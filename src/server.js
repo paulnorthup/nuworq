@@ -13,7 +13,7 @@ import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner } from './notify.js';
 import { receive } from './github.js';
 import { runChecks } from './precondition.js';
-import { syncIssues, commentIssues, closeLanded, closeStale } from './issues.js';
+import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
@@ -151,6 +151,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (hub.github) hub.mergeReady().catch((e) => console.error('checking pull requests failed', e));
       // Issues whose work has landed close on GitHub (a hub that has served a request knows its public address).
       if (app && hub._app === app) for (const p of hub.projects()) closeLanded(hub, p, hub.github.app).catch((e) => console.error('closing issues failed', e));
+      // Questions to issue reporters that GitHub refused when asked go out again.
+      if (app && hub._app === app) for (const p of hub.projects()) askReporters(hub, p, hub.github.app).catch((e) => console.error('asking reporters failed', e));
     }
   }, sweepMs);
   const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
@@ -361,6 +363,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.
       const itemLink = (rq, slug) => (item) => `${publicUrl || origin(rq)}${base}/#/p/${encodeURIComponent(slug)}/${item.seq}`;
+      // A question to an issue's reporter goes onto the issue now; one GitHub refused, the sweep posts later.
+      const askedReporter = async (h, rq, out) => {
+        if (!out?.reporter || !app) return out;
+        const p = h.q('SELECT * FROM projects WHERE id = (SELECT project_id FROM questions WHERE id = ?)').get(out.question);
+        try { out.github = await askReporters(h, p, app, { link: itemLink(rq, p.slug) }); } catch (e) { out.github = { error: e.message }; }
+        return out;
+      };
 
       // GitHub can't log in: the delivery's signature is its credential, so this answers under any host name
       // (e.g. through a tunnel to a loopback hub). Browsers never send these, and nothing changes without a valid signature.
@@ -721,7 +730,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const agent = header(req, 'agent') || b.agent;
         delete b.agent;
         if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
-        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
+        return send(200, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller })));
       }
       // git asks for a credential (nuworq git-credential): a token for the repository of the item this
       // agent holds, minted by the GitHub App for that one repository and an hour. On the record, never shown.
@@ -792,7 +801,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const agent = header(req, 'agent') || b.agent;
         delete b.agent;
         if (DECIDES.agent.includes(m[1])) await hub.prefetch('', b, { remote: remoteOf(req), root: rootOf(req), scope: caller.scope });
-        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
+        return send(200, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller })));
       }
       // Push channels: hub-wide (or workspace-wide) ones, and personal ones that get only what that person owns.
       // Agent tokens never reach these. An owner manages them all; a person manages their own.

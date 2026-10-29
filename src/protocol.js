@@ -75,6 +75,7 @@ export const OPS = [
       options: { type: 'array', items: { type: 'string' }, description: 'Optional. Likely answers the human can pick with one click.' },
       assumption: s('What you will assume and proceed with unless told otherwise.'),
       blocking: { type: 'boolean', description: 'True only if you cannot make progress without an answer. Defaults to false when you give an assumption.' },
+      to: { type: 'string', enum: ['human', 'reporter'], description: 'Optional. "reporter": for an item that came from a GitHub issue, ask the person who opened it, on the issue. The item parks until they reply; after a wait, the human can answer instead. Default "human".' },
     },
     required: ['question'],
   },

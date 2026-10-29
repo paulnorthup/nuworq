@@ -96,12 +96,15 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const attention = [];
   const push = (a) => { if (!dismissed.has(a.key)) attention.push(a); };
 
-  for (const q of openQs.filter((q) => q.blocking)) {
+  // A question to an issue's reporter comes to you only once they've had reporter_wait hours to answer on GitHub.
+  const wait = p.reporter_wait * HOUR;
+  for (const q of openQs.filter((q) => q.blocking && !(q.reporter && t - q.at < wait))) {
     const it = byId.get(q.item_id);
     push({
-      key: `q:${q.id}`, level: 'act', kind: 'question', at: q.at,
+      key: `q:${q.id}`, level: 'act', kind: 'question', at: q.reporter ? q.at + wait : q.at,
       headline: q.question,
-      sub: [it?.title, `${q.asked_by} asked ${dur(t - q.at)} ago`, it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
+      sub: [it?.title, `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${dur(t - q.at)} ago`, q.reporter && 'no reply yet',
+        it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
       why: q.context, detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
