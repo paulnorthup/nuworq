@@ -208,9 +208,6 @@ function project(v) {
     ? `<div class="inline-form"><input data-draft="mission" id="mission-in" placeholder="What is this project for? Agents read this first." value="${esc(P.mission)}"><button class="btn primary small" data-action="save-mission">Save</button><button class="btn ghost small" data-action="cancel-mission">Cancel</button></div>`
     : `<div class="mission ${P.mission ? '' : 'empty'}" data-action="edit-mission" title="Click to edit. Every agent reads the mission at checkin.">${esc(P.mission || 'Add a mission: the north star every agent reads at checkin')}</div>`;
 
-  const where = S.editPath
-    ? `<div class="inline-form"><input data-draft="path" id="path-in" placeholder="/path/to/the/repo on this machine" value="${esc(P.path)}"><button class="btn primary small" data-action="save-path">Save</button><button class="btn ghost small" data-action="cancel-path">Cancel</button></div>`
-    : `<div class="where" data-action="edit-path" title="Where the code lives. Agents working in this folder find the project on their own, and workers routed here start in it.">${P.path ? `Lives in <code>${esc(P.path)}</code>` : '<span class="faint">Where does the code live? Set it, or the first agent that checks in from its folder teaches the hub.</span>'}</div>`;
   // The repositories this project is: any clone of one, on any machine, finds the project.
   const remotes = `<div class="where">${P.remotes.length ? `Repo ${P.remotes.map((r) => `<code>${esc(r)}</code><button class="link" data-action="remote-remove" data-remote="${esc(r)}" title="Unlink this repository">×</button>`).join(' ')}` : '<span class="faint">No repository linked yet: the first agent that checks in from a clone teaches the hub.</span>'}
     ${S.addRemote
@@ -219,7 +216,7 @@ function project(v) {
   const empty = !v.all.length && !v.agents.length;
   return `
     <div class="phead">
-      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? where + remotes : ''}</div>
+      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? remotes : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
@@ -820,9 +817,6 @@ const ACTIONS = {
   autonomy: (el) => human('settings', { autonomy: el.dataset.level }, 'Autonomy changed; agents have been told'),
   'edit-mission': () => { S.editMission = true; render({ force: true }); setTimeout(() => $('#mission-in')?.focus(), 0); },
   'cancel-mission': () => { S.editMission = false; clearDraft('mission'); render({ force: true }); },
-  'edit-path': () => { S.editPath = true; render({ force: true }); setTimeout(() => $('#path-in')?.focus(), 0); },
-  'cancel-path': () => { S.editPath = false; clearDraft('path'); render({ force: true }); },
-  'save-path': async () => { const v = val('path-in'); S.editPath = false; clearDraft('path'); await human('settings', { path: v }, 'Saved: agents in that folder will find this project'); },
   'save-mission': async () => { const m = val('mission-in'); S.editMission = false; clearDraft('mission'); await human('settings', { mission: m }, 'Mission saved'); },
   'remote-new': () => { S.addRemote = true; render({ force: true }); setTimeout(() => $('#remote-in')?.focus(), 0); },
   'remote-cancel': () => { S.addRemote = false; clearDraft('remote'); render({ force: true }); },
