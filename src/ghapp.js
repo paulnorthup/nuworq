@@ -83,6 +83,43 @@ export class GitHubApp {
     return { status: r.status, json: await r.json().catch(() => ({})) };
   }
 
+  // A metadata-only token for one installation, reused until 5 minutes before it expires (memory only).
+  async installationToken(id) {
+    this._inst ??= new Map();
+    const have = this._inst.get(id);
+    if (have && Date.parse(have.expires_at) - 5 * 60_000 > this.now()) return have.token;
+    const tok = await this.call('POST', `/app/installations/${id}/access_tokens`, { permissions: { metadata: 'read' } });
+    if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for installation ${id} (${tok.status})`, { status: 502 });
+    this._inst.set(id, { token: tok.json.token, expires_at: tok.json.expires_at });
+    return tok.json.token;
+  }
+
+  // Every repository the app's installations can see: [{ repo: "github.com/o/r", name, description, private }].
+  async repos() {
+    const pages = async (get, pick) => {
+      const out = [];
+      for (let page = 1; page <= 50; page++) {
+        const r = await get(`per_page=100&page=${page}`);
+        if (r.status !== 200) throw new UserError(`GitHub didn't list the app's repositories (${r.status}${r.json?.message ? `: ${r.json.message}` : ''})`, { status: 502, hint: 'Check the app id and private key the hub uses; try again in a minute.' });
+        const batch = pick(r.json) ?? [];
+        out.push(...batch);
+        if (batch.length < 100) break;
+      }
+      return out;
+    };
+    const installs = await pages((q) => this.call('GET', `/app/installations?${q}`), (j) => j);
+    const all = [];
+    for (const inst of installs) {
+      const token = await this.installationToken(inst.id);
+      const list = await pages(async (q) => {
+        const r = await fetch(`${this.api}/installation/repositories?${q}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'nuworq' }, signal: AbortSignal.timeout(10_000) });
+        return { status: r.status, json: await r.json().catch(() => ({})) };
+      }, (j) => j.repositories);
+      for (const r of list) all.push({ repo: `github.com/${r.full_name}`.toLowerCase(), name: r.name, description: r.description ?? '', private: !!r.private });
+    }
+    return all.sort((a, b) => a.repo.localeCompare(b.repo));
+  }
+
   installUrl() {
     return this.slug ? `https://github.com/apps/${this.slug}/installations/new` : 'the app\'s page on GitHub (Settings → Developer settings → GitHub Apps → Install App)';
   }

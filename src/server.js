@@ -56,6 +56,7 @@ const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 // What an agent-role token may reach in required mode.
 const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
+const REPO_PAGE = 30; // repositories per page in "+ Project"
 
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
 // target: one Hub (today's single hub), or a Workspaces registry: then each request is resolved to a
@@ -530,13 +531,37 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
       }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
+      // The repositories the GitHub App can see, to make a project from one. Single hub only: on a workspaces hub
+      // the app is shared, and its installations would show other organizations' repository names.
+      if (req.method === 'GET' && path === '/api/github/repos') {
+        if (spaces) return deny(403, 'on a hub with workspaces, projects are added by name and remote for now', 'The shared GitHub App would list other organizations\' repositories.');
+        if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't add projects`, 'Ask an owner or steward.');
+        if (!app) return deny(404, 'this hub has no GitHub App, so it can\'t list repositories', 'An owner creates one in one click: /api/github/app/new (Connect an agent → GitHub App). Or add the project by name and remote.');
+        const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase();
+        const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+        const all = (await app.repos()).filter((r) => !q || r.repo.slice('github.com/'.length).includes(q));
+        const repos = all.slice((page - 1) * REPO_PAGE, page * REPO_PAGE).map((r) => ({ ...r, project: hub.projectByRemote(r.repo)?.slug ?? null }));
+        return send(200, { repos, next_page: page * REPO_PAGE < all.length ? page + 1 : null });
+      }
       if (req.method === 'POST' && path === '/api/projects') {
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't create projects`, 'Ask an owner or steward.');
         const b = await body(req);
-        const p = hub.tx(() => hub.project(b.slug || b.name, { create: true, name: b.name }));
+        // From a repository: its name, a free slug, its description as the mission, and the remote linked.
+        const repo = b.repo ? normRemote(b.repo) : '';
+        if (b.repo && !/^github\.com\/[^/]+\/[^/]+$/.test(repo)) return deny(400, `"${b.repo}" isn't a GitHub repository`, 'e.g. github.com/acme/api');
+        const owner = repo && hub.projectByRemote(repo);
+        if (owner) return deny(409, `${repo} is already the project ${owner.name}`, `Open it: /#/p/${owner.slug}`);
+        const name = b.name || repo.split('/').at(-1);
+        const p = hub.tx(() => {
+          let slug = slugify(b.slug || name);
+          if (repo) for (let n = 2; hub.projects().some((x) => x.slug === slug); n++) slug = `${slugify(name)}-${n}`;
+          const made = hub.project(slug, { create: true, name });
+          if (repo) hub.addRemote(made, repo, by);
+          return made;
+        });
         if (b.mission) hub.humanOp(p.slug, 'settings', { mission: b.mission });
         hub.changed(p);
-        return send(200, { ok: true, slug: p.slug });
+        return send(200, { ok: true, slug: p.slug, ...(repo ? { repo, runner_opt_in: true } : {}) });
       }
       if (req.method === 'GET' && path === '/api/tools') {
         return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? ''));

@@ -846,12 +846,40 @@ async function githubSettings() {
     <div class="foot">${P.github ? '<button class="btn ghost" data-action="github-disconnect">Disconnect</button>' : ''}<button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="github-save">Save</button></div>`);
 }
 
+// "+ Project": pick one of the repositories the GitHub App can see, or (no app, or a workspaces hub) by name.
 function newProject() {
-  modal(`<h2>New project</h2><p class="lead">Agents also create projects automatically when they check in to a new name.</p>
+  const gh = S.info?.github_app;
+  const picker = gh && gh !== 'create' && !S.info?.workspace;
+  const why = S.info?.workspace ? 'On a hub with workspaces, add a project by name for now: the shared GitHub App would list other organizations\' repositories.'
+    : gh === 'create' ? 'To pick a repository instead, <a href="api/github/app/new">create the GitHub App</a> (one click) and install it on your repositories.'
+    : !gh ? 'With the hub\'s GitHub App, you could pick a repository here instead; an owner creates it from Connect an agent.' : '';
+  modal(`<h2>New project</h2>
+    ${picker ? `<p class="lead">Pick a repository the nuworq GitHub App is installed on. Install it on more from GitHub to see them here.</p>
+      <div class="form"><label>Search<input id="np-q" placeholder="owner/name"></label></div><div id="np-repos" class="repo-list"><p class="faint">Loading…</p></div>
+      <details><summary>Or add one by name</summary>` : `<p class="lead">${why} Agents also create projects when they check in to a new name.</p>`}
     <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
     <label>Mission (optional): the north star every agent reads<textarea id="np-mission" placeholder="What is this for? What matters most?"></textarea></label></div>
-    <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="create-project">Create</button></div>`);
-  setTimeout(() => $('#np-name')?.focus(), 0);
+    ${picker ? '</details>' : ''}
+    <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="create-project">Create by name</button></div>`);
+  if (!picker) return setTimeout(() => $('#np-name')?.focus(), 0);
+  let timer;
+  $('#np-q')?.addEventListener('input', (e) => { clearTimeout(timer); timer = setTimeout(() => loadRepos(e.target.value.trim(), 1), 250); });
+  setTimeout(() => $('#np-q')?.focus(), 0);
+  loadRepos('', 1);
+}
+
+async function loadRepos(q, page) {
+  const box = $('#np-repos');
+  if (!box) return;
+  try {
+    const r = await api(`/api/github/repos?q=${encodeURIComponent(q)}&page=${page}`);
+    const rows = r.repos.map((x) => x.project
+      ? `<div class="row-item"><div class="body"><div class="h">${esc(x.repo.replace('github.com/', ''))}</div><div class="s">already the project <a data-action="goto" data-slug="${esc(x.project)}">${esc(x.project)}</a></div></div></div>`
+      : `<button class="row-item clickable pick-repo" data-action="pick-repo" data-repo="${esc(x.repo)}" data-desc="${esc(x.description)}"><div class="body"><div class="h">${esc(x.repo.replace('github.com/', ''))}${x.private ? ' <span class="tag">private</span>' : ''}</div>${x.description ? `<div class="s">${esc(x.description)}</div>` : ''}</div></button>`).join('');
+    box.innerHTML = (page > 1 ? box.dataset.html ?? '' : '') + (rows || (page === 1 ? `<p class="faint">${q ? 'No repository matches.' : 'The app is installed on no repositories yet.'}</p>` : ''));
+    box.dataset.html = box.innerHTML;
+    if (r.next_page) box.insertAdjacentHTML('beforeend', `<button class="btn ghost small" data-action="more-repos" data-q="${esc(q)}" data-page="${r.next_page}">More</button>`);
+  } catch (e) { box.innerHTML = `<p class="faint">${esc(e.message)}</p>`; }
 }
 
 // ── events ──
@@ -1026,6 +1054,23 @@ const ACTIONS = {
     } catch (e) { toast(e.message, true); }
   },
   'new-project': () => newProject(),
+  'more-repos': (el) => { el.remove(); loadRepos(el.dataset.q, Number(el.dataset.page)); },
+  'pick-repo': async (el) => {
+    try {
+      const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ repo: el.dataset.repo, mission: el.dataset.desc }) });
+      modal(`<h2>${esc(r.repo.replace('github.com/', ''))} is a project</h2>
+        <p class="lead">Let <code>nuworq run</code> staff this project? It starts workers whenever there is work nobody is on, up to the limits it was started with. You can change this later in the project's settings.</p>
+        <div class="foot"><button class="btn ghost" data-action="goto-new" data-slug="${esc(r.slug)}">Not now</button><button class="btn primary" data-action="staff-new" data-slug="${esc(r.slug)}">Let run staff it</button></div>`);
+    } catch (e) { toast(e.message, true); }
+  },
+  'goto-new': (el) => { closeModal(); go(el.dataset.slug); },
+  'staff-new': async (el) => {
+    try {
+      await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/settings`, { method: 'POST', body: JSON.stringify({ runner: true }) });
+      closeModal();
+      go(el.dataset.slug);
+    } catch (e) { toast(e.message, true); }
+  },
   'close-modal': () => closeModal(),
   logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },
   'create-project': async () => {
