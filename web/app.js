@@ -3,10 +3,13 @@
 import { connectCommands } from './connect.js';
 import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
-import { homePage } from './home.js';
+import { homePage, columns } from './home.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
+// Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
+const WIDE = matchMedia('(min-width: 1024px)');
+WIDE.addEventListener('change', () => render());
 // Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
 const store = {
   get: (k, d) => { try { return localStorage.getItem('nuworq:' + k) ?? localStorage.getItem('trellis:' + k) ?? d; } catch { return d; } },
@@ -220,8 +223,8 @@ function renderRail() {
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
       <button class="rail-item" data-action="archived">Archived projects</button>
-      <button class="rail-item" data-action="connect">⌁ Connect an agent</button>
-      <button class="rail-item" data-action="notify">◔ Notifications</button>
+      <button class="rail-item" data-action="connect">Connect an agent</button>
+      <button class="rail-item" data-action="notify">Notifications</button>
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
     </div>`;
@@ -265,8 +268,7 @@ function overview() {
   }
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div></div></div>
-    ${getStarted()}
-    ${homePage(S.home, { z: z(), pulse, card, esc, plural })}`;
+    ${homePage(S.home, { z: z(), pulse, card, esc, plural, wide: WIDE.matches, gs: getStarted() })}`;
 }
 
 // ── project ──
@@ -299,22 +301,23 @@ function project(v) {
           : `<button class="link" data-action="runner-on" title="Let nuworq run start headless workers here whenever work is waiting">Let nuworq run staff this project</button>`) : ''}
       </div>
     </div>
-    ${pulse(v)}
-    ${composer(v)}
-    ${empty ? emptyProject() : ''}
-    ${needsYou(v)}
-    ${motion(v)}
-    ${z() >= 1 ? worthKnowing(v) : ''}
-    ${z() >= 1 ? flow(v) : ''}
-    ${z() >= 1 ? upNext(v) : ''}
-    ${z() >= 1 ? finished(v) : ''}
-    ${z() >= 1 ? steering(v) : ''}
-    ${z() >= 1 ? agents(v) : ''}
-    ${z() >= 2 ? activity(v) : ''}
-    ${z() >= 2 ? allWork(v) : ''}
-    ${z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
-      ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, flow, what's next, what finished, and how agents are doing.`
-      : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : ''}`;
+    ${projectBody(v, empty)}`;
+}
+
+// The project's sections: one column on a phone; wide (#141), the work in the main column and the pulse,
+// flow and agents beside it, the same sections either way. Each starts at its own depth (#144: Flow at 5m).
+function projectBody(v, empty) {
+  const more = z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
+    ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, flow, what's next, what finished, and how agents are doing.`
+    : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : '';
+  const s = {
+    pulse: pulse(v), composer: composer(v), empty: empty ? emptyProject() : '', needs: needsYou(v), motion: motion(v),
+    worth: z() >= 1 ? worthKnowing(v) : '', flow: z() >= 1 ? flow(v) : '', next: z() >= 1 ? upNext(v) : '', finished: z() >= 1 ? finished(v) : '',
+    steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
+  };
+  const order = (keys) => keys.map((k) => s[k]).join('');
+  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents']));
+  return order(['pulse', 'composer', 'empty', 'needs', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'activity', 'all', 'more']);
 }
 
 function emptyProject() {
