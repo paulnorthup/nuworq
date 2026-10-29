@@ -67,6 +67,7 @@ export function view(hub, slug, { light = false } = {}) {
         acceptance: it.acceptance, evidence,
         warn: evidence.length ? null : 'No evidence attached',
         item: ref(it),
+        attempts: it.race > 1 ? hub.submissions(it) : undefined, // a race: compare and keep one
       });
     }
   } else {
@@ -280,6 +281,8 @@ export function view(hub, slug, { light = false } = {}) {
     const sentBack = hub.q(`SELECT COUNT(*) AS n FROM events e JOIN items i ON i.id = e.item_id
         WHERE e.project_id = ? AND e.type = 'sent_back' AND i.implementer = ?`).get(p.id, a.name).n;
     const stalls = hub.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'lease_expired' AND data LIKE ?`).get(p.id, `%"agent":"${a.name}"%`).n;
+    const races = hub.q(`SELECT COUNT(*) AS entered, COALESCE(SUM(a.stage = 'chosen'), 0) AS won FROM attempts a JOIN items i ON i.id = a.item_id
+        WHERE i.project_id = ? AND a.agent = ?`).get(p.id, a.name);
     return {
       name: a.name, model: a.model, client: a.client, provider: providerOf(a.model),
       status, line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
@@ -288,6 +291,7 @@ export function view(hub, slug, { light = false } = {}) {
         claimed: rec.claimed ?? 0, submitted: rec.submitted ?? 0, handoffs: rec.handoffs ?? 0,
         questions: rec.questions ?? 0, assumptions: rec.assumptions ?? 0, proposed: rec.proposed ?? 0,
         reviews: rec.reviews_accepted ?? 0, learned: rec.learned ?? 0,
+        races: races.entered, races_won: races.won,
       },
     };
   });
@@ -413,6 +417,7 @@ export function itemView(hub, slug, ref) {
     holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
     race: it.race,
     racers: it.race > 1 ? hub.attemptsOf(it).map((a) => ({ agent: a.agent, model: a.model, stage: a.stage, lease_left: a.lease_until ? dur(a.lease_until - t) : null })) : [],
+    submissions: hub.submissions(it),
     implementer: it.implementer, last_worker: it.last_worker,
     attempts: it.attempts, stalls: it.stalls, rejections: it.rejections,
     handoff: json(it.handoff, null),

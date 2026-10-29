@@ -113,6 +113,7 @@ export const OPS = [
     params: {
       item: ITEM,
       verdict: { type: 'string', enum: ['accept', 'reject'] },
+      attempt: s('Only for a raced item with several submissions: the one to keep, by number or agent name (see race.submissions). The others are recorded as not chosen.'),
       ...LAYERS,
     },
     required: ['item', 'verdict', 'headline'],

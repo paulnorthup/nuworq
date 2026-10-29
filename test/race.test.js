@@ -200,3 +200,83 @@ describe('races', () => {
     assert.equal(s.row(1).stage, 'active');
   });
 });
+
+describe('race review', () => {
+  // Two attempts submitted on #1: a (claude), then c (gpt-5).
+  function finished(opts) {
+    const s = setup(opts);
+    s.human('create', { title: 'Hard thing', acceptance: 'It works' });
+    s.human('update', { item: '#1', race: 2 });
+    const a = s.agent('a', 'claude');
+    const c = s.agent('c', 'gpt-5');
+    a('next'); c('next');
+    s.clock.t += 10 * MIN;
+    a('submit', { item: '#1', headline: 'A: small patch', evidence: ['npm test: 40 pass'] });
+    s.clock.t += 5 * MIN;
+    c('submit', { item: '#1', headline: 'C: rewrite', evidence: ['npm test: 41 pass'] });
+    return { ...s, a, c };
+  }
+
+  test('the review card and item view show every attempt side by side', () => {
+    const s = finished({ autonomy: 'balanced' });
+    const card = view(s.hub, 'demo').attention.find((x) => x.kind === 'review');
+    assert.deepEqual(card.attempts.map((x) => [x.n, x.agent, x.model, x.headline, x.took]), [[1, 'a', 'claude', 'A: small patch', '10m'], [2, 'c', 'gpt-5', 'C: rewrite', '15m']]);
+    assert.deepEqual(card.attempts[1].evidence, [{ label: 'npm test: 41 pass' }]);
+    assert.equal(itemView(s.hub, 'demo', '#1').submissions.length, 2);
+  });
+
+  test('keeping one marks the item done with that implementer, records the rest as not chosen, and names the branch', () => {
+    const s = finished({ autonomy: 'balanced' });
+    assert.throws(() => s.human('accept', { item: '#1' }), /say which one to keep/);
+    assert.throws(() => s.human('accept', { item: '#1', attempt: 7 }), /No submitted attempt "7"/);
+    const r = s.human('accept', { item: '#1', attempt: 'c' });
+    assert.deepEqual([r.kept, r.merge], ['c', 'trellis/c']);
+    assert.equal(s.row(1).stage, 'done');
+    assert.equal(s.row(1).implementer, 'c');
+    assert.deepEqual(s.runs(1).map((x) => x.stage), ['not_chosen', 'chosen']);
+    const events = s.hub.q(`SELECT type, headline, summary FROM events WHERE type IN ('not_chosen', 'accepted') ORDER BY id`).all();
+    assert.match(events[0].headline, /a's attempt on #1 was not chosen/);
+    assert.match(events[1].headline, /You accepted #1 \(c's attempt\)/);
+    assert.match(events[1].summary, /Merge trellis\/c/);
+  });
+
+  test('send all back returns it to ready and clears the attempts for a fresh race', () => {
+    const s = finished({ autonomy: 'balanced' });
+    s.human('sendback', { item: '#1', note: 'Neither handles the edge case' });
+    assert.equal(s.row(1).stage, 'ready');
+    assert.ok(s.runs(1).every((x) => x.closed === 1));
+    assert.equal(s.hub.openSlots(s.row(1)), 2);
+    assert.match(JSON.parse(s.row(1).handoff).headline, /edge case/);
+  });
+
+  test('a peer reviewer picks an attempt by number; racers cannot review; records count races won', () => {
+    const s = finished();
+    const r = s.agent('r', 'gemini');
+    const next = r('next');
+    assert.equal(next.mode, 'review');
+    assert.equal(next.race.submissions.length, 2);
+    assert.match(next.hint, /accept with attempt/);
+    assert.throws(() => r('review', { item: '#1', verdict: 'accept', headline: 'x' }), /say which one to keep/);
+    assert.throws(() => s.a('review', { item: '#1', verdict: 'accept', headline: 'x', attempt: 2 }), /can't review your own work/);
+    const res = r('review', { item: '#1', verdict: 'accept', headline: 'A is smaller', attempt: '1' });
+    assert.equal(res.kept, 'a');
+    assert.equal(s.row(1).implementer, 'a');
+    const rec = (name) => view(s.hub, 'demo').agents.find((x) => x.name === name).record;
+    assert.deepEqual([rec('a').races, rec('a').races_won], [1, 1]);
+    assert.deepEqual([rec('c').races, rec('c').races_won], [1, 0]);
+    assert.equal(rec('a').landed, 1);
+  });
+
+  test('a race with a single submission is accepted without naming the attempt', () => {
+    const s = setup({ autonomy: 'balanced' });
+    s.human('create', { title: 'Hard thing', acceptance: 'It works' });
+    s.human('update', { item: '#1', race: 2 });
+    const a = s.agent('a', 'claude');
+    s.agent('c', 'gpt-5')('next');
+    a('next');
+    s.agent('c', 'gpt-5')('handoff', { item: '#1', headline: 'gave up' });
+    a('submit', { item: '#1', headline: 'done' });
+    assert.equal(s.human('accept', { item: '#1' }).kept, 'a');
+    assert.deepEqual(s.runs(1).map((x) => x.stage), ['abandoned', 'chosen']);
+  });
+});

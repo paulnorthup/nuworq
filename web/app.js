@@ -84,9 +84,10 @@ async function api(path, opts = {}) {
 }
 async function human(action, body = {}, msg) {
   try {
-    await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
+    const r = await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
     if (msg) toast(msg);
     await refresh();
+    return r;
   } catch (e) {
     toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true);
   }
@@ -308,12 +309,23 @@ function card(a) {
   return `<article class="card kind-${a.kind}">
     <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${esc(a.sub)}</span></div>
     <h3>${esc(a.headline)}</h3>
-    ${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
+    ${a.attempts?.length > 1 ? attemptsGrid(a.item, a.attempts) : a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
     ${a.warn ? `<div class="warn">⚠ ${esc(a.warn)}</div>` : ''}
     ${a.kind === 'proposal' && a.acceptance && !open ? `<div class="more"><div class="label" style="margin-top:0">Done means</div>${md(a.acceptance)}</div>` : ''}
     ${more}
     ${cardActions(a, hasMore, open, key)}
   </article>`;
+}
+
+// A raced item's submissions side by side, each with its own "Keep this one".
+function attemptsGrid(item, attempts, { keep = true } = {}) {
+  return `<div class="attempts">${attempts.map((s) => `<div class="attempt ${s.stage}">
+      <div class="meta">${who(s.agent, s.model)} <span class="age">${esc(s.model || '')}${s.took ? ` · ${esc(s.took)}` : ''}</span>${s.stage === 'chosen' ? '<span class="tag go">kept</span>' : s.stage === 'not_chosen' ? '<span class="tag">not chosen</span>' : ''}</div>
+      <div class="h">${esc(s.headline)}</div>
+      ${s.branch ? `<div class="touch"><code>${esc(s.branch)}</code>${s.commits?.length ? ` ${s.commits.map((c) => `<code title="${esc(c.subject ?? '')}">${esc(String(c.hash ?? c).slice(0, 7))}</code>`).join(' ')}` : ''}</div>` : ''}
+      ${s.evidence?.length ? `<div class="evidence">${s.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
+      ${keep && s.stage === 'submitted' ? `<button class="btn go small" data-action="keep" data-item="${esc(item)}" data-attempt="${s.n}">Keep this one</button>` : ''}
+    </div>`).join('')}</div>`;
 }
 
 function cardActions(a, hasMore, open, key) {
@@ -337,11 +349,12 @@ function cardActions(a, hasMore, open, key) {
   }
   if (a.kind === 'review') {
     const r = `sb:${a.item}`;
+    const race = a.attempts?.length > 1;
     return `<div class="actions">
-      <button class="btn go" data-action="accept" data-item="${esc(a.item)}">Accept</button>
+      ${race ? '' : `<button class="btn go" data-action="accept" data-item="${esc(a.item)}">Accept</button>`}
       ${S.reveal.has(r)
-        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What's missing? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
-        : `<button class="btn" data-action="reveal" data-key="${r}">Send back…</button>`}
+        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What's missing? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send ${race ? 'all ' : ''}back</button></div>`
+        : `<button class="btn" data-action="reveal" data-key="${r}">Send ${race ? 'all ' : ''}back…</button>`}
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
     </div>`;
   }
@@ -518,7 +531,7 @@ function agents(v) {
         <div><b>${a.record.stalls}</b><span>stalls</span></div>
         <div><b>${a.record.handoffs}</b><span>handoffs</span></div>
       </div>
-      <div class="model" style="margin-top:6px">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''} · seen ${esc(a.last_seen)} ago</div>
+      <div class="model" style="margin-top:6px">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${esc(a.last_seen)} ago</div>
     </div>`).join('')}</div></section>`;
 }
 
@@ -571,8 +584,9 @@ function renderDrawer() {
   }[it.stage];
 
   const actions = [];
+  const raced = it.submissions?.filter((s) => s.stage === 'submitted').length > 1;
   if (it.stage === 'verifying') {
-    actions.push(`<button class="btn go" data-action="accept" data-item="${it.item}">Accept</button>`);
+    if (!raced) actions.push(`<button class="btn go" data-action="accept" data-item="${it.item}">Accept</button>`);
     actions.push(S.reveal.has('dsb') ? `<div class="inline-form grow"><input data-draft="sb:${it.item}" id="sb:${it.item}" placeholder="What's missing?"><button class="btn you" data-action="sendback" data-item="${it.item}">Send back</button></div>`
       : `<button class="btn" data-action="reveal" data-key="dsb">Send back…</button>`);
   }
@@ -648,7 +662,8 @@ function renderDrawer() {
       <div class="life-steps">${life.map((l) => `<span><b>${esc(l.label)}</b> ${esc(l.time)}${l.court === 'agents' && l.actor ? ` (${esc(l.actor)})` : ''}</span>`).join('<span>→</span>')}</div></div>` : ''}
     ${it.summary ? `<div class="d-sec"><div class="label">Summary</div>${md(it.summary)}</div>` : ''}
     <div class="d-sec"><div class="label">Done means</div>${it.acceptance ? md(it.acceptance) : '<p class="age">No acceptance criteria yet. Agents are asked to write them before submitting.</p>'}</div>
-    ${it.submission && it.stage === 'verifying' ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
+    ${it.submissions?.length ? `<div class="d-sec"><div class="label">The race <span class="count">${it.submissions.length} submitted</span></div>${attemptsGrid(it.item, it.submissions, { keep: it.stage === 'verifying' })}</div>` : ''}
+    ${it.submission && it.stage === 'verifying' && !it.submissions?.length ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
       ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}</div>` : ''}
     ${handoff}
     ${questions}
@@ -770,6 +785,10 @@ const ACTIONS = {
     return human('answer', { question: Number(q), answer }, 'Overridden: the agent will be steered');
   },
   accept: (el) => human('accept', { item: el.dataset.item }, `Accepted ${el.dataset.item}`),
+  keep: async (el) => {
+    const r = await human('accept', { item: el.dataset.item, attempt: el.dataset.attempt });
+    if (r?.merge) toast(`Kept ${r.kept}'s attempt on ${el.dataset.item}. Now merge ${r.merge}`);
+  },
   sendback: (el) => {
     const k = `sb:${el.dataset.item}`;
     const note = val(k);

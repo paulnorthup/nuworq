@@ -89,7 +89,7 @@ const AGENT_CMDS = {
     item: need(p[0], '<item>'), title: text(f.title), ...layers(f), acceptance: text(f.acceptance),
     priority: f.priority, depends_on: refs(f['depends-on']),
   }),
-  review: (p, f) => ({ item: need(p[0], '<item>'), verdict: need(p[1], '<accept|reject>'), headline: need(rest(p, 2), '<headline>'), ...layers(f) }),
+  review: (p, f) => ({ item: need(p[0], '<item>'), verdict: need(p[1], '<accept|reject>'), headline: need(rest(p, 2), '<headline>'), attempt: f.attempt, ...layers(f) }),
   comment: (p, f) => {
     const item = isRef(p[0]) && p.length > 1 ? p[0] : undefined;
     return { item, headline: need(rest(p, item ? 1 : 0), '<headline>'), ...layers(f) };
@@ -473,7 +473,7 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   handoff <item> <headline>              release with where you left off
   propose <title> [--acceptance] [--priority now|soon|later] [--parent] [--depends-on "#1,#2"]
   refine <item> [--title] [--acceptance] [--priority] [--depends-on]
-  review <item> <accept|reject> <headline>
+  review <item> <accept|reject> <headline> [--attempt n|agent]   (raced items: which attempt to keep)
   comment [<item>] <headline>
   ack <steer-id> [response]
   look [<item>] [--stage s]

@@ -354,6 +354,36 @@ export class Hub extends EventEmitter {
       .run(stage, submission, this.attemptOf(item, agent).id);
   }
 
+  // A race's submissions, numbered for the reviewer (1-based, in the order the attempts started).
+  submissions(item) {
+    if (item.race <= 1) return [];
+    return this.attemptsOf(item).filter((a) => ['submitted', 'chosen', 'not_chosen'].includes(a.stage)).map((a, k) => {
+      const e = this.q('SELECT * FROM events WHERE id = ?').get(a.submission) ?? {};
+      const data = json(e.data, {});
+      return {
+        n: k + 1, agent: a.agent, model: a.model, stage: a.stage,
+        headline: e.headline ?? '', summary: e.summary || undefined, evidence: data.evidence ?? [],
+        branch: data.git?.branch ?? null, commits: data.git?.commits ?? undefined,
+        took: e.at ? dur(e.at - a.at) : undefined,
+      };
+    });
+  }
+
+  // Which attempt a reviewer keeps: by number or agent name. With one submission, that one.
+  keptAttempt(item, choice, actor) {
+    const subs = this.submissions(item).filter((s) => s.stage === 'submitted');
+    if (!subs.length) return null;
+    const which = `Pass attempt: ${subs.map((s) => `${s.n} (${s.agent})`).join(', ')}.`;
+    if (choice == null || str(choice) === '') {
+      if (subs.length === 1) return subs[0];
+      throw new UserError(`#${item.seq} was raced: ${subs.length} attempts were submitted, so say which one to keep`, { hint: which });
+    }
+    const k = subs.find((s) => String(s.n) === str(choice).replace(/^#/, '') || s.agent === str(choice));
+    if (!k) throw new UserError(`No submitted attempt "${choice}" on #${item.seq}`, { status: 404, hint: which });
+    if (k.agent === actor) throw new UserError("You can't pick your own attempt", { status: 403 });
+    return k;
+  }
+
   // When no attempt is still running, the race is over: to review if anyone submitted, else back to the queue.
   settleRace(p, item, actor) {
     if (item.race <= 1 || item.stage !== 'active') return;
@@ -451,11 +481,15 @@ export class Hub extends EventEmitter {
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
       lease: item.holder ? { holder: item.holder, expires_in: dur(item.lease_until - this.now()) }
         : this.racing(item) && lease ? { holder: agent, expires_in: dur(lease - this.now()) } : undefined,
-      race: item.race > 1 ? {
+      race: item.race > 1 ? (item.stage === 'verifying' ? {
+        slots: item.race,
+        submissions: this.submissions(item),
+        note: 'Compare the attempts side by side against done_means. Accept with attempt: <n or agent> to keep one; the others are recorded as not chosen. Reject sends them all back.',
+      } : {
         slots: item.race,
         attempts: racers.length ? racers.map((a) => `${a.agent}${a.model ? ` (${a.model})` : ''}: ${a.stage}`) : undefined,
         note: 'Several agents attempt this item at once, each on its own. Work independently; the reviewer compares the submissions.',
-      } : undefined,
+      }) : undefined,
       touching: touching.length ? touching : undefined,
       attempt: item.attempts || undefined,
       last_handoff: handoff ? { by: handoff.by, kind: handoff.kind, headline: handoff.headline, summary: handoff.summary || undefined, ago: dur(this.now() - handoff.at) } : undefined,
@@ -818,7 +852,7 @@ const AGENT_OPS = {
       mode: pick.mode,
       ...this.context(p, pick.item, agent),
       hint: pick.mode === 'review'
-        ? `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.`
+        ? `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.${pick.item.race > 1 ? ' It was raced: compare race.submissions and accept with attempt set to the one to keep.' : ''}`
         : pick.mode === 'shape' && args.claim !== false
           ? SHAPE_HINT(pick.item, p)
           : args.claim === false
@@ -982,9 +1016,9 @@ const AGENT_OPS = {
     const verdict = str(args.verdict).toLowerCase();
     if (!['accept', 'reject'].includes(verdict)) throw new UserError('verdict must be "accept" or "reject"');
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
-    this.verdict(p, agent, item, verdict, { headline, summary, detail });
+    const r = this.verdict(p, agent, item, verdict, { headline, summary, detail, attempt: args.attempt });
     this.setStatus(p, agent, `Reviewed #${item.seq}`);
-    return { ok: true, stage: item.stage, hint: 'Thanks. Call next.' };
+    return { ok: true, stage: item.stage, ...r, hint: 'Thanks. Call next.' };
   },
 
   comment(p, agent, args) {
@@ -1115,11 +1149,27 @@ Object.assign(Hub.prototype, {
     return changed;
   },
 
-  verdict(p, actor, item, verdict, { headline, summary = '', detail = '' }) {
+  verdict(p, actor, item, verdict, { headline, summary = '', detail = '', attempt }) {
     const who = actor === HUMAN ? 'You' : actor;
     if (verdict === 'accept') {
-      this.move(item, 'done', actor, { holder: null, lease_until: null });
-      this.event(p, { item, actor, type: 'accepted', headline: `${who} accepted #${item.seq}${headline ? `: ${headline}` : ''}`, summary, detail });
+      // A race: keep one attempt, and record the others as not chosen.
+      const kept = this.keptAttempt(item, attempt, actor);
+      const merge = kept && (kept.branch ?? `trellis/${kept.agent}`);
+      if (kept) {
+        for (const a of this.attemptsOf(item).filter((x) => x.stage === 'submitted')) {
+          const chosen = a.agent === kept.agent;
+          this.q('UPDATE attempts SET stage = ? WHERE id = ?').run(chosen ? 'chosen' : 'not_chosen', a.id);
+          if (!chosen) this.event(p, { item, actor, type: 'not_chosen', headline: `${a.agent}'s attempt on #${item.seq} was not chosen`, data: { agent: a.agent } });
+        }
+      }
+      this.move(item, 'done', actor, { holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}) });
+      this.event(p, {
+        item, actor, type: 'accepted',
+        headline: `${who} accepted #${item.seq}${kept ? ` (${kept.agent}'s attempt)` : ''}${headline ? `: ${headline}` : ''}`,
+        summary: [kept ? `Merge ${merge}${kept.branch ? '' : ' (the worker branch convention; check the evidence)'}.` : '', summary].filter(Boolean).join('\n\n'),
+        detail, data: kept ? { kept: kept.agent, merge } : {},
+      });
+      return kept ? { kept: kept.agent, merge } : {};
     } else {
       this.move(item, 'ready', actor, {
         holder: null, lease_until: null, rejections: item.rejections + 1,
@@ -1166,10 +1216,10 @@ const HUMAN_OPS = {
     this.event(p, { item: this.itemById(q.item_id), actor: HUMAN, type: 'assumption_confirmed', headline: `You confirmed ${q.asked_by}'s assumption: ${q.assumption}` });
   },
 
-  accept(p, { item, note }) {
+  accept(p, { item, note, attempt }) {
     const it = this.item(p, item);
     if (it.stage !== 'verifying') throw new UserError(`#${it.seq} is ${it.stage}, not verifying`, { status: 409 });
-    this.verdict(p, HUMAN, it, 'accept', { headline: str(note) });
+    return this.verdict(p, HUMAN, it, 'accept', { headline: str(note), attempt });
   },
 
   sendback(p, { item, note }) {
