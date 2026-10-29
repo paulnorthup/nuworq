@@ -70,13 +70,15 @@ const stagePill = (stage, court) => `<span class="stage-pill ${stage === 'done' 
 const courtOf = (stage) => S.view?.flow.stages.find((s) => s.stage === stage)?.court;
 const LOGO = `<svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="var(--agents)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>`;
 
-function toast(msg, err = false) {
+// undo: { action, note } for a button that reverses what just happened; the toast then stays 8s to give time to use it.
+function toast(msg, err = false, undo = null) {
   const t = $('#toast');
   t.textContent = msg;
+  if (undo) t.insertAdjacentHTML('beforeend', ` <button class="toast-undo" data-action="${esc(undo.action)}" data-note="${esc(undo.note)}">Undo</button>`);
   t.className = err ? 'err' : '';
   t.hidden = false;
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => (t.hidden = true), err ? 5000 : 2200);
+  toast.t = setTimeout(() => (t.hidden = true), undo ? 8000 : err ? 5000 : 2200);
 }
 
 // The hub out of reach (#142): say so in a bar that stays, mark what's on screen as possibly out of date, and
@@ -1175,7 +1177,13 @@ const ACTIONS = {
   'remove-pre': (el) => human('update', { item: el.dataset.item, precondition: {} }, 'Removed: it no longer waits'),
   'check-now': (el) => human('check', { item: el.dataset.item }, 'The hub checks it on its next sweep'),
   dismiss: (el) => human('dismiss', { key: el.dataset.key }),
-  retire: (el) => human('retire', { note: Number(el.dataset.note) }, 'Retired'),
+  // One click retires; the toast's Undo brings the same note back (#146).
+  retire: async (el) => {
+    const note = Number(el.dataset.note);
+    const words = el.closest('.row-item')?.querySelector('.h')?.textContent.trim() ?? '';
+    if (await human('retire', { note })) toast(`Retired${words ? `: ${words.length > 50 ? `${words.slice(0, 50)}…` : words}` : ''}`, false, { action: 'unretire', note });
+  },
+  unretire: async (el) => { $('#toast').hidden = true; await human('unretire', { note: Number(el.dataset.note) }, 'Brought back: agents get it again'); },
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
   connect: () => connect(),
   notify: () => notifySettings(),
