@@ -169,12 +169,28 @@ export class GitHubApp {
   }
 }
 
+// GitHub won't turn auto-merge on for a pull request with nothing left to wait for (no required checks, or
+// they already passed). It says "Pull request Pull request is in clean status": the PR can merge as it is.
+export const CLEAN = /\bis in clean status\b/i;
+
 // What the hub does on GitHub to land accepted work through a pull request (#63), as the app, on the one
-// repository: open the PR (or find the one already open for the branch) and turn on auto-merge (squash).
+// repository: open the PR (or find the one already open for the branch) and turn on auto-merge (squash),
+// or squash-merge it at once when it is already ready; and look at it again on the hub's periodic pass.
 // Also a read-only token for the hub's own mirror of the repository, fetched over HTTPS from web.
 export function prClient(app, { web = 'https://github.com' } = {}) {
   const parts = (repo) => String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/)?.slice(1) ?? [];
   const shape = (pr) => ({ number: pr.number, url: pr.html_url, node_id: pr.node_id, head_ref: pr.head?.ref, head_sha: pr.head?.sha });
+  // The repository's work token, reused until 5 minutes before it expires (memory only): the periodic pass
+  // looks at every landing PR once a minute.
+  const tokens = new Map();
+  const tokenFor = async (repo) => {
+    const have = tokens.get(repo);
+    if (have && Date.parse(have.expires_at) - 5 * 60_000 > app.now()) return have.token;
+    const fresh = await app.mint(repo);
+    tokens.set(repo, fresh);
+    return fresh.token;
+  };
+  const said = (r) => `${r.status}${r.json.message ? `: ${r.json.message}` : ''}`;
   return {
     app,
     web: web.replace(/\/+$/, ''),
@@ -182,7 +198,7 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
     readToken: (repo) => app.mint(repo, CLONE_PERMISSIONS),
     async openPr({ repo, head, base, title, body }) {
       const [owner, name] = parts(repo);
-      const { token } = await app.mint(repo);
+      const token = await tokenFor(repo);
       const r = await app.call('POST', `/repos/${owner}/${name}/pulls`, { title, head, base, body }, token);
       if (r.status === 201) return shape(r.json);
       // Already open for this branch (opened by hand, or by an earlier try): use that one.
@@ -190,16 +206,37 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
         const open = await app.call('GET', `/repos/${owner}/${name}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}`, null, token);
         if (open.status === 200 && open.json[0]) return shape(open.json[0]);
       }
-      throw new Error(`GitHub didn't open the pull request (${r.status}${r.json.message ? `: ${r.json.message}` : ''}${r.json.errors?.[0]?.message ? `; ${r.json.errors[0].message}` : ''})`);
+      throw new Error(`GitHub didn't open the pull request (${said(r)}${r.json.errors?.[0]?.message ? `; ${r.json.errors[0].message}` : ''})`);
     },
+    // { ready: true } when GitHub won't turn it on because the PR has nothing left to wait for: merge it instead.
     async autoMerge({ repo, id }) {
-      const { token } = await app.mint(repo);
       const r = await app.call('POST', '/graphql', {
         query: 'mutation($id: ID!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH }) { clientMutationId } }',
         variables: { id },
-      }, token);
+      }, await tokenFor(repo));
       const error = r.json.errors?.[0]?.message;
+      if (error && CLEAN.test(error)) return { ready: true };
       if (r.status !== 200 || error) throw new Error(error ?? `GitHub answered ${r.status}`);
+      return { ready: false };
+    },
+    // Squash-merge it now: { sha } of the commit it made on the base branch.
+    async merge({ repo, number }) {
+      const [owner, name] = parts(repo);
+      const r = await app.call('PUT', `/repos/${owner}/${name}/pulls/${number}/merge`, { merge_method: 'squash' }, await tokenFor(repo));
+      if (r.status !== 200 || !r.json.merged) throw new Error(`GitHub didn't merge PR #${number} (${said(r)})`);
+      return { sha: r.json.sha ?? '' };
+    },
+    // The PR as GitHub has it now: { state: open | merged | closed, mergeable_state (clean: it can merge as
+    // it is; dirty: it conflicts with its base), auto_merge, base, sha (of the merge, once merged) }.
+    async pull({ repo, number }) {
+      const [owner, name] = parts(repo);
+      const r = await app.call('GET', `/repos/${owner}/${name}/pulls/${number}`, null, await tokenFor(repo));
+      if (r.status !== 200) throw new Error(`GitHub didn't show PR #${number} (${said(r)})`);
+      const pr = r.json;
+      return {
+        state: pr.merged ? 'merged' : pr.state === 'closed' ? 'closed' : 'open', mergeable_state: pr.mergeable_state ?? 'unknown',
+        auto_merge: !!pr.auto_merge, base: pr.base?.ref ?? 'main', sha: pr.merge_commit_sha ?? '',
+      };
     },
   };
 }

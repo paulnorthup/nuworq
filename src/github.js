@@ -94,6 +94,49 @@ function pullRequest(hub, p, body) {
   return { item: `#${item.seq}`, pr: pr.number, state };
 }
 
+// A pull request on record merged without a webhook saying so (the hub merged it, or saw GitHub had): the
+// record and the item move exactly as the merged webhook moves them, so that webhook, arriving later,
+// changes nothing. row: its prs row. In a transaction.
+export function prMerged(hub, p, row, { sha = '', base = 'main' } = {}) {
+  return pullRequest(hub, p, {
+    repository: { full_name: row.repo },
+    pull_request: {
+      number: row.number, title: row.title, state: 'closed', merged: true, html_url: row.url,
+      head: { ref: row.head_ref, sha: row.head_sha }, base: { ref: base }, merge_commit_sha: sha,
+    },
+  });
+}
+
+// What the hub's own look at a landing item's open pull request found (its periodic pass, which a hub needs
+// because no webhook may reach it), as pull() in src/ghapp.js says: merged lands it, as the merged webhook
+// does; closed without merging leaves it in landing, a land job again, saying so; conflicting with main
+// (dirty, or behind it) makes it a land job to rebase the branch (see landHint). In a transaction.
+// True when it changed something.
+export function prSeen(hub, p, row, pr) {
+  row = hub.q('SELECT * FROM prs WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, row.repo, row.number);
+  if (row?.state !== 'open') return false; // a webhook got here first
+  if (pr.state === 'merged') return !!prMerged(hub, p, row, pr);
+  const item = hub.itemById(row.item_id);
+  if (item?.stage !== 'landing') return false;
+  if (pr.state === 'closed') {
+    hub.q(`UPDATE prs SET state = 'closed', updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?`).run(hub.now(), p.id, row.repo, row.number);
+    if (item.holder) hub.patch(item, { holder: null, lease_until: null });
+    hub.event(p, {
+      item, actor: ACTOR, type: 'pr', headline: `PR #${row.number} was closed without merging; #${item.seq} is a land job again`,
+      summary: `Someone closed it on GitHub (${row.url}). The work is still accepted: the next land job puts ${item.branch || 'its branch'} through a new pull request.`,
+      data: { url: row.url, repo: row.repo, number: row.number, state: 'closed' },
+    });
+    return true;
+  }
+  if (['dirty', 'behind'].includes(pr.mergeable_state) && row.blocked !== 'conflict') {
+    // Offered as a land job from now on, to whoever is free: a hold from before the conflict doesn't count.
+    if (item.holder) hub.patch(item, { holder: null, lease_until: null });
+    setBlocked(hub, p, item, row, 'conflict', row.url);
+    return true;
+  }
+  return false;
+}
+
 // Why an open landing PR can't merge, as GitHub says: its branch conflicts with (or is behind) main, which
 // a rebase fixes; or it waits for a person's approval. Checks that fail are handled per check (below).
 // Only a change goes on the record. mergeable_state "unknown" (still computing) leaves things as they are.

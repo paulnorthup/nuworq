@@ -391,6 +391,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
     worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. To land accepted work, follow the hub's steps: rebase onto origin/${main}, run the checks, then \`git push origin <branch>:${main}\`. Never work in the main checkout, ${home}.`
       : worktree ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} with \`git switch -c <branch> ${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, and include the branch and commit in your evidence when you submit. Never work in the main checkout, ${home}.` : '',
+    'While you work, run only the tests that cover what you change; run the full test suite once, just before you submit.',
     'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
 
@@ -421,6 +422,10 @@ function workerSetup(target, agent, flags, s, token = null) {
     const helper = `!NUWORQ_URL=${s.url}${token ? ` NUWORQ_TOKEN=${token}` : ''} node ${JSON.stringify(BIN)} git-credential --as ${name}`;
     lines.push(`export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0=${sq(helper)} GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath GIT_CONFIG_VALUE_1=true`);
   }
+  // Workers each running a Node project's whole suite on every core at once saturate the machine: their test
+  // runs take at most 2 files at a time (unless the operator set otherwise). Node refuses --test-concurrency in
+  // NODE_OPTIONS, so the project's test script reads this (nuworq's own does: scripts/run-tests.js).
+  if (has('package.json')) lines.push('export NUWORQ_TEST_CONCURRENCY=${NUWORQ_TEST_CONCURRENCY:-2}');
   // Started here (--run), the agent speaks JSON, so its usage can be read and recorded (src/usage.js tap).
   const json = flags.run ? { claude: ' \\\n  --output-format stream-json --verbose', codex: ' --json', opencode: ' --format json' }[agent] : '';
   // Model traffic says who it is, so llm-proxy (when it goes through one) can be read per worker (#76).

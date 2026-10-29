@@ -120,6 +120,7 @@ describe('nuworq worker --agent claude', () => {
       assert.ok(allow.includes('Bash(git switch:*)'), 'it makes the branch the hub names');
       assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [`Bash(git -C ${repo} merge --ff-only:*)`], 'no other -C command');
       assert.ok(!allow.some((a) => /git push|^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no origin: never push, no blanket git');
+      assert.doesNotMatch(stdout, /NUWORQ_TEST_CONCURRENCY/, 'not a Node project: its tests are left alone');
     } finally {
       server.close();
     }
@@ -143,6 +144,7 @@ describe('nuworq worker --agent claude', () => {
     g(other, 'add', '.');
     g(other, 'commit', '-q', '-m', 'landed elsewhere');
     g(other, 'push', '-q', 'origin', 'main');
+    writeFileSync(join(repo, 'package.json'), '{}'); // a Node project
 
     const hub = new Hub();
     hub.tx(() => hub.project('gh', { create: true }));
@@ -160,6 +162,14 @@ describe('nuworq worker --agent claude', () => {
       assert.ok(!allow.some((a) => /^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no blanket git');
       assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*`git push origin <branch>:main`/);
       assert.match(stdout, /detached at origin\/main/);
+      assert.match(stdout, /run only the tests that cover what you change; run the full test suite once, just before you submit/);
+      // Its test runs take 2 files at a time (or what the operator set), for every process the agent starts.
+      const cap = stdout.match(/^export NUWORQ_TEST_CONCURRENCY=\S+(?= && \\\n)/m)?.[0];
+      assert.ok(cap && stdout.indexOf(cap) < stdout.indexOf('claude -p'), stdout);
+      const val = (env) => execFileSync('/bin/sh', ['-c', `${cap} && echo $NUWORQ_TEST_CONCURRENCY`], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } }).trim();
+      assert.equal(val({}), '2');
+      assert.equal(val({ NUWORQ_TEST_CONCURRENCY: '4' }), '4');
+      assert.doesNotMatch(stdout, /NODE_OPTIONS/, 'Node refuses --test-concurrency there');
 
       const setup = stdout.match(/^git -C '[^']*' fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
       assert.ok(setup, 'fetch first, then the worktree detached at origin/main');

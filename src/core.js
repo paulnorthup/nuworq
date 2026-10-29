@@ -9,6 +9,7 @@ import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
 import { normPrecondition, describe as describePrecondition } from './precondition.js';
 import { issuesOf, markDuplicate, markStale, staleAnswered } from './issues.js';
+import { prMerged, prSeen } from './github.js';
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -30,6 +31,7 @@ export const HUMAN = 'you';
 export const SYSTEM = 'nuworq';
 const GITHUB = 'github'; // holds accepted work while the hub opens its pull request
 const PR_LEASE = 2 * MIN;
+const PR_PASS = MIN; // how often the hub looks at landing work's pull requests itself (mergeReady)
 const MIRROR_RETRY = 5 * MIN; // after GitHub refuses the app a token for a mirror, ask again this often
 // The hub's own entries on the record: SYSTEM, GitHub's (webhooks, the pull requests it opens), or
 // "trellis" in events recorded before the rename. None of them is an agent.
@@ -211,11 +213,14 @@ export class Hub extends EventEmitter {
     // The app's read tokens for the hub's own mirrors, per remote: { token, expires_at } once minted,
     // { pending } while minting, { error, hint, at } when GitHub said no. Memory only, never the database.
     this._mirrorTokens = new Map();
-    // github: opens pull requests and turns on auto-merge, as the GitHub App ({ covers, openPr, autoMerge }; see
-    // prClient in src/ghapp.js). Set by the server when it has an app; tests set a fake. publicUrl: links in PR bodies.
+    // github: opens pull requests and turns on auto-merge, as the GitHub App ({ covers, openPr, autoMerge, merge,
+    // pull }; see prClient in src/ghapp.js). Set by the server when it has an app; tests set a fake. publicUrl:
+    // links in PR bodies.
     this.github = null;
     this.publicUrl = '';
     this._opening = new Map(); // item id → the pull request being opened for it
+    this._prPass = { at: 0, running: null }; // the periodic look at landing PRs (mergeReady)
+    this._mergeFailed = new Map(); // item id → why GitHub last wouldn't merge its ready PR (on the record once)
     // llmProxy: where measured usage comes from ({ requests }; see proxyClient in src/llmproxy.js). Set by
     // `nuworq serve` from NUWORQ_LLM_PROXY_URL; tests set a fake. null: reported usage only.
     this.llmProxy = null;
@@ -349,6 +354,18 @@ export class Hub extends EventEmitter {
   // Resolves once every pull request being opened is open (or has failed). For tests and shutdown.
   async prsSettled() {
     while (this._opening.size) await Promise.all(this._opening.values());
+  }
+
+  // The hub's own look at landing work's open pull requests, at most once a minute (the server's sweep calls
+  // it): no webhook may reach the hub, and GitHub won't turn auto-merge on for a PR with nothing to wait for.
+  // A PR that is ready with no auto-merge gets merged; one GitHub merged lands its item; one closed, or in
+  // conflict with main, becomes a land job (prSeen in src/github.js). Resolves to how many it landed.
+  mergeReady() {
+    const pass = this._prPass;
+    if (pass.running) return pass.running;
+    if (!this.github?.pull || this.now() - pass.at < PR_PASS) return Promise.resolve(0);
+    pass.at = this.now();
+    return (pass.running = mergeReady.call(this).finally(() => { pass.running = null; }));
   }
 
   // The item's open pull request that conflicts with main (GitHub said so), or null.
@@ -1494,16 +1511,18 @@ function prBody(p, item) {
 }
 
 // Opens the pull request for accepted work, with auto-merge (squash) on, and links it to the item.
-// A failure goes on the record and the item becomes an ordinary land job.
+// A failure goes on the record and the item becomes an ordinary land job. A PR with nothing to wait for (no
+// required checks, or they already passed) gets no auto-merge from GitHub: the hub squash-merges it at once,
+// and that lands the item as GitHub's merged webhook would.
 async function openPr(p, id) {
   let item = this.itemById(id);
   if (item.stage !== 'landing') return;
   const release = () => { const it = this.itemById(id); if (it.holder === GITHUB) this.patch(it, { holder: null, lease_until: null }); };
-  const repo = this.repoOf(p, item);
+  const repo = this.repoOf(p, item), base = this.baseFor(p, item);
   if (this.q(`SELECT 1 FROM prs WHERE item_id = ? AND state = 'open'`).get(id)) return release(); // accepted again: it has one
-  let pr, noAuto = '';
+  let pr, auto, noAuto = '', merged = null, noMerge = '';
   try {
-    pr = await this.github.openPr({ repo, head: item.branch, base: this.baseFor(p, item), title: item.title, body: prBody.call(this, p, item) });
+    pr = await this.github.openPr({ repo, head: item.branch, base, title: item.title, body: prBody.call(this, p, item) });
   } catch (e) {
     this.tx(() => {
       release();
@@ -1514,20 +1533,68 @@ async function openPr(p, id) {
     });
     return this.changed(p);
   }
-  try { await this.github.autoMerge({ repo, number: pr.number, id: pr.node_id }); } catch (e) { noAuto = e.message; }
+  try { auto = await this.github.autoMerge({ repo, number: pr.number, id: pr.node_id }); } catch (e) { noAuto = e.message; }
+  if (auto?.ready) {
+    try { merged = await this.github.merge({ repo, number: pr.number }); } catch (e) { noMerge = e.message; }
+  }
+  let row;
   this.tx(() => {
     item = this.itemById(id);
     this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
         ON CONFLICT (project_id, repo, number) DO UPDATE SET item_id = excluded.item_id, url = excluded.url, state = 'open', updated_at = excluded.updated_at`)
       .run(p.id, repo, pr.number, id, pr.url ?? '', item.title, pr.head_ref ?? item.branch, pr.head_sha ?? '', this.now());
+    row = this.q('SELECT * FROM prs WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, repo, pr.number);
     release();
     this.event(p, {
       item, actor: SYSTEM, type: 'pr',
-      headline: `Opened PR #${pr.number} for #${item.seq}${noAuto ? '' : '; GitHub squash-merges it when its checks pass'}`,
+      headline: `Opened PR #${pr.number} for #${item.seq}${merged ? '; it had nothing to wait for, so the hub squash-merged it'
+        : noAuto || noMerge ? '' : '; GitHub squash-merges it when its checks pass'}`,
       summary: noAuto ? `Auto-merge couldn't be turned on (${clip(noAuto)}): merge it on GitHub, and the hub marks #${item.seq} done.` : '',
-      data: { url: pr.url, repo, number: pr.number, state: 'open', auto_merge: !noAuto },
+      data: { url: pr.url, repo, number: pr.number, state: 'open', auto_merge: !noAuto && !auto?.ready },
     });
+    if (merged) prMerged(this, p, row, { ...merged, base });
   });
+  if (noMerge) mergeFailed.call(this, p, row, noMerge);
+  this.changed(p);
+}
+
+// One pass of mergeReady: each landing item's open pull request, as GitHub has it now.
+async function mergeReady() {
+  const rows = this.q(`SELECT prs.* FROM prs JOIN items i ON i.id = prs.item_id WHERE prs.state = 'open' AND i.stage = 'landing' ORDER BY prs.updated_at`).all();
+  let landed = 0;
+  for (const row of rows.filter((r) => this.github.covers(r.repo))) {
+    let pr;
+    try { pr = await this.github.pull({ repo: row.repo, number: row.number }); } catch { continue; } // GitHub didn't answer: the next pass asks again
+    const p = this.q('SELECT * FROM projects WHERE id = ?').get(row.project_id);
+    if (!p) continue;
+    // Ready with no auto-merge to wait for (opened before the hub merged those, or auto-merge is off).
+    if (pr.state === 'open' && pr.mergeable_state === 'clean' && !pr.auto_merge) {
+      try {
+        pr = { ...pr, ...await this.github.merge({ repo: row.repo, number: row.number }), state: 'merged' };
+        this._mergeFailed.delete(row.item_id);
+      } catch (e) {
+        mergeFailed.call(this, p, row, e.message);
+        continue;
+      }
+    }
+    if (!this.tx(() => prSeen(this, p, row, pr))) continue;
+    if (this.itemById(row.item_id)?.stage === 'done') landed++;
+    this.changed(p);
+  }
+  return landed;
+}
+
+// GitHub wouldn't merge a ready pull request: the reason goes on the record once (until it changes), and the
+// next pass of mergeReady tries again. The item stays in landing.
+function mergeFailed(p, row, why) {
+  const item = this.itemById(row.item_id);
+  if (!item || this._mergeFailed.get(row.item_id) === why) return;
+  this._mergeFailed.set(row.item_id, why);
+  this.tx(() => this.event(p, {
+    item, actor: SYSTEM, type: 'pr_merge_failed', headline: `The hub couldn't merge PR #${row.number} for #${item.seq}, which is ready: ${clip(why)}`,
+    summary: `It tries again within a minute; or merge it on GitHub, and the hub marks #${item.seq} done.`,
+    data: { url: row.url, number: row.number, error: why },
+  }));
   this.changed(p);
 }
 
