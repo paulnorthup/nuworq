@@ -905,27 +905,30 @@ function modal(html) {
 const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''; };
 
 async function connect() {
-  S.info ??= await api('/api/info').catch(() => ({ bin: '/path/to/nuworq/bin/nuworq.js', url: location.origin }));
+  S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
   const slug = S.slug ?? 'my-project';
   const c = connectCommands(S.info, location, slug);
   const url = c.url;
   const gh = await api('/api/github/app').catch(() => null);
   const where = S.view?.project.path;
   modal(`<h2>Connect an agent</h2>
-    <p class="lead">Any model can work here, and many agents at once. Set an agent tool up once: it needs no project. An agent working in a folder the hub knows finds its project; anywhere else, the hub routes it to the work that matters most.</p>
-    ${c.local ? '' : `<h4>Get nuworq on your machine (once)</h4><p class="lead">It has no dependencies beyond Node 22.13+${c.clone ? ', so a clone is the install' : ': clone its repository into ~/nuworq'}.</p>${c.clone ? copyBlock(c.clone) : ''}`}
-    ${c.connect ? `<h4>Connect this machine (once)</h4><p class="lead">It checks the hub answers, logs you in through the browser for this machine's token, and registers nuworq with Claude Code and Codex if they're installed. Undo it all with <code>disconnect</code>.</p>${copyBlock(c.connect)}` : ''}
-    <h4>Start a worker (it goes wherever work is waiting)</h4><p class="lead">Each worker gets its own git worktree and branch, so many can run at once. Run it again for more workers.</p>${copyBlock(c.worker)}
+    <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
+    <h4>1. Install nuworq (once)</h4>
+    ${c.install ? `<p class="lead">From this hub: Node 22.13+, no other dependencies, and it keeps itself up to date.</p>${copyBlock(c.install)}`
+      : '<p class="lead">This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed.</p>'}
+    <h4>2. Connect this machine (once)</h4><p class="lead">It logs you in through the browser, saves this machine's token, and registers nuworq with Claude Code, Codex and opencode if they're installed. <code>nuworq disconnect</code> undoes it all.</p>${copyBlock(c.connect)}
+    <h4>3. Keep workers going</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${copyBlock(c.run)}
+    <p class="lead">One worker on its own, wherever work is waiting:</p>${copyBlock(c.worker)}
     ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
-    ${c.claude ? `<h4>Claude Code (once, for every project)</h4>${copyBlock(c.claude)}` : ''}
-    <h4>OpenAI Codex (~/.codex/config.toml)${c.connect ? ', if you set it up by hand' : ''}</h4>${copyBlock(c.codex)}
+    ${z() >= 2 ? `<h3>Setting up by hand</h3><p class="lead">What <code>nuworq connect</code> does for you. No token or address goes in these: connect saved both, and <code>nuworq mcp</code> reads them.</p>
+    <h4>Claude Code</h4>${copyBlock(c.claude)}
+    <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}
-    ${c.token ? `<p class="lead">By hand, each agent needs its own token, so you can revoke one without the others. Make one on the hub's host, and put it where the config says <code>paste-an-agent-token-here</code>:</p>${copyBlock(c.token)}` : ''}
     <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(c.guide)}
     <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>
-
-    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>x-nuworq-agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
+    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>x-nuworq-agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>`
+      : '<p class="lead">Setting an agent tool up by hand, or your own agent loop? It\'s at <button class="link" data-action="connect-deep">depth 30m</button>.</p>'}
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
 
@@ -1189,6 +1192,7 @@ const ACTIONS = {
   unretire: async (el) => { $('#toast').hidden = true; await human('unretire', { note: Number(el.dataset.note) }, 'Brought back: agents get it again'); },
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
   connect: () => connect(),
+  'connect-deep': () => { S.zoom = '30m'; store.set('zoom', S.zoom); render({ force: true }); connect(); },
   notify: () => notifySettings(),
   github: () => githubSettings(),
   'github-generate': () => {

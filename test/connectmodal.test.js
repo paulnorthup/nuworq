@@ -28,26 +28,37 @@ describe('connect an agent: commands that paste and run', () => {
     }
   });
 
-  test('a hub on another machine: clone nuworq, then connect; never the server\'s own path', () => {
-    const c = connectCommands(REMOTE, { protocol: 'https:', host: 'nuworq.com' }, 'demo');
-    assert.equal(c.local, false);
+  test('install from this hub, connect to it, keep workers going: for a plain hub and a workspace (#105)', () => {
+    const pkg = { url: 'http://nuworq.com/nuworq.tgz', sha256: 'ab'.repeat(32), commit: '1234567' };
+    const c = connectCommands({ ...REMOTE, package: pkg }, { protocol: 'https:', host: 'nuworq.com' }, 'demo');
     assert.equal(c.url, 'https://nuworq.com', 'the page is on https, so the hub is too');
-    assert.equal(c.clone, 'git clone https://github.com/paulnorthup/nuworq.git ~/nuworq');
-    assert.equal(c.connect, 'node ~/nuworq/bin/nuworq.js connect https://nuworq.com');
-    assert.equal(c.claude, null, 'connect registers Claude Code itself, with the token');
-    assert.match(c.worker, /^node ~\/nuworq\/bin\/nuworq\.js worker --agent claude --run$/m);
-    for (const text of Object.values(c)) assert.ok(!String(text).includes('/var/lib/nuworq'), String(text));
-    assert.match(c.codex, /NUWORQ_TOKEN = "paste-an-agent-token-here"/, 'config files say where the token goes, in plain words');
-    assert.equal(connectCommands({ ...REMOTE, source: null }).clone, null, "no source known: the UI says to clone it, without a guessed address");
+    assert.equal(c.install, 'npm install -g https://nuworq.com/nuworq.tgz');
+    assert.equal(c.connect, 'nuworq connect https://nuworq.com');
+    assert.equal(c.run, 'nuworq run --workers 3 --agent claude');
+    assert.equal(c.worker, 'nuworq worker --agent claude --run');
+    assert.equal(c.guide, 'nuworq guide --project demo');
+
+    const w = connectCommands({ ...REMOTE, url: 'https://nuworq.com/w/acme', package: { ...pkg, url: 'https://nuworq.com/nuworq.tgz' } }, null, 'demo');
+    assert.equal(w.install, 'npm install -g https://nuworq.com/nuworq.tgz', 'one package for the whole hub');
+    assert.equal(w.connect, 'nuworq connect https://nuworq.com/w/acme', 'connect names the workspace');
+
+    const here = connectCommands({ bin: '/Users/me/nuworq/bin/nuworq.js', url: 'http://127.0.0.1:4747', auth: 'local', package: { ...pkg, url: 'http://127.0.0.1:4747/nuworq.tgz' } }, null, 'demo');
+    assert.equal(here.install, 'npm install -g http://127.0.0.1:4747/nuworq.tgz', 'a hub on this machine installs the same way');
+    assert.equal(here.connect, 'nuworq connect http://127.0.0.1:4747');
+    assert.equal(connectCommands({ ...REMOTE, package: null }).install, null, 'a hub with no package: the dialog says to install nuworq the way the hub was');
   });
 
-  test('a hub on this machine without login: the hub\'s own copy, Claude Code by hand, nothing to connect', () => {
-    const c = connectCommands({ bin: '/Users/me/nuworq/bin/nuworq.js', url: 'http://127.0.0.1:4747', auth: 'local' }, null, 'demo');
-    assert.equal(c.local, true);
-    assert.equal(c.clone, null);
-    assert.equal(c.connect, null);
-    assert.equal(c.claude, 'claude mcp add --scope user nuworq -- node "/Users/me/nuworq/bin/nuworq.js" mcp');
-    assert.equal(c.guide, 'node "/Users/me/nuworq/bin/nuworq.js" guide --project demo');
+  test('setting up by hand: no token, no address, no path, no clone, in any command or config', () => {
+    for (const info of [REMOTE, { ...REMOTE, package: { url: 'https://nuworq.com/nuworq.tgz' } }, { bin: '/Users/me/nuworq/bin/nuworq.js', url: 'http://127.0.0.1:4747', auth: 'local' }]) {
+      const c = connectCommands(info, null, 'demo');
+      assert.equal(c.claude, 'claude mcp add --scope user nuworq -- nuworq mcp');
+      assert.equal(c.codex, '[mcp_servers.nuworq]\ncommand = "nuworq"\nargs = ["mcp"]\ndefault_tools_approval_mode = "approve"');
+      assert.equal(c.mcp, 'command: nuworq\nargs: ["mcp"]');
+      for (const [k, text] of Object.entries(c)) {
+        if (typeof text !== 'string' || k === 'url') continue;
+        assert.doesNotMatch(text, /git clone|nuworq\.js|\/path\/to|NUWORQ_TOKEN|NUWORQ_URL|paste-an|\bnode /, `${k}: ${text}`);
+      }
+    }
   });
 
   test('/api/info gives the public address when the hub has one, and where nuworq comes from', async () => {
