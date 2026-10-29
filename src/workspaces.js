@@ -42,8 +42,9 @@ export class Workspaces {
 
   static check(slug) {
     const s = String(slug ?? '').trim().toLowerCase();
-    if (!SLUG.test(s) || s.length < 2) throw new UserError(`"${slug}" is not a workspace name`, { hint: '2–40 characters: lowercase letters, digits and dashes, e.g. "acme".' });
-    if (RESERVED.has(s)) throw new UserError(`"${s}" is reserved; pick another workspace name`, { hint: `Reserved for the hub itself: ${[...RESERVED].join(', ')}.` });
+    // People see these as they name an organization (#155): say organization, as sign-up does.
+    if (!SLUG.test(s) || s.length < 2) throw new UserError(`"${slug}" can't be an organization's address`, { hint: '2–40 characters: lowercase letters, digits and dashes, e.g. "acme".' });
+    if (RESERVED.has(s)) throw new UserError(`"${s}" is reserved; pick another address for your organization`, { hint: `Reserved for the hub itself: ${[...RESERVED].join(', ')}.` });
     return s;
   }
 

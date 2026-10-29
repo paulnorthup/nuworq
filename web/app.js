@@ -219,6 +219,7 @@ function render({ force = false } = {}) {
 
 // ── routing ──
 function route() {
+  if (!$('#modal').hidden) closeModal(); // a dialog belongs to the page it was opened on (#155)
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
   const ref = m?.[2] ? `#${m[2]}` : null;
@@ -1126,11 +1127,20 @@ async function notifySettings() {
     <p class="lead">When something new needs you (a blocking question, work to verify, "what matters most?"), nuworq sends one message, batched over 2 minutes, with a link. Healthy work sends nothing. Once a week, each channel also gets one line per project that was busy: what landed, your actions, the cost and escapes. Turn it off per channel.</p>
     ${rows || '<p class="lead faint">No channels yet, so you only learn that something needs you when you open the dashboard. Add one below.</p>'}
     <h4>Add a channel</h4>
-    <div class="inline-form"><select id="nt-kind">${Object.keys(n.kinds).map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
+    <div class="inline-form notify-add"><select id="nt-kind">${Object.keys(n.kinds).map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
       <input id="nt-url" placeholder="https://ntfy.sh/your-secret-topic, a Slack webhook, or any URL"><button class="btn primary small" data-action="notify-add">Add</button></div>
     ${n.person ? `<label class="faint"><input type="checkbox" id="nt-mine" checked> Only what needs me (${esc(n.person)}); unchecked, an owner's channel gets everyone's</label>` : ''}
-    <p class="lead">${Object.entries(n.kinds).map(([k, v]) => `<b>${esc(k)}</b>: ${esc(v)}`).join('<br>')}</p>
+    <p class="lead" id="nt-help"></p>
     <div class="foot">${n.channels.length ? '<button class="btn" data-action="notify-test">Send a test</button>' : ''}<button class="btn primary" data-action="close-modal">Done</button></div>`);
+  // Only the chosen kind's help (#155): the others are noise until picked.
+  const example = { ntfy: 'https://ntfy.sh/topic', slack: 'https://hooks.slack.com/…' };
+  const help = () => {
+    const k = $('#nt-kind').value;
+    $('#nt-help').innerHTML = `<b>${esc(k)}</b>: ${esc(n.kinds[k])}`;
+    $('#nt-url').placeholder = example[k] ?? 'https://…';
+  };
+  $('#nt-kind').addEventListener('change', help);
+  help();
 }
 
 // Where the hub's GitHub App stands (/api/github/app), one line and its next step, so a person who closed a
@@ -1360,9 +1370,22 @@ const ACTIONS = {
   archived: async () => {
     try {
       const list = await api('/api/projects?archived=1');
-      modal(`<h2>Archived projects</h2>${list.length ? list.map((p) => `<div class="row-item"><div class="body"><div class="h">${esc(p.name)}</div>${p.remotes.length ? `<div class="s">${esc(p.remotes.join(', '))}</div>` : ''}</div><button class="btn small" data-action="restore-project" data-slug="${esc(p.slug)}">Restore</button></div>`).join('') : '<p class="lead faint">No archived projects. Removing a project archives it: its history is kept, and you can restore it here.</p>'}
+      modal(`<h2>Archived projects</h2>${list.length ? list.map((p) => `<div class="row-item"><div class="body"><div class="h">${esc(p.name)}</div>${p.remotes.length ? `<div class="s">${esc(p.remotes.join(', '))}</div>` : ''}</div>
+        <div class="acts"><button class="btn ghost small" data-action="delete-archived" data-slug="${esc(p.slug)}" data-name="${esc(p.name)}">Delete for good</button><button class="btn small" data-action="restore-project" data-slug="${esc(p.slug)}">Restore</button></div></div>`).join('') : '<p class="lead faint">No archived projects. Removing a project archives it: its history is kept, and you can restore it here.</p>'}
         <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
     } catch (e) { toastError(e); }
+  },
+  // An archived project deleted for good (#155): the same typed-name check as Remove project.
+  'delete-archived': (el) => modal(`<h2>Delete ${esc(el.dataset.name)} for good</h2>
+    <p class="lead">This removes its items, history, notes and the hub's mirror for good, and tokens limited to it lose it. The repository on GitHub is not touched. Type <code>${esc(el.dataset.name)}</code> to delete it.</p>
+    <div class="form"><input id="rm-archived" placeholder="${esc(el.dataset.name)}"></div>
+    <div class="foot"><button class="btn ghost" data-action="archived">Back</button><button class="btn" data-action="delete-archived-now" data-slug="${esc(el.dataset.slug)}">Delete for good</button></div>`),
+  'delete-archived-now': async (el) => {
+    try {
+      await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/delete`, { method: 'POST', body: JSON.stringify({ confirm: val('rm-archived') }) });
+      toast('Deleted for good');
+      ACTIONS.archived();
+    } catch (e) { toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true); }
   },
   'restore-project': async (el) => {
     try {

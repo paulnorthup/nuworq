@@ -61,7 +61,7 @@ describe('the workspace registry', () => {
     spaces.remove('acme');
     assert.deepEqual(readdirSync(dir), []);
     assert.equal(spaces.get('acme'), null);
-    assert.throws(() => spaces.create('Bad Name!'), /not a workspace name/);
+    assert.throws(() => spaces.create('Bad Name!'), /can't be an organization's address/);
     assert.throws(() => spaces.create('www'), /reserved/);
     spaces.create('acme');
     assert.throws(() => spaces.create('acme'), /already exists/);
