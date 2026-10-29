@@ -8,6 +8,8 @@ import { envVar, dataDir, CONFIG_FILES } from './names.js';
 export const DEFAULT_URL = 'http://127.0.0.1:4747';
 // `nuworq serve` writes where it is listening, so clients find the hub without configuration.
 export const HUB_FILE = join(dataDir(), 'hub.json');
+// `nuworq connect <url>` writes the hub this machine works with, and its token (readable only by you).
+export const CONNECT_FILE = join(dataDir(), 'connect.json');
 
 // The nearest .nuworq.json (or older .trellis.json) walking up from dir, or null.
 export function findConfig(dir = process.cwd()) {
@@ -47,13 +49,28 @@ function discoveredUrl() {
   try { return JSON.parse(readFileSync(HUB_FILE, 'utf8')).url || null; } catch { return null; }
 }
 
+export function connected() {
+  try {
+    const c = JSON.parse(readFileSync(CONNECT_FILE, 'utf8'));
+    return c?.url ? { url: String(c.url).replace(/\/+$/, ''), token: String(c.token ?? '') } : null;
+  } catch {
+    return null;
+  }
+}
+
 // project is null unless someone named it (flag, env, or .nuworq.json): otherwise the hub decides,
 // from the folder the agent is in, or by routing it to the work that matters most.
+// The hub: flag, env, .nuworq.json, the connected hub, the one serving on this machine, the default.
+// The token: flag, env, then the connected hub's, which is only ever sent to that hub.
 export function resolveSettings({ url, project, token, cwd = process.cwd() } = {}) {
   const config = findConfig(cwd);
-  const hubUrl = (url || envVar('URL') || config?.url || discoveredUrl() || DEFAULT_URL).replace(/\/+$/, '');
+  const conn = connected();
+  const hubUrl = (url || envVar('URL') || config?.url || conn?.url || discoveredUrl() || DEFAULT_URL).replace(/\/+$/, '');
   const named = project || envVar('PROJECT') || config?.project;
-  return { url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd), token: token ?? envVar('TOKEN') ?? '', config };
+  return {
+    url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd),
+    token: token ?? envVar('TOKEN') ?? (conn?.url === hubUrl ? conn.token : ''), config,
+  };
 }
 
 export class HubError extends Error {

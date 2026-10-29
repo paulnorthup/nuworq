@@ -9,10 +9,13 @@ const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 export const RESERVED = new Set(['www', 'api', 'app', 'admin', 'w', 'static', 'login']);
 
 export class Workspaces {
-  constructor({ dir, clock } = {}) {
+  // repos: where hubs keep mirrors of repositories they have no checkout of; each workspace gets
+  // its own folder there, like its own database.
+  constructor({ dir, clock, repos = null } = {}) {
     if (!dir) throw new Error('Workspaces needs a directory');
     this.dir = dir;
     this.clock = clock;
+    this.repos = repos;
     this.open = new Map(); // slug → Hub
     mkdirSync(dir, { recursive: true });
   }
@@ -47,7 +50,7 @@ export class Workspaces {
       return null;
     }
     if (!hub && existsSync(this.file(s))) {
-      hub = new Hub({ file: this.file(s), ...(this.clock ? { clock: this.clock } : {}) });
+      hub = new Hub({ file: this.file(s), repos: this.repos && join(this.repos, s), ...(this.clock ? { clock: this.clock } : {}) });
       hub.workspace = s;
       this.open.set(s, hub);
     }

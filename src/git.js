@@ -1,8 +1,8 @@
 // What git says about a submission: the worker's branch, its commits, and whether commits named in
 // the evidence exist. Shells out to git with short timeouts; any failure means "no git facts".
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 
 const MAX_COMMITS = 20;
 const HASH = /\b[0-9a-f]{7,40}\b/g;
@@ -26,7 +26,11 @@ export function claimedHashes({ evidence = [], headline = '', summary = '' }) {
   return [...out];
 }
 
-export const isRepo = (repo) => !!repo && existsSync(join(repo, '.git')) && git(repo, 'rev-parse', '--git-dir') !== null;
+// A checkout (with .git in it), or a bare repository such as the hub's mirrors. A plain folder
+// inside some other repository doesn't count.
+export const isRepo = (repo) => !!repo && existsSync(repo) && (existsSync(join(repo, '.git'))
+  ? git(repo, 'rev-parse', '--git-dir') !== null
+  : git(repo, 'rev-parse', '--git-dir') === '.');
 export const baseOf = (repo) => ['main', 'master'].find((b) => exists(repo, b)) ?? null;
 export const branchExists = exists;
 export const headOf = (repo, ref) => git(repo, 'rev-parse', '--short', ref);
@@ -62,8 +66,67 @@ export function gitFacts(repo, agent, claim, own = '') {
 // One line for the human, or null when git has nothing to worry about.
 export function gitWarning(g) {
   if (!g) return null;
+  if (g.unpushed) return `${g.unpushed} isn't on origin yet; push it (git push -u origin ${g.unpushed}) so reviewers anywhere can see it`;
   if (g.missing.length) return `Evidence names commit ${g.missing.join(', ')}, which isn't in the repo`;
   if (g.branch && g.base && !g.commits.length) return `No commits on ${g.branch} ahead of ${g.base}`;
   if (g.behind) return `${g.branch} is ${g.behind} commit(s) behind ${g.base}; rebase onto ${g.base} so the review sees what will land`;
   return null;
+}
+
+// ── the hub's own mirror ──────────────────────────────────────────────────
+// When the hub has no checkout of a project on its machine (it runs on a server, agents elsewhere),
+// it keeps a bare mirror of the project's repository and asks that instead: <dir>/github.com/acme/api.git.
+// In a mirror, branches are plain local refs (main, nuworq/12-x), so every question above works on it.
+
+const FETCH_EVERY = 10_000; // heartbeats ask often; the remote is asked at most this often unless it must be
+const CLONE_MS = 120_000, FETCH_MS = 30_000;
+const fetched = new Map(); // mirror path → { at, error }: shared by every hub in this process
+
+// Where to fetch from. github.com (and any host/owner/repo) over SSH, so a read-only deploy key is
+// enough; a path (a repository on this machine) as it is. null for anything else.
+export function mirrorSource(remote) {
+  const r = String(remote ?? '');
+  if (r.startsWith('/')) return r.split('/').some((s) => s === '..') ? null : r;
+  const [host, ...rest] = r.split('/');
+  if (!/^[a-z0-9][a-z0-9.-]*$/.test(host) || rest.length < 2 || !rest.every((s) => /^[\w.-]+$/.test(s) && !/^\.+$/.test(s))) return null;
+  return `git@${host}:${rest.join('/')}.git`;
+}
+
+export function mirrorPath(dir, remote) {
+  const parts = String(remote ?? '').split('/').filter(Boolean);
+  if (!parts.length || parts.some((s) => /^\.+$/.test(s))) return null;
+  return `${join(dir, ...parts)}.git`;
+}
+
+// Git over the network: no prompts (a hub has nobody to answer them), bounded in time.
+// Returns null, or the last line git said about the failure.
+function netGit(args, timeout) {
+  const quiet = process.env.GIT_SSH_COMMAND || process.env.GIT_SSH || git('.', 'config', '--get', 'core.sshCommand')
+    ? {} : { GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10' };
+  try {
+    execFileSync('git', args, { timeout, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...quiet } });
+    return null;
+  } catch (e) {
+    return String(e.stderr ?? '').trim().split('\n').filter(Boolean).pop() || (e.signal ? 'timed out' : e.message);
+  }
+}
+
+// The mirror of remote under dir, created or fetched first: { path } or { error }. fresh: fetch
+// now, whenever it was last fetched (before deciding a landing); otherwise at most every FETCH_EVERY.
+export function mirror(dir, remote, { fresh = false } = {}) {
+  const path = mirrorPath(dir, remote), source = mirrorSource(remote);
+  if (!path || !source) return { error: `${remote} isn't a repository address the hub can fetch` };
+  const last = fetched.get(path);
+  if (!fresh && last && Date.now() - last.at < FETCH_EVERY) return last.error ? { error: last.error } : { path };
+  let error;
+  if (isRepo(path)) {
+    error = netGit(['-C', path, 'fetch', '-q', '--prune'], FETCH_MS);
+  } else {
+    // A clone cut short leaves a folder that isn't a repository yet: start again.
+    rmSync(path, { recursive: true, force: true });
+    mkdirSync(dirname(path), { recursive: true });
+    error = netGit(['clone', '-q', '--mirror', '--', source, path], CLONE_MS);
+  }
+  fetched.set(path, { at: Date.now(), error });
+  return error ? { error } : { path };
 }

@@ -119,7 +119,55 @@ describe('nuworq worker --agent claude', () => {
       assert.ok(allow.includes(`Bash(git -C ${repo} merge --ff-only:*)`));
       assert.ok(allow.includes('Bash(git switch:*)'), 'it makes the branch the hub names');
       assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [`Bash(git -C ${repo} merge --ff-only:*)`], 'no other -C command');
-      assert.ok(!allow.some((a) => /git push|^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'never push, no blanket git');
+      assert.ok(!allow.some((a) => /git push|^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no origin: never push, no blanket git');
+    } finally {
+      server.close();
+    }
+  });
+
+  test('with an origin: fetches, starts at origin/main, may fetch and push nuworq/ branches only', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-origin-')));
+    const g = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const origin = join(dir, 'origin.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+    const repo = join(dir, 'app');
+    g(dir, 'clone', '-q', origin, repo);
+    writeFileSync(join(repo, 'f'), 'x');
+    g(repo, 'add', '.');
+    g(repo, 'commit', '-q', '-m', 'init');
+    g(repo, 'push', '-q', 'origin', 'main');
+    // Someone landed on GitHub since this clone last fetched: the worker starts from that.
+    const other = join(dir, 'other');
+    g(dir, 'clone', '-q', origin, other);
+    writeFileSync(join(other, 'g'), 'y');
+    g(other, 'add', '.');
+    g(other, 'commit', '-q', '-m', 'landed elsewhere');
+    g(other, 'push', '-q', 'origin', 'main');
+
+    const hub = new Hub();
+    hub.tx(() => hub.project('gh', { create: true }));
+    hub.humanOp('gh', 'settings', { path: repo });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'gh', '--agent', 'claude', '--as', 'c-2'],
+        { env: { ...process.env, NUWORQ_TOKEN: '' } });
+      const allow = stdout.match(/--allowedTools '([^']*)'/)[1].split(',');
+      assert.ok(allow.includes('Bash(git fetch:*)'));
+      assert.deepEqual(allow.filter((a) => /git push/.test(a)), ['Bash(git push origin nuworq/:*)'], 'no other push, and no bare git push');
+      assert.ok(allow.includes(`Bash(git -C ${repo} merge --ff-only:*)`), 'kept for a hub that lands in this checkout');
+      assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [`Bash(git -C ${repo} merge --ff-only:*)`], 'no other -C command');
+      assert.ok(!allow.some((a) => /^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no blanket git');
+      assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push -u origin <branch>`\).*`git push origin <branch>:main`/);
+      assert.match(stdout, /detached at origin\/main/);
+
+      const setup = stdout.match(/^git -C '[^']*' fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
+      assert.ok(setup, 'fetch first, then the worktree detached at origin/main');
+      execFileSync('/bin/sh', ['-c', setup.replace(/ \\\n/g, ' ')]);
+      const wt = `${repo}.worktrees/c-2`;
+      assert.equal(g(wt, 'rev-parse', 'HEAD'), g(origin, 'rev-parse', 'main'), 'at the latest main on GitHub');
+      assert.notEqual(g(repo, 'rev-parse', 'main'), g(origin, 'rev-parse', 'main'), 'not the stale local main');
+      g(repo, 'worktree', 'remove', '--force', wt);
     } finally {
       server.close();
     }
