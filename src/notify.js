@@ -197,3 +197,39 @@ export class Notifier {
     return results;
   }
 }
+
+// Many workspaces in one process: each has its own channels, so each gets its own notifier, linking to
+// its own address (baseUrlFor(name)). Workspaces created while serving are picked up within `every` ms.
+// A workspace whose hub closes (evicted, or removed, even from another process) loses its notifier;
+// re-created, it gets a fresh one. Returns { notifiers (name → Notifier), sweep(), stop() }.
+export function notifyWorkspaces(spaces, baseUrlFor, { every = 30_000, ...opts } = {}) {
+  const notifiers = new Map();
+  const sweep = () => {
+    const names = spaces.list();
+    for (const [name, n] of notifiers) {
+      if (names.includes(name)) continue;
+      spaces.get(name); // removed from the host: lets its hub go
+      n.stop();
+      notifiers.delete(name);
+    }
+    for (const name of names) {
+      if (notifiers.has(name)) continue;
+      const hub = spaces.get(name);
+      if (!hub) continue;
+      const n = new Notifier(hub, { baseUrl: baseUrlFor(name), ...opts }).start();
+      hub.once('closed', () => { n.stop(); if (notifiers.get(name) === n) notifiers.delete(name); });
+      notifiers.set(name, n);
+    }
+  };
+  sweep();
+  const timer = setInterval(sweep, every);
+  timer.unref?.();
+  return { notifiers, sweep, stop: () => { clearInterval(timer); for (const n of notifiers.values()) n.stop(); } };
+}
+
+// A workspace's address, for links in pushes: its subdomain of baseDomain, else /w/<name>/ under the hub.
+export function workspaceUrl(name, { baseDomain = '', publicUrl = '', url = '' } = {}) {
+  const base = (publicUrl || url).replace(/\/+$/, '');
+  if (baseDomain) return `${base.startsWith('http://') ? 'http' : 'https'}://${name}.${baseDomain}`;
+  return `${base}/w/${encodeURIComponent(name)}`;
+}

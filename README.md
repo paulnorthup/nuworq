@@ -191,9 +191,4 @@ Loopback is open. Anything else needs tokens: *human* tokens log in to the UI, *
 `npm test` covers leases, steering, parking and answers, assumptions and overrides, peer-review rules, layered text, the HTTP errors, MCP over stdio, the CLI end to end, and the auth model.
 
 ### Where it could go next
-These are proposals in the `nuworq` project (`nuworq seed`):
-- parallel attempts, where two models race one item
-- routing work by capability fit
-- linking git commits and PRs to items
-- cost per item
-- pushing the 30-second digest to your phone, but only when something needs you
+What's next lives on the hub, as proposals in the `nuworq` project, not in this file (it went stale here: races, routing by fit, git and PR links, cost per item and phone push all exist now).
