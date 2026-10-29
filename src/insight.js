@@ -23,15 +23,16 @@ const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mis
 
 // The home: does anything need you, anywhere? One aggregate pulse, every act entry of the viewer's across
 // projects (tagged with its project, oldest first as on a project page), then one line per project. 5m adds
-// worth knowing per project and what's in motion. Parked projects are listed (with their own needs count)
-// but never set the pulse: what they need waits until they're unparked.
+// worth knowing per project and what's in motion. A parked project's state and agents never set the pulse,
+// but what it already asked of you (a blocking question, work to verify) still needs you, so it counts here as
+// it does on its own line and badge (#152). Parking only stops new asks: direction and staffing.
 const URGENCY = ['needs-you', 'stalled', 'flowing', 'idle'];
 export function homeView(hub, { viewer } = {}) {
   const t = hub.now();
   const rows = hub.projects().map((p) => ({ p, v: view(hub, p.slug, { light: true, viewer }) }));
   const tag = (p) => ({ slug: p.slug, name: p.name });
   const live = rows.filter(({ p }) => !p.parked);
-  const needs = live.flatMap(({ p, v }) => v.attention.filter((a) => a.level === 'act').map((a) => ({ ...a, project: tag(p) })))
+  const needs = rows.flatMap(({ p, v }) => v.attention.filter((a) => a.level === 'act').map((a) => ({ ...a, project: tag(p) })))
     .sort((a, b) => a.at - b.at);
   const state = needs.length ? 'needs-you' : URGENCY.find((s) => live.some(({ v }) => v.pulse.state === s)) ?? 'idle';
   const across = (n) => (n > 1 ? ` across ${plural(n, 'project')}` : '');
