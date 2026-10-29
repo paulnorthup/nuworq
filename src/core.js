@@ -2,6 +2,7 @@
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
 import { openDb } from './db.js';
+import { findSecret } from './secrets.js';
 
 export class UserError extends Error {
   constructor(message, { status = 400, hint } = {}) {
@@ -118,6 +119,17 @@ export function normPaths(v) {
 }
 const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
 const normDir = (d) => str(d).replace(/\/+$/, '');
+
+// Refuse a write that carries a secret, before anything is stored. The error names the field, never the value.
+function refuseSecrets(args) {
+  const hit = findSecret(args);
+  if (hit) {
+    throw new UserError(`${hit.path} looks like ${hit.kind}; nothing was saved`, {
+      status: 422,
+      hint: `Remove or redact it (e.g. "sk-…abcd") and send again. Secrets don't belong in Trellis: everything written here is stored and shown to others.`,
+    });
+  }
+}
 
 export function slugify(s) {
   return str(s).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
@@ -576,6 +588,7 @@ export class Hub extends EventEmitter {
   agentOp(slug, op, name, args = {}, { root = '' } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
+    refuseSecrets(args);
     this.sweep();
     const agent = this.requireAgent(name);
     let p;
@@ -1336,6 +1349,7 @@ Object.assign(Hub.prototype, {
   humanOp(slug, action, args = {}, by = HUMAN) {
     const fn = HUMAN_OPS[action];
     if (!fn) throw new UserError(`Unknown action "${action}"`, { status: 404 });
+    refuseSecrets(args);
     this.sweep();
     const p = this.project(slug, { create: action === 'create' && args.createProject });
     const result = this.tx(() => fn.call(this, p, args ?? {}, by)) ?? {};
