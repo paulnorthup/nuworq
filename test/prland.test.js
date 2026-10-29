@@ -199,6 +199,27 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     assert.equal(w.events(1, 'pushed').length, 1);
   });
 
+  test("the hub stopped while opening the PR: the land job says submit (the hub opens it), never push to main", async () => {
+    const w = world();
+    w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+    const j = w.build('a1');
+    const openPr = w.hub.github.openPr;
+    w.hub.github.openPr = () => new Promise(() => {}); // GitHub never answers, then the hub restarts
+    w.hub.humanOp('demo', 'accept', { item: '#1' });
+    await new Promise((r) => setImmediate(r));
+    w.hub._opening.clear();
+    w.hub.github.openPr = openPr;
+    w.advance(3 * 60_000); // the hub's hold on it lapses
+    const land = w.op('a1', 'next');
+    assert.equal(land.mode, 'land');
+    assert.match(land.hint, new RegExp(`${j.branch} is on origin but has no pull request yet\\. Submit #1: the hub opens one`));
+    assert.doesNotMatch(land.hint, /push origin \S+:main/);
+    w.op('a1', 'submit', { item: '#1', headline: 'Submitted' });
+    await w.hub.prsSettled();
+    assert.equal(w.calls.opened.length, 1, 'opened on submit');
+    assert.equal(w.item(1).stage, 'landing');
+  });
+
   test("GitHub refusing the PR goes on the record and it becomes an ordinary land job", async () => {
     const w = world({ fail: 'GitHub didn\'t open the pull request (403: Resource not accessible by integration)' });
     w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });

@@ -1308,6 +1308,10 @@ export class Hub extends EventEmitter {
       if (pr) return where + PR_REBASE_HINT(item, pr, base);
       if (unseen) return where + PR_LAND_HINT(item);
       if (this.prFailed(item)) return `${where}The hub couldn't open a pull request for it (see its history), so land it by hand. ${LAND_HINT(item, p, base, remote)}`;
+      const open = this.q(`SELECT number FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
+      if (open) return `${where}PR #${open.number} is open with auto-merge on: GitHub merges it once its checks pass, and that marks #${item.seq} done. Nothing to push.`;
+      // On origin with no pull request yet (the hub stopped while opening it): submit, and the hub opens it.
+      return where + PR_OPEN_HINT(item);
     }
     return where + LAND_HINT(item, p, base, remote, unseen);
   }
@@ -1395,6 +1399,7 @@ const LAND_HINT = (item, p, base = 'main', remote = false, unseen = false) => re
 
 // Remote work that lands through a pull request: the lander only pushes; the hub opens the PR.
 const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
+const PR_OPEN_HINT = (item) => `${item.branch} is on origin but has no pull request yet. Submit #${item.seq}: the hub opens one with auto-merge on, and GitHub's merge marks it done. Don't push to main yourself.`;
 
 // Its pull request conflicts with main: rebase the branch and push it again; the PR and its auto-merge stay.
 const PR_REBASE_HINT = (item, pr, base = 'main') => [
