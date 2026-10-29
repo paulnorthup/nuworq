@@ -9,7 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
-import { fileInTarball } from '../src/update.js';
+import { fileInTarball, releaseOf } from '../src/update.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
@@ -48,8 +48,9 @@ describe('/nuworq.tgz', () => {
     const again = await fetch(`${url}/nuworq.tgz`);
     assert.equal(again.headers.get('etag'), `"${sha}"`, 'built once, served from the cache');
     // It knows which commit it is, so an install can tell whether the hub has a newer one (#107).
-    const commit = execFileSync('git', ['-C', clone, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    assert.equal(fileInTarball(body, 'src/commit.txt').toString().trim(), commit);
+    // With its commit time, which orders releases: an update is never older than what runs (#128).
+    const [commit, time] = execFileSync('git', ['-C', clone, 'log', '-1', '--format=%H %ct'], { encoding: 'utf8' }).trim().split(' ');
+    assert.deepEqual(releaseOf(fileInTarball(body, 'src/commit.txt')), { commit, time: Number(time) });
   });
 
   test('its release signature is served only when one was put beside it', async () => {

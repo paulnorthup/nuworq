@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { update, describeUpdate, offReason, fileInTarball, runningCommit, CHECK_EVERY } from '../src/update.js';
+import { update, describeUpdate, offReason, fileInTarball, runningCommit, releaseOf, CHECK_EVERY } from '../src/update.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
@@ -18,20 +18,22 @@ const keyPair = () => {
 };
 const RELEASE = keyPair(), OTHER = keyPair();
 const OLD = 'a'.repeat(40), NEW = 'b'.repeat(40);
+const OLD_T = 1_790_000_000, NEW_T = OLD_T + 3600; // committer times (unix seconds)
+const line = (commit, time) => `${commit}${time == null ? '' : ` ${time}`}\n`;
 
-// An installed package: its commit and the release key it pinned.
-function installed({ pub = RELEASE.pub, commit = OLD } = {}) {
+// An installed package: its commit (and time) and the release key it pinned.
+function installed({ pub = RELEASE.pub, commit = OLD, time = OLD_T } = {}) {
   const root = tmp('nuworq-upd-root-');
   mkdirSync(join(root, 'src'));
-  writeFileSync(join(root, 'src', 'commit.txt'), `${commit}\n`);
+  writeFileSync(join(root, 'src', 'commit.txt'), line(commit, time));
   if (pub) writeFileSync(join(root, 'release-key.pub'), pub);
   return root;
 }
 // A package tarball in npm's layout, carrying the given release key.
-function tarball({ pub = RELEASE.pub, commit = NEW } = {}) {
+function tarball({ pub = RELEASE.pub, commit = NEW, time = NEW_T } = {}) {
   const dir = tmp('nuworq-upd-pkg-');
   mkdirSync(join(dir, 'package', 'src'), { recursive: true });
-  writeFileSync(join(dir, 'package', 'src', 'commit.txt'), `${commit}\n`);
+  writeFileSync(join(dir, 'package', 'src', 'commit.txt'), line(commit, time));
   writeFileSync(join(dir, 'package', 'package.json'), '{"name":"nuworq"}');
   if (pub) writeFileSync(join(dir, 'package', 'release-key.pub'), pub);
   execFileSync('tar', ['-czf', join(dir, 'p.tgz'), '-C', dir, 'package']);
@@ -72,11 +74,11 @@ describe('the package updates itself only to a release signed by its pinned key'
     } finally { hub.close(); }
   });
 
-  const refusedFor = async (hubOpts, why) => {
+  const refusedFor = async (hubOpts, why, root = installed()) => {
     const hub = await fakeHub(hubOpts);
     try {
       const { calls, install } = installer();
-      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
+      const r = await update({ root, hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
       assert.equal(r.status, 'refused');
       assert.match(r.reason, why);
       assert.match(r.reason, /Kept the installed version/);
@@ -107,6 +109,32 @@ describe('the package updates itself only to a release signed by its pinned key'
   test('a new package that pins a different release key', async () => {
     const tgz = tarball({ pub: OTHER.pub });
     await refusedFor({ tgz, sig: sigOf(tgz) }, /carries a different release key; changing keys takes a reinstall by hand/);
+  });
+
+  test('an older release, validly signed, is refused: updates never go back', async () => {
+    const tgz = tarball({ time: OLD_T - 86400 });
+    await refusedFor({ tgz }, /bbbbbbb \(2026-09-20 \d\d:\d\d UTC\) isn't newer than the installed aaaaaaa \(2026-09-21 \d\d:\d\d UTC\); updates never go back/);
+    const same = tarball({ time: OLD_T });
+    await refusedFor({ tgz: same }, /isn't newer than the installed/, installed());
+  });
+
+  test("a signed package that doesn't say when it was made is refused by an install that knows its own time", async () => {
+    await refusedFor({ tgz: tarball({ time: null }) }, /doesn't say when it was made/);
+  });
+
+  test('an install from before release times takes a signed release once; after that it orders them', async () => {
+    const hub = await fakeHub();
+    try {
+      const { calls, install } = installer();
+      const r = await update({ root: installed({ time: null }), hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
+      assert.equal(r.status, 'updated', describeUpdate(r));
+      assert.equal(calls.length, 1);
+    } finally { hub.close(); }
+  });
+
+  test('the signed package must be the version the hub named', async () => {
+    const tgz = tarball({ commit: 'c'.repeat(40) });
+    await refusedFor({ tgz }, /the signed package says it is ccccccc, not bbbbbbb/);
   });
 
   test('the same version is current; nothing downloads', async () => {
@@ -146,12 +174,18 @@ describe('the package updates itself only to a release signed by its pinned key'
     } finally { hub.close(); }
   });
 
-  test('npm failing keeps the version and names the command to run by hand', async () => {
-    const hub = await fakeHub();
+  test('npm failing keeps the version and names the command to install the verified file by hand', async () => {
+    const tgz = tarball();
+    const hub = await fakeHub({ tgz });
     try {
-      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), install: async () => 'EACCES: permission denied', force: true });
+      const dir = tmp('nuworq-upd-data-');
+      const r = await update({ root: installed(), hub: hub.url, dir, install: async () => 'EACCES: permission denied', force: true });
       assert.equal(r.status, 'failed');
-      assert.match(describeUpdate(r), new RegExp(`EACCES.*Run it yourself: npm install -g ${hub.url}/nuworq.tgz`));
+      const file = join(dir, `nuworq-${NEW.slice(0, 7)}.tgz`);
+      assert.equal(r.command, `npm install -g ${file}`, 'the file that verified, not a fresh download from the hub');
+      assert.ok(readFileSync(file).equals(tgz));
+      assert.match(describeUpdate(r), /EACCES.*Run it yourself: npm install -g \//);
+      assert.doesNotMatch(describeUpdate(r), /nuworq\.tgz$|127\.0\.0\.1/);
     } finally { hub.close(); }
   });
 
@@ -181,6 +215,9 @@ describe('the package updates itself only to a release signed by its pinned key'
 
   test('a package knows its commit; a checkout does not', () => {
     assert.equal(runningCommit(installed()), OLD);
+    assert.equal(runningCommit(installed({ time: null })), OLD, 'a package from before release times');
+    assert.deepEqual(releaseOf(`${NEW} ${NEW_T}\n`), { commit: NEW, time: NEW_T });
+    assert.equal(releaseOf('$Format:%H %ct$'), null);
     assert.equal(runningCommit(fileURLToPath(new URL('..', import.meta.url))), null, 'the $Format placeholder is not a commit');
   });
 });
