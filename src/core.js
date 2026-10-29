@@ -1053,7 +1053,8 @@ export class Hub extends EventEmitter {
     // A clone of the project's repository is the right place to work, wherever it sits on disk.
     const ownClone = !!remote && this.projectByRemote(remote)?.id === p.id;
     const result = this.tx(() => {
-      const presence = this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
+      // The runner posts a worker's usage after it exited: that's bookkeeping, not the agent being here.
+      const presence = op === 'usage' ? null : this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
       this.noteToken(p, agent, token?.name);
       if (token?.role === 'agent') this.q('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ?').run(token.id, p.id, agent);
       const need = powers && this.powerFor(p, op, args ?? {});

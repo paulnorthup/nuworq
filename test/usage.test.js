@@ -100,6 +100,26 @@ describe('agent-reported usage', () => {
   });
 });
 
+describe("a worker's usage, posted after it exits", () => {
+  test("doesn't bring a signed-off worker back online; the usage is still recorded", () => {
+    let t = Date.UTC(2026, 9, 29, 9);
+    const hub = new Hub({ clock: () => t });
+    hub.tx(() => hub.project('demo', { create: true }));
+    hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+    const op = (name, args = {}) => hub.agentOp('demo', name, 'w1', args);
+    op('checkin', { model: 'claude-opus-5-5' });
+    op('next');
+    op('submit', { item: '#1', headline: 'Done' });
+    op('signoff', { headline: 'Leaving' });
+    const before = { ...hub.q("SELECT signed_off, last_seen FROM agents WHERE name = 'w1'").get() };
+    t += 60_000;
+    op('usage', { usage: { input_tokens: 100, output_tokens: 20, cost_usd: 0.01 } });
+    assert.deepEqual({ ...hub.q("SELECT signed_off, last_seen FROM agents WHERE name = 'w1'").get() }, before, 'still signed off, last seen at its signoff');
+    assert.equal(before.signed_off, 1);
+    assert.equal(hub.q("SELECT COUNT(*) AS n FROM usage WHERE agent = 'w1' AND source = 'runner'").get().n, 1);
+  });
+});
+
 describe('cost in Flow', () => {
   test('median and total per finished item by model, tokens for unpriced models, and total spend', () => {
     const hub = new Hub();
