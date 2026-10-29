@@ -62,8 +62,20 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       headline: q.question,
       sub: [it?.title, `${q.asked_by} asked ${dur(t - q.at)} ago`, it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
       why: q.context, detail: q.detail,
-      item: it ? ref(it) : null,
+      item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
+    });
+  }
+
+  // Work someone answered on but kept parked: it waits for them to say go.
+  for (const it of in_('waiting').filter((i) => i.parked_by && !openQs.some((q) => q.blocking && q.item_id === i.id))) {
+    const ans = hub.q(`SELECT answer FROM questions WHERE item_id = ? AND status = 'answered' ORDER BY answered_at DESC LIMIT 1`).get(it.id);
+    push({
+      key: `parked:${it.id}:${it.stage_since}`, level: 'act', kind: 'kept-parked', at: it.updated_at,
+      headline: `${ref(it)} is parked by ${it.parked_by === HUMAN ? 'you' : it.parked_by}: agents don't get it until it's unparked`,
+      sub: [it.title, ans && `answered: ${ans.answer}`].filter(Boolean).join(' · '),
+      why: 'You answered its question and asked to keep it parked. Unpark it when it should go back to the agents.',
+      item: ref(it), parked_by: it.parked_by,
     });
   }
 
@@ -284,7 +296,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   if (hub.hasPeople()) {
     const bySeq = new Map(items.map((i) => [ref(i), i]));
     for (const a of attention.filter((x) => x.level === 'act')) {
-      a.owners = hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
+      // Work kept parked is the parker's to release.
+      a.owners = a.parked_by?.startsWith('@') ? [a.parked_by] : hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
       if (viewer && !a.owners.includes(viewer)) {
         a.level = 'know';
         a.sub = [a.owners.length ? `needs ${a.owners.join(', ')}` : 'needs a steward (none set)', a.sub].filter(Boolean).join(' · ');
