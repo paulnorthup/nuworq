@@ -394,7 +394,8 @@ main.narrow h1 { margin-bottom: 14px; }
 main.narrow .faint, .setup .faint, .dialog .faint { color: var(--faint); font-size: 12.5px; }
 .setup > :first-child, .dialog > :first-child { margin-top: 0; }
 .btn:disabled { opacity: .45; cursor: default; }
-.dialog details.more > summary { margin-top: 16px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.dialog .lead code { overflow-wrap: anywhere; } /* a long URL in a sentence wraps instead of widening a phone's dialog */
+.dialog h3 { margin: 24px 0 4px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 15px; }
 .copyable { position: relative; }
 .copyable pre { padding-right: 64px; } /* the text scrolls clear of the Copy button */
 .copyable button { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--line-strong); background: var(--panel); }
