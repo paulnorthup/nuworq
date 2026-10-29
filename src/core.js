@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { rmSync } from 'node:fs';
 import { openDb } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, mirrorPath, originOf, refetch } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, mirrorPath, originOf, refetch } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -374,20 +374,43 @@ export class Hub extends EventEmitter {
   }
 
   // Where the hub asks git about an item's work (or the project's, with no item): the project's checkout
-  // on this machine (local), else its own mirror of the item's remote, fetched first (remote).
-  // fresh: fetch now, not just every ~10s. null when git can't say: no repository, or the remote
-  // can't be reached or read.
+  // on this machine (local), else its own mirror of the item's remote (remote), as it is: it never waits
+  // on the network. A stale mirror is fetched in the background, and the project hears when that changed
+  // something. Decisions that need the newest state are prefetched by the server first (prefetch).
+  // fresh: a mirror of a repository on this machine is fetched now. null when git can't say: no
+  // repository, the remote can't be reached or read, or its first clone is still under way.
   repoFor(p, item = null, { fresh = false } = {}) {
     if (this.localFor(p, item)) return { path: p.path, mode: 'local' };
     const remote = this.repoOf(p, item);
     if (!remote || !this.repos) return null;
-    const m = mirror(this.repos, remote, { fresh, keys: this.keys, https: this.mirrorHttps(remote) });
+    const m = mirror(this.repos, remote, { fresh, keys: this.keys, https: this.mirrorHttps(remote), onFetched: () => this.remoteChanged(remote) });
     if (!m.error) return { path: m.path, mode: 'remote' };
-    if (!this._unreachable.has(remote)) {
+    if (!m.pending && !this._unreachable.has(remote)) {
       this._unreachable.add(remote);
       console.error(`nuworq: can't read ${remote} for ${p.name} (${m.error}). Until it can, accepted work there waits in landing: the hub can't confirm main has it. Check the network and the hub's access to the repository (the hub's GitHub App installed on it, or a read-only deploy key${this.keys && !remote.startsWith('/') ? `, as ${this.keys}/${remote}` : ''}).`);
     }
     return null;
+  }
+
+  // Fetch the mirror an op is about to decide on (accept, submit, review), so it reads the newest state.
+  // The server awaits this before the op, outside any transaction; nothing else waits on the network.
+  // Best effort: an unknown project or item, or a fetch that fails, leaves the op to say so as before.
+  async prefetch(slug, args = {}, { remote = '', root = '', scope = null } = {}) {
+    if (!this.repos) return;
+    try {
+      const p = slug ? this.project(slug) : this.projectByRemote(normRemote(remote), scope) ?? this.projectByPath(root, scope);
+      const item = p && args.item ? this.item(p, args.item) : null;
+      if (!p || this.localFor(p, item)) return;
+      const repo = this.repoOf(p, item);
+      if (!repo) return;
+      // A read token being minted is worth the wait: without it the fetch goes over SSH.
+      if (this.github?.readToken && this.github.covers(repo)) {
+        this.mirrorHttps(repo);
+        await this._mirrorTokens.get(repo)?.pending;
+      }
+      const r = await fetchMirror(this.repos, repo, { keys: this.keys, https: this.mirrorHttps(repo) });
+      if (r.changed) this.remoteChanged(repo);
+    } catch { /* the op says what's wrong */ }
   }
 
   // How the hub reaches remote's mirror over HTTPS with the GitHub App: { url, token }, or null to use

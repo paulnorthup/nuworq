@@ -1,6 +1,6 @@
 // What git says about a submission: the worker's branch, its commits, and whether commits named in
 // the evidence exist. Shells out to git with short timeouts; any failure means "no git facts".
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
@@ -128,48 +128,106 @@ export function tokenEnv(url, token, env = process.env) {
   };
 }
 
-// Git over the network: no prompts (a hub has nobody to answer them), bounded in time. ssh: the
+// How git is run to fetch: no prompts (a hub has nobody to answer them), bounded in time. ssh: the
 // repository's own key (sshCommandFor); a GIT_SSH_COMMAND or GIT_SSH set for the hub still wins.
-// extra: more environment (tokenEnv). Returns null, or the last line git said about the failure.
-function netGit(args, timeout, ssh = null, extra = {}) {
+// extra: more environment (tokenEnv).
+function fetchOpts(timeout, ssh, extra) {
   const quiet = process.env.GIT_SSH_COMMAND || process.env.GIT_SSH ? {}
     : ssh ? { GIT_SSH_COMMAND: ssh }
     : git('.', 'config', '--get', 'core.sshCommand') ? {} : { GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10' };
+  return { timeout, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...quiet, ...extra } };
+}
+const failure = (e, stderr) => String(stderr ?? '').trim().split('\n').filter(Boolean).pop() || (e.killed || e.signal ? 'timed out' : e.message);
+
+// Git over the network, asynchronously: a slow or unreachable remote never holds up the event loop, so
+// every other request, stream and sweep carries on while it runs. Resolves null, or the last line git
+// said about the failure.
+const netGit = (args, timeout, ssh = null, extra = {}) => new Promise((resolve) => {
+  execFile('git', args, fetchOpts(timeout, ssh, extra), (e, _out, stderr) => resolve(e ? failure(e, stderr) : null));
+});
+
+// A repository on this machine (a path remote) is read from disk, not the network: fetched in place.
+function diskGit(args, timeout) {
   try {
-    execFileSync('git', args, { timeout, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...quiet, ...extra } });
+    execFileSync('git', args, fetchOpts(timeout, null, {}));
     return null;
   } catch (e) {
-    return String(e.stderr ?? '').trim().split('\n').filter(Boolean).pop() || (e.signal ? 'timed out' : e.message);
+    return failure(e, e.stderr);
   }
 }
 
 // Fetch remote's mirror at the next ask, however recently it was fetched (the hub just got a way in).
 export const refetch = (dir, remote) => fetched.delete(mirrorPath(dir, remote));
 
-// The mirror of remote under dir, created or fetched first: { path } or { error }. fresh: fetch
-// now, whenever it was last fetched (before deciding a landing); otherwise at most every FETCH_EVERY.
-// keys: where per-repository deploy keys live (see sshCommandFor); null: the default key only.
-// https: { url, token }: fetch from url (no credentials in it) with a GitHub App installation token
-// instead (tokenEnv); the mirror keeps url as its remote, never the token.
-export function mirror(dir, remote, { fresh = false, keys = null, https = null } = {}) {
+const inflight = new Map(); // mirror path → its fetch or clone under way
+const refsOf = (path) => git(path, 'for-each-ref', '--format=%(objectname) %(refname)');
+
+// What fetching remote's mirror takes: the git arguments (clone it, or fetch it from where it is reached
+// now) and how. keys: where per-repository deploy keys live (see sshCommandFor). https: { url, token }:
+// from url (no credentials in it) with a GitHub App installation token (tokenEnv); the mirror keeps url
+// as its remote, never the token.
+function fetchPlan(dir, remote, { keys = null, https = null } = {}) {
   const path = mirrorPath(dir, remote), source = mirrorSource(remote);
   if (!path || !source) return { error: `${remote} isn't a repository address the hub can fetch` };
-  const last = fetched.get(path);
-  if (!fresh && last && Date.now() - last.at < FETCH_EVERY) return last.error ? { error: last.error } : { path };
   const ssh = https ? null : sshCommandFor(keys, remote);
   const env = https ? tokenEnv(https.url, https.token) : {};
   const from = https?.url ?? source;
-  let error;
+  const disk = !https && source.startsWith('/');
   if (isRepo(path)) {
     // A mirror cloned one way (SSH) and fetched another (the app's HTTPS) is fetched from where it is reached now.
     const elsewhere = originOf(path) === from ? [] : ['--', from, '+refs/*:refs/*'];
-    error = netGit(['-C', path, 'fetch', '-q', '--prune', ...elsewhere], FETCH_MS, ssh, env);
-  } else {
-    // A clone cut short leaves a folder that isn't a repository yet: start again.
-    rmSync(path, { recursive: true, force: true });
-    mkdirSync(dirname(path), { recursive: true });
-    error = netGit(['clone', '-q', '--mirror', '--', from, path], CLONE_MS, ssh, env);
+    return { path, disk, ssh, env, timeout: FETCH_MS, args: ['-C', path, 'fetch', '-q', '--prune', ...elsewhere] };
   }
-  fetched.set(path, { at: Date.now(), error });
-  return error ? { error } : { path };
+  return { path, disk, ssh, env, timeout: CLONE_MS, clone: true, args: ['clone', '-q', '--mirror', '--', from, path] };
+}
+
+function begin(plan) {
+  // A clone cut short leaves a folder that isn't a repository yet: start again.
+  if (plan.clone) {
+    rmSync(plan.path, { recursive: true, force: true });
+    mkdirSync(dirname(plan.path), { recursive: true });
+  }
+  return { before: refsOf(plan.path), was: fetched.get(plan.path)?.error ?? null };
+}
+function settle(plan, { before, was }, error) {
+  fetched.set(plan.path, { at: Date.now(), error });
+  // changed: what the hub would say from this mirror may differ now (new refs, or it started or stopped failing).
+  return { ...(error ? { error } : { path: plan.path }), changed: refsOf(plan.path) !== before || (error ?? null) !== was };
+}
+
+// Fetch (or clone) remote's mirror now: { path } or { error }, with changed. One at a time per mirror: a
+// second ask joins the one under way. For decisions that need the newest state (accept, submit): the
+// server awaits this before running them, outside any transaction.
+export function fetchMirror(dir, remote, opts = {}) {
+  const plan = fetchPlan(dir, remote, opts);
+  if (plan.error) return Promise.resolve({ error: plan.error });
+  if (inflight.has(plan.path)) return inflight.get(plan.path);
+  const run = (async () => {
+    const start = begin(plan);
+    const error = plan.disk ? diskGit(plan.args, plan.timeout) : await netGit(plan.args, plan.timeout, plan.ssh, plan.env);
+    return settle(plan, start, error);
+  })().finally(() => inflight.delete(plan.path));
+  inflight.set(plan.path, run);
+  return run;
+}
+
+// The mirror of remote under dir, as it is: { path }, or { error } (pending: true while the first clone
+// is under way). Never waits on the network. When the mirror is older than FETCH_EVERY, a fetch starts in
+// the background, and onFetched() is called when it finished and changed something. A repository on this
+// machine (a path) is fetched in place first, as reading a disk is: fresh fetches it however recent it is.
+export function mirror(dir, remote, { fresh = false, keys = null, https = null, onFetched = null } = {}) {
+  const plan = fetchPlan(dir, remote, { keys, https });
+  if (plan.error) return { error: plan.error };
+  const last = fetched.get(plan.path);
+  const due = !last || Date.now() - last.at >= FETCH_EVERY;
+  if (plan.disk) {
+    if (!due && !fresh) return last.error ? { error: last.error } : { path: plan.path };
+    const r = settle(plan, begin(plan), diskGit(plan.args, plan.timeout));
+    return r.error ? { error: r.error } : { path: plan.path };
+  }
+  if (due && !inflight.has(plan.path)) {
+    fetchMirror(dir, remote, { keys, https }).then((r) => { if (r.changed) onFetched?.(); }, () => {});
+  }
+  if (last?.error) return { error: last.error };
+  return isRepo(plan.path) ? { path: plan.path } : { error: `${remote} is still being cloned`, pending: true };
 }

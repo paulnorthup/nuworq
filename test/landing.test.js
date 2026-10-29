@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Hub, LAND_GRACE } from '../src/core.js';
-import { mirrorSource, mirrorPath, isRepo, sshCommandFor, mirror } from '../src/git.js';
+import { mirrorSource, mirrorPath, isRepo, sshCommandFor, fetchMirror } from '../src/git.js';
 
 // A real repo with main, a hub whose project lives there, and agents that work in their own worktrees.
 function setup() {
@@ -427,7 +427,7 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     assert.match(sshCommandFor(odd, 'github.com/acme/api'), /^ssh -i '.*it'\\''s\/github\.com\/acme\/api' /, 'quoted for the shell git runs it in');
   });
 
-  test("the mirror is cloned with the repository's key; a GIT_SSH_COMMAND set for the hub still wins", () => {
+  test("the mirror is cloned with the repository's key; a GIT_SSH_COMMAND set for the hub still wins", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-sshkey-')));
     const keys = join(dir, 'keys'), log = join(dir, 'ssh.log');
     mkdirSync(join(dir, 'bin'));
@@ -441,11 +441,11 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     delete process.env.GIT_SSH;
     const calls = () => (existsSync(log) ? readFileSync(log, 'utf8') : '');
     try {
-      assert.ok(mirror(join(dir, 'repos'), 'github.com/acme/api', { fresh: true, keys }).error);
+      assert.ok((await fetchMirror(join(dir, 'repos'), 'github.com/acme/api', { keys })).error);
       assert.match(calls(), new RegExp(`-i ${keys}/github\\.com/acme/api -o IdentitiesOnly=yes -o BatchMode=yes .*git@github\\.com`));
       writeFileSync(log, '');
       process.env.GIT_SSH_COMMAND = 'ssh -o Explicit=yes';
-      assert.ok(mirror(join(dir, 'repos'), 'github.com/acme/api', { fresh: true, keys }).error);
+      assert.ok((await fetchMirror(join(dir, 'repos'), 'github.com/acme/api', { keys })).error);
       assert.match(calls(), /-o Explicit=yes/);
       assert.doesNotMatch(calls(), /-i /, 'the explicit command is used as it is');
     } finally {
