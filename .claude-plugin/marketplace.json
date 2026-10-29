@@ -1,0 +1,14 @@
+{
+  "name": "nuworq",
+  "owner": {
+    "name": "nuworq"
+  },
+  "plugins": [
+    {
+      "name": "nuworq",
+      "source": "./plugin",
+      "version": "0.2.0",
+      "description": "The nuworq MCP server and the nuworq and nuworq-plan skills."
+    }
+  ]
+}

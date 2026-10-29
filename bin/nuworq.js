@@ -1130,6 +1130,7 @@ ${bold('Setup')}
                                          --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
   disconnect                             revoke that token, remove what connect added, forget the hub
   skill [--dir d]                        write the nuworq and nuworq-plan skills for Claude (generated; connect does both too)
+  skill --plugin [dir]                   write the Claude Code plugin (MCP server + both skills; default: plugin/)
   mcp                                    run the stdio MCP server (one per agent session)
   git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
@@ -1241,6 +1242,21 @@ async function main() {
   if (cmd === 'guide') {
     const s = resolveSettings(flags);
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
+  }
+  if (cmd === 'skill' && flags.plugin) {
+    // The Claude Code plugin (src/plugin.js): <dir> (default this checkout's plugin/), plus the marketplace
+    // that lists it when it is this checkout's own.
+    const { pluginFiles, marketplace } = await import('../src/plugin.js');
+    const { version } = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+    const dir = resolve(typeof flags.plugin === 'string' ? flags.plugin : join(ROOT, 'plugin'));
+    const files = Object.entries(pluginFiles({ version })).map(([f, text]) => [join(dir, f), text]);
+    if (dir === join(ROOT, 'plugin')) files.push([join(ROOT, '.claude-plugin', 'marketplace.json'), marketplace({ version })]);
+    for (const [file, text] of files) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, text);
+      console.log(`${green('Wrote')} ${file}`);
+    }
+    return;
   }
   if (cmd === 'skill') {
     // The nuworq skills for Claude, generated from the protocol: <dir>/nuworq/SKILL.md and <dir>/nuworq-plan/SKILL.md
