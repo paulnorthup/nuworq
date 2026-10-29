@@ -4,7 +4,8 @@ import { writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { createClient, resolveSettings, HubError, DEFAULT_URL, HUB_FILE } from '../src/client.js';
+import { execFileSync } from 'node:child_process';
+import { createClient, resolveSettings, repoRoot, HubError, DEFAULT_URL, HUB_FILE } from '../src/client.js';
 import { tools, guide } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 
@@ -13,7 +14,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -137,7 +138,8 @@ If you have nuworq tools (checkin, next, progress, submit, ...), use them. Other
 
 Your session:
 1. checkin. Read the mission, standing decisions and steering, and ack each steer.
-2. Loop: next → do the work in this repository → progress at real milestones → submit with evidence (tests run, commits), or handoff with where you left off if you can't finish.
+2. Loop: next → do the work in this repository → progress at real milestones → submit with evidence (tests run, branch and commits), or handoff with where you left off if you can't finish.
+   Work in your own git worktree, never in the main checkout. For each item the hub names a branch: create it from the latest main with \`git switch -c <branch> main\`, or \`git switch <branch>\` if it exists.
 3. Got a question? Prefer ask with an assumption and keep going. Only block if you truly can't proceed, and then take other work.
 4. Propose work you notice instead of growing your current item.
 5. When next says there's nothing ready (mode "idle"), signoff with one line on where things stand, and stop.
@@ -159,9 +161,10 @@ function detectHas(flags) {
   ].filter(Boolean).map((t) => String(t).toLowerCase()))];
 }
 
-// A headless worker: ask the hub where work is waiting, give the worker its own git worktree and
-// branch there (so many can run at once without colliding), and start the agent with everything it
-// needs (MCP server, project, a scoped tool allowlist). Prints the command, or runs it with --run.
+// A headless worker: ask the hub where work is waiting, give the worker its own git worktree there,
+// detached at main (so many can run at once without colliding; each item it claims gets its own branch),
+// and start the agent with everything it needs (MCP server, project, a scoped tool allowlist).
+// Prints the command, or runs it with --run.
 function agentOf(flags) {
   const agent = String(flags.agent || 'claude').toLowerCase();
   if (!['claude', 'codex', 'opencode'].includes(agent)) {
@@ -223,10 +226,10 @@ async function worker(flags) {
     why = `the hub routed here: ${best.item} ${best.title} (${best.mode}, ${best.priority})`;
   }
   const token = flags.run ? await agentToken(client, flags) : null;
-  const { name, worktree, branch, cwd, cmd } = workerSetup(target, agent, flags, s, token);
+  const { name, worktree, main, cwd, cmd } = workerSetup(target, agent, flags, s, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
-${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Merge the branch when you accept the work, then: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
+${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
   if (!flags.run) {
     console.log(`\n${cmd}\n`);
     console.log(dim({
@@ -244,7 +247,13 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Me
 
 const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 
-// The shell command that gives a worker its worktree and branch and starts the agent in it.
+// The branch work lands on: main, or (in a repo without one) the branch the main checkout is on.
+function mainBranch(home) {
+  const git = (...a) => { try { return execFileSync('git', ['-C', home, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
+  return git('rev-parse', '--verify', '-q', 'refs/heads/main') ? 'main' : git('symbolic-ref', '-q', '--short', 'HEAD') || 'main';
+}
+
+// The shell command that gives a worker its worktree (detached at main, reused if it exists) and starts the agent in it.
 // token: the agent token the worker gets when it runs (null: the hub needs none, or we only print).
 function workerSetup(target, agent, flags, s, token = null) {
   const home = target.path || process.cwd();
@@ -255,7 +264,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   const name = String(flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
   const isRepo = existsSync(join(home, '.git'));
   const worktree = isRepo && !flags.here ? join(`${home}.worktrees`, name) : null;
-  const branch = `nuworq/${name}`;
+  const main = isRepo ? mainBranch(home) : 'main';
   const cwd = worktree ?? home;
   const tags = detectHas(flags);
   const env = {
@@ -265,7 +274,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   };
   const task = [
     `Work on the ${target.name} project using nuworq. Do the work in this directory.`,
-    worktree ? `You are in your own git worktree on branch ${branch}: commit your work there, and include the branch and commit in your evidence when you submit.` : '',
+    worktree ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} with \`git switch -c <branch> ${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, and include the branch and commit in your evidence when you submit. Never work in the main checkout, ${home}.` : '',
     'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
 
@@ -275,13 +284,15 @@ function workerSetup(target, agent, flags, s, token = null) {
     (has('pyproject.toml') || has('requirements.txt') || has('setup.py')) && ['Bash(python3:*)', 'Bash(pytest:*)'],
     has('Cargo.toml') && ['Bash(cargo:*)'],
     has('go.mod') && ['Bash(go:*)'],
-    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)'],
+    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)'],
+    // Landing: rebase onto main, then fast-forward main in this one checkout. Nothing else with -C, never push.
+    isRepo && ['Bash(git rebase:*)', `Bash(git -C ${home} merge --ff-only:*)`],
   ].filter(Boolean).flat();
   const allow = flags.allow ? String(flags.allow) : ['mcp__nuworq', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(ls:*)', ...run].join(',');
   const mcp = JSON.stringify({ mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env } } });
 
   const lines = [];
-  if (worktree) lines.push(`git -C ${sq(home)} worktree add -q -b ${sq(branch)} ${sq(worktree)}`);
+  if (worktree) lines.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
   lines.push(`cd ${sq(cwd)}`);
   if (agent === 'claude') {
     lines.push(`claude -p ${sq(task)} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}`);
@@ -300,7 +311,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
     lines.push(`codex exec -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)} \\\n  ${sq(task)}`);
   }
-  return { name, worktree, branch, cwd, cmd: lines.join(' && \\\n') };
+  return { name, worktree, main, cwd, cmd: lines.join(' && \\\n') };
 }
 
 // Keep up to --workers headless workers on waiting work in the projects the human opted in.
@@ -388,7 +399,7 @@ ${bold('Any other MCP client')}
 ${bold('Shell-only agents')}  ${dim('(add to AGENTS.md or CLAUDE.md)')}
   This project coordinates work through nuworq. Run \`node ${q} guide\` and follow it.
 
-${bold('Headless worker')}  ${dim('(asks the hub where work is waiting; own worktree and branch; --run starts it)')}
+${bold('Headless worker')}  ${dim('(asks the hub where work is waiting; own worktree, a branch per item; --run starts it)')}
   node ${q} worker --agent claude --run
   node ${q} worker --agent codex --run
   node ${q} worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run`);
@@ -421,6 +432,7 @@ async function seedCmd(flags) {
 }
 
 async function serve(flags) {
+  if (flags.follow) return serveFollow(flags);
   const { Hub } = await import('../src/core.js');
   const { createServer } = await import('../src/server.js');
   const { Notifier } = await import('../src/notify.js');
@@ -475,6 +487,33 @@ ${dim(`
   const stop = () => { server.close(); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+}
+
+// serve --follow: a small supervisor that keeps the hub on the latest main that passes its tests.
+// The hub itself runs as a child (serve with the same flags, minus --follow) from its own worktree
+// under the data folder (hub-src), never from this checkout, which agents fast-forward. New commits
+// are tested in a second worktree there (hub-next). See src/follow.js.
+async function serveFollow(flags) {
+  const { follow } = await import('../src/follow.js');
+  const host = String(flags.host || envVar('HOST') || '127.0.0.1');
+  const port = Number(flags.port || envVar('PORT') || 4747);
+  if (!port) throw new HubError('--follow needs a fixed port', { hint: 'Pass --port <n> (the supervisor checks the hub there).' });
+  const probe = { '0.0.0.0': '127.0.0.1', '::': '::1' }[host] ?? host;
+  const repo = repoRoot(ROOT);
+  const args = process.argv.slice(3).filter((a) => !/^--?follow(=.*)?$/.test(a));
+  const data = flags['data-dir'] || envVar('DATA_DIR') || dataDir();
+  try {
+    await follow({
+      repo,
+      dir: join(data, 'hub-src'),
+      next: join(data, 'hub-next'),
+      args,
+      url: `http://${probe.includes(':') ? `[${probe}]` : probe}:${port}`,
+      log: (line) => console.log(`${dim(`[follow ${new Date().toTimeString().slice(0, 8)}]`)} ${line}`),
+    });
+  } catch (e) {
+    throw new HubError(`--follow couldn't start the hub: ${e.message}`, { hint: `It follows the main branch of ${repo}, the git checkout this nuworq runs from. Without --follow, serve runs this copy as it is.` });
+  }
 }
 
 // Many workspaces, one process: each workspace is its own database, reached by subdomain or /w/<name>/.
@@ -669,9 +708,10 @@ async function notify(pos, flags) {
 const HELP = `${bold('nuworq')}: a hub where humans facilitate and AI agents coordinate work.
 
 ${bold('Human')}
-  serve [--port 4747] [--host 127.0.0.1] [--db path] [--demo] [--auth] [--trust-proxy] [--public-url u]
+  serve [--port 4747] [--host 127.0.0.1] [--db path] [--demo] [--auth] [--trust-proxy] [--public-url u] [--follow]
                                          run the hub and web UI. Loopback: no login.
                                          Any other host (or --auth): tokens required.
+                                         --follow: keep the hub on the latest main that passes its tests
   token create <name> --role human|agent [--project a,b]
                                          create a token (shown once); run on the hub host.
                                          --project limits an agent token to those projects
@@ -723,7 +763,7 @@ ${bold('Setup')}
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
   worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags]
                                          start a headless worker where work is waiting (the hub routes it),
-                                         in its own git worktree and branch (--here: no worktree). Without
+                                         in its own git worktree, a branch per item (--here: no worktree). Without
                                          --run it prints the command instead. opencode needs --model,
                                          e.g. ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is set up for you).
                                          On a hub with login, --run needs --agent-token (or

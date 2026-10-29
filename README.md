@@ -11,7 +11,7 @@ node bin/nuworq.js seed                # add the nuworq project itself, to build
 node bin/nuworq.js serve --demo        # or try it in memory, nothing saved
 ```
 
-Start workers. Each one asks the hub where work is waiting, gets its own git worktree and branch there, and goes:
+Start workers. Each one asks the hub where work is waiting, gets its own git worktree there (each item it takes gets its own branch, cut from the latest main), and goes:
 
 ```bash
 node bin/nuworq.js worker --agent claude --run     # or --agent codex; run it again for more workers
@@ -94,7 +94,7 @@ You can also set channels up in the UI, under **Notifications** in the left rail
 | MCP server (`nuworq mcp`) | Claude Code, Codex, opencode, Goose, Cline, LM Studio, any MCP client, including open-weight models (verified: opencode 1.18 + Qwen3 27B on Ollama; see [docs/OPEN-WEIGHT.md](docs/OPEN-WEIGHT.md)) |
 | CLI (`nuworq checkin --as name …`) | Any agent with a shell |
 | HTTP + tool schemas (`/api/tools?format=openai\|anthropic\|mcp`) | Your own agent loop |
-| Headless worker | `nuworq worker --agent claude\|codex\|opencode --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree and branch, with a scoped tool allowlist |
+| Headless worker | `nuworq worker --agent claude\|codex\|opencode --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree (each item gets its own branch, cut from the latest main), with a scoped tool allowlist |
 | Runner | `nuworq run --workers N`: keeps up to N headless workers on projects you opted in, one per waiting item, never a herd on one |
 
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.

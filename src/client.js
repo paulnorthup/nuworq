@@ -64,6 +64,11 @@ export class HubError extends Error {
   }
 }
 
+// Connection failures worth another try: refused (nothing listening yet) or reset/closed (the old process went away).
+const RETRY_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET']);
+const RETRY_MS = 5000;
+
+// opts: url, project, token, cwd (see resolveSettings); retryMs: how long to retry a refused or dropped connection.
 export function createClient(opts = {}) {
   const settings = resolveSettings(opts);
   // Each x-nuworq-* header goes out under its old x-trellis-* name too, so hubs not yet updated still understand.
@@ -74,10 +79,26 @@ export function createClient(opts = {}) {
     ...(settings.token ? { authorization: `Bearer ${settings.token}` } : {}),
   });
 
+  // A hub restarting (e.g. serve --follow moving onto a new main) refuses or drops connections for a
+  // moment. Those are retried for a few seconds, so a call made meanwhile just takes a little longer.
+  // HTTP errors are answers, never retried.
+  const retryMs = opts.retryMs ?? RETRY_MS;
+  async function send(path, init) {
+    const until = Date.now() + retryMs;
+    for (let wait = 100; ; wait = Math.min(wait * 2, 1000)) {
+      try {
+        return await fetch(settings.url + path, init);
+      } catch (e) {
+        if (!RETRY_CODES.has(e?.cause?.code) || Date.now() + wait > until) throw e;
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
+  }
+
   async function request(method, path, { body, agent } = {}) {
     let res;
     try {
-      res = await fetch(settings.url + path, {
+      res = await send(path, {
         method,
         headers: headers(agent ? { agent } : {}),
         body: body === undefined ? undefined : JSON.stringify(body),

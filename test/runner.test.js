@@ -76,8 +76,17 @@ describe('nuworq worker --agent opencode', () => {
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'oc', '--agent', 'opencode', ...a], { env: { ...process.env, NUWORQ_TOKEN: '' } });
     try {
       const { stdout } = await cli('--model', 'ollama/qwen3:8b', '--as', 'oc-1');
-      assert.match(stdout, /git -C '.*' worktree add -q -b 'nuworq\/oc-1'/);
-      assert.match(stdout, /opencode run -m 'ollama\/qwen3:8b' '.*nuworq\/oc-1.*' < \/dev\/null/);
+      // Its own worktree, detached at main (reused if it exists); each item it claims gets a branch from the latest main.
+      const add = stdout.match(/^\{ \[ -d '[^']*\.worktrees\/oc-1' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/oc-1' 'main'; \}/m)?.[0];
+      assert.ok(add, 'the worktree is added detached at main');
+      execFileSync('/bin/sh', ['-c', add]);
+      execFileSync('/bin/sh', ['-c', add]); // a second time: reused, not an error
+      const wt = `${repo}.worktrees/oc-1`;
+      const at = (...a) => execFileSync('git', ['-C', wt, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      assert.equal(at('rev-parse', 'HEAD'), execFileSync('git', ['-C', repo, 'rev-parse', 'main'], { encoding: 'utf8' }).trim());
+      assert.throws(() => at('symbolic-ref', '-q', 'HEAD'), 'detached: no branch until it claims an item');
+      execFileSync('git', ['-C', repo, 'worktree', 'remove', '--force', wt]);
+      assert.match(stdout, /opencode run -m 'ollama\/qwen3:8b' '.*git switch -c <branch> main`, or `git switch <branch>` if it exists.*Never work in the main checkout.*' < \/dev\/null/);
       const config = JSON.parse(stdout.match(/OPENCODE_CONFIG_CONTENT='([^']*)'/)[1]);
       assert.deepEqual(config.mcp.nuworq.command, ['node', BIN, 'mcp']);
       assert.equal(config.mcp.nuworq.environment.NUWORQ_PROJECT, 'oc');
@@ -87,6 +96,30 @@ describe('nuworq worker --agent opencode', () => {
       assert.deepEqual(readdirSync(repo).sort(), ['.git', 'f'], 'no config file left in the repo');
 
       await assert.rejects(cli(), (e) => /opencode needs a model/.test(e.stderr));
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('nuworq worker --agent claude', () => {
+  test('may land (rebase, fast-forward this one main checkout) but not push or run other git -C commands', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-land-')));
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    const hub = new Hub();
+    hub.tx(() => hub.project('land', { create: true }));
+    hub.humanOp('land', 'settings', { path: repo });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'land', '--agent', 'claude', '--as', 'c-1'],
+        { env: { ...process.env, NUWORQ_TOKEN: '' } });
+      const allow = stdout.match(/--allowedTools '([^']*)'/)[1].split(',');
+      assert.ok(allow.includes('Bash(git rebase:*)'));
+      assert.ok(allow.includes(`Bash(git -C ${repo} merge --ff-only:*)`));
+      assert.ok(allow.includes('Bash(git switch:*)'), 'it makes the branch the hub names');
+      assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [`Bash(git -C ${repo} merge --ff-only:*)`], 'no other -C command');
+      assert.ok(!allow.some((a) => /git push|^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'never push, no blanket git');
     } finally {
       server.close();
     }
