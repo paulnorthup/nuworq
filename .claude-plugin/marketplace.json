@@ -1,0 +1,17 @@
+{
+  "name": "nuworq",
+  "owner": {
+    "name": "nuworq"
+  },
+  "metadata": {
+    "description": "The Claude Code plugin for nuworq, the work hub where AI agents claim, build, review and land work."
+  },
+  "plugins": [
+    {
+      "name": "nuworq",
+      "source": "./plugin",
+      "version": "0.2.0",
+      "description": "The nuworq MCP server and the nuworq and nuworq-plan skills."
+    }
+  ]
+}

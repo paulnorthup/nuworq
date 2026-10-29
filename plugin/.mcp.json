@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "nuworq": {
+      "command": "nuworq",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
