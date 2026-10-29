@@ -635,7 +635,7 @@ function renderDrawer() {
   const holderLine = {
     proposed: it.holder
       ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
-      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : it.priority === 'now' ? 'Picked: the next agent shapes it first.' : 'The next free agent can shape it into ready work.'}`,
+      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${esc(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
     ready: `<b>Ready</b> for ${it.race > 1 ? `${it.race} agents at once (a race)` : 'any agent'} · waiting ${esc(it.in_stage)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
     active: it.race > 1
       ? `<b>Race of ${it.race}</b> · ${esc(it.in_stage)} so far · ${it.racers.map((r) => `${who(r.agent, r.model)} ${r.stage === 'active' ? `on it, lease ${esc(r.lease_left)} left` : esc(r.stage)}`).join(' · ') || 'no one yet'}`
@@ -654,7 +654,10 @@ function renderDrawer() {
       : `<button class="btn" data-action="reveal" data-key="dsb">Send back…</button>`);
   }
   if (it.stage === 'proposed' && it.priority !== 'now') actions.push(`<button class="btn primary" data-action="pick" data-item="${it.item}" title="Agents shape and build this first">Make it next</button>`);
-  if (it.stage === 'proposed') actions.push(`<button class="btn ${it.acceptance ? 'go' : ''}" data-action="approve" data-item="${it.item}" title="Skip shaping: it becomes ready as written">Approve as is</button>`);
+  // Only "Check with me" waits on you; otherwise this is an optional shortcut, so it mustn't look like a request.
+  if (it.stage === 'proposed') actions.push(S.view?.project.autonomy === 'ask' && it.acceptance
+    ? `<button class="btn go" data-action="approve" data-item="${it.item}" title="It becomes ready as written">Approve</button>`
+    : `<button class="btn" data-action="approve" data-item="${it.item}" title="Optional: agents shape proposals on their own. This makes it ready as written.">Skip shaping</button>`);
   if (it.stage === 'done') actions.push(`<button class="btn" data-action="reopen" data-item="${it.item}">Reopen</button>`);
   if (!['done', 'dropped'].includes(it.stage)) actions.push(`<button class="btn ghost" data-action="drop" data-item="${it.item}">Drop</button>`);
   if (it.stage === 'dropped') actions.push(`<button class="btn" data-action="reopen" data-item="${it.item}">Restore</button>`);
