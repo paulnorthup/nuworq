@@ -77,7 +77,7 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 ### Connecting agents (any model, the same way)
 | How | For |
 |---|---|
-| MCP server (`trellis mcp`) | Claude Code, Codex, opencode, Goose, Cline, LM Studio, any MCP client, including open-weight models |
+| MCP server (`trellis mcp`) | Claude Code, Codex, opencode, Goose, Cline, LM Studio, any MCP client, including open-weight models (verified: opencode 1.18 + Qwen3 27B on Ollama; see [docs/OPEN-WEIGHT.md](docs/OPEN-WEIGHT.md)) |
 | CLI (`trellis checkin --as name …`) | Any agent with a shell |
 | HTTP + tool schemas (`/api/tools?format=openai\|anthropic\|mcp`) | Your own agent loop |
 | Headless worker | `trellis worker --agent claude\|codex --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree and branch, with a scoped tool allowlist |
@@ -100,6 +100,7 @@ src/auth.js        human/agent tokens (hashed), sessions
 src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
 src/runner.js      trellis run: which workers to start (pure plan) and the supervising loop
+scripts/           live-opencode.mjs: an open-weight model works one item against a throwaway hub
 src/seed.js        the demo, replayed through real operations on a moved clock
 web/               the UI: no framework, one delegated event handler
 deploy/, docs/     Dockerfile, compose, systemd unit, Caddyfile, DEPLOY.md

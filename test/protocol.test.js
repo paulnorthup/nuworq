@@ -238,6 +238,11 @@ describe('transports', () => {
 
     const n = JSON.parse((await cli('next', '--as', 'cli-1')).stdout);
     assert.equal(n.item, p.item);
+    assert.match(n.hint, /As soon as you know which files you will change, post progress with a headline and touching/);
+
+    await cli('progress', p.item, 'Routing in place', '--as', 'cli-1', '--touching', 'src/server.js, src/health');
+    const held = hub.q(`SELECT touching FROM items WHERE stage = 'active' ORDER BY id DESC LIMIT 1`).get();
+    assert.deepEqual(JSON.parse(held.touching), ['src/server.js', 'src/health']);
 
     const s = JSON.parse((await cli('submit', p.item, 'Health endpoint added', '--as', 'cli-1', '--evidence', 'curl /health → 200|http://example.test/pr/1')).stdout);
     assert.equal(s.ok, true);

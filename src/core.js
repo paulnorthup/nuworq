@@ -615,6 +615,8 @@ export class Hub extends EventEmitter {
   }
 }
 
+// Open-weight models (and others) skipped progress entirely until told when the first one is due.
+const TOUCHING_HINT = 'As soon as you know which files you will change, post progress with a headline and touching, so other agents steer clear.';
 const SHAPE_HINT = (item, p) => [
   `You're shaping #${item.seq}, not building it yet. You hold it for ${dur(LEASE_MS)}.`,
   'Read the relevant code, then refine it: a sharp title and summary, and acceptance criteria (checkable, so a reviewer knows what done means).',
@@ -686,7 +688,7 @@ const AGENT_OPS = {
           ? SHAPE_HINT(pick.item, p)
           : args.claim === false
           ? `Not claimed. Claim #${pick.item.seq} to start.`
-          : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. Post progress at milestones (it renews the lease). Submit with evidence when done_means is met.`,
+          : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`,
     };
   },
 
@@ -700,7 +702,7 @@ const AGENT_OPS = {
         ? `Review #${item.seq} against done_means and the evidence, then call review.`
         : item.stage === 'proposed'
           ? SHAPE_HINT(item, p)
-          : `You hold #${item.seq} for ${dur(LEASE_MS)}. Progress renews the lease.`,
+          : `You hold #${item.seq} for ${dur(LEASE_MS)}. ${args.touching ? '' : `${TOUCHING_HINT} `}Progress renews the lease.`,
     };
   },
 

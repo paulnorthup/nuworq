@@ -191,7 +191,7 @@ Hub: ${url} · project: ${project} (change with --project).
    - **work**: build it.
    - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. Finish with ${c('submit')}.
    - **review**: check someone else's submission against done_means.
-3. Work. Post ${c('progress', cli ? '<item> "<headline>"' : '')} at real milestones, with \`touching\`. You hold a 20-minute lease: in long stretches, a ${c('progress')} with no headline is a silent heartbeat. If you go quiet, the item returns to the queue.
+3. Work. As soon as you know which files you'll change, post ${c('progress', cli ? '<item> "<headline>" --touching "<paths>"' : '')} with \`touching\`, so others steer clear. Then post it at real milestones. You hold a 20-minute lease: in long stretches, a ${c('progress')} with no headline is a silent heartbeat. If you go quiet, the item returns to the queue.
 4. A question?
    - Can you make a reasonable call? ${c('ask')} with an \`assumption\` and keep going.
    - Truly blocked? ${c('ask')} with \`blocking\`. The item parks; take other work with ${c('next')}.

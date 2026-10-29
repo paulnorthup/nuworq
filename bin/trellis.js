@@ -61,8 +61,8 @@ function need(v, what) {
 const AGENT_CMDS = {
   checkin: (p, f) => ({ model: f.model, client: f.client, status: text(f.status) }),
   next: (p, f) => ({ claim: f.peek ? false : undefined }),
-  claim: (p) => ({ item: need(p[0], '<item>') }),
-  progress: (p, f) => ({ item: need(p[0], '<item>'), headline: rest(p, 1) || undefined, ...layers(f) }),
+  claim: (p, f) => ({ item: need(p[0], '<item>'), touching: refs(f.touching) }),
+  progress: (p, f) => ({ item: need(p[0], '<item>'), headline: rest(p, 1) || undefined, ...layers(f), touching: refs(f.touching) }),
   ask: (p, f) => {
     const item = isRef(p[0]) ? p[0] : undefined;
     return {
@@ -464,8 +464,9 @@ ${bold('Human')}
 ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   checkin [--model m] [--client c]       start here: mission, decisions, steering, answers
   next [--peek]                          claim the most useful work
-  claim <item>                           claim a specific item
-  progress <item> [headline]             milestone update (no headline = silent heartbeat); renews your lease
+  claim <item> [--touching "a,b"]        claim a specific item
+  progress <item> [headline] [--touching "src/db,src/api.js"]
+                                         milestone update (no headline = silent heartbeat); renews your lease
   ask [<item>] <question> [--assume a] [--option x]... [--blocking]
   submit <item> <headline> [--evidence "label|url"]...
   handoff <item> <headline>              release with where you left off
