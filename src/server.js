@@ -15,7 +15,7 @@ import { receive } from './github.js';
 import { syncIssues, commentIssues } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
-import { GitHubApp, manifest, convert, prClient } from './ghapp.js';
+import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
@@ -570,6 +570,31 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
         if (!app) return deny(404, "this hub has no GitHub App, so it hands out no GitHub tokens", 'An owner creates one in one click (Connect an agent → GitHub App), or the hub host sets NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE (see docs/GITHUB.md). Until then, push with your own credentials.');
+        // A worker cloning a project's repository it has no checkout of (nuworq run): read-only, no item needed.
+        if (b.purpose === 'clone') {
+          const p = hub.project(String(b.project ?? ''));
+          if (caller.scope && !caller.scope.includes(p.slug)) return deny(403, `this token can't reach ${p.slug}`, 'Use an agent token for that project.');
+          const repo = normRemote(b.repo ?? '');
+          if (!hub.remotesOf(p).includes(repo)) return deny(400, `${repo || 'that'} isn't one of ${p.name}'s repositories`, `Its repositories: ${hub.remotesOf(p).join(', ') || 'none yet'}.`);
+          const who = caller.token?.name ?? agent ?? 'a worker';
+          let t;
+          try {
+            t = await app.mint(repo, CLONE_PERMISSIONS);
+          } catch (e) {
+            if (e instanceof UserError) {
+              hub.event(p, { actor: who, type: 'credential_refused', headline: `No GitHub token for ${who} to clone ${repo}: ${e.message}`, summary: e.hint ?? '', data: { agent: who, repo, purpose: 'clone' } });
+              hub.changed(p);
+            }
+            throw e;
+          }
+          hub.event(p, {
+            actor: who, type: 'credential',
+            headline: `${who} got a read-only GitHub token to clone ${t.repo}, until ${new Date(t.expires_at).toISOString().slice(11, 16)} UTC`,
+            data: { agent: who, repo: t.repo, purpose: 'clone', expires_at: t.expires_at, token: caller.token?.name ?? null },
+          });
+          hub.changed(p);
+          return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
+        }
         const held = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
           .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
           .find(({ p }) => !caller.scope || caller.scope.includes(p.slug));

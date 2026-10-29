@@ -10,6 +10,8 @@ import { envVar } from './names.js';
 
 // What a worker's token may do: push branches, open pull requests, read CI. Nothing else.
 export const WORK_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read' };
+// What a worker's token may do to clone a project's repository before it holds an item: read it.
+export const CLONE_PERMISSIONS = { contents: 'read', metadata: 'read' };
 
 const b64 = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
 

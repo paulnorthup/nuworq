@@ -61,7 +61,7 @@ const folders = (dir) => {
 export function checkoutOf(remotes, { cwd = process.cwd(), roots = envVar('REPOS') ?? '' } = {}) {
   const want = new Set(remotes.map(normRemote).filter(Boolean));
   const here = git(cwd, 'rev-parse', '--show-toplevel') ? repoRoot(cwd) : null;
-  const beside = here ? dirname(here) : resolve(cwd);
+  const beside = besideOf(cwd);
   const seen = new Set();
   for (const dir of [here, ...[beside, ...String(roots).split(delimiter)].filter(Boolean).flatMap(folders)]) {
     if (!dir || seen.has(dir) || !existsSync(join(dir, '.git'))) continue;
@@ -69,9 +69,19 @@ export function checkoutOf(remotes, { cwd = process.cwd(), roots = envVar('REPOS
     if (want.has(repoRemote(dir))) return repoRoot(dir);
   }
   const remote = [...want][0] ?? '';
-  throw new HubError(`No checkout of ${remote || 'its repository'} on this machine`, {
-    hint: `git clone ${mirrorSource(remote) ?? remote} ${join(beside, basename(remote) || 'repo')}   (workers look in the repo they start in, the folders beside it, and the folders in NUWORQ_REPOS)`,
-  });
+  throw Object.assign(new HubError(`No checkout of ${remote || 'its repository'} on this machine`, {
+    hint: `git clone ${mirrorSource(remote) ?? remote} ${cloneDir(remote, { cwd, roots })}   (workers look in the repo they start in, the folders beside it, and the folders in NUWORQ_REPOS)`,
+  }), { missing: remote });
+}
+
+// The folders beside the repo cwd is in (or cwd itself, outside one): where checkoutOf looks, and clones go.
+const besideOf = (cwd) => (git(cwd, 'rev-parse', '--show-toplevel') ? dirname(repoRoot(cwd)) : resolve(cwd));
+
+// Where a clone of remote goes, so that checkoutOf finds it: in the first of NUWORQ_REPOS, else beside
+// the repo cwd is in. Named after the repository.
+export function cloneDir(remote, { cwd = process.cwd(), roots = envVar('REPOS') ?? '' } = {}) {
+  const root = String(roots).split(delimiter).find(Boolean) ?? besideOf(cwd);
+  return join(root, basename(String(remote)).replace(/\.git$/, '') || 'repo');
 }
 
 function discoveredUrl() {

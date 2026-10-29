@@ -53,10 +53,10 @@ function github() {
 }
 
 describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
-  let gh, hub, server, port, url;
+  let gh, hub, server, port, url, api;
   before(async () => {
     gh = github();
-    const api = `http://127.0.0.1:${await listen(gh.server)}`;
+    api = `http://127.0.0.1:${await listen(gh.server)}`;
     hub = new Hub();
     hub.tx(() => hub.project('api', { create: true }));
     hub.addRemote(hub.project('api'), 'git@github.com:acme/api.git', 'you');
@@ -143,6 +143,51 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     hub.agentOp('web', 'claim', 'a2', { item: '#1' });
     const [d, e] = [await credential('a2'), await credential('a2')];
     assert.notEqual(d.json.password, e.json.password, 'short-lived tokens are minted again');
+  });
+
+  test('cloning a project with no item held: a read-only token for one of its repos, on the record; never for others', async () => {
+    const clone = (b, headers = {}, at = url) => fetch(`${at}/api/agent/credential`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ purpose: 'clone', ...b }) })
+      .then(async (r) => ({ status: r.status, json: await r.json() }));
+    const mints = gh.state.mints.length;
+    const r = await clone({ project: 'api', repo: 'github.com/acme/api', agent: 'run-1' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.repo, 'github.com/acme/api');
+    assert.match(r.json.password, /^ghs_/);
+    assert.deepEqual(gh.state.mints[mints], { repositories: ['api'], permissions: { contents: 'read', metadata: 'read' } });
+    const e = hub.q(`SELECT * FROM events WHERE type = 'credential' AND data LIKE '%"purpose":"clone"%'`).get();
+    assert.match(e.headline, /run-1 got a read-only GitHub token to clone github\.com\/acme\/api/);
+    assert.equal(e.item_id, null, 'on the project, no item');
+    assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE data LIKE '%ghs_%' OR headline LIKE '%ghs_%'`).get().n, 0, 'never stored');
+
+    assert.equal((await clone({ project: 'api', repo: 'github.com/acme/web' })).status, 400, "web isn't api's repository");
+    gh.state.installed.delete('acme/web');
+    const refused = await clone({ project: 'web', repo: 'https://github.com/acme/web' });
+    assert.equal(refused.status, 424);
+    assert.match(refused.json.error, /isn't installed on acme\/web/);
+    assert.ok(hub.q(`SELECT 1 FROM events WHERE type = 'credential_refused' AND data LIKE '%"purpose":"clone"%'`).get());
+    gh.state.installed.add('acme/web');
+
+    // A token scoped to other projects can't clone this one.
+    const locked = createServer(hub, { auth: 'required', githubApp: { id: 1234, key: PEM, api } });
+    const at = `http://127.0.0.1:${await listen(locked)}`;
+    try {
+      const webOnly = locked.auth.createToken('box', 'agent', { projects: ['web'] });
+      const no = await clone({ project: 'api', repo: 'github.com/acme/api' }, { authorization: `Bearer ${webOnly}` }, at);
+      assert.equal(no.status, 403);
+      assert.match(no.json.error, /can't reach api/);
+      const yes = await clone({ project: 'web', repo: 'github.com/acme/web' }, { authorization: `Bearer ${webOnly}` }, at);
+      assert.equal(yes.status, 200, JSON.stringify(yes.json));
+      assert.match(hub.q(`SELECT headline FROM events WHERE type = 'credential' ORDER BY id DESC`).get().headline, /^box got a read-only/, 'named by the agent token that asked');
+    } finally { locked.close(); }
+  });
+
+  test('git-credential --project answers git with the clone token', async () => {
+    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
+    const out = await new Promise((resolve, reject) => {
+      const child = execFile(process.execPath, [BIN, 'git-credential', 'get', '--project', 'api'], { env }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+      child.stdin.end('protocol=https\nhost=github.com\npath=acme/api.git\n\n');
+    });
+    assert.match(out, /^username=x-access-token\npassword=ghs_secret\d+\n$/);
   });
 
   test('a hub without an app says so (404, which the helper takes as "step aside")', async () => {

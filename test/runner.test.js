@@ -1,12 +1,12 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { Hub } from '../src/core.js';
+import { Hub, normRemote } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { plan, run } from '../src/runner.js';
 
@@ -254,6 +254,86 @@ describe('a worker for a project the hub knows only by remote (a hub on a server
       await assert.rejects(cli('gone'), (e) => e.stderr.includes('No checkout of github.com/acme/nope on this machine')
         && e.stderr.includes(`git clone git@github.com:acme/nope.git ${join(dir, 'nope')}`));
       assert.ok((await cli('pinned')).stdout.includes(`cd '${a}.worktrees/w'`), "the project's folder, since it exists here");
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('a worker for a project with no checkout on this machine', () => {
+  // A bare repo plays the project's repository; the hub knows it only by that remote.
+  function far() {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-clone-')));
+    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+    const origin = join(dir, 'github', 'api.git');
+    g('init', '-q', '--bare', '-b', 'main', origin);
+    g('clone', '-q', origin, join(dir, 'seed'));
+    writeFileSync(join(dir, 'seed', 'README'), 'api\n');
+    g('-C', join(dir, 'seed'), 'add', '.');
+    g('-C', join(dir, 'seed'), 'commit', '-q', '-m', 'init');
+    g('-C', join(dir, 'seed'), 'push', '-q', 'origin', 'main');
+    const repos = join(dir, 'repos'), home = join(dir, 'home'), bin = join(dir, 'bin');
+    for (const d of [repos, home, bin]) mkdirSync(d);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "WORKING IN $(pwd)"\n', { mode: 0o755 });
+    const hub = new Hub();
+    hub.tx(() => hub.project('far', { create: true }));
+    hub.humanOp('far', 'remote', { add: origin });
+    hub.humanOp('far', 'settings', { runner: true });
+    hub.humanOp('far', 'create', { title: 'Do it', acceptance: 'done' });
+    const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, NUWORQ_TOKEN: '', NUWORQ_AGENT_TOKEN: '', NUWORQ_REPOS: repos };
+    return { dir, origin, repos, home, hub, env };
+  }
+
+  test('worker clones it into NUWORQ_REPOS, says so once, and works in a worktree of the clone', async () => {
+    const w = far();
+    const server = createServer(w.hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const cli = () => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'far', '--agent', 'claude', '--as', 'w'], { env: w.env, cwd: w.home });
+    try {
+      const first = (await cli()).stdout;
+      const clone = join(w.repos, 'api');
+      assert.ok(first.includes(`Cloned ${normRemote(w.origin)} into ${clone}`), first);
+      assert.ok(first.includes(`cd '${clone}.worktrees/w'`), first);
+      assert.equal(normRemote(execFileSync('git', ['-C', clone, 'remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim()), normRemote(w.origin));
+      const again = (await cli()).stdout;
+      assert.ok(!again.includes('Cloned'), 'the clone is found the second time');
+      assert.ok(again.includes(`cd '${clone}.worktrees/w'`));
+    } finally {
+      server.close();
+    }
+  });
+
+  test('run clones it and launches the worker in a worktree of the clone', async () => {
+    const w = far();
+    const server = createServer(w.hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--max-runs', '1', '--until-idle', '--poll', '1'], { env: w.env, cwd: w.home });
+      const clone = join(w.repos, 'api');
+      assert.ok(stdout.includes(`Cloned ${normRemote(w.origin)} into ${clone}`), stdout);
+      assert.ok(!/Skipping far/.test(stdout), stdout);
+      const logs = join(w.home, '.nuworq', 'logs');
+      const log = readdirSync(logs).map((f) => readFileSync(join(logs, f), 'utf8')).join('');
+      assert.match(log, new RegExp(`WORKING IN ${clone}\\.worktrees/`), log);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('a GitHub repo on a hub without an App is skipped with the clone command, as before', async () => {
+    const w = far();
+    const hub = new Hub();
+    hub.tx(() => hub.project('gh', { create: true }));
+    hub.humanOp('gh', 'remote', { add: 'github.com/acme/nowhere' });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    try {
+      await assert.rejects(promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'gh', '--agent', 'claude', '--as', 'w'], { env: w.env, cwd: w.home }),
+        (e) => e.stderr.includes('No checkout of github.com/acme/nowhere on this machine') && e.stderr.includes(`git clone git@github.com:acme/nowhere.git ${join(w.repos, 'nowhere')}`));
+      assert.deepEqual(readdirSync(w.repos), [], 'nothing cloned');
     } finally {
       server.close();
     }

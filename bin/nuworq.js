@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname } from 'node:os';
-import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
+import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 
@@ -240,7 +240,7 @@ async function worker(flags) {
     target = { ...target, repo: routes.find((r) => r.project === target.slug)?.repo ?? null };
   }
   const token = flags.run ? await agentToken(client, flags) : null;
-  const { name, worktree, main, origin, cwd, cmd } = workerSetup(target, agent, flags, s, token);
+  const { name, worktree, main, origin, cwd, cmd } = await setupOrClone(target, agent, flags, s, client, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
@@ -311,6 +311,46 @@ function homeOf(target, flags) {
     throw new HubError(`${target.name} lives in ${target.path}, which doesn't exist on this machine`, { hint: 'Run the worker from a clone of its repository with --here.' });
   }
   return process.cwd();
+}
+
+// No checkout of the project here: clone it (#86), so the worker can start. A path remote clones from the
+// path; a GitHub one over HTTPS through the hub's GitHub App, when the hub has one. The token reaches git
+// only through the credential helper: never in argv, the remote URL or .git/config. Otherwise, or when the
+// clone fails, a HubError with the clone command as its hint, as before. Returns the clone's folder.
+async function cloneHome(target, flags, s, client, token, missing) {
+  const remote = missing.missing;
+  const github = /^github\.com\/[^/]+\/[^/]+$/.test(remote);
+  if (flags.here || !(remote.startsWith('/') || github)) throw missing;
+  if (github) {
+    const info = await client.get('/api/info').catch(() => ({}));
+    if (!info.github_app || info.github_app === 'create') throw missing;
+  }
+  const dir = cloneDir(remote);
+  const cant = (why) => new HubError(`Couldn't clone ${remote} into ${dir}: ${why}`, { hint: missing.hint });
+  if (existsSync(dir)) throw cant('something else is there');
+  const helper = `!node ${JSON.stringify(BIN)} git-credential --project ${target.slug}`;
+  try {
+    execFileSync('git', ['-c', 'credential.https://github.com.helper=', '-c', `credential.https://github.com.helper=${helper}`, '-c', 'credential.https://github.com.useHttpPath=true',
+      'clone', '-q', github ? `https://${remote}.git` : remote, dir], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', NUWORQ_URL: s.url, ...(token ?? s.token ? { NUWORQ_TOKEN: token ?? s.token } : {}) },
+    });
+  } catch (e) {
+    throw cant(String(e.stderr ?? e.message).trim().split('\n').filter(Boolean).pop() ?? 'git clone failed');
+  }
+  console.log(`Cloned ${remote} into ${dir}`);
+  return dir;
+}
+
+// workerSetup, cloning the project first when this machine has no checkout of it.
+async function setupOrClone(target, agent, flags, s, client, token) {
+  try {
+    return workerSetup(target, agent, flags, s, token);
+  } catch (e) {
+    if (!(e instanceof HubError) || !e.missing) throw e;
+    await cloneHome(target, flags, s, client, token, e);
+    return workerSetup(target, agent, flags, s, token);
+  }
 }
 
 // The shell command that gives a worker its worktree (detached at main, or at origin/main after a
@@ -411,7 +451,7 @@ async function runCmd(flags) {
     const repo = (target.remotes ?? []).length > 1 ? r.repo : null;
     let setup;
     try {
-      setup = workerSetup({ ...target, repo }, agent, { ...flags, as: undefined, run: true }, s, token);
+      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true }, s, client, token);
     } catch (e) {
       // This machine can't work on the project (no checkout of it here): the runner leaves it to others.
       if (e instanceof HubError) e.skip = true;
@@ -1023,6 +1063,12 @@ async function gitCredential(pos, flags) {
   for await (const c of process.stdin) input += c;
   const ask = Object.fromEntries(input.split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
   if (ask.host !== 'github.com') return;
+  // --project: a read-only token to clone that project's repository (nuworq run, before it holds an item).
+  if (flags.project) {
+    const repo = `github.com/${String(ask.path ?? '').replace(/\.git$/, '').replace(/\/+$/, '')}`;
+    const r = await createClient(flags).post('/api/agent/credential', { purpose: 'clone', project: String(flags.project), repo, agent: flags.as || envVar('AGENT') || undefined });
+    return process.stdout.write(`username=${r.username}\npassword=${r.password}\n`);
+  }
   const agent = flags.as || envVar('AGENT');
   if (!agent) throw new HubError('who are you?', { hint: 'The helper needs --as <name> or NUWORQ_AGENT.' });
   let r;
