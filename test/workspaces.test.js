@@ -186,7 +186,12 @@ describe('one server, two workspaces', () => {
       const start = await request(sso.address().port, 'GET', '/auth/github/start?ws=initech');
       assert.equal(start.status, 404);
       assert.equal(start.json.error, 'no organization "initech"');
+      const finish = await request(sso.address().port, 'GET', '/w/acme/api/oauth/finish?ticket=stale');
+      assert.equal(finish.status, 302);
+      const error = decodeURIComponent(finish.headers.location.split('#error=')[1]);
+      assert.match(error, /belongs to another organization/);
       for (const r of [denied, start]) assert.doesNotMatch(r.text, /workspace/i);
+      assert.doesNotMatch(error, /workspace/i);
     } finally { sso.close(); sso.closeAllConnections(); }
   });
 });

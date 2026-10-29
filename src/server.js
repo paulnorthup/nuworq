@@ -576,7 +576,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'GET' && path === '/api/oauth/finish') {
         const sid = required ? sso.redeem(url.searchParams.get('ticket'), ws) : null;
-        if (!sid) return redirect(res, `${base}/login.html#error=${encodeURIComponent('That sign-in link was already used, expired, or belongs to another workspace. Sign in again')}`);
+        if (!sid) return redirect(res, `${base}/login.html#error=${encodeURIComponent(`That sign-in link was already used, expired, or belongs to another ${place}. Sign in again`)}`);
         res.setHeader('set-cookie', sessionCookie(req, sid, cookiePath));
         // Only ever this hub's own device page, with a code of the right shape: never an address from the link.
         const dev = deviceCode(url.searchParams.get('device'));
@@ -702,7 +702,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return redirect(res, spaces ? `${app.installUrl()}?state=${encodeURIComponent(installState(app, hub.workspace))}` : app.installUrl());
       }
       if (req.method === 'GET' && path === '/api/github/app/new') {
-        if (spaces) return deny(403, 'on a hub with workspaces, the host sets up the GitHub App', 'See docs/GITHUB.md: NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE.');
+        if (spaces) return deny(403, 'on a hub with organizations, the host sets up the GitHub App', 'Install it for your organization instead; the hub host creates it (docs/GITHUB.md).');
         if (personRole !== 'owner') return deny(403, 'only an owner creates the GitHub App', 'Ask an owner of this hub.');
         const site = publicUrl || origin(req);
         const state = randomBytes(24).toString('base64url');
@@ -819,7 +819,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // The repositories the GitHub App can see, to make a project from one. Single hub only: on a workspaces hub
       // the app is shared, and its installations would show other organizations' repository names.
       if (req.method === 'GET' && path === '/api/github/repos') {
-        if (spaces) return deny(403, 'on a hub with workspaces, projects are added by name and remote for now', 'The shared GitHub App would list other organizations\' repositories.');
+        if (spaces) return deny(403, 'on a hub with organizations, projects are added by name and remote for now', 'The shared GitHub App would list other organizations\' repositories.');
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't add projects`, 'Ask an owner or steward.');
         if (!app) return deny(404, 'this hub has no GitHub App, so it can\'t list repositories', 'An owner creates one in one click: /api/github/app/new (Connect an agent → GitHub App). Or add the project by name and remote.');
         const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase();

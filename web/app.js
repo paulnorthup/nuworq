@@ -1040,7 +1040,7 @@ async function appCovers(P) {
 function newProject() {
   const gh = S.info?.github_app;
   const picker = gh && gh !== 'create' && !S.info?.workspace;
-  const why = S.info?.workspace ? 'On a hub with workspaces, add a project by name for now: the shared GitHub App would list other organizations\' repositories.'
+  const why = S.info?.workspace ? 'On a hub with organizations, add a project by name for now: the shared GitHub App would list other organizations\' repositories.'
     : gh === 'create' ? 'To pick a repository instead, <a href="api/github/app/new">create the GitHub App</a> (one click) and install it on your repositories.'
     : !gh ? 'With the hub\'s GitHub App, you could pick a repository here instead; an owner creates it from Connect an agent.' : '';
   modal(`<h2>New project</h2>
