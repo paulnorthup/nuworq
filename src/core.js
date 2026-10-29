@@ -13,6 +13,7 @@ export class UserError extends Error {
 
 export const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 export const LEASE_MS = 20 * MIN;
+export const HANDOFF_COOLDOWN = 30 * MIN; // work you just handed off isn't offered straight back to you
 const HEADLINE_MAX = 140;
 const STEER_TTL = 3 * DAY;
 export const HUMAN = 'you';
@@ -546,15 +547,24 @@ export class Hub extends EventEmitter {
     return this.claimable(p, agent)[0] ?? null;
   }
 
-  // Everything this agent could claim here, most useful first.
+  // Items this agent handed off within the cooldown, by id.
+  handedOff(p, agent) {
+    if (!agent) return new Set();
+    return new Set(this.q(`SELECT DISTINCT item_id FROM events WHERE project_id = ? AND actor = ? AND type = 'handoff' AND at > ?`)
+      .all(p.id, agent, this.now() - HANDOFF_COOLDOWN).map((r) => r.item_id));
+  }
+
+  // Everything this agent could claim here, most useful first. Not what it just handed off.
   claimable(p, agent) {
+    const gave = this.handedOff(p, agent);
+    const fresh = (i) => !gave.has(i.id);
     const reviews = p.autonomy !== 'full' ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
-        AND COALESCE(implementer, '') != ? ORDER BY stage_since`).all(p.id, agent).map((item) => ({ mode: 'review', item }));
+        AND COALESCE(implementer, '') != ? ORDER BY stage_since`).all(p.id, agent).filter(fresh).map((item) => ({ mode: 'review', item }));
     if (p.parked) return reviews;
     const ready = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
-      .filter((i) => !this.unmetDeps(i).length)
+      .filter((i) => fresh(i) && !this.unmetDeps(i).length)
       .map((item) => ({ mode: 'work', item }));
-    const shape = this.shapeable(p).map((item) => ({ mode: 'shape', item }));
+    const shape = this.shapeable(p).filter(fresh).map((item) => ({ mode: 'shape', item }));
     const all = [...ready, ...shape].sort((a, b) =>
       PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
@@ -668,11 +678,15 @@ const AGENT_OPS = {
     const pick = this.pick(p, agent);
     if (!pick) {
       if (p.parked) return { mode: 'idle', hint: 'The human has parked this project: start nothing new. Signoff.' };
-      const blocked = this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).get(p.id).n;
+      const gave = [...this.handedOff(p, agent)].map((id) => this.itemById(id))
+        .filter((i) => !i.holder && ['ready', 'proposed', 'verifying'].includes(i.stage));
+      const blocked = this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).get(p.id).n
+        - gave.filter((i) => i.stage === 'ready').length;
       return {
         mode: 'idle',
         hint: [
           'Nothing is ready or waiting to be shaped right now.',
+          gave.length ? `You handed off ${gave.map((i) => `#${i.seq}`).join(', ')}, so it's left for other agents for now (claim it if you really can do it now).` : '',
           blocked ? `${blocked} ready item(s) are waiting on dependencies or their own sub-items.` : '',
           'Propose work you think matters (with acceptance criteria), or signoff.',
         ].filter(Boolean).join(' '),

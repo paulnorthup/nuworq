@@ -70,6 +70,43 @@ describe('the hub routes agents to work', () => {
   });
 });
 
+describe('handing off', () => {
+  function world() {
+    const clock = { t: Date.UTC(2026, 9, 1, 9) };
+    const hub = new Hub({ clock: () => clock.t });
+    hub.tx(() => hub.project('p', { create: true }));
+    const op = (agent, name, args = {}) => hub.agentOp('p', name, agent, args);
+    return { hub, clock, op };
+  }
+
+  test("what you hand off isn't handed straight back to you, but others get it at once", () => {
+    const { hub, clock, op } = world();
+    hub.humanOp('p', 'create', { title: 'Needs Docker', acceptance: 'x', priority: 'now' });
+    hub.humanOp('p', 'create', { title: 'Plain work', acceptance: 'x' });
+    assert.equal(op('a', 'next').item, '#1');
+    op('a', 'handoff', { item: '#1', headline: 'no Docker here' });
+    assert.equal(op('a', 'next').item, '#2', 'other work instead');
+    op('a', 'handoff', { item: '#2', headline: 'also stuck' });
+    const idle = op('a', 'next');
+    assert.equal(idle.mode, 'idle');
+    assert.match(idle.hint, /You handed off #1, #2/);
+    assert.equal(op('b', 'next').item, '#1', 'another agent gets it immediately');
+    op('b', 'handoff', { item: '#1', headline: 'me neither' });
+    clock.t += 31 * 60_000;
+    assert.equal(op('a', 'next').item, '#1', 'after the cooldown it comes back');
+  });
+
+  test('affinity still brings sent-back work to its implementer', () => {
+    const { hub, op } = world();
+    hub.humanOp('p', 'create', { title: 'First', acceptance: 'x' });
+    hub.humanOp('p', 'create', { title: 'Mine', acceptance: 'x' });
+    op('a', 'claim', { item: '#2' });
+    op('a', 'submit', { item: '#2', headline: 'done' });
+    hub.humanOp('p', 'sendback', { item: '#2', note: 'missing a test' });
+    assert.equal(op('a', 'next').item, '#2');
+  });
+});
+
 describe('transport', () => {
   test('HTTP: project-less agent calls resolve by folder; /api/where and /api/route answer', async () => {
     const { hub, make } = setup();
