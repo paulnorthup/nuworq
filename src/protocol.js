@@ -17,8 +17,11 @@ const USAGE = {
 };
 const PRECONDITION = {
   type: 'object',
-  description: 'Optional, and rarely needed: usually build against the documented contract with a fake instead. A fact outside this hub the work must wait for; until the hub sees it, the item waits in "outside" and next doesn\'t offer it. A URL alone means it must answer 200. Or { url, status, contains, json_path, equals, credential } where credential is a NAME (the hub host\'s NUWORQ_CRED_<NAME>), never a secret. {} clears it.',
+  description: 'Optional, and rarely needed: usually build against the documented contract with a fake instead. A fact outside this hub the work must wait for; until the hub sees it, the item waits in "outside" and next doesn\'t offer it. A URL alone means it must answer 200. Or { url, status, contains, json_path, equals, credential } where credential is a NAME (the hub host\'s NUWORQ_CRED_<NAME>), never a secret. For a version: { kind: "version", url, json_path, min } (the version at json_path, or the first in the body, reaches semver min), or { kind: "release", repo: "owner/name", min } (its latest GitHub release). {} clears it.',
   properties: {
+    kind: { type: 'string', enum: ['http', 'version', 'release'], description: 'Default "http".' },
+    min: s('For kind "version" or "release": the lowest semver version that will do, e.g. "2.1.0".'),
+    repo: s('For kind "release": the GitHub repository, e.g. "acme/api".'),
     url: s('http(s) URL the hub GETs.'), status: { type: 'integer', description: 'Expected status (default 200).' },
     contains: s('Text the body must contain.'), json_path: s('Dotted path into a JSON body, e.g. "features.export".'),
     equals: { description: 'The value at json_path must equal this (otherwise it must just exist).' },
