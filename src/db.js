@@ -314,6 +314,8 @@ export function openDb(file) {
     'ALTER TABLE questions ADD COLUMN issue_comment INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN reporter_wait INTEGER NOT NULL DEFAULT 48', // hours a reporter has to answer before the human is asked
     "ALTER TABLE questions ADD COLUMN audience TEXT NOT NULL DEFAULT ''", // 'operator' (ask to: "operator"): an operator session answers, not the human; '' otherwise
+    'ALTER TABLE questions ADD COLUMN escalates INTEGER', // an operator's escalation to the human: the operator question it carries up
+    "ALTER TABLE questions ADD COLUMN evidence TEXT NOT NULL DEFAULT '[]'", // an escalation's evidence: [{ label, url? }]
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

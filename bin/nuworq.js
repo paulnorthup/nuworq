@@ -61,6 +61,12 @@ function need(v, what) {
 }
 
 // positional + flag shapes for each agent operation
+// --evidence "label|url", repeatable.
+const evidenceFlags = (list) => list?.map((e) => {
+  const [label, ...url] = String(e).split('|');
+  return clean({ label: label.trim(), url: url.join('|').trim() || undefined });
+});
+
 const AGENT_CMDS = {
   checkin: (p, f) => ({ model: f.model, client: f.client, status: text(f.status), has: refs(f.has ?? envVar('HAS')) }),
   next: (p, f) => ({ claim: f.peek ? false : undefined }),
@@ -74,15 +80,13 @@ const AGENT_CMDS = {
       context: text(f.context), detail: text(f.detail),
       options: f.option, assumption: text(f.assume ?? f.assumption),
       blocking: f.blocking ? true : undefined, to: f.to,
+      escalates: f.escalates, evidence: evidenceFlags(f.evidence),
     };
   },
   answer: (p) => ({ question: need(p[0], '<question-id>'), answer: need(rest(p, 1), '<answer>') }),
   submit: (p, f) => ({
     item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f), acceptance: text(f.acceptance),
-    evidence: f.evidence?.map((e) => {
-      const [label, ...url] = String(e).split('|');
-      return clean({ label: label.trim(), url: url.join('|').trim() || undefined });
-    }),
+    evidence: evidenceFlags(f.evidence),
   }),
   handoff: (p, f) => ({ item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f) }),
   propose: (p, f) => ({
@@ -1110,6 +1114,8 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   progress <item> [headline] [--touching "src/db,src/api.js"]
                                          milestone update (no headline = silent heartbeat); renews your lease
   ask [<item>] <question> [--assume a] [--option x]... [--blocking] [--to human|reporter|operator]
+  ask <question> --escalates <question-id> --evidence "label|url"...
+                                         operators only: carry a question up to the human, with evidence
   answer <question-id> <answer>          operators only: answer a question asked to: operator
   submit <item> <headline> [--evidence "label|url"]...
   handoff <item> <headline>              release with where you left off
