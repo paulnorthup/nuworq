@@ -88,15 +88,18 @@ Who gets in: the hub asks the provider for a **verified** email (GitHub: the pri
 **Organizations (with `--workspaces`).** People can also sign in to the hub itself, at the address that names no workspace (the base domain, the `--public-url` host, or `/` without subdomains): `/auth/<provider>/start` with no `ws`. There, `GET /api/me` lists their organizations (workspaces where a person has their verified email) with role, address and an `enter` link that signs them in there in one click. `POST /api/orgs {name, slug}` creates a workspace with them as its owner. Each person may create up to 5 (`--org-cap`, `NUWORQ_ORG_CAP`). The hub keeps who-belongs-where in `<data-dir>/workspaces/directory.sqlite` and checks it against each workspace's people on every read, so role changes and removals show at once. Reserved names: www, api, app, admin, w, static, login, auth, hub.
 
 ### Connecting agents to a remote hub
-Create one agent token per machine or agent, so you can revoke them one at a time:
+On the agent's machine, two lines with the hub's public address (the hub's "Connect an agent" dialog gives them ready to copy):
 ```bash
-node bin/nuworq.js token create claude-laptop          # role defaults to agent
+npm install -g https://nuworq.example.com/nuworq.tgz   # the package of the commit the hub runs
+nuworq connect https://nuworq.example.com              # a workspace: its /w/<slug> address
 ```
-On the agent's machine:
+`connect` logs in through the browser, gives the machine its own agent token, and registers `nuworq mcp` with Claude Code, Codex and opencode. A hub that serves no package (`/api/info` has `package: null`, e.g. an older version) still works from a checkout of nuworq: `node bin/nuworq.js connect <url>`.
+
+By hand instead, create one agent token per machine or agent, so you can revoke them one at a time:
 ```bash
-claude mcp add nuworq -e NUWORQ_URL=https://nuworq.example.com -e NUWORQ_TOKEN=nwq_… -- node /path/to/nuworq/bin/nuworq.js mcp
+node bin/nuworq.js token create claude-laptop          # on the hub's host; role defaults to agent
 ```
-Codex, opencode and the plain CLI read the same two variables.
+Then give the agent `NUWORQ_URL` and `NUWORQ_TOKEN`, e.g. `claude mcp add nuworq -e NUWORQ_URL=https://nuworq.example.com -e NUWORQ_TOKEN=nwq_… -- nuworq mcp`. Codex, opencode and the plain CLI read the same two variables.
 
 ### GitHub: pull requests and CI on items
 A signed webhook links pull requests to items and shows CI results on them. When CI fails on work in Verifying, it lands under "Needs you" (and gets pushed, if you set up [notifications](../README.md#getting-pinged-ntfy-slack-or-any-webhook)).

@@ -37,11 +37,11 @@ claude mcp add --scope user nuworq -- node /path/to/nuworq/bin/nuworq.js mcp
 node bin/nuworq.js init        # the same one-time setup for Codex, opencode and other MCP clients
 ```
 
-When the hub runs on another machine (a server, or a workspace on nuworq.com), set this machine up with one command:
+When the hub runs on another machine (a server, or a workspace on nuworq.com), set this machine up with two lines, both with the hub's address (its "Connect an agent" dialog gives them ready to copy):
 
 ```bash
-node bin/nuworq.js connect https://acme.nuworq.com     # or: connect acme --hub https://nuworq.com
-node bin/nuworq.js disconnect                          # undo all of it
+npm install -g https://nuworq.com/nuworq.tgz      # the hub's own package: no registry, no clone; it keeps itself up to date
+nuworq connect https://nuworq.com/w/acme          # your hub or workspace; `nuworq disconnect` undoes all of it
 ```
 
 Claude Code can instead take nuworq as one plugin, the MCP server and both skills (`nuworq`, `nuworq-plan`). On a clean machine, that is all of it:
@@ -58,6 +58,13 @@ Then "work on X using nuworq" and "help me plan Y in nuworq" work in Claude Code
 
 Any agent with a shell can also use the CLI: `nuworq guide` tells it everything.
 Requirements: Node 22.13+. No dependencies.
+
+### Working on nuworq itself
+Contributors run it from a checkout, as the commands above do (`node bin/nuworq.js …`); a checkout never updates itself:
+
+```bash
+git clone https://github.com/paulnorthup/nuworq.git && cd nuworq && npm test
+```
 nuworq used to be called Trellis. Setups from then keep working: the `trellis` command (`bin/trellis.js`), `TRELLIS_*` variables, `.trellis.json`, `~/.trellis` and `trl_` tokens are still read wherever the new names are.
 
 ---
