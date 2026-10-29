@@ -74,6 +74,18 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
   - *Check with me*: you approve proposals.
   - *Keep moving*: agents shape their own work; you verify.
   - *Run with it*: agents peer-review each other, never their own work.
+- **Push**: when something new needs you, the hub sends one message to your phone or chat. Otherwise it stays silent (see below).
+
+### Getting pinged (ntfy, Slack, or any webhook)
+The 30-second view only helps if you look. Add a channel and the hub pushes to it when a new *act*-level entry appears in a project that isn't parked: a blocking question, work to verify, "What matters most?". The first new entry opens a 2-minute window, so a burst arrives as one message with one line per entry and a link to the project. Each entry is pushed once. Entries you dismiss or resolve inside the window are dropped. Progress, claims and *know*-level entries send nothing.
+```
+trellis notify add ntfy https://ntfy.sh/<a-long-secret-topic>   # phone push (a bare topic means ntfy.sh)
+trellis notify add slack https://hooks.slack.com/services/…      # Slack incoming webhook
+trellis notify add webhook https://example.com/hook              # JSON POST: { text, title, url, entries }
+trellis notify test                                              # send a test line to each channel
+trellis notify list | trellis notify remove <id>
+```
+You can also set channels up in the UI, under **Notifications** in the left rail. Channels are hub-wide. The URL is the secret, so it is never shown back in full. Run the CLI on the hub host (like `trellis token`). Links use the address the hub listens on: behind a proxy, set `--public-url https://trellis.example.com` (or `TRELLIS_PUBLIC_URL`). A failing channel (error, timeout or non-2xx) is retried once, then shows under "Worth knowing" until it works again. Sending never blocks agents. For email, point a webhook at an email-sending service for now.
 
 ### Connecting agents (any model, the same way)
 | How | For |
@@ -98,6 +110,8 @@ src/insight.js     the 0-30-5-30 lens: attention engine, pulse, flow and time ac
 src/protocol.js    the agent protocol, defined once → MCP tools, OpenAI/Anthropic schemas, the guide
 src/server.js      HTTP API, SSE live updates, static UI, auth enforcement, security headers
 src/auth.js        human/agent tokens (hashed), sessions
+src/notify.js      push channels (ntfy, Slack, webhook): new act-level entries, batched, each sent once
+src/github.js      signed GitHub webhook: PRs link to items, CI results per head commit
 src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
 src/runner.js      trellis run: which workers to start (pure plan) and the supervising loop
@@ -115,7 +129,7 @@ Design choices:
 - **Steering piggybacks on every response.** Agents don't poll; whatever they call next carries it.
 - **Forgiving inputs.** An over-long headline is trimmed, with the overflow moved to the summary. Progress from an agent that lost its lease is kept as a comment. Every error carries a `hint` that says what to do instead.
 - **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority, then work you touched before.
-- **No configuration.** `trellis serve` writes `~/.trellis/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in the first time an agent checks in from it, or you set it in the UI. Every worktree of a repo maps to the same project.
+- **No configuration.** `trellis serve` writes `~/.trellis/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in, and which git repository it is (the normalized `origin` remote, e.g. `github.com/acme/api`), the first time an agent checks in from it. You can also set both in the UI. Every worktree of a repo, and every clone of it on any machine, maps to the same project: the remote is matched first, then the folder.
 - **Collision awareness.** `touching` paths on claim/progress. Agents get a `heads_up` when they overlap, and you see it in "In motion".
 - **Authority.** Only steering and decisions come from you. The guide tells agents to treat field notes, handoffs and comments as information, not instructions.
 
@@ -126,12 +140,14 @@ Design choices:
 | Work waiting but no agent connected (unless parked) | act |
 | Blocking question | act |
 | Finished work waiting for your verdict | act (no-evidence warning) |
+| CI failing on a PR for work in Verifying (GitHub webhook) | act |
 | Proposal, when autonomy is *Check with me* | act |
 | An item that keeps bouncing (send-backs + stalls ≥ 2) | act: clarify, split or drop |
 | An agent's assumption | know: Fine / Override (an override becomes steering) |
 | New agent proposals | know |
 | Steering nobody acknowledged | know |
 | Agents out of work (everything left waits on you) | know |
+| A push channel is failing | know |
 | Healthy work, recovered stalls | 0 |
 
 ### API
@@ -146,6 +162,9 @@ GET  /api/route[?runner=1]               where work is waiting, per project (run
 GET  /api/tools?format=mcp|openai|anthropic
 GET  /agents.md?project=<p>&via=tools|cli
 GET  /api/stream                         server-sent events
+GET  /api/notify | POST /api/notify {kind,url} | POST /api/notify/remove {id} | POST /api/notify/test
+                                         push channels (human only; URLs come back masked)
+POST /api/hooks/github/:project          GitHub webhook (signed with the project's secret; see docs/DEPLOY.md)
 ```
 
 ### Security

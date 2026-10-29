@@ -137,7 +137,7 @@ function route() {
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
   const ref = m?.[2] ? `#${m[2]}` : null;
-  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; }
+  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = false; }
   S.slug = slug;
   if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; }
   refresh({ force: true });
@@ -160,6 +160,7 @@ function renderRail() {
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
       <button class="rail-item" data-action="connect">⌁ Connect an agent</button>
+      <button class="rail-item" data-action="notify">◔ Notifications</button>
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
     </div>`;
 }
@@ -200,13 +201,19 @@ function project(v) {
   const where = S.editPath
     ? `<div class="inline-form"><input data-draft="path" id="path-in" placeholder="/path/to/the/repo on this machine" value="${esc(P.path)}"><button class="btn primary small" data-action="save-path">Save</button><button class="btn ghost small" data-action="cancel-path">Cancel</button></div>`
     : `<div class="where" data-action="edit-path" title="Where the code lives. Agents working in this folder find the project on their own, and workers routed here start in it.">${P.path ? `Lives in <code>${esc(P.path)}</code>` : '<span class="faint">Where does the code live? Set it, or the first agent that checks in from its folder teaches the hub.</span>'}</div>`;
+  // The repositories this project is: any clone of one, on any machine, finds the project.
+  const remotes = `<div class="where">${P.remotes.length ? `Repo ${P.remotes.map((r) => `<code>${esc(r)}</code><button class="link" data-action="remote-remove" data-remote="${esc(r)}" title="Unlink this repository">×</button>`).join(' ')}` : '<span class="faint">No repository linked yet: the first agent that checks in from a clone teaches the hub.</span>'}
+    ${S.addRemote
+      ? `<div class="inline-form"><input data-draft="remote" id="remote-in" placeholder="github.com/acme/api, or any git remote URL"><button class="btn primary small" data-action="remote-add">Link</button><button class="btn ghost small" data-action="remote-cancel">Cancel</button></div>`
+      : `<button class="link" data-action="remote-new" title="Link a git remote: every clone of it, on any machine, reaches this project">+ repo</button>`}</div>`;
   const empty = !v.all.length && !v.agents.length;
   return `
     <div class="phead">
-      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? where : ''}</div>
+      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? where + remotes : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
+        ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items with a GitHub webhook">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
         ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
         ${z() >= 1 ? (P.runner
           ? `<button class="link" data-action="runner-off" title="trellis run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by trellis run · stop</button>`
@@ -300,7 +307,7 @@ function needsYou(v) {
 }
 
 function card(a) {
-  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working' }[a.kind] ?? a.kind;
+  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'ci-failing': 'CI is failing' }[a.kind] ?? a.kind;
   const key = 'a:' + a.key;
   const open = S.open.has(key) || z() >= 2;
   const hasMore = a.why || a.detail || a.acceptance;
@@ -369,6 +376,18 @@ function cardActions(a, hasMore, open, key) {
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
     </div>`;
   }
+  if (a.kind === 'ci-failing') {
+    const r = `sb:${a.item}`;
+    return `<div class="evidence">${a.pr.checks.map((c) => `<span class="ev">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">✗ ${esc(c.name)}</a>` : `✗ ${esc(c.name)}`}</span>`).join('')}</div>
+      <div class="actions">
+      ${S.reveal.has(r)
+        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What failed? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
+        : `<button class="btn you" data-action="reveal" data-key="${r}">Send back…</button>`}
+      ${a.pr.url ? `<a class="btn" href="${esc(a.pr.url)}" target="_blank" rel="noopener">PR #${a.pr.number}</a>` : ''}
+      <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>
+      <button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}
+    </div>`;
+  }
   if (a.kind === 'struggling') {
     const r = `cl:${a.item}`;
     return `<div class="actions">
@@ -397,7 +416,8 @@ function worthKnowing(v) {
     }
     if (a.kind === 'proposal') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Look</button>` + acts;
     if (a.start) acts = `<button class="btn small primary" data-action="connect">Start an agent</button>` + acts;
-    if (a.kind === 'peer-review-stuck') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Review it</button>` + acts;
+    if (a.kind === 'notify-failing') acts = `<button class="btn small" data-action="notify">Check it</button>` + acts;
+    if (a.kind === 'peer-review-stuck') acts =`<button class="btn small" data-action="open" data-item="${esc(a.item)}">Review it</button>` + acts;
     return `<div class="row-item"><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
       ${z() >= 2 && a.why ? `<div class="s" style="margin-top:4px">${esc(a.why)}</div>` : ''}</div><div class="acts">${acts}</div></div>`;
   }).join('');
@@ -678,6 +698,9 @@ function renderDrawer() {
       ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
       ${commits(it.git)}${it.git_warning ? `<div class="warn">⚠ ${esc(it.git_warning)}</div>` : ''}</div>` : ''}
     ${handoff}
+    ${it.prs?.length ? `<div class="d-sec"><div class="label">Pull requests</div>${it.prs.map((pr) => `<p><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a> <b>${esc(pr.state)}</b> · ${esc(pr.title)}
+      ${pr.ci ? ` · CI <b class="${pr.ci === 'fail' ? 'warn' : ''}">${pr.ci === 'pass' ? '✓ passing' : pr.ci === 'fail' ? '✗ failing' : '… running'}</b>` : ''}</p>
+      ${pr.checks.length ? `<div class="evidence">${pr.checks.map((c) => `<span class="ev">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}: ${esc(c.conclusion)}</a>` : `${esc(c.name)}: ${esc(c.conclusion)}`}</span>`).join('')}</div>` : ''}`).join('')}</div>` : ''}
     ${questions}
     ${steers}
     <div class="d-sec"><div class="label">Say something about this item</div>
@@ -722,6 +745,35 @@ async function connect() {
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
 
+async function notifySettings() {
+  let n;
+  try { n = await api('/api/notify'); } catch (e) { return toast(e.message, true); }
+  const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
+    <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
+  modal(`<h2>Notifications</h2>
+    <p class="lead">When something new needs you (a blocking question, work to verify, "what matters most?"), Trellis sends one message, batched over 2 minutes, with a link. Healthy work sends nothing.</p>
+    ${rows || '<p class="lead faint">No channels yet.</p>'}
+    <h4>Add a channel</h4>
+    <div class="inline-form"><select id="nt-kind">${Object.keys(n.kinds).map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
+      <input id="nt-url" placeholder="https://ntfy.sh/your-secret-topic, a Slack webhook, or any URL"><button class="btn primary small" data-action="notify-add">Add</button></div>
+    <p class="lead">${Object.entries(n.kinds).map(([k, v]) => `<b>${esc(k)}</b>: ${esc(v)}`).join('<br>')}</p>
+    <div class="foot">${n.channels.length ? '<button class="btn" data-action="notify-test">Send a test</button>' : ''}<button class="btn primary" data-action="close-modal">Done</button></div>`);
+}
+
+async function githubSettings() {
+  S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
+  const P = S.view.project;
+  const hook = `${S.info.url}/api/hooks/github/${encodeURIComponent(P.slug)}`;
+  modal(`<h2>GitHub</h2>
+    <p class="lead">A webhook links pull requests to items (a <code>trellis/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
+    <h4>1. In the repo on GitHub: Settings → Webhooks → Add webhook</h4>
+    <p class="lead">Payload URL (GitHub must be able to reach it; see docs/DEPLOY.md):</p>${copyBlock(hook)}
+    <p class="lead">Content type <code>application/json</code>. Events: <i>Pull requests</i>, <i>Check suites</i>, <i>Check runs</i>, <i>Statuses</i>.</p>
+    <h4>2. The same secret, there and here</h4>
+    <div class="inline-form"><input id="gh-secret" placeholder="${P.github ? 'A secret is set; enter a new one to replace it' : 'A long random secret'}"><button class="btn small" data-action="github-generate">Generate</button></div>
+    <div class="foot">${P.github ? '<button class="btn ghost" data-action="github-disconnect">Disconnect</button>' : ''}<button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="github-save">Save</button></div>`);
+}
+
 function newProject() {
   modal(`<h2>New project</h2><p class="lead">Agents also create projects automatically when they check in to a new name.</p>
     <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
@@ -751,6 +803,10 @@ const ACTIONS = {
   'cancel-path': () => { S.editPath = false; clearDraft('path'); render({ force: true }); },
   'save-path': async () => { const v = val('path-in'); S.editPath = false; clearDraft('path'); await human('settings', { path: v }, 'Saved: agents in that folder will find this project'); },
   'save-mission': async () => { const m = val('mission-in'); S.editMission = false; clearDraft('mission'); await human('settings', { mission: m }, 'Mission saved'); },
+  'remote-new': () => { S.addRemote = true; render({ force: true }); setTimeout(() => $('#remote-in')?.focus(), 0); },
+  'remote-cancel': () => { S.addRemote = false; clearDraft('remote'); render({ force: true }); },
+  'remote-add': async () => { const v = val('remote-in'); if (!v) return; S.addRemote = false; clearDraft('remote'); await human('remote', { add: v }, 'Linked: agents in any clone of it find this project'); },
+  'remote-remove': (el) => { if (confirm(`Unlink ${el.dataset.remote}?`)) human('remote', { remove: el.dataset.remote }, 'Unlinked'); },
   'compose-kind': (el) => { S.composeKind = el.dataset.kind; render({ force: true }); },
   'compose-send': async () => {
     const body = val('compose');
@@ -842,6 +898,38 @@ const ACTIONS = {
   retire: (el) => human('retire', { note: Number(el.dataset.note) }, 'Retired'),
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
   connect: () => connect(),
+  notify: () => notifySettings(),
+  github: () => githubSettings(),
+  'github-generate': () => {
+    const el = $('#gh-secret');
+    el.value = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    el.select();
+    toast('Copy it into GitHub before you save: it is not shown again');
+  },
+  'github-save': async () => {
+    const secret = val('gh-secret');
+    if (!secret) return toast('Enter or generate a secret', true);
+    closeModal();
+    await human('settings', { github_secret: secret }, 'GitHub connected: pull requests and CI will link to items');
+  },
+  'github-disconnect': async () => { closeModal(); await human('settings', { github_secret: '' }, 'GitHub disconnected'); },
+  'notify-add': async () => {
+    try {
+      await api('/api/notify', { method: 'POST', body: JSON.stringify({ kind: val('nt-kind'), url: val('nt-url') }) });
+      toast('Channel added: send a test to check it');
+      notifySettings();
+    } catch (e) { toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true); }
+  },
+  'notify-remove': async (el) => {
+    try { await api('/api/notify/remove', { method: 'POST', body: JSON.stringify({ id: Number(el.dataset.id) }) }); notifySettings(); } catch (e) { toast(e.message, true); }
+  },
+  'notify-test': async () => {
+    try {
+      const r = await api('/api/notify/test', { method: 'POST' });
+      toast(r.ok ? 'Test sent to every channel' : `Failed: ${r.results.filter((x) => !x.ok).map((x) => `${x.kind} (${x.error})`).join(', ')}`, !r.ok);
+      notifySettings();
+    } catch (e) { toast(e.message, true); }
+  },
   'new-project': () => newProject(),
   'close-modal': () => closeModal(),
   logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },

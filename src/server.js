@@ -7,6 +7,8 @@ import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Workspaces } from './workspaces.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
+import { receive } from './github.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -26,7 +28,7 @@ const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
 // target: one Hub (today's single hub), or a Workspaces registry: then each request is resolved to a
 // workspace by subdomain of baseDomain or a /w/<slug>/ path prefix, and login is always required.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000 } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '' } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   const required = spaces ? true : auth === 'required';
   const failures = new Map(); // ip → [timestamps of failed logins]
@@ -109,6 +111,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const { authz, clients } = scopeOf(hub);
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+
+      // GitHub can't log in: the delivery's signature is its credential, so this answers under any host name
+      // (e.g. through a tunnel to a loopback hub). Browsers never send these, and nothing changes without a valid signature.
+      let hook;
+      if (req.method === 'POST' && (hook = path.match(/^\/api\/hooks\/github\/([^/]+)$/))) {
+        return send(200, receive(hub, decodeURIComponent(hook[1]), { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) }));
+      }
 
       // Without login, only answer to loopback names: blocks DNS-rebinding from web pages you visit.
       if (!required && !LOOPBACK.test(hostname(req.headers.host))) {
@@ -268,18 +277,37 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), ...caller }));
+        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
       if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), ...caller }));
+        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
+      }
+      // Push channels (hub-wide, or workspace-wide). Agent tokens never reach these; only an owner changes them.
+      if (req.method === 'GET' && path === '/api/notify') return send(200, { channels: listChannels(hub.db), kinds: KINDS });
+      if (req.method === 'POST' && path.startsWith('/api/notify') && personRole !== 'owner') return deny(403, 'only an owner manages push channels', 'Ask an owner of this workspace.');
+      if (req.method === 'POST' && path === '/api/notify') {
+        const b = await body(req);
+        const c = addChannel(hub.db, b.kind, b.url, hub.now());
+        hub.emit('change', { project: null, at: hub.now() });
+        return send(200, { ok: true, ...c });
+      }
+      if (req.method === 'POST' && path === '/api/notify/remove') {
+        removeChannel(hub.db, (await body(req)).id);
+        hub.emit('change', { project: null, at: hub.now() });
+        return send(200, { ok: true });
+      }
+      if (req.method === 'POST' && path === '/api/notify/test') {
+        const results = await testChannels(hub.db, { baseUrl: publicUrl || origin(req) + base, now: () => hub.now() });
+        hub.emit('change', { project: null, at: hub.now() });
+        return send(200, { ok: results.every((r) => r.ok), results });
       }
       if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', { runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null }));
       if (req.method === 'GET' && path === '/api/where') {
-        const p = hub.projectByPath(url.searchParams.get('root') ?? '', caller.scope);
+        const p = hub.projectByRemote(url.searchParams.get('remote') ?? '', caller.scope) ?? hub.projectByPath(url.searchParams.get('root') ?? '', caller.scope);
         return send(200, { project: p?.slug ?? null, path: p?.path ?? null });
       }
       send(404, { ok: false, error: `No route ${req.method} ${path}` });
@@ -299,10 +327,11 @@ function hostname(host) {
 }
 
 const rootOf = (req) => { try { return decodeURIComponent(req.headers['x-trellis-root'] ?? ''); } catch { return ''; } };
+const remoteOf = (req) => { try { return decodeURIComponent(req.headers['x-trellis-remote'] ?? ''); } catch { return ''; } };
 
 const TOO_BIG = () => new UserError('Request body too large (limit 1MB)', { status: 413, hint: 'Keep detail to what a person would read; put long logs in the repo and reference them.' });
 
-async function body(req) {
+async function rawBody(req) {
   // Read and discard a moderately oversized body so the client gets a clean 413 instead of a broken pipe;
   // only refuse outright, unread, when it's absurdly large.
   if (Number(req.headers['content-length']) > 16 * MAX_BODY) { req.destroy(); throw TOO_BIG(); }
@@ -314,7 +343,11 @@ async function body(req) {
     if (size <= MAX_BODY) chunks.push(c);
   }
   if (size > MAX_BODY) throw TOO_BIG();
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  return Buffer.concat(chunks);
+}
+
+async function body(req) {
+  const raw = (await rawBody(req)).toString('utf8').trim();
   if (!raw) return {};
   try {
     const v = JSON.parse(raw);

@@ -171,6 +171,54 @@ CREATE TABLE IF NOT EXISTS dismissals (
   at         INTEGER NOT NULL,
   PRIMARY KEY (project_id, key)
 );
+
+-- The git repositories a project is (normalized remotes: github.com/acme/api). One repository, one project.
+CREATE TABLE IF NOT EXISTS project_remotes (
+  project_id INTEGER NOT NULL,
+  remote     TEXT UNIQUE NOT NULL,
+  at         INTEGER NOT NULL
+);
+
+-- Push channels (hub-wide) and which act-level attention entries were already pushed (src/notify.js).
+CREATE TABLE IF NOT EXISTS channels (
+  id            INTEGER PRIMARY KEY,
+  kind          TEXT NOT NULL,                -- ntfy | slack | webhook
+  url           TEXT UNIQUE NOT NULL,         -- holds the secret: never shown back in full
+  failing_since INTEGER,
+  last_error    TEXT NOT NULL DEFAULT '',
+  created_at    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notified (
+  project_id INTEGER NOT NULL,
+  key        TEXT NOT NULL,
+  at         INTEGER NOT NULL,
+  seen_at    INTEGER NOT NULL,                -- last time the entry was still there
+  PRIMARY KEY (project_id, key)
+);
+
+-- GitHub pull requests linked to items, and CI results per commit (src/github.js).
+CREATE TABLE IF NOT EXISTS prs (
+  project_id INTEGER NOT NULL,
+  repo       TEXT NOT NULL,
+  number     INTEGER NOT NULL,
+  item_id    INTEGER NOT NULL,
+  url        TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  state      TEXT NOT NULL,                   -- open | merged | closed
+  head_ref   TEXT NOT NULL DEFAULT '',
+  head_sha   TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, repo, number)
+);
+CREATE TABLE IF NOT EXISTS checks (
+  project_id INTEGER NOT NULL,
+  sha        TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  conclusion TEXT NOT NULL,                   -- GitHub's: success | failure | neutral | skipped | timed_out | … (or a status state)
+  url        TEXT NOT NULL DEFAULT '',
+  at         INTEGER NOT NULL,
+  PRIMARY KEY (project_id, sha, name)
+);
 `;
 
 export function openDb(file) {
@@ -188,6 +236,7 @@ export function openDb(file) {
     "ALTER TABLE agents ADD COLUMN tokens TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE items ADD COLUMN race INTEGER NOT NULL DEFAULT 1',
     'ALTER TABLE agents ADD COLUMN token_id INTEGER',
+    "ALTER TABLE projects ADD COLUMN github_secret TEXT NOT NULL DEFAULT ''",
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

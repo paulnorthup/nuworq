@@ -404,6 +404,7 @@ async function seedCmd(flags) {
 async function serve(flags) {
   const { Hub } = await import('../src/core.js');
   const { createServer } = await import('../src/server.js');
+  const { Notifier } = await import('../src/notify.js');
   const host = flags.host || process.env.TRELLIS_HOST || '127.0.0.1';
   const port = Number(flags.port || process.env.TRELLIS_PORT || 4747);
   const loopback = host === 'localhost' || host === '::1' || host.startsWith('127.');
@@ -420,7 +421,8 @@ async function serve(flags) {
       console.warn(amber(`warning: couldn't load demo data (${e.message}); starting empty`));
     }
   }
-  const server = createServer(hub, { auth, trustProxy });
+  const publicUrl = String(flags['public-url'] || process.env.TRELLIS_PUBLIC_URL || '').replace(/\/+$/, '');
+  const server = createServer(hub, { auth, trustProxy, publicUrl });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -436,6 +438,8 @@ hint: Create one, then start again:
       // Let agents and the CLI on this machine find the hub without configuration.
       try { mkdirSync(dirname(HUB_FILE), { recursive: true }); writeFileSync(HUB_FILE, JSON.stringify({ url, pid: process.pid }) + '\n'); } catch {}
     }
+    const notifier = new Notifier(hub, { baseUrl: publicUrl || url }).start();
+    server.on('close', () => notifier.stop());
     const authLine = auth === 'required'
       ? `${green('locked')}: browsers log in with a human token; agents send TRELLIS_TOKEN (an agent token)${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}`
       : `${amber('open')} on loopback: no login (only this machine can reach it)`;
@@ -612,10 +616,41 @@ async function token(pos, flags) {
   throw new HubError('usage: trellis token create <name> --role human|agent | list | revoke <name|id>');
 }
 
+// Push channels are managed on the hub host, straight against the database file (like tokens).
+async function notify(pos, flags) {
+  const { openDb } = await import('../src/db.js');
+  const n = await import('../src/notify.js');
+  const db = openDb(dbPath(flags));
+  const [sub, a, b] = pos;
+  try {
+    if (sub === 'add') {
+      const c = n.addChannel(db, need(a, 'ntfy|slack|webhook'), need(b, '<url>'));
+      return console.log(`${green('Added')} ${c.kind} channel ${bold(c.id)} (${c.url}). Try it: trellis notify test`);
+    }
+    if (sub === 'list') {
+      const rows = n.listChannels(db);
+      if (!rows.length) return console.log(dim('No push channels. Add one: trellis notify add ntfy <topic-url> | slack <webhook-url> | webhook <url>'));
+      for (const c of rows) console.log(`${String(c.id).padEnd(4)}${c.kind.padEnd(9)}${c.url}  ${c.failing ? amber(`failing: ${c.last_error}`) : green('ok')}`);
+      return;
+    }
+    if (sub === 'remove') { n.removeChannel(db, need(a, '<id>')); return console.log(`${green('Removed')} channel ${a}.`); }
+    if (sub === 'test') {
+      const results = await n.testChannels(db, { baseUrl: flags['public-url'] || process.env.TRELLIS_PUBLIC_URL || '' });
+      if (!results.length) return console.log(dim('No push channels to test. Add one: trellis notify add ntfy <topic-url>'));
+      for (const r of results) console.log(`${String(r.id).padEnd(4)}${r.kind.padEnd(9)}${r.ok ? green('sent') : amber(`failed: ${r.error}`)}`);
+      if (results.some((r) => !r.ok)) process.exitCode = 1;
+      return;
+    }
+  } catch (e) {
+    throw e.hint && !(e instanceof HubError) ? new HubError(e.message, { hint: e.hint }) : e;
+  }
+  throw new HubError('usage: trellis notify add ntfy|slack|webhook <url> | list | remove <id> | test');
+}
+
 const HELP = `${bold('trellis')}: a hub where humans facilitate and AI agents coordinate work.
 
 ${bold('Human')}
-  serve [--port 4747] [--host 127.0.0.1] [--db path] [--demo] [--auth] [--trust-proxy]
+  serve [--port 4747] [--host 127.0.0.1] [--db path] [--demo] [--auth] [--trust-proxy] [--public-url u]
                                          run the hub and web UI. Loopback: no login.
                                          Any other host (or --auth): tokens required.
   token create <name> --role human|agent [--project a,b]
@@ -637,6 +672,8 @@ ${bold('Human')}
                                          one process, many workspaces (one database each),
                                          at <name>.<base-domain> or /w/<name>/. Login always required.
   workspace create|remove <name> | list  manage workspaces on the hub host
+  notify add ntfy|slack|webhook <url>    push one batched message when something new needs you
+  notify list | remove <id> | test       see, remove or test push channels (run on the hub host)
   status [--all]                         the 30-second view
 
 ${bold('Agents')}  (every command takes --as <name>, --project, --url)
@@ -677,7 +714,8 @@ ${bold('Setup')}
   seed                                   add the Trellis roadmap project to your hub's database
 
 Env: TRELLIS_URL (default ${DEFAULT_URL}), TRELLIS_PROJECT, TRELLIS_AGENT, TRELLIS_MODEL, TRELLIS_DB,
-     TRELLIS_TOKEN (a token the CLI and MCP server send to a hub that requires login)
+     TRELLIS_TOKEN (a token the CLI and MCP server send to a hub that requires login),
+     TRELLIS_PUBLIC_URL (the hub's address as you reach it, used for links in push messages)
 Deploying on a VM or the internet: docs/DEPLOY.md`;
 
 async function main() {
@@ -695,6 +733,7 @@ async function main() {
   if (cmd === 'workspace') return workspace(pos, flags);
   if (cmd === 'person') return person(pos, flags);
   if (cmd === 'invite') return invite(pos, flags);
+  if (cmd === 'notify') return notify(pos, flags);
   if (cmd === 'guide') {
     const s = resolveSettings(flags);
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
