@@ -86,17 +86,38 @@ describe('the home: what needs you across every project', () => {
     assert.equal(h.pulse.state, 'stalled');
     assert.equal(h.pulse.sentence, 'Nothing needs you. Nothing is moving: work is waiting in 1 project.');
 
-    // What a parked project needs waits for it too: not in needs, not in the pulse; its own line still counts it.
+    // What a parked project already asked still needs you (#152): the pulse, the list and its line agree.
     hub.humanOp('p2', 'settings', { parked: false }, '@o');
     hub.agentOp('p2', 'claim', 'bot2', { item: '#1' });
     hub.agentOp('p2', 'ask', 'bot2', { item: '#1', question: 'Which region?', blocking: true });
     assert.equal(homeView(hub, { viewer: '@b' }).pulse.state, 'needs-you');
     hub.humanOp('p2', 'settings', { parked: true }, '@o');
     h = homeView(hub, { viewer: '@b' });
-    assert.equal(h.pulse.state, 'stalled');
-    assert.deepEqual(h.needs, []);
-    assert.match(h.pulse.sentence, /^Nothing needs you\./);
-    assert.ok(h.projects.find((p) => p.slug === 'p2').needs >= 1, 'the parked line still shows it');
+    const line = h.projects.find((p) => p.slug === 'p2');
+    assert.equal(h.pulse.state, 'needs-you');
+    assert.equal(h.needs.length, line.needs, 'the list and the line count the same');
+    assert.deepEqual(h.needs.map((a) => [a.project.slug, a.kind]), [['p2', 'question']]);
+    assert.match(h.pulse.sentence, /^1 thing needs you\./);
+  });
+
+  test('a parked project with a blocking question and work to verify: pulse, list, line and badge all say 2 (#152)', () => {
+    const { hub } = setup();
+    hub.humanOp('p2', 'settings', { autonomy: 'balanced' }, '@o'); // the human verifies
+    hub.agentOp('p2', 'claim', 'bot2', { item: '#1' });
+    hub.agentOp('p2', 'ask', 'bot2', { item: '#1', question: 'Which region?', blocking: true });
+    hub.agentOp('p2', 'claim', 'bot3', { item: '#2' });
+    hub.agentOp('p2', 'submit', 'bot3', { item: '#2', headline: 'Built', evidence: [{ label: 'tests pass' }] });
+    const before = homeView(hub, { viewer: '@b' });
+    const mine = (h) => h.needs.filter((a) => a.project.slug === 'p2');
+    hub.humanOp('p2', 'settings', { parked: true }, '@o');
+    const h = homeView(hub, { viewer: '@b' });
+    const line = h.projects.find((p) => p.slug === 'p2');
+    assert.equal(line.pulse.state, 'parked');
+    assert.deepEqual(mine(h).map((a) => a.kind).sort(), mine(before).map((a) => a.kind).filter((k) => k !== 'direction').sort());
+    assert.deepEqual(mine(h).map((a) => a.kind).sort(), ['question', 'review']);
+    assert.equal(line.needs, 2);
+    assert.equal(h.pulse.act, h.needs.length);
+    assert.equal(h.pulse.state, 'needs-you');
   });
 
   test('over HTTP: one request; Mark all seen covers every project; agents and viewers are refused', async () => {
