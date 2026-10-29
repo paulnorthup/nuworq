@@ -238,5 +238,6 @@ Say nothing when nothing is worth saying. Silence reads as "working fine".
 - Finish before starting. Reviews and returned work come before new work.
 - Stay within the autonomy level you're given at checkin.
 - Responses are deliberately small. Call ${c('look')} when you want more.
+- Model traffic through llm-proxy? Label it \`x-client-name: nuworq/<project>/<your agent name>\`, so the hub can measure what each item cost. Claude Code: \`ANTHROPIC_CUSTOM_HEADERS\`. Codex: \`http_headers\` on your model provider. opencode: \`options.headers\` on the provider. Workers that nuworq starts do this for you.
 `;
 }
