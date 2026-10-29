@@ -73,7 +73,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       key: `land:${it.id}`, level: 'know', kind: 'landing-stuck', at: it.stage_since,
       headline: `${ref(it)} was accepted ${dur(t - it.stage_since)} ago but isn't on main yet`,
       sub: it.title, why: `No agent has landed ${it.branch || 'its branch'}. Start an agent; land jobs come before any other work.`,
-      item: ref(it),
+      item: ref(it), start: true,
     });
   }
 
@@ -203,7 +203,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       headline: `${ref(it)} needs ${missing.join(', ')}; no agent connected in the last day has it`,
       sub: it.title,
       why: `Only agents that declare ${missing.join(', ')} at checkin (has) are offered it. Start one on a machine that has it, or change what the item needs.`,
-      item: ref(it),
+      item: ref(it), missing, keep: json(it.needs, []).filter((t) => !missing.includes(t)),
     });
   }
 
