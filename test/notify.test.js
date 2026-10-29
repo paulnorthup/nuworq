@@ -1,7 +1,6 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { Hub, MIN, HOUR } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { Notifier, addChannel, listChannels, mask, testChannels } from '../src/notify.js';
@@ -26,7 +25,7 @@ before(async () => {
 });
 after(() => { sink.closeAllConnections(); sink.close(); });
 
-function setup({ kind = 'webhook', path = '/hook' } = {}) {
+function setup({ kind = 'webhook', path = '/hook', timeout = 5000 } = {}) {
   got.length = 0;
   reply = 200;
   let t = Date.UTC(2026, 9, 1, 9);
@@ -37,7 +36,7 @@ function setup({ kind = 'webhook', path = '/hook' } = {}) {
   hub.humanOp('app', 'create', { title: 'Build another thing', acceptance: 'it works' });
   op('next', 'a');
   addChannel(hub.db, kind, sinkUrl + path, t);
-  const n = new Notifier(hub, { baseUrl: 'http://hub.test', windowMs: 60, debounce: 5, retryDelay: 0, timeout: 300 });
+  const n = new Notifier(hub, { baseUrl: 'http://hub.test', windowMs: 60, debounce: 5, retryDelay: 0, timeout });
   return { hub, op, n, advance: (ms) => (t += ms) };
 }
 const blockingAsk = (op, agent, item, question) => op('ask', agent, { item, question, blocking: true });
@@ -46,12 +45,14 @@ describe('push notifications', () => {
   test('new act-level entries in a burst go out as one message per channel, with a line each and a link', async () => {
     const { hub, op, n } = setup();
     addChannel(hub.db, 'slack', sinkUrl + '/slack');
+    // Wait on the batch the window timer sends, not on the wall clock: a loaded test run can make it late.
+    const flushed = new Promise((resolve) => { const flush = n.flush.bind(n); n.flush = () => { const p = flush(); resolve(p); return p; }; });
     n.start();
     blockingAsk(op, 'a', '#1', 'Postgres or SQLite?');
     op('checkin', 'b');
     op('next', 'b');
     blockingAsk(op, 'b', '#2', 'Which region should it deploy to?');
-    await sleep(150);
+    await flushed;
     n.stop();
     assert.equal(got.length, 2, 'one message per channel');
     const hook = JSON.parse(got.find((g) => g.path === '/hook').body);
@@ -141,7 +142,7 @@ describe('push notifications', () => {
   });
 
   test('a channel that never answers times out without holding up agents', async () => {
-    const { hub, op, n } = setup();
+    const { hub, op, n } = setup({ timeout: 300 });
     reply = 'hang';
     blockingAsk(op, 'a', '#1', 'Postgres or SQLite?');
     n.scan();
