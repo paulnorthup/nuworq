@@ -69,10 +69,11 @@ export class GitHubApp {
     return `${body}.${createSign('RSA-SHA256').update(body).sign(this.key).toString('base64url')}`;
   }
 
-  async call(method, path, body) {
+  // token: an installation token, to act on a repository; the app's JWT otherwise.
+  async call(method, path, body, token = this.jwt()) {
     const r = await fetch(`${this.api}${path}`, {
       method,
-      headers: { authorization: `Bearer ${this.jwt()}`, accept: 'application/vnd.github+json', 'user-agent': 'nuworq', ...(body ? { 'content-type': 'application/json' } : {}) },
+      headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'nuworq', ...(body ? { 'content-type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(10_000),
     });
@@ -105,4 +106,36 @@ export class GitHubApp {
     if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for ${owner}/${name} (${tok.status}${tok.json.message ? `: ${tok.json.message}` : ''})`, { status: 502 });
     return { token: tok.json.token, expires_at: tok.json.expires_at, repo: `github.com/${owner}/${name}` };
   }
+}
+
+// What the hub does on GitHub to land accepted work through a pull request (#63), as the app, on the one
+// repository: open the PR (or find the one already open for the branch) and turn on auto-merge (squash).
+export function prClient(app) {
+  const parts = (repo) => String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/)?.slice(1) ?? [];
+  const shape = (pr) => ({ number: pr.number, url: pr.html_url, node_id: pr.node_id, head_ref: pr.head?.ref, head_sha: pr.head?.sha });
+  return {
+    app,
+    covers: (repo) => parts(repo).length === 2, // GitHub repositories only
+    async openPr({ repo, head, base, title, body }) {
+      const [owner, name] = parts(repo);
+      const { token } = await app.mint(repo);
+      const r = await app.call('POST', `/repos/${owner}/${name}/pulls`, { title, head, base, body }, token);
+      if (r.status === 201) return shape(r.json);
+      // Already open for this branch (opened by hand, or by an earlier try): use that one.
+      if (r.status === 422) {
+        const open = await app.call('GET', `/repos/${owner}/${name}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}`, null, token);
+        if (open.status === 200 && open.json[0]) return shape(open.json[0]);
+      }
+      throw new Error(`GitHub didn't open the pull request (${r.status}${r.json.message ? `: ${r.json.message}` : ''}${r.json.errors?.[0]?.message ? `; ${r.json.errors[0].message}` : ''})`);
+    },
+    async autoMerge({ repo, id }) {
+      const { token } = await app.mint(repo);
+      const r = await app.call('POST', '/graphql', {
+        query: 'mutation($id: ID!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH }) { clientMutationId } }',
+        variables: { id },
+      }, token);
+      const error = r.json.errors?.[0]?.message;
+      if (r.status !== 200 || error) throw new Error(error ?? `GitHub answered ${r.status}`);
+    },
+  };
 }

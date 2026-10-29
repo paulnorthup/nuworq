@@ -24,6 +24,8 @@ const HEADLINE_MAX = 140;
 const STEER_TTL = 3 * DAY;
 export const HUMAN = 'you';
 export const SYSTEM = 'nuworq';
+const GITHUB = 'github'; // holds accepted work while the hub opens its pull request
+const PR_LEASE = 2 * MIN;
 // The hub's own entries on the record: SYSTEM, or "trellis" in events recorded before the rename.
 export const isSystem = (actor) => actor === SYSTEM || actor === 'trellis';
 // People act on the record as "@handle"; without accounts (local mode) the one human is "you".
@@ -192,6 +194,11 @@ export class Hub extends EventEmitter {
     this.keys = keys;
     this._stmts = new Map();
     this._unreachable = new Set(); // repositories the hub has said it can't reach
+    // github: opens pull requests and turns on auto-merge, as the GitHub App ({ covers, openPr, autoMerge }; see
+    // prClient in src/ghapp.js). Set by the server when it has an app; tests set a fake. publicUrl: links in PR bodies.
+    this.github = null;
+    this.publicUrl = '';
+    this._opening = new Map(); // item id → the pull request being opened for it
   }
 
   q(sql) {
@@ -286,6 +293,35 @@ export class Hub extends EventEmitter {
   // the hub has no checkout of it here, but knows the repository.
   remoteMode(p, item = null) {
     return !this.localFor(p, item) && !!this.repoOf(p, item);
+  }
+
+  // Whether accepted work lands through a pull request the hub opens with auto-merge on (#63): the item's
+  // repository is on GitHub, the hub has no checkout of it, and it has a GitHub App to open the PR as.
+  prMode(p, item) {
+    return !!this.github && this.remoteMode(p, item) && this.github.covers(this.repoOf(p, item));
+  }
+
+  // Open the pull request for accepted work. The item is held as 'github' meanwhile, so nobody gets a land
+  // job for it; if the hub stops before it finishes, the lease lapses and it becomes an ordinary land job.
+  openPr(p, item) {
+    if (this._opening.has(item.id)) return;
+    this.patch(item, { holder: GITHUB, lease_until: this.now() + PR_LEASE, touching: '[]' });
+    let done;
+    this._opening.set(item.id, new Promise((r) => (done = r)));
+    setImmediate(() => openPr.call(this, p, item.id)
+      .catch((e) => console.error('opening a pull request failed', e))
+      .finally(() => { this._opening.delete(item.id); done(); }));
+  }
+
+  // Resolves once every pull request being opened is open (or has failed). For tests and shutdown.
+  async prsSettled() {
+    while (this._opening.size) await Promise.all(this._opening.values());
+  }
+
+  // The hub tried to open a pull request since the item was last accepted, and couldn't: it lands by hand.
+  prFailed(item) {
+    const e = this.q(`SELECT type FROM events WHERE item_id = ? AND type IN ('accepted', 'pr_failed') ORDER BY at DESC, id DESC LIMIT 1`).get(item.id);
+    return e?.type === 'pr_failed';
   }
 
   // A repository for an item: one of the project's remotes, in its normalized form. '' for none.
@@ -1030,7 +1066,9 @@ export class Hub extends EventEmitter {
       ORDER BY stage_since`).all(p.id, agent, agent).filter(fresh).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
-    const lands = !may('build') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'landing' AND holder IS NULL ORDER BY stage_since`).all(p.id)
+    // An open pull request lands it: GitHub's merge marks it done.
+    const lands = !may('build') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'landing' AND holder IS NULL
+        AND NOT EXISTS (SELECT 1 FROM prs WHERE prs.item_id = items.id AND prs.state = 'open') ORDER BY stage_since`).all(p.id)
       .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
       .map((item) => ({ mode: 'land', item }));
     if (p.parked) return [...lands, ...reviews];
@@ -1163,6 +1201,10 @@ export class Hub extends EventEmitter {
     const base = (repo && baseOf(repo.path)) ?? 'main';
     const unseen = remote && !!item.branch && !(repo && branchExists(repo.path, item.branch));
     const where = this.remotesOf(p).length > 1 ? `This is in ${this.repoOf(p, item)}. ` : '';
+    if (this.prMode(p, item)) {
+      if (unseen) return where + PR_LAND_HINT(item);
+      if (this.prFailed(item)) return `${where}The hub couldn't open a pull request for it (see its history), so land it by hand. ${LAND_HINT(item, p, base, remote)}`;
+    }
     return where + LAND_HINT(item, p, base, remote, unseen);
   }
 
@@ -1247,6 +1289,65 @@ const LAND_HINT = (item, p, base = 'main', remote = false, unseen = false) => re
   `5. submit #${item.seq}. The hub checks that ${base} contains the branch and marks it done.`,
 ].join(' ');
 
+// Remote work that lands through a pull request: the lander only pushes; the hub opens the PR.
+const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
+
+// What a pull request the hub opens says: the item, who built and reviewed it, and the evidence.
+function prBody(p, item) {
+  const link = this.publicUrl ? `${this.publicUrl.replace(/\/+$/, '')}/#/p/${encodeURIComponent(p.slug)}/${item.seq}` : '';
+  const last = (type) => this.q('SELECT * FROM events WHERE item_id = ? AND type = ? ORDER BY at DESC, id DESC LIMIT 1').get(item.id, type);
+  const accepted = last('accepted'), submitted = last('submitted');
+  const builder = item.implementer || submitted?.actor || '';
+  const model = builder ? this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, builder)?.model ?? '' : '';
+  const evidence = json(submitted?.data, {}).evidence ?? [];
+  const issue = json(this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'created' ORDER BY at LIMIT 1`).get(item.id)?.data, {}).issue;
+  return [
+    `nuworq #${item.seq}: ${item.title}${link ? `\n${link}` : ''}`,
+    [builder && `Built by ${builder}${model ? ` (${model})` : ''}`, accepted && `reviewed by ${accepted.actor}`].filter(Boolean).join(', ') + '.',
+    item.summary,
+    evidence.length ? `Evidence:\n${evidence.map((e) => `- ${e.label}${e.url ? ` (${e.url})` : ''}`).join('\n')}` : '',
+    issue ? `Fixes #${issue}` : '',
+  ].filter((s) => s && s !== '.').join('\n\n');
+}
+
+// Opens the pull request for accepted work, with auto-merge (squash) on, and links it to the item.
+// A failure goes on the record and the item becomes an ordinary land job.
+async function openPr(p, id) {
+  let item = this.itemById(id);
+  if (item.stage !== 'landing') return;
+  const release = () => { const it = this.itemById(id); if (it.holder === GITHUB) this.patch(it, { holder: null, lease_until: null }); };
+  const repo = this.repoOf(p, item);
+  if (this.q(`SELECT 1 FROM prs WHERE item_id = ? AND state = 'open'`).get(id)) return release(); // accepted again: it has one
+  let pr, noAuto = '';
+  try {
+    pr = await this.github.openPr({ repo, head: item.branch, base: this.baseFor(p, item), title: item.title, body: prBody.call(this, p, item) });
+  } catch (e) {
+    this.tx(() => {
+      release();
+      this.event(p, {
+        item, actor: SYSTEM, type: 'pr_failed', headline: `The hub couldn't open a pull request for #${item.seq}: ${clip(e.message)}`,
+        summary: 'An agent lands it by hand: the next land job has the steps.', data: { repo, branch: item.branch },
+      });
+    });
+    return this.changed(p);
+  }
+  try { await this.github.autoMerge({ repo, number: pr.number, id: pr.node_id }); } catch (e) { noAuto = e.message; }
+  this.tx(() => {
+    item = this.itemById(id);
+    this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+        ON CONFLICT (project_id, repo, number) DO UPDATE SET item_id = excluded.item_id, url = excluded.url, state = 'open', updated_at = excluded.updated_at`)
+      .run(p.id, repo, pr.number, id, pr.url ?? '', item.title, pr.head_ref ?? item.branch, pr.head_sha ?? '', this.now());
+    release();
+    this.event(p, {
+      item, actor: SYSTEM, type: 'pr',
+      headline: `Opened PR #${pr.number} for #${item.seq}${noAuto ? '' : '; GitHub squash-merges it when its checks pass'}`,
+      summary: noAuto ? `Auto-merge couldn't be turned on (${clip(noAuto)}): merge it on GitHub, and the hub marks #${item.seq} done.` : '',
+      data: { url: pr.url, repo, number: pr.number, state: 'open', auto_merge: !noAuto },
+    });
+  });
+  this.changed(p);
+}
+
 // Submit on a land job: done when git shows main has the branch; back to review when the rebase changed it.
 function finishLanding(p, agent, item, { headline, summary, detail, conflicts }) {
   const reviewer = p.autonomy === 'full' ? 'Another agent reviews it again' : 'The human verifies it again';
@@ -1265,6 +1366,13 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
         ? `Push it (git push origin ${item.branch} --force-with-lease) and submit again. If you have, the hub may not reach the repository right now: try again in a minute. Keep the branch until the hub confirms the landing.`
         : 'Keep the branch until the hub confirms the landing. If the work is on another branch, say which in a comment and handoff.',
     });
+  }
+  // Pushed for a pull request: the hub opens it, and GitHub's merge marks the item done.
+  if (land.pending && this.prMode(p, item) && !this.prFailed(item)) {
+    this.event(p, { item, actor: agent, type: 'pushed', headline: `${agent} pushed ${item.branch} for #${item.seq}; the hub opens its pull request`, summary, detail });
+    this.openPr(p, item);
+    this.setStatus(p, agent, `Pushed #${item.seq} for its pull request`);
+    return { ok: true, hint: `${item.branch} is on origin. The hub opens a pull request with auto-merge on; GitHub's merge marks #${item.seq} done. Call next.` };
   }
   if (land.pending) {
     throw new UserError(`${land.base} doesn't contain ${item.branch} yet`, { status: 409, hint: LAND_HINT(item, p, land.base, remote) });
@@ -1634,6 +1742,7 @@ Object.assign(Hub.prototype, {
     this.q('UPDATE projects SET next_seq = next_seq + 1 WHERE id = ?').run(p.id);
     const needs = JSON.stringify(normTags(args.needs));
     const size = SIZES.includes(args.size) ? args.size : '';
+    const issue = Number.isInteger(Number(args.issue)) && Number(args.issue) > 0 ? Number(args.issue) : null; // the GitHub issue it came from
     const r =this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, stage_since, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, t, t, t);
     const item = this.itemById(Number(r.lastInsertRowid));
@@ -1642,7 +1751,7 @@ Object.assign(Hub.prototype, {
     this.event(p, {
       item, actor, type: 'created',
       headline: human ? `${You(actor)} added #${seq}: ${title}` : `${actor} proposed #${seq}: ${title}`,
-      summary, data: { stage },
+      summary, data: { stage, ...(issue ? { issue } : {}) },
     });
     return item;
   },
@@ -1714,12 +1823,15 @@ Object.assign(Hub.prototype, {
       this.move(item, landing ? 'landing' : 'done', actor, {
         holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
       });
+      const viaPr = landing && this.prMode(p, item);
       this.event(p, {
         item, actor, type: 'accepted',
         headline: `${who} accepted #${item.seq}${kept ? ` (${kept.agent}'s attempt)` : ''}${headline ? `: ${headline}` : ''}`,
         summary: [
-          land?.pending ? `${branch} lands on ${land.base} next: an agent rebases it, runs the checks and fast-forwards ${land.base}.` : '',
-          unseen ? `${branch} lands next: the hub can't see it on origin yet, so the lander pushes it first, then rebases it, runs the checks and pushes it to main.` : '',
+          land?.pending && viaPr ? `${branch} lands through a pull request: the hub opens it with auto-merge on, and GitHub's merge marks #${item.seq} done.` : '',
+          unseen && viaPr ? `${branch} lands through a pull request: the hub can't see it on origin yet, so an agent pushes it, then the hub opens the PR.` : '',
+          land?.pending && !viaPr ? `${branch} lands on ${land.base} next: an agent rebases it, runs the checks and fast-forwards ${land.base}.` : '',
+          unseen && !viaPr ? `${branch} lands next: the hub can't see it on origin yet, so the lander pushes it first, then rebases it, runs the checks and pushes it to main.` : '',
           kept && !land && !unseen ? `Merge ${merge}${kept.branch ? '' : ' (the worker branch convention; check the evidence)'}.` : '',
           summary,
         ].filter(Boolean).join('\n\n'),
@@ -1731,6 +1843,7 @@ Object.assign(Hub.prototype, {
       if (land && !land.pending) {
         this.event(p, { item, actor: SYSTEM, type: 'landed', headline: `#${item.seq} is already on ${land.base}`, data: { branch, base: land.base, head: land.head } });
       }
+      if (viaPr && land) this.openPr(p, item);
       return { ...(kept ? { kept: kept.agent, merge } : {}), ...(landing ? { landing: branch } : {}) };
     } else {
       this.move(item, 'ready', actor, {

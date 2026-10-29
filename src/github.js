@@ -65,6 +65,21 @@ function pullRequest(hub, p, body) {
       summary: [pr.head?.ref && `Branch ${pr.head.ref}`, pr.user?.login && `by ${pr.user.login}`].filter(Boolean).join(' · '),
       data: { url: pr.html_url, repo, number: pr.number, state },
     });
+    // Accepted work waiting on its pull request: the merge lands it; closing it unmerged sends it back.
+    if (item.stage === 'landing' && state === 'merged') {
+      const base = pr.base?.ref ?? 'main';
+      hub.move(item, 'done', ACTOR, { holder: null, lease_until: null, touching: '[]' });
+      hub.event(p, {
+        item, actor: ACTOR, type: 'landed',
+        headline: `GitHub merged PR #${pr.number}: #${item.seq} is on ${base}`,
+        data: { pr: pr.number, url: pr.html_url, branch: pr.head?.ref ?? item.branch, base, head: pr.merge_commit_sha ?? '' },
+      });
+    } else if (item.stage === 'landing' && state === 'closed') {
+      const headline = `PR #${pr.number} was closed without merging`;
+      const summary = 'Read the pull request for why, rework it on the same branch, and submit again.';
+      hub.move(item, 'ready', ACTOR, { holder: null, lease_until: null, handoff: JSON.stringify({ kind: 'sent_back', by: ACTOR, headline, summary, at: hub.now() }) });
+      hub.event(p, { item, actor: ACTOR, type: 'sent_back', headline: `${headline}; #${item.seq} is back in the queue`, summary, data: { pr: pr.number, url: pr.html_url } });
+    }
   }
   return { item: `#${item.seq}`, pr: pr.number, state };
 }

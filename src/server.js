@@ -15,7 +15,7 @@ import { receive } from './github.js';
 import { syncIssues, commentIssues } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
-import { GitHubApp, manifest, convert } from './ghapp.js';
+import { GitHubApp, manifest, convert, prClient } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
@@ -269,6 +269,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
       }
       const { authz, devices, clients } = scopeOf(hub);
+      // Accepted remote work lands through a pull request the hub opens, as the app (also one created since start).
+      if (app && hub.github?.app !== app) { hub.github = prClient(app); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.
