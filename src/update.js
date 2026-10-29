@@ -12,14 +12,19 @@ export const CHECK_EVERY = 10 * 60_000;
 const LOCK_STALE = 10 * 60_000;
 const TIMEOUT_MS = 5_000;
 
-// The commit an installed package was built from: git archive fills src/commit.txt in (export-subst).
-// null in a checkout (the placeholder is still there) or a package from before this file.
-export function runningCommit(root) {
-  try {
-    const c = readFileSync(join(root, 'src', 'commit.txt'), 'utf8').trim();
-    return /^[0-9a-f]{7,40}$/.test(c) ? c : null;
-  } catch { return null; }
+// What a package says it was built from, in src/commit.txt (git archive fills it in, export-subst): the commit
+// and its committer time (unix seconds). Inside a signed package the time is signed too, so it orders releases:
+// an update must be newer than what runs. { commit, time } (time null in packages from before it), or null
+// in a checkout (the placeholder is still there).
+export function releaseOf(text) {
+  const [commit, time] = String(text ?? '').trim().split(/\s+/);
+  if (!/^[0-9a-f]{7,40}$/.test(commit ?? '')) return null;
+  return { commit, time: /^\d+$/.test(time ?? '') ? Number(time) : null };
 }
+const running = (root) => { try { return releaseOf(readFileSync(join(root, 'src', 'commit.txt'), 'utf8')); } catch { return null; } };
+
+// The commit an installed package was built from, or null.
+export const runningCommit = (root) => running(root)?.commit ?? null;
 
 const pinnedKey = (root) => {
   try { return readFileSync(join(root, 'release-key.pub'), 'utf8').trim(); } catch { return null; }
@@ -126,11 +131,23 @@ export async function update({ root, hub, dir, env = process.env, force = false,
     let next = null;
     try { next = fileInTarball(tgz.body, 'release-key.pub')?.toString('utf8').trim() ?? null; } catch {}
     if (next !== pinned) return refused(`${to} carries ${next ? 'a different' : 'no'} release key; changing keys takes a reinstall by hand`);
+    // Never backwards: a compromised hub could serve an old signed release with known bugs. The signed
+    // package's own commit time must be later than the running one's.
+    let rel = null;
+    try { rel = releaseOf(fileInTarball(tgz.body, 'src/commit.txt')); } catch {}
+    if (!rel || !(rel.commit.startsWith(to) || to.startsWith(rel.commit))) return refused(`the signed package says it is ${rel ? rel.commit.slice(0, 7) : 'no version'}, not ${to.slice(0, 7)} as the hub said`);
+    const mine = running(root);
+    if (mine?.time != null) {
+      const when = (s) => new Date(s * 1000).toISOString().slice(0, 16).replace('T', ' ');
+      if (rel.time == null) return refused(`${to.slice(0, 7)} doesn't say when it was made, so it can't be shown newer than the installed ${from.slice(0, 7)} (${when(mine.time)} UTC)`);
+      if (rel.time <= mine.time) return refused(`${to.slice(0, 7)} (${when(rel.time)} UTC) isn't newer than the installed ${from.slice(0, 7)} (${when(mine.time)} UTC); updates never go back`);
+    }
 
     const file = join(dir, `nuworq-${to}.tgz`);
     writeFileSync(file, tgz.body);
     const failed = await install(file);
-    if (failed) return { status: 'failed', reason: `npm couldn't install it (${failed})`, from, to, command: `npm install -g ${base}/nuworq.tgz` };
+    // By hand, the same verified file: downloading it again would skip the signature check.
+    if (failed) return { status: 'failed', reason: `npm couldn't install it (${failed})`, from, to, command: `npm install -g ${file}` };
     writeState(stateFile, { ...readState(stateFile), installed: to });
     return { status: 'updated', from, to };
   } finally { unlock(); }
