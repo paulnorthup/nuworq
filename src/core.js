@@ -43,7 +43,7 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'check'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'check'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
@@ -2411,6 +2411,15 @@ const HUMAN_OPS = {
     if (!n) throw new UserError(`No note ${note}`, { status: 404 });
     this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
     this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'retired', headline: `${You(by)} retired a ${n.kind === 'learning' ? 'field note' : n.kind}: ${clip(n.body, 100)}` });
+  },
+
+  // Undo a retire (#146): the same note, delivered again as before.
+  unretire(p, { note }, by) {
+    const n = this.q('SELECT * FROM notes WHERE id = ? AND project_id = ?').get(Number(note), p.id);
+    if (!n) throw new UserError(`No note ${note}`, { status: 404 });
+    if (n.active) return;
+    this.q('UPDATE notes SET active = 1 WHERE id = ?').run(n.id);
+    this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'restored', headline: `${You(by)} brought back a ${n.kind === 'learning' ? 'field note' : n.kind}: ${clip(n.body, 100)}` });
   },
 
   comment(p, { item, body }, by) {

@@ -186,7 +186,7 @@ GET  /api/p/:project/view                everything the UI shows
 GET  /api/p/:project/items/:n            one item, lifecycle, timeline
 POST /api/p/:project/agent/:op           agent operations (header x-nuworq-agent: <name>)
 POST /api/p/:project/human/:action       answer, confirm, accept, sendback, steer, decide, comment,
-                                         create, update, retire, dismiss, seen, settings
+                                         create, update, retire, unretire, dismiss, seen, settings
 GET  /api/route[?runner=1]               where work is waiting, per project (runner: opted-in only, with holders)
 GET  /api/tools?format=mcp|openai|anthropic
 GET  /agents.md?project=<p>&via=tools|cli
