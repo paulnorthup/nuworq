@@ -165,14 +165,18 @@ export class GitHubApp {
     return all.sort((a, b) => a.repo.localeCompare(b.repo));
   }
 
-  // Whether the app is installed anywhere, or (repo given) on that one repository.
+  // Whether the app is installed anywhere, or (repo given) on that one repository. Scoped, only through
+  // an installation this organization may use, and always for one repository.
   async installed(repo) {
     if (!repo) {
+      if (this.allows) return false;
       const r = await this.call('GET', '/app/installations?per_page=1&page=1');
       return r.status === 200 && Array.isArray(r.json) && r.json.length > 0;
     }
     const [, owner, name] = String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/) ?? [];
-    return !!owner && (await this.call('GET', `/repos/${owner}/${name}/installation`)).status === 200;
+    if (!owner) return false;
+    const r = await this.call('GET', `/repos/${owner}/${name}/installation`);
+    return r.status === 200 && (!this.allows || (!!r.json.id && !!this.allows(r.json.id)));
   }
 
   installUrl() {

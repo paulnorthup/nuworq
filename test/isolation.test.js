@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hub } from '../src/core.js';
 import { Workspaces } from '../src/workspaces.js';
+import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
 import { mirror, fetchMirror, mirrorPath } from '../src/git.js';
 import { GitHubApp, installState } from '../src/ghapp.js';
@@ -138,6 +139,22 @@ describe('a shared hub keeps organizations apart', () => {
       assert.equal((await app.mint('github.com/acme/api')).token, 'ghs_x', 'the unscoped app (single hub) is unchanged');
       // An app without its client id and secret can't check, so it binds nothing.
       await assert.rejects(new GitHubApp({ id: 1, key: PEM, api: apiUrl, web: apiUrl }).installedBy('alice', 42), (e) => e.status === 424 && /NUWORQ_GITHUB_APP_CLIENT_ID/.test(e.hint));
+
+      // Get started: both organizations link acme/api, but only alpha's checklist counts the app as installed.
+      for (const ws of ['alpha', 'bravo']) {
+        const hub = spaces.get(ws);
+        hub.addRemote(hub.tx(() => hub.project('api', { create: true })), 'github.com/acme/api', 'you');
+      }
+      const github = async (ws) => {
+        const token = new Auth(spaces.get(ws).db).createToken(`gs-${ws}`, 'human');
+        const gs = await (await fetch(`${url}/w/${ws}/api/get-started`, { headers: { authorization: `Bearer ${token}` } })).json();
+        return gs.steps.find((s) => s.key === 'github').done;
+      };
+      assert.equal(await github('alpha'), true);
+      assert.equal(await github('bravo'), false, "alpha's installation isn't bravo's");
+      assert.equal(await as('bravo').installed('github.com/acme/api'), false);
+      assert.equal(await as('bravo').installed(), false, 'scoped: never "installed anywhere"');
+      assert.equal(await app.installed('github.com/acme/api'), true, 'unscoped: unchanged');
     } finally {
       server.close();
       api.close();
