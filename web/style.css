@@ -29,19 +29,7 @@
   --shadow: 0 1px 2px rgba(20, 20, 18, .05), 0 2px 8px rgba(20, 20, 18, .04);
   --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #131312; --panel: #1b1b19; --sunken: #232320; --ink: #ecebe5; --muted: #a3a19a; --faint: #75736d;
-    --line: #2c2b28; --line-strong: #3a3935;
-    --you: #f08a4b; --you-tint: #2e1f14; --you-line: #5a3519;
-    --agents: #8fa3ff; --agents-tint: #1b2140; --queue: #8b9099; --queue-tint: #24262a;
-    --ok: #5ec48a; --ok-tint: #15281d; --warn: #e0a643; --bad: #f97066;
-    --p-anthropic: #e08a68; --p-openai: #3fc79f; --p-open: #a98af0; --p-google: #7aa7ff;
-    --shadow: 0 1px 2px rgba(0,0,0,.3);
-    color-scheme: dark;
-  }
+  color-scheme: light; /* light only, on every device (#141): no dark theme */
 }
 
 * { box-sizing: border-box; }
@@ -73,6 +61,13 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .rail-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; padding-top: 16px; }
 .rail-foot .rail-item { color: var(--muted); }
+/* The sidebar in the phone top bar's terms (#141): chips for projects, the count beside its label, quiet actions. */
+@media (min-width: 861px) {
+  .rail-item { padding: 8px 10px; border-radius: 8px; }
+  #rail a.rail-head { justify-content: flex-start; gap: 6px; padding-left: 10px; }
+  .rail-foot .rail-item { font-size: 13px; padding: 6px 10px; }
+  .rail-foot .rail-item:hover { color: var(--ink); }
+}
 .rail-version { font-size: 11px; color: var(--faint); padding: 6px 8px 0; font-variant-numeric: tabular-nums; }
 .rail-version a { color: inherit; }
 /* The organization switcher (hubs with organizations): this one, the others, and a new one. */
@@ -450,6 +445,39 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   .card .btn, .card .opt, .card .pick, .answer-row input, .pulse .btn, .ov-line, .get-started .btn, .seg button { min-height: 44px; }
   .card .btn, .card .opt { padding: 10px 14px; }
   .card .evidence, .card pre, .card code { max-width: 100%; overflow-x: auto; }
+}
+
+/* Wide (#141): the same sections in two columns, the work and beside it the 30-second answer, which stays in
+   view while you act. app.js lays them out from 1024px (WIDE); below that, the phone's single column. */
+@media (min-width: 1024px) {
+  #main { max-width: 1360px; padding: 28px 32px 80px; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+  .col-side { position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+  .col-side > * { margin: 0; }
+  .col-side .pulse { padding: 16px 18px; }
+  .col-side .pulse .sentence { font-size: 17px; }
+  .col-side .get-started { padding: 12px 14px; }
+  /* Narrow: each step's action sits under its label, not wrapped wherever it falls. */
+  .col-side .get-started li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 10px; }
+  .col-side .get-started li > :not(.tick) { grid-column: 2; justify-self: start; margin-left: 0; }
+  .col-side .get-started li .link { padding: 0; font-size: 12px; }
+  /* The project header's links in one row, so the work starts right under the title. */
+  .phead { flex-wrap: wrap; }
+  .phead .titles { flex: 1 1 420px; }
+  .composer .box { min-width: 0; }
+  .phead .controls { flex: 0 1 auto; margin-left: auto; flex-direction: row; flex-wrap: wrap; justify-content: flex-end; column-gap: 14px; row-gap: 6px; max-width: 560px; }
+  .phead .controls .ctl-row { flex-basis: 100%; justify-content: flex-end; }
+  .phead .controls .link { padding: 2px 0; }
+  .col-side .flow { padding: 14px; }
+  .col-side .stage { min-width: 54px; padding: 6px 4px 4px; }
+  .col-side .stage .n { font-size: 17px; }
+  .col-side .arrow { display: none; }
+  .col-side .agent-grid { grid-template-columns: minmax(0, 1fr); }
+  .col-side .sec > header { flex-wrap: wrap; row-gap: 0; }
+}
+@media (min-width: 1440px) {
+  .cols { grid-template-columns: minmax(0, 1fr) 360px; gap: 32px; }
+  .col-side .pulse .sentence { font-size: 19px; }
 }
 
 .picks { display: flex; flex-direction: column; gap: 6px; }

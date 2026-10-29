@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-// The project page at each depth (web/app.js, project()): 30s is what needs you and what's moving, and each
-// deeper level adds sections rather than repeating them (#144).
+// The project page at each depth (web/app.js, projectBody()'s sections): 30s is what needs you and what's moving,
+// and each deeper level adds sections rather than repeating them (#144).
 const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
-const body = app.slice(app.indexOf('${pulse(v)}'), app.indexOf("That's the 30-second view."));
-const at = (section) => body.match(new RegExp(`\\$\\{(?:z\\(\\) >= (\\d) \\? )?${section}\\(v\\)`))?.[1] ?? '0';
+const start = app.indexOf('function projectBody(');
+const body = app.slice(start, app.indexOf('\n}\n', start));
+const at = (section) => body.match(new RegExp(`\\b\\w+: (?:z\\(\\) >= (\\d) \\? )?${section}\\(v\\)`))?.[1] ?? '0';
 
 test('at 30s a project shows the pulse, composer, Needs you and In motion; Flow first appears at 5m', () => {
   for (const s of ['pulse', 'composer', 'needsYou', 'motion']) assert.equal(at(s), '0', `${s} at 30s`);
