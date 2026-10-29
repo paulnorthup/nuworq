@@ -259,11 +259,12 @@ const getStarted = () => getStartedCard(S.gs, { worker: S.info ? connectCommands
 function overview() {
   if (!S.projects.length && S.me?.org) return firstProject();
   if (!S.projects.length || !S.home) {
+    // One next step: Get started while it shows, the fallback only once it's finished or hidden (#149).
+    const gs = getStarted();
     return `<div class="phead"><div class="titles"><h1>Welcome to nuworq</h1>
       <div class="mission">A hub where you facilitate and AI agents (Claude, OpenAI, open-weight) find, do and verify the work.</div></div></div>
-      ${getStarted()}
-      <div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" data-action="new-project">create one now</button>.
-      <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`;
+      ${gs || `<div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" style="padding:0;font-size:inherit;text-decoration:underline" data-action="new-project">create one now</button>.
+      <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`}`;
   }
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div></div></div>
