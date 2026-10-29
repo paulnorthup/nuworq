@@ -4,9 +4,10 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync } from 'node:fs';
 import { join, dirname, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { skill } from './protocol.js';
+import { skill, planSkill } from './protocol.js';
 
 const NAME = 'nuworq';
+const SKILLS = { [NAME]: skill, [`${NAME}-plan`]: planSkill };
 
 const onPath = (cmd, env) => (env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
 const run = (cmd, args, env) => {
@@ -25,22 +26,28 @@ const codexBlock = (bin) => `\n[mcp_servers.${NAME}]\ncommand = "node"\nargs = [
 // Each tool: where it keeps MCP servers, whether nuworq is there already, how to add and remove it.
 // add() returns the record to keep (what disconnect needs), or a reason it was left alone.
 const TOOLS = {
-  // The nuworq skill (generated from the protocol; see skill() in src/protocol.js). Rewritten on every
-  // connect, so it follows the hub's tools; disconnect removes it.
+  // The nuworq skills (generated from the protocol; see skill() and planSkill() in src/protocol.js).
+  // Rewritten on every connect, so they follow the hub's tools; disconnect removes them.
   skill: {
     label: 'Claude Code skill',
     refresh: true,
-    where: ({ home }) => join(home, '.claude', 'skills', NAME, 'SKILL.md'),
+    where: ({ home }) => join(home, '.claude', 'skills'),
     present: ({ env }) => onPath('claude', env),
     add(ctx) {
-      const file = TOOLS.skill.where(ctx);
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, skill({ url: ctx.url }));
-      return { record: { file } };
+      const files = Object.entries(SKILLS).map(([name, make]) => {
+        const file = join(TOOLS.skill.where(ctx), name, 'SKILL.md');
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, make({ url: ctx.url }));
+        return file;
+      });
+      return { record: { files } };
     },
     remove(ctx, rec) {
-      rmSync(rec.file, { force: true });
-      try { rmdirSync(dirname(rec.file)); } catch { /* not empty: something else lives there */ }
+      // An older connect recorded just the one skill, as { file }.
+      for (const file of rec.files ?? [rec.file]) {
+        rmSync(file, { force: true });
+        try { rmdirSync(dirname(file)); } catch { /* not empty: something else lives there */ }
+      }
       return null;
     },
   },
@@ -121,7 +128,7 @@ export function registerMcp({ bin, home, env = process.env, kept = [], url = '' 
     const r = t.add(ctx);
     if (r.record) {
       added.push({ tool, ...r.record });
-      lines.push(tool === 'skill' ? `${t.label}: wrote the ${NAME} skill (${t.where(ctx)})` : `${t.label}: added the ${NAME} MCP server (${t.where(ctx)})`);
+      lines.push(tool === 'skill' ? `${t.label}: wrote the ${Object.keys(SKILLS).join(' and ')} skills (${t.where(ctx)})`: `${t.label}: added the ${NAME} MCP server (${t.where(ctx)})`);
     } else {
       lines.push(`${t.label}: left alone, ${r.skip}`);
     }
