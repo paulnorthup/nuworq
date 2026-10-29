@@ -128,7 +128,9 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         }
       }
 
-      if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name });
+      // What a token-bearing agent may reach, and its name for the record.
+      const caller = { scope: who.projects ?? null, token: who.via === 'bearer' ? who.name : null };
+      if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
       if (req.method === 'POST' && path === '/api/logout') {
         authz.deleteSession(cookieOf(req));
         res.setHeader('set-cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
@@ -175,18 +177,18 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req) }));
+        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), ...caller }));
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
       if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req) }));
+        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), ...caller }));
       }
-      if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', { runner: !!url.searchParams.get('runner') }));
+      if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', { runner: !!url.searchParams.get('runner'), scope: caller.scope }));
       if (req.method === 'GET' && path === '/api/where') {
-        const p = hub.projectByPath(url.searchParams.get('root') ?? '');
+        const p = hub.projectByPath(url.searchParams.get('root') ?? '', caller.scope);
         return send(200, { project: p?.slug ?? null, path: p?.path ?? null });
       }
       send(404, { ok: false, error: `No route ${req.method} ${path}` });

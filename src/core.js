@@ -169,12 +169,13 @@ export class Hub extends EventEmitter {
     return p;
   }
 
-  // The project whose code lives in (or above) this folder. Longest match wins.
-  projectByPath(root) {
+  // The project whose code lives in (or above) this folder. Longest match wins. scope: slugs to consider (null: all).
+  projectByPath(root, scope = null) {
     const r = normDir(root);
     if (!r) return null;
     let best = null;
     for (const p of this.projects()) {
+      if (scope && !scope.includes(p.slug)) continue;
       const pp = normDir(p.path);
       if (pp && (r === pp || r.startsWith(pp + '/')) && (!best || pp.length > normDir(best.path).length)) best = p;
     }
@@ -184,11 +185,11 @@ export class Hub extends EventEmitter {
   // Where the most valuable claimable work is, across every project that isn't parked:
   // your picks and "now" work first, then building before shaping, then whatever has waited longest.
   // With runner, only projects the human lets `trellis run` staff.
-  route(agent = '', { runner = false } = {}) {
+  route(agent = '', { runner = false, scope = null } = {}) {
     this.sweep();
     const options = [];
     for (const p of this.projects()) {
-      if (p.parked || (runner && !p.runner)) continue;
+      if (p.parked || (runner && !p.runner) || (scope && !scope.includes(p.slug))) continue;
       const all = this.claimable(p, agent);
       if (all.length) options.push({ p, ...all[0], claimable: all.length });
     }
@@ -265,6 +266,20 @@ export class Hub extends EventEmitter {
       WHERE project_id = ? AND name = ?`)
       .run(t, str(model), str(model), str(client), str(client), str(status), str(status), p.id, name);
     return { fresh: false, gap: t - a.last_seen, wasSignedOff: !!a.signed_off };
+  }
+
+  // Which tokens have spoken as this agent name: more than one is worth the human's eye.
+  noteToken(p, name, token) {
+    if (!token) return;
+    const a = this.q('SELECT tokens FROM agents WHERE project_id = ? AND name = ?').get(p.id, name);
+    const seen = a?.tokens ? a.tokens.split(',') : [];
+    if (a && !seen.includes(token)) this.q('UPDATE agents SET tokens = ? WHERE project_id = ? AND name = ?').run([...seen, token].join(','), p.id, name);
+  }
+
+  // A token limited to some projects: refuse the rest, saying which it may use.
+  inScope(scope, slug) {
+    if (!scope || scope.includes(slugify(slug))) return;
+    throw new UserError(`This token can't reach project "${slugify(slug)}"`, { status: 403, hint: `It is limited to: ${scope.join(', ')}. Ask the human for a token that covers it.` });
   }
 
   setStatus(p, agent, status) {
@@ -430,7 +445,8 @@ export class Hub extends EventEmitter {
   // ── agent operations ────────────────────────────────────────────────────
 
   // slug may be empty: then the agent's folder (root) picks the project, or the hub routes it to work.
-  agentOp(slug, op, name, args = {}, { root = '' } = {}) {
+  // scope: the project slugs the caller's token may reach (null: all). token: its name, recorded on the agent.
+  agentOp(slug, op, name, args = {}, { root = '', scope = null, token = null } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     this.sweep();
@@ -438,19 +454,20 @@ export class Hub extends EventEmitter {
     let p;
     let routed = null;
     if (slug) {
+      this.inScope(scope, slug);
       p = this.project(slug, { create: op === 'checkin' });
     } else {
-      p = this.projectByPath(root);
+      p = this.projectByPath(root, scope);
       if (!p) {
         if (!['checkin', 'next'].includes(op)) {
           throw new UserError('Which project?', { hint: 'Call checkin first: the hub sends you to the work that matters most, and remembers it for this session.' });
         }
-        routed = this.route(agent)[0];
+        routed = this.route(agent, { scope })[0];
         if (!routed) {
           return {
             ok: true, project: null,
             next: 'No work is waiting in any project: everything is parked, idle, or waiting on the human. Signoff, or check in to a specific project to propose work.',
-            projects: this.projects().map((x) => x.slug),
+            projects: this.projects().map((x) => x.slug).filter((s) => !scope || scope.includes(s)),
           };
         }
         p = this.project(routed.project);
@@ -465,6 +482,7 @@ export class Hub extends EventEmitter {
     }
     const result = this.tx(() => {
       const presence = this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
+      this.noteToken(p, agent, token);
       const r = fn.call(this, p, agent, args ?? {}, presence);
       // Steering rides along on every response, so it lands on the agent's very next call.
       if (op !== 'checkin') {

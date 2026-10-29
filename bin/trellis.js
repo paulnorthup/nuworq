@@ -436,9 +436,11 @@ async function token(pos, flags) {
   const [sub, name] = pos;
   if (sub === 'create') {
     const role = flags.role || 'agent';
+    const { slugify } = await import('../src/core.js');
+    const projects = (refs(flags.project === true ? '' : flags.project) ?? []).map(slugify).filter(Boolean);
     let plain;
-    try { plain = auth.createToken(need(name, '<name>'), role); } catch (e) { throw new HubError(e.message, { hint: 'See: trellis token list' }); }
-    console.log(`${green('Created')} ${role} token ${bold(name)}. It is shown only this once:
+    try { plain = auth.createToken(need(name, '<name>'), role, projects); } catch (e) { throw new HubError(e.message, { hint: projects.length ? 'Leave out --project for a human token.' : 'See: trellis token list' }); }
+    console.log(`${green('Created')} ${role} token ${bold(name)}${projects.length ? ` for ${projects.join(', ')}` : ''}. It is shown only this once:
 
   ${bold(plain)}
 `);
@@ -454,9 +456,10 @@ async function token(pos, flags) {
     if (!rows.length) return console.log(dim(`No tokens in ${db}. Create one: trellis token create <name> --role human`));
     const when = (t) => (t ? new Date(t).toISOString().slice(0, 16).replace('T', ' ') : '—');
     const w = Math.max(4, ...rows.map((r) => r.name.length));
-    console.log(dim(`${'id'.padEnd(4)}${'name'.padEnd(w + 2)}${'role'.padEnd(7)}${'prefix'.padEnd(11)}${'created'.padEnd(18)}${'last used'.padEnd(18)}status`));
+    console.log(dim(`${'id'.padEnd(4)}${'name'.padEnd(w + 2)}${'role'.padEnd(7)}${'prefix'.padEnd(11)}${'created'.padEnd(18)}${'last used'.padEnd(18)}${'status'.padEnd(9)}projects`));
     for (const r of rows) {
-      console.log(`${String(r.id).padEnd(4)}${r.name.padEnd(w + 2)}${r.role.padEnd(7)}${(r.prefix + '…').padEnd(11)}${when(r.created_at).padEnd(18)}${when(r.last_used_at).padEnd(18)}${r.revoked_at ? amber('revoked') : green('active')}`);
+      const scope = r.role === 'human' ? '' : r.projects ? r.projects.split(',').join(', ') : 'all';
+      console.log(`${String(r.id).padEnd(4)}${r.name.padEnd(w + 2)}${r.role.padEnd(7)}${(r.prefix + '…').padEnd(11)}${when(r.created_at).padEnd(18)}${when(r.last_used_at).padEnd(18)}${(r.revoked_at ? amber('revoked') : green('active')) + ' '.repeat(r.revoked_at ? 2 : 3)}${scope}`);
     }
     return;
   }
@@ -474,7 +477,9 @@ ${bold('Human')}
   serve [--port 4747] [--host 127.0.0.1] [--db path] [--demo] [--auth] [--trust-proxy]
                                          run the hub and web UI. Loopback: no login.
                                          Any other host (or --auth): tokens required.
-  token create <name> --role human|agent create a token (shown once); run on the hub host
+  token create <name> --role human|agent [--project a,b]
+                                         create a token (shown once); run on the hub host.
+                                         --project limits an agent token to those projects
   token list | token revoke <name|id>    see or revoke tokens (revoking logs out sessions)
   status [--all]                         the 30-second view
 

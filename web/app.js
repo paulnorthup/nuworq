@@ -507,12 +507,13 @@ function agents(v) {
     const live = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off');
     const away = v.agents.length - live.length;
     return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} active</span>${away ? `<span class="hint">${away} away</span>` : ''}</header>
-      <div class="agent-strip">${live.map((a) => `<span class="a">${who(a.name, a.model)}<span class="st">${esc(a.status)}${a.holding.length ? ` ${a.holding.join(', ')}` : ''}</span></span>`).join('') || '<span class="age">No agent is active right now.</span>'}</div></section>`;
+      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model)}<span class="st">${esc(a.status)}${a.holding.length ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || '<span class="age">No agent is active right now.</span>'}</div></section>`;
   }
   return `<section class="sec"><header><h2>Agents</h2><span class="count">${v.agents.length}</span><span class="hint">first-class participants, each with a track record</span></header>
     <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
       <div class="top">${who(a.name, a.model)}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
       <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}</div>
+      ${a.tokens.length ? `<div class="model ${a.tokens.length > 1 ? 'warn' : ''}" title="${a.tokens.length > 1 ? 'More than one token has acted under this name' : 'The token this agent connects with'}">token: ${esc(a.tokens.join(', '))}</div>` : ''}
       <div class="line" title="${esc(a.line)}">${esc(a.line || '—')}</div>
       <div class="stats">
         <div><b>${a.record.landed}</b><span>landed</span></div>

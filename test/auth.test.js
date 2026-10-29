@@ -193,3 +193,59 @@ describe('required mode', () => {
     assert.equal(r.status, 413);
   });
 });
+
+describe('agent tokens limited to projects', () => {
+  let ctx, scoped, other;
+  const as = (token, agent = 'w1') => ({ authorization: `Bearer ${token}`, 'x-trellis-agent': agent });
+  before(async () => {
+    ctx = await start({ auth: 'required' });
+    for (const slug of ['alpha', 'beta']) {
+      ctx.hub.tx(() => ctx.hub.project(slug, { create: true }));
+      ctx.hub.humanOp(slug, 'settings', { path: `/code/${slug}` });
+      ctx.hub.humanOp(slug, 'create', { title: `${slug} work`, acceptance: 'x', priority: slug === 'beta' ? 'now' : 'soon' });
+    }
+    scoped = ctx.server.auth.createToken('alpha-box', 'agent', ['alpha']);
+    other = ctx.server.auth.createToken('spare-box', 'agent');
+  });
+  after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
+
+  test('the scope is stored and listed; human tokens cannot have one', () => {
+    const rows = ctx.server.auth.listTokens();
+    assert.equal(rows.find((r) => r.name === 'alpha-box').projects, 'alpha');
+    assert.equal(rows.find((r) => r.name === 'spare-box').projects, '');
+    assert.throws(() => ctx.server.auth.createToken('h', 'human', ['alpha']), /only agent tokens/);
+  });
+
+  test('out-of-scope projects are refused, and never created', async () => {
+    const r = await request(ctx.port, 'POST', '/api/p/beta/agent/checkin', { body: {}, headers: as(scoped) });
+    assert.equal(r.status, 403);
+    assert.match(r.json.hint, /limited to: alpha/);
+    const c = await request(ctx.port, 'POST', '/api/p/gamma/agent/checkin', { body: {}, headers: as(scoped) });
+    assert.equal(c.status, 403);
+    assert.ok(!ctx.hub.projects().some((p) => p.slug === 'gamma'));
+    const ok = await request(ctx.port, 'POST', '/api/p/alpha/agent/checkin', { body: {}, headers: as(scoped) });
+    assert.equal(ok.status, 200);
+  });
+
+  test('routing, /api/route and /api/where only reveal projects in scope', async () => {
+    // beta has the more urgent work, but this token only sees alpha
+    const route = await request(ctx.port, 'GET', '/api/route', { headers: as(scoped) });
+    assert.deepEqual(route.json.map((r) => r.project), ['alpha']);
+    const where = await request(ctx.port, 'GET', `/api/where?root=${encodeURIComponent('/code/beta')}`, { headers: as(scoped) });
+    assert.equal(where.json.project, null);
+    const next = await request(ctx.port, 'POST', '/api/agent/next', { body: {}, headers: { ...as(scoped, 'w2'), 'x-trellis-root': encodeURIComponent('/code/beta') } });
+    assert.equal(next.status, 200);
+    assert.equal(next.json.project, 'alpha');
+    assert.equal(next.json.item, '#1');
+    // an unscoped token still sees everything (alpha's only item is now held by w2)
+    const all = await request(ctx.port, 'GET', '/api/route', { headers: as(other) });
+    assert.deepEqual(all.json.map((r) => r.project), ['beta']);
+  });
+
+  test('each agent records the tokens that acted under its name', async () => {
+    await request(ctx.port, 'POST', '/api/p/alpha/agent/checkin', { body: {}, headers: as(other, 'w1') });
+    assert.equal(ctx.hub.q("SELECT tokens FROM agents WHERE name = 'w1'").get().tokens, 'alpha-box,spare-box');
+    const { view } = await import('../src/insight.js');
+    assert.deepEqual(view(ctx.hub, 'alpha').agents.find((x) => x.name === 'w1').tokens, ['alpha-box', 'spare-box']);
+  });
+});

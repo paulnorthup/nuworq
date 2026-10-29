@@ -5,6 +5,7 @@ export const SESSION_MS = 30 * 24 * 3600_000;
 const ROLES = ['human', 'agent'];
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 const same = (a, b) => a.length === b.length && timingSafeEqual(a, b);
+const scopeOf = (s) => (s ? s.split(',') : null); // null: every project
 
 export class Auth {
   constructor(db, { now = () => Date.now() } = {}) {
@@ -19,7 +20,8 @@ export class Auth {
         prefix       TEXT NOT NULL,            -- first 8 characters, for display and lookup
         created_at   INTEGER NOT NULL,
         last_used_at INTEGER,
-        revoked_at   INTEGER
+        revoked_at   INTEGER,
+        projects     TEXT NOT NULL DEFAULT ''  -- agent tokens: comma-separated project slugs it may reach; '' = all
       );
       CREATE INDEX IF NOT EXISTS tokens_prefix ON tokens (prefix);
       CREATE TABLE IF NOT EXISTS sessions (
@@ -28,21 +30,24 @@ export class Auth {
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
       );`);
+    try { db.exec("ALTER TABLE tokens ADD COLUMN projects TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
   }
 
-  createToken(name, role = 'agent') {
+  // projects: slugs an agent token is limited to; empty means every project.
+  createToken(name, role = 'agent', projects = []) {
     name = String(name ?? '').trim();
     if (!/^[\w.@-]{1,60}$/.test(name)) throw new Error('token name: 1–60 letters, digits, ., _, @ or -');
     if (!ROLES.includes(role)) throw new Error('role must be "human" or "agent"');
+    if (projects.length && role !== 'agent') throw new Error('only agent tokens can be limited to projects (humans see every project)');
     if (this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name)) throw new Error(`a token named "${name}" already exists (revoke it first, or pick another name)`);
     const token = 'trl_' + randomBytes(32).toString('base64url');
-    this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(name, role, sha(token), token.slice(0, 8), this.now());
+    this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, created_at, projects) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(name, role, sha(token), token.slice(0, 8), this.now(), projects.join(','));
     return token;
   }
 
   listTokens() {
-    return this.db.prepare('SELECT id, name, role, prefix, created_at, last_used_at, revoked_at FROM tokens ORDER BY id').all();
+    return this.db.prepare('SELECT id, name, role, prefix, created_at, last_used_at, revoked_at, projects FROM tokens ORDER BY id').all();
   }
 
   revoke(nameOrId) {
@@ -61,7 +66,7 @@ export class Auth {
       .find((t) => same(Buffer.from(t.hash), h));
     if (!match) return null;
     this.db.prepare('UPDATE tokens SET last_used_at = ? WHERE id = ?').run(this.now(), match.id);
-    return { id: match.id, name: match.name, role: match.role };
+    return { id: match.id, name: match.name, role: match.role, projects: scopeOf(match.projects) };
   }
 
   createSession(tokenId) {

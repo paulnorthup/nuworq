@@ -271,7 +271,7 @@ export function view(hub, slug, { light = false } = {}) {
         WHERE e.project_id = ? AND e.type = 'sent_back' AND i.implementer = ?`).get(p.id, a.name).n;
     const stalls = hub.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'lease_expired' AND data LIKE ?`).get(p.id, `%"agent":"${a.name}"%`).n;
     return {
-      name: a.name, model: a.model, client: a.client, provider: providerOf(a.model),
+      name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), tokens: a.tokens ? a.tokens.split(',') : [],
       status, line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
       record: {
         landed, sent_back: sentBack, stalls,
