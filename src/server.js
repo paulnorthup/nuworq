@@ -7,6 +7,7 @@ import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
+import { receive } from './github.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -73,6 +74,13 @@ export function createServer(hub, { auth = 'local', trustProxy = false, publicUr
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+
+      // GitHub can't log in: the delivery's signature is its credential, so this answers under any host name
+      // (e.g. through a tunnel to a loopback hub). Browsers never send these, and nothing changes without a valid signature.
+      let hook;
+      if (req.method === 'POST' && (hook = path.match(/^\/api\/hooks\/github\/([^/]+)$/))) {
+        return send(200, receive(hub, decodeURIComponent(hook[1]), { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) }));
+      }
 
       // Without login, only answer to loopback names: blocks DNS-rebinding from web pages you visit.
       if (!required && !LOOPBACK.test(hostname(req.headers.host))) {
@@ -228,7 +236,7 @@ const rootOf = (req) => { try { return decodeURIComponent(req.headers['x-trellis
 
 const TOO_BIG = () => new UserError('Request body too large (limit 1MB)', { status: 413, hint: 'Keep detail to what a person would read; put long logs in the repo and reference them.' });
 
-async function body(req) {
+async function rawBody(req) {
   // Read and discard a moderately oversized body so the client gets a clean 413 instead of a broken pipe;
   // only refuse outright, unread, when it's absurdly large.
   if (Number(req.headers['content-length']) > 16 * MAX_BODY) { req.destroy(); throw TOO_BIG(); }
@@ -240,7 +248,11 @@ async function body(req) {
     if (size <= MAX_BODY) chunks.push(c);
   }
   if (size > MAX_BODY) throw TOO_BIG();
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  return Buffer.concat(chunks);
+}
+
+async function body(req) {
+  const raw = (await rawBody(req)).toString('utf8').trim();
   if (!raw) return {};
   try {
     const v = JSON.parse(raw);

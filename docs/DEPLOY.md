@@ -64,6 +64,25 @@ claude mcp add trellis -e TRELLIS_URL=https://trellis.example.com -e TRELLIS_TOK
 ```
 Codex, opencode and the plain CLI read the same two variables.
 
+### GitHub: pull requests and CI on items
+A signed webhook links pull requests to items and shows CI results on them. When CI fails on work in Verifying, it lands under "Needs you" (and gets pushed, if you set up [notifications](../README.md#getting-pinged-ntfy-slack-or-any-webhook)).
+1. In the project (5m view, top right): **Connect GitHub**. Generate a secret, copy it, and save.
+2. In the repo on GitHub: **Settings → Webhooks → Add webhook**:
+   - Payload URL: `https://<your hub>/api/hooks/github/<project>` (the dialog shows it)
+   - Content type: `application/json`
+   - Secret: the one from step 1
+   - Events: *Pull requests*, *Check suites*, *Check runs*, *Statuses*
+3. GitHub sends a `ping`. "Recent Deliveries" should show 200.
+
+How a PR finds its item: `#N` in the PR title first. Then the branch: on `trellis/<agent>`, it's the item that agent holds, or the one it last submitted. Then `#N` in the PR body. A PR that matches nothing is acknowledged and ignored. Later events for a linked PR (pushes, merge, close) follow it. CI is summarised per head commit: any failed check means failing, all green means passing. Only changes of state go on the item's timeline.
+
+GitHub must be able to reach the hub:
+- **Public hub (Caddy):** nothing more to do.
+- **Tailscale:** `tailscale serve` is tailnet-only, and GitHub isn't on your tailnet. Expose only the hook path with Funnel, e.g. `tailscale funnel --bg --set-path /api/hooks/github http://127.0.0.1:4747/api/hooks/github` (not yet tried end to end: check that GitHub's ping returns 200).
+- **Any tunnel (ngrok, cloudflared) to a loopback hub:** the hook route answers under any host name. Every other route still refuses non-loopback hosts unless login is on.
+
+Deliveries need no token: the HMAC-SHA256 signature (`X-Hub-Signature-256`) is the credential. A missing or wrong signature, an unknown project, or a project without a secret all get the same 401, and nothing is recorded.
+
 ---
 
 ## 30 minutes: details
@@ -87,7 +106,7 @@ Or stop the service and copy the `.db` file. To restore, put the file back and s
 
 ### Threat model (honest version)
 **What it protects against**
-- Anyone without a token: they can't read projects, steer agents or act as an agent. Static UI files and `/api/health` are public, and contain no data.
+- Anyone without a token: they can't read projects, steer agents or act as an agent. Static UI files and `/api/health` are public, and contain no data. `/api/hooks/github/<project>` accepts only deliveries signed with that project's secret.
 - Agent tokens: they can't open the UI or take human actions (answer, accept, steer, change autonomy).
 - Cross-site attacks:
   - Writes authenticated by cookie must carry a matching `Origin` (CSRF).

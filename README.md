@@ -101,6 +101,7 @@ src/protocol.js    the agent protocol, defined once → MCP tools, OpenAI/Anthro
 src/server.js      HTTP API, SSE live updates, static UI, auth enforcement, security headers
 src/auth.js        human/agent tokens (hashed), sessions
 src/notify.js      push channels (ntfy, Slack, webhook): new act-level entries, batched, each sent once
+src/github.js      signed GitHub webhook: PRs link to items, CI results per head commit
 src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
 src/seed.js        the demo, replayed through real operations on a moved clock
@@ -127,6 +128,7 @@ Design choices:
 | Work waiting but no agent connected (unless parked) | act |
 | Blocking question | act |
 | Finished work waiting for your verdict | act (no-evidence warning) |
+| CI failing on a PR for work in Verifying (GitHub webhook) | act |
 | Proposal, when autonomy is *Check with me* | act |
 | An item that keeps bouncing (send-backs + stalls ≥ 2) | act: clarify, split or drop |
 | An agent's assumption | know: Fine / Override (an override becomes steering) |
@@ -149,6 +151,7 @@ GET  /agents.md?project=<p>&via=tools|cli
 GET  /api/stream                         server-sent events
 GET  /api/notify | POST /api/notify {kind,url} | POST /api/notify/remove {id} | POST /api/notify/test
                                          push channels (human only; URLs come back masked)
+POST /api/hooks/github/:project          GitHub webhook (signed with the project's secret; see docs/DEPLOY.md)
 ```
 
 ### Security

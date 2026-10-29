@@ -1066,8 +1066,12 @@ const HUMAN_OPS = {
     this.q('UPDATE projects SET seen_at = ? WHERE id = ?').run(this.now(), p.id);
   },
 
-  settings(p, { name, mission, autonomy, parked, path }) {
+  settings(p, { name, mission, autonomy, parked, path, github_secret }) {
     const changes = [];
+    if (github_secret != null && str(github_secret) !== p.github_secret) {
+      this.q('UPDATE projects SET github_secret = ? WHERE id = ?').run(str(github_secret), p.id);
+      this.event(p, { actor: HUMAN, type: 'github', headline: str(github_secret) ? 'You connected GitHub webhooks' : 'You disconnected GitHub webhooks' });
+    }
     if (path != null && normDir(path) !== p.path) {
       this.q('UPDATE projects SET path = ? WHERE id = ?').run(normDir(path), p.id);
       this.event(p, { actor: HUMAN, type: 'path', headline: normDir(path) ? `You set where ${p.name} lives: ${normDir(path)}` : `You cleared where ${p.name} lives` });

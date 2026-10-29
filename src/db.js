@@ -153,6 +153,30 @@ CREATE TABLE IF NOT EXISTS notified (
   seen_at    INTEGER NOT NULL,                -- last time the entry was still there
   PRIMARY KEY (project_id, key)
 );
+
+-- GitHub pull requests linked to items, and CI results per commit (src/github.js).
+CREATE TABLE IF NOT EXISTS prs (
+  project_id INTEGER NOT NULL,
+  repo       TEXT NOT NULL,
+  number     INTEGER NOT NULL,
+  item_id    INTEGER NOT NULL,
+  url        TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  state      TEXT NOT NULL,                   -- open | merged | closed
+  head_ref   TEXT NOT NULL DEFAULT '',
+  head_sha   TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, repo, number)
+);
+CREATE TABLE IF NOT EXISTS checks (
+  project_id INTEGER NOT NULL,
+  sha        TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  conclusion TEXT NOT NULL,                   -- GitHub's: success | failure | neutral | skipped | timed_out | … (or a status state)
+  url        TEXT NOT NULL DEFAULT '',
+  at         INTEGER NOT NULL,
+  PRIMARY KEY (project_id, sha, name)
+);
 `;
 
 export function openDb(file) {
@@ -166,6 +190,7 @@ export function openDb(file) {
     'ALTER TABLE agents ADD COLUMN last_checkin INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN parked INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE projects ADD COLUMN path TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE projects ADD COLUMN github_secret TEXT NOT NULL DEFAULT ''",
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

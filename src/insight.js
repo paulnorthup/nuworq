@@ -4,6 +4,7 @@
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
 import { STAGES, AUTONOMY, OPEN_STAGES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS } from './core.js';
+import { prsOf } from './github.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
@@ -94,6 +95,19 @@ export function view(hub, slug, { light = false } = {}) {
         headline: `${it.created_by} proposed: ${it.title}`,
         sub: 'agents can shape this into ready work themselves',
         why: it.summary, item: ref(it),
+      });
+    }
+  }
+
+  for (const it of in_('verifying')) {
+    for (const pr of prsOf(hub, p, it).filter((x) => x.ci === 'fail' && x.state !== 'closed')) {
+      const failed = pr.checks.filter((c) => !['success', 'neutral', 'skipped', 'pending'].includes(c.conclusion));
+      push({
+        key: `ci:${it.id}:${pr.number}:${pr.sha}`, level: 'act', kind: 'ci-failing', at: it.stage_since,
+        headline: `CI is failing on ${it.title}`,
+        sub: `PR #${pr.number} · ${failed.map((c) => c.name).join(', ')}`,
+        why: 'The work is waiting for review, but its pull request fails CI. Send it back with what failed, or look at the checks first.',
+        item: ref(it), pr: { url: pr.url, number: pr.number, checks: failed },
       });
     }
   }
@@ -301,7 +315,7 @@ export function view(hub, slug, { light = false } = {}) {
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
   return {
-    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at },
+    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret },
     pulse, since, attention, motion, flow,
     queue, proposed, waiting, verifying, done,
     agents: agentRows, decisions, notes, steers, activity,
@@ -419,6 +433,7 @@ export function itemView(hub, slug, ref) {
     children: hub.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(it.id).map((c) => ({ item: `#${c.seq}`, title: c.title, stage: c.stage })),
     depends_on: hub.deps(it).map((d) => ({ item: `#${d.seq}`, title: d.title, stage: d.stage })),
     evidence: submit?.data?.evidence ?? [], submission: submit ?? null,
+    prs: prsOf(hub, p, it),
     questions, steers, lifecycle,
     court_totals: Object.fromEntries(Object.entries(courtTotals).map(([k, v]) => [k, dur(v)])),
     court_ms: courtTotals,

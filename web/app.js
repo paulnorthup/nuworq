@@ -206,7 +206,8 @@ function project(v) {
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
-        ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
+        ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items with a GitHub webhook">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
+        ${z() >= 1 && !P.parked ? `<button class="link" data-action="park"title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
       </div>
     </div>
     ${pulse(v)}
@@ -296,7 +297,7 @@ function needsYou(v) {
 }
 
 function card(a) {
-  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working' }[a.kind] ?? a.kind;
+  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'ci-failing': 'CI is failing' }[a.kind] ?? a.kind;
   const key = 'a:' + a.key;
   const open = S.open.has(key) || z() >= 2;
   const hasMore = a.why || a.detail || a.acceptance;
@@ -350,6 +351,18 @@ function cardActions(a, hasMore, open, key) {
       <button class="btn go" data-action="approve" data-item="${esc(a.item)}">Approve</button>
       <button class="btn" data-action="drop" data-item="${esc(a.item)}">Drop</button>
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
+    </div>`;
+  }
+  if (a.kind === 'ci-failing') {
+    const r = `sb:${a.item}`;
+    return `<div class="evidence">${a.pr.checks.map((c) => `<span class="ev">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">✗ ${esc(c.name)}</a>` : `✗ ${esc(c.name)}`}</span>`).join('')}</div>
+      <div class="actions">
+      ${S.reveal.has(r)
+        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What failed? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
+        : `<button class="btn you" data-action="reveal" data-key="${r}">Send back…</button>`}
+      ${a.pr.url ? `<a class="btn" href="${esc(a.pr.url)}" target="_blank" rel="noopener">PR #${a.pr.number}</a>` : ''}
+      <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>
+      <button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}
     </div>`;
   }
   if (a.kind === 'struggling') {
@@ -649,6 +662,9 @@ function renderDrawer() {
     ${it.submission && it.stage === 'verifying' ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
       ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}</div>` : ''}
     ${handoff}
+    ${it.prs?.length ? `<div class="d-sec"><div class="label">Pull requests</div>${it.prs.map((pr) => `<p><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a> <b>${esc(pr.state)}</b> · ${esc(pr.title)}
+      ${pr.ci ? ` · CI <b class="${pr.ci === 'fail' ? 'warn' : ''}">${pr.ci === 'pass' ? '✓ passing' : pr.ci === 'fail' ? '✗ failing' : '… running'}</b>` : ''}</p>
+      ${pr.checks.length ? `<div class="evidence">${pr.checks.map((c) => `<span class="ev">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}: ${esc(c.conclusion)}</a>` : `${esc(c.name)}: ${esc(c.conclusion)}`}</span>`).join('')}</div>` : ''}`).join('')}</div>` : ''}
     ${questions}
     ${steers}
     <div class="d-sec"><div class="label">Say something about this item</div>
@@ -706,6 +722,20 @@ async function notifySettings() {
       <input id="nt-url" placeholder="https://ntfy.sh/your-secret-topic, a Slack webhook, or any URL"><button class="btn primary small" data-action="notify-add">Add</button></div>
     <p class="lead">${Object.entries(n.kinds).map(([k, v]) => `<b>${esc(k)}</b>: ${esc(v)}`).join('<br>')}</p>
     <div class="foot">${n.channels.length ? '<button class="btn" data-action="notify-test">Send a test</button>' : ''}<button class="btn primary" data-action="close-modal">Done</button></div>`);
+}
+
+async function githubSettings() {
+  S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
+  const P = S.view.project;
+  const hook = `${S.info.url}/api/hooks/github/${encodeURIComponent(P.slug)}`;
+  modal(`<h2>GitHub</h2>
+    <p class="lead">A webhook links pull requests to items (a <code>trellis/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
+    <h4>1. In the repo on GitHub: Settings → Webhooks → Add webhook</h4>
+    <p class="lead">Payload URL (GitHub must be able to reach it; see docs/DEPLOY.md):</p>${copyBlock(hook)}
+    <p class="lead">Content type <code>application/json</code>. Events: <i>Pull requests</i>, <i>Check suites</i>, <i>Check runs</i>, <i>Statuses</i>.</p>
+    <h4>2. The same secret, there and here</h4>
+    <div class="inline-form"><input id="gh-secret" placeholder="${P.github ? 'A secret is set; enter a new one to replace it' : 'A long random secret'}"><button class="btn small" data-action="github-generate">Generate</button></div>
+    <div class="foot">${P.github ? '<button class="btn ghost" data-action="github-disconnect">Disconnect</button>' : ''}<button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="github-save">Save</button></div>`);
 }
 
 function newProject() {
@@ -821,6 +851,20 @@ const ACTIONS = {
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
   connect: () => connect(),
   notify: () => notifySettings(),
+  github: () => githubSettings(),
+  'github-generate': () => {
+    const el = $('#gh-secret');
+    el.value = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    el.select();
+    toast('Copy it into GitHub before you save: it is not shown again');
+  },
+  'github-save': async () => {
+    const secret = val('gh-secret');
+    if (!secret) return toast('Enter or generate a secret', true);
+    closeModal();
+    await human('settings', { github_secret: secret }, 'GitHub connected: pull requests and CI will link to items');
+  },
+  'github-disconnect': async () => { closeModal(); await human('settings', { github_secret: '' }, 'GitHub disconnected'); },
   'notify-add': async () => {
     try {
       await api('/api/notify', { method: 'POST', body: JSON.stringify({ kind: val('nt-kind'), url: val('nt-url') }) });
