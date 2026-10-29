@@ -53,6 +53,9 @@ function github() {
       Object.assign(state.prs.get(Number(m[1])), { state: 'closed', merged: true, merge_commit_sha: 'squash123' });
       return json(200, { sha: 'squash123', merged: true, message: 'Pull Request successfully merged' });
     }
+    if (req.method === 'GET' && req.url.startsWith('/installation/repositories?')) {
+      return json(200, { repositories: [...state.installed].map((full_name) => ({ full_name, name: full_name.split('/')[1], private: true })) });
+    }
     if (req.method === 'GET' && (m = req.url.match(/^\/repos\/acme\/api\/pulls\/(\d+)$/))) {
       return state.prs.has(Number(m[1])) ? json(200, state.prs.get(Number(m[1]))) : json(404, { message: 'Not Found' });
     }
@@ -77,6 +80,7 @@ function github() {
     if (req.method === 'GET' && (m = req.url.match(/^\/repos\/([^/]+\/[^/]+)\/installation$/))) {
       return state.installed.has(m[1]) ? json(200, { id: 42, account: { login: m[1].split('/')[0] } }) : json(404, { message: 'Not Found' });
     }
+    if (req.method === 'GET' && req.url.startsWith('/app/installations?')) return json(200, state.installed.size ? [{ id: 42 }] : []);
     if (req.method === 'POST' && req.url === '/app/installations/42/access_tokens') {
       if (state.suspended) return json(403, { message: 'This installation has been suspended' });
       let raw = '';
@@ -255,11 +259,13 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
     const port = await listen(server);
     const get = (path) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual' });
     try {
-      assert.deepEqual(await (await get('/api/github/app')).json(), { configured: false, slug: null, can_create: true });
+      assert.deepEqual(await (await get('/api/github/app')).json(), { configured: false, slug: null, can_create: true, state: 'none', repositories: null, install_url: null });
       const page = await get('/api/github/app/new');
       assert.equal(page.status, 200);
       assert.match(page.headers.get('content-security-policy'), new RegExp(`form-action 'self' ${stub}`));
       const html = await page.text();
+      assert.match(html, /<link rel="stylesheet" href="\/style\.css">.*class="login-card flow-card".*<span>nuworq<\/span>/s, 'the app\'s styles and brand');
+      assert.match(html, /Next, GitHub shows the app .* asks you to confirm.*you come back here with <b>\+ Project<\/b> open/s, 'what GitHub asks, and where you land');
       const action = html.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&');
       assert.ok(action.startsWith(`${stub}/settings/apps/new?state=`), action);
       const m = JSON.parse(html.match(/name="manifest" value="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
@@ -269,12 +275,22 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       const state = new URL(action).searchParams.get('state');
 
       assert.equal((await get(`/api/github/app/callback?code=good&state=forged`)).status, 400, 'a state the hub never made is refused');
+      const installed = gh.state.installed;
+      gh.state.installed = new Set(); // made, and installed nowhere yet
       const back = await get(`/api/github/app/callback?code=good&state=${state}`);
-      assert.equal(back.status, 302);
+      assert.equal(back.status, 200, 'a page of nuworq\'s on the way to GitHub, saying what comes next');
+      const INSTALL = 'https://github.com/apps/nuworq-hub/installations/new';
+      assert.equal(back.headers.get('refresh'), `3;url=${INSTALL}`, 'and on to GitHub\'s install page by itself');
+      const made = await back.text();
+      assert.match(made, /class="login-card flow-card".*GitHub App created.*<b>nuworq-hub<\/b>.*GitHub asks where to install it.*\+ Project<\/b> open/s);
+      assert.ok(made.includes(`href="${INSTALL}"`), 'with a button, if the browser doesn\'t follow');
       assert.equal((statSync(appFile).mode & 0o777).toString(8), '600');
       assert.deepEqual(JSON.parse(readFileSync(appFile, 'utf8')), { id: '999', slug: 'nuworq-hub', key: PEM, webhook_secret: 'whs', client_id: 'cid', client_secret: 'csec', owner: 'paul' });
       assert.equal((await get(`/api/github/app/callback?code=good&state=${state}`)).status, 400, 'a state works once');
-      assert.deepEqual(await (await get('/api/github/app')).json(), { configured: true, slug: 'nuworq-hub', can_create: true });
+      assert.deepEqual(await (await get('/api/github/app')).json(), { configured: true, slug: 'nuworq-hub', can_create: true, state: 'created', repositories: null, install_url: INSTALL });
+      gh.state.installed = new Set([...installed, 'acme/web']); // the person installs it on GitHub and comes back
+      assert.equal((await (await get('/api/github/app')).json()).state, 'created', 'asked of GitHub at most once a minute');
+      assert.deepEqual(await (await get('/api/github/app?fresh')).json(), { configured: true, slug: 'nuworq-hub', can_create: true, state: 'installed', repositories: 2, install_url: INSTALL }, 'back from GitHub: asked again');
       assert.deepEqual(appFromFile(appFile).id, '999', 'serve picks it up from the file next time');
 
       hub.agentOp('api', 'claim', 'a1', { item: '#1' });
