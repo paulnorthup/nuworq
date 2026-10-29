@@ -178,6 +178,8 @@ sqlite3 /var/lib/nuworq/nuworq.db ".backup '/backups/nuworq-$(date +%F).db'"   #
 ```
 Or stop the service and copy the `.db` file. To restore, put the file back and start nuworq. Tokens are in the same file, so a backup is also a credential store: keep it private.
 
+`serve --follow` also copies the database before every move to a new commit, into `<data-dir>/backups/<sha>.db`, named after the commit it left (with `--workspaces`, `backups/<sha>/<workspace>.db`). It keeps the last 10. If the new hub doesn't come up healthy, it puts that copy back before starting the old code, because the new code may have migrated the database. If the copy can't be made (a full disk, say), the hub stays where it is and the log says why. These copies sit on the same disk, so they don't replace off-machine backups.
+
 ### Upgrading a deployment from before the rename
 nuworq used to be called Trellis, and so did these recipes: the `trellis` user, `/opt/trellis`, `/var/lib/trellis/trellis.db` and `trellis.service`; in Docker, the `trellis` service, the `trellis-data` volume and `/data/trellis.db`. The code still answers to the old names: `bin/trellis.js` runs nuworq, and old tokens (`trl_…`), sessions, `TRELLIS_*` variables and `trellis/<agent>` branches keep working.
 - **systemd**: your installed unit keeps running as it is after `git pull`. To move to the new names, stop it and move the database to `/var/lib/nuworq/nuworq.db` (owned by the `nuworq` user) before starting `nuworq.service`.

@@ -1,20 +1,28 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { follower, system, firstFailure } from '../src/follow.js';
+import { DatabaseSync } from 'node:sqlite';
+import { follower, system, firstFailure, backups, KEEP_BACKUPS } from '../src/follow.js';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 
 // A pretend world: main's head, which commits pass their tests or start healthy, and what happened.
 // out: the commit in the hub's own worktree (checkout moves it); tests run elsewhere (test(sha)).
-function world({ red = [], sick = [] } = {}) {
+// full: backups fail (a full disk).
+function world({ red = [], sick = [], full = false } = {}) {
   const w = {
     main: 'aaaaaaa1', out: null, up: null, log: [], said: [],
     head: () => w.main,
     checkout: (sha) => { w.out = sha; w.log.push(`checkout ${sha}${w.up ? ' while the hub runs' : ''}`); },
+    backup: (sha) => {
+      w.log.push(`backup ${sha}${w.up ? ' while the hub runs' : ''}`);
+      if (full) throw new Error('ENOSPC: no space left on device');
+      return `backups/${sha}.db`;
+    },
+    restore: (sha) => { w.log.push(`restore ${sha}${w.up ? ' while the hub runs' : ''}`); return `backups/${sha}.db`; },
     test: async (sha) => { w.log.push(`test ${sha}`); return red.includes(sha) ? { ok: false, failed: 'routing › picks work' } : { ok: true }; },
     start: async () => { w.up = w.out; w.log.push(`start ${w.out}`); },
     alive: () => w.up != null,
@@ -151,6 +159,51 @@ describe('the hub follows main', () => {
     assert.ok(w.said.some((l) => l.startsWith('the hub stopped by itself')));
   });
 
+  test('each move backs up the database first, with the hub stopped, tagged with the commit it leaves', async () => {
+    const w = world();
+    const f = follow(w);
+    await f.boot();
+    assert.equal(count(w, 'backup'), 0, 'boot moves nothing');
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    w.main = 'ccccccc3';
+    await f.tick();
+    assert.deepEqual(w.log.filter((l) => l.startsWith('backup')), ['backup aaaaaaa1', 'backup bbbbbbb2']);
+    const at = (l) => w.log.indexOf(l);
+    assert.ok(at('stop aaaaaaa1') < at('backup aaaaaaa1') && at('backup aaaaaaa1') < at('checkout bbbbbbb2'));
+    assert.ok(!w.log.some((l) => l.endsWith('while the hub runs')));
+    assert.equal(count(w, 'restore'), 0, 'healthy moves restore nothing');
+  });
+
+  test('a rollback puts back the database from before the move, before the old hub starts', async () => {
+    const w = world({ sick: ['bbbbbbb2'] });
+    const f = follow(w);
+    await f.boot();
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    const at = (l) => w.log.lastIndexOf(l);
+    assert.ok(at('stop bbbbbbb2') < at('restore aaaaaaa1'), 'the sick hub is stopped first');
+    assert.ok(at('restore aaaaaaa1') < at('checkout aaaaaaa1') && at('checkout aaaaaaa1') < at('start aaaaaaa1'));
+    assert.ok(!w.log.some((l) => l.endsWith('while the hub runs')));
+    assert.ok(w.said.includes('put the database back as it was at aaaaaaa, before bbbbbbb started'));
+  });
+
+  test("a backup that fails aborts the move: the old hub runs on, with one line saying why", async () => {
+    const w = world({ full: true });
+    const f = follow(w);
+    await f.boot();
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    assert.equal(w.up, 'aaaaaaa1');
+    assert.equal(w.out, 'aaaaaaa1', "the hub's worktree never moved");
+    assert.equal(count(w, 'checkout bbbbbbb2'), 0);
+    assert.equal(f.state.running, 'aaaaaaa1');
+    const why = w.said.filter((l) => /couldn't back up/.test(l));
+    assert.deepEqual(why, ["couldn't back up the database before moving (ENOSPC: no space left on device); staying on aaaaaaa and not trying bbbbbbb again; the next commit on main tries again"]);
+    await f.tick();
+    assert.equal(count(w, 'backup'), 1, 'not retried every check');
+  });
+
   test('closing stops the hub and nothing starts after it', async () => {
     const w = world();
     const f = follow(w);
@@ -160,6 +213,102 @@ describe('the hub follows main', () => {
     await f.tick();
     assert.equal(w.up, null);
     assert.equal(count(w, 'start bbbbbbb2'), 0);
+  });
+});
+
+describe('database backups, on real files', () => {
+  const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-backup-')));
+  // A database the way the hub keeps one: WAL, with rows not yet checkpointed into the main file.
+  const makeDb = (file, rows = ['one']) => {
+    const d = new DatabaseSync(file);
+    d.exec('PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)');
+    for (const r of rows) d.prepare('INSERT INTO items (title) VALUES (?)').run(r);
+    return d; // left open: the WAL stays
+  };
+  const columns = (file) => { const d = new DatabaseSync(file); try { return d.prepare('PRAGMA table_info(items)').all().map((c) => c.name); } finally { d.close(); } };
+  const titles = (file) => { const d = new DatabaseSync(file); try { return d.prepare('SELECT title FROM items ORDER BY id').all().map((r) => r.title); } finally { d.close(); } };
+
+  test('a backup holds what was in the WAL; restore undoes a migration', () => {
+    const root = scratch();
+    const db = join(root, 'nuworq.db');
+    const open = makeDb(db, ['one', 'two']);
+    assert.ok(existsSync(`${db}-wal`));
+    const store = backups({ dir: join(root, 'backups'), db });
+    assert.equal(store.backup('aaaaaaa1'), join(root, 'backups', 'aaaaaaa1.db'));
+    open.close();
+    assert.deepEqual(titles(join(root, 'backups', 'aaaaaaa1.db')), ['one', 'two']);
+    const d = new DatabaseSync(db);
+    d.exec("ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''; INSERT INTO items (title) VALUES ('three')");
+    d.close();
+    assert.ok(columns(db).includes('repo'));
+    store.restore('aaaaaaa1');
+    assert.deepEqual(columns(db), ['id', 'title']);
+    assert.deepEqual(titles(db), ['one', 'two']);
+    assert.ok(!existsSync(`${db}-wal`), "no WAL from the newer code is left to replay over the copy");
+    assert.equal(store.restore('nope'), null, 'no copy, nothing restored');
+  });
+
+  test(`only the last ${KEEP_BACKUPS} are kept, oldest removed`, () => {
+    const root = scratch();
+    const db = join(root, 'nuworq.db');
+    makeDb(db).close();
+    const store = backups({ dir: join(root, 'backups'), db });
+    const shas = Array.from({ length: KEEP_BACKUPS + 1 }, (_, i) => `${i}`.padStart(7, '0'));
+    for (const s of shas) store.backup(s);
+    const left = readdirSync(join(root, 'backups')).filter((f) => f.endsWith('.db')).sort();
+    assert.equal(left.length, KEEP_BACKUPS);
+    assert.ok(!left.includes(`${shas[0]}.db`), 'the oldest went');
+    assert.ok(left.includes(`${shas.at(-1)}.db`));
+  });
+
+  test('with workspaces, every workspace file is backed up and restored together', () => {
+    const root = scratch();
+    const ws = join(root, 'workspaces');
+    mkdirSync(ws);
+    makeDb(join(ws, 'acme.db'), ['a']).close();
+    makeDb(join(ws, 'beta.db'), ['b']).close();
+    const store = backups({ dir: join(root, 'backups'), workspaces: ws });
+    store.backup('aaaaaaa1');
+    assert.deepEqual(readdirSync(join(root, 'backups', 'aaaaaaa1')).sort(), ['acme.db', 'beta.db']);
+    for (const f of ['acme.db', 'beta.db']) {
+      const d = new DatabaseSync(join(ws, f));
+      d.exec("ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''");
+      d.close();
+    }
+    store.restore('aaaaaaa1');
+    assert.deepEqual(columns(join(ws, 'acme.db')), ['id', 'title']);
+    assert.deepEqual(columns(join(ws, 'beta.db')), ['id', 'title']);
+  });
+
+  test('a backup that fails leaves no copy behind that could pass for good', () => {
+    const root = scratch();
+    const db = join(root, 'nuworq.db');
+    writeFileSync(db, 'not a database');
+    const store = backups({ dir: join(root, 'backups'), db });
+    assert.throws(() => store.backup('aaaaaaa1'));
+    assert.deepEqual(readdirSync(join(root, 'backups')), []);
+  });
+
+  test('a candidate that migrates the database on startup and never answers is rolled back, and so is its migration', async () => {
+    const root = scratch();
+    const db = join(root, 'nuworq.db');
+    makeDb(db).close();
+    const w = world({ sick: ['bbbbbbb2'] });
+    const store = backups({ dir: join(root, 'backups'), db });
+    Object.assign(w, { backup: store.backup, restore: store.restore });
+    const start = w.start;
+    // bbbbbbb2's code adds a column as it starts, then never answers.
+    w.start = async () => {
+      await start();
+      if (w.up === 'bbbbbbb2') { const d = new DatabaseSync(db); d.exec("ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''"); d.close(); }
+    };
+    const f = follow(w);
+    await f.boot();
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    assert.equal(w.up, 'aaaaaaa1');
+    assert.deepEqual(columns(db), ['id', 'title'], 'the column bbbbbbb2 added is gone');
+    assert.ok(w.said.some((l) => l.startsWith('put the database back as it was at aaaaaaa')));
   });
 });
 

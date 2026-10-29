@@ -5,10 +5,12 @@
 // tested in a second worktree (hub-next), so the running hub's files never change under it. If the
 // tests pass, the hub stops, hub-src moves to the commit, and the hub starts again; if the new hub
 // doesn't answer, it goes back to the last good commit. If main fails its tests, the hub stays where it
-// is and fixing main goes to the front of the queue: stop the line, not the hub.
+// is and fixing main goes to the front of the queue: stop the line, not the hub. Before each move the
+// database is copied aside, and a rollback puts the copy back: new code may migrate it on startup.
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 const short = (sha) => String(sha).slice(0, 7);
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -16,6 +18,68 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STOP_GRACE_MS = 5000;
 const HEALTHY_MS = 15_000;
 const TEST_TIMEOUT_MS = 10 * 60_000;
+export const KEEP_BACKUPS = 10;
+
+// Copies of the hub's database, one per move, named after the commit moved away from: dir/<sha>.db for
+// one database (db), or dir/<sha>/<name>.db for every workspace file in workspaces. Taken only while the
+// hub is stopped, with VACUUM INTO, so what sits in the WAL is in the copy and no copy is torn. A copy is
+// written aside and renamed into place, so a failed one (disk full) never passes for a good one. The
+// order file lists them oldest first; past KEEP_BACKUPS the oldest go.
+export function backups({ dir, db = null, workspaces = null, keep = KEEP_BACKUPS }) {
+  const orderFile = join(dir, 'order');
+  const order = () => { try { return readFileSync(orderFile, 'utf8').split('\n').filter(Boolean); } catch { return []; } };
+  const target = (sha) => join(dir, workspaces ? sha : `${sha}.db`);
+  // The live files now, by name: a workspace created since the last move is in the next copy.
+  const live = () => workspaces
+    ? (existsSync(workspaces) ? readdirSync(workspaces).filter((f) => f.endsWith('.db')).map((f) => ({ name: f, file: join(workspaces, f) })) : [])
+    : existsSync(db) ? [{ name: 'db', file: db }] : [];
+  const vacuum = (from, to) => {
+    const d = new DatabaseSync(from);
+    try { d.exec(`VACUUM INTO '${to.replaceAll("'", "''")}'`); } finally { d.close(); }
+  };
+  return {
+    // Copy the database(s) as they are now; returns where, or null when there is nothing to copy yet.
+    backup(sha) {
+      const files = live();
+      if (!files.length) return null;
+      mkdirSync(dir, { recursive: true });
+      const out = target(sha), tmp = `${out}.tmp`;
+      rmSync(tmp, { recursive: true, force: true });
+      try {
+        if (workspaces) {
+          mkdirSync(tmp);
+          for (const f of files) vacuum(f.file, join(tmp, f.name));
+        } else {
+          vacuum(files[0].file, tmp);
+        }
+      } catch (e) {
+        rmSync(tmp, { recursive: true, force: true });
+        throw e;
+      }
+      rmSync(out, { recursive: true, force: true });
+      renameSync(tmp, out);
+      const kept = [...order().filter((s) => s !== sha), sha];
+      for (const old of kept.splice(0, Math.max(0, kept.length - keep))) rmSync(target(old), { recursive: true, force: true });
+      writeFileSync(orderFile, kept.join('\n') + '\n');
+      return out;
+    },
+    // Put the copy taken when leaving sha back, with the hub stopped; null when there is none. A
+    // workspace the copy doesn't have (created since) is left as it is.
+    restore(sha) {
+      const src = target(sha);
+      if (!existsSync(src)) return null;
+      const pairs = workspaces
+        ? readdirSync(src).filter((f) => f.endsWith('.db')).map((f) => [join(src, f), join(workspaces, f)])
+        : [[src, db]];
+      for (const [from, to] of pairs) {
+        copyFileSync(from, `${to}.restore`);
+        for (const x of ['-wal', '-shm']) rmSync(`${to}${x}`, { force: true });
+        renameSync(`${to}.restore`, to);
+      }
+      return src;
+    },
+  };
+}
 
 // The tests run without the hub's own NUWORQ_* / TRELLIS_* settings, so they can't reach its database or
 // the hub itself (and without NODE_TEST_CONTEXT, so they report normally even when this runs under node --test).
@@ -54,7 +118,8 @@ function place(repo, path, sha) {
 // repo: the checkout whose main is followed. dir: the worktree the hub runs from. next: the worktree
 // candidates are tested in. args: the hub's serve flags. url: where the hub answers. cwd: the hub's
 // working directory (relative --db paths mean what they did).
-export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000 }) {
+// store: where the database is copied before each move (see backups()); null: no copies (--demo).
+export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null }) {
   let child = null;
   let testing = null;
   let fetched = 0;
@@ -81,6 +146,9 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
     },
     // Move the hub's own worktree: only while the hub is stopped, right before it starts.
     checkout: (sha) => place(repo, dir, sha),
+    // Copy the database aside before leaving sha, and put it back on a rollback: only while stopped.
+    backup: (sha) => store?.backup(sha) ?? null,
+    restore: (sha) => store?.restore(sha) ?? null,
     // npm test on sha in the candidates' worktree, without blocking: the supervisor keeps answering
     // signals meanwhile, and the running hub's worktree is untouched.
     test(sha) {
@@ -225,7 +293,17 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       if (!t.ok) return await red(sha, t.failed);
       log(`${short(sha)} passes its tests${state.red ? ` (${branch} is green again)` : ''}; restarting the hub on it`);
       state.red = false;
+      const from = state.running;
       await sys.stop();
+      // No copy, no move: the old hub starts again as it was, and this commit waits for the next one.
+      try {
+        sys.backup?.(from);
+      } catch (e) {
+        state.skip = sha;
+        log(`couldn't back up the database before moving (${e.message.split('\n')[0]}); staying on ${short(from)} and not trying ${short(sha)} again; the next commit on ${branch} tries again`);
+        await sys.start();
+        return;
+      }
       sys.checkout(sha);
       await sys.start();
       if (await sys.healthy()) {
@@ -236,6 +314,12 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       log(`the hub didn't answer at ${short(sha)} within ${HEALTHY_MS / 1000}s; going back to ${short(state.good)} and not trying ${short(sha)} again`);
       state.skip = sha;
       await sys.stop();
+      // The new code may have migrated the database as it started: back to the copy from before the move.
+      try {
+        if (sys.restore?.(from)) log(`put the database back as it was at ${short(from)}, before ${short(sha)} started`);
+      } catch (e) {
+        log(`couldn't put the database back as it was at ${short(from)} (${e.message.split('\n')[0]}); ${short(state.good)} starts on it as ${short(sha)} left it`);
+      }
       sys.checkout(state.good);
       state.running = state.good;
       await sys.start();
@@ -256,8 +340,8 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
 }
 
 // Run it: start the hub, check main every few seconds, and stop the hub on SIGINT, SIGTERM or SIGHUP.
-export async function follow({ repo, dir, next, args, url, branch = 'main', every = 10_000, log }) {
-  const sys = system({ repo, dir, next, args, url });
+export async function follow({ repo, dir, next, args, url, branch = 'main', every = 10_000, log, store = null }) {
+  const sys = system({ repo, dir, next, args, url, store });
   const f = follower(sys, { branch, log });
   let timer;
   let stopping = false;

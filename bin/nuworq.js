@@ -592,7 +592,7 @@ ${dim(`
 // under the data folder (hub-src), never from this checkout, which agents fast-forward. New commits
 // are tested in a second worktree there (hub-next). See src/follow.js.
 async function serveFollow(flags) {
-  const { follow } = await import('../src/follow.js');
+  const { follow, backups } = await import('../src/follow.js');
   const host = String(flags.host || envVar('HOST') || '127.0.0.1');
   const port = Number(flags.port || envVar('PORT') || 4747);
   if (!port) throw new HubError('--follow needs a fixed port', { hint: 'Pass --port <n> (the supervisor checks the hub there).' });
@@ -600,9 +600,15 @@ async function serveFollow(flags) {
   const repo = repoRoot(ROOT);
   const args = process.argv.slice(3).filter((a) => !/^--?follow(=.*)?$/.test(a));
   const data = dataHome(flags);
+  // Copied before every move, to <data>/backups: the one database, or every workspace's.
+  const store = flags.demo ? null : backups({
+    dir: join(data, 'backups'),
+    ...(flags.workspaces ? { workspaces: workspacesDir(flags) } : { db: resolve(dbPath(flags)) }),
+  });
   try {
     await follow({
       repo,
+      store,
       dir: join(data, 'hub-src'),
       next: join(data, 'hub-next'),
       args,
