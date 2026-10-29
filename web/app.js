@@ -61,6 +61,8 @@ function who(name, model) {
   const prov = providerOf(model);
   return `<span class="agent prov-${prov.toLowerCase().replace(/[^a-z]/g, '')}" title="${esc([model, prov].filter(Boolean).join(' · '))}"><i></i>${esc(name)}</span>`;
 }
+// An empty section: one line on why it's empty, and the one thing to do about it.
+const zero = (why, action = '') => `<div class="zero"><span class="check">→</span><div>${why}${action ? ` ${action}` : ''}</div></div>`;
 const refLink = (ref) => (ref ? `<a class="ref" data-action="open" data-item="${esc(ref)}">${esc(ref)}</a>` : '');
 const stagePill = (stage, court) => `<span class="stage-pill ${stage === 'done' ? 'done' : `court-${court ?? ''}`}">${esc(S.view?.stages?.[stage]?.label ?? stage)}</span>`;
 const courtOf = (stage) => S.view?.flow.stages.find((s) => s.stage === stage)?.court;
@@ -174,7 +176,7 @@ function renderRail() {
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects">Projects${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
-    ${projects || '<div class="rail-item" style="color:var(--faint)">None yet</div>'}
+    ${projects || '<div class="rail-item" style="color:var(--faint)">No projects yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
       <button class="rail-item" data-action="archived">Archived projects</button>
@@ -521,7 +523,7 @@ function flow(v) {
     const st = f.stages.find((s) => s.stage === S.stage);
     const items = v.all.filter((i) => i.stage === S.stage).slice(-25).reverse();
     detail = `<div class="stage-detail"><div class="blurb"><b>${esc(st.label)}.</b> ${esc(st.blurb)} ${st.court ? `<i>Whose move: ${st.court === 'you' ? 'yours' : st.court === 'agents' ? "the agents'" : st.court === 'external' ? 'someone outside this hub' : 'nobody yet (waiting for an agent)'}.</i>` : ''} ${st.ms ? `Work spent ${esc(st.time)} here in the last 14 days.` : ''}</div>
-      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${esc(i.title)} <span class="age">${esc(i.ago)}</span></div>`).join('') : '<div class="age">Nothing here.</div>'}</div>`;
+      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${esc(i.title)} <span class="age">${esc(i.ago)}</span></div>`).join('') : `<div class="age">${STAGE_EMPTY[S.stage] ?? 'Nothing here.'}</div>`}</div>`;
   }
   const c = f.court;
   const hasTime = c.agents + c.queue + c.you + (c.external ?? 0) > 0;
@@ -545,6 +547,18 @@ function flow(v) {
       ${f.cost ? flowCost(f.cost) : ''}
     </div></section>`;
 }
+
+// Why a stage is empty, and the one thing to do about it where there is one.
+const STAGE_EMPTY = {
+  proposed: 'No ideas waiting to be shaped. <button class="link" data-action="toggle-add">+ Work</button>',
+  ready: 'Nothing ready: every shaped item is taken or finished. <button class="link" data-action="toggle-add">+ Work</button>',
+  outside: 'Nothing is waiting on a check outside this hub.',
+  active: 'No agent is working right now. <button class="link" data-action="connect">Start an agent</button>',
+  waiting: 'No agent is waiting on an answer from you.',
+  verifying: 'Nothing to review: no submissions are waiting.',
+  landing: 'Nothing accepted is waiting to land on main.',
+  done: 'Nothing finished yet.',
+};
 
 // The repository an item lands in, when its project has several (the hub sends null otherwise).
 const repoTag = (i) => i.repo ? ` <span class="tag" title="Lands in this repository">${esc(i.repo)}</span>` : '';
@@ -574,7 +588,8 @@ function itemRow(i, extra = '') {
 }
 
 function upNext(v) {
-  if (!v.queue.length) return '';
+  if (!v.queue.length) return v.all.length ? `<section class="sec"><header><h2>Up next</h2></header>
+    ${zero('<b>Nothing ready for an agent to pick up.</b> Everything here is in progress, waiting, still being shaped or finished.', '<button class="link" data-action="toggle-add">+ Work</button>')}</section>` : '';
   const shown = z() >= 2 ? v.queue : v.queue.slice(0, 5);
   return `<section class="sec"><header><h2>Up next</h2><span class="count">${v.queue.length}</span><span class="hint">ready for any agent, in the order they'll be picked</span></header>
     <div class="rows">${shown.map((i) => itemRow(i)).join('')}</div>
@@ -629,12 +644,13 @@ function commits(g) {
 }
 
 function agents(v) {
-  if (!v.agents.length) return '';
+  if (!v.agents.length) return v.all.length ? `<section class="sec"><header><h2>Agents</h2></header>
+    ${zero('<b>No agent has checked in here yet.</b> The work waits until one does.', '<button class="btn primary small" data-action="connect">Connect an agent</button>')}</section>` : '';
   if (z() < 2) {
     const live = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off');
     const away = v.agents.length - live.length;
     return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} active</span>${away ? `<span class="hint">${away} away</span>` : ''}</header>
-      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model)}<span class="st">${esc(a.status)}${a.holding.length ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || '<span class="age">No agent is active right now.</span>'}</div></section>`;
+      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model)}<span class="st">${esc(a.status)}${a.holding.length ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || `<span class="age">${plural(away, 'agent')} ${away === 1 ? 'is' : 'are'} away or signed off, so nothing moves until one comes back. <button class="link" data-action="connect">Start an agent</button></span>`}</div></section>`;
   }
   return `<section class="sec"><header><h2>Agents</h2><span class="count">${v.agents.length}</span><span class="hint">first-class participants, each with a track record</span></header>
     <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
@@ -658,6 +674,9 @@ function activity(v) {
   const events = S.feedAll ? v.activity : v.activity.filter((e) => !quiet.has(e.type));
   return `<section class="sec feed"><header><h2>Everything that happened</h2><span class="count">${events.length}</span>
     <span class="right"><label class="check-label"><input type="checkbox" data-action="feed-all" ${S.feedAll ? 'checked' : ''}> include routine progress</label></span></header>
+    ${events.length ? '' : v.activity.length
+      ? zero('Only routine progress so far.', '<button class="link" data-action="feed-all">Include routine progress</button>')
+      : zero('<b>Nothing has happened here yet.</b> Every claim, question, submission and review will show up here.')}
     <div class="rows">${events.map((e) => {
       const key = 'e:' + e.id;
       const open = S.open.has(key);
@@ -672,6 +691,7 @@ function activity(v) {
 
 function allWork(v) {
   const rows = [...v.all].reverse();
+  if (!rows.length) return `<section class="sec"><header><h2>All work</h2></header>${zero('<b>No work yet.</b> Every item, in every stage, will be listed here.')}</section>`;
   return `<section class="sec"><header><h2>All work</h2><span class="count">${rows.length}</span></header>
     <table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Who</th><th>In stage</th></tr></thead><tbody>
     ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : `<span class="age">${esc(i.by)}</span>`}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
@@ -844,7 +864,7 @@ async function notifySettings() {
     <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
   modal(`<h2>Notifications</h2>
     <p class="lead">When something new needs you (a blocking question, work to verify, "what matters most?"), nuworq sends one message, batched over 2 minutes, with a link. Healthy work sends nothing.</p>
-    ${rows || '<p class="lead faint">No channels yet.</p>'}
+    ${rows || '<p class="lead faint">No channels yet, so you only learn that something needs you when you open the dashboard. Add one below.</p>'}
     <h4>Add a channel</h4>
     <div class="inline-form"><select id="nt-kind">${Object.keys(n.kinds).map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
       <input id="nt-url" placeholder="https://ntfy.sh/your-secret-topic, a Slack webhook, or any URL"><button class="btn primary small" data-action="notify-add">Add</button></div>
@@ -1013,7 +1033,7 @@ const ACTIONS = {
   archived: async () => {
     try {
       const list = await api('/api/projects?archived=1');
-      modal(`<h2>Archived projects</h2>${list.length ? list.map((p) => `<div class="row-item"><div class="body"><div class="h">${esc(p.name)}</div>${p.remotes.length ? `<div class="s">${esc(p.remotes.join(', '))}</div>` : ''}</div><button class="btn small" data-action="restore-project" data-slug="${esc(p.slug)}">Restore</button></div>`).join('') : '<p class="lead">None.</p>'}
+      modal(`<h2>Archived projects</h2>${list.length ? list.map((p) => `<div class="row-item"><div class="body"><div class="h">${esc(p.name)}</div>${p.remotes.length ? `<div class="s">${esc(p.remotes.join(', '))}</div>` : ''}</div><button class="btn small" data-action="restore-project" data-slug="${esc(p.slug)}">Restore</button></div>`).join('') : '<p class="lead faint">No archived projects. Removing a project archives it: its history is kept, and you can restore it here.</p>'}
         <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
     } catch (e) { toast(e.message, true); }
   },
