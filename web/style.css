@@ -75,6 +75,19 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .rail-foot .rail-item { color: var(--muted); }
 .rail-version { font-size: 11px; color: var(--faint); padding: 6px 8px 0; font-variant-numeric: tabular-nums; }
 .rail-version a { color: inherit; }
+/* The organization switcher (hubs with organizations): this one, the others, and a new one. */
+.org-switch { position: relative; margin: -6px 0 4px; }
+.org-switch summary { list-style: none; display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 7px; cursor: pointer; font-weight: 600; }
+.org-switch summary::-webkit-details-marker { display: none; }
+.org-switch summary:hover, .org-switch[open] summary { background: var(--sunken); }
+.org-switch .org-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-caret { color: var(--faint); font-size: 11px; }
+.org-menu { position: absolute; z-index: 20; left: 0; right: 0; min-width: 200px; margin-top: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); padding: 4px; display: flex; flex-direction: column; }
+.org-item { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 10px; border-radius: 6px; color: var(--ink); }
+.org-item:hover { background: var(--sunken); text-decoration: none; }
+.org-item.on { font-weight: 600; }
+.org-item.on::before { content: '✓'; color: var(--ok); }
+.org-role { font-size: 11.5px; color: var(--faint); }
 .badge { background: var(--you); color: #fff; border-radius: 999px; font-size: 11px; font-weight: 650; min-width: 19px; height: 19px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--queue); }
@@ -369,9 +382,18 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 .flow-card h1 { font-size: 18px; margin: 0; }
 .flow-card .btn { text-align: center; text-decoration: none; }
 .flow-form { display: flex; flex-direction: column; }
-.dialog .form { display: flex; flex-direction: column; gap: 10px; }
-.dialog .form label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
-.dialog .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.dialog .form, .setup .form, .narrow .form { display: flex; flex-direction: column; gap: 10px; }
+.dialog .form label, .setup .form label, .narrow .form label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.dialog .foot, .setup .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.setup { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; max-width: 640px; }
+.setup .lead, .narrow .lead { color: var(--muted); margin: 0 0 14px; }
+.ok { color: var(--ok); font-size: 12.5px; margin-top: 4px; }
+/* The hub's own pages (join, early access, requests): one narrow column. */
+main.narrow { max-width: 560px; margin: 0 auto; padding: 48px 20px 80px; }
+main.narrow h1 { margin-bottom: 14px; }
+main.narrow .faint, .setup .faint, .dialog .faint { color: var(--faint); font-size: 12.5px; }
+.setup > :first-child, .dialog > :first-child { margin-top: 0; }
+.btn:disabled { opacity: .45; cursor: default; }
 .copyable { position: relative; }
 .copyable button { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--line-strong); background: var(--panel); }
 #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 9px; font-size: 13px; z-index: 40; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 90vw; }
@@ -388,6 +410,9 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
   .brand { padding: 0 8px 0 0; }
   .rail-label, .rail-foot { display: none; }
   .rail-item { width: auto; }
+  .org-switch { margin: 0; }
+  #rail { overflow: visible; } /* so the organization menu can drop over the page */
+  .org-menu { right: auto; }
   #main { padding: 18px 16px 60px; }
   .phead { flex-direction: column; gap: 10px; }
   .controls { align-items: flex-start; }

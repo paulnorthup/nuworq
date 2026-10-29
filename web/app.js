@@ -182,6 +182,7 @@ function renderRail() {
   const total = S.projects.reduce((n, p) => n + p.needs, 0);
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
+    ${orgSwitcher()}
     <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects">Projects${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--faint)">No projects yet</div>'}
     <div class="rail-foot">
@@ -192,6 +193,17 @@ function renderRail() {
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
     </div>`;
+}
+
+// On a hub with organizations: which one this is, the others you belong to (one click signs you in there),
+// and making a new one.
+function orgSwitcher() {
+  if (!S.me?.org) return '';
+  const orgs = S.me.orgs ?? [];
+  const row = (o) => `<span class="org-name">${esc(o.workspace)}</span><span class="org-role">${esc(o.role)}</span>`;
+  return `<details class="org-switch" ${S.orgOpen ? 'open' : ''}><summary title="Switch organization"><span class="org-name">${esc(S.me.org)}</span><span class="org-caret">▾</span></summary>
+    <div class="org-menu">${orgs.length > 1 ? orgs.map((o) => o.current ? `<span class="org-item on">${row(o)}</span>` : `<a class="org-item" href="${esc(o.enter)}">${row(o)}</a>`).join('') : ''}
+    <a class="org-item" href="${esc(S.me.new_org)}">+ New organization</a></div></details>`;
 }
 
 // What is live, e.g. "v0.2.0 · c3a3008", the commit linked to GitHub when the hub's code came from there.
@@ -211,6 +223,7 @@ function zoomControl() {
 // The home, across every project (web/home.js): the pulse, what needs you, a line per project.
 const getStarted = () => getStartedCard(S.gs, { worker: S.info ? connectCommands(S.info, location).worker : '' });
 function overview() {
+  if (!S.projects.length && S.me?.org) return firstProject();
   if (!S.projects.length || !S.home) {
     return `<div class="phead"><div class="titles"><h1>Welcome to nuworq</h1>
       <div class="mission">A hub where you facilitate and AI agents (Claude, OpenAI, open-weight) find, do and verify the work.</div></div></div>
@@ -819,6 +832,32 @@ function renderDrawer() {
     ${deep}`;
 }
 
+// ── a new organization: step 2 (its first project, with its repositories) and step 3 (connect a machine) ──
+// Step 1, naming the organization, is on the hub's own address (web/join.js).
+function firstProject() {
+  return `<div class="phead"><div class="titles"><h1>${esc(S.me.org)}</h1></div></div>
+    <div class="setup">
+      <p class="faint">Step 2 of 3 · your first project</p>
+      <p class="lead">A project is what agents work on: a mission, and the repositories their work lands in.</p>
+      <div class="form"><label>Name<input id="fp-name" data-draft="fp-name" placeholder="e.g. api"></label>
+      <label>Mission (optional): the north star every agent reads<textarea id="fp-mission" data-draft="fp-mission" placeholder="What is this for? What matters most?"></textarea></label>
+      <label>Repositories (optional): one per line<textarea id="fp-remotes" data-draft="fp-remotes" placeholder="github.com/acme/api&#10;github.com/acme/web"></textarea></label></div>
+      <div class="foot"><button class="btn primary" data-action="first-project">Create project</button></div>
+    </div>`;
+}
+
+function connectStep(r) {
+  const c = connectCommands(S.info ?? { url: location.origin }, location, r.slug);
+  const refused = r.refused?.length ? `<div class="warn">${r.refused.map((x) => `<p>⚠ Not linked: ${esc(x.error)}.${x.hint ? ` ${esc(x.hint)}` : ''}</p>`).join('')}</div>` : '';
+  modal(`<p class="faint">Step 3 of 3 · connect a machine</p>
+    <h2>${esc(r.name)} is ready</h2>
+    ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
+    ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${copyBlock(c.clone)}` : ''}
+    <h4>Connect it to ${esc(S.me.org)}</h4><p class="lead">It signs you in through the browser, saves a fresh agent token for this organization, and registers nuworq with Claude Code and Codex if they're installed.</p>${copyBlock(c.connect ?? c.guide)}
+    <h4>Start a worker in a clone of the repository</h4>${copyBlock(c.worker)}
+    <div class="foot"><button class="btn primary" data-action="goto-new" data-slug="${esc(r.slug)}">Open the board</button></div>`);
+}
+
 // ── modals ──
 function modal(html) {
   const m = $('#modal');
@@ -1162,6 +1201,17 @@ const ACTIONS = {
   },
   'close-modal': () => closeModal(),
   logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },
+  'first-project': async () => {
+    const name = val('fp-name');
+    if (!name) return toast('Name it', true);
+    try {
+      const remotes = val('fp-remotes').split(/[\s,]+/).filter(Boolean);
+      const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('fp-mission'), remotes }) });
+      clearDraft('fp-name', 'fp-mission', 'fp-remotes');
+      await loadProjects();
+      connectStep({ ...r, name });
+    } catch (e) { toast(e.message, true); }
+  },
   'create-project': async () => {
     const name = val('np-name');
     if (!name) return toast('Name it', true);
@@ -1220,6 +1270,8 @@ document.addEventListener('keydown', (e) => {
   }
 });
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+// The rail re-renders on every update: the organization menu stays as the person left it.
+document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) S.orgOpen = e.target.open; }, true);
 
 // ── live updates ──
 let refreshTimer;
