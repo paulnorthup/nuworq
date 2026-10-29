@@ -243,6 +243,7 @@ export function openDb(file) {
     "ALTER TABLE agents ADD COLUMN has TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE items ADD COLUMN needs TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE items ADD COLUMN size TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE items ADD COLUMN branch TEXT NOT NULL DEFAULT ''", // the git branch the item is built on, landed from
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

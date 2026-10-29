@@ -34,6 +34,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const in_ = (stage) => items.filter((i) => i.stage === stage);
   const active = in_('active');
   const shaping = in_('proposed').filter((i) => i.holder);
+  const landing = in_('landing');
   // Running race attempts: each is its own line of work, with its own agent and lease.
   const racers = hub.q(`SELECT a.* FROM attempts a JOIN items i ON i.id = a.item_id
     WHERE i.project_id = ? AND i.stage = 'active' AND a.stage = 'active' AND a.closed = 0 ORDER BY a.id`).all(p.id);
@@ -55,6 +56,16 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       why: q.context, detail: q.detail,
       item: it ? ref(it) : null,
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
+    });
+  }
+
+  // Accepted work that nobody lands: worth knowing whatever the autonomy.
+  for (const it of landing.filter((i) => !i.holder && t - i.stage_since > HOUR)) {
+    push({
+      key: `land:${it.id}`, level: 'know', kind: 'landing-stuck', at: it.stage_since,
+      headline: `${ref(it)} was accepted ${dur(t - it.stage_since)} ago but isn't on main yet`,
+      sub: it.title, why: `No agent has landed ${it.branch || 'its branch'}. Start an agent; land jobs come before any other work.`,
+      item: ref(it),
     });
   }
 
@@ -276,7 +287,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
 
   // ── in motion ──
   const lines = [
-    ...[...active, ...shaping].filter((it) => it.holder).map((it) => ({ it, agent: it.holder, lease: it.lease_until, touching: it.touching, since: it.stage_since })),
+    ...[...active, ...shaping, ...landing].filter((it) => it.holder).map((it) => ({ it, agent: it.holder, lease: it.lease_until, touching: it.touching, since: it.stage_since })),
     ...racers.map((r) => ({ it: byId.get(r.item_id), agent: r.agent, lease: r.lease_until, touching: r.touching, since: r.at, race: true })),
   ].sort((x, y) => x.it.seq - y.it.seq);
   const motion = lines.map(({ it, agent, lease, touching, since, race }) => {
@@ -292,6 +303,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       touching: json(touching, []),
       heads_up: hub.headsUp(p, agent, it) ?? null,
       shaping: it.stage === 'proposed',
+      landing: it.stage === 'landing',
       race: race ? it.race : undefined,
     };
   });

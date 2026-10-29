@@ -2,7 +2,7 @@
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
 import { openDb } from './db.js';
-import { gitFacts, gitWarning } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch } from './git.js';
 import { findSecret } from './secrets.js';
 
 const GIT_CHECK = Symbol('git check');
@@ -40,10 +40,13 @@ export const STAGES = {
   active:    { label: 'Active',    court: 'agents',  blurb: 'An agent holds a 20-minute lease and is working. Progress renews the lease; if the agent goes quiet, the work returns to Ready for someone else.' },
   waiting:   { label: 'Waiting',   court: 'you',     blurb: 'An agent hit a question only you can answer and parked the work (it took other work meanwhile). Your answer returns it to Ready.' },
   verifying: { label: 'Verifying', court: 'review',  blurb: 'The agent says it is done and attached evidence. Someone other than the implementer checks it.' },
+  landing:   { label: 'Landing',   court: 'agents',  blurb: 'Accepted, and an agent is putting it on main: rebase onto the latest main, run the checks, fast-forward main. It is done when git shows main contains it.' },
   done:      { label: 'Done',      court: null,      blurb: 'Accepted.' },
   dropped:   { label: 'Dropped',   court: null,      blurb: 'Decided not to do. Kept for the record.' },
 };
-export const OPEN_STAGES = ['proposed', 'ready', 'active', 'waiting', 'verifying'];
+export const OPEN_STAGES = ['proposed', 'ready', 'active', 'waiting', 'verifying', 'landing'];
+// Accepted work goes to its builder to land first; after this, any agent may land it.
+export const LAND_GRACE = 3 * MIN;
 
 export const AUTONOMY = {
   ask: {
@@ -533,14 +536,24 @@ export class Hub extends EventEmitter {
   }
 
   headsUp(p, agent, item) {
+    const notes = [];
     const mine = this.touchingOf(item, agent);
-    if (!mine.length) return undefined;
     const clashes = [];
-    for (const o of this.others(p, agent)) {
+    for (const o of mine.length ? this.others(p, agent) : []) {
       const hit = (o.touching ?? []).filter((x) => mine.some((m) => overlap(m, x)));
       if (hit.length) clashes.push(`${o.agent} is also changing ${hit.join(', ')} (for ${o.item})`);
     }
-    return clashes.length ? `${clashes.join('; ')}. Keep your changes there small and coordinate with a comment on their item.` : undefined;
+    if (clashes.length) notes.push(`${clashes.join('; ')}. Keep your changes there small and coordinate with a comment on their item.`);
+    // Work that landed since this agent started, unless its branch already has it: rebase while conflicts are small.
+    if (item.stage === 'active' && item.branch) {
+      const landed = this.q(`SELECT DISTINCT i.seq FROM events e JOIN items i ON i.id = e.item_id
+        WHERE e.project_id = ? AND e.type = 'landed' AND e.at > ? AND i.id != ? ORDER BY i.seq`).all(p.id, item.stage_since, item.id);
+      const base = landed.length && isRepo(p.path) ? baseOf(p.path) : null;
+      if (base && branchExists(p.path, item.branch) && !contains(p.path, item.branch, base)) {
+        notes.push(`${base} moved since you started: ${landed.map((x) => `#${x.seq}`).join(', ')} landed. Rebase now (git rebase ${base}), while any conflicts are small.`);
+      }
+    }
+    return notes.length ? notes.join(' ') : undefined;
   }
 
   setTouching(item, v, agent) {
@@ -608,6 +621,8 @@ export class Hub extends EventEmitter {
       summary: item.summary || undefined,
       detail: item.detail || undefined,
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
+      repo: this.remotesOf(p)[0] || undefined,
+      branch: item.branch || undefined,
       lease: item.holder ? { holder: item.holder, expires_in: dur(item.lease_until - this.now()) }
         : this.racing(item) && lease ? { holder: agent, expires_in: dur(lease - this.now()) } : undefined,
       race: item.race > 1 ? (item.stage === 'verifying' ? {
@@ -686,7 +701,9 @@ export class Hub extends EventEmitter {
           });
         } else {
           this.patch(it, { holder: null, lease_until: null });
-          this.event(p, { item: it, actor: SYSTEM, type: 'lease_expired', headline: `Review lease on #${it.seq} expired; it's open for review again` });
+          this.event(p, it.stage === 'landing'
+            ? { item: it, actor: SYSTEM, type: 'lease_expired', headline: `${it.holder} went quiet while landing #${it.seq}; another agent can land it`, data: { agent: it.holder } }
+            : { item: it, actor: SYSTEM, type: 'lease_expired', headline: `Review lease on #${it.seq} expired; it's open for review again` });
         }
       }
     });
@@ -781,8 +798,9 @@ export class Hub extends EventEmitter {
     const check = result[GIT_CHECK];
     if (check) {
       delete result[GIT_CHECK];
-      const g = gitFacts(p.path, agent, check.claim);
+      const g = gitFacts(p.path, agent, check.claim, check.branch);
       if (g) {
+        if (check.item && g.branch && g.branch !== check.branch) this.q('UPDATE items SET branch = ? WHERE id = ?').run(g.branch, check.item);
         const e = this.q('SELECT data FROM events WHERE id = ?').get(check.event);
         this.q('UPDATE events SET data = ? WHERE id = ?').run(JSON.stringify({ ...json(e.data, {}), git: g }), check.event);
         const warn = gitWarning(g);
@@ -881,7 +899,12 @@ export class Hub extends EventEmitter {
         AND COALESCE(implementer, '') != ?
         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
       ORDER BY stage_since`).all(p.id, agent, agent).filter(fresh).map((item) => ({ mode: 'review', item }));
-    if (p.parked) return reviews;
+    // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
+    // parked project: it finishes work, it doesn't start any.
+    const lands = !may('build') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'landing' AND holder IS NULL ORDER BY stage_since`).all(p.id)
+      .filter((i) => !gave.has(i.id) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
+      .map((item) => ({ mode: 'land', item }));
+    if (p.parked) return [...lands, ...reviews];
     const ready = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
       .filter((i) => fresh(i) && !this.unmetDeps(i).length)
       .map((item) => ({ mode: 'work', item }));
@@ -902,7 +925,7 @@ export class Hub extends EventEmitter {
       (a.mode === 'shape') - (b.mode === 'shape') ||
       (b.item.last_worker === agent) - (a.item.last_worker === agent) ||
       a.item.seq - b.item.seq);
-    return [...reviews, ...all];
+    return [...lands, ...reviews, ...all];
   }
 
   // What fits this agent: the tags its machine has (declared at checkin, here or in its latest project),
@@ -930,8 +953,15 @@ export class Hub extends EventEmitter {
       this.setStatus(p, agent, `Reviewing #${item.seq}: ${item.title}`);
       return;
     }
-    if (item.holder === agent && ['active', 'proposed'].includes(item.stage)) {
+    if (item.holder === agent && ['active', 'proposed', 'landing'].includes(item.stage)) {
       this.patch(item, { lease_until: t + LEASE_MS });
+      return;
+    }
+    if (item.stage === 'landing') {
+      if (item.holder) throw new UserError(`${item.holder} is landing #${item.seq}`, { status: 409, hint: 'Pick other work with next.' });
+      this.patch(item, { holder: agent, lease_until: t + LEASE_MS });
+      this.event(p, { item, actor: agent, type: 'landing', headline: `${agent} is landing #${item.seq}` });
+      this.setStatus(p, agent, `Landing #${item.seq}: ${item.title}`);
       return;
     }
     if (p.parked && ['ready', 'proposed'].includes(item.stage)) {
@@ -952,7 +982,7 @@ export class Hub extends EventEmitter {
     if (item.stage !== 'ready') throw new UserError(`#${item.seq} is ${item.stage}`, { status: 409 });
     const unmet = this.unmetDeps(item);
     if (unmet.length) throw new UserError(`#${item.seq} depends on unfinished work: ${unmet.map((d) => `#${d.seq}`).join(', ')}`, { status: 409, hint: 'Work on a dependency, or pick other work with next.' });
-    this.move(item, 'active', agent, { holder: agent, lease_until: t + LEASE_MS, last_worker: agent, attempts: item.attempts + 1 });
+    this.move(item, 'active', agent, { holder: agent, lease_until: t + LEASE_MS, last_worker: agent, attempts: item.attempts + 1, branch: item.branch || itemBranch(item) });
     this.event(p, {
       item, actor: agent, type: 'claimed',
       headline: `${agent} picked up #${item.seq}${item.attempts > 1 ? ` (attempt ${item.attempts})` : ''}`,
@@ -986,6 +1016,21 @@ export class Hub extends EventEmitter {
   }
 
   // Find an item this agent is allowed to write to; be helpful when it isn't.
+  // Where accepted work lands: null when git can't say (no repo here, or no branch to land);
+  // otherwise the base branch, and whether the branch still has commits main lacks.
+  toLand(p, branch) {
+    if (!branch || !isRepo(p.path) || !branchExists(p.path, branch)) return null;
+    const base = baseOf(p.path);
+    if (!base) return null;
+    return { base, pending: !contains(p.path, base, branch), head: headOf(p.path, base) };
+  }
+
+  // The branch git found for the latest submission, when the item has none of its own (older work).
+  submittedBranch(item) {
+    const e = this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'submitted' ORDER BY at DESC LIMIT 1`).get(item.id);
+    return json(e?.data, {}).git?.branch ?? '';
+  }
+
   heldItem(p, agent, ref, verb) {
     const item = this.item(p, ref);
     if (this.holds(item, agent)) return item;
@@ -1008,6 +1053,47 @@ const SHAPE_HINT = (item, p) => [
   'If the intent is unclear, ask with an assumption.',
   `Finish with submit (headline: the shape you chose). ${p.autonomy === 'ask' ? 'The human then approves it.' : 'It becomes ready for any agent, including you.'}`,
 ].join(' ');
+
+// Every claim says where to work: the item's own branch, in a worktree, never the main checkout.
+const WORK_HINT = (item, p) => item.branch
+  ? `Work on branch ${item.branch}, cut from the latest main: git switch -c ${item.branch} main (or git switch ${item.branch} if it exists). Work in a git worktree, never in ${p.path || 'the main checkout'} itself: it stays on main so work can land there. Commit as you go.`
+  : '';
+const LAND_HINT = (item, p, base = 'main') => [
+  `Land #${item.seq}: put ${item.branch} on ${base}.`,
+  `1. In your worktree: git switch ${item.branch} (commit or stash anything uncommitted first).`,
+  `2. git rebase ${base}. Conflicts: resolve them keeping both intents. If resolving changed what the reviewer approved, don't land: submit with conflicts (what you changed and why), and it goes back for review.`,
+  `3. Run the project's checks (e.g. npm test) and fix anything the rebase broke.`,
+  `4. git -C ${p.path} merge --ff-only ${item.branch}. If it can't fast-forward, ${base} moved: go back to step 2.`,
+  `5. submit #${item.seq}. The hub checks that ${base} contains the branch and marks it done.`,
+].join(' ');
+
+// Submit on a land job: done when git shows main has the branch; back to review when the rebase changed it.
+function finishLanding(p, agent, item, { headline, summary, detail, conflicts }) {
+  const reviewer = p.autonomy === 'full' ? 'Another agent reviews it again' : 'The human verifies it again';
+  if (conflicts) {
+    this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent });
+    this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased #${item.seq} and had to resolve conflicts; it needs another look`, summary: conflicts, detail });
+    this.setStatus(p, agent, `Sent #${item.seq} back for review after a rebase`);
+    return { ok: true, hint: `#${item.seq} is verifying again with your note on the conflicts. ${reviewer}, then it lands. Call next.` };
+  }
+  const land = this.toLand(p, item.branch);
+  if (!land) {
+    throw new UserError(`The hub can't see ${item.branch || 'a branch for this item'} in ${p.path || 'a repository it can reach'}`, {
+      status: 409, hint: 'Keep the branch until the hub confirms the landing. If the work is on another branch, say which in a comment and handoff.',
+    });
+  }
+  if (land.pending) {
+    throw new UserError(`${land.base} doesn't contain ${item.branch} yet`, { status: 409, hint: LAND_HINT(item, p, land.base) });
+  }
+  this.move(item, 'done', agent, { holder: null, lease_until: null, touching: '[]' });
+  this.event(p, {
+    item, actor: agent, type: 'landed',
+    headline: `${agent} landed #${item.seq} on ${land.base}${headline && !/^land/i.test(headline) ? `: ${headline}` : ''}`,
+    summary, detail, data: { branch: item.branch, base: land.base, head: land.head },
+  });
+  this.setStatus(p, agent, `Landed #${item.seq}`);
+  return { ok: true, hint: `#${item.seq} is on ${land.base} and done. You can delete the branch: git branch -d ${item.branch}. Call next.` };
+}
 
 function finishShaping(p, agent, item, { headline, summary, detail, acceptance }) {
   if (str(acceptance)) this.patch(item, { acceptance: str(acceptance) });
@@ -1042,7 +1128,7 @@ const AGENT_OPS = {
   },
 
   next(p, agent, args) {
-    const holding = this.heldBy(p, agent).filter((i) => ['active', 'proposed'].includes(i.stage));
+    const holding = this.heldBy(p, agent).filter((i) => ['active', 'proposed', 'landing'].includes(i.stage));
     if (holding.length && args.claim !== false) {
       return {
         mode: 'holding',
@@ -1077,11 +1163,13 @@ const AGENT_OPS = {
       ...this.context(p, pick.item, agent),
       hint: pick.mode === 'review'
         ? `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.${pick.item.race > 1 ? ' It was raced: compare race.submissions and accept with attempt set to the one to keep.' : ''}`
+        : pick.mode === 'land' && args.claim !== false
+          ? LAND_HINT(this.itemById(pick.item.id), p, baseOf(p.path) ?? 'main')
         : pick.mode === 'shape' && args.claim !== false
           ? SHAPE_HINT(pick.item, p)
           : args.claim === false
           ? `Not claimed. Claim #${pick.item.seq} to start.`
-          : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`,
+          : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${WORK_HINT(this.itemById(pick.item.id), p)} ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`.replace(/  +/g, ' '),
     };
   },
 
@@ -1095,7 +1183,9 @@ const AGENT_OPS = {
         ? `Review #${item.seq} against done_means and the evidence, then call review.`
         : item.stage === 'proposed'
           ? SHAPE_HINT(item, p)
-          : `You hold #${item.seq} for ${dur(LEASE_MS)}. ${args.touching ? '' : `${TOUCHING_HINT} `}Progress renews the lease.`,
+          : item.stage === 'landing'
+            ? LAND_HINT(this.itemById(item.id), p, baseOf(p.path) ?? 'main')
+            : `You hold #${item.seq} for ${dur(LEASE_MS)}. ${WORK_HINT(this.itemById(item.id), p)} ${args.touching ? '' : `${TOUCHING_HINT} `}Progress renews the lease.`.replace(/  +/g, ' '),
     };
   },
 
@@ -1161,6 +1251,7 @@ const AGENT_OPS = {
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
     const item = this.heldItem(p, agent, args.item, 'submit');
     if (item.stage === 'proposed') return finishShaping.call(this, p, agent, item, { headline, summary, detail, acceptance: args.acceptance });
+    if (item.stage === 'landing') return finishLanding.call(this, p, agent, item, { headline, summary, detail, conflicts: str(args.conflicts) });
     if (item.stage !== 'active') throw new UserError(`#${item.seq} is ${item.stage}; only active work can be submitted`, { status: 409 });
     const evidence = (Array.isArray(args.evidence) ? args.evidence : args.evidence ? [args.evidence] : [])
       .map((e) => (typeof e === 'string' ? { label: e } : { label: str(e.label || e.url), url: str(e.url) || undefined }))
@@ -1187,7 +1278,7 @@ const AGENT_OPS = {
     return {
       ok: true,
       hint: `#${item.seq} is verifying. ${reviewer} ${nudge}Call next for more work.`,
-      [GIT_CHECK]: { event, claim: { headline, summary, evidence } }, // asked of git once the transaction is done
+      [GIT_CHECK]: { event, item: item.id, branch: item.branch, claim: { headline, summary, evidence } }, // asked of git once the transaction is done
     };
   },
 
@@ -1395,14 +1486,25 @@ Object.assign(Hub.prototype, {
           if (!chosen) this.event(p, { item, actor, type: 'not_chosen', headline: `${a.agent}'s attempt on #${item.seq} was not chosen`, data: { agent: a.agent } });
         }
       }
-      this.move(item, 'done', actor, { holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}) });
+      const branch = kept ? merge : item.branch || this.submittedBranch(item);
+      const land = this.toLand(p, branch);
+      this.move(item, land?.pending ? 'landing' : 'done', actor, {
+        holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
+      });
       this.event(p, {
         item, actor, type: 'accepted',
         headline: `${who} accepted #${item.seq}${kept ? ` (${kept.agent}'s attempt)` : ''}${headline ? `: ${headline}` : ''}`,
-        summary: [kept ? `Merge ${merge}${kept.branch ? '' : ' (the worker branch convention; check the evidence)'}.` : '', summary].filter(Boolean).join('\n\n'),
-        detail, data: kept ? { kept: kept.agent, merge } : {},
+        summary: [
+          land?.pending ? `${branch} lands on ${land.base} next: an agent rebases it, runs the checks and fast-forwards ${land.base}.` : '',
+          kept && !land ? `Merge ${merge}${kept.branch ? '' : ' (the worker branch convention; check the evidence)'}.` : '',
+          summary,
+        ].filter(Boolean).join('\n\n'),
+        detail, data: { ...(kept ? { kept: kept.agent, merge } : {}), ...(land ? { branch, base: land.base, landing: land.pending } : {}) },
       });
-      return kept ? { kept: kept.agent, merge } : {};
+      if (land && !land.pending) {
+        this.event(p, { item, actor: SYSTEM, type: 'landed', headline: `#${item.seq} is already on ${land.base}`, data: { branch, base: land.base, head: land.head } });
+      }
+      return { ...(kept ? { kept: kept.agent, merge } : {}), ...(land?.pending ? { landing: branch } : {}) };
     } else {
       this.move(item, 'ready', actor, {
         holder: null, lease_until: null, rejections: item.rejections + 1,
@@ -1458,7 +1560,7 @@ const HUMAN_OPS = {
   sendback(p, { item, note }, by) {
     const it = this.item(p, item);
     const { headline, summary } = layered(note, '', '', 'A reason for sending it back');
-    if (!['verifying', 'done'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409 });
+    if (!['verifying', 'landing', 'done'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409 });
     this.verdict(p, by, it, 'reject', { headline, summary });
   },
 

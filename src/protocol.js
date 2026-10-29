@@ -57,11 +57,12 @@ export const OPS = [
   },
   {
     name: 'submit',
-    description: 'Finished an item you hold? Submit it for verification with evidence. Someone other than you verifies it; never mark your own work done. When you were shaping a proposal, submit ends the shaping: the item becomes ready (or goes to the human for approval).',
+    description: 'Finished an item you hold? Submit it for verification with evidence. Someone other than you verifies it; never mark your own work done. When you were shaping a proposal, submit ends the shaping: the item becomes ready (or goes to the human for approval). When you were landing accepted work, submit once main contains its branch: the hub checks git and marks it done.',
     params: {
       item: ITEM,
       ...LAYERS,
       acceptance: s('Only when finishing a shaping job: what done means, if you have not set it with refine.'),
+      conflicts: s('Only when landing: the rebase needed conflict fixes that change what was approved. Say what you changed and why; instead of landing, the item goes back for review.'),
       evidence: {
         type: 'array',
         description: 'Proof it meets done_means: tests run and their result, commands, commit hashes, PR links.',
@@ -200,11 +201,12 @@ Hub: ${url} · project: ${project} (change with --project).
    - **work**: build it.
    - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. Finish with ${c('submit')}.
    - **review**: check someone else's submission against done_means.
+   - **land**: accepted work to put on main: rebase its branch onto main, run the checks, fast-forward main, then ${c('submit')}. Land jobs come first, because finished work that isn't on main helps nobody.
 3. Work. As soon as you know which files you'll change, post ${c('progress', cli ? '<item> "<headline>" --touching "<paths>"' : '')} with \`touching\`, so others steer clear. Then post it at real milestones. You hold a 20-minute lease: in long stretches, a ${c('progress')} with no headline is a silent heartbeat. If you go quiet, the item returns to the queue.
 4. A question?
    - Can you make a reasonable call? ${c('ask')} with an \`assumption\` and keep going.
    - Truly blocked? ${c('ask')} with \`blocking\`. The item parks; take other work with ${c('next')}.
-5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it.
+5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it. Every item has its own branch, cut from the latest main (the claim names it), so it can land on its own. If you're told main moved, rebase early.
 6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for.
 7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item.
 8. Leaving? ${c('signoff')}.
