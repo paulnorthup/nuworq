@@ -72,6 +72,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
   let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, ...githubApp }) : githubApp;
   const appStates = new Map(); // one-click app creation: state → expiry (single use, an hour)
+  // Follow a renamed app: refresh its slug now and then (never blocking a request), and save it.
+  let slugAt = 0;
+  const freshSlug = () => {
+    if (!app?.refreshSlug || Date.now() - slugAt < 10 * 60_000) return;
+    slugAt = Date.now();
+    app.refreshSlug().then((changed) => {
+      if (!changed || !appFile) return;
+      try { writeFileSync(appFile, JSON.stringify({ ...JSON.parse(readFileSync(appFile, 'utf8')), slug: app.slug }, null, 2), { mode: 0o600 }); } catch {}
+    }).catch(() => {});
+  };
+  freshSlug();
   // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
   const minted = new Map(); // `${agent}|${item id}|${repo}` → { token, expires_at, repo }
   // The hub's own address names no workspace: the base domain, or the public URL's host (e.g. auth.<base-domain>).
@@ -441,6 +452,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'POST' && path === '/api/me/revoke') return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
       // The hub's GitHub App: whether it has one, and the one-click page that creates it (owners, single hub).
+      if (req.method === 'GET' && (path === '/api/github/app' || path === '/api/info')) freshSlug();
       if (req.method === 'GET' && path === '/api/github/app') return send(200, { configured: !!app, slug: app?.slug || null, can_create: !spaces && personRole === 'owner' });
       if (req.method === 'GET' && path === '/api/github/app/new') {
         if (spaces) return deny(403, 'on a hub with workspaces, the host sets up the GitHub App', 'See docs/GITHUB.md: NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE.');

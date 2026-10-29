@@ -266,3 +266,23 @@ describe('workers ask git for tokens through the helper', () => {
     } finally { server.close(); }
   });
 });
+
+describe('a renamed GitHub App', () => {
+  test('the hub asks GitHub for the app\'s current slug instead of trusting the saved one', async () => {
+    const { GitHubApp } = await import('../src/ghapp.js');
+    const gh = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(req.url === '/app' ? { id: 1234, slug: 'nuworq', name: 'nuworq' } : {}));
+    });
+    await new Promise((r) => gh.listen(0, '127.0.0.1', r));
+    try {
+      const app = new GitHubApp({ id: 1234, key: PEM, slug: 'nuworq-nuworq-com', api: `http://127.0.0.1:${gh.address().port}` });
+      assert.equal(await app.refreshSlug(), true);
+      assert.equal(app.slug, 'nuworq');
+      assert.equal(app.installUrl(), 'https://github.com/apps/nuworq/installations/new');
+      assert.equal(await app.refreshSlug(), false, 'unchanged the second time');
+    } finally {
+      gh.close();
+    }
+  });
+});

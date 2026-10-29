@@ -892,7 +892,7 @@ async function loadRepos(q, page) {
     const rows = r.repos.map((x) => x.project
       ? `<div class="row-item"><div class="body"><div class="h">${esc(x.repo.replace('github.com/', ''))}</div><div class="s">already the project <a data-action="goto" data-slug="${esc(x.project)}">${esc(x.project)}</a></div></div></div>`
       : `<button class="row-item clickable pick-repo" data-action="pick-repo" data-repo="${esc(x.repo)}" data-desc="${esc(x.description)}"><div class="body"><div class="h">${esc(x.repo.replace('github.com/', ''))}${x.private ? ' <span class="tag">private</span>' : ''}</div>${x.description ? `<div class="s">${esc(x.description)}</div>` : ''}</div></button>`).join('');
-    box.innerHTML = (page > 1 ? box.dataset.html ?? '' : '') + (rows || (page === 1 ? `<p class="faint">${q ? 'No repository matches.' : `The app is installed on no repositories yet. ${installLink('Install it on your repositories')}, then come back here.`}</p>` : ''))
+    box.innerHTML = (page > 1 ? box.dataset.html ?? '' : '') + (rows ? `<div class="rows">${rows}</div>` : (page === 1 ? `<p class="faint">${q ? 'No repository matches.' : `The app is installed on no repositories yet. ${installLink('Install it on your repositories')}, then come back here.`}</p>` : ''))
       + (rows && page === 1 && !q ? `<p class="faint" style="margin-top:8px">Not listed? ${installLink('Install the app on more repositories')}.</p>` : '');
     box.dataset.html = box.innerHTML;
     if (r.next_page) box.insertAdjacentHTML('beforeend', `<button class="btn ghost small" data-action="more-repos" data-q="${esc(q)}" data-page="${r.next_page}">More</button>`);

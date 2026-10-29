@@ -75,6 +75,15 @@ export class GitHubApp {
   }
 
   // token: an installation token, to act on a repository; the app's JWT otherwise.
+  // GitHub derives the app's address (github.com/apps/<slug>) from its name, which the owner can change:
+  // ask GitHub rather than trust the slug saved when the app was created. True when it changed.
+  async refreshSlug() {
+    const r = await this.call('GET', '/app');
+    if (r.status !== 200 || !r.json.slug || r.json.slug === this.slug) return false;
+    this.slug = r.json.slug;
+    return true;
+  }
+
   async call(method, path, body, token = this.jwt()) {
     const r = await fetch(`${this.api}${path}`, {
       method,

@@ -187,6 +187,11 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .row-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .row-item:first-child { border-top: 0; }
 .row-item .body { flex: 1; min-width: 0; }
+/* A row you pick (e.g. a repository): looks like any list row, not the browser's button. */
+button.row-item { width: 100%; text-align: left; background: transparent; border: 0; border-top: 1px solid var(--line); border-radius: 0; color: inherit; font: inherit; cursor: pointer; }
+.rows > button.row-item:first-child { border-top: 0; }
+button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127, 127, .08); outline: none; }
+#np-repos { max-height: 50vh; overflow-y: auto; }
 .row-item .h { font-weight: 520; }
 .row-item .s { color: var(--muted); font-size: 12.5px; }
 .row-item .acts { display: flex; gap: 4px; flex: none; align-items: center; }
