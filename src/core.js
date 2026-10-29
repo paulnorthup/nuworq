@@ -310,8 +310,18 @@ export class Hub extends EventEmitter {
 
   // Whether accepted work lands through a pull request the hub opens with auto-merge on (#63): the item's
   // repository is on GitHub, the hub has no checkout of it, and it has a GitHub App to open the PR as.
+  // Not while the App is known not to reach the repository (not installed there): the PR would only fail,
+  // so the work lands by hand. An item whose PR is already open keeps it.
   prMode(p, item) {
-    return !!this.github && this.remoteMode(p, item) && this.github.covers(this.repoOf(p, item));
+    if (!this.github || !this.remoteMode(p, item)) return false;
+    const repo = this.repoOf(p, item);
+    if (!this.github.covers(repo)) return false;
+    return !this.appTrouble(p, item) || !!this.q(`SELECT 1 FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
+  }
+
+  // Why the GitHub App can't reach the item's repository right now (see mirrorTrouble), or null.
+  appTrouble(p, item) {
+    return this.github ? this.mirrorTrouble(this.repoOf(p, item)) : null;
   }
 
   // Open the pull request for accepted work. The item is held as 'github' meanwhile, so nobody gets a land
@@ -1315,6 +1325,8 @@ export class Hub extends EventEmitter {
       // On origin with no pull request yet (the hub stopped while opening it): submit, and the hub opens it.
       return where + PR_OPEN_HINT(item);
     }
+    const trouble = this.appTrouble(p, item);
+    if (trouble) return `${where}It lands by hand: the hub can't open a pull request because ${trouble.error.replace(/^The /, 'the ')}. ${LAND_HINT(item, p, base, remote, unseen)}`;
     return where + LAND_HINT(item, p, base, remote, unseen);
   }
 
