@@ -13,7 +13,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'trellis')));
 const CLI = ON_PATH ? 'trellis' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -89,7 +89,7 @@ const AGENT_CMDS = {
     item: need(p[0], '<item>'), title: text(f.title), ...layers(f), acceptance: text(f.acceptance),
     priority: f.priority, depends_on: refs(f['depends-on']),
   }),
-  review: (p, f) => ({ item: need(p[0], '<item>'), verdict: need(p[1], '<accept|reject>'), headline: need(rest(p, 2), '<headline>'), ...layers(f) }),
+  review: (p, f) => ({ item: need(p[0], '<item>'), verdict: need(p[1], '<accept|reject>'), headline: need(rest(p, 2), '<headline>'), attempt: f.attempt, ...layers(f) }),
   comment: (p, f) => {
     const item = isRef(p[0]) && p.length > 1 ? p[0] : undefined;
     return { item, headline: need(rest(p, item ? 1 : 0), '<headline>'), ...layers(f) };
@@ -377,7 +377,16 @@ ${bold('Headless worker')}  ${dim('(asks the hub where work is waiting; own work
   node ${q} worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run`);
 }
 
-const dbPath = (flags) => flags.db || process.env.TRELLIS_DB || join(homedir(), '.trellis', 'trellis.db');
+// Workspaces mode keeps one database per workspace here (see src/workspaces.js).
+const workspacesDir = (flags) => join(flags['data-dir'] || process.env.TRELLIS_DATA_DIR || join(homedir(), '.trellis'), 'workspaces');
+const dbPath = (flags) => {
+  if (flags.workspace) {
+    const file = join(workspacesDir(flags), `${String(flags.workspace).toLowerCase()}.db`);
+    if (!existsSync(file)) throw new HubError(`no workspace "${flags.workspace}" in ${workspacesDir(flags)}`, { hint: 'See: trellis workspace list' });
+    return file;
+  }
+  return flags.db || process.env.TRELLIS_DB || join(homedir(), '.trellis', 'trellis.db');
+};
 
 // Load the Trellis roadmap project into a real hub database, so Trellis can be built with Trellis.
 async function seedCmd(flags) {
@@ -400,6 +409,7 @@ async function serve(flags) {
   const loopback = host === 'localhost' || host === '::1' || host.startsWith('127.');
   const auth = flags.auth || !loopback ? 'required' : 'local';
   const trustProxy = !!flags['trust-proxy'];
+  if (flags.workspaces) return serveWorkspaces(flags, { host, port, trustProxy });
   const db = flags.demo ? ':memory:' : dbPath(flags);
   const hub = new Hub({ file: db });
   if (flags.demo) {
@@ -444,6 +454,114 @@ ${dim(`
   process.on('SIGTERM', stop);
 }
 
+// Many workspaces, one process: each workspace is its own database, reached by subdomain or /w/<name>/.
+async function serveWorkspaces(flags, { host, port, trustProxy }) {
+  const { Workspaces } = await import('../src/workspaces.js');
+  const { createServer } = await import('../src/server.js');
+  const dir = workspacesDir(flags);
+  const spaces = new Workspaces({ dir });
+  const baseDomain = String(flags['base-domain'] || process.env.TRELLIS_BASE_DOMAIN || '').toLowerCase().replace(/^\.+|\.+$/g, '');
+  const server = createServer(spaces, { trustProxy, baseDomain });
+  server.listen(port, host, () => {
+    const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
+    const names = spaces.list();
+    console.log(`${green('●')} ${bold('Trellis')} is serving workspaces at ${bold(url)}  ${dim(`(${dir})`)}
+  Auth: ${green('locked')}: every workspace has its own tokens${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}
+  Workspaces: ${names.length ? names.join(', ') : dim('none yet')}
+${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w/<workspace>/
+  Add one:   node ${JSON.stringify(BIN)} workspace create <name>
+  Then:      node ${JSON.stringify(BIN)} token create <you> --role human --workspace <name>`)}`);
+  });
+  const stop = () => { server.close(); spaces.close(); process.exit(0); };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+}
+
+async function workspace(pos, flags) {
+  const { Workspaces } = await import('../src/workspaces.js');
+  const spaces = new Workspaces({ dir: workspacesDir(flags) });
+  const [sub, name] = pos;
+  try {
+    if (sub === 'create') {
+      const s = spaces.create(need(name, '<name>'));
+      return console.log(`${green('Created')} workspace ${bold(s)} (${spaces.file(s)}).
+${dim(`  Give someone a login: trellis token create <name> --role human --workspace ${s}`)}`);
+    }
+    if (sub === 'list') {
+      const names = spaces.list();
+      return console.log(names.length ? names.join('\n') : dim(`No workspaces in ${spaces.dir}. Add one: trellis workspace create <name>`));
+    }
+    if (sub === 'remove') {
+      spaces.remove(need(name, '<name>'));
+      return console.log(`${green('Removed')} workspace ${bold(name)} and its database. A running hub stops serving it at once.`);
+    }
+  } catch (e) {
+    throw e.hint || e.status ? new HubError(e.message, { hint: e.hint }) : e;
+  }
+  throw new HubError('usage: trellis workspace create <name> | list | remove <name>');
+}
+
+// People (the humans, each with a role) are managed on the hub host too, like tokens.
+async function person(pos, flags) {
+  const { openDb } = await import('../src/db.js');
+  const { Auth, PERSON_ROLES } = await import('../src/auth.js');
+  const auth = new Auth(openDb(dbPath(flags)));
+  const [sub, handle, role] = pos;
+  try {
+    if (sub === 'add') {
+      const p = auth.addPerson(need(handle, '<handle>'), flags.role || 'member', { name: flags.name, email: flags.email });
+      return console.log(`${green('Added')} @${p.handle} as ${p.role}. Give them a login: trellis token create <token-name> --role human --person ${p.handle}`);
+    }
+    if (sub === 'list') {
+      const rows = auth.listPeople();
+      if (!rows.length) return console.log(dim('No people yet. Human tokens create one each; or: trellis person add <handle> --role owner'));
+      for (const r of rows) console.log(`@${r.handle.padEnd(20)}${r.role.padEnd(9)}${r.email}`);
+      return;
+    }
+    if (sub === 'remove') {
+      const r = auth.removePerson(need(handle, '<handle>'));
+      return console.log(`${green('Removed')} @${r.handle}; ${r.revoked} token(s) they held or minted are revoked. Runner tokens are untouched.`);
+    }
+    if (sub === 'set-role') {
+      const p = auth.setRole(need(handle, '<handle>'), need(role ?? flags.role, `<${PERSON_ROLES.join('|')}>`));
+      return console.log(`${green('Updated')} @${p.handle} is now ${p.role}.`);
+    }
+  } catch (e) {
+    throw e instanceof HubError ? e : new HubError(e.message, { hint: 'See: trellis person list' });
+  }
+  throw new HubError(`usage: trellis person add <handle> --role ${PERSON_ROLES.join('|')} [--email e] | list | set-role <handle> <role>`);
+}
+
+// Invites are made on the hub host too; the link is printed once (only its hash is kept).
+async function invite(pos, flags) {
+  const { openDb } = await import('../src/db.js');
+  const { Auth, PERSON_ROLES } = await import('../src/auth.js');
+  const auth = new Auth(openDb(dbPath(flags)));
+  const [sub, id] = pos;
+  try {
+    if (sub === 'create') {
+      const inv = auth.createInvite(flags.role || 'member', { email: flags.email, by: flags.by ? `@${String(flags.by).replace(/^@/, '')}` : '' });
+      const hub = String(flags['public-url'] || process.env.TRELLIS_PUBLIC_URL || resolveSettings(flags).url).replace(/\/+$/, '');
+      const ws = flags.workspace && !flags['public-url'] ? `/w/${String(flags.workspace).toLowerCase()}` : '';
+      console.log(`${green('Invite')} ${bold(inv.id)} for a ${inv.role}${flags.email ? ` (${flags.email})` : ''}, valid 7 days, single use. Send this link; it is shown only once:
+
+  ${bold(`${hub}${ws}/invite.html#${inv.token}`)}
+`);
+      return;
+    }
+    if (sub === 'list') {
+      const rows = auth.listInvites();
+      if (!rows.length) return console.log(dim('No invites. Make one: trellis invite create --role member'));
+      for (const r of rows) console.log(`${String(r.id).padEnd(4)}${r.role.padEnd(9)}${(r.email || '—').padEnd(28)}${r.state}${r.used_by ? ` by @${r.used_by}` : ''}`);
+      return;
+    }
+    if (sub === 'revoke') { auth.revokeInvite(need(id, '<id>')); return console.log(`${green('Revoked')} invite ${id}.`); }
+  } catch (e) {
+    throw e instanceof HubError ? e : new HubError(e.message, { hint: 'See: trellis invite list' });
+  }
+  throw new HubError(`usage: trellis invite create --role ${PERSON_ROLES.join('|')} [--email e] [--by <owner>] [--public-url u] | list | revoke <id>`);
+}
+
 // Token management runs on the hub host, straight against the database file.
 async function token(pos, flags) {
   const { openDb } = await import('../src/db.js');
@@ -456,7 +574,11 @@ async function token(pos, flags) {
     const { slugify } = await import('../src/core.js');
     const projects = (refs(flags.project === true ? '' : flags.project) ?? []).map(slugify).filter(Boolean);
     let plain;
-    try { plain = auth.createToken(need(name, '<name>'), role, projects); } catch (e) { throw new HubError(e.message, { hint: projects.length ? 'Leave out --project for a human token.' : 'See: trellis token list' }); }
+    try {
+      plain = auth.createToken(need(name, '<name>'), role, {
+        person: flags.person, mintedBy: flags['minted-by'], runner: flags.runner === true ? name : flags.runner, powers: flags.powers, projects,
+      });
+    } catch (e) { throw new HubError(e.message, { hint: projects.length ? 'Leave out --project for a human token.' : 'See: trellis token list, trellis person list' }); }
     console.log(`${green('Created')} ${role} token ${bold(name)}${projects.length ? ` for ${projects.join(', ')}` : ''}. It is shown only this once:
 
   ${bold(plain)}
@@ -473,10 +595,12 @@ async function token(pos, flags) {
     if (!rows.length) return console.log(dim(`No tokens in ${db}. Create one: trellis token create <name> --role human`));
     const when = (t) => (t ? new Date(t).toISOString().slice(0, 16).replace('T', ' ') : '—');
     const w = Math.max(4, ...rows.map((r) => r.name.length));
-    console.log(dim(`${'id'.padEnd(4)}${'name'.padEnd(w + 2)}${'role'.padEnd(7)}${'prefix'.padEnd(11)}${'created'.padEnd(18)}${'last used'.padEnd(18)}${'status'.padEnd(9)}projects`));
-    for (const r of rows) {
-      const scope = r.role === 'human' ? '' : r.projects ? r.projects.split(',').join(', ') : 'all';
-      console.log(`${String(r.id).padEnd(4)}${r.name.padEnd(w + 2)}${r.role.padEnd(7)}${(r.prefix + '…').padEnd(11)}${when(r.created_at).padEnd(18)}${when(r.last_used_at).padEnd(18)}${(r.revoked_at ? amber('revoked') : green('active')) + ' '.repeat(r.revoked_at ? 2 : 3)}${scope}`);
+    const scopes = rows.map((r) => (r.role === 'human' ? '' : r.projects ? r.projects.split(',').join(', ') : 'all'));
+    const sw = Math.max(8, ...scopes.map((x) => x.length)) + 2;
+    console.log(dim(`${'id'.padEnd(4)}${'name'.padEnd(w + 2)}${'role'.padEnd(7)}${'prefix'.padEnd(11)}${'created'.padEnd(18)}${'last used'.padEnd(18)}${'status'.padEnd(9)}${'projects'.padEnd(sw)}who · powers`));
+    for (const [k, r] of rows.entries()) {
+      const who = r.person ? `@${r.person}` : r.runner ? `runner ${r.runner}` : r.minted_by ? `minted by @${r.minted_by}` : '—';
+      console.log(`${String(r.id).padEnd(4)}${r.name.padEnd(w + 2)}${r.role.padEnd(7)}${(r.prefix + '…').padEnd(11)}${when(r.created_at).padEnd(18)}${when(r.last_used_at).padEnd(18)}${(r.revoked_at ? amber('revoked') : green('active')) + ' '.repeat(r.revoked_at ? 2 : 3)}${scopes[k].padEnd(sw)}${who}${r.powers ? ` · ${r.powers.join(',')}` : ''}`);
     }
     return;
   }
@@ -498,6 +622,21 @@ ${bold('Human')}
                                          create a token (shown once); run on the hub host.
                                          --project limits an agent token to those projects
   token list | token revoke <name|id>    see or revoke tokens (revoking logs out sessions)
+                                         human tokens act as a person: --person <handle>
+                                         (default: one named like the token, created as owner)
+  person add <handle> --role owner|steward|member|viewer [--email e]
+  person list | person set-role <handle> <role> | person remove <handle>   (revokes tokens they minted)
+  invite create --role steward [--email e] [--public-url u] | invite list | invite revoke <id>
+                                         a single-use, 7-day link that adds a person with that role
+  token create <name> [--powers shape,build,review] [--minted-by <handle> | --runner [name]]
+                                         agent tokens: what they may do, and who answers for them
+                                         owners do everything; stewards steer, decide, answer and
+                                         accept; members comment and propose; viewers read
+                                         --workspace <name>: that workspace's tokens
+  serve --workspaces [--data-dir d] [--base-domain example.com]
+                                         one process, many workspaces (one database each),
+                                         at <name>.<base-domain> or /w/<name>/. Login always required.
+  workspace create|remove <name> | list  manage workspaces on the hub host
   status [--all]                         the 30-second view
 
 ${bold('Agents')}  (every command takes --as <name>, --project, --url)
@@ -511,7 +650,7 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   handoff <item> <headline>              release with where you left off
   propose <title> [--acceptance] [--priority now|soon|later] [--parent] [--depends-on "#1,#2"]
   refine <item> [--title] [--acceptance] [--priority] [--depends-on]
-  review <item> <accept|reject> <headline>
+  review <item> <accept|reject> <headline> [--attempt n|agent]   (raced items: which attempt to keep)
   comment [<item>] <headline>
   ack <steer-id> [response]
   look [<item>] [--stage s]
@@ -553,6 +692,9 @@ async function main() {
   }
   if (cmd === 'status') return status(flags);
   if (cmd === 'token') return token(pos, flags);
+  if (cmd === 'workspace') return workspace(pos, flags);
+  if (cmd === 'person') return person(pos, flags);
+  if (cmd === 'invite') return invite(pos, flags);
   if (cmd === 'guide') {
     const s = resolveSettings(flags);
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));

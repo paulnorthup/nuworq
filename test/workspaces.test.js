@@ -1,0 +1,187 @@
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { mkdtempSync, existsSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { Workspaces } from '../src/workspaces.js';
+import { Auth } from '../src/auth.js';
+import { createServer } from '../src/server.js';
+import { LEASE_MS, MIN } from '../src/core.js';
+
+const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
+const BASE = 'trellis.test';
+
+function request(port, method, path, { headers = {}, body } = {}) {
+  const data = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method, path, headers: { ...(data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {}), ...headers } }, (res) => {
+      let text = '';
+      res.on('data', (c) => (text += c));
+      res.on('end', () => {
+        let json;
+        try { json = JSON.parse(text); } catch {}
+        resolve({ status: res.statusCode, headers: res.headers, text, json });
+      });
+    });
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+// Read an SSE stream for a while; resolve with everything received.
+function listen(port, path, headers, ms) {
+  return new Promise((resolve, reject) => {
+    let text = '';
+    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path, headers }, (res) => {
+      res.on('data', (c) => (text += c));
+      setTimeout(() => { req.destroy(); resolve({ status: res.statusCode, text }); }, ms);
+    });
+    req.on('error', (e) => (e.code === 'ECONNRESET' ? resolve({ text }) : reject(e)));
+    req.end();
+  });
+}
+
+const bearer = (t) => ({ authorization: `Bearer ${t}` });
+const at = (slug) => ({ host: `${slug}.${BASE}` });
+
+describe('the workspace registry', () => {
+  test('create makes one file, list shows it, remove deletes it (and its WAL files)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trellis-ws-'));
+    const spaces = new Workspaces({ dir });
+    spaces.create('acme');
+    assert.deepEqual(readdirSync(dir), ['acme.db']);
+    assert.deepEqual(spaces.list(), ['acme']);
+    spaces.get('acme').tx(() => spaces.get('acme').project('p', { create: true }));
+    assert.ok(readdirSync(dir).length > 1, 'an open hub has WAL files');
+    spaces.remove('acme');
+    assert.deepEqual(readdirSync(dir), []);
+    assert.equal(spaces.get('acme'), null);
+    assert.throws(() => spaces.create('Bad Name!'), /not a workspace name/);
+    assert.throws(() => spaces.create('www'), /reserved/);
+    spaces.create('acme');
+    assert.throws(() => spaces.create('acme'), /already exists/);
+  });
+});
+
+describe('one server, two workspaces', () => {
+  let ctx;
+  before(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trellis-ws-'));
+    const clock = { t: Date.UTC(2026, 9, 1, 9) };
+    const spaces = new Workspaces({ dir, clock: () => clock.t });
+    const tokens = {};
+    for (const s of ['acme', 'globex']) {
+      spaces.create(s);
+      const auth = new Auth(spaces.get(s).db);
+      tokens[s] = { human: auth.createToken('boss', 'human'), agent: auth.createToken('bot', 'agent') };
+    }
+    const server = createServer(spaces, { baseDomain: BASE, sweepMs: 40 });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    ctx = { spaces, server, port: server.address().port, tokens, clock, dir };
+  });
+  after(() => { ctx.server.close(); ctx.server.closeAllConnections(); ctx.spaces.close(); });
+
+  const call = (method, path, opts) => request(ctx.port, method, path, opts);
+
+  test('a subdomain and a /w/<name>/ prefix both reach the workspace; unknown names get a 404 with a hint', async () => {
+    const a = ctx.tokens.acme;
+    const sub = await call('POST', '/api/p/rockets/agent/checkin', { headers: { ...at('acme'), ...bearer(a.agent), 'x-trellis-agent': 'bot' }, body: {} });
+    assert.equal(sub.status, 200, sub.text);
+    const viaPath = await call('GET', '/w/acme/api/projects', { headers: bearer(a.human) });
+    assert.deepEqual(viaPath.json.map((p) => p.slug), ['rockets']);
+    const none = await call('GET', '/api/projects', { headers: at('initech') });
+    assert.equal(none.status, 404);
+    assert.match(none.json.hint, /trellis workspace create/);
+    const bare = await call('GET', '/api/projects');
+    assert.equal(bare.status, 404);
+    assert.match(bare.json.hint, /\/w\/<workspace>/);
+    assert.equal((await call('GET', '/api/health')).status, 200);
+    const redirect = await call('GET', '/w/acme');
+    assert.deepEqual([redirect.status, redirect.headers.location], [308, '/w/acme/']);
+    const page = await call('GET', '/w/acme/');
+    assert.match(page.text, /src="app.js"/, 'the UI loads its assets relative to the workspace');
+    const info = await call('GET', '/w/acme/api/info', { headers: bearer(a.human) });
+    assert.match(info.json.url, /\/w\/acme$/);
+  });
+
+  test("one workspace never sees another's projects, items, events or route", async () => {
+    const a = ctx.tokens.acme, g = ctx.tokens.globex;
+    await call('POST', '/api/p/rockets/human/create', { headers: { ...at('acme'), ...bearer(a.human) }, body: { title: 'Secret acme plan', acceptance: 'x' } });
+    const gp = await call('GET', '/api/projects', { headers: { ...at('globex'), ...bearer(g.human) } });
+    assert.deepEqual(gp.json, []);
+    const gv = await call('GET', '/api/p/rockets/view', { headers: { ...at('globex'), ...bearer(g.human) } });
+    assert.equal(gv.status, 404);
+    const route = await call('GET', '/api/route', { headers: { ...at('globex'), ...bearer(g.agent) } });
+    assert.deepEqual(route.json, []);
+    const aroute = await call('GET', '/api/route', { headers: { ...at('acme'), ...bearer(a.agent) } });
+    assert.equal(aroute.json[0].title, 'Secret acme plan');
+    assert.equal(ctx.spaces.get('globex').q('SELECT COUNT(*) AS n FROM events').get().n, 0);
+  });
+
+  test('tokens and sessions from one workspace get 401 on the other, by subdomain and by path', async () => {
+    const a = ctx.tokens.acme;
+    for (const t of [a.human, a.agent]) {
+      assert.equal((await call('GET', '/api/route', { headers: { ...at('globex'), ...bearer(t) } })).status, 401);
+      assert.equal((await call('GET', '/w/globex/api/route', { headers: bearer(t) })).status, 401);
+    }
+    const login = await call('POST', '/w/acme/api/login', { body: { token: a.human } });
+    assert.equal(login.status, 200);
+    const cookie = login.headers['set-cookie'][0];
+    assert.match(cookie, /Path=\/w\/acme\//, 'the session cookie is scoped to its workspace path');
+    const sid = cookie.split(';')[0];
+    assert.equal((await call('GET', '/w/acme/api/projects', { headers: { cookie: sid } })).status, 200);
+    assert.equal((await call('GET', '/w/globex/api/projects', { headers: { cookie: sid } })).status, 401);
+    assert.equal((await call('GET', '/api/projects', { headers: { ...at('globex'), cookie: sid } })).status, 401);
+  });
+
+  test("a workspace's live stream carries only its own changes", async () => {
+    const a = ctx.tokens.acme, g = ctx.tokens.globex;
+    const gStream = listen(ctx.port, '/api/stream', { ...at('globex'), ...bearer(g.human) }, 250);
+    const aStream = listen(ctx.port, '/api/stream', { ...at('acme'), ...bearer(a.human) }, 250);
+    await new Promise((r) => setTimeout(r, 50));
+    await call('POST', '/api/p/rockets/human/comment', { headers: { ...at('acme'), ...bearer(a.human) }, body: { body: 'hello' } });
+    const [gs, as] = await Promise.all([gStream, aStream]);
+    assert.match(as.text, /"project":"rockets"/);
+    assert.doesNotMatch(gs.text, /data:/);
+  });
+
+  test('expired leases are swept in every open workspace', async () => {
+    const g = ctx.tokens.globex;
+    const h = { ...at('globex'), ...bearer(g.agent), 'x-trellis-agent': 'bot' };
+    await call('POST', '/api/p/mines/agent/checkin', { headers: h, body: {} });
+    ctx.spaces.get('globex').humanOp('mines', 'create', { title: 'Dig', acceptance: 'x' });
+    const next = await call('POST', '/api/p/mines/agent/next', { headers: h, body: {} });
+    assert.equal(next.json.item, '#1');
+    ctx.clock.t += LEASE_MS + MIN;
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(ctx.spaces.get('globex').q('SELECT stage FROM items WHERE seq = 1').get().stage, 'ready');
+  });
+
+  test('a removed workspace stops being served at once', async () => {
+    ctx.spaces.create('tempco');
+    const t = new Auth(ctx.spaces.get('tempco').db).createToken('boss', 'human');
+    assert.equal((await call('GET', '/w/tempco/api/projects', { headers: bearer(t) })).status, 200);
+    ctx.spaces.remove('tempco');
+    assert.equal((await call('GET', '/w/tempco/api/projects', { headers: bearer(t) })).status, 404);
+    assert.ok(!existsSync(join(ctx.dir, 'tempco.db')));
+  });
+});
+
+describe('the CLI manages workspaces on the host', () => {
+  test('workspace create, list, token --workspace, remove', async () => {
+    const data = mkdtempSync(join(tmpdir(), 'trellis-ws-cli-'));
+    const run = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--data-dir', data], { env: { ...process.env, HOME: data, NO_COLOR: '1' } });
+    assert.match((await run('workspace', 'create', 'acme')).stdout, /Created workspace/);
+    assert.ok(existsSync(join(data, 'workspaces', 'acme.db')));
+    assert.equal((await run('workspace', 'list')).stdout.trim(), 'acme');
+    assert.match((await run('token', 'create', 'boss', '--role', 'human', '--workspace', 'acme')).stdout, /trl_/);
+    await run('workspace', 'remove', 'acme');
+    assert.deepEqual(readdirSync(join(data, 'workspaces')), []);
+    await assert.rejects(run('token', 'list', '--workspace', 'acme'), /no workspace "acme"/);
+  });
+});

@@ -104,7 +104,7 @@ describe('workers on a hub that requires login', () => {
     hub.humanOp('lock', 'settings', { path: dir });
     const server = createServer(hub, { auth: 'required' });
     const human = server.auth.createToken('me', 'human');
-    const agent = server.auth.createToken('box', 'agent', ['lock']);
+    const agent = server.auth.createToken('box', 'agent', { projects: ['lock'] });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TRELLIS_TOKEN: human, TRELLIS_AGENT_TOKEN: '' };

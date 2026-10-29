@@ -2,10 +2,11 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN } from './core.js';
 import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
+import { Workspaces } from './workspaces.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -23,17 +24,32 @@ const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/age
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
-export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
-  const required = auth === 'required';
-  const authz = new Auth(hub.db);
+// target: one Hub (today's single hub), or a Workspaces registry: then each request is resolved to a
+// workspace by subdomain of baseDomain or a /w/<slug>/ path prefix, and login is always required.
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000 } = {}) {
+  const spaces = target instanceof Workspaces ? target : null;
+  const required = spaces ? true : auth === 'required';
   const failures = new Map(); // ip → [timestamps of failed logins]
-  const clients = new Set();
-  hub.on('change', (e) => {
-    const msg = `data: ${JSON.stringify(e)}\n\n`;
-    for (const res of clients) res.write(msg);
-  });
-  const sweeper = setInterval(() => { try { hub.sweep(); } catch (e) { console.error('sweep failed', e); } }, 15_000);
-  const keepalive = setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 25_000);
+  // Per hub: its tokens and sessions, and the browsers streaming its changes. Nothing is shared across hubs.
+  const scopes = new Map();
+  const scopeOf = (hub) => {
+    let s = scopes.get(hub);
+    if (!s) {
+      s = { authz: new Auth(hub.db), clients: new Set() };
+      hub.on('change', (e) => {
+        const msg = `data: ${JSON.stringify(e)}\n\n`;
+        for (const res of s.clients) res.write(msg);
+      });
+      hub.once('closed', () => { for (const res of s.clients) res.end(); scopes.delete(hub); });
+      scopes.set(hub, s);
+    }
+    return s;
+  };
+  const hubs = () => (spaces ? spaces.hubs() : [target]);
+  const sweeper = setInterval(() => {
+    for (const hub of hubs()) { try { hub.sweep(); } catch (e) { console.error('sweep failed', e); } }
+  }, sweepMs);
+  const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
 
   const first = (v) => String(v ?? '').split(',')[0].trim();
   const clientIp = (req) => (trustProxy && first(req.headers['x-forwarded-for'])) || req.socket.remoteAddress || '?';
@@ -63,7 +79,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
     req.on('error', () => {});
     res.on('error', () => {});
     const url = new URL(req.url, 'http://local');
-    const path = url.pathname;
+    let path = url.pathname;
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
     const send = (status, body, type = 'application/json; charset=utf-8') => {
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -71,6 +87,27 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
+      // Which hub: the only one, or the workspace this address names.
+      let hub = target, base = '';
+      if (spaces) {
+        const host = hostname(hostOf(req));
+        const sub = baseDomain && host.endsWith(`.${baseDomain}`) ? host.slice(0, -baseDomain.length - 1) : null;
+        const pre = sub == null ? path.match(/^\/w\/([^/]+)(\/.*)?$/) : null;
+        const slug = sub ?? (pre ? decodeURIComponent(pre[1]) : null);
+        if (slug == null) {
+          if (path === '/api/health') return send(200, { ok: true, name: 'trellis', workspaces: true });
+          return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
+        }
+        hub = spaces.get(slug);
+        if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: trellis workspace create <name>.');
+        if (pre) {
+          base = `/w/${pre[1]}`;
+          path = pre[2] ?? '';
+          if (!path) { res.writeHead(308, { location: `${base}/` }); return res.end(); }
+        }
+      }
+      const { authz, clients } = scopeOf(hub);
+      const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
 
       // Without login, only answer to loopback names: blocks DNS-rebinding from web pages you visit.
@@ -94,8 +131,27 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         }
         failures.delete(ip);
         const sid = authz.createSession(t.id);
-        res.setHeader('set-cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
+        res.setHeader('set-cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
         return send(200, { ok: true, name: t.name });
+      }
+      // An invite link: peek at what it offers, or accept it with a handle (creates the person, signs them in).
+      if (req.method === 'POST' && (path === '/api/invite/peek' || path === '/api/invite/accept')) {
+        if (!required) return deny(400, 'this hub has no logins', 'Invites are for hubs that require login (--auth or --workspaces).');
+        const ip = clientIp(req);
+        if (recentFailures(ip).length >= LOGIN_MAX_FAILS) return deny(429, 'too many failed attempts', 'Wait 10 minutes, then try again.');
+        const b = await body(req);
+        const peek = authz.peekInvite(b.token);
+        if (!peek.ok) { recentFailures(ip).push(Date.now()); return deny(410, peek.error, 'Ask an owner of this workspace for a new invite.'); }
+        if (path === '/api/invite/peek') return send(200, { ok: true, role: peek.invite.role, email: peek.invite.email || undefined, invited_by: peek.invite.created_by || undefined });
+        let r;
+        try { r = authz.acceptInvite(b.token, b.handle); } catch (e) { return deny(400, e.message, 'Pick another handle: lowercase letters, digits, ., _ or -.'); }
+        res.setHeader('set-cookie', `${COOKIE}=${r.sid}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
+        const who = `@${r.person.handle}`;
+        for (const p of hub.projects()) {
+          hub.event(p, { actor: who, type: 'joined', headline: `${who} joined as ${r.person.role}${r.invitedBy ? `, invited by ${r.invitedBy}` : ''}` });
+          hub.changed(p);
+        }
+        return send(200, { ok: true, person: who, role: r.person.role });
       }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
@@ -128,12 +184,41 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         }
       }
 
-      // What a token-bearing agent may reach, and its name for the record.
-      const caller = { scope: who.projects ?? null, token: who.via === 'bearer' ? who.name : null };
+      // What a token-bearing agent may reach, and its token (name for the record; powers, provenance).
+      const caller = { scope: who.projects ?? null, token: who.via === 'bearer' ? who : null };
+      // A person acts as "@handle" with their role; without accounts the one human is "you", an owner.
+      const by = who.person ? `@${who.person.handle}` : HUMAN;
+      const personRole = who.person?.role ?? 'owner';
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
+      if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
+      if (path === '/api/invites' || path === '/api/invites/revoke') {
+        if (personRole !== 'owner') return deny(403, 'only an owner invites people', 'Ask an owner of this workspace.');
+        if (req.method === 'GET' && path === '/api/invites') return send(200, authz.listInvites());
+        if (req.method !== 'POST') return deny(405, 'use GET or POST');
+        const b = await body(req);
+        try {
+          if (path === '/api/invites/revoke') { authz.revokeInvite(b.id); return send(200, { ok: true }); }
+          const inv = authz.createInvite(b.role, { email: b.email, by: by === HUMAN ? '' : by });
+          // The link is shown this once; only its hash is kept.
+          return send(200, { ok: true, id: inv.id, role: inv.role, link: `${origin(req)}${base}/invite.html#${inv.token}`, expires_in: '7 days' });
+        } catch (e) {
+          throw new UserError(e.message);
+        }
+      }
+      if (path === '/api/people' || path === '/api/people/role') {
+        if (req.method === 'GET' && path === '/api/people') return send(200, authz.listPeople());
+        if (req.method !== 'POST') return deny(405, 'use GET or POST');
+        if (personRole !== 'owner') return deny(403, 'only an owner manages people', 'Ask an owner of this workspace.');
+        const b = await body(req);
+        try {
+          return send(200, { ok: true, person: path === '/api/people' ? authz.addPerson(b.handle, b.role, { name: b.name, email: b.email }) : authz.setRole(b.handle, b.role) });
+        } catch (e) {
+          throw new UserError(e.message);
+        }
+      }
       if (req.method === 'POST' && path === '/api/logout') {
         authz.deleteSession(cookieOf(req));
-        res.setHeader('set-cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+        res.setHeader('set-cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=0`);
         return send(200, { ok: true });
       }
       if (req.method === 'GET' && path === '/api/stream') {
@@ -144,10 +229,13 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         return;
       }
       if (req.method === 'GET' && path === '/api/info') {
-        return send(200, { bin: join(WEB, '..', 'bin', 'trellis.js'), url: origin(req), auth: required ? 'required' : 'local' });
+        return send(200, { bin: join(WEB, '..', 'bin', 'trellis.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace });
       }
-      if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub));
+      // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
+      const viewer = who.person ? by : undefined;
+      if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
       if (req.method === 'POST' && path === '/api/projects') {
+        if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't create projects`, 'Ask an owner or steward.');
         const b = await body(req);
         const p = hub.tx(() => hub.project(b.slug || b.name, { create: true, name: b.name }));
         if (b.mission) hub.humanOp(p.slug, 'settings', { mission: b.mission });
@@ -158,20 +246,23 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? ''));
       }
       if (req.method === 'GET' && (path === '/agents.md' || path === '/api/guide')) {
-        return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req), via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
+        return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req) + base, via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
       }
 
       let m;
       if ((m = path.match(/^\/api\/p\/([^/]+)\/view$/)) && req.method === 'GET') {
         hub.sweep();
-        return send(200, view(hub, decodeURIComponent(m[1])));
+        return send(200, view(hub, decodeURIComponent(m[1]), { viewer }));
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/items\/([^/]+)$/)) && req.method === 'GET') {
         return send(200, itemView(hub, decodeURIComponent(m[1]), decodeURIComponent(m[2])));
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/human\/([a-z]+)$/)) && req.method === 'POST') {
         if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404 });
-        return send(200, hub.humanOp(decodeURIComponent(m[1]), m[2], await body(req)));
+        if (!PERSON_CAN[personRole]?.includes(m[2])) return deny(403, `a ${personRole} can't ${m[2]} here`, 'Ask an owner of this workspace for a different role.');
+        const args = await body(req);
+        if (personRole === 'member' && m[2] === 'create') args.stage = 'proposed'; // members propose; stewards decide
+        return send(200, hub.humanOp(decodeURIComponent(m[1]), m[2], args, by));
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);
@@ -186,7 +277,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         delete b.agent;
         return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), ...caller }));
       }
-      if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', { runner: !!url.searchParams.get('runner'), scope: caller.scope }));
+      if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', { runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null }));
       if (req.method === 'GET' && path === '/api/where') {
         const p = hub.projectByPath(url.searchParams.get('root') ?? '', caller.scope);
         return send(200, { project: p?.slug ?? null, path: p?.path ?? null });
@@ -198,7 +289,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
       send(500, { ok: false, error: String(e?.message ?? e) });
     }
   });
-  server.auth = authz;
+  if (!spaces) server.auth = scopeOf(target).authz;
   server.on('close', () => { clearInterval(sweeper); clearInterval(keepalive); });
   return server;
 }

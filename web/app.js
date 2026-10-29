@@ -72,9 +72,10 @@ function toast(msg, err = false) {
 }
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { 'content-type': 'application/json' }, credentials: 'same-origin' });
+  // Relative, so the UI also works under a workspace path prefix (/w/<slug>/).
+  const r = await fetch(path.replace(/^\//, ''), { ...opts, headers: { 'content-type': 'application/json' }, credentials: 'same-origin' });
   if (r.status === 401) {
-    location.href = '/login.html';
+    location.href = 'login.html';
     throw new Error('Not signed in');
   }
   const j = await r.json().catch(() => ({}));
@@ -83,9 +84,10 @@ async function api(path, opts = {}) {
 }
 async function human(action, body = {}, msg) {
   try {
-    await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
+    const r = await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
     if (msg) toast(msg);
     await refresh();
+    return r;
   } catch (e) {
     toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true);
   }
@@ -310,13 +312,24 @@ function card(a) {
   return `<article class="card kind-${a.kind}">
     <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${esc(a.sub)}</span></div>
     <h3>${esc(a.headline)}</h3>
-    ${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
-    ${commits(a.git)}
+    ${a.attempts?.length > 1 ? attemptsGrid(a.item, a.attempts) : `${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
+    ${commits(a.git)}`}
     ${a.warn ? `<div class="warn">⚠ ${esc(a.warn)}</div>` : ''}
     ${a.kind === 'proposal' && a.acceptance && !open ? `<div class="more"><div class="label" style="margin-top:0">Done means</div>${md(a.acceptance)}</div>` : ''}
     ${more}
     ${cardActions(a, hasMore, open, key)}
   </article>`;
+}
+
+// A raced item's submissions side by side, each with its own "Keep this one".
+function attemptsGrid(item, attempts, { keep = true } = {}) {
+  return `<div class="attempts">${attempts.map((s) => `<div class="attempt ${s.stage}">
+      <div class="meta">${who(s.agent, s.model)} <span class="age">${esc(s.model || '')}${s.took ? ` · ${esc(s.took)}` : ''}</span>${s.stage === 'chosen' ? '<span class="tag go">kept</span>' : s.stage === 'not_chosen' ? '<span class="tag">not chosen</span>' : ''}</div>
+      <div class="h">${esc(s.headline)}</div>
+      ${s.branch ? `<div class="touch"><code>${esc(s.branch)}</code>${s.commits?.length ? ` ${s.commits.map((c) => `<code title="${esc(c.subject ?? '')}">${esc(String(c.hash ?? c).slice(0, 7))}</code>`).join(' ')}` : ''}</div>` : ''}
+      ${s.evidence?.length ? `<div class="evidence">${s.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
+      ${keep && s.stage === 'submitted' ? `<button class="btn go small" data-action="keep" data-item="${esc(item)}" data-attempt="${s.n}">Keep this one</button>` : ''}
+    </div>`).join('')}</div>`;
 }
 
 function cardActions(a, hasMore, open, key) {
@@ -340,11 +353,12 @@ function cardActions(a, hasMore, open, key) {
   }
   if (a.kind === 'review') {
     const r = `sb:${a.item}`;
+    const race = a.attempts?.length > 1;
     return `<div class="actions">
-      <button class="btn go" data-action="accept" data-item="${esc(a.item)}">Accept</button>
+      ${race ? '' : `<button class="btn go" data-action="accept" data-item="${esc(a.item)}">Accept</button>`}
       ${S.reveal.has(r)
-        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What's missing? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
-        : `<button class="btn" data-action="reveal" data-key="${r}">Send back…</button>`}
+        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What's missing? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send ${race ? 'all ' : ''}back</button></div>`
+        : `<button class="btn" data-action="reveal" data-key="${r}">Send ${race ? 'all ' : ''}back…</button>`}
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
     </div>`;
   }
@@ -396,7 +410,7 @@ function motion(v) {
   const rows = v.motion.map((m) => `
     <div class="row-item clickable" data-action="open" data-item="${esc(m.item)}">
       <div class="body">
-        <div class="h">${who(m.agent, m.model)} ${refLink(m.item)} <span>${esc(m.title)}</span>${m.shaping ? '<span class="tag shaping">shaping</span>' : ''}${m.priority === 'now' ? '<span class="tag now">now</span>' : ''}${m.attempt > 1 ? `<span class="tag soon">attempt ${m.attempt}</span>` : ''}</div>
+        <div class="h">${who(m.agent, m.model)} ${refLink(m.item)} <span>${esc(m.title)}</span>${m.shaping ? '<span class="tag shaping">shaping</span>' : ''}${m.priority === 'now' ? '<span class="tag now">now</span>' : ''}${m.race ? `<span class="tag soon">race of ${m.race}</span>` : m.attempt > 1 ? `<span class="tag soon">attempt ${m.attempt}</span>` : ''}</div>
         ${z() >= 1 && m.last ? `<div class="last ${m.quiet ? 'quiet' : ''}">${m.last.type === 'claimed' ? 'Just picked it up' : esc(m.last.headline)}</div>` : ''}
         ${z() >= 1 && m.touching?.length ? `<div class="touch">${m.touching.map((t) => `<code>${esc(t)}</code>`).join(' ')}</div>` : ''}
         ${z() >= 1 && m.heads_up ? `<div class="headsup">⚠ ${esc(m.heads_up.split('. ')[0])}</div>` : ''}
@@ -519,7 +533,7 @@ function agents(v) {
   return `<section class="sec"><header><h2>Agents</h2><span class="count">${v.agents.length}</span><span class="hint">first-class participants, each with a track record</span></header>
     <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
       <div class="top">${who(a.name, a.model)}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
-      <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}</div>
+      <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}${a.via ? ` · <span title="Who answers for this agent's token">${esc(a.via)}</span>` : ''}</div>
       ${a.tokens.length ? `<div class="model ${a.tokens.length > 1 ? 'warn' : ''}" title="${a.tokens.length > 1 ? 'More than one token has acted under this name' : 'The token this agent connects with'}">token: ${esc(a.tokens.join(', '))}</div>` : ''}
       <div class="line" title="${esc(a.line)}">${esc(a.line || '—')}</div>
       <div class="stats">
@@ -528,7 +542,7 @@ function agents(v) {
         <div><b>${a.record.stalls}</b><span>stalls</span></div>
         <div><b>${a.record.handoffs}</b><span>handoffs</span></div>
       </div>
-      <div class="model" style="margin-top:6px">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''} · seen ${esc(a.last_seen)} ago</div>
+      <div class="model" style="margin-top:6px">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${esc(a.last_seen)} ago</div>
     </div>`).join('')}</div></section>`;
 }
 
@@ -570,8 +584,10 @@ function renderDrawer() {
     proposed: it.holder
       ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
       : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : it.priority === 'now' ? 'Picked: the next agent shapes it first.' : 'The next free agent can shape it into ready work.'}`,
-    ready: `<b>Ready</b> for any agent · waiting ${esc(it.in_stage)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
-    active: `<b>${who(it.holder)}</b> is on it · ${esc(it.in_stage)} so far · lease ${esc(it.lease_left)} left`,
+    ready: `<b>Ready</b> for ${it.race > 1 ? `${it.race} agents at once (a race)` : 'any agent'} · waiting ${esc(it.in_stage)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
+    active: it.race > 1
+      ? `<b>Race of ${it.race}</b> · ${esc(it.in_stage)} so far · ${it.racers.map((r) => `${who(r.agent, r.model)} ${r.stage === 'active' ? `on it, lease ${esc(r.lease_left)} left` : esc(r.stage)}`).join(' · ') || 'no one yet'}`
+      : `<b>${who(it.holder)}</b> is on it · ${esc(it.in_stage)} so far · lease ${esc(it.lease_left)} left`,
     waiting: `<b>Waiting on you</b> for ${esc(it.in_stage)}: an agent parked it to ask a question.`,
     verifying: `<b>Verifying</b> · ${who(it.implementer)} finished it ${esc(it.in_stage)} ago${it.holder ? ` · ${who(it.holder)} is reviewing` : ''}`,
     done: `<b>Done</b> ${esc(it.in_stage)} ago · built by ${who(it.implementer)}`,
@@ -579,8 +595,9 @@ function renderDrawer() {
   }[it.stage];
 
   const actions = [];
+  const raced = it.submissions?.filter((s) => s.stage === 'submitted').length > 1;
   if (it.stage === 'verifying') {
-    actions.push(`<button class="btn go" data-action="accept" data-item="${it.item}">Accept</button>`);
+    if (!raced) actions.push(`<button class="btn go" data-action="accept" data-item="${it.item}">Accept</button>`);
     actions.push(S.reveal.has('dsb') ? `<div class="inline-form grow"><input data-draft="sb:${it.item}" id="sb:${it.item}" placeholder="What's missing?"><button class="btn you" data-action="sendback" data-item="${it.item}">Send back</button></div>`
       : `<button class="btn" data-action="reveal" data-key="dsb">Send back…</button>`);
   }
@@ -620,6 +637,7 @@ function renderDrawer() {
       <textarea data-draft="ei-summary" id="ei-summary" placeholder="Summary">${esc(it.summary)}</textarea>
       <textarea data-draft="ei-acceptance" id="ei-acceptance" placeholder="Done means…">${esc(it.acceptance)}</textarea>
       <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['ei-priority'] ?? it.priority) === p ? 'on' : ''}" data-action="ei-priority" data-p="${p}">${p}</button>`).join('')}</div>
+      ${it.stage !== 'active' ? `<div class="seg" title="Race: how many agents attempt it at once, each on its own; you keep the best">${[1, 2, 3].map((n) => `<button class="${+(S.drafts['ei-race'] ?? it.race) === n ? 'on' : ''}" data-action="ei-race" data-n="${n}">${n === 1 ? '1 agent' : `race ${n}`}</button>`).join('')}</div>` : ''}
       <span style="flex:1"></span><button class="btn ghost" data-action="edit-item">Cancel</button><button class="btn primary" data-action="save-item" data-item="${it.item}">Save</button></div></div></div>` : '';
 
   const deep = S.deep ? `
@@ -655,7 +673,8 @@ function renderDrawer() {
       <div class="life-steps">${life.map((l) => `<span><b>${esc(l.label)}</b> ${esc(l.time)}${l.court === 'agents' && l.actor ? ` (${esc(l.actor)})` : ''}</span>`).join('<span>→</span>')}</div></div>` : ''}
     ${it.summary ? `<div class="d-sec"><div class="label">Summary</div>${md(it.summary)}</div>` : ''}
     <div class="d-sec"><div class="label">Done means</div>${it.acceptance ? md(it.acceptance) : '<p class="age">No acceptance criteria yet. Agents are asked to write them before submitting.</p>'}</div>
-    ${it.submission && it.stage === 'verifying' ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
+    ${it.submissions?.length ? `<div class="d-sec"><div class="label">The race <span class="count">${it.submissions.length} submitted</span></div>${attemptsGrid(it.item, it.submissions, { keep: it.stage === 'verifying' })}</div>` : ''}
+    ${it.submission && it.stage === 'verifying' && !it.submissions?.length ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
       ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
       ${commits(it.git)}${it.git_warning ? `<div class="warn">⚠ ${esc(it.git_warning)}</div>` : ''}</div>` : ''}
     ${handoff}
@@ -699,7 +718,7 @@ async function connect() {
     <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(`node "${bin}" guide --project ${slug}`)}
     <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through Trellis: run the command above and follow it."</i></p>
 
-    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="/api/tools?format=openai" target="_blank">OpenAI</a> · <a href="/api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="/api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>X-Trellis-Agent: &lt;name&gt;</code>. The agent guide: <a href="/agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
+    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>X-Trellis-Agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
 
@@ -778,6 +797,10 @@ const ACTIONS = {
     return human('answer', { question: Number(q), answer }, 'Overridden: the agent will be steered');
   },
   accept: (el) => human('accept', { item: el.dataset.item }, `Accepted ${el.dataset.item}`),
+  keep: async (el) => {
+    const r = await human('accept', { item: el.dataset.item, attempt: el.dataset.attempt });
+    if (r?.merge) toast(`Kept ${r.kept}'s attempt on ${el.dataset.item}. Now merge ${r.merge}`);
+  },
   sendback: (el) => {
     const k = `sb:${el.dataset.item}`;
     const note = val(k);
@@ -804,13 +827,15 @@ const ACTIONS = {
   },
   'item-steer': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('steer', { item: el.dataset.item, body }, 'Steer attached: whoever works on it must acknowledge'); },
   'item-note': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('comment', { item: el.dataset.item, body }, 'Noted'); },
-  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority'); render({ force: true }); },
+  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race'); render({ force: true }); },
   'ei-priority': (el) => { S.drafts['ei-priority'] = el.dataset.p; render({ force: true }); },
+  'ei-race': (el) => { S.drafts['ei-race'] = el.dataset.n; render({ force: true }); },
   'save-item': async (el) => {
     const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance') };
     if (S.drafts['ei-priority']) args.priority = S.drafts['ei-priority'];
+    if (S.drafts['ei-race']) args.race = Number(S.drafts['ei-race']);
     S.editItem = false;
-    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority');
+    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race');
     await human('update', args, 'Saved');
   },
   dismiss: (el) => human('dismiss', { key: el.dataset.key }),
@@ -819,7 +844,7 @@ const ACTIONS = {
   connect: () => connect(),
   'new-project': () => newProject(),
   'close-modal': () => closeModal(),
-  logout: async () => { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = '/login.html'; },
+  logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },
   'create-project': async () => {
     const name = val('np-name');
     if (!name) return toast('Name it', true);
@@ -874,7 +899,7 @@ $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') clos
 let refreshTimer;
 function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh(), 250); }
 function listen() {
-  const es = new EventSource('/api/stream');
+  const es = new EventSource('api/stream');
   es.onmessage = () => scheduleRefresh();
   es.onerror = () => { es.close(); setTimeout(listen, 3000); };
 }

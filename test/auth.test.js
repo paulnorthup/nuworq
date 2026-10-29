@@ -204,7 +204,7 @@ describe('agent tokens limited to projects', () => {
       ctx.hub.humanOp(slug, 'settings', { path: `/code/${slug}` });
       ctx.hub.humanOp(slug, 'create', { title: `${slug} work`, acceptance: 'x', priority: slug === 'beta' ? 'now' : 'soon' });
     }
-    scoped = ctx.server.auth.createToken('alpha-box', 'agent', ['alpha']);
+    scoped = ctx.server.auth.createToken('alpha-box', 'agent', { projects: ['alpha'] });
     other = ctx.server.auth.createToken('spare-box', 'agent');
   });
   after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
@@ -213,7 +213,7 @@ describe('agent tokens limited to projects', () => {
     const rows = ctx.server.auth.listTokens();
     assert.equal(rows.find((r) => r.name === 'alpha-box').projects, 'alpha');
     assert.equal(rows.find((r) => r.name === 'spare-box').projects, '');
-    assert.throws(() => ctx.server.auth.createToken('h', 'human', ['alpha']), /only agent tokens/);
+    assert.throws(() => ctx.server.auth.createToken('h', 'human', { projects: ['alpha'] }), /only agent tokens/);
   });
 
   test('out-of-scope projects are refused, and never created', async () => {

@@ -103,6 +103,7 @@ export const OPS = [
       acceptance: s('Optional. What done means.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
+      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Optional. For hard items: how many agents may attempt it at once (each on its own; the reviewer keeps the best). 1 is the usual single worker. Only while it is not being worked on.' },
     },
     required: ['item'],
   },
@@ -112,6 +113,7 @@ export const OPS = [
     params: {
       item: ITEM,
       verdict: { type: 'string', enum: ['accept', 'reject'] },
+      attempt: s('Only for a raced item with several submissions: the one to keep, by number or agent name (see race.submissions). The others are recorded as not chosen.'),
       ...LAYERS,
     },
     required: ['item', 'verdict', 'headline'],

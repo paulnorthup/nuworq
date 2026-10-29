@@ -53,6 +53,19 @@ docker compose -f deploy/docker-compose.yml up -d
 - Data lives in the `trellis-data` volume.
 - The port is published on host loopback; edit `ports` for LAN access.
 
+### Many workspaces on one hub
+One process can serve several companies or teams. Each **workspace** has its own SQLite file (`<data-dir>/workspaces/<name>.db`), with its own projects, tokens and sessions. Nothing is shared, and exporting or deleting a workspace is one file.
+```bash
+trellis workspace create acme                            # creates ~/.trellis/workspaces/acme.db
+trellis token create paul --role human --workspace acme  # tokens belong to one workspace
+trellis serve --workspaces --base-domain trellis.example.com --host 127.0.0.1 --auth --trust-proxy
+```
+- **Subdomains**: with `--base-domain trellis.example.com` and wildcard DNS (`*.trellis.example.com`) plus a wildcard certificate at the proxy, `acme.trellis.example.com` is the acme workspace.
+- **No wildcard DNS?** Every workspace is also at `https://<host>/w/<name>/`. Agents use that as their `TRELLIS_URL` (e.g. `https://trellis.example.com/w/acme`), and the session cookie is limited to that path.
+- Login is always required in this mode, even on loopback. An address that names no workspace, or an unknown one, gets a 404.
+- `trellis workspace list`, and `trellis workspace remove <name>` (it deletes the file; a running hub stops serving it at once). `--data-dir` or `TRELLIS_DATA_DIR` moves the folder.
+- Without `--workspaces`, nothing changes: one database, as above.
+
 ### Connecting agents to a remote hub
 Create one agent token per machine or agent, so you can revoke them one at a time:
 ```bash
@@ -80,6 +93,8 @@ trellis token revoke <name|id>                      # also logs out that token's
 - `trellis worker` and `trellis run` are your commands, not an agent's: they read the project list, so give them a human token (`TRELLIS_TOKEN`). The agents they start never get it: with `--run` they need an agent token (`--agent-token` or `TRELLIS_AGENT_TOKEN`, ideally limited with `--project`), and they refuse a human token.
 - These commands work directly on the database file (`--db` or `TRELLIS_DB`; default `~/.trellis/trellis.db`), so run them on the hub host, as the user that owns the file.
 - Tokens look like `trl_` followed by 43 random characters (256 bits). Only a SHA-256 hash and an 8-character prefix are stored.
+- Every human token belongs to a **person**, who acts on the record as `@handle` with a role: *owner* (everything, including people and settings), *steward* (steer, decide, answer, accept, send back, edit work), *member* (comment and propose) or *viewer* (read only). `token create paul --role human` makes `@paul` an owner if they don't exist yet. Otherwise: `trellis person add bea --role steward`, then `trellis token create bea-laptop --role human --person bea`. See also `person list` and `person set-role <handle> <role>`. Human tokens from before people existed become owners. Local loopback mode has no people: the one human is "you".
+- **Invites** add people without handing out tokens: `trellis invite create --role steward [--email bea@example.com] --public-url https://trellis.example.com` (or POST /api/invites as an owner) prints a single-use link, valid for 7 days. Opening it asks for a handle, creates the person with that role and signs them in. Only a hash of the link is stored. `invite list` and `invite revoke <id>` manage open invites. An invite's email is shown but not yet enforced; that comes with GitHub/Google sign-in.
 - Browser logins exchange a human token for an `HttpOnly; SameSite=Strict` session cookie. It is `Secure` over HTTPS and lasts 30 days.
 
 ### Backups
