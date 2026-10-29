@@ -15,6 +15,7 @@ const USAGE = {
     model: s('The model id.'),
   },
 };
+const REPO = s('Optional. The repository the work lands in, when the project has several, e.g. "github.com/acme/api". Default: the project\'s first.');
 const LAYERS = {
   headline: s('One line, ≤100 characters, outcome first. What a busy person needs in three seconds.'),
   summary: s('Optional. The 5-minute version: a few short lines on what, why, and what is next.'),
@@ -106,6 +107,7 @@ export const OPS = [
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Items that must be done first.' },
       needs: NEEDS,
       size: SIZE,
+      repo: REPO,
     },
     required: ['title'],
   },
@@ -122,6 +124,7 @@ export const OPS = [
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
       needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
       size: SIZE,
+      repo: REPO,
       race: { type: 'integer', minimum: 1, maximum: 4, description: 'Optional. For hard items: how many agents may attempt it at once (each on its own; the reviewer keeps the best). 1 is the usual single worker. Only while it is not being worked on.' },
     },
     required: ['item'],

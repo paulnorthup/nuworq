@@ -84,11 +84,11 @@ const AGENT_CMDS = {
   handoff: (p, f) => ({ item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f) }),
   propose: (p, f) => ({
     title: need(rest(p, 0), '<title>'), ...layers(f), acceptance: text(f.acceptance),
-    priority: f.priority, parent: f.parent, depends_on: refs(f['depends-on']), needs: refs(f.needs), size: f.size,
+    priority: f.priority, parent: f.parent, depends_on: refs(f['depends-on']), needs: refs(f.needs), size: f.size, repo: f.repo,
   }),
   refine: (p, f) => ({
     item: need(p[0], '<item>'), title: text(f.title), ...layers(f), acceptance: text(f.acceptance),
-    priority: f.priority, depends_on: refs(f['depends-on']), needs: f.needs === undefined ? undefined : refs(f.needs) ?? [], size: f.size,
+    priority: f.priority, depends_on: refs(f['depends-on']), needs: f.needs === undefined ? undefined : refs(f.needs) ?? [], size: f.size, repo: f.repo,
   }),
   review: (p, f) => ({ item: need(p[0], '<item>'), verdict: need(p[1], '<accept|reject>'), headline: need(rest(p, 2), '<headline>'), attempt: f.attempt, ...layers(f) }),
   comment: (p, f) => {
@@ -849,8 +849,8 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   submit <item> <headline> [--evidence "label|url"]...
   handoff <item> <headline>              release with where you left off
   propose <title> [--acceptance] [--priority now|soon|later] [--parent] [--depends-on "#1,#2"]
-          [--needs "docker,linux-vm"] [--size small|large]
-  refine <item> [--title] [--acceptance] [--priority] [--depends-on] [--needs] [--size]
+          [--needs "docker,linux-vm"] [--size small|large] [--repo github.com/acme/api]
+  refine <item> [--title] [--acceptance] [--priority] [--depends-on] [--needs] [--size] [--repo]
   review <item> <accept|reject> <headline> [--attempt n|agent]   (raced items: which attempt to keep)
   comment [<item>] <headline>
   ack <steer-id> [response]

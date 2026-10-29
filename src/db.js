@@ -259,6 +259,7 @@ export function openDb(file) {
     "ALTER TABLE items ADD COLUMN needs TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE items ADD COLUMN size TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE items ADD COLUMN branch TEXT NOT NULL DEFAULT ''", // the git branch the item is built on, landed from
+    "ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''", // the repository it lands in (a normalized remote); '': the project's first
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

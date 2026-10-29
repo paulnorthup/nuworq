@@ -2,7 +2,7 @@
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
 import { openDb } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, originOf } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 
@@ -182,7 +182,7 @@ export class Hub extends EventEmitter {
     this.now = clock;
     this.repos = repos;
     this._stmts = new Map();
-    this._unreachable = new Set(); // projects whose repository the hub has said it can't reach
+    this._unreachable = new Set(); // repositories the hub has said it can't reach
   }
 
   q(sql) {
@@ -258,31 +258,60 @@ export class Hub extends EventEmitter {
     return this.q('SELECT remote FROM project_remotes WHERE project_id = ? ORDER BY at').all(p.id).map((r) => r.remote);
   }
 
-  // Whether work lands through the project's remote (GitHub) instead of a checkout on this machine:
-  // the hub has no checkout of the project here, but knows its repository.
-  remoteMode(p) {
-    return !isRepo(p.path) && this.remotesOf(p).length > 0;
+  // The repository an item lands in: its own, else the project's first. '' when the project has none.
+  repoOf(p, item = null) {
+    return item?.repo || this.remotesOf(p)[0] || '';
   }
 
-  // Where the hub asks git about a project: its checkout on this machine (local), else its own
-  // mirror of the project's remote, fetched first (remote). fresh: fetch now, not just every ~10s.
-  // null when git can't say: no repository, or the remote can't be reached or read.
-  repoFor(p, { fresh = false } = {}) {
-    if (isRepo(p.path)) return { path: p.path, mode: 'local' };
-    const remote = this.remotesOf(p)[0];
+  // Whether the project's checkout on this machine is where an item's work lands: always for an item
+  // that names no repository (as before projects had several); otherwise only when the checkout's
+  // origin is that repository (or, with no origin, when it is the project's first).
+  localFor(p, item = null) {
+    if (!isRepo(p.path)) return false;
+    if (!item?.repo) return true;
+    const origin = originOf(p.path);
+    return origin ? normRemote(origin) === item.repo : item.repo === this.remotesOf(p)[0];
+  }
+
+  // Whether work lands through the item's remote (GitHub) instead of a checkout on this machine:
+  // the hub has no checkout of it here, but knows the repository.
+  remoteMode(p, item = null) {
+    return !this.localFor(p, item) && !!this.repoOf(p, item);
+  }
+
+  // A repository for an item: one of the project's remotes, in its normalized form. '' for none.
+  checkRepo(p, repo) {
+    const r = normRemote(repo);
+    if (!r) return '';
+    const all = this.remotesOf(p);
+    if (!all.includes(r)) {
+      throw new UserError(`${r} isn't one of ${p.name}'s repositories`, {
+        hint: all.length ? `Use one of: ${all.join(', ')}. Or leave repo out to use ${all[0]}.` : `${p.name} has no repositories linked yet; leave repo out, or link one first (it is learned from an agent's checkin in a clone).`,
+      });
+    }
+    return r;
+  }
+
+  // Where the hub asks git about an item's work (or the project's, with no item): the project's checkout
+  // on this machine (local), else its own mirror of the item's remote, fetched first (remote).
+  // fresh: fetch now, not just every ~10s. null when git can't say: no repository, or the remote
+  // can't be reached or read.
+  repoFor(p, item = null, { fresh = false } = {}) {
+    if (this.localFor(p, item)) return { path: p.path, mode: 'local' };
+    const remote = this.repoOf(p, item);
     if (!remote || !this.repos) return null;
     const m = mirror(this.repos, remote, { fresh });
     if (!m.error) return { path: m.path, mode: 'remote' };
-    if (!this._unreachable.has(p.id)) {
-      this._unreachable.add(p.id);
+    if (!this._unreachable.has(remote)) {
+      this._unreachable.add(remote);
       console.error(`nuworq: can't read ${remote} for ${p.name} (${m.error}). Until it can, accepted work there waits in landing: the hub can't confirm main has it. Check the network and the hub's access to the repository (a read-only deploy key is enough).`);
     }
     return null;
   }
 
   // The branch work lands on, as far as git can say: main, else master; main when it can't.
-  baseFor(p) {
-    const repo = this.repoFor(p);
+  baseFor(p, item = null) {
+    const repo = this.repoFor(p, item);
     return (repo && baseOf(repo.path)) ?? 'main';
   }
 
@@ -609,7 +638,7 @@ export class Hub extends EventEmitter {
     if (item.stage === 'active' && item.branch) {
       const landed = this.q(`SELECT DISTINCT i.seq FROM events e JOIN items i ON i.id = e.item_id
         WHERE e.project_id = ? AND e.type = 'landed' AND e.at > ? AND i.id != ? ORDER BY i.seq`).all(p.id, item.stage_since, item.id);
-      const repo = landed.length ? this.repoFor(p) : null;
+      const repo = landed.length ? this.repoFor(p, item) : null;
       const base = repo ? baseOf(repo.path) : null;
       if (base && branchExists(repo.path, item.branch) && !contains(repo.path, item.branch, base)) {
         const how = repo.mode === 'remote'
@@ -688,7 +717,7 @@ export class Hub extends EventEmitter {
       summary: item.summary || undefined,
       detail: item.detail || undefined,
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
-      repo: this.remotesOf(p)[0] || undefined,
+      repo: this.repoOf(p, item) || undefined,
       branch: item.branch || undefined,
       git: g ? { branch: g.branch, base: g.base, commits: g.commits, missing: g.missing } : undefined,
       git_warning: gitWarning(g) ?? undefined,
@@ -871,7 +900,7 @@ export class Hub extends EventEmitter {
     if (check) {
       delete result[GIT_CHECK];
       // Fetched now: the agent has likely just pushed, and a stale mirror would say it hadn't.
-      const repo = this.repoFor(p, { fresh: true });
+      const repo = this.repoFor(p, this.itemById(check.about), { fresh: true });
       const g = repo ? gitFacts(repo.path, agent, check.claim, check.branch) : null;
       if (g && repo.mode === 'remote' && !g.branch && check.branch) g.unpushed = check.branch;
       if (g) {
@@ -1094,8 +1123,8 @@ export class Hub extends EventEmitter {
   // Where accepted work lands: null when git can't say (no repo it can read, or no branch to land);
   // otherwise the base branch, and whether the branch still has commits main lacks.
   // fresh: deciding a landing, so a mirror is fetched first.
-  toLand(p, branch, { fresh = false } = {}) {
-    const repo = branch ? this.repoFor(p, { fresh }) : null;
+  toLand(p, item, branch, { fresh = false } = {}) {
+    const repo = branch ? this.repoFor(p, item, { fresh }) : null;
     if (!repo || !branchExists(repo.path, branch)) return null;
     const base = baseOf(repo.path);
     if (!base) return null;
@@ -1104,11 +1133,18 @@ export class Hub extends EventEmitter {
 
   // The land job's hint: the base as git says it, and a push first when the hub can't see the branch.
   landHint(p, item) {
-    const remote = this.remoteMode(p);
-    const repo = this.repoFor(p);
+    const remote = this.remoteMode(p, item);
+    const repo = this.repoFor(p, item);
     const base = (repo && baseOf(repo.path)) ?? 'main';
     const unseen = remote && !!item.branch && !(repo && branchExists(repo.path, item.branch));
-    return LAND_HINT(item, p, base, remote, unseen);
+    const where = this.remotesOf(p).length > 1 ? `This is in ${this.repoOf(p, item)}. ` : '';
+    return where + LAND_HINT(item, p, base, remote, unseen);
+  }
+
+  // The work job's hint: where to cut the branch, in the item's repo and from its base.
+  workHint(p, item) {
+    const repo = this.remotesOf(p).length > 1 ? this.repoOf(p, item) : '';
+    return WORK_HINT(item, p, this.remoteMode(p, item), this.baseFor(p, item), repo);
   }
 
   // The branch git found for the latest submission, when the item has none of its own (older work).
@@ -1143,20 +1179,23 @@ export class Hub extends EventEmitter {
 
 // Open-weight models (and others) skipped progress entirely until told when the first one is due.
 const TOUCHING_HINT = 'As soon as you know which files you will change, post progress with a headline and touching, so other agents steer clear.';
-const SHAPE_HINT = (item, p) => [
+// repos: the project's repositories; with several, each item lands in one of them.
+const SHAPE_HINT = (item, p, repos = []) => [
   `You're shaping #${item.seq}, not building it yet. You hold it for ${dur(LEASE_MS)}.`,
   'Read the relevant code, then refine it: a sharp title and summary, and acceptance criteria (checkable, so a reviewer knows what done means).',
   `If it's big, split it: propose sub-items with parent #${item.seq}, each with acceptance criteria. #${item.seq} then waits for them.`,
+  repos.length > 1 ? `Each item lands in one repository (${repos.join(', ')}): set repo when you refine or propose. Work that spans repositories becomes one sub-item per repository, with depends_on giving the order (e.g. the API before the client that calls it).` : '',
   'If the intent is unclear, ask with an assumption.',
   `Finish with submit (headline: the shape you chose). ${p.autonomy === 'ask' ? 'The human then approves it.' : 'It becomes ready for any agent, including you.'}`,
-].join(' ');
+].filter(Boolean).join(' ');
 
 // Every claim says where to work: the item's own branch, in a worktree, never the main checkout.
 // remote: the hub has no checkout here, so the branch is cut from origin and pushed there for review.
-const WORK_HINT = (item, p, remote = false) => !item.branch ? ''
+// base: the branch it lands on, in the item's repo. repo: named when the project has several.
+const WORK_HINT = (item, p, remote = false, base = 'main', repo = '') => !item.branch ? ''
   : remote
-    ? `Work on branch ${item.branch}, cut from the latest main on origin: git fetch origin, then git switch -c ${item.branch} origin/main (or git switch ${item.branch} if it exists). Work in a git worktree or a clone of your own, not a checkout another agent is using. Commit as you go. Before you submit, push the branch (git push origin ${item.branch}) so reviewers anywhere can see it.`
-    : `Work on branch ${item.branch}, cut from the latest main: git switch -c ${item.branch} main (or git switch ${item.branch} if it exists). Work in a git worktree, never in ${p.path || 'the main checkout'} itself: it stays on main so work can land there. Commit as you go.`;
+    ? `${repo ? `This is in ${repo}: work in a clone of it. ` : ''}Work on branch ${item.branch}, cut from the latest ${base} on origin: git fetch origin, then git switch -c ${item.branch} origin/${base} (or git switch ${item.branch} if it exists). Work in a git worktree or a clone of your own, not a checkout another agent is using. Commit as you go. Before you submit, push the branch (git push origin ${item.branch}) so reviewers anywhere can see it.`
+    : `${repo ? `This is in ${repo}. ` : ''}Work on branch ${item.branch}, cut from the latest ${base}: git switch -c ${item.branch} ${base} (or git switch ${item.branch} if it exists). Work in a git worktree, never in ${p.path || 'the main checkout'} itself: it stays on ${base} so work can land there. Commit as you go.`;
 // remote: main is the one on origin (GitHub). Pushing to it succeeds only as a fast-forward, so a
 // rejected push means main moved; the branch is pushed again too, so the hub can see main contains it.
 // unseen: the hub can't see the branch on origin, so it is pushed first. One git command at a time, and
@@ -1187,10 +1226,10 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
     this.setStatus(p, agent, `Sent #${item.seq} back for review after a rebase`);
     return { ok: true, hint: `#${item.seq} is verifying again with your note on the conflicts. ${reviewer}, then it lands. Call next.` };
   }
-  const land = this.toLand(p, item.branch, { fresh: true });
-  const remote = this.remoteMode(p);
+  const land = this.toLand(p, item, item.branch, { fresh: true });
+  const remote = this.remoteMode(p, item);
   if (!land) {
-    throw new UserError(`The hub can't see ${item.branch || 'a branch for this item'} in ${remote ? this.remotesOf(p)[0] : p.path || 'a repository it can reach'}`, {
+    throw new UserError(`The hub can't see ${item.branch || 'a branch for this item'} in ${remote ? this.repoOf(p, item) : p.path || 'a repository it can reach'}`, {
       status: 409,
       hint: remote
         ? `Push it (git push origin ${item.branch} --force-with-lease) and submit again. If you have, the hub may not reach the repository right now: try again in a minute. Keep the branch until the hub confirms the landing.`
@@ -1281,10 +1320,10 @@ const AGENT_OPS = {
         : pick.mode === 'land' && args.claim !== false
           ? this.landHint(p, this.itemById(pick.item.id))
         : pick.mode === 'shape' && args.claim !== false
-          ? SHAPE_HINT(pick.item, p)
+          ? SHAPE_HINT(pick.item, p, this.remotesOf(p))
           : args.claim === false
           ? `Not claimed. Claim #${pick.item.seq} to start.`
-          : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${WORK_HINT(this.itemById(pick.item.id), p, this.remoteMode(p))} ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`.replace(/  +/g, ' '),
+          : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${this.workHint(p, this.itemById(pick.item.id))} ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`.replace(/  +/g, ' '),
     };
   },
 
@@ -1297,10 +1336,10 @@ const AGENT_OPS = {
       hint: item.stage === 'verifying'
         ? this.reviewHint(item, `Review #${item.seq} against done_means and the evidence, then call review.`)
         : item.stage === 'proposed'
-          ? SHAPE_HINT(item, p)
+          ? SHAPE_HINT(item, p, this.remotesOf(p))
           : item.stage === 'landing'
             ? this.landHint(p, this.itemById(item.id))
-            : `You hold #${item.seq} for ${dur(LEASE_MS)}. ${WORK_HINT(this.itemById(item.id), p, this.remoteMode(p))} ${args.touching ? '' : `${TOUCHING_HINT} `}Progress renews the lease.`.replace(/  +/g, ' '),
+            : `You hold #${item.seq} for ${dur(LEASE_MS)}. ${this.workHint(p, this.itemById(item.id))} ${args.touching ? '' : `${TOUCHING_HINT} `}Progress renews the lease.`.replace(/  +/g, ' '),
     };
   },
 
@@ -1384,7 +1423,7 @@ const AGENT_OPS = {
       return {
         ok: true,
         hint: `${item.stage === 'verifying' ? `The race is over and #${item.seq} is verifying. ${reviewer}` : `Your attempt is in; #${item.seq} goes to review when the other racers finish.`} ${nudge}Call next for more work.`,
-        [GIT_CHECK]: { event: id, claim: { headline, summary, evidence } }, // the race review shows each attempt's branch
+        [GIT_CHECK]: { event: id, about: item.id, claim: { headline, summary, evidence } }, // the race review shows each attempt's branch
       };
     }
     this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
@@ -1393,7 +1432,7 @@ const AGENT_OPS = {
     return {
       ok: true,
       hint: `#${item.seq} is verifying. ${reviewer} ${nudge}Call next for more work.`,
-      [GIT_CHECK]: { event, item: item.id, branch: item.branch, claim: { headline, summary, evidence } }, // asked of git once the transaction is done
+      [GIT_CHECK]: { event, item: item.id, about: item.id, branch: item.branch, claim: { headline, summary, evidence } }, // asked of git once the transaction is done
     };
   },
 
@@ -1547,6 +1586,7 @@ Object.assign(Hub.prototype, {
     const acceptance = str(args.acceptance);
     const priority = PRIORITY_RANK[args.priority] != null ? args.priority : 'soon';
     const parent = args.parent ? this.item(p, args.parent) : null;
+    const repo = this.checkRepo(p, args.repo);
     const human = isHuman(actor);
     const stage = human ? (args.stage === 'proposed' ? 'proposed' : 'ready')
       : p.autonomy !== 'ask' && acceptance ? 'ready' : 'proposed';
@@ -1555,8 +1595,8 @@ Object.assign(Hub.prototype, {
     this.q('UPDATE projects SET next_seq = next_seq + 1 WHERE id = ?').run(p.id);
     const needs = JSON.stringify(normTags(args.needs));
     const size = SIZES.includes(args.size) ? args.size : '';
-    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, stage_since, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, t, t, t);
+    const r =this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, stage_since, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, t, t, t);
     const item = this.itemById(Number(r.lastInsertRowid));
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
     this.setDeps(p, item, args.depends_on);
@@ -1590,6 +1630,14 @@ Object.assign(Hub.prototype, {
       changed.push(`needs → ${normTags(args.needs).join(', ') || 'nothing'}`);
     }
     if (args.size != null && (SIZES.includes(args.size) || args.size === '') && args.size !== item.size) { set.size = args.size; changed.push(`size → ${args.size || 'unset'}`); }
+    if (args.repo != null) {
+      const repo = this.checkRepo(p, args.repo);
+      if (repo !== item.repo) {
+        if (['landing', 'done'].includes(item.stage)) throw new UserError(`#${item.seq} is ${item.stage}; its repository can't change now`, { status: 409, hint: 'Propose a new item for the other repository.' });
+        set.repo = repo;
+        changed.push(`repo → ${repo || this.remotesOf(p)[0] || 'unset'}`);
+      }
+    }
     if (Object.keys(set).length) this.patch(item, set);
     if (Array.isArray(args.depends_on)) { this.setDeps(p, item, args.depends_on); changed.push('dependencies'); }
     const human = isHuman(actor);
@@ -1619,10 +1667,10 @@ Object.assign(Hub.prototype, {
         }
       }
       const branch = kept ? merge : item.branch || this.submittedBranch(item);
-      const land = this.toLand(p, branch, { fresh: true });
+      const land = this.toLand(p, item, branch, { fresh: true });
       // Done means on main. Remote mode: work with a branch the hub can't see in its mirror (never pushed,
       // or the remote can't be read right now) still lands. The lander pushes it; finishLanding checks.
-      const unseen = !land && !!branch && !!this.repos && this.remoteMode(p);
+      const unseen = !land && !!branch && !!this.repos && this.remoteMode(p, item);
       const landing = !!land?.pending || unseen;
       this.move(item, landing ? 'landing' : 'done', actor, {
         holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),

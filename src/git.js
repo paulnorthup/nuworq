@@ -34,6 +34,8 @@ export const isRepo = (repo) => !!repo && existsSync(repo) && (existsSync(join(r
 export const baseOf = (repo) => ['main', 'master'].find((b) => exists(repo, b)) ?? null;
 export const branchExists = exists;
 export const headOf = (repo, ref) => git(repo, 'rev-parse', '--short', ref);
+// The URL the checkout's origin points at, as configured; null when it has none.
+export const originOf = (repo) => git(repo, 'remote', 'get-url', 'origin');
 // Does `into` already contain every commit of `ref`?
 export const contains = (repo, into, ref) => git(repo, 'merge-base', '--is-ancestor', ref, into) !== null;
 const count = (repo, range) => Number(git(repo, 'rev-list', '--count', range) ?? 0);
