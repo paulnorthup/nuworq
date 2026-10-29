@@ -23,7 +23,7 @@ const COOKIE = 'nuworq_session';
 const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where)$/, /^GET \/agents\.md$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects)$/, /^GET \/agents\.md$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
@@ -244,6 +244,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
       const viewer = who.person ? by : undefined;
+      // Agents get only what a worker needs to find its checkout, for the projects their token may reach.
+      if (req.method === 'GET' && path === '/api/projects' && who.role === 'agent') {
+        return send(200, hub.projects().filter((p) => !caller.scope || caller.scope.includes(p.slug))
+          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner })));
+      }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
       if (req.method === 'POST' && path === '/api/projects') {
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't create projects`, 'Ask an owner or steward.');

@@ -190,7 +190,8 @@ async function hubProjects(client) {
 async function agentToken(client, flags) {
   const me = await client.get('/api/me');
   if (me.auth !== 'required') return null;
-  const t = flags['agent-token'] || envVar('AGENT_TOKEN');
+  // A machine connected with an agent token (nuworq connect) hands that one on.
+  const t = flags['agent-token'] || envVar('AGENT_TOKEN') || (me.role === 'agent' ? client.settings.token : null);
   const how = 'Create one on the hub host: nuworq token create <name> --role agent --project <project>. Pass it with --agent-token or NUWORQ_AGENT_TOKEN.';
   if (!t || t === true) throw new HubError('This hub requires login, so workers need their own agent token', { hint: how });
   const who = await createClient({ url: client.settings.url, token: t }).get('/api/me');

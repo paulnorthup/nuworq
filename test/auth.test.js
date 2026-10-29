@@ -100,6 +100,10 @@ describe('required mode', () => {
     assert.equal(ok.status, 200, ok.text);
     assert.equal(ok.json.project, 'demo');
     assert.equal((await request(ctx.port, 'GET', '/api/tools', { headers: { authorization: `Bearer ${agent}` } })).status, 200);
+    // Workers find their checkout from the project list: agents get a lean one, without the human view.
+    const list = await request(ctx.port, 'GET', '/api/projects', { headers: { authorization: `Bearer ${agent}` } });
+    assert.equal(list.status, 200, list.text);
+    assert.deepEqual(Object.keys(list.json.find((p) => p.slug === 'demo')).sort(), ['name', 'parked', 'path', 'remotes', 'runner', 'slug']);
     const no = await request(ctx.port, 'GET', '/api/p/demo/view', { headers: { authorization: `Bearer ${agent}` } });
     assert.equal(no.status, 403);
     assert.match(no.json.error, /agent tokens can only use agent operations/);
