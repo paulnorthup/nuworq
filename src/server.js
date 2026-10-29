@@ -18,6 +18,7 @@ import { ORG_CAP } from './directory.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { outcomes } from './outcomes.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -55,7 +56,7 @@ const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode)
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 const REPO_PAGE = 30; // repositories per page in "+ Project"
 
@@ -588,6 +589,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if ((m = path.match(/^\/api\/p\/([^/]+)\/view$/)) && req.method === 'GET') {
         hub.sweep();
         return send(200, view(hub, decodeURIComponent(m[1]), { viewer }));
+      }
+      // What finished work came to, for other tools (docs/API.md is the contract). Agent tokens read only their projects'.
+      if ((m = path.match(/^\/api\/p\/([^/]+)\/outcomes$/)) && req.method === 'GET') {
+        const slug = decodeURIComponent(m[1]);
+        if (caller.scope && !caller.scope.includes(slug)) return deny(403, `this token can't read ${slug}`, 'Use a token made for that project (nuworq token create <name> --role agent --project <slug>).');
+        return send(200, outcomes(hub, slug, { since: url.searchParams.get('since'), until: url.searchParams.get('until') }));
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/items\/([^/]+)$/)) && req.method === 'GET') {
         return send(200, itemView(hub, decodeURIComponent(m[1]), decodeURIComponent(m[2])));
