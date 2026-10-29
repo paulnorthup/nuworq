@@ -325,6 +325,11 @@ export class Hub extends EventEmitter {
     while (this._opening.size) await Promise.all(this._opening.values());
   }
 
+  // The item's open pull request that conflicts with main (GitHub said so), or null.
+  conflictedPr(item) {
+    return this.q(`SELECT * FROM prs WHERE item_id = ? AND state = 'open' AND blocked = 'conflict'`).get(item.id) ?? null;
+  }
+
   // The hub tried to open a pull request since the item was last accepted, and couldn't: it lands by hand.
   prFailed(item) {
     const e = this.q(`SELECT type FROM events WHERE item_id = ? AND type IN ('accepted', 'pr_failed') ORDER BY at DESC, id DESC LIMIT 1`).get(item.id);
@@ -1126,9 +1131,10 @@ export class Hub extends EventEmitter {
       ORDER BY stage_since`).all(p.id, agent, agent).filter(fresh).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
-    // An open pull request lands it: GitHub's merge marks it done.
+    // An open pull request lands it: GitHub's merge marks it done. Unless it conflicts with main: then an
+    // agent rebases it, and the PR's auto-merge carries on.
     const lands = !may('build') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'landing' AND holder IS NULL
-        AND NOT EXISTS (SELECT 1 FROM prs WHERE prs.item_id = items.id AND prs.state = 'open') ORDER BY stage_since`).all(p.id)
+        AND NOT EXISTS (SELECT 1 FROM prs WHERE prs.item_id = items.id AND prs.state = 'open' AND prs.blocked != 'conflict') ORDER BY stage_since`).all(p.id)
       .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
       .map((item) => ({ mode: 'land', item }));
     if (p.parked) return [...lands, ...reviews];
@@ -1262,6 +1268,8 @@ export class Hub extends EventEmitter {
     const unseen = remote && !!item.branch && !(repo && branchExists(repo.path, item.branch));
     const where = this.remotesOf(p).length > 1 ? `This is in ${this.repoOf(p, item)}. ` : '';
     if (this.prMode(p, item)) {
+      const pr = this.conflictedPr(item);
+      if (pr) return where + PR_REBASE_HINT(item, pr, base);
       if (unseen) return where + PR_LAND_HINT(item);
       if (this.prFailed(item)) return `${where}The hub couldn't open a pull request for it (see its history), so land it by hand. ${LAND_HINT(item, p, base, remote)}`;
     }
@@ -1352,6 +1360,15 @@ const LAND_HINT = (item, p, base = 'main', remote = false, unseen = false) => re
 // Remote work that lands through a pull request: the lander only pushes; the hub opens the PR.
 const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
 
+// Its pull request conflicts with main: rebase the branch and push it again; the PR and its auto-merge stay.
+const PR_REBASE_HINT = (item, pr, base = 'main') => [
+  `PR #${pr.number} for #${item.seq} conflicts with ${base} (${pr.url}). Rebase it; the pull request and its auto-merge stay as they are.`,
+  `1. git fetch origin, then git switch ${item.branch}, then git rebase origin/${base}. Resolve conflicts keeping both intents. If resolving changed what the reviewer approved, submit with conflicts (what you changed and why) instead, and it goes back for review.`,
+  `2. Run the project's checks (e.g. npm test).`,
+  `3. git push origin ${item.branch} --force-with-lease.`,
+  `4. submit #${item.seq}. GitHub merges the PR once its checks pass, and the hub marks it done.`,
+].join(' ');
+
 // What a pull request the hub opens says: the item, who built and reviewed it, and the evidence.
 function prBody(p, item) {
   const link = this.publicUrl ? `${this.publicUrl.replace(/\/+$/, '')}/#/p/${encodeURIComponent(p.slug)}/${item.seq}` : '';
@@ -1429,6 +1446,19 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
         ? `Push it (git push origin ${item.branch} --force-with-lease) and submit again. If you have, the hub may not reach the repository right now: try again in a minute. Keep the branch until the hub confirms the landing.`
         : 'Keep the branch until the hub confirms the landing. If the work is on another branch, say which in a comment and handoff.',
     });
+  }
+  // Rebased for a pull request that conflicted: the branch on origin must now contain main. The PR stays.
+  const conflicted = land.pending && this.prMode(p, item) && this.conflictedPr(item);
+  if (conflicted) {
+    const repo = this.repoFor(p, item);
+    if (!contains(repo.path, item.branch, land.base)) {
+      throw new UserError(`${item.branch} on origin doesn't contain ${land.base} yet`, { status: 409, hint: PR_REBASE_HINT(item, conflicted, land.base) });
+    }
+    this.q(`UPDATE prs SET blocked = '' WHERE item_id = ? AND state = 'open'`).run(item.id);
+    this.patch(item, { holder: null, lease_until: null });
+    this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased ${item.branch} onto ${land.base} for PR #${conflicted.number}; auto-merge carries on`, summary, detail });
+    this.setStatus(p, agent, `Rebased #${item.seq} for its pull request`);
+    return { ok: true, hint: `PR #${conflicted.number} has the rebased branch. GitHub merges it once its checks pass, and #${item.seq} is done. Call next.` };
   }
   // Pushed for a pull request: the hub opens it, and GitHub's merge marks the item done.
   if (land.pending && this.prMode(p, item) && !this.prFailed(item)) {

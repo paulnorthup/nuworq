@@ -162,6 +162,19 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     }
   }
 
+  // Accepted work whose pull request waits for a person's approval on GitHub: one card per PR.
+  for (const it of in_('landing')) {
+    for (const pr of hub.q(`SELECT * FROM prs WHERE item_id = ? AND state = 'open' AND blocked = 'review'`).all(it.id)) {
+      push({
+        key: `pr-review:${it.id}:${pr.number}`, level: 'act', kind: 'pr-review', at: it.stage_since,
+        headline: `Approve PR #${pr.number} on GitHub: ${it.title}`,
+        sub: `PR #${pr.number} · the repository requires a person's approval`,
+        why: 'The work is accepted and its checks pass, but the repository needs a person to approve the pull request. Approve it on GitHub; auto-merge does the rest.',
+        item: ref(it), pr: { url: pr.url, number: pr.number },
+      });
+    }
+  }
+
   for (const it of items.filter((i) => OPEN_STAGES.includes(i.stage) && i.stalls + i.rejections >= 2)) {
     const h = json(it.handoff, null);
     const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);

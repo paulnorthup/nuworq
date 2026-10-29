@@ -47,9 +47,11 @@ export function prsOf(hub, p, item) {
 function pullRequest(hub, p, body) {
   const pr = body.pull_request;
   if (!pr) return { ignored: 'no pull_request' };
-  const repo = body.repository?.full_name ?? '';
+  const full = body.repository?.full_name ?? '';
   const state = pr.merged ? 'merged' : pr.state === 'closed' ? 'closed' : 'open';
-  const old = hub.q('SELECT * FROM prs WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, repo, pr.number);
+  // A PR the hub opened is on record under the normalized remote (github.com/o/r); others under o/r.
+  const old = hub.q('SELECT * FROM prs WHERE project_id = ? AND repo IN (?, ?) AND number = ? ORDER BY repo DESC').get(p.id, full, `github.com/${full}`.toLowerCase(), pr.number);
+  const repo = old?.repo ?? full;
   const item = old ? hub.itemById(old.item_id) : itemFor(hub, p, pr);
   if (!item) return { ignored: 'no matching item' };
   hub.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -81,7 +83,49 @@ function pullRequest(hub, p, body) {
       hub.event(p, { item, actor: ACTOR, type: 'sent_back', headline: `${headline}; #${item.seq} is back in the queue`, summary, data: { pr: pr.number, url: pr.html_url } });
     }
   }
+  if (state === 'open' && item.stage === 'landing') blocked(hub, p, item, repo, pr);
   return { item: `#${item.seq}`, pr: pr.number, state };
+}
+
+// Why an open landing PR can't merge, as GitHub says: its branch conflicts with (or is behind) main, which
+// a rebase fixes; or it waits for a person's approval. Checks that fail are handled per check (below).
+// Only a change goes on the record. mergeable_state "unknown" (still computing) leaves things as they are.
+const BLOCKED_HEADLINE = {
+  conflict: (n) => `PR #${n} can't merge: its branch conflicts with main (or is behind it); an agent rebases it`,
+  review: (n) => `PR #${n} waits for a person's approval on GitHub`,
+  '': (n) => `PR #${n} can merge again`,
+};
+function blocked(hub, p, item, repo, pr) {
+  const row = hub.q('SELECT * FROM prs WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, repo, pr.number);
+  const ms = pr.mergeable_state;
+  const ci = ciState(hub, p, pr.head?.sha ?? '').state;
+  const why = ['dirty', 'behind'].includes(ms) ? 'conflict'
+    : pr.review_decision === 'REVIEW_REQUIRED' || (ms === 'blocked' && ci !== 'fail') ? 'review'
+    : !ms || ms === 'unknown' || ms === 'blocked' ? row.blocked
+    : '';
+  setBlocked(hub, p, item, row, why, pr.html_url);
+}
+
+function setBlocked(hub, p, item, row, why, url) {
+  if (why === row.blocked) return;
+  hub.q('UPDATE prs SET blocked = ? WHERE project_id = ? AND repo = ? AND number = ?').run(why, p.id, row.repo, row.number);
+  hub.event(p, {
+    item, actor: ACTOR, type: 'pr_blocked', headline: BLOCKED_HEADLINE[why](row.number),
+    summary: why === 'review' ? `Approve it on GitHub (${url || row.url}); auto-merge then merges it and #${item.seq} is done.` : '',
+    data: { pr: row.number, url: url || row.url, blocked: why },
+  });
+}
+
+// An approving review clears "waits for approval"; GitHub's next pull_request event says the rest.
+function review(hub, p, body) {
+  const pr = body.pull_request, state = String(body.review?.state ?? '').toLowerCase();
+  if (!pr || body.action !== 'submitted') return { ignored: body.action || 'no review' };
+  const full = body.repository?.full_name ?? '';
+  const row = hub.q(`SELECT * FROM prs WHERE project_id = ? AND repo IN (?, ?) AND number = ? AND state = 'open'`).get(p.id, full, `github.com/${full}`.toLowerCase(), pr.number);
+  if (!row) return { ignored: 'no pull request on record' };
+  const item = hub.itemById(row.item_id);
+  if (state === 'approved' && row.blocked === 'review') setBlocked(hub, p, item, row, '', pr.html_url);
+  return { item: `#${item.seq}`, pr: pr.number, review: state };
 }
 
 // A completed check (check_suite, check_run or commit status) for a commit.
@@ -98,11 +142,24 @@ function check(hub, p, { sha, name, conclusion, url }) {
   if (after.state !== before && after.state !== 'pending') {
     for (const pr of prs) {
       const failed = after.checks.filter((c) => FAIL.has(c.conclusion)).map((c) => c.name);
+      const item = hub.itemById(pr.item_id);
       hub.event(p, {
-        item: hub.itemById(pr.item_id), actor: ACTOR, type: 'ci',
+        item, actor: ACTOR, type: 'ci',
         headline: after.state === 'pass' ? `CI passed on PR #${pr.number}` : `CI failed on PR #${pr.number}: ${failed.join(', ')}`,
         data: { sha, state: after.state, url, pr: pr.number },
       });
+      // Accepted work whose pull request fails a check goes back to its builder, like a send-back: the fix
+      // goes on the same branch, the PR stays, and its auto-merge merges it once checks pass.
+      if (after.state === 'fail' && pr.state === 'open' && item?.stage === 'landing') {
+        const bad = after.checks.filter((c) => FAIL.has(c.conclusion));
+        const headline = `${bad.map((c) => c.name).join(', ')} failed on PR #${pr.number}`;
+        const summary = `${bad.map((c) => `${c.name}: ${c.conclusion}${c.url ? ` (${c.url})` : ''}`).join('\n')}\n\nFix it on ${item.branch || 'the same branch'} and push: the pull request stays open, and it merges once its checks pass. Then submit again.`;
+        hub.move(item, 'ready', ACTOR, {
+          holder: null, lease_until: null, rejections: item.rejections + 1, last_worker: item.implementer || item.last_worker,
+          handoff: JSON.stringify({ kind: 'sent_back', by: ACTOR, headline, summary, at: hub.now() }),
+        });
+        hub.event(p, { item, actor: ACTOR, type: 'sent_back', headline: `${headline}; #${item.seq} goes back to ${item.implementer || 'its builder'}`, summary, data: { pr: pr.number, checks: bad } });
+      }
     }
   }
   return { sha: sha.slice(0, 7), ci: after.state };
@@ -120,6 +177,7 @@ export function receive(hub, slug, { event, signature, raw }) {
   const result = hub.tx(() => {
     if (event === 'ping') return { pong: true };
     if (event === 'pull_request') return pullRequest(hub, p, body);
+    if (event === 'pull_request_review') return review(hub, p, body);
     if (event === 'issues') return issueEvent(hub, p, body);
     // The app was installed on (or added to) repositories: their open issues come in, after this answer.
     if (event === 'installation' || event === 'installation_repositories') {

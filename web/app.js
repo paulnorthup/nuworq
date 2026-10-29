@@ -343,7 +343,7 @@ function needsYou(v) {
 }
 
 function card(a) {
-  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'ci-failing': 'CI is failing' }[a.kind] ?? a.kind;
+  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub' }[a.kind] ?? a.kind;
   const key = 'a:' + a.key;
   const open = S.open.has(key) || z() >= 2;
   const hasMore = a.why || a.detail || a.acceptance;
@@ -418,6 +418,12 @@ function cardActions(a, hasMore, open, key) {
     return `<div class="actions">
       <button class="btn go" data-action="approve" data-item="${esc(a.item)}">Approve</button>
       <button class="btn" data-action="drop" data-item="${esc(a.item)}">Drop</button>
+      <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
+    </div>`;
+  }
+  if (a.kind === 'pr-review') {
+    return `<div class="actions">
+      <a class="btn you" href="${esc(a.pr.url)}" target="_blank" rel="noopener">Approve PR #${a.pr.number} on GitHub</a>
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
     </div>`;
   }
