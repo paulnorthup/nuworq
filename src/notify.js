@@ -25,7 +25,11 @@ export function mask(url) {
 
 // ── channels (hub-wide, stored in the database) ──
 
-export function addChannel(db, kind, url, now = Date.now()) {
+// person: "@handle" (or "handle") for a personal channel: it gets only what that person owns. '' or
+// absent: a hub-wide channel, which gets every "needs you".
+export function addChannel(db, kind, url, now = Date.now(), { person = '' } = {}) {
+  const who = normPerson(person);
+  if (who && !personExists(db, who)) throw new UserError(`no person ${who} here`, { status: 404, hint: 'See: nuworq person list' });
   kind = String(kind ?? '').toLowerCase();
   if (!KINDS[kind]) throw new UserError(`unknown channel "${kind}"`, { hint: `Use one of: ${Object.keys(KINDS).join(', ')}.` });
   let raw = String(url ?? '').trim();
@@ -35,15 +39,23 @@ export function addChannel(db, kind, url, now = Date.now()) {
   try { u = new URL(raw); } catch { throw new UserError('a channel needs a URL', { hint: KINDS[kind] }); }
   if (!['http:', 'https:'].includes(u.protocol)) throw new UserError('channel URLs must be http or https', { hint: KINDS[kind] });
   if (db.prepare('SELECT 1 FROM channels WHERE url = ?').get(u.href)) throw new UserError('that channel is already set up', { hint: 'See: nuworq notify list' });
-  const r = db.prepare('INSERT INTO channels (kind, url, created_at) VALUES (?, ?, ?)').run(kind, u.href, now);
-  return { id: Number(r.lastInsertRowid), kind, url: mask(u.href) };
+  const r = db.prepare('INSERT INTO channels (kind, url, created_at, person) VALUES (?, ?, ?, ?)').run(kind, u.href, now, who);
+  return { id: Number(r.lastInsertRowid), kind, url: mask(u.href), person: who || null };
 }
 
-export function listChannels(db) {
-  return db.prepare('SELECT * FROM channels ORDER BY id').all().map((c) => ({
-    id: c.id, kind: c.kind, url: mask(c.url), failing: !!c.failing_since, last_error: c.last_error || null,
+export const normPerson = (p) => { const h = String(p ?? '').trim().replace(/^@/, '').toLowerCase(); return h ? `@${h}` : ''; };
+const personExists = (db, who) => {
+  try { return !!db.prepare('SELECT 1 FROM people WHERE handle = ?').get(who.slice(1)); } catch { return false; }
+};
+
+// person: only that person's channels (what a non-owner sees and manages); null: all of them.
+export function listChannels(db, { person = null } = {}) {
+  return db.prepare('SELECT * FROM channels ORDER BY id').all().filter((c) => person == null || c.person === person).map((c) => ({
+    id: c.id, kind: c.kind, url: mask(c.url), person: c.person || null, failing: !!c.failing_since, last_error: c.last_error || null,
   }));
 }
+
+export const channelOwner = (db, id) => db.prepare('SELECT person FROM channels WHERE id = ?').get(Number(id))?.person ?? null;
 
 export function removeChannel(db, id) {
   const r = db.prepare('DELETE FROM channels WHERE id = ?').run(Number(id));
@@ -176,9 +188,10 @@ export class Notifier {
     const db = this.hub.db, t = this.hub.now();
     const mark = db.prepare('INSERT OR REPLACE INTO notified (project_id, key, at, seen_at) VALUES (?, ?, ?, ?)');
     for (const e of entries) mark.run(e.project_id, e.entry.key, t, t);
-    const msg = compose(entries, this.baseUrl);
+    // A personal channel gets only the entries its person owns; a hub-wide one gets them all.
+    const sends = channels.map((c) => [c, c.person ? entries.filter((e) => (e.entry.owners ?? []).includes(c.person)) : entries]).filter(([, es]) => es.length);
     const before = new Set(channels.filter((c) => c.failing_since).map((c) => c.id));
-    const results = await Promise.all(channels.map((c) => deliver(db, c, msg, this.sendOpts)));
+    const results = await Promise.all(sends.map(([c, es]) => deliver(db, c, compose(es, this.baseUrl), this.sendOpts)));
     // A channel started or stopped failing: the UI shows that as something worth knowing.
     if (results.some((r) => r.ok === before.has(r.id))) this.hub.emit('change', { project: null, at: this.hub.now() });
     return results;

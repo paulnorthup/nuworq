@@ -10,7 +10,7 @@ import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
-import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner } from './notify.js';
 import { receive } from './github.js';
 import { syncIssues, commentIssues, closeLanded, closeStale } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
@@ -686,17 +686,23 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         delete b.agent;
         return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
       }
-      // Push channels (hub-wide, or workspace-wide). Agent tokens never reach these; only an owner changes them.
-      if (req.method === 'GET' && path === '/api/notify') return send(200, { channels: listChannels(hub.db), kinds: KINDS });
-      if (req.method === 'POST' && path.startsWith('/api/notify') && personRole !== 'owner') return deny(403, 'only an owner manages push channels', 'Ask an owner of this workspace.');
+      // Push channels: hub-wide (or workspace-wide) ones, and personal ones that get only what that person owns.
+      // Agent tokens never reach these. An owner manages them all; a person manages their own.
+      const own = who.person && personRole !== 'owner' ? by : null; // null: every channel
+      if (req.method === 'GET' && path === '/api/notify') return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null });
+      if (req.method === 'POST' && path.startsWith('/api/notify') && personRole !== 'owner' && !(own && ['/api/notify', '/api/notify/remove'].includes(path))) {
+        return deny(403, 'only an owner manages hub-wide push channels', 'Add one for yourself instead: it gets only what needs you.');
+      }
       if (req.method === 'POST' && path === '/api/notify') {
         const b = await body(req);
-        const c = addChannel(hub.db, b.kind, b.url, hub.now());
+        const c = addChannel(hub.db, b.kind, b.url, hub.now(), { person: own ?? b.person });
         hub.emit('change', { project: null, at: hub.now() });
         return send(200, { ok: true, ...c });
       }
       if (req.method === 'POST' && path === '/api/notify/remove') {
-        removeChannel(hub.db, (await body(req)).id);
+        const { id } = await body(req);
+        if (own && channelOwner(hub.db, id) !== own) return deny(403, 'that channel isn\'t yours', 'You can remove only your own channels.');
+        removeChannel(hub.db, id);
         hub.emit('change', { project: null, at: hub.now() });
         return send(200, { ok: true });
       }

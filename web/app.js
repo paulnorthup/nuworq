@@ -828,7 +828,8 @@ async function connect() {
 async function notifySettings() {
   let n;
   try { n = await api('/api/notify'); } catch (e) { return toast(e.message, true); }
-  const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
+  S.notifyPerson = n.person; // who "only what needs me" means
+  const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> <span class="faint">${c.person ? `${c.person === n.person ? 'you' : esc(c.person)}: only what they own` : 'everyone'}</span> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
     <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
   modal(`<h2>Notifications</h2>
     <p class="lead">When something new needs you (a blocking question, work to verify, "what matters most?"), nuworq sends one message, batched over 2 minutes, with a link. Healthy work sends nothing.</p>
@@ -836,6 +837,7 @@ async function notifySettings() {
     <h4>Add a channel</h4>
     <div class="inline-form"><select id="nt-kind">${Object.keys(n.kinds).map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
       <input id="nt-url" placeholder="https://ntfy.sh/your-secret-topic, a Slack webhook, or any URL"><button class="btn primary small" data-action="notify-add">Add</button></div>
+    ${n.person ? `<label class="faint"><input type="checkbox" id="nt-mine" checked> Only what needs me (${esc(n.person)}); unchecked, an owner's channel gets everyone's</label>` : ''}
     <p class="lead">${Object.entries(n.kinds).map(([k, v]) => `<b>${esc(k)}</b>: ${esc(v)}`).join('<br>')}</p>
     <div class="foot">${n.channels.length ? '<button class="btn" data-action="notify-test">Send a test</button>' : ''}<button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
@@ -1055,7 +1057,8 @@ const ACTIONS = {
   'github-disconnect': async () => { closeModal(); await human('settings', { github_secret: '' }, 'GitHub disconnected'); },
   'notify-add': async () => {
     try {
-      await api('/api/notify', { method: 'POST', body: JSON.stringify({ kind: val('nt-kind'), url: val('nt-url') }) });
+      const mine = document.getElementById('nt-mine');
+      await api('/api/notify', { method: 'POST', body: JSON.stringify({ kind: val('nt-kind'), url: val('nt-url'), ...(mine?.checked ? { person: S.notifyPerson } : {}) }) });
       toast('Channel added: send a test to check it');
       notifySettings();
     } catch (e) { toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true); }
