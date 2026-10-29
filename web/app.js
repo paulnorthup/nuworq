@@ -446,11 +446,11 @@ function worthKnowing(v) {
         : `<button class="btn small" data-action="confirm" data-q="${a.question.id}">Fine</button><button class="btn small" data-action="reveal" data-key="${r}">Override…</button>`;
     }
     if (a.kind === 'proposal') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Look</button>` + acts;
-    if (a.start) acts = `<button class="btn small primary" data-action="connect">Start an agent</button>` + acts;
+    if (a.start) acts = `<button class="btn small" data-action="connect">Start an agent</button>` + acts;
     if (a.kind === 'notify-failing') acts = `<button class="btn small" data-action="notify">Check it</button>` + acts;
     if (a.kind === 'peer-review-stuck') acts =`<button class="btn small" data-action="open" data-item="${esc(a.item)}">Review it</button>` + acts;
     // Stuck on a capability nobody has: the choices are to let any agent take it, or keep waiting for one that has it.
-    if (a.kind === 'unfit') acts = `<button class="btn small primary" data-action="needs" data-item="${esc(a.item)}" data-needs="${esc(JSON.stringify(a.keep ?? []))}" title="Drop ${esc((a.missing ?? []).join(', '))} from what it needs">Let any agent take it</button><button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Keep waiting</button>`;
+    if (a.kind === 'unfit') acts = `<button class="btn small" data-action="needs" data-item="${esc(a.item)}" data-needs="${esc(JSON.stringify(a.keep ?? []))}" title="Drop ${esc((a.missing ?? []).join(', '))} from what it needs">Let any agent take it</button><button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Keep waiting</button>`;
     // "Got it" is for news; next to a real action, dismissing just hides it.
     else if (/data-action="(open|connect|notify)"/.test(acts)) acts = acts.replace('>Got it</button>', '>Hide</button>');
     return `<div class="row-item"><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
