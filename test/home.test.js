@@ -85,6 +85,18 @@ describe('the home: what needs you across every project', () => {
     assert.equal(h.projects.find((p) => p.slug === 'p2').pulse.state, 'parked');
     assert.equal(h.pulse.state, 'stalled');
     assert.equal(h.pulse.sentence, 'Nothing needs you. Nothing is moving: work is waiting in 1 project.');
+
+    // What a parked project needs waits for it too: not in needs, not in the pulse; its own line still counts it.
+    hub.humanOp('p2', 'settings', { parked: false }, '@o');
+    hub.agentOp('p2', 'claim', 'bot2', { item: '#1' });
+    hub.agentOp('p2', 'ask', 'bot2', { item: '#1', question: 'Which region?', blocking: true });
+    assert.equal(homeView(hub, { viewer: '@b' }).pulse.state, 'needs-you');
+    hub.humanOp('p2', 'settings', { parked: true }, '@o');
+    h = homeView(hub, { viewer: '@b' });
+    assert.equal(h.pulse.state, 'stalled');
+    assert.deepEqual(h.needs, []);
+    assert.match(h.pulse.sentence, /^Nothing needs you\./);
+    assert.ok(h.projects.find((p) => p.slug === 'p2').needs >= 1, 'the parked line still shows it');
   });
 
   test('over HTTP: one request; Mark all seen covers every project; agents and viewers are refused', async () => {
