@@ -84,7 +84,10 @@ describe('required mode', () => {
     const r = await request(ctx.port, 'GET', '/api/projects');
     assert.equal(r.status, 401);
     assert.ok(r.json.hint);
-    assert.equal((await request(ctx.port, 'GET', '/agents.md')).status, 401);
+    // The guide is public: it's how an agent learns nuworq before it has a token.
+    const g = await request(ctx.port, 'GET', '/agents.md');
+    assert.equal(g.status, 200);
+    assert.match(g.text, /checkin/);
     assert.equal((await request(ctx.port, 'GET', '/api/stream')).status, 401);
     const me = await request(ctx.port, 'GET', '/api/me');
     assert.deepEqual(me.json, { auth: 'required', role: null, name: null });

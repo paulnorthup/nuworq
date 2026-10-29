@@ -276,6 +276,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 
       // ── public ──
       if (req.method === 'GET' && path === '/api/health') return send(200, { ok: true, name: 'nuworq' });
+      // The guide is how any agent learns nuworq, before it has a token: no project data, no secrets.
+      if (req.method === 'GET' && (path === '/agents.md' || path === '/api/guide')) {
+        return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req) + base, via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
+      }
       if (req.method === 'POST' && path === '/api/login') {
         if (!required) return send(200, { ok: true, auth: 'local' });
         const ip = clientIp(req);
@@ -456,9 +460,6 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'GET' && path === '/api/tools') {
         return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? ''));
-      }
-      if (req.method === 'GET' && (path === '/agents.md' || path === '/api/guide')) {
-        return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req) + base, via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
       }
 
       let m;
