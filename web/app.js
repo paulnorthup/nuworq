@@ -752,7 +752,7 @@ async function connect() {
     <p class="lead">Any model can work here, and many agents at once. Set an agent tool up once: it needs no project. An agent working in a folder the hub knows finds its project; anywhere else, the hub routes it to the work that matters most.</p>
     ${secured ? `<p class="lead">This hub requires tokens. Give each agent its own, so you can revoke one without the others. On the server, run:</p>${copyBlock('node bin/nuworq.js token create <agent-name> --role agent')}` : ''}
     <h4>Start a worker (it goes wherever work is waiting)</h4><p class="lead">Each worker gets its own git worktree and branch, so many can run at once. Run it again for more workers.</p>${copyBlock(`node "${bin}" worker --agent claude --run\nnode "${bin}" worker --agent codex --run`)}
-    ${where ? '' : `<p class="lead">⚠ The hub doesn't know where ${esc(S.view?.project.name ?? 'this project')}'s code lives yet. Set it under the mission (5m view), so workers can start there.</p>`}
+    ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
     <h4>Claude Code (once, for every project)</h4>${copyBlock(`claude mcp add --scope user nuworq${env} -- node "${bin}" mcp`)}
     <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(`[mcp_servers.nuworq]\ncommand = "node"\nargs = ["${bin}", "mcp"]\nenv = { NUWORQ_URL = "${url}"${tomlTok} }`)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(`command: node\nargs: ["${bin}", "mcp"]\nenv: NUWORQ_URL=${url}${envTok}`)}

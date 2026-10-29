@@ -208,6 +208,25 @@ describe('workers on a hub that requires login', () => {
   });
 });
 
+describe('a worker started --here', () => {
+  test('works in this folder even when the hub has another one on record', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-here-')));
+    const hub = new Hub();
+    hub.tx(() => hub.project('moved', { create: true }));
+    hub.humanOp('moved', 'settings', { path: join(dir, 'gone') });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'moved', '--as', 'w', ...a], { env: { ...process.env, HOME: dir }, cwd: dir });
+    try {
+      await assert.rejects(cli(), (e) => /doesn't exist on this machine/.test(e.stderr) && /--here/.test(e.stderr));
+      assert.match((await cli('--here')).stdout, new RegExp(`cd '${dir}'`));
+    } finally {
+      server.close();
+    }
+  });
+});
+
 // A fake world: time only moves when the runner sleeps; workers are promises we resolve by hand.
 function world(routesSeq) {
   let t = 0;

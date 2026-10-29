@@ -286,10 +286,11 @@ const hasOrigin = (home) => {
 // The shell command that gives a worker its worktree (detached at main, or at origin/main after a
 // fetch when there is an origin; reused if it exists) and starts the agent in it.
 // token: the agent token the worker gets when it runs (null: the hub needs none, or we only print).
+// --here: work in this folder (a clone of the project), whatever folder the hub has on record.
 function workerSetup(target, agent, flags, s, token = null) {
-  const home = target.path || process.cwd();
+  const home = (flags.here && process.cwd()) || target.path || process.cwd();
   if (!existsSync(home)) {
-    throw new HubError(`${target.name} lives in ${home}, which doesn't exist on this machine`, { hint: 'Set where it lives in the UI (5m view, under the mission).' });
+    throw new HubError(`${target.name} lives in ${home}, which doesn't exist on this machine`, { hint: 'Run the worker from a clone of its repository with --here.' });
   }
 
   const name = String(flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
