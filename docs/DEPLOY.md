@@ -203,6 +203,9 @@ An item can wait on an outside URL (a precondition), and the check may send a cr
 
 A release precondition (`{ kind: "release", repo: "acme/api", min: "2.1.0" }`) reads the repository's latest GitHub release through the hub's GitHub App when the app is installed there (a read-only token), and through GitHub's public API otherwise. A hub with workspaces uses the app only for the project's own repositories.
 
+### Early access (workspaces hubs)
+`serve --workspaces --early-access` means making an organization takes an invitation. People ask on a form that POSTs `{ email, github, building, turnstile }` to `/api/early-access` on the hub's own address. The hub checks the Cloudflare Turnstile token with `NUWORQ_TURNSTILE_SECRET`, takes at most 5 attempts per address per hour, and merges a repeat email into one request. The hub's owners, `NUWORQ_HUB_OWNERS=you@example.com,...` (verified sign-in emails), review requests at `/requests.html`. Approving one shows a link (`/?grant=…`) to send: it lets that person sign in and make one organization, once, within 14 days. Owners need no invitation themselves.
+
 ### Backups
 Everything lives in one SQLite file, plus its `-wal` and `-shm` files while running.
 ```bash
