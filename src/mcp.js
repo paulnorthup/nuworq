@@ -45,7 +45,8 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
         delete args.project;
       }
       if (name === 'checkin') {
-        if (!args.model && env.TRELLIS_MODEL) args.model = env.TRELLIS_MODEL;
+        // Whoever launched us knows the model better than the model does (open-weight ones say "unknown").
+        if (env.TRELLIS_MODEL) args.model = env.TRELLIS_MODEL;
         if (!args.client && clientName) args.client = clientName;
       }
       try {

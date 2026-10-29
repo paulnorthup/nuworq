@@ -152,8 +152,11 @@ ${guide({ project, url, via: 'cli', command: CLI })}`;
 // needs (MCP server, project, a scoped tool allowlist). Prints the command, or runs it with --run.
 function agentOf(flags) {
   const agent = String(flags.agent || 'claude').toLowerCase();
-  if (!['claude', 'codex'].includes(agent)) {
-    throw new HubError(`unknown agent "${agent}"`, { hint: 'Use --agent claude or --agent codex. For anything else, give it the Trellis MCP server (trellis init) and let it check in.' });
+  if (!['claude', 'codex', 'opencode'].includes(agent)) {
+    throw new HubError(`unknown agent "${agent}"`, { hint: 'Use --agent claude, codex or opencode. For anything else, give it the Trellis MCP server (trellis init) and let it check in.' });
+  }
+  if (agent === 'opencode' && (typeof flags.model !== 'string' || !flags.model.includes('/'))) {
+    throw new HubError('opencode needs a model: --model <provider>/<model>', { hint: 'e.g. --model ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is configured for you), or any provider in your opencode config. A ~27B tool-calling model is reliable; see docs/OPEN-WEIGHT.md.' });
   }
   return agent;
 }
@@ -198,9 +201,11 @@ async function worker(flags) {
 ${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Merge the branch when you accept the work, then: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
   if (!flags.run) {
     console.log(`\n${cmd}\n`);
-    console.log(dim(agent === 'claude'
-      ? `Headless agents can't ask permission: they may only use the tools in --allowedTools (set from what's in the folder; change with --allow). Never git push.\nAdd --run to start it now.`
-      : `Codex runs in its workspace-write sandbox; the Trellis MCP server runs outside it, so it can reach the hub.\nAdd --run to start it now.`));
+    console.log(dim({
+      claude: `Headless agents can't ask permission: they may only use the tools in --allowedTools (set from what's in the folder; change with --allow). Never git push.`,
+      codex: `Codex runs in its workspace-write sandbox; the Trellis MCP server runs outside it, so it can reach the hub.`,
+      opencode: `opencode has no sandbox: it may run any shell command except git push (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
+    }[agent] + '\nAdd --run to start it now.'));
     if (s.token) console.log(dim('Replace <agent-token> with an agent token: trellis token create <name> --role agent'));
     return;
   }
@@ -249,6 +254,17 @@ function workerSetup(target, agent, flags, s) {
   lines.push(`cd ${sq(cwd)}`);
   if (agent === 'claude') {
     lines.push(`claude -p ${sq(task)} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}`);
+  } else if (agent === 'opencode') {
+    // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
+    // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
+    const model = String(flags.model);
+    const [provider, ...rest] = model.split('/');
+    const config = {
+      mcp: { trellis: { type: 'local', command: ['node', BIN, 'mcp'], enabled: true, environment: { ...env, TRELLIS_MODEL: rest.join('/') } } },
+      permission: { bash: { 'git push*': 'deny' } },
+      ...(provider === 'ollama' ? { provider: { ollama: { npm: '@ai-sdk/openai-compatible', name: 'Ollama', options: { baseURL: process.env.OLLAMA_URL || 'http://localhost:11434/v1' }, models: { [rest.join('/')]: {} } } } } : {}),
+    };
+    lines.push(`OPENCODE_CONFIG_CONTENT=${sq(JSON.stringify(config))} \\\n  opencode run -m ${sq(model)} ${sq(task)} < /dev/null`);
   } else {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
     lines.push(`codex exec -s workspace-write \\\n  -c ${sq('mcp_servers.trellis.command="node"')} \\\n  -c ${sq(`mcp_servers.trellis.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq(`mcp_servers.trellis.env=${envToml}`)} \\\n  ${sq(task)}`);
@@ -340,7 +356,8 @@ ${bold('Shell-only agents')}  ${dim('(add to AGENTS.md or CLAUDE.md)')}
 
 ${bold('Headless worker')}  ${dim('(asks the hub where work is waiting; own worktree and branch; --run starts it)')}
   node ${q} worker --agent claude --run
-  node ${q} worker --agent codex --run`);
+  node ${q} worker --agent codex --run
+  node ${q} worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run`);
 }
 
 const dbPath = (flags) => flags.db || process.env.TRELLIS_DB || join(homedir(), '.trellis', 'trellis.db');
@@ -484,11 +501,12 @@ ${bold('Setup')}
   mcp                                    run the stdio MCP server (one per agent session)
   guide [--via cli|tools]                the agent guide
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
-  worker [--agent claude|codex] [--run] [--project p] [--here] [--as name] [--allow tools]
+  worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools]
                                          start a headless worker where work is waiting (the hub routes it),
                                          in its own git worktree and branch (--here: no worktree). Without
-                                         --run it prints the command instead.
-  run [--workers 1] [--agent claude|codex] [--max-runs M] [--max-minutes T] [--poll 30]
+                                         --run it prints the command instead. opencode needs --model,
+                                         e.g. ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is set up for you).
+  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--poll 30]
                                          keep up to N workers on waiting work in projects you opted in
                                          (UI: "Let trellis run staff this project"); exits when the
                                          queue is empty. Logs: ~/.trellis/logs. Dollar budgets: not yet.

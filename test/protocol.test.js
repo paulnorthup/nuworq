@@ -201,7 +201,7 @@ describe('transports', () => {
       const list = await rpc('tools/list', {});
       assert.equal(list.result.tools.length, 15);
 
-      const checkin = await rpc('tools/call', { name: 'checkin', arguments: {} });
+      const checkin = await rpc('tools/call', { name: 'checkin', arguments: { model: 'unknown' } }); // TRELLIS_MODEL wins
       assert.ok(!checkin.result.isError, checkin.result.content[0].text);
       const brief = JSON.parse(checkin.result.content[0].text);
       assert.match(brief.you, /^codex-[0-9a-f]{4}$/);
