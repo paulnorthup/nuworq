@@ -13,6 +13,7 @@ export function getStartedCard(gs, { worker = '' } = {}) {
   const action = (s) => {
     const a = s.action;
     if (!a) return '';
+    if (a.note) return `<span class="faint">${esc(a.label)}</span>`; // someone else's to do: nothing to click
     const cls = s.key === next ? 'btn primary small' : 'link';
     if (a.href) return `<a class="${cls}" href="${esc(a.href)}"${/^https?:/.test(a.href) ? ' target="_blank" rel="noopener"' : ''}>${esc(a.label)}</a>`;
     return `<button class="${cls}" data-action="${esc(a.ui)}">${esc(a.label)}</button>`;

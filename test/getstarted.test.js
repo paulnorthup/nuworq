@@ -35,8 +35,8 @@ function github(installations) {
 describe('get started: each step checks itself off from hub state', () => {
   test('a single hub has five steps; a workspaces hub adds the organization first', () => {
     const { hub } = setup();
-    assert.deepEqual(getStarted(facts(hub)).steps.map((s) => s.key), ['github', 'project', 'machine', 'agent', 'landed']);
-    assert.deepEqual(getStarted(facts(hub, { workspaces: true })).steps.map((s) => s.key), ['org', 'github', 'project', 'machine', 'agent', 'landed']);
+    assert.deepEqual(getStarted(facts(hub)).steps.map((s) => s.key), ['project', 'github', 'machine', 'agent', 'landed']);
+    assert.deepEqual(getStarted(facts(hub, { workspaces: true })).steps.map((s) => s.key), ['org', 'project', 'github', 'machine', 'agent', 'landed']);
   });
 
   test('organization: done once the viewer is a person in the workspace', () => {
@@ -118,6 +118,37 @@ describe('get started: each step checks itself off from hub state', () => {
     assert.equal(step('landed').done, true);
   });
 
+  test('a project that is not on GitHub finishes without the GitHub step; one on github.com still needs it (#129)', () => {
+    const { hub, step } = setup();
+    assert.ok(step('github'), 'before any project, GitHub is on the list');
+    const p = hub.tx(() => hub.project('demo', { create: true }));
+    hub.addRemote(p, '/srv/git/demo.git', 'you');
+    hub.agentOp('demo', 'checkin', 'a1', {});
+    hub.event(p, { actor: 'a1', type: 'landed', headline: 'a1 landed #1 on main' });
+    const gs = getStarted(facts(hub, { app: 'none' }));
+    assert.equal(gs.steps.find((s) => s.key === 'github'), undefined);
+    assert.equal(gs.complete, true);
+
+    const q = hub.tx(() => hub.project('api', { create: true }));
+    hub.addRemote(q, 'github.com/acme/api', 'you');
+    const again = getStarted(facts(hub, { app: 'none' }));
+    assert.equal(again.steps.find((s) => s.key === 'github').done, false);
+    assert.equal(again.complete, false);
+  });
+
+  test("with no app, someone who can't create it is told whom to ask, not sent to the create flow (#129)", () => {
+    const { hub, step } = setup();
+    const auth = new Auth(hub.db);
+    auth.addPerson('paul', 'owner');
+    auth.addPerson('sam', 'steward');
+    const ask = step('github', { app: 'none', viewer: '@sam' }).action;
+    assert.deepEqual(ask, { label: 'Ask an owner (@paul) to set up GitHub', note: true });
+    assert.deepEqual(step('github', { app: 'none', workspaces: true }).action, { label: 'Ask whoever runs this hub to set up its GitHub App', note: true });
+    assert.equal(step('github', { app: 'none', canCreateApp: true }).action.href, 'api/github/app/new', 'an owner still creates it');
+    assert.match(getStartedCard({ show: true, steps: [{ key: 'github', label: 'Connect GitHub', done: false, action: ask }] }),
+      /<span class="faint">Ask an owner \(@paul\) to set up GitHub<\/span>/);
+  });
+
   test('connect GitHub: no app, an app installed nowhere, an app installed', () => {
     const { hub, step } = setup();
     assert.equal(step('github', { app: 'none' }).done, false);
@@ -135,11 +166,11 @@ describe('get started: each step checks itself off from hub state', () => {
       for (const st of getStarted(s).steps) {
         assert.ok(!st.done, st.key);
         assert.ok(st.action?.label, `${st.key} has a label`);
-        assert.ok(st.action.href || st.action.ui, `${st.key} has an href or a ui action`);
+        assert.ok(st.action.href || st.action.ui || st.action.note, `${st.key} has an href, a ui action, or says whom to ask`);
       }
     }
-    assert.equal(getStarted({ app: 'none', canCreateApp: true }).steps[0].action.href, 'api/github/app/new');
-    assert.equal(getStarted({ app: 'uninstalled', installUrl: 'https://github.com/apps/x/installations/new' }).steps[0].action.href, 'https://github.com/apps/x/installations/new');
+    assert.equal(getStarted({ app: 'none', canCreateApp: true }).steps.find((s) => s.key === 'github').action.href, 'api/github/app/new');
+    assert.equal(getStarted({ app: 'uninstalled', installUrl: 'https://github.com/apps/x/installations/new' }).steps.find((s) => s.key === 'github').action.href, 'https://github.com/apps/x/installations/new');
     assert.equal(getStarted({ board: 'demo' }).steps.at(-1).action.href, '#/p/demo');
     assert.equal(getStarted({}).steps.find((s) => s.key === 'project').action.ui, 'new-project');
   });
@@ -164,8 +195,8 @@ describe('get started over HTTP: complete once, then gone for good', () => {
       let gs = await call('/api/get-started');
       assert.equal(gs.show, true);
       assert.equal(gs.complete, false);
-      assert.deepEqual(gs.steps.filter((s) => !s.done).map((s) => s.key), ['github', 'project', 'machine', 'agent', 'landed']);
-      assert.equal(gs.steps[0].action.href, 'https://github.com/apps/nuworq-test/installations/new');
+      assert.deepEqual(gs.steps.filter((s) => !s.done).map((s) => s.key), ['project', 'github', 'machine', 'agent', 'landed']);
+      assert.equal(gs.steps.find((s) => s.key === 'github').action.href, 'https://github.com/apps/nuworq-test/installations/new');
 
       hub.addRemote(p, 'github.com/acme/api', 'you');
       hub.agentOp('demo', 'checkin', 'a1', {});

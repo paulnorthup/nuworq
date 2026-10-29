@@ -30,7 +30,10 @@ Invite link to a landed item: **8.0s, 11 steps**, and nobody had to ask the owne
 
 - **Step 3, then for good:** Get started puts "Connect GitHub" first. For a steward on a hub without an
   App, its action opens a dialog where only an owner can create one. For a project that isn't on GitHub,
-  the step never checks off, so the card can't complete. Filed as #129.
+  the step never checks off, so the card can't complete. Filed as #129, and fixed there. "Add a project"
+  now comes first, so step 3's first undone step is "+ Project". The GitHub step leaves the list once the
+  project's repository turns out not to be on github.com. Someone who can't create the App is told whom to
+  ask. A rerun ends with "Get started still open: none".
 
 ## What this run doesn't cover
 
