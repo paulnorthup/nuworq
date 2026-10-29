@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS usage (
   input_tokens  INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd      REAL,
-  source        TEXT NOT NULL,                -- agent: reported by the agent | runner: read from its CLI
+  source        TEXT NOT NULL,                -- agent: reported by the agent | runner: read from its CLI | llm-proxy: measured (src/llmproxy.js)
   at            INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_item ON usage (item_id);
@@ -279,6 +279,11 @@ export function openDb(file) {
     'ALTER TABLE issues ADD COLUMN landed_comment INTEGER NOT NULL DEFAULT 0', // the hub's comment when its item landed (its id on GitHub)
     "ALTER TABLE issues ADD COLUMN close_error TEXT NOT NULL DEFAULT ''", // why the hub couldn't close it after its item landed
     "ALTER TABLE prs ADD COLUMN blocked TEXT NOT NULL DEFAULT ''", // why an open landing PR can't merge: '' | conflict | review
+    // What llm-proxy measured (source 'llm-proxy'; 0 on reported rows): model time, requests, failed ones, cold model loads
+    'ALTER TABLE usage ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE usage ADD COLUMN requests INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE usage ADD COLUMN failures INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE usage ADD COLUMN cold_loads INTEGER NOT NULL DEFAULT 0',
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

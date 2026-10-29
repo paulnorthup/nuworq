@@ -6,6 +6,7 @@ import { openDb } from './db.js';
 import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, mirrorPath, originOf, refetch } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
+import { measure } from './llmproxy.js';
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -204,6 +205,10 @@ export class Hub extends EventEmitter {
     this.github = null;
     this.publicUrl = '';
     this._opening = new Map(); // item id → the pull request being opened for it
+    // llmProxy: where measured usage comes from ({ requests }; see proxyClient in src/llmproxy.js). Set by
+    // `nuworq serve` from NUWORQ_LLM_PROXY_URL; tests set a fake. null: reported usage only.
+    this.llmProxy = null;
+    this._measuring = new Map(); // item id → its measurement in flight
   }
 
   q(sql) {
@@ -328,6 +333,24 @@ export class Hub extends EventEmitter {
   // The item's open pull request that conflicts with main (GitHub said so), or null.
   conflictedPr(item) {
     return this.q(`SELECT * FROM prs WHERE item_id = ? AND state = 'open' AND blocked = 'conflict'`).get(item.id) ?? null;
+  }
+
+  // Ask llm-proxy what the item cost, after this transaction: on submit and on landing. One at a time
+  // per item; a later ask waits for the one in flight, so the newest windows win.
+  measureUsage(item) {
+    if (!this.llmProxy) return;
+    const id = item.id;
+    const run = (this._measuring.get(id) ?? Promise.resolve())
+      .then(() => new Promise((r) => setImmediate(r)))
+      .then(() => measure(this, id))
+      .catch((e) => console.error('measuring usage from llm-proxy failed', e))
+      .finally(() => { if (this._measuring.get(id) === run) this._measuring.delete(id); });
+    this._measuring.set(id, run);
+  }
+
+  // Resolves once every measurement asked for has finished. For tests and shutdown.
+  async measured() {
+    while (this._measuring.size) await Promise.all(this._measuring.values());
   }
 
   // The hub tried to open a pull request since the item was last accepted, and couldn't: it lands by hand.
@@ -512,6 +535,7 @@ export class Hub extends EventEmitter {
     // count is now: it may have been changed while the item was verifying.
     if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);
     Object.assign(item, fields);
+    if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
   }
 
   patch(item, fields) {
@@ -556,16 +580,28 @@ export class Hub extends EventEmitter {
   }
 
   // One item's usage, per agent and model, with totals. Cost stays null while any part of it is unknown.
+  // Where llm-proxy measured an agent's traffic, that agent's reported rows are kept but superseded:
+  // out of the totals, so nothing counts twice.
   usageOf(item) {
-    const rows = this.q(`SELECT agent, model, source, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
-        SUM(cost_usd) AS cost_usd, COUNT(cost_usd) = COUNT(*) AS priced
-      FROM usage WHERE item_id = ? GROUP BY agent, model, source ORDER BY MIN(at)`).all(item.id)
-      .map(({ priced, ...r }) => ({ ...r, cost_usd: priced ? r.cost_usd : null }));
-    if (!rows.length) return null;
-    const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
+    const all = this.q(`SELECT agent, model, source, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+        SUM(cost_usd) AS cost_usd, COUNT(cost_usd) = COUNT(*) AS priced,
+        SUM(duration_ms) AS duration_ms, SUM(requests) AS requests, SUM(failures) AS failures, SUM(cold_loads) AS cold_loads
+      FROM usage WHERE item_id = ? GROUP BY agent, model, source ORDER BY MIN(at)`).all(item.id);
+    if (!all.length) return null;
+    const measured = new Set(all.filter((r) => r.source === 'llm-proxy').map((r) => r.agent));
+    const rows = all.map(({ priced, duration_ms, requests, failures, cold_loads, ...r }) => ({
+      ...r, cost_usd: priced ? r.cost_usd : null,
+      ...(r.source === 'llm-proxy' ? { duration_ms, requests, failures, cold_loads } : measured.has(r.agent) ? { superseded: true } : {}),
+    }));
+    const counted = rows.filter((r) => !r.superseded);
+    const sum = (k) => counted.reduce((a, r) => a + (r[k] ?? 0), 0);
     return {
       rows,
-      total: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cost_usd: rows.some((r) => r.cost_usd != null) ? rows.reduce((a, r) => a + (r.cost_usd ?? 0), 0) : null },
+      total: {
+        input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'),
+        cost_usd: counted.some((r) => r.cost_usd != null) ? sum('cost_usd') : null,
+        ...(measured.size ? { duration_ms: sum('duration_ms'), requests: sum('requests'), failures: sum('failures'), cold_loads: sum('cold_loads') } : {}),
+      },
     };
   }
 

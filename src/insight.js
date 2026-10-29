@@ -506,14 +506,17 @@ function flowStats(hub, p, items, t) {
 
 // What finished work cost over the window, per model: median and total per finished item, tokens too
 // (a local model has no price), and everything spent in the window. Null when nothing was recorded.
+// Measured numbers win: an agent's reported rows on an item drop out once llm-proxy measured it there.
+const COUNTED = `(u.source = 'llm-proxy' OR NOT EXISTS (SELECT 1 FROM usage m WHERE m.item_id = u.item_id AND m.agent = u.agent AND m.source = 'llm-proxy'))`;
+
 function costStats(hub, p, from) {
-  const spent = hub.q(`SELECT COUNT(*) AS n, SUM(cost_usd) AS usd FROM usage WHERE project_id = ? AND at > ?`).get(p.id, from);
+  const spent = hub.q(`SELECT COUNT(*) AS n, SUM(cost_usd) AS usd FROM usage u WHERE project_id = ? AND at > ? AND ${COUNTED}`).get(p.id, from);
   if (!spent.n) return null;
   // One row per finished item and model; its cost is unknown (null) if any part of it is.
   const rows = hub.q(`SELECT u.model, u.item_id, SUM(u.input_tokens + u.output_tokens) AS tokens,
       SUM(u.cost_usd) AS usd, COUNT(u.cost_usd) = COUNT(*) AS priced
     FROM usage u JOIN items i ON i.id = u.item_id
-    WHERE i.project_id = ? AND i.stage = 'done'
+    WHERE i.project_id = ? AND i.stage = 'done' AND ${COUNTED}
       AND (SELECT MAX(t.at) FROM transitions t WHERE t.item_id = i.id AND t.stage = 'done') > ?
     GROUP BY u.model, u.item_id`).all(p.id, from);
   const mid = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };

@@ -703,6 +703,9 @@ async function serve(flags) {
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
   const { appFromEnv, appFromFile } = await import('../src/ghapp.js');
+  // Measured usage for agents that go through llm-proxy (NUWORQ_LLM_PROXY_URL / _KEY). Not on a hub with
+  // workspaces: one host key would read every tenant's traffic.
+  hub.llmProxy = (await import('../src/llmproxy.js')).proxyFromEnv();
   // The GitHub App: from the environment, else the one the hub created for itself (Create GitHub App).
   const appFile = join(dataHome(flags), 'github-app.json');
   const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile });
@@ -1052,7 +1055,9 @@ ${bold('Setup')}
 
 Env: NUWORQ_URL (default ${DEFAULT_URL}), NUWORQ_PROJECT, NUWORQ_AGENT, NUWORQ_MODEL, NUWORQ_DB,
      NUWORQ_TOKEN (a token the CLI and MCP server send to a hub that requires login),
-     NUWORQ_PUBLIC_URL (the hub's address as you reach it, used for links in push messages)
+     NUWORQ_PUBLIC_URL (the hub's address as you reach it, used for links in push messages),
+     NUWORQ_LLM_PROXY_URL and NUWORQ_LLM_PROXY_KEY (serve: measured usage for agents that send
+     x-client-name: nuworq/<project>/<agent> through llm-proxy)
 Deploying on a VM or the internet: docs/DEPLOY.md`;
 
 // git's credential helper protocol (git help credential): for "get" on github.com, a token from the hub's
