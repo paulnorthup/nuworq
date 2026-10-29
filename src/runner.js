@@ -27,7 +27,7 @@ const KILL_GRACE_MS = 10_000;
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
 export async function run({
   routes, launch, log = console.log,
-  workers = 1, maxRuns = Infinity, maxMinutes = Infinity, pollSeconds = 30,
+  workers = 1, maxRuns = Infinity, maxMinutes = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
   const running = [];
@@ -38,6 +38,7 @@ export async function run({
   let why = '';
   let wake = () => {};
   let hubDown = false;
+  let idle = false;
   const stop = (reason) => { if (!stopping) { stopping = true; why = reason; } wake(); };
   let interrupted = false;
   onInterrupt?.(() => {
@@ -99,7 +100,13 @@ export async function run({
           wake();
         });
       }
-      if (!running.length && !list.length) stop('no work is waiting in opted-in projects');
+      // Work starts the moment it's ready: by default, wait for it rather than exit.
+      if (list.length) idle = false;
+      else if (!running.length && untilIdle) stop('no work is waiting in opted-in projects');
+      else if (!running.length && !idle) {
+        idle = true;
+        log(`Nothing is waiting in opted-in projects; checking every ${pollSeconds}s. Ctrl-C stops.`);
+      }
     }
     if (!stopping && launched >= maxRuns && !running.length) stop(`reached --max-runs ${maxRuns}`);
     if (stopping && !running.length) break;

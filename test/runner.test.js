@@ -187,9 +187,9 @@ function world(routesSeq) {
 }
 
 describe('run: the supervising loop', () => {
-  test('starts one worker for one item, waits for it, then exits when nothing is waiting', async () => {
+  test('with --until-idle: starts one worker for one item, waits for it, then exits when nothing is waiting', async () => {
     const w = world([[route('a', 1)], [route('a', 1)], []]);
-    const p = run({ ...w.opts, workers: 3 });
+    const p = run({ ...w.opts, workers: 3, untilIdle: true });
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(w.workers.length, 1, 'no herd while the first worker has not claimed');
     w.workers[0].finish(0);
@@ -197,6 +197,16 @@ describe('run: the supervising loop', () => {
     assert.equal(res.launched, 1);
     assert.match(res.why, /no work is waiting/);
     assert.match(w.lines.at(-1), /1 launched, 1 exited cleanly, 0 failed \(w1@a:0\)/);
+  });
+
+  test('by default it waits for work instead of exiting, and starts a worker the moment work appears', async () => {
+    const w = world([[], [], [], [route('a', 1)], [route('a', 1)], []]);
+    const p = run({ ...w.opts, workers: 1, maxRuns: 1 });
+    while (!w.workers.length) await new Promise((r) => setTimeout(r, 5));
+    assert.equal(w.lines.filter((l) => /Nothing is waiting/.test(l)).length, 1, 'says so once, not every poll');
+    w.workers[0].finish(0);
+    const res = await p;
+    assert.match(res.why, /reached --max-runs 1/);
   });
 
   test('stops after --max-runs, and terminates workers that run past --max-minutes', async () => {

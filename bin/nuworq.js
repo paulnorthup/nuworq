@@ -14,7 +14,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -353,6 +353,7 @@ async function runCmd(flags) {
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}`),
     launch, workers,
     maxRuns: num(flags['max-runs'], Infinity),
+    untilIdle: !!flags['until-idle'],
     maxMinutes: num(flags['max-minutes'], Infinity),
     pollSeconds: num(flags.poll, 30),
     onInterrupt: (fn) => {
@@ -770,7 +771,7 @@ ${bold('Setup')}
                                          NUWORQ_AGENT_TOKEN): workers never get your own token.
                                          It reports what this machine has (macos/linux, docker, gpu;
                                          add more with --has).
-  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--poll 30] [--has tags]
+  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--poll 30] [--has tags] [--until-idle]
                                          keep up to N workers on waiting work in projects you opted in
                                          (UI: "Let nuworq run staff this project"); exits when the
                                          queue is empty. Logs: ~/.nuworq/logs. Dollar budgets: not yet.
