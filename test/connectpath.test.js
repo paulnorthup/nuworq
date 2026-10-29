@@ -40,7 +40,7 @@ describe('connect registers nuworq without folder paths', () => {
     const m = machine();
     assert.deepEqual(launcher(m.pkgBin, m.env), { command: 'nuworq', args: ['mcp'] });
     const r = registerMcp({ bin: m.pkgBin, home: m.home, env: m.env });
-    assert.deepEqual(r.added.map((a) => a.tool), ['claude', 'codex', 'opencode']);
+    assert.deepEqual(r.added.map((a) => a.tool), ['claude', 'codex', 'opencode', 'skill']);
     assert.deepEqual(m.claude(), ['mcp get nuworq', 'mcp get nuworq', 'mcp add --scope user nuworq -- nuworq mcp'], 'an old entry to upgrade? none; one to add');
     const codex = readFileSync(m.codex, 'utf8');
     assert.match(codex, /\[mcp_servers\.nuworq\]\ncommand = "nuworq"\nargs = \["mcp"\]\ndefault_tools_approval_mode = "approve"\n/);
@@ -80,7 +80,7 @@ describe('connect registers nuworq without folder paths', () => {
     assert.deepEqual(oc.other, { type: 'local', command: ['x'] });
 
     // Codex was connect's own: its record follows the new text, so disconnect removes it. The hand-written ones stay theirs.
-    assert.deepEqual(r.added.map((a) => a.tool), ['codex']);
+    assert.deepEqual(r.added.map((a) => a.tool), ['codex', 'skill']);
     unregisterMcp({ home: m.home, env: m.env, added: r.added });
     assert.ok(!readFileSync(m.codex, 'utf8').includes('[mcp_servers.nuworq]'));
     assert.ok(JSON.parse(readFileSync(m.opencode, 'utf8')).mcp.nuworq, 'opencode was written by hand: left alone');
