@@ -424,7 +424,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     lines.push(`OPENCODE_CONFIG_CONTENT=${sq(JSON.stringify(config))} \\\n  opencode run${json} -m ${sq(model)} ${sq(task)} < /dev/null`);
   } else {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
-    lines.push(`codex exec${json} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)} \\\n  ${sq(task)}`);
+    lines.push(`codex exec${json} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)} \\\n  ${sq(task)}`);
   }
   return { name, worktree, main: origin ? `origin/${main}` : main, origin, cwd, cmd: lines.join(' && \\\n') };
 }
@@ -627,6 +627,7 @@ ${bold('Codex')}  ${dim('(~/.codex/config.toml)')}
   [mcp_servers.nuworq]
   command = "node"
   args = [${q}, "mcp"]
+  default_tools_approval_mode = "approve"   ${dim('# headless Codex can\'t answer a prompt')}
 
 ${bold('opencode')}  ${dim('(~/.config/opencode/opencode.json)')}
   "mcp": {

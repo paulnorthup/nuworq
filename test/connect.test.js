@@ -159,6 +159,7 @@ describe('nuworq connect', () => {
       assert.deepEqual(m.read.claude(), ['mcp get nuworq', `mcp add --scope user nuworq -- node ${BIN} mcp`]);
       assert.ok(m.read.codex().startsWith(m.toml), "Codex's own entries are untouched");
       assert.match(m.read.codex(), /\[mcp_servers\.nuworq\]\ncommand = "node"\nargs = \[.*"mcp"\]/);
+      assert.match(m.read.codex(), /default_tools_approval_mode = "approve"/, 'headless Codex would otherwise cancel every nuworq call');
       assert.deepEqual(m.read.opencode().mcp.other, m.oc.mcp.other);
       assert.equal(m.read.opencode().theme, 'dark');
       assert.deepEqual(m.read.opencode().mcp.nuworq.command, ['node', BIN, 'mcp']);

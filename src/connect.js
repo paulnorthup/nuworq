@@ -17,7 +17,9 @@ const run = (cmd, args, env) => {
 };
 
 // The Codex block, exactly as written: disconnect removes this text and only this text.
-const codexBlock = (bin) => `\n[mcp_servers.${NAME}]\ncommand = "node"\nargs = [${JSON.stringify(bin)}, "mcp"]\n`;
+// Codex asks before every MCP tool call unless told otherwise, and a headless session (codex exec) has
+// nobody to answer, so the call is cancelled. nuworq's own tools are approved; nothing else is.
+const codexBlock = (bin) => `\n[mcp_servers.${NAME}]\ncommand = "node"\nargs = [${JSON.stringify(bin)}, "mcp"]\ndefault_tools_approval_mode = "approve"\n`;
 
 // Each tool: where it keeps MCP servers, whether nuworq is there already, how to add and remove it.
 // add() returns the record to keep (what disconnect needs), or a reason it was left alone.
