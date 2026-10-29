@@ -190,6 +190,13 @@ function versionLine() {
 }
 
 // ── overview: the 30-second view across every project ──
+function zoomControl() {
+  return `<div class="seg" title="How much do you want to see? (keys 1, 2, 3)">${Object.keys(Z).map((k) =>
+    `<button class="${S.zoom === k ? 'on' : ''}" data-action="zoom" data-zoom="${k}">${k}</button>`).join('')}</div>`;
+}
+
+// All projects at 30s: what needs you and whether each is moving. 5m adds the mission (two lines);
+// 30m the whole mission, its repos and whether nuworq run staffs it. Parked projects wait until 5m.
 function overview() {
   if (!S.projects.length) {
     return `<div class="phead"><div class="titles"><h1>Welcome to nuworq</h1>
@@ -199,23 +206,31 @@ function overview() {
   }
   const sorted = [...S.projects].sort((a, b) => a.parked - b.parked || b.needs - a.needs || a.name.localeCompare(b.name));
   const total = sorted.reduce((n, p) => n + p.needs, 0);
+  const shown = z() >= 1 ? sorted : sorted.filter((p) => !p.parked);
+  const parked = sorted.length - shown.length;
+  const details = (p) => z() < 2 ? '' : `<div class="s">${[
+    p.remotes?.length ? esc(p.remotes.join(', ')) : 'No repo linked',
+    p.runner ? 'nuworq run staffs it' : 'nuworq run leaves it alone',
+    p.parked ? 'parked' : '',
+  ].filter(Boolean).join(' · ')}</div>`;
   return `<div class="phead"><div class="titles"><h1>All projects</h1>
-      <div class="mission">${total ? `${plural(total, 'thing')} across ${plural(sorted.filter((p) => p.needs).length, 'project')} ${total === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you anywhere. Work is flowing.'}</div></div></div>
-    <div class="overview">${sorted.map((p) => `
+      <div class="mission">${total ? `${plural(total, 'thing')} across ${plural(sorted.filter((p) => p.needs).length, 'project')} ${total === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you anywhere. Work is flowing.'}</div></div>
+      <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div></div></div>
+    <div class="overview">${shown.map((p) => `
       <div class="ov-card state-${p.pulse.state} ${p.parked ? 'parked' : ''}" data-action="goto" data-slug="${esc(p.slug)}">
         <span class="dot ${p.pulse.state}" style="margin-top:7px"></span>
         <div class="body"><h3>${esc(p.name)}</h3>
-          ${p.mission ? `<div class="m">${esc(p.mission)}</div>` : ''}
-          <div class="sentence">${esc(p.pulse.sentence)}</div></div>
+          ${z() >= 1 && p.mission ? `<div class="m ${z() < 2 ? 'clamp' : ''}">${esc(p.mission)}</div>` : ''}
+          <div class="sentence">${esc(p.pulse.sentence)}</div>${details(p)}</div>
         ${p.needs ? `<span class="badge">${p.needs}</span>` : ''}
-      </div>`).join('')}</div>`;
+      </div>`).join('')}</div>
+    ${parked ? `<div class="zoom-more">${plural(parked, 'parked project')} not shown. <button data-action="zoom" data-zoom="5m">Go to 5m</button> to see ${parked === 1 ? 'it' : 'them'}.</div>` : ''}`;
 }
 
 // ── project ──
 function project(v) {
   const P = v.project;
-  const zoomSeg = `<div class="seg" title="How much do you want to see? (keys 1, 2, 3)">${Object.keys(Z).map((k) =>
-    `<button class="${S.zoom === k ? 'on' : ''}" data-action="zoom" data-zoom="${k}">${k}</button>`).join('')}</div>`;
+  const zoomSeg = zoomControl();
   const autoSeg = `<div class="seg">${Object.entries(P.autonomy_options).map(([k, o]) =>
     `<button class="${P.autonomy === k ? 'on' : ''}" data-action="autonomy" data-level="${k}" title="${esc(o.human)}">${esc(o.label)}</button>`).join('')}</div>`;
   const mission = S.editMission
