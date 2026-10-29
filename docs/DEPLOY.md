@@ -105,6 +105,19 @@ Deliveries need no token: the HMAC-SHA256 signature (`X-Hub-Signature-256`) is t
 
 ## 30 minutes: details
 
+### Keeping a server up to date: it pulls, nothing pushes to it
+`serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. If the new hub doesn't come up healthy, it rolls back. No CI job reaches into your network, and the server only needs read access:
+```bash
+# on the server, as the hub's user
+sudo -u nuworq ssh-keygen -t ed25519 -N "" -C "nuworq server (read-only)" -f /var/lib/nuworq/.ssh/id_ed25519
+ssh-keyscan -t ed25519 github.com | sudo -u nuworq tee /var/lib/nuworq/.ssh/known_hosts
+#   check: ssh-keygen -lf /var/lib/nuworq/.ssh/known_hosts shows GitHub's published
+#   SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU
+# then add the .pub to the repo as a deploy key, read-only:
+gh repo deploy-key add id_ed25519.pub --repo <owner>/<repo> --title "nuworq server (read-only)"
+```
+If `main` fails its tests, the hub stays on the last good commit and files one "main fails its tests" item at priority `now`, so the next agent fixes it first.
+
 ### Tokens
 ```bash
 nuworq token create <name> --role human|agent     # prints the token once
