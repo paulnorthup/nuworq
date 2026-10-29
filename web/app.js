@@ -1,6 +1,7 @@
 // nuworq UI. No framework: state → HTML strings → one delegated event handler.
 // Zoom levels mirror 0-30-5-30: what isn't relevant at a level simply isn't rendered.
 import { connectCommands } from './connect.js';
+import { copyBlock, copyText } from './copy.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
@@ -798,7 +799,6 @@ function modal(html) {
   m.hidden = false;
 }
 const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''; };
-const copyBlock = (text) => `<div class="copyable"><pre>${esc(text)}</pre><button data-action="copy" data-text="${esc(text)}">Copy</button></div>`;
 
 async function connect() {
   S.info ??= await api('/api/info').catch(() => ({ bin: '/path/to/nuworq/bin/nuworq.js', url: location.origin }));
@@ -1099,7 +1099,13 @@ const ACTIONS = {
       go(r.slug);
     } catch (e) { toast(e.message, true); }
   },
-  copy: async (el) => { try { await navigator.clipboard.writeText(el.dataset.text); toast('Copied'); } catch { toast('Copy failed; select the text instead', true); } },
+  copy: async (el) => {
+    if (await copyText(el.dataset.text)) return toast('Copied');
+    // Refused every way: select the text, so the keyboard copies it.
+    const pre = el.closest('.copyable')?.querySelector('pre');
+    if (pre) getSelection().selectAllChildren(pre);
+    toast(`This browser won't copy from a button: the text is selected, press ${/Mac|iP(hone|ad)/.test(navigator.platform) ? '⌘C' : 'Ctrl-C'}`, true);
+  },
 };
 
 document.addEventListener('click', (e) => {
