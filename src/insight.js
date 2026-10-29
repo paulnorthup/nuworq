@@ -8,6 +8,7 @@ import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
 import { verification } from './outcomes.js';
+import { OPERATOR_TAGS } from './protocol.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -331,7 +332,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       key: `unfit:${it.id}:${missing.join(',')}`, level: 'know', kind: 'unfit', at: it.stage_since,
       headline: `${ref(it)} needs ${missing.join(', ')}; no agent connected in the last day has it`,
       sub: it.title,
-      why: `Only agents that declare ${missing.join(', ')} at checkin (has) are offered it. Start one on a machine that has it, or change what the item needs.`,
+      why: missing.some((tag) => OPERATOR_TAGS.includes(tag))
+        ? `Only an operator that declares ${missing.join(', ')} at checkin (has) is offered it. Start an operator session (see Operators in the guide, /agents.md), or change what the item needs.`
+        : `Only agents that declare ${missing.join(', ')} at checkin (has) are offered it. Start one on a machine that has it, or change what the item needs.`,
       item: ref(it), missing, keep: json(it.needs, []).filter((t) => !missing.includes(t)),
     });
   }

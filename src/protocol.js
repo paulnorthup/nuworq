@@ -30,6 +30,8 @@ const PRECONDITION = {
     credential: s('The NAME of a credential on the hub host, e.g. "VENDOR" for NUWORQ_CRED_VENDOR. It is sent only to the hosts the hub host lists in NUWORQ_CRED_VENDOR_HOSTS.'),
   },
 };
+// What only an operator has: an attended session with the human's permissions (see Operators in the guide).
+export const OPERATOR_TAGS = ['operator', 'claude-cli', 'nuworq-infra', 'homelab-vm', 'github-admin'];
 const REPO = s('Optional. The repository the work lands in, when the project has several, e.g. "github.com/acme/api". Default: the project\'s first.');
 const LAYERS = {
   headline: s('One line, ≤100 characters, outcome first. What a busy person needs in three seconds.'),
@@ -46,7 +48,7 @@ export const OPS = [
       model: s('Your model id, e.g. "claude-opus-5-5", "gpt-5", "qwen3-coder".'),
       client: s('The tool you run in, e.g. "claude-code", "codex", "opencode".'),
       status: s('Optional one-line status.'),
-      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others.' },
+      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others. Only an operator (an attended session with the human\'s permissions) declares "operator" and its capabilities: claude-cli, nuworq-infra, homelab-vm, github-admin, browser.' },
     },
   },
   {
@@ -331,7 +333,13 @@ Hub: ${url} · project: ${project} (change with --project).
 8. Leaving? ${c('signoff')}.
 
 ## Operators
-An operator is a trusted, attended session: it checks in with \`operator\` in \`has\`. Its ${c('next')} first hands it questions agents asked \`to: "operator"\` (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them. If one needs the human's approval (risky, irreversible, or a product call), escalate it: ${c('ask')} with \`escalates\` (the question id), one precise question, and \`evidence\`. The human's answer reaches the original asker.
+Some work needs a capable session more than a decision: running \`claude\`, the hub's own infrastructure, a homelab VM, GitHub admin, a real browser. That goes to an operator, not to the human.
+- **Who:** a trusted, attended Claude Code session in the project folder, running with the human's permissions and safety checks. Only an operator declares \`operator\` in \`has\`, plus the capabilities it really has: \`claude-cli\`, \`nuworq-infra\`, \`homelab-vm\`, \`github-admin\`, \`browser\`.
+- **Work:** an item whose \`needs\` include those tags is offered only to an agent that declared all of them. Set \`needs\` when you ${c('propose')} work only an operator can do.
+- **Questions:** about running something, permissions, or verifying on real infrastructure? ${c('ask')} with \`to: "operator"\`, not the human. An operator's ${c('next')} first hands it these questions (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them; the answer reaches the asker at its next checkin.
+- **Escalation:** an operator settles what it can. If one needs the human's approval (risky, irreversible, or a product call), it escalates: ${c('ask')} with \`escalates\` (the question id), one precise question, and \`evidence\`. The human's answer reaches the original asker.
+- **Keeping one running:** start Claude Code in the project folder and leave it on a loop:
+  \`/loop Work on ${project} as its operator using nuworq: checkin with has ["operator", <your capabilities>], ack steering, take next until it says there is nothing for you, answer operator questions, escalate to the human only what your safety checks need approved.\`
 
 ## Write in layers (0-30-5-30)
 - **headline**: one line, outcome first. "Retries added; 2 flaky tests remain", not "Update".
