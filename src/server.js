@@ -134,6 +134,25 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         res.setHeader('set-cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
         return send(200, { ok: true, name: t.name });
       }
+      // An invite link: peek at what it offers, or accept it with a handle (creates the person, signs them in).
+      if (req.method === 'POST' && (path === '/api/invite/peek' || path === '/api/invite/accept')) {
+        if (!required) return deny(400, 'this hub has no logins', 'Invites are for hubs that require login (--auth or --workspaces).');
+        const ip = clientIp(req);
+        if (recentFailures(ip).length >= LOGIN_MAX_FAILS) return deny(429, 'too many failed attempts', 'Wait 10 minutes, then try again.');
+        const b = await body(req);
+        const peek = authz.peekInvite(b.token);
+        if (!peek.ok) { recentFailures(ip).push(Date.now()); return deny(410, peek.error, 'Ask an owner of this workspace for a new invite.'); }
+        if (path === '/api/invite/peek') return send(200, { ok: true, role: peek.invite.role, email: peek.invite.email || undefined, invited_by: peek.invite.created_by || undefined });
+        let r;
+        try { r = authz.acceptInvite(b.token, b.handle); } catch (e) { return deny(400, e.message, 'Pick another handle: lowercase letters, digits, ., _ or -.'); }
+        res.setHeader('set-cookie', `${COOKIE}=${r.sid}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
+        const who = `@${r.person.handle}`;
+        for (const p of hub.projects()) {
+          hub.event(p, { actor: who, type: 'joined', headline: `${who} joined as ${r.person.role}${r.invitedBy ? `, invited by ${r.invitedBy}` : ''}` });
+          hub.changed(p);
+        }
+        return send(200, { ok: true, person: who, role: r.person.role });
+      }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
         if (file.includes('..')) return send(404, 'not found', 'text/plain');
@@ -170,6 +189,20 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const personRole = who.person?.role ?? 'owner';
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name });
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
+      if (path === '/api/invites' || path === '/api/invites/revoke') {
+        if (personRole !== 'owner') return deny(403, 'only an owner invites people', 'Ask an owner of this workspace.');
+        if (req.method === 'GET' && path === '/api/invites') return send(200, authz.listInvites());
+        if (req.method !== 'POST') return deny(405, 'use GET or POST');
+        const b = await body(req);
+        try {
+          if (path === '/api/invites/revoke') { authz.revokeInvite(b.id); return send(200, { ok: true }); }
+          const inv = authz.createInvite(b.role, { email: b.email, by: by === HUMAN ? '' : by });
+          // The link is shown this once; only its hash is kept.
+          return send(200, { ok: true, id: inv.id, role: inv.role, link: `${origin(req)}${base}/invite.html#${inv.token}`, expires_in: '7 days' });
+        } catch (e) {
+          throw new UserError(e.message);
+        }
+      }
       if (path === '/api/people' || path === '/api/people/role') {
         if (req.method === 'GET' && path === '/api/people') return send(200, authz.listPeople());
         if (req.method !== 'POST') return deny(405, 'use GET or POST');

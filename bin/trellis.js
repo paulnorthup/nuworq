@@ -438,6 +438,36 @@ async function person(pos, flags) {
   throw new HubError(`usage: trellis person add <handle> --role ${PERSON_ROLES.join('|')} [--email e] | list | set-role <handle> <role>`);
 }
 
+// Invites are made on the hub host too; the link is printed once (only its hash is kept).
+async function invite(pos, flags) {
+  const { openDb } = await import('../src/db.js');
+  const { Auth, PERSON_ROLES } = await import('../src/auth.js');
+  const auth = new Auth(openDb(dbPath(flags)));
+  const [sub, id] = pos;
+  try {
+    if (sub === 'create') {
+      const inv = auth.createInvite(flags.role || 'member', { email: flags.email, by: flags.by ? `@${String(flags.by).replace(/^@/, '')}` : '' });
+      const hub = String(flags['public-url'] || process.env.TRELLIS_PUBLIC_URL || resolveSettings(flags).url).replace(/\/+$/, '');
+      const ws = flags.workspace && !flags['public-url'] ? `/w/${String(flags.workspace).toLowerCase()}` : '';
+      console.log(`${green('Invite')} ${bold(inv.id)} for a ${inv.role}${flags.email ? ` (${flags.email})` : ''}, valid 7 days, single use. Send this link; it is shown only once:
+
+  ${bold(`${hub}${ws}/invite.html#${inv.token}`)}
+`);
+      return;
+    }
+    if (sub === 'list') {
+      const rows = auth.listInvites();
+      if (!rows.length) return console.log(dim('No invites. Make one: trellis invite create --role member'));
+      for (const r of rows) console.log(`${String(r.id).padEnd(4)}${r.role.padEnd(9)}${(r.email || '—').padEnd(28)}${r.state}${r.used_by ? ` by @${r.used_by}` : ''}`);
+      return;
+    }
+    if (sub === 'revoke') { auth.revokeInvite(need(id, '<id>')); return console.log(`${green('Revoked')} invite ${id}.`); }
+  } catch (e) {
+    throw e instanceof HubError ? e : new HubError(e.message, { hint: 'See: trellis invite list' });
+  }
+  throw new HubError(`usage: trellis invite create --role ${PERSON_ROLES.join('|')} [--email e] [--by <owner>] [--public-url u] | list | revoke <id>`);
+}
+
 // Token management runs on the hub host, straight against the database file.
 async function token(pos, flags) {
   const { openDb } = await import('../src/db.js');
@@ -496,6 +526,8 @@ ${bold('Human')}
                                          (default: one named like the token, created as owner)
   person add <handle> --role owner|steward|member|viewer [--email e]
   person list | person set-role <handle> <role> | person remove <handle>   (revokes tokens they minted)
+  invite create --role steward [--email e] [--public-url u] | invite list | invite revoke <id>
+                                         a single-use, 7-day link that adds a person with that role
   token create <name> [--powers shape,build,review] [--minted-by <handle> | --runner [name]]
                                          agent tokens: what they may do, and who answers for them
                                          owners do everything; stewards steer, decide, answer and
@@ -554,6 +586,7 @@ async function main() {
   if (cmd === 'token') return token(pos, flags);
   if (cmd === 'workspace') return workspace(pos, flags);
   if (cmd === 'person') return person(pos, flags);
+  if (cmd === 'invite') return invite(pos, flags);
   if (cmd === 'guide') {
     const s = resolveSettings(flags);
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));

@@ -2,6 +2,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const SESSION_MS = 30 * 24 * 3600_000;
+export const INVITE_MS = 7 * 24 * 3600_000;
 const ROLES = ['human', 'agent'];
 // What a person may do here: owner > steward > member > viewer (see PERSON_CAN in core.js).
 export const PERSON_ROLES = ['owner', 'steward', 'member', 'viewer'];
@@ -42,6 +43,19 @@ export class Auth {
     ]) {
       try { db.exec(sql); } catch { /* already there */ }
     }
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS invites (
+        id         INTEGER PRIMARY KEY,
+        hash       BLOB UNIQUE NOT NULL,        -- sha256 of the invite token; the link is shown once
+        role       TEXT NOT NULL,
+        email      TEXT NOT NULL DEFAULT '',    -- shown on the invite; enforced once sign-in (#42) exists
+        created_by TEXT NOT NULL DEFAULT '',    -- "@handle" of the owner who invited
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_at    INTEGER,
+        used_by    TEXT,
+        revoked_at INTEGER
+      );`);
     // Human tokens from before people existed: each becomes an owner, so nobody loses access.
     for (const t of db.prepare(`SELECT id, name FROM tokens WHERE role = 'human' AND person_id IS NULL`).all()) {
       const handle = Auth.handleOf(t.name);
@@ -84,6 +98,59 @@ export class Auth {
     }
     this.db.prepare('UPDATE people SET role = ? WHERE id = ?').run(role, p.id);
     return { ...p, role };
+  }
+
+  // ── invites: single-use, expiring links that add a person with a role ──
+
+  createInvite(role, { email = '', by = '', ttl = INVITE_MS } = {}) {
+    if (!PERSON_ROLES.includes(role)) throw new Error(`role must be one of ${PERSON_ROLES.join(', ')}`);
+    const token = 'tri_' + randomBytes(24).toString('base64url');
+    const t = this.now();
+    const r = this.db.prepare('INSERT INTO invites (hash, role, email, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(sha(token), role, String(email).trim().toLowerCase(), String(by), t, t + ttl);
+    return { id: Number(r.lastInsertRowid), token, role, expires_at: t + ttl };
+  }
+
+  listInvites() {
+    const t = this.now();
+    return this.db.prepare('SELECT id, role, email, created_by, created_at, expires_at, used_at, used_by, revoked_at FROM invites ORDER BY id').all()
+      .map((i) => ({ ...i, state: i.used_at ? 'used' : i.revoked_at ? 'revoked' : i.expires_at < t ? 'expired' : 'open' }));
+  }
+
+  revokeInvite(id) {
+    const r = this.db.prepare('UPDATE invites SET revoked_at = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL').run(this.now(), Number(id));
+    if (!r.changes) throw new Error(`no open invite ${id}`);
+  }
+
+  // What an invite link offers, without using it (so the page can say "you're invited as steward").
+  peekInvite(token) {
+    const i = this.db.prepare('SELECT * FROM invites WHERE hash = ?').get(sha(String(token ?? '').trim()));
+    if (!i) return { ok: false, error: 'this invite link is not valid' };
+    if (i.used_at) return { ok: false, error: 'this invite was already used' };
+    if (i.revoked_at) return { ok: false, error: 'this invite was revoked' };
+    if (i.expires_at < this.now()) return { ok: false, error: 'this invite has expired' };
+    return { ok: true, invite: i };
+  }
+
+  // Use an invite: the person is created with its role and signed in (a login token they never see, plus a session).
+  acceptInvite(token, handle) {
+    const peek = this.peekInvite(token);
+    if (!peek.ok) throw new Error(peek.error);
+    const inv = peek.invite;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const p = this.addPerson(handle, inv.role, { email: inv.email });
+      this.db.prepare('UPDATE invites SET used_at = ?, used_by = ? WHERE id = ?').run(this.now(), p.handle, inv.id);
+      const name = `${p.handle}-invite-${inv.id}`;
+      this.createToken(name, 'human', { person: p.handle });
+      const tokenId = this.db.prepare('SELECT id FROM tokens WHERE name = ?').get(name).id;
+      const sid = this.createSession(tokenId);
+      this.db.exec('COMMIT');
+      return { person: p, sid, invitedBy: inv.created_by };
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
   }
 
   // ── tokens ──
