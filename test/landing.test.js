@@ -212,7 +212,7 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     const b = 'nuworq/1-add-a-greeting-file';
     assert.equal(job.branch, b);
     assert.match(job.hint, /git fetch origin, then git switch -c nuworq\/1-add-a-greeting-file origin\/main \(or git switch nuworq\/1-add-a-greeting-file if it exists\)/);
-    assert.match(job.hint, /push the branch \(git push -u origin nuworq\/1-add-a-greeting-file\)/);
+    assert.match(job.hint, /push the branch \(git push origin nuworq\/1-add-a-greeting-file\)/);
     assert.doesNotMatch(job.hint, /git switch -c \S+ main\b/);
 
     const mac = clone('mac');
@@ -235,7 +235,7 @@ describe('landing through GitHub, when the hub has no checkout', () => {
 
     const land = op('a1', 'next');
     assert.equal(land.mode, 'land');
-    assert.match(land.hint, /git fetch origin && git switch nuworq\/1-add-a-greeting-file && git rebase origin\/main/);
+    assert.match(land.hint, /git fetch origin, then git switch nuworq\/1-add-a-greeting-file, then git rebase origin\/main/);
     assert.match(land.hint, /git push origin nuworq\/1-add-a-greeting-file:main\. If it is rejected as non-fast-forward, main moved: go back to step 1/);
     assert.match(land.hint, /git push origin nuworq\/1-add-a-greeting-file --force-with-lease/);
     assert.doesNotMatch(land.hint, /merge --ff-only/);
@@ -311,7 +311,7 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     op('a1', 'submit', { item: '#1', headline: 'Landed' });
 
     const nudge = op('a2', 'progress', { item: '#2', headline: 'Still going' }).heads_up;
-    assert.match(nudge, /main moved since you started: #1 landed\. Rebase now \(git fetch origin && git rebase origin\/main, then git push origin nuworq\/2-second --force-with-lease\)/);
+    assert.match(nudge, /main moved since you started: #1 landed\. Rebase now \(git fetch origin, then git rebase origin\/main, then git push origin nuworq\/2-second --force-with-lease\)/);
   });
 
   test('submit before pushing says to push the branch, and the reviewer sees it too', () => {
@@ -321,7 +321,7 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     const mac = clone('mac');
     build(mac, job.branch, 'thing');
     const r = op('a1', 'submit', { item: '#1', headline: 'Done' });
-    assert.match(r.hint, /^nuworq\/1-thing isn't on origin yet; push it \(git push -u origin nuworq\/1-thing\) so reviewers anywhere can see it/);
+    assert.match(r.hint, /^nuworq\/1-thing isn't on origin yet; push it \(git push origin nuworq\/1-thing\) so reviewers anywhere can see it/);
     const review = hub.q(`SELECT data FROM events WHERE type = 'submitted'`).get();
     assert.equal(JSON.parse(review.data).git.unpushed, 'nuworq/1-thing');
 

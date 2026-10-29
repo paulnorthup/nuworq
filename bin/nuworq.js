@@ -140,7 +140,7 @@ Your session:
 1. checkin. Read the mission, standing decisions and steering, and ack each steer.
 2. Loop: next → do the work in this repository → progress at real milestones → submit with evidence (tests run, branch and commits), or handoff with where you left off if you can't finish.
    Work in your own git worktree, never in the main checkout. ${remote
-    ? 'For each item the hub names a branch: create it from the latest main on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/main\`, or \`git switch <branch>\` if it exists. Push it (\`git push -u origin <branch>\`) before you submit.'
+    ? 'For each item the hub names a branch: create it from the latest main on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/main\`, or \`git switch <branch>\` if it exists. Push it (\`git push origin <branch>\`) before you submit.'
     : 'For each item the hub names a branch: create it from the latest main with \`git switch -c <branch> main\`, or \`git switch <branch>\` if it exists.'}
 3. Got a question? Prefer ask with an assumption and keep going. Only block if you truly can't proceed, and then take other work.
 4. Propose work you notice instead of growing your current item.
@@ -236,7 +236,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
   if (!flags.run) {
     console.log(`\n${cmd}\n`);
     console.log(dim({
-      claude: `Headless agents can't ask permission: they may only use the tools in --allowedTools (set from what's in the folder; change with --allow). ${origin ? 'The only pushes: nuworq/ branches to origin, and landing one on main there.' : 'Never git push.'}`,
+      claude: `Headless agents can't ask permission: they may only use the tools in --allowedTools (set from what's in the folder; change with --allow). ${origin ? 'Pushes go to origin only: item branches, and landing one on main (GitHub keeps main fast-forward-only).' : 'Never git push.'}`,
       codex: `Codex runs in its workspace-write sandbox; the nuworq MCP server runs outside it, so it can reach the hub.`,
       opencode: `opencode has no sandbox: it may run any shell command except git push (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
     }[agent] + '\nAdd --run to start it now.'));
@@ -284,7 +284,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   };
   const task = [
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
-    worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push -u origin <branch>\`), and include the branch and commit in your evidence. To land accepted work, follow the hub's steps: rebase onto origin/${main}, run the checks, then \`git push origin <branch>:${main}\`. Never work in the main checkout, ${home}.`
+    worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. To land accepted work, follow the hub's steps: rebase onto origin/${main}, run the checks, then \`git push origin <branch>:${main}\`. Never work in the main checkout, ${home}.`
       : worktree ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} with \`git switch -c <branch> ${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, and include the branch and commit in your evidence when you submit. Never work in the main checkout, ${home}.` : '',
     'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
@@ -298,9 +298,10 @@ function workerSetup(target, agent, flags, s, token = null) {
     isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)'],
     // Landing: rebase onto main, then fast-forward main in this one checkout. Nothing else with -C.
     isRepo && ['Bash(git rebase:*)', `Bash(git -C ${home} merge --ff-only:*)`],
-    // Through origin: push the item's branch, and land it with git push origin <branch>:main (GitHub
-    // refuses anything but a fast-forward there). No other pushes.
-    origin && ['Bash(git fetch:*)', 'Bash(git push origin nuworq/:*)'],
+    // Through origin: push the item's branch, and land it with git push origin <branch>:main. Claude Code
+    // matches allowed commands at word boundaries, so the rule is "git push origin"; main itself is kept
+    // fast-forward-only by the repository's rules on GitHub (no force-push, no delete).
+    origin && ['Bash(git fetch:*)', 'Bash(git push origin:*)'],
   ].filter(Boolean).flat();
   const allow = flags.allow ? String(flags.allow) : ['mcp__nuworq', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(ls:*)', ...run].join(',');
   const mcp = JSON.stringify({ mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env } } });

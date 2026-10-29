@@ -66,7 +66,7 @@ export function gitFacts(repo, agent, claim, own = '') {
 // One line for the human, or null when git has nothing to worry about.
 export function gitWarning(g) {
   if (!g) return null;
-  if (g.unpushed) return `${g.unpushed} isn't on origin yet; push it (git push -u origin ${g.unpushed}) so reviewers anywhere can see it`;
+  if (g.unpushed) return `${g.unpushed} isn't on origin yet; push it (git push origin ${g.unpushed}) so reviewers anywhere can see it`;
   if (g.missing.length) return `Evidence names commit ${g.missing.join(', ')}, which isn't in the repo`;
   if (g.branch && g.base && !g.commits.length) return `No commits on ${g.branch} ahead of ${g.base}`;
   if (g.behind) return `${g.branch} is ${g.behind} commit(s) behind ${g.base}; rebase onto ${g.base} so the review sees what will land`;

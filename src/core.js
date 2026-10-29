@@ -589,7 +589,7 @@ export class Hub extends EventEmitter {
       const base = repo ? baseOf(repo.path) : null;
       if (base && branchExists(repo.path, item.branch) && !contains(repo.path, item.branch, base)) {
         const how = repo.mode === 'remote'
-          ? `git fetch origin && git rebase origin/${base}, then git push origin ${item.branch} --force-with-lease`
+          ? `git fetch origin, then git rebase origin/${base}, then git push origin ${item.branch} --force-with-lease`
           : `git rebase ${base}`;
         notes.push(`${base} moved since you started: ${landed.map((x) => `#${x.seq}`).join(', ')} landed. Rebase now (${how}), while any conflicts are small.`);
       }
@@ -1104,13 +1104,13 @@ const SHAPE_HINT = (item, p) => [
 // remote: the hub has no checkout here, so the branch is cut from origin and pushed there for review.
 const WORK_HINT = (item, p, remote = false) => !item.branch ? ''
   : remote
-    ? `Work on branch ${item.branch}, cut from the latest main on origin: git fetch origin, then git switch -c ${item.branch} origin/main (or git switch ${item.branch} if it exists). Work in a git worktree or a clone of your own, not a checkout another agent is using. Commit as you go. Before you submit, push the branch (git push -u origin ${item.branch}) so reviewers anywhere can see it.`
+    ? `Work on branch ${item.branch}, cut from the latest main on origin: git fetch origin, then git switch -c ${item.branch} origin/main (or git switch ${item.branch} if it exists). Work in a git worktree or a clone of your own, not a checkout another agent is using. Commit as you go. Before you submit, push the branch (git push origin ${item.branch}) so reviewers anywhere can see it.`
     : `Work on branch ${item.branch}, cut from the latest main: git switch -c ${item.branch} main (or git switch ${item.branch} if it exists). Work in a git worktree, never in ${p.path || 'the main checkout'} itself: it stays on main so work can land there. Commit as you go.`;
 // remote: main is the one on origin (GitHub). Pushing to it succeeds only as a fast-forward, so a
 // rejected push means main moved; the branch is pushed again too, so the hub can see main contains it.
 const LAND_HINT = (item, p, base = 'main', remote = false) => remote ? [
   `Land #${item.seq}: put ${item.branch} on ${base} on origin.`,
-  `1. In your worktree or clone: git fetch origin && git switch ${item.branch} && git rebase origin/${base} (commit or stash anything uncommitted first). Conflicts: resolve them keeping both intents. If resolving changed what the reviewer approved, don't land: submit with conflicts (what you changed and why), and it goes back for review.`,
+  `1. In your worktree or clone: git fetch origin, then git switch ${item.branch}, then git rebase origin/${base} (commit or stash anything uncommitted first). Conflicts: resolve them keeping both intents. If resolving changed what the reviewer approved, don't land: submit with conflicts (what you changed and why), and it goes back for review.`,
   `2. Run the project's checks (e.g. npm test) and fix anything the rebase broke.`,
   `3. git push origin ${item.branch}:${base}. If it is rejected as non-fast-forward, ${base} moved: go back to step 1.`,
   `4. git push origin ${item.branch} --force-with-lease (the rebase rewrote the branch; this updates it on origin).`,

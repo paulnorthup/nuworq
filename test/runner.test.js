@@ -154,11 +154,11 @@ describe('nuworq worker --agent claude', () => {
         { env: { ...process.env, NUWORQ_TOKEN: '' } });
       const allow = stdout.match(/--allowedTools '([^']*)'/)[1].split(',');
       assert.ok(allow.includes('Bash(git fetch:*)'));
-      assert.deepEqual(allow.filter((a) => /git push/.test(a)), ['Bash(git push origin nuworq/:*)'], 'no other push, and no bare git push');
+      assert.deepEqual(allow.filter((a) => /git push/.test(a)), ['Bash(git push origin:*)'], 'no other push, and no bare git push');
       assert.ok(allow.includes(`Bash(git -C ${repo} merge --ff-only:*)`), 'kept for a hub that lands in this checkout');
       assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [`Bash(git -C ${repo} merge --ff-only:*)`], 'no other -C command');
       assert.ok(!allow.some((a) => /^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no blanket git');
-      assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push -u origin <branch>`\).*`git push origin <branch>:main`/);
+      assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*`git push origin <branch>:main`/);
       assert.match(stdout, /detached at origin\/main/);
 
       const setup = stdout.match(/^git -C '[^']*' fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
