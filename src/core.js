@@ -182,13 +182,14 @@ export class Hub extends EventEmitter {
 
   // Where the most valuable claimable work is, across every project that isn't parked:
   // your picks and "now" work first, then building before shaping, then whatever has waited longest.
-  route(agent = '') {
+  // With runner, only projects the human lets `trellis run` staff.
+  route(agent = '', { runner = false } = {}) {
     this.sweep();
     const options = [];
     for (const p of this.projects()) {
-      if (p.parked) continue;
-      const pick = this.pick(p, agent);
-      if (pick) options.push({ p, ...pick });
+      if (p.parked || (runner && !p.runner)) continue;
+      const all = this.claimable(p, agent);
+      if (all.length) options.push({ p, ...all[0], claimable: all.length });
     }
     options.sort((a, b) =>
       PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
@@ -197,7 +198,8 @@ export class Hub extends EventEmitter {
     return options.map((o) => ({
       project: o.p.slug, name: o.p.name, path: o.p.path || null,
       mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.item.priority,
-      waiting: dur(this.now() - o.item.stage_since),
+      waiting: dur(this.now() - o.item.stage_since), claimable: o.claimable,
+      ...(runner ? { holders: this.q('SELECT DISTINCT holder FROM items WHERE project_id = ? AND holder IS NOT NULL').all(o.p.id).map((h) => h.holder) } : {}),
     }));
   }
 
@@ -541,12 +543,14 @@ export class Hub extends EventEmitter {
   // Pick the most useful thing for this agent. Finish before starting: reviews first, then by priority;
   // at equal priority, build ready work before shaping proposals, and prefer work you touched before.
   pick(p, agent) {
-    if (p.autonomy === 'full') {
-      const review = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
-          AND COALESCE(implementer, '') != ? ORDER BY stage_since`).get(p.id, agent);
-      if (review) return { mode: 'review', item: review };
-    }
-    if (p.parked) return null;
+    return this.claimable(p, agent)[0] ?? null;
+  }
+
+  // Everything this agent could claim here, most useful first.
+  claimable(p, agent) {
+    const reviews = p.autonomy !== 'full' ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
+        AND COALESCE(implementer, '') != ? ORDER BY stage_since`).all(p.id, agent).map((item) => ({ mode: 'review', item }));
+    if (p.parked) return reviews;
     const ready = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
       .filter((i) => !this.unmetDeps(i).length)
       .map((item) => ({ mode: 'work', item }));
@@ -556,7 +560,7 @@ export class Hub extends EventEmitter {
       (a.mode === 'shape') - (b.mode === 'shape') ||
       (b.item.last_worker === agent) - (a.item.last_worker === agent) ||
       a.item.seq - b.item.seq);
-    return all[0] ?? null;
+    return [...reviews, ...all];
   }
 
   claimItem(p, agent, item) {
@@ -1066,8 +1070,12 @@ const HUMAN_OPS = {
     this.q('UPDATE projects SET seen_at = ? WHERE id = ?').run(this.now(), p.id);
   },
 
-  settings(p, { name, mission, autonomy, parked, path }) {
+  settings(p, { name, mission, autonomy, parked, path, runner }) {
     const changes = [];
+    if (runner != null && !!runner !== !!p.runner) {
+      this.q('UPDATE projects SET runner = ? WHERE id = ?').run(runner ? 1 : 0, p.id);
+      this.event(p, { actor: HUMAN, type: 'runner', headline: runner ? 'You let `trellis run` start workers here' : 'You stopped `trellis run` starting workers here' });
+    }
     if (path != null && normDir(path) !== p.path) {
       this.q('UPDATE projects SET path = ? WHERE id = ?').run(normDir(path), p.id);
       this.event(p, { actor: HUMAN, type: 'path', headline: normDir(path) ? `You set where ${p.name} lives: ${normDir(path)}` : `You cleared where ${p.name} lives` });

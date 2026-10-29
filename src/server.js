@@ -184,7 +184,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         delete b.agent;
         return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req) }));
       }
-      if (req.method === 'GET' && path === '/api/route') return send(200, hub.route());
+      if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', { runner: !!url.searchParams.get('runner') }));
       if (req.method === 'GET' && path === '/api/where') {
         const p = hub.projectByPath(url.searchParams.get('root') ?? '');
         return send(200, { project: p?.slug ?? null, path: p?.path ?? null });

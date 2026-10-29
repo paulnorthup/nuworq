@@ -17,6 +17,14 @@ Start workers. Each one asks the hub where work is waiting, gets its own git wor
 node bin/trellis.js worker --agent claude --run     # or --agent codex; run it again for more workers
 ```
 
+Or keep them going: let `trellis run` staff a project (in the UI, "Let trellis run staff this project"), and it starts workers whenever that project has work nobody is on, up to your limit, and exits when the queue is empty:
+
+```bash
+node bin/trellis.js run --workers 2 --max-runs 10 --max-minutes 60   # logs in ~/.trellis/logs
+```
+
+Limits are counts and wall-clock for now; dollar and token budgets come with cost tracking (#16).
+
 Or connect your agent tools once, for every project. Agents find their project from the folder they're in; anywhere else, the hub routes them to the work that matters most:
 
 ```bash
@@ -73,6 +81,7 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 | CLI (`trellis checkin --as name …`) | Any agent with a shell |
 | HTTP + tool schemas (`/api/tools?format=openai\|anthropic\|mcp`) | Your own agent loop |
 | Headless worker | `trellis worker --agent claude\|codex --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree and branch, with a scoped tool allowlist |
+| Runner | `trellis run --workers N`: keeps up to N headless workers on projects you opted in, one per waiting item, never a herd on one |
 
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `trellis guide`, or at `/agents.md`.
 
@@ -90,6 +99,7 @@ src/server.js      HTTP API, SSE live updates, static UI, auth enforcement, secu
 src/auth.js        human/agent tokens (hashed), sessions
 src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
+src/runner.js      trellis run: which workers to start (pure plan) and the supervising loop
 src/seed.js        the demo, replayed through real operations on a moved clock
 web/               the UI: no framework, one delegated event handler
 deploy/, docs/     Dockerfile, compose, systemd unit, Caddyfile, DEPLOY.md
@@ -130,6 +140,7 @@ GET  /api/p/:project/items/:n            one item, lifecycle, timeline
 POST /api/p/:project/agent/:op           agent operations (header X-Trellis-Agent: <name>)
 POST /api/p/:project/human/:action       answer, confirm, accept, sendback, steer, decide, comment,
                                          create, update, retire, dismiss, seen, settings
+GET  /api/route[?runner=1]               where work is waiting, per project (runner: opted-in only, with holders)
 GET  /api/tools?format=mcp|openai|anthropic
 GET  /agents.md?project=<p>&via=tools|cli
 GET  /api/stream                         server-sent events
@@ -143,7 +154,7 @@ Loopback is open. Anything else needs tokens: *human* tokens log in to the UI, *
 
 ### Where it could go next
 These are proposals in the `trellis` project (`trellis seed`):
-- a runner that keeps N headless workers going across providers
+- spend budgets for the runner, once cost per item is tracked
 - parallel attempts, where two models race one item
 - routing work by capability fit
 - linking git commits and PRs to items

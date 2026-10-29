@@ -150,19 +150,27 @@ ${guide({ project, url, via: 'cli', command: CLI })}`;
 // A headless worker: ask the hub where work is waiting, give the worker its own git worktree and
 // branch there (so many can run at once without colliding), and start the agent with everything it
 // needs (MCP server, project, a scoped tool allowlist). Prints the command, or runs it with --run.
-async function worker(flags) {
-  const s = resolveSettings(flags);
+function agentOf(flags) {
   const agent = String(flags.agent || 'claude').toLowerCase();
   if (!['claude', 'codex'].includes(agent)) {
     throw new HubError(`unknown agent "${agent}"`, { hint: 'Use --agent claude or --agent codex. For anything else, give it the Trellis MCP server (trellis init) and let it check in.' });
   }
-  const client = createClient(flags);
-  let projects;
+  return agent;
+}
+
+async function hubProjects(client) {
   try {
-    projects = await client.get('/api/projects');
+    return await client.get('/api/projects');
   } catch {
-    throw new HubError(`The hub isn't reachable at ${s.url}`, { hint: `Start it first: ${CLI} serve` });
+    throw new HubError(`The hub isn't reachable at ${client.settings.url}`, { hint: `Start it first: ${CLI} serve` });
   }
+}
+
+async function worker(flags) {
+  const s = resolveSettings(flags);
+  const agent = agentOf(flags);
+  const client = createClient(flags);
+  const projects = await hubProjects(client);
 
   // Where to work: the named project, else the one this folder belongs to, else wherever the hub routes us.
   let target = s.project ? projects.find((p) => p.slug === s.project) : null;
@@ -184,6 +192,27 @@ async function worker(flags) {
     target = projects.find((p) => p.slug === best.project);
     why = `the hub routed here: ${best.item} ${best.title} (${best.mode}, ${best.priority})`;
   }
+  const { name, worktree, branch, cwd, cmd } = workerSetup(target, agent, flags, s);
+
+  console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
+${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Merge the branch when you accept the work, then: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
+  if (!flags.run) {
+    console.log(`\n${cmd}\n`);
+    console.log(dim(agent === 'claude'
+      ? `Headless agents can't ask permission: they may only use the tools in --allowedTools (set from what's in the folder; change with --allow). Never git push.\nAdd --run to start it now.`
+      : `Codex runs in its workspace-write sandbox; the Trellis MCP server runs outside it, so it can reach the hub.\nAdd --run to start it now.`));
+    if (s.token) console.log(dim('Replace <agent-token> with an agent token: trellis token create <name> --role agent'));
+    return;
+  }
+  const { spawn } = await import('node:child_process');
+  const child = spawn('/bin/sh', ['-c', cmd], { stdio: 'inherit' });
+  await new Promise((done) => child.on('exit', (code) => { process.exitCode = code ?? 1; done(); }));
+}
+
+const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
+
+// The shell command that gives a worker its worktree and branch and starts the agent in it.
+function workerSetup(target, agent, flags, s) {
   const home = target.path || process.cwd();
   if (!existsSync(home)) {
     throw new HubError(`${target.name} lives in ${home}, which doesn't exist on this machine`, { hint: 'Set where it lives in the UI (5m view, under the mission).' });
@@ -214,7 +243,6 @@ async function worker(flags) {
   ].filter(Boolean).flat();
   const allow = flags.allow ? String(flags.allow) : ['mcp__trellis', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(ls:*)', ...run].join(',');
   const mcp = JSON.stringify({ mcpServers: { trellis: { command: 'node', args: [BIN, 'mcp'], env } } });
-  const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 
   const lines = [];
   if (worktree) lines.push(`git -C ${sq(home)} worktree add -q -b ${sq(branch)} ${sq(worktree)}`);
@@ -225,21 +253,53 @@ async function worker(flags) {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
     lines.push(`codex exec -s workspace-write \\\n  -c ${sq('mcp_servers.trellis.command="node"')} \\\n  -c ${sq(`mcp_servers.trellis.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq(`mcp_servers.trellis.env=${envToml}`)} \\\n  ${sq(task)}`);
   }
-  const cmd = lines.join(' && \\\n');
+  return { name, worktree, branch, cwd, cmd: lines.join(' && \\\n') };
+}
 
-  console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
-${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Merge the branch when you accept the work, then: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
-  if (!flags.run) {
-    console.log(`\n${cmd}\n`);
-    console.log(dim(agent === 'claude'
-      ? `Headless agents can't ask permission: they may only use the tools in --allowedTools (set from what's in the folder; change with --allow). Never git push.\nAdd --run to start it now.`
-      : `Codex runs in its workspace-write sandbox; the Trellis MCP server runs outside it, so it can reach the hub.\nAdd --run to start it now.`));
-    if (s.token) console.log(dim('Replace <agent-token> with an agent token: trellis token create <name> --role agent'));
-    return;
-  }
+// Keep up to --workers headless workers on waiting work in the projects the human opted in.
+async function runCmd(flags) {
+  const s = resolveSettings(flags);
+  const agent = agentOf(flags);
+  const client = createClient(flags);
+  await hubProjects(client);
+  const num = (v, d) => (v === undefined ? d : Number(v) > 0 ? Number(v) : (() => { throw new HubError(`expected a positive number, got "${v}"`, { hint: 'See: trellis help' }); })());
   const { spawn } = await import('node:child_process');
-  const child = spawn('/bin/sh', ['-c', cmd], { stdio: 'inherit' });
-  await new Promise((done) => child.on('exit', (code) => { process.exitCode = code ?? 1; done(); }));
+  const { createWriteStream } = await import('node:fs');
+  const { run } = await import('../src/runner.js');
+  const logs = join(dirname(HUB_FILE), 'logs');
+  mkdirSync(logs, { recursive: true });
+
+  const launch = async (r) => {
+    const projects = await hubProjects(client);
+    const target = projects.find((p) => p.slug === r.project);
+    if (!target) throw new HubError(`the hub no longer has project "${r.project}"`);
+    const { name, worktree, cwd, cmd } = workerSetup(target, agent, { ...flags, as: undefined, run: true }, s);
+    const log = join(logs, `${name}.log`);
+    const out = createWriteStream(log);
+    // Its own process group, so stopping it stops the agent too, not just the shell.
+    const child = spawn('/bin/sh', ['-c', cmd], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.pipe(out);
+    child.stderr.pipe(out);
+    return {
+      name, project: target.slug, where: dim(`${worktree ?? cwd}  log: ${log}`),
+      kill: (sig) => { try { process.kill(-child.pid, sig); } catch {} },
+      exited: new Promise((done) => child.on('exit', (code, sig) => done(code ?? (sig ? `${sig}` : 1)))),
+    };
+  };
+
+  const workers = num(flags.workers, 1);
+  console.log(`${green('●')} ${bold('trellis run')}  ${dim(`up to ${workers} ${agent} worker${workers > 1 ? 's' : ''} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
+  await run({
+    routes: () => client.get('/api/route?runner=1'),
+    launch, workers,
+    maxRuns: num(flags['max-runs'], Infinity),
+    maxMinutes: num(flags['max-minutes'], Infinity),
+    pollSeconds: num(flags.poll, 30),
+    onInterrupt: (fn) => {
+      process.on('SIGINT', () => { console.log(dim('\nStopping: no new workers; asking running ones to stop (Ctrl-C again to kill them).')); fn(); });
+      process.on('SIGTERM', fn);
+    },
+  });
 }
 
 function init(flags) {
@@ -427,6 +487,10 @@ ${bold('Setup')}
                                          start a headless worker where work is waiting (the hub routes it),
                                          in its own git worktree and branch (--here: no worktree). Without
                                          --run it prints the command instead.
+  run [--workers 1] [--agent claude|codex] [--max-runs M] [--max-minutes T] [--poll 30]
+                                         keep up to N workers on waiting work in projects you opted in
+                                         (UI: "Let trellis run staff this project"); exits when the
+                                         queue is empty. Logs: ~/.trellis/logs. Dollar budgets: not yet.
   prompt [--as name]                     just the worker prompt text, for other agents
   seed                                   add the Trellis roadmap project to your hub's database
 
@@ -453,6 +517,7 @@ async function main() {
   if (cmd === 'tools') return console.log(JSON.stringify(tools(flags.format || 'mcp', flags.prefix || ''), null, 2));
   if (cmd === 'prompt') return console.log(workerPrompt(flags));
   if (cmd === 'worker') return worker(flags);
+  if (cmd === 'run') return runCmd(flags);
   if (cmd === 'seed') return seedCmd(flags);
   if (cmd === 'init') return init(flags);
 

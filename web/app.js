@@ -206,6 +206,9 @@ function project(v) {
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
         ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
+        ${z() >= 1 ? (P.runner
+          ? `<button class="link" data-action="runner-off" title="trellis run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by trellis run · stop</button>`
+          : `<button class="link" data-action="runner-on" title="Let trellis run start headless workers here whenever work is waiting">Let trellis run staff this project</button>`) : ''}
       </div>
     </div>
     ${pulse(v)}
@@ -778,6 +781,8 @@ const ACTIONS = {
   pick: (el) => human('pick', { item: el.dataset.item }, `Picked ${el.dataset.item}: the next agent shapes it first`),
   park: () => { if (confirm('Park this project? No new work starts and nothing here will ask for you until you unpark it.')) human('settings', { parked: true }, 'Parked'); },
   unpark: () => human('settings', { parked: false }, 'Unparked'),
+  'runner-on': () => human('settings', { runner: true }, '`trellis run` may now start workers here'),
+  'runner-off': () => human('settings', { runner: false }, '`trellis run` will no longer start workers here'),
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
   clarify: (el) => {

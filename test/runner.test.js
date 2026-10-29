@@ -1,0 +1,125 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { Hub } from '../src/core.js';
+import { plan, run } from '../src/runner.js';
+
+const route = (project, claimable, holders = []) => ({ project, name: project, item: '#1', title: 't', mode: 'work', claimable, holders });
+
+describe('plan: which workers to start', () => {
+  test('fills free slots, in value order, up to what is claimable', () => {
+    assert.deepEqual(plan([route('a', 2), route('b', 5)], [], { workers: 3 }).map((r) => r.project), ['a', 'a', 'b']);
+    assert.deepEqual(plan([route('a', 2)], [{ name: 'w1', project: 'b' }], { workers: 2 }).map((r) => r.project), ['a']);
+  });
+
+  test('no herd: workers that hold nothing yet count against the claimable work', () => {
+    assert.equal(plan([route('a', 1)], [], { workers: 3 }).length, 1);
+    assert.equal(plan([route('a', 1)], [{ name: 'w1', project: 'a' }], { workers: 3 }).length, 0);
+    // once w1 holds an item, what is still claimable is free for others
+    assert.equal(plan([route('a', 1, ['w1'])], [{ name: 'w1', project: 'a' }], { workers: 3 }).length, 1);
+  });
+
+  test('never more than --workers at once, nor more than --max-runs in total', () => {
+    assert.equal(plan([route('a', 9)], [{ name: 'w', project: 'x' }, { name: 'v', project: 'x' }], { workers: 2 }).length, 0);
+    assert.equal(plan([route('a', 9)], [], { workers: 5, maxRuns: 3, launched: 2 }).length, 1);
+    assert.equal(plan([route('a', 9)], [], { workers: 5, maxRuns: 3, launched: 3 }).length, 0);
+  });
+});
+
+describe('the hub routes the runner only to opted-in, unparked projects', () => {
+  test('runner flag round-trips through settings, records an event, and filters routes', () => {
+    const hub = new Hub({ clock: () => Date.UTC(2026, 9, 1, 9) });
+    for (const s of ['on', 'off', 'parked']) {
+      hub.tx(() => hub.project(s, { create: true }));
+      hub.humanOp(s, 'create', { title: 'One', acceptance: 'x' });
+      hub.humanOp(s, 'create', { title: 'Two', acceptance: 'x' });
+    }
+    hub.humanOp('on', 'settings', { runner: true });
+    hub.humanOp('parked', 'settings', { runner: true, parked: true });
+    assert.equal(hub.project('on').runner, 1);
+    assert.equal(hub.project('off').runner, 0);
+    assert.ok(hub.q("SELECT 1 FROM events WHERE type = 'runner'").get());
+
+    const r = hub.route('', { runner: true });
+    assert.deepEqual(r.map((x) => [x.project, x.claimable, x.holders]), [['on', 2, []]]);
+    hub.agentOp('on', 'next', 'w1');
+    assert.deepEqual(hub.route('', { runner: true }).map((x) => [x.claimable, x.holders]), [[1, ['w1']]]);
+    assert.equal(hub.route().length, 2, 'ordinary routing still sees every unparked project');
+
+    hub.humanOp('on', 'settings', { runner: false });
+    assert.deepEqual(hub.route('', { runner: true }), []);
+  });
+});
+
+// A fake world: time only moves when the runner sleeps; workers are promises we resolve by hand.
+function world(routesSeq) {
+  let t = 0;
+  const workers = [];
+  const lines = [];
+  let i = 0;
+  return {
+    workers, lines,
+    opts: {
+      routes: async () => routesSeq[Math.min(i++, routesSeq.length - 1)],
+      launch: async (r) => {
+        let finish;
+        const w = { name: `w${workers.length + 1}`, project: r.project, signals: [], exited: new Promise((res) => { finish = res; }) };
+        w.finish = finish;
+        w.kill = (sig) => w.signals.push(sig);
+        workers.push(w);
+        return w;
+      },
+      log: (l) => lines.push(l),
+      now: () => t,
+      sleep: async (ms) => { t += ms; await new Promise((r) => setImmediate(r)); },
+      pollSeconds: 1,
+    },
+  };
+}
+
+describe('run: the supervising loop', () => {
+  test('starts one worker for one item, waits for it, then exits when nothing is waiting', async () => {
+    const w = world([[route('a', 1)], [route('a', 1)], []]);
+    const p = run({ ...w.opts, workers: 3 });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(w.workers.length, 1, 'no herd while the first worker has not claimed');
+    w.workers[0].finish(0);
+    const res = await p;
+    assert.equal(res.launched, 1);
+    assert.match(res.why, /no work is waiting/);
+    assert.match(w.lines.at(-1), /1 launched, 1 exited cleanly, 0 failed \(w1@a:0\)/);
+  });
+
+  test('stops after --max-runs, and terminates workers that run past --max-minutes', async () => {
+    const w = world([[route('a', 5)]]);
+    const p = run({ ...w.opts, workers: 1, maxRuns: 1, maxMinutes: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(w.workers.length, 1);
+    assert.deepEqual(w.workers[0].signals.slice(0, 2), ['SIGTERM', 'SIGKILL']);
+    w.workers[0].finish('SIGKILL');
+    const res = await p;
+    assert.match(res.why, /max-runs 1/);
+  });
+
+  test('Ctrl-C stops launching, asks workers to stop, then kills them on a second Ctrl-C', async () => {
+    const w = world([[route('a', 5)]]);
+    let interrupt;
+    const p = run({ ...w.opts, workers: 2, onInterrupt: (fn) => { interrupt = fn; } });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(w.workers.length, 2);
+    interrupt();
+    interrupt();
+    assert.deepEqual(w.workers[0].signals, ['SIGTERM', 'SIGKILL']);
+    w.workers.forEach((x) => x.finish(143));
+    const res = await p;
+    assert.equal(res.why, 'interrupted');
+    assert.equal(res.launched, 2);
+  });
+
+  test('gives up after workers keep failing within seconds', async () => {
+    const w = world([[route('a', 5)]]);
+    w.opts.launch = async () => { throw new Error('claude: command not found'); };
+    const res = await run({ ...w.opts, workers: 1 });
+    assert.match(res.why, /failed within seconds/);
+    assert.equal(res.launched, 3);
+  });
+});
