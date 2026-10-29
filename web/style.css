@@ -150,6 +150,10 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .sec > header .right { margin-left: auto; }
 .zero { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--muted); }
 .zero .check { width: 26px; height: 26px; border-radius: 50%; background: var(--ok-tint); color: var(--ok); display: grid; place-items: center; font-weight: 700; flex: none; }
+/* A link to a project that isn't here (#143). */
+.zero.missing .check { background: var(--sunken); color: var(--muted); }
+.missing-links { margin-top: 6px; font-size: 13px; }
+.missing-links .link { padding: 0; font-size: inherit; color: var(--agents); }
 .zoom-more { font-size: 12.5px; color: var(--faint); margin-top: 6px; }
 .zoom-more button { border: 0; background: none; color: var(--agents); padding: 0; font-size: inherit; }
 
@@ -407,7 +411,8 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 .add-work .row { display: flex; gap: 8px; align-items: center; }
 
 @media (max-width: 860px) {
-  #shell { grid-template-columns: minmax(0, 1fr); }
+  #shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; } /* a short page grows the page, not the top bar */
+  #rail { align-content: flex-start; }
   .composer .row .hint { display: none; }
   .composer { flex-wrap: wrap; }
   #rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 16px; gap: 4px; }

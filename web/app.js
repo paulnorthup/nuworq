@@ -4,6 +4,7 @@ import { connectCommands } from './connect.js';
 import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
 import { homePage, columns } from './home.js';
+import { missingProject } from './missing.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
@@ -160,7 +161,13 @@ async function loadProjects() {
 async function refresh({ force = false } = {}) {
   try {
     if (S.slug) await loadProjects();
-    if (S.slug && S.projects.some((p) => p.slug === S.slug)) {
+    S.missing = null;
+    if (S.slug && !S.projects.some((p) => p.slug === S.slug)) {
+      // A stale link, or a renamed or archived project: say so, rather than quietly showing the home (#143).
+      const archived = await api('/api/projects?archived=1').catch(() => []);
+      S.view = null;
+      S.missing = { slug: S.slug, archived: archived.find((p) => p.slug === S.slug) ?? null };
+    } else if (S.slug) {
       S.view = await api(`/api/p/${encodeURIComponent(S.slug)}/view`);
       if (S.itemRef) S.item = await api(`/api/p/${encodeURIComponent(S.slug)}/items/${encodeURIComponent(S.itemRef.replace('#', ''))}`).catch(() => null);
     } else {
@@ -187,7 +194,7 @@ function render({ force = false } = {}) {
   S.pending = false;
   const drawerScroll = $('#drawer').scrollTop;
   renderRail();
-  $('#main').innerHTML = S.slug && S.view ? project(S.view) : overview();
+  $('#main').innerHTML = S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
   renderDrawer();
   $('#drawer').scrollTop = drawerScroll;
   for (const el of document.querySelectorAll('[data-draft]')) {
@@ -1149,6 +1156,7 @@ const ACTIONS = {
       closeModal();
       await loadProjects();
       go(el.dataset.slug);
+      refresh({ force: true }); // restored from its own (missing) page, the address doesn't change
     } catch (e) { toast(e.message, true); }
   },
   'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
