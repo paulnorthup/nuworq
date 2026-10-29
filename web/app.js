@@ -299,7 +299,7 @@ function project(v) {
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
-        ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items with a GitHub webhook">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
+        ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items through GitHub">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
         ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
         ${z() >= 2 ? `<button class="link" data-action="remove-project" title="Archive it (history kept) or delete it for good">Remove project</button>` : ''}
         ${z() >= 1 ? (P.runner
@@ -981,15 +981,44 @@ async function githubSettings() {
   const P = S.view.project;
   const hook = `${S.info.url}/api/hooks/github/${encodeURIComponent(P.slug)}`;
   const st = S.info.workspace ? null : await api('/api/github/app').catch(() => null);
-  modal(`<h2>GitHub</h2>
-    ${st && st.state !== 'none' ? `<h4>The hub's GitHub App</h4>${appStatus(st)}<h4>This project's webhook</h4>` : ''}
-    <p class="lead">A webhook links pull requests to items (a <code>nuworq/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
+  const manual = `<p class="lead">A webhook links pull requests to items (a <code>nuworq/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
     <h4>1. In the repo on GitHub: Settings → Webhooks → Add webhook</h4>
     <p class="lead">Payload URL (GitHub must be able to reach it; see docs/DEPLOY.md):</p>${copyBlock(hook)}
     <p class="lead">Content type <code>application/json</code>. Events: <i>Pull requests</i>, <i>Check suites</i>, <i>Check runs</i>, <i>Statuses</i>.</p>
     <h4>2. The same secret, there and here</h4>
-    <div class="inline-form"><input id="gh-secret" placeholder="${P.github ? 'A secret is set; enter a new one to replace it' : 'A long random secret'}"><button class="btn small" data-action="github-generate">Generate</button></div>
-    <div class="foot">${P.github ? '<button class="btn ghost" data-action="github-disconnect">Disconnect</button>' : ''}<button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="github-save">Save</button></div>`);
+    <div class="inline-form"><input id="gh-secret" placeholder="${P.github ? 'A secret is set; enter a new one to replace it' : 'A long random secret'}"><button class="btn small" data-action="github-generate">Generate</button></div>`;
+  const disconnect = P.github ? '<button class="btn ghost" data-action="github-disconnect">Disconnect</button>' : '';
+  // No app to offer (a workspaces hub): the webhook is the only way, as before.
+  if (!st) {
+    return modal(`<h2>GitHub</h2>${manual}
+      <div class="foot">${disconnect}<button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="github-save">Save</button></div>`);
+  }
+  // The recommended path first (#154): the hub's GitHub App serves every project with no per-repository setup;
+  // the per-project webhook is the fallback, folded away unless this project already uses it.
+  const lead = st.state === 'none'
+    ? `<div class="app-status none"><span class="dot"></span><p>No GitHub App yet. It links pull requests and CI results to items and brings issues in as proposals, for every project at once, with no setup per repository. Workers push through it with a token for one repository, for an hour.
+      ${st.can_create ? 'GitHub asks you to confirm it, then where to install it.</p><a class="btn primary small" href="api/github/app/new">Create</a>' : 'Only an owner can create it: ask whoever runs this hub.</p>'}</div>`
+    : `${appStatus(st)}<p class="lead" id="gh-covered">${st.state === 'installed' ? 'Checking whether it covers this project\'s repository…' : ''}</p>`;
+  modal(`<h2>GitHub</h2>${lead}
+    <details ${P.github ? 'open' : ''}><summary>Without the app: a webhook for this project${P.github ? ' (connected)' : ''}</summary>${manual}
+      <div class="foot">${disconnect}<button class="btn" data-action="github-save">Save the webhook</button></div></details>
+    <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
+  if (st.state === 'installed') appCovers(P).then((line) => { const el = $('#gh-covered'); if (el) el.innerHTML = line; });
+}
+
+// Whether the hub's installed GitHub App can see this project's repository, as one line for the GitHub dialog.
+async function appCovers(P) {
+  const repos = P.remotes.filter((r) => r.startsWith('github.com/'));
+  if (!repos.length) return 'This project has no GitHub repository linked yet: link one in the project header and the app covers it once it is installed there.';
+  try {
+    for (const r of repos) {
+      const { repos: seen } = await api(`/api/github/repos?q=${encodeURIComponent(r.slice('github.com/'.length).toLowerCase())}`);
+      if (seen.some((x) => x.repo === r)) return `✓ It covers <code>${esc(r)}</code>: nothing else to set up for this project.`;
+    }
+    return `It isn't installed on ${repos.map((r) => `<code>${esc(r)}</code>`).join(', ')} yet. ${installLink('Install it there')}, and this project is covered.`;
+  } catch {
+    return ''; // can't tell (only owners and stewards may list repositories): say nothing rather than guess
+  }
 }
 
 // "+ Project": pick one of the repositories the GitHub App can see, or (no app, or a workspaces hub) by name.
