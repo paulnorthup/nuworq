@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS agents (
   last_checkin INTEGER NOT NULL DEFAULT 0,
   tokens      TEXT NOT NULL DEFAULT '',        -- names of the tokens that have acted as this agent
   token_id    INTEGER,                        -- the agent token it last called with (required mode)
+  has         TEXT NOT NULL DEFAULT '[]',     -- JSON: what the agent's machine can do, e.g. ["docker", "macos"]
   first_seen  INTEGER NOT NULL,
   last_seen   INTEGER NOT NULL,
   PRIMARY KEY (project_id, name)
@@ -51,6 +52,8 @@ CREATE TABLE IF NOT EXISTS items (
   implementer TEXT,                           -- who submitted it for verification
   handoff     TEXT NOT NULL DEFAULT '',       -- JSON: latest "where I left off" / "sent back because"
   touching    TEXT NOT NULL DEFAULT '[]',     -- JSON: paths the current holder says it is changing
+  needs       TEXT NOT NULL DEFAULT '[]',     -- JSON: tags an agent must have to take it, e.g. ["docker"]
+  size        TEXT NOT NULL DEFAULT '',       -- '' | small | large
   attempts    INTEGER NOT NULL DEFAULT 0,
   stalls      INTEGER NOT NULL DEFAULT 0,
   rejections  INTEGER NOT NULL DEFAULT 0,
@@ -237,6 +240,9 @@ export function openDb(file) {
     'ALTER TABLE items ADD COLUMN race INTEGER NOT NULL DEFAULT 1',
     'ALTER TABLE agents ADD COLUMN token_id INTEGER',
     "ALTER TABLE projects ADD COLUMN github_secret TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agents ADD COLUMN has TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE items ADD COLUMN needs TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE items ADD COLUMN size TEXT NOT NULL DEFAULT ''",
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

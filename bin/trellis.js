@@ -59,7 +59,7 @@ function need(v, what) {
 
 // positional + flag shapes for each agent operation
 const AGENT_CMDS = {
-  checkin: (p, f) => ({ model: f.model, client: f.client, status: text(f.status) }),
+  checkin: (p, f) => ({ model: f.model, client: f.client, status: text(f.status), has: refs(f.has ?? process.env.TRELLIS_HAS) }),
   next: (p, f) => ({ claim: f.peek ? false : undefined }),
   claim: (p, f) => ({ item: need(p[0], '<item>'), touching: refs(f.touching) }),
   progress: (p, f) => ({ item: need(p[0], '<item>'), headline: rest(p, 1) || undefined, ...layers(f), touching: refs(f.touching) }),
@@ -83,11 +83,11 @@ const AGENT_CMDS = {
   handoff: (p, f) => ({ item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f) }),
   propose: (p, f) => ({
     title: need(rest(p, 0), '<title>'), ...layers(f), acceptance: text(f.acceptance),
-    priority: f.priority, parent: f.parent, depends_on: refs(f['depends-on']),
+    priority: f.priority, parent: f.parent, depends_on: refs(f['depends-on']), needs: refs(f.needs), size: f.size,
   }),
   refine: (p, f) => ({
     item: need(p[0], '<item>'), title: text(f.title), ...layers(f), acceptance: text(f.acceptance),
-    priority: f.priority, depends_on: refs(f['depends-on']),
+    priority: f.priority, depends_on: refs(f['depends-on']), needs: f.needs === undefined ? undefined : refs(f.needs) ?? [], size: f.size,
   }),
   review: (p, f) => ({ item: need(p[0], '<item>'), verdict: need(p[1], '<accept|reject>'), headline: need(rest(p, 2), '<headline>'), attempt: f.attempt, ...layers(f) }),
   comment: (p, f) => {
@@ -147,6 +147,18 @@ Write everything in layers: headline (one line, outcome first), summary (the 5-m
 ${guide({ project, url, via: 'cli', command: CLI })}`;
 }
 
+// What this machine can do, as fit tags for the hub (work that needs something else goes elsewhere).
+// Cheap checks only; --has adds what can't be detected, e.g. --has browser,linux-vm.
+function detectHas(flags) {
+  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
+  return [...new Set([
+    { darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform],
+    onPath('docker') && 'docker',
+    onPath('nvidia-smi') && 'gpu',
+    ...(refs(flags.has) ?? []),
+  ].filter(Boolean).map((t) => String(t).toLowerCase()))];
+}
+
 // A headless worker: ask the hub where work is waiting, give the worker its own git worktree and
 // branch there (so many can run at once without colliding), and start the agent with everything it
 // needs (MCP server, project, a scoped tool allowlist). Prints the command, or runs it with --run.
@@ -187,6 +199,7 @@ async function worker(flags) {
   const s = resolveSettings(flags);
   const agent = agentOf(flags);
   const client = createClient(flags);
+  const tags = detectHas(flags);
   const projects = await hubProjects(client);
 
   // Where to work: the named project, else the one this folder belongs to, else wherever the hub routes us.
@@ -203,7 +216,7 @@ async function worker(flags) {
     }
   }
   if (!target) {
-    const routes = await client.get('/api/route');
+    const routes = await client.get(`/api/route?has=${encodeURIComponent(tags.join(','))}`);
     const best = routes.find((r) => r.path) ?? routes[0];
     if (!best) return console.log(dim('No work is waiting in any project: everything is parked, idle, or waiting on you.'));
     target = projects.find((p) => p.slug === best.project);
@@ -244,8 +257,10 @@ function workerSetup(target, agent, flags, s, token = null) {
   const worktree = isRepo && !flags.here ? join(`${home}.worktrees`, name) : null;
   const branch = `trellis/${name}`;
   const cwd = worktree ?? home;
+  const tags = detectHas(flags);
   const env = {
     TRELLIS_URL: s.url, TRELLIS_PROJECT: target.slug, TRELLIS_AGENT: name,
+    ...(tags.length ? { TRELLIS_HAS: tags.join(',') } : {}),
     ...(token ? { TRELLIS_TOKEN: token } : s.token && !flags.run ? { TRELLIS_TOKEN: '<agent-token>' } : {}),
   };
   const task = [
@@ -323,7 +338,8 @@ async function runCmd(flags) {
   const workers = num(flags.workers, 1);
   console.log(`${green('●')} ${bold('trellis run')}  ${dim(`up to ${workers} ${agent} worker${workers > 1 ? 's' : ''} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
   await run({
-    routes: () => client.get('/api/route?runner=1'),
+    // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
+    routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}`),
     launch, workers,
     maxRuns: num(flags['max-runs'], Infinity),
     maxMinutes: num(flags['max-minutes'], Infinity),
@@ -677,7 +693,9 @@ ${bold('Human')}
   status [--all]                         the 30-second view
 
 ${bold('Agents')}  (every command takes --as <name>, --project, --url)
-  checkin [--model m] [--client c]       start here: mission, decisions, steering, answers
+  checkin [--model m] [--client c] [--has "docker,macos"]
+                                         start here: mission, decisions, steering, answers.
+                                         --has: what your machine can do (or TRELLIS_HAS)
   next [--peek]                          claim the most useful work
   claim <item> [--touching "a,b"]        claim a specific item
   progress <item> [headline] [--touching "src/db,src/api.js"]
@@ -686,7 +704,8 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   submit <item> <headline> [--evidence "label|url"]...
   handoff <item> <headline>              release with where you left off
   propose <title> [--acceptance] [--priority now|soon|later] [--parent] [--depends-on "#1,#2"]
-  refine <item> [--title] [--acceptance] [--priority] [--depends-on]
+          [--needs "docker,linux-vm"] [--size small|large]
+  refine <item> [--title] [--acceptance] [--priority] [--depends-on] [--needs] [--size]
   review <item> <accept|reject> <headline> [--attempt n|agent]   (raced items: which attempt to keep)
   comment [<item>] <headline>
   ack <steer-id> [response]
@@ -699,14 +718,16 @@ ${bold('Setup')}
   mcp                                    run the stdio MCP server (one per agent session)
   guide [--via cli|tools]                the agent guide
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
-  worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools]
+  worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags]
                                          start a headless worker where work is waiting (the hub routes it),
                                          in its own git worktree and branch (--here: no worktree). Without
                                          --run it prints the command instead. opencode needs --model,
                                          e.g. ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is set up for you).
                                          On a hub with login, --run needs --agent-token (or
                                          TRELLIS_AGENT_TOKEN): workers never get your own token.
-  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--poll 30]
+                                         It reports what this machine has (macos/linux, docker, gpu;
+                                         add more with --has).
+  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--poll 30] [--has tags]
                                          keep up to N workers on waiting work in projects you opted in
                                          (UI: "Let trellis run staff this project"); exits when the
                                          queue is empty. Logs: ~/.trellis/logs. Dollar budgets: not yet.

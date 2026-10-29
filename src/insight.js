@@ -161,6 +161,20 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     });
   }
 
+  // Work that needs something no agent seen in the last day has: it would wait forever unnoticed.
+  const fitAgents = agents.filter((a) => t - a.last_seen < DAY).map((a) => json(a.has, []));
+  for (const it of [...readyFree, ...shapeable]) {
+    const missing = json(it.needs, []).filter((tag) => !fitAgents.some((has) => has.includes(tag)));
+    if (!missing.length) continue;
+    push({
+      key: `unfit:${it.id}:${missing.join(',')}`, level: 'know', kind: 'unfit', at: it.stage_since,
+      headline: `${ref(it)} needs ${missing.join(', ')}; no agent connected in the last day has it`,
+      sub: it.title,
+      why: `Only agents that declare ${missing.join(', ')} at checkin (has) are offered it. Start one on a machine that has it, or change what the item needs.`,
+      item: ref(it),
+    });
+  }
+
   // Silence must be earned. If nothing is moving and you haven't parked the project, say so.
   const lastAgentSeen = agents.reduce((m, a) => Math.max(m, a.last_seen), 0);
   const picked = shapeable.filter((i) => i.priority === 'now');
@@ -288,7 +302,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   // ── queues ──
   const brief = (it) => ({
     item: ref(it), title: it.title, priority: it.priority, stage: it.stage, holder: it.holder,
-    by: it.created_by, ago: dur(t - it.stage_since), summary: it.summary,
+    needs: json(it.needs, []), size: it.size || null, by: it.created_by, ago: dur(t - it.stage_since), summary: it.summary,
     blocked_by: unmet(it).map(ref), last_worker: it.last_worker, attempts: it.attempts,
     handoff: json(it.handoff, null),
   });
@@ -326,7 +340,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const races = hub.q(`SELECT COUNT(*) AS entered, COALESCE(SUM(a.stage = 'chosen'), 0) AS won FROM attempts a JOIN items i ON i.id = a.item_id
         WHERE i.project_id = ? AND a.agent = ?`).get(p.id, a.name);
     return {
-      name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), tokens: a.tokens ? a.tokens.split(',') : [], via,
+      name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), tokens: a.tokens ? a.tokens.split(',') : [], via, has: json(a.has, []),
       status, line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
       record: {
         landed, sent_back: sentBack, stalls,
@@ -455,7 +469,8 @@ export function itemView(hub, slug, ref) {
   return {
     item: `#${it.seq}`, title: it.title, summary: it.summary, detail: it.detail, acceptance: it.acceptance,
     stage: it.stage, stage_label: STAGES[it.stage].label, stage_blurb: STAGES[it.stage].blurb, court: courtOf(it.stage, p.autonomy),
-    priority: it.priority, created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
+    priority: it.priority, needs: json(it.needs, []), size: it.size || null,
+    created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
     holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
     race: it.race,
     racers: it.race > 1 ? hub.attemptsOf(it).map((a) => ({ agent: a.agent, model: a.model, stage: a.stage, lease_left: a.lease_until ? dur(a.lease_until - t) : null })) : [],
