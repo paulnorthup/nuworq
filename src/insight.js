@@ -460,7 +460,34 @@ function flowStats(hub, p, items, t) {
     finished: doneAt.length,
     median_cycle: median ? dur(median) : null,
     takeaway,
+    cost: costStats(hub, p, from),
   };
+}
+
+// What finished work cost over the window, per model: median and total per finished item, tokens too
+// (a local model has no price), and everything spent in the window. Null when nothing was recorded.
+function costStats(hub, p, from) {
+  const spent = hub.q(`SELECT COUNT(*) AS n, SUM(cost_usd) AS usd FROM usage WHERE project_id = ? AND at > ?`).get(p.id, from);
+  if (!spent.n) return null;
+  // One row per finished item and model; its cost is unknown (null) if any part of it is.
+  const rows = hub.q(`SELECT u.model, u.item_id, SUM(u.input_tokens + u.output_tokens) AS tokens,
+      SUM(u.cost_usd) AS usd, COUNT(u.cost_usd) = COUNT(*) AS priced
+    FROM usage u JOIN items i ON i.id = u.item_id
+    WHERE i.project_id = ? AND i.stage = 'done'
+      AND (SELECT MAX(t.at) FROM transitions t WHERE t.item_id = i.id AND t.stage = 'done') > ?
+    GROUP BY u.model, u.item_id`).all(p.id, from);
+  const mid = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  const models = new Map();
+  for (const r of rows) (models.get(r.model) ?? models.set(r.model, []).get(r.model)).push(r);
+  const by_model = [...models].map(([model, rs]) => {
+    const priced = rs.filter((r) => r.priced).map((r) => r.usd);
+    return {
+      model: model || null, items: rs.length,
+      median_usd: mid(priced), total_usd: priced.length ? priced.reduce((a, b) => a + b, 0) : null,
+      median_tokens: mid(rs.map((r) => r.tokens)), total_tokens: rs.reduce((a, r) => a + r.tokens, 0),
+    };
+  }).sort((a, b) => (b.total_usd ?? 0) - (a.total_usd ?? 0) || b.total_tokens - a.total_tokens);
+  return { by_model, spend_usd: spent.usd ?? null };
 }
 
 // The 5-minute and 30-minute views of one item.

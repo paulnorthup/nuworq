@@ -487,11 +487,23 @@ function flow(v) {
         <div class="spark" title="Finished per day, last 14 days">${f.throughput.map((n) => `<span class="${n ? '' : 'z'}" style="height:${Math.max(2, Math.round((n / max) * 28))}px" title="${n}"></span>`).join('')}</div>
         <span>${plural(f.finished, 'item')} finished in 14 days${f.median_cycle ? ` · median ${esc(f.median_cycle)} from ready to done` : ''}</span>
       </div>
+      ${f.cost ? flowCost(f.cost) : ''}
     </div></section>`;
 }
 
 // The repository an item lands in, when its project has several (the hub sends null otherwise).
 const repoTag = (i) => i.repo ? ` <span class="tag" title="Lands in this repository">${esc(i.repo)}</span>` : '';
+
+// What finished work cost per model; a local model shows tokens, having no price.
+function flowCost(c) {
+  const usd = (n) => `$${n.toFixed(2)}`;
+  const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+  const row = (m) => `<dt>${esc(m.model || 'unknown model')} <span class="age">${plural(m.items, 'item')}</span></dt><dd>${m.median_usd != null
+    ? `median ${usd(m.median_usd)} per item · ${usd(m.total_usd)} total`
+    : `median ${tok(m.median_tokens)} tokens per item · ${tok(m.total_tokens)} total`}</dd>`;
+  return `<div class="cost"><dl class="kv">${c.by_model.map(row).join('')}
+    <dt><b>Spent</b></dt><dd><b>${c.spend_usd != null ? usd(c.spend_usd) : '—'}</b> in 14 days</dd></dl></div>`;
+}
 
 function itemRow(i, extra = '') {
   const notes = [

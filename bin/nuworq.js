@@ -389,6 +389,7 @@ async function runCmd(flags) {
         await reportUsage(s, token, target.slug, name, usage());
         done(code ?? (sig ? `${sig}` : 1));
       })),
+      spent: () => usage()?.cost_usd ?? 0, // what its CLI said it cost, for --max-usd
     };
   };
 
@@ -401,6 +402,7 @@ async function runCmd(flags) {
     maxRuns: num(flags['max-runs'], Infinity),
     untilIdle: !!flags['until-idle'],
     maxMinutes: num(flags['max-minutes'], Infinity),
+    maxUsd: num(flags['max-usd'], Infinity),
     pollSeconds: num(flags.poll, 30),
     onInterrupt: (fn) => {
       process.on('SIGINT', () => { console.log(dim('\nStopping: no new workers; asking running ones to stop (Ctrl-C again to kill them).')); fn(); });
@@ -881,10 +883,12 @@ ${bold('Setup')}
                                          NUWORQ_AGENT_TOKEN): workers never get your own token.
                                          It reports what this machine has (macos/linux, docker, gpu;
                                          add more with --has).
-  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--poll 30] [--has tags] [--until-idle]
+  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--max-usd X] [--poll 30] [--has tags] [--until-idle]
                                          keep up to N workers on waiting work in projects you opted in
                                          (UI: "Let nuworq run staff this project"); exits when the
-                                         queue is empty. Logs: ~/.nuworq/logs. Dollar budgets: not yet.
+                                         queue is empty. Logs: ~/.nuworq/logs. --max-usd stops launching
+                                         once workers' reported spend reaches X (codex and local models
+                                         report no cost, so they don't count against it).
   prompt [--as name]                     just the worker prompt text, for other agents
   seed                                   add the nuworq roadmap project to your hub's database
 

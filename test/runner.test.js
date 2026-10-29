@@ -302,6 +302,35 @@ describe('run: the supervising loop', () => {
     assert.equal(res.launched, 2);
   });
 
+  test('stops launching at --max-usd, lets running workers finish, and says what was spent', async () => {
+    const w = world([[route('a', 5)]]);
+    const p = run({ ...w.opts, workers: 2, maxUsd: 2.5 });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(w.workers.length, 2);
+    w.workers[0].spent = () => 3.1;
+    w.workers[0].finish(0);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(w.workers.length, 2, 'no new worker once the budget is spent');
+    assert.deepEqual(w.workers[1].signals, [], 'the running worker is left to finish');
+    assert.ok(w.lines.some((l) => /■ w1 \(a\) exited 0 after \d+s, spent \$3\.10/.test(l)));
+    w.workers[1].spent = () => null; // a CLI that reports no cost
+    w.workers[1].finish(0);
+    const res = await p;
+    assert.match(res.why, /reached --max-usd 2\.5 \(\$3\.10 spent\); letting 1 running worker\(s\) finish/);
+    assert.equal(res.spent, 3.1);
+    assert.match(w.lines.at(-1), /2 launched, 2 exited cleanly, 0 failed .*; \$3\.10 spent\.$/);
+  });
+
+  test('without a budget, workers that report no spend change nothing', async () => {
+    const w = world([[route('a', 1)], []]);
+    const p = run({ ...w.opts, workers: 1, untilIdle: true });
+    await new Promise((r) => setTimeout(r, 20));
+    w.workers[0].finish(0);
+    const res = await p;
+    assert.equal(res.spent, 0);
+    assert.doesNotMatch(w.lines.at(-1), /spent/);
+  });
+
   test('gives up after workers keep failing within seconds', async () => {
     const w = world([[route('a', 5)]]);
     w.opts.launch = async () => { throw new Error('claude: command not found'); };

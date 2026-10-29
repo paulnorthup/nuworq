@@ -23,16 +23,19 @@ const FAST_FAIL_MS = 15_000;
 const FAST_FAILS = 3;
 const KILL_GRACE_MS = 10_000;
 
-// routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal), exited: Promise<code> }.
+// routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal),
+// exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited }.
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
+// maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
 export async function run({
   routes, launch, log = console.log,
-  workers = 1, maxRuns = Infinity, maxMinutes = Infinity, pollSeconds = 30, untilIdle = false,
+  workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
   const running = [];
   const done = [];
   let launched = 0;
+  let spent = 0;
   let fastFails = 0;
   let stopping = false;
   let why = '';
@@ -94,7 +97,10 @@ export async function run({
           running.splice(running.indexOf(w), 1);
           const secs = Math.round((now() - w.started) / 1000);
           done.push({ name: w.name, project: w.project, code, secs });
-          log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s`);
+          const usd = Number(w.spent?.()) || 0;
+          spent += usd;
+          log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s${usd ? `, spent $${usd.toFixed(2)}` : ''}`);
+          if (spent >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${spent.toFixed(2)} spent)${running.length ? `; letting ${running.length} running worker(s) finish` : ''}`);
           if (code !== 0 && !interrupted && !w.killedAt && now() - w.started < FAST_FAIL_MS) failedFast();
           else fastFails = 0;
           wake();
@@ -115,6 +121,6 @@ export async function run({
 
   const failed = done.filter((d) => d.code !== 0).length;
   const each = done.map((d) => `${d.name}@${d.project}:${d.code}`).join(', ');
-  log(`Done: ${why}. ${launched} launched, ${done.length - failed} exited cleanly, ${failed} failed${each ? ` (${each})` : ''}.`);
-  return { launched, done, why };
+  log(`Done: ${why}. ${launched} launched, ${done.length - failed} exited cleanly, ${failed} failed${each ? ` (${each})` : ''}${spent || maxUsd !== Infinity ? `; $${spent.toFixed(2)} spent` : ''}.`);
+  return { launched, done, why, spent };
 }

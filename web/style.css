@@ -262,6 +262,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .takeaway { margin: 12px 0 0; font-size: 14px; }
 .takeaway::before { content: '→ '; color: var(--faint); }
 .throughput { display: flex; align-items: flex-end; gap: 14px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 12.5px; }
+.flow .cost { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 28px; }
 .spark span { width: 7px; background: var(--ok); border-radius: 2px 2px 0 0; min-height: 2px; opacity: .85; }
 .spark span.z { background: var(--line-strong); }

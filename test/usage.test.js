@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
-import { itemView } from '../src/insight.js';
+import { itemView, view } from '../src/insight.js';
 import { tools } from '../src/protocol.js';
 import { tap, split, normUsage } from '../src/usage.js';
 
@@ -97,6 +97,36 @@ describe('agent-reported usage', () => {
     ]);
     assert.equal(u.total.input_tokens, 5500);
     assert.equal(u.total.cost_usd.toFixed(2), '0.15', 'the known costs, summed');
+  });
+});
+
+describe('cost in Flow', () => {
+  test('median and total per finished item by model, tokens for unpriced models, and total spend', () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('c', { create: true }));
+    assert.equal(view(hub, 'c').flow.cost, null, 'nothing recorded: nothing shown');
+    const finish = (title, agent, usage) => {
+      const { item } = hub.humanOp('c', 'create', { title, acceptance: 'x' });
+      hub.agentOp('c', 'claim', agent, { item });
+      hub.agentOp('c', 'submit', agent, { item, headline: 'Done', usage });
+      hub.humanOp('c', 'accept', { item });
+      return item;
+    };
+    finish('A', 'cl', { input_tokens: 1000, output_tokens: 100, cost_usd: 1, model: 'claude-opus-5-5' });
+    finish('B', 'cl', { input_tokens: 1000, output_tokens: 100, cost_usd: 3, model: 'claude-opus-5-5' });
+    finish('C', 'cl', { input_tokens: 1000, output_tokens: 100, cost_usd: 2, model: 'claude-opus-5-5' });
+    finish('D', 'local', { input_tokens: 9000, output_tokens: 1000, model: 'qwen3:8b' });
+    // Unfinished work counts toward spend, not toward cost per finished item.
+    const { item } = hub.humanOp('c', 'create', { title: 'E', acceptance: 'x' });
+    hub.agentOp('c', 'claim', 'cl', { item });
+    hub.agentOp('c', 'progress', 'cl', { item, usage: { input_tokens: 10, output_tokens: 1, cost_usd: 0.5, model: 'claude-opus-5-5' } });
+
+    const cost = view(hub, 'c').flow.cost;
+    assert.deepEqual(cost.by_model, [
+      { model: 'claude-opus-5-5', items: 3, median_usd: 2, total_usd: 6, median_tokens: 1100, total_tokens: 3300 },
+      { model: 'qwen3:8b', items: 1, median_usd: null, total_usd: null, median_tokens: 10000, total_tokens: 10000 },
+    ]);
+    assert.equal(cost.spend_usd, 6.5);
   });
 });
 

@@ -24,7 +24,7 @@ Or keep them going: let `nuworq run` staff a project (in the UI, "Let nuworq run
 node bin/nuworq.js run --workers 2 --max-runs 10 --max-minutes 60   # logs in ~/.nuworq/logs
 ```
 
-Limits are counts and wall-clock for now; dollar and token budgets come with cost tracking (#16).
+Limits are counts, wall-clock and dollars: `--max-usd 5` stops launching once the workers' CLIs have reported $5 spent in this run, and lets running workers finish. Spend is known when a worker exits; codex and local models report no cost, so they don't count against it.
 
 What each item cost shows in its 30-minute view, per agent and model. Workers started with `--run` (or by `nuworq run`) report their CLI's own numbers when the agent exits, split across the items they worked on by time: `claude` (`--output-format stream-json`: tokens including cached input, and dollars), `codex` (`exec --json`: tokens only, so cost shows "—"), `opencode` (`--format json`: tokens and cost; a local Ollama model's cost shows "—"). The readers follow those CLIs' JSON event formats; the tests use sample output in those shapes, not yet captures from live runs. Agents you run yourself can pass `usage` on progress, submit and handoff.
 
@@ -180,7 +180,6 @@ Loopback is open. Anything else needs tokens: *human* tokens log in to the UI, *
 
 ### Where it could go next
 These are proposals in the `nuworq` project (`nuworq seed`):
-- spend budgets for the runner, once cost per item is tracked
 - parallel attempts, where two models race one item
 - routing work by capability fit
 - linking git commits and PRs to items
