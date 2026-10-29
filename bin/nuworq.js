@@ -437,7 +437,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     browser && (has('bin/nuworq.js')
       ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login.'
       : 'To check UI work, start the app from this worktree on a free local port, in the background.'),
-    browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide, each in light and in dark mode (browser_resize, browser_emulate_media). Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
+    browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide (browser_resize); the app is light only, so there is no dark mode to check. Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
     'While you work, run only the tests that cover what you change; run the full test suite once, just before you submit.',
     'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
