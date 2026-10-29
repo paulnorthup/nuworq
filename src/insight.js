@@ -19,12 +19,18 @@ export function projectList(hub, { viewer } = {}) {
   });
 }
 
+// The repository an item lands in, short (acme/api), when the project has several; null with one.
+function repoTag(remotes, it) {
+  return remotes.length > 1 ? (it.repo || remotes[0]).split('/').slice(-2).join('/') : null;
+}
+
 export function view(hub, slug, { light = false, viewer } = {}) {
   const p = hub.project(slug);
   const t = hub.now();
   const items = hub.q('SELECT * FROM items WHERE project_id = ? ORDER BY seq').all(p.id);
   const byId = new Map(items.map((i) => [i.id, i]));
   const ref = (i) => `#${i.seq}`;
+  const remotes = hub.remotesOf(p);
   const agents = hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id);
   const openQs = hub.q(`SELECT * FROM questions WHERE project_id = ? AND status = 'open' ORDER BY at`).all(p.id);
   const dismissed = new Set(hub.q('SELECT key FROM dismissals WHERE project_id = ?').all(p.id).map((d) => d.key));
@@ -296,7 +302,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       : hub.q(`SELECT * FROM events WHERE item_id = ? AND type IN ('progress','claimed','shaping') ORDER BY at DESC, id DESC LIMIT 1`).get(it.id);
     const a = agents.find((x) => x.name === agent);
     return {
-      item: ref(it), title: it.title, priority: it.priority, agent, model: a?.model ?? '', provider: providerOf(a?.model),
+      item: ref(it), title: it.title, priority: it.priority, repo: repoTag(remotes, it), agent, model: a?.model ?? '', provider: providerOf(a?.model),
       last: last ? { headline: last.headline, summary: last.summary, ago: dur(t - last.at), type: last.type } : null,
       for: dur(t - since), lease_left: dur(lease - t), attempt: it.attempts,
       quiet: lease - t < LEASE_MS - 10 * MIN, // no milestone or heartbeat in 10 minutes
@@ -314,7 +320,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   // ── queues ──
   const brief = (it) => ({
     item: ref(it), title: it.title, priority: it.priority, stage: it.stage, holder: it.holder,
-    needs: json(it.needs, []), size: it.size || null, by: it.created_by, ago: dur(t - it.stage_since), summary: it.summary,
+    needs: json(it.needs, []), size: it.size || null, repo: repoTag(remotes, it), by: it.created_by, ago: dur(t - it.stage_since), summary: it.summary,
     blocked_by: unmet(it).map(ref), last_worker: it.last_worker, attempts: it.attempts,
     handoff: json(it.handoff, null),
   });
@@ -481,7 +487,7 @@ export function itemView(hub, slug, ref) {
   return {
     item: `#${it.seq}`, title: it.title, summary: it.summary, detail: it.detail, acceptance: it.acceptance,
     stage: it.stage, stage_label: STAGES[it.stage].label, stage_blurb: STAGES[it.stage].blurb, court: courtOf(it.stage, p.autonomy),
-    priority: it.priority, needs: json(it.needs, []), size: it.size || null,
+    priority: it.priority, needs: json(it.needs, []), size: it.size || null, repo: repoTag(hub.remotesOf(p), it),
     created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
     holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
     race: it.race,

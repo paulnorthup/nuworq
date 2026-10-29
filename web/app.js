@@ -446,7 +446,7 @@ function motion(v) {
   const rows = v.motion.map((m) => `
     <div class="row-item clickable" data-action="open" data-item="${esc(m.item)}">
       <div class="body">
-        <div class="h">${who(m.agent, m.model)} ${refLink(m.item)} <span>${esc(m.title)}</span>${m.shaping ? '<span class="tag shaping">shaping</span>' : ''}${m.landing ? '<span class="tag shaping">landing</span>' : ''}${m.priority === 'now' ? '<span class="tag now">now</span>' : ''}${m.race ? `<span class="tag soon">race of ${m.race}</span>` : m.attempt > 1 ? `<span class="tag soon">attempt ${m.attempt}</span>` : ''}</div>
+        <div class="h">${who(m.agent, m.model)} ${refLink(m.item)} <span>${esc(m.title)}</span>${repoTag(m)}${m.shaping ? '<span class="tag shaping">shaping</span>' : ''}${m.landing ? '<span class="tag shaping">landing</span>' : ''}${m.priority === 'now' ? '<span class="tag now">now</span>' : ''}${m.race ? `<span class="tag soon">race of ${m.race}</span>` : m.attempt > 1 ? `<span class="tag soon">attempt ${m.attempt}</span>` : ''}</div>
         ${z() >= 1 && m.last ? `<div class="last ${m.quiet ? 'quiet' : ''}">${m.last.type === 'claimed' ? 'Just picked it up' : esc(m.last.headline)}</div>` : ''}
         ${z() >= 1 && m.touching?.length ? `<div class="touch">${m.touching.map((t) => `<code>${esc(t)}</code>`).join(' ')}</div>` : ''}
         ${z() >= 1 && m.heads_up ? `<div class="headsup">⚠ ${esc(m.heads_up.split('. ')[0])}</div>` : ''}
@@ -490,6 +490,9 @@ function flow(v) {
     </div></section>`;
 }
 
+// The repository an item lands in, when its project has several (the hub sends null otherwise).
+const repoTag = (i) => i.repo ? ` <span class="tag" title="Lands in this repository">${esc(i.repo)}</span>` : '';
+
 function itemRow(i, extra = '') {
   const notes = [
     i.blocked_by?.length && `after ${i.blocked_by.join(', ')}`,
@@ -499,7 +502,7 @@ function itemRow(i, extra = '') {
   ].filter(Boolean).join(' · ');
   return `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
     <span class="tag ${i.priority}">${i.priority}</span>
-    <div class="body"><div class="h">${refLink(i.item)} ${esc(i.title)}</div>${notes || extra ? `<div class="s">${esc(notes)}${extra}</div>` : ''}</div>
+    <div class="body"><div class="h">${refLink(i.item)} ${esc(i.title)}${repoTag(i)}</div>${notes || extra ? `<div class="s">${esc(notes)}${extra}</div>` : ''}</div>
     <span class="age">${esc(i.ago)}</span></div>`;
 }
 
@@ -604,7 +607,7 @@ function allWork(v) {
   const rows = [...v.all].reverse();
   return `<section class="sec"><header><h2>All work</h2><span class="count">${rows.length}</span></header>
     <table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Who</th><th>In stage</th></tr></thead><tbody>
-    ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : `<span class="age">${esc(i.by)}</span>`}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
+    ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : `<span class="age">${esc(i.by)}</span>`}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
     </tbody></table></section>`;
 }
 
@@ -700,7 +703,7 @@ function renderDrawer() {
     </div></div>` : '';
 
   d.innerHTML = `
-    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
+    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${repoTag(it)}${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
       <button class="btn ghost small x" data-action="close" title="Close (Esc)">✕</button></div>
     <h2 class="title">${esc(it.title)}</h2>
     <div class="d-now">${holderLine}</div>
