@@ -7,7 +7,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
-import { skill, OPS } from '../src/protocol.js';
+import { skill, planSkill, OPS } from '../src/protocol.js';
 import { Auth } from '../src/auth.js';
 import { Workspaces } from '../src/workspaces.js';
 import { createServer } from '../src/server.js';
@@ -157,8 +157,10 @@ describe('nuworq connect', () => {
       assert.ok(!out.stdout.includes(saved.token), 'the token is never printed');
       // The nuworq skill, generated, pointing at this hub's guide.
       const skillFile = join(m.home, '.claude', 'skills', 'nuworq', 'SKILL.md');
+      const planFile = join(m.home, '.claude', 'skills', 'nuworq-plan', 'SKILL.md');
       assert.equal(readFileSync(skillFile, 'utf8'), skill({ url }));
-      assert.match(out.stdout, /Claude Code skill: wrote the nuworq skill/);
+      assert.equal(readFileSync(planFile, 'utf8'), planSkill({ url }));
+      assert.match(out.stdout, /Claude Code skill: wrote the nuworq and nuworq-plan skills/);
 
       // Each tool got nuworq and kept everything else; no config holds the token.
       assert.deepEqual(m.read.claude(), ['mcp get nuworq', `mcp add --scope user nuworq -- node ${BIN} mcp`]);
@@ -185,6 +187,7 @@ describe('nuworq connect', () => {
       assert.deepEqual(m.read.opencode(), m.oc, 'opencode config has its own entries and nothing else');
       assert.equal(m.read.claude().at(-1), 'mcp remove --scope user nuworq');
       assert.ok(!existsSync(skillFile) && !existsSync(dirname(skillFile)), 'the skill is gone too');
+      assert.ok(!existsSync(planFile) && !existsSync(dirname(planFile)), 'and the planning skill');
 
       const again = await cli(['disconnect'], { env: m.env });
       assert.equal(again.code, 0, again.stderr);
@@ -277,10 +280,41 @@ describe('the nuworq skill is generated from the protocol', () => {
     assert.ok(text.split('\n').length <= 60, `${text.split('\n').length} lines`);
   });
 
-  test('`nuworq skill --dir d` writes it', async () => {
+  test('the planning skill names only real operations, the ones planning needs, and points at the guide', () => {
+    const text = planSkill({ url: 'https://hub.test/' });
+    const fm = text.match(/^---\nname: nuworq-plan\ndescription: (.+)\n---\n/);
+    assert.ok(fm && fm[1].length > 40, 'frontmatter with a name and a real description');
+    const ops = new Set(OPS.map((o) => o.name));
+    // Every one-word code span is a tool name.
+    const named = new Set([...text.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]));
+    for (const n of named) assert.ok(ops.has(n), `\`${n}\` is not an operation`);
+    for (const n of ['checkin', 'look', 'propose', 'refine', 'ask']) assert.ok(named.has(n), `names \`${n}\``);
+    for (const field of ['title', 'acceptance', 'parent', 'depends_on', 'needs', 'size', 'repo']) {
+      assert.ok(field in OPS.find((o) => o.name === 'propose').params, `propose still takes ${field}`);
+      assert.match(text, new RegExp(`\\*\\*${field}\\*\\*`), `explains ${field}`);
+    }
+    assert.match(text, /https:\/\/hub\.test\/agents\.md/);
+    assert.match(text, /follow the hub/);
+    assert.ok(text.split('\n').length <= 60, `${text.split('\n').length} lines`);
+  });
+
+  test('the planning skill drafts decisions and asks; it never tells the agent to make one', () => {
+    const text = planSkill();
+    const about = text.split(/(?<=[.:!?])\s+|\n/).filter((s) => /\bdecisions?\b/i.test(s));
+    assert.ok(about.length, 'it talks about decisions');
+    for (const s of about) {
+      assert.doesNotMatch(s.replace(/\bnever\b.*/i, ''), /\b(write|record|add|create|make|set)s?\b[^.]*\bdecisions?\b/i, `"${s}"`);
+    }
+    assert.match(text, /draft the wording and `ask` the person/);
+    assert.match(text, /only the person makes them/);
+    assert.ok(!OPS.some((o) => /decide|decision/.test(o.name)), 'agents have no operation that writes a decision');
+  });
+
+  test('`nuworq skill --dir d` writes both skills', async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-skill-')));
     const r = await cli(['skill', '--dir', dir], { env: envFor(dir, { NUWORQ_URL: 'http://127.0.0.1:9' }) });
     assert.equal(r.code, 0, r.stderr);
     assert.equal(readFileSync(join(dir, 'nuworq', 'SKILL.md'), 'utf8'), skill({ url: 'http://127.0.0.1:9' }));
+    assert.equal(readFileSync(join(dir, 'nuworq-plan', 'SKILL.md'), 'utf8'), planSkill({ url: 'http://127.0.0.1:9' }));
   });
 });

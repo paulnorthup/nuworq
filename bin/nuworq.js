@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
-import { tools, guide, skill } from '../src/protocol.js';
+import { tools, guide, skill, planSkill } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -1064,7 +1064,7 @@ ${bold('Setup')}
                                          and add the nuworq MCP server to Claude Code, Codex and opencode here.
                                          --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
   disconnect                             revoke that token, remove what connect added, forget the hub
-  skill [--dir d]                        write the nuworq skill for Claude (generated; connect does it too)
+  skill [--dir d]                        write the nuworq and nuworq-plan skills for Claude (generated; connect does both too)
   mcp                                    run the stdio MCP server (one per agent session)
   git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
@@ -1148,11 +1148,17 @@ async function main() {
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
   }
   if (cmd === 'skill') {
-    // The nuworq skill for Claude, generated from the protocol: <dir>/nuworq/SKILL.md (default ~/.claude/skills).
-    const file = join(resolve(String(flags.dir || join(homedir(), '.claude', 'skills'))), 'nuworq', 'SKILL.md');
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, skill({ url: resolveSettings(flags).url }));
-    return console.log(`${green('Wrote')} ${file}`);
+    // The nuworq skills for Claude, generated from the protocol: <dir>/nuworq/SKILL.md and <dir>/nuworq-plan/SKILL.md
+    // (default ~/.claude/skills).
+    const dir = resolve(String(flags.dir || join(homedir(), '.claude', 'skills')));
+    const url = resolveSettings(flags).url;
+    for (const [name, make] of [['nuworq', skill], ['nuworq-plan', planSkill]]) {
+      const file = join(dir, name, 'SKILL.md');
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, make({ url }));
+      console.log(`${green('Wrote')} ${file}`);
+    }
+    return;
   }
   if (cmd === 'tools') return console.log(JSON.stringify(tools(flags.format || 'mcp', flags.prefix || ''), null, 2));
   if (cmd === 'prompt') return console.log(workerPrompt(flags));
