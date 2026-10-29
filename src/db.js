@@ -295,6 +295,7 @@ export function openDb(file) {
     'ALTER TABLE items ADD COLUMN next_check INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE items ADD COLUMN check_fails INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE items ADD COLUMN parked_by TEXT NOT NULL DEFAULT ''", // who answered and kept it waiting ('' = not kept parked)
+    'ALTER TABLE projects ADD COLUMN wait_days INTEGER NOT NULL DEFAULT 0', // how long work waits outside before you hear; 0: the default (src/precondition.js)
     // What llm-proxy measured (source 'llm-proxy'; 0 on reported rows): model time, requests, failed ones, cold model loads
     'ALTER TABLE usage ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE usage ADD COLUMN requests INTEGER NOT NULL DEFAULT 0',

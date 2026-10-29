@@ -6,6 +6,7 @@
 import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem, preconditionOut } from './core.js';
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
+import { WAIT_DAYS } from './precondition.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -130,6 +131,19 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       headline: `${ref(it)} was accepted ${dur(t - it.stage_since)} ago but isn't on main yet`,
       sub: it.title, why: `No agent has landed ${it.branch || 'its branch'}. Start an agent; land jobs come before any other work.`,
       item: ref(it), start: true,
+    });
+  }
+
+  // Work that has waited outside past the project's limit: the fact may never come, or the check may be wrong.
+  const waitMs = (p.wait_days || WAIT_DAYS) * DAY;
+  for (const it of in_('outside').filter((i) => t - i.stage_since > waitMs)) {
+    const pre = preconditionOut(it);
+    push({
+      key: `outside:${it.id}:${it.stage_since}`, level: 'know', kind: 'outside-overdue', at: it.stage_since,
+      headline: `${ref(it)} has waited ${dur(t - it.stage_since)} on something outside the hub`,
+      sub: [it.title, pre?.last_check ? `last check ${dur(t - pre.last_check.at)} ago: ${pre.last_check.detail}` : 'not checked yet'].join(' · '),
+      why: `It waits until ${pre?.waits_for}. If that will never happen, or the check is wrong, edit or remove the precondition; "Check now" asks again on the next sweep.`,
+      item: ref(it),
     });
   }
 

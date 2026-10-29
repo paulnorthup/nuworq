@@ -7,7 +7,7 @@ import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, i
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
-import { normPrecondition, describe as describePrecondition } from './precondition.js';
+import { normPrecondition, describe as describePrecondition, WAIT_DAYS } from './precondition.js';
 import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from './issues.js';
 import { prMerged, prSeen } from './github.js';
 
@@ -42,7 +42,7 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'check'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
@@ -616,8 +616,10 @@ export class Hub extends EventEmitter {
   }
 
   move(item, stage, actor, patch = {}) {
-    // Work waiting on an outside fact the hub hasn't seen yet isn't ready, whichever way it got here.
-    if (stage === 'ready' && this.unmetPrecondition(item)) stage = 'outside';
+    // Work waiting on an outside fact the hub hasn't seen yet isn't ready, whichever way it got here. One
+    // only a person can vouch for waits on them, as a question.
+    const unmet = stage === 'ready' && this.unmetPrecondition(item);
+    if (unmet) stage = unmet.kind === 'ask' ? 'waiting' : 'outside';
     const t = this.now();
     const fields = { ...patch, stage, stage_since: t, updated_at: t };
     if (stage !== 'waiting' && item.parked_by) fields.parked_by = ''; // out of waiting: no longer kept parked
@@ -629,11 +631,27 @@ export class Hub extends EventEmitter {
     // count is now: it may have been changed while the item was verifying.
     if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);    Object.assign(item, fields);
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
+    if (unmet?.kind === 'ask') this.askPrecondition(item, actor);
   }
 
   // The item's precondition (src/precondition.js), unless none or it has passed.
   unmetPrecondition(item) {
     return item.precondition && !json(item.last_check, {}).ok ? JSON.parse(item.precondition) : null;
+  }
+
+  // An 'ask' precondition becomes a blocking question to the human, once; its last check points at it, so
+  // answering it is what passes the precondition.
+  askPrecondition(item, actor) {
+    const pre = this.unmetPrecondition(item);
+    const asked = json(item.last_check, {}).question;
+    if (pre?.kind !== 'ask' || (asked && this.q(`SELECT 1 FROM questions WHERE id = ? AND status = 'open'`).get(asked))) return;
+    const p = this.q('SELECT * FROM projects WHERE id = ?').get(item.project_id);
+    const t = this.now();
+    const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at)
+      VALUES (?, ?, ?, ?, ?, '', '[]', 1, '', ?)`).run(p.id, item.id, actor, pre.question, `#${item.seq} waits on this before any agent starts it. Answering makes it ready.`, t);
+    const id = Number(r.lastInsertRowid);
+    this.patch(item, { last_check: JSON.stringify({ at: t, ok: false, detail: 'asked you', question: id }) });
+    this.event(p, { item, actor, type: 'question', headline: `#${item.seq} waits on you: ${pre.question}`, data: { question: id } });
   }
 
   patch(item, fields) {
@@ -2047,7 +2065,7 @@ Object.assign(Hub.prototype, {
     const pre = normPrecondition(args.precondition);
     let stage = human ? (args.stage === 'proposed' ? 'proposed' : 'ready')
       : p.autonomy !== 'ask' && acceptance ? 'ready' : 'proposed';
-    if (stage === 'ready' && pre) stage = 'outside';
+    if (stage === 'ready' && pre) stage = pre.kind === 'ask' ? 'waiting' : 'outside';
     const t = this.now();
     const seq = this.q('SELECT next_seq FROM projects WHERE id = ?').get(p.id).next_seq;
     this.q('UPDATE projects SET next_seq = next_seq + 1 WHERE id = ?').run(p.id);
@@ -2063,6 +2081,7 @@ Object.assign(Hub.prototype, {
       headline: human ? `${You(actor)} added #${seq}: ${title}` : `${actor} proposed #${seq}: ${title}`,
       summary, data: { stage },
     });
+    if (stage === 'waiting') this.askPrecondition(item, actor);
     return item;
   },
 
@@ -2119,13 +2138,20 @@ Object.assign(Hub.prototype, {
       const val = pre ? JSON.stringify(pre) : '';
       if (val !== item.precondition) {
         if (['active', 'verifying', 'landing', 'done', 'dropped'].includes(item.stage)) throw new UserError(`#${item.seq} is ${item.stage}; a precondition only holds work that hasn't started`, { status: 409 });
+        // The question an earlier 'ask' precondition put to the human no longer stands.
+        const asked = json(item.last_check, {}).question;
+        if (asked) this.q(`UPDATE questions SET status = 'withdrawn' WHERE id = ? AND status = 'open'`).run(asked);
         Object.assign(set, { precondition: val, last_check: '', check_fails: 0, next_check: this.now() });
         changed.push(pre ? `waits on: ${describePrecondition(pre)}` : 'no longer waits on anything outside');
-        gate = pre ? (item.stage === 'ready' ? 'outside' : null) : (item.stage === 'outside' ? 'ready' : null);
+        gate = !pre ? 'ready' : pre.kind === 'ask' ? 'waiting' : 'outside';
       }
     }
     if (Object.keys(set).length) this.patch(item, set);
-    if (gate) this.move(item, 'ready', actor); // to outside, or out of it
+    // To outside, to the human, or out of either; work parked on other questions stays parked.
+    if (gate && (['ready', 'outside'].includes(item.stage) || (item.stage === 'waiting' && !this.openQuestions(item, { blocking: true }).length))) {
+      if (gate !== item.stage) this.move(item, 'ready', actor);
+      else if (gate === 'waiting') this.askPrecondition(item, actor);
+    }
     if (Array.isArray(args.depends_on)) { this.setDeps(p, item, args.depends_on); changed.push('dependencies'); }
     const human = isHuman(actor);
     const promote = item.stage === 'proposed' && !item.holder && item.acceptance && (human || p.autonomy !== 'ask') && args.ready !== false;
@@ -2221,6 +2247,10 @@ const HUMAN_OPS = {
       // Overriding an assumption the agent already acted on: tell whoever is on it now.
       this.addNote(p, 'steer', `Change of course${item ? ` on #${item.seq}` : ''}: you assumed "${q.assumption}". Instead: ${text}`, item, null, by);
     }
+    // The question an 'ask' precondition put: answering it is what passes the precondition.
+    if (item && json(item.last_check, {}).question === q.id) {
+      this.patch(item, { last_check: JSON.stringify({ at: this.now(), ok: true, detail: `you answered: ${clip(text, 100)}`, question: q.id }) });
+    }
     if (item && item.stage === 'waiting' && keep_parked) {
       this.patch(item, { parked_by: by });
       this.event(p, { item, actor: by, type: 'kept_parked', headline: `${You(by)} kept #${item.seq} parked: agents don't get it until it's unparked` });
@@ -2296,6 +2326,14 @@ const HUMAN_OPS = {
       this.event(p, { item: it, actor: by, type: 'staged', headline: `${You(by)} ${verb} #${it.seq}${args.stage !== 'dropped' ? ` to ${args.stage}` : ''}`, summary: str(args.note) });
       for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder, by);
     }
+  },
+
+  // "Check now": forget the backoff, so the next sweep checks it.
+  check(p, { item }, by) {
+    const it = this.item(p, item);
+    if (it.stage !== 'outside' || !this.unmetPrecondition(it)) throw new UserError(`#${it.seq} isn't waiting on anything outside`, { status: 409 });
+    this.patch(it, { check_fails: 0, next_check: this.now() });
+    this.event(p, { item: it, actor: by, type: 'check_now', headline: `${You(by)} asked the hub to check #${it.seq}'s precondition now` });
   },
 
   pick(p, { item }, by) {
@@ -2386,13 +2424,21 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, github_secret, issue_label, reporter_wait }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, github_secret, issue_label, reporter_wait, wait_days }, by) {
     const changes = [];
     if (reporter_wait != null && Number(reporter_wait) !== p.reporter_wait) {
       const hours = Number(reporter_wait);
       if (!Number.isInteger(hours) || hours < 1) throw new UserError('reporter_wait is a whole number of hours, at least 1');
       this.q('UPDATE projects SET reporter_wait = ? WHERE id = ?').run(hours, p.id);
       this.event(p, { actor: by, type: 'github', headline: `${You(by)} gave issue reporters ${hours}h to answer a question before it comes to you` });
+    }
+    if (wait_days != null && wait_days !== '') {
+      const n = Number(wait_days);
+      if (!Number.isInteger(n) || n < 1 || n > 365) throw new UserError('wait_days must be a whole number of days from 1 to 365', { hint: `How long work may wait outside before you hear about it; the default is ${WAIT_DAYS}.` });
+      if (n !== (p.wait_days || WAIT_DAYS)) {
+        this.q('UPDATE projects SET wait_days = ? WHERE id = ?').run(n, p.id);
+        this.event(p, { actor: by, type: 'settings', headline: `${You(by)} set work waiting outside to show up after ${n} day${n === 1 ? '' : 's'}` });
+      }
     }
     if (issue_label != null && str(issue_label) !== p.issue_label) {
       this.q('UPDATE projects SET issue_label = ? WHERE id = ?').run(str(issue_label), p.id);
