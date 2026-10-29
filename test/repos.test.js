@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { Hub, normRemote } from '../src/core.js';
 import { view, itemView } from '../src/insight.js';
+import { createServer } from '../src/server.js';
+
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
 // A project with two repositories. Bare repos play GitHub (acme/api and acme/web); agents work in
 // their own clones; the hub keeps mirrors. checkout: the hub also has a clone of api as its path.
@@ -152,6 +157,69 @@ describe('each item names its repo', () => {
     assert.match(j1.hint, /git switch -c nuworq\/1-api-thing main/, 'local: cut from main in the checkout');
     assert.match(j2.hint, /git switch -c nuworq\/2-web-thing origin\/main/, 'web: cut from origin, pushed for review');
     assert.match(j2.hint, /git push origin nuworq\/2-web-thing/);
+  });
+
+  test('next offers an agent the work in the repo it is in; with none there, it names the repos that have some', () => {
+    const { hub, api, web, API, WEB } = twoRepos();
+    hub.humanOp('demo', 'create', { title: 'Web page', acceptance: 'x', repo: WEB });
+    hub.humanOp('demo', 'create', { title: 'Api endpoint', acceptance: 'x' }); // no repo: the first, api
+    const inClone = (agent, origin, op = 'next') => hub.agentOp('demo', op, agent, {}, { remote: origin });
+
+    const a = inClone('in-api', api);
+    assert.equal(a.item, '#2', 'skips #1 (web) for the api item, though #1 comes first');
+    const w = inClone('in-web', web);
+    assert.equal(w.item, '#1');
+
+    hub.humanOp('demo', 'create', { title: 'More api', acceptance: 'x' });
+    const idle = inClone('in-web-2', web);
+    assert.equal(idle.mode, 'idle');
+    assert.deepEqual(idle.repos_with_work, [API]);
+    assert.match(idle.hint, new RegExp(`Nothing is ready for you in ${WEB}.*Work waits in ${API}`));
+    assert.match(idle.hint, new RegExp(`git clone ${API}`));
+
+    // Not in a clone at all: anything, and the hint says to clone the item's repo first.
+    const any = hub.agentOp('demo', 'next', 'nowhere');
+    assert.equal(any.item, '#3');
+    assert.match(any.hint, new RegExp(`You aren't in a clone of ${API}: clone it first \\(git clone ${API}\\)`));
+    assert.doesNotMatch(inClone('in-api-2', api, 'checkin').next ?? '', /clone it first/);
+  });
+
+  test('an agent in a clone of a repo the project does not have is offered anything', () => {
+    const { hub, WEB } = twoRepos();
+    hub.humanOp('demo', 'create', { title: 'Web page', acceptance: 'x', repo: WEB });
+    assert.equal(hub.agentOp('demo', 'next', 'x', {}, { remote: 'github.com/other/thing' }).item, '#1');
+  });
+
+  test("worker starts in this machine's clone of the repo with the most useful work, not the project's folder; --here stays put", async () => {
+    const { hub, root, WEB, git } = twoRepos({ checkout: true });
+    hub.humanOp('demo', 'create', { title: 'Web page', acceptance: 'x', repo: WEB, priority: 'now' });
+    hub.humanOp('demo', 'create', { title: 'Api thing', acceptance: 'x' });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const home = join(root, 'home');
+    mkdirSync(home);
+    const env = {
+      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))),
+      HOME: home, NUWORQ_URL: `http://127.0.0.1:${server.address().port}`,
+    };
+    const worker = (args, cwd) => promisify(execFile)(process.execPath, [BIN, 'worker', '--agent', 'claude', '--project', 'demo', ...args], { env, cwd });
+    try {
+      // The project's folder (hub-checkout) is api's; the web work goes to the web clone beside it.
+      const clone = join(root, 'seed-web');
+      assert.equal(normRemote(git(clone, 'remote', 'get-url', 'origin')), WEB);
+      const { stdout } = await worker(['--as', 'w1'], root);
+      assert.match(stdout, new RegExp(`cd '${clone}\\.worktrees/w1'`), 'works in a worktree of the web clone');
+
+      // Once the web item is taken, the most useful work is api's: the project's own folder.
+      hub.agentOp('demo', 'claim', 'someone', { item: '#1' });
+      const api = await worker(['--as', 'w3'], root);
+      assert.match(api.stdout, new RegExp(`cd '${join(root, 'hub-checkout')}\\.worktrees/w3'`));
+
+      const here = await worker(['--as', 'w2', '--here'], join(root, 'seed-api'));
+      assert.match(here.stdout, new RegExp(`cd '${join(root, 'seed-api')}'`), '--here: this clone, no other');
+    } finally {
+      server.close();
+    }
   });
 
   test('shaping in a multi-repo project says to split work per repo, with depends_on for the order', () => {

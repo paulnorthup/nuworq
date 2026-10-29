@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname } from 'node:os';
-import { createClient, resolveSettings, repoRoot, checkoutOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
+import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 
@@ -229,6 +229,11 @@ async function worker(flags) {
     target = projects.find((p) => p.slug === best.project);
     why = `the hub routed here: ${best.item} ${best.title} (${best.mode}, ${best.priority})`;
   }
+  // With several repositories: the one holding this project's most useful work for this machine.
+  if ((target.remotes ?? []).length > 1 && !flags.here) {
+    const routes = await client.get(`/api/route?has=${encodeURIComponent(tags.join(','))}`);
+    target = { ...target, repo: routes.find((r) => r.project === target.slug)?.repo ?? null };
+  }
   const token = flags.run ? await agentToken(client, flags) : null;
   const { name, worktree, main, origin, cwd, cmd } = workerSetup(target, agent, flags, s, token);
 
@@ -287,8 +292,14 @@ const hasOrigin = (home) => {
 // Where a worker on target works: this folder with --here; the project's folder if it is on this
 // machine; else this machine's checkout of the project's repository, found by remote (a hub on a
 // server knows projects by remote, and has no folder for them here); with neither, this folder.
+// target.repo: in a project with several repositories, the one its most useful work is in: the
+// project's folder only when that is a clone of it, else this machine's checkout of it.
 function homeOf(target, flags) {
   if (flags.here) return process.cwd();
+  if (target.repo) {
+    const recorded = target.path && existsSync(target.path) ? repoRemote(target.path) : '';
+    return recorded === target.repo ? target.path : checkoutOf([target.repo]);
+  }
   if (target.path && existsSync(target.path)) return target.path;
   if (target.remotes?.length) return checkoutOf(target.remotes);
   if (target.path) {
@@ -391,9 +402,11 @@ async function runCmd(flags) {
     const projects = await hubProjects(client);
     const target = projects.find((p) => p.slug === r.project);
     if (!target) throw new HubError(`the hub no longer has project "${r.project}"`);
+    // The route names the repository of the work it found; with several, the worker starts there.
+    const repo = (target.remotes ?? []).length > 1 ? r.repo : null;
     let setup;
     try {
-      setup = workerSetup(target, agent, { ...flags, as: undefined, run: true }, s, token);
+      setup = workerSetup({ ...target, repo }, agent, { ...flags, as: undefined, run: true }, s, token);
     } catch (e) {
       // This machine can't work on the project (no checkout of it here): the runner leaves it to others.
       if (e instanceof HubError) e.skip = true;

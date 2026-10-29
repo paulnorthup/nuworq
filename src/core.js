@@ -170,6 +170,11 @@ export function normRemote(url) {
   return s.startsWith('/') ? s : s.toLowerCase();
 }
 
+// What to give git clone for a normalized remote: https for host/owner/repo, a path as it is.
+export function cloneUrl(remote) {
+  return remote.startsWith('/') ? remote : `https://${remote}.git`;
+}
+
 export function slugify(s) {
   return str(s).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
@@ -353,7 +358,7 @@ export class Hub extends EventEmitter {
       (a.mode === 'shape') - (b.mode === 'shape') ||
       a.item.stage_since - b.item.stage_since);
     return options.map((o) => ({
-      project: o.p.slug, name: o.p.name, path: o.p.path || null,
+      project: o.p.slug, name: o.p.name, path: o.p.path || null, repo: this.repoOf(o.p, o.item) || null,
       mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.item.priority,
       waiting: dur(this.now() - o.item.stage_since), claimable: o.claimable,
       slots: this.racing(o.item) ? this.openSlots(o.item) : undefined, // a race with open slots can take that many workers
@@ -884,7 +889,7 @@ export class Hub extends EventEmitter {
           status: 403, hint: `Call next: it only offers work this token may do. A token with ${need} comes from: nuworq token create <name> --powers ${need}.`,
         });
       }
-      this.caller = { powers };
+      this.caller = { powers, remote };
       // Checked before the op runs, so a malformed usage changes nothing.
       const usage = USAGE_OPS.includes(op) ? normUsage(args?.usage) : null;
       let r;
@@ -996,8 +1001,8 @@ export class Hub extends EventEmitter {
   // at equal priority, build ready work before shaping proposals, and prefer work you touched before.
   // powers: what the caller's token may do (null: everything); work it can't do is never offered.
   // Never offers work whose needs the agent's machine lacks; large work waits while a weak fit has other work.
-  pick(p, agent, { powers = null, has } = {}) {
-    return this.claimable(p, agent, { powers, has })[0] ?? null;
+  pick(p, agent, { powers = null, has, repo = '' } = {}) {
+    return this.claimable(p, agent, { powers, has, repo })[0] ?? null;
   }
 
   // Items this agent handed off within the cooldown, by id.
@@ -1009,12 +1014,15 @@ export class Hub extends EventEmitter {
 
   // Everything this agent could claim here, most useful first. Not what it just handed off, not a race
   // it already ran in, not work its token's powers don't cover, and not work needing what its machine lacks.
-  claimable(p, agent, { powers = null, has } = {}) {
+  // repo: the repository the agent is in (its clone's origin). When it is one of the project's, only work
+  // in that repository: the rest is left for agents in clones of the others.
+  claimable(p, agent, { powers = null, has, repo = '' } = {}) {
     const may = (power) => !powers || powers.includes(power);
     const fit = this.fit(p, agent, has);
-    const ok = (i) => !fit.has || json(i.needs, []).every((t) => fit.has.includes(t));
+    const inRepo = repo && this.remotesOf(p).includes(repo) ? (i) => this.repoOf(p, i) === repo : () => true;
+    const ok = (i) => (!fit.has || json(i.needs, []).every((t) => fit.has.includes(t))) && inRepo(i);
     const gave = this.handedOff(p, agent);
-    const fresh = (i) => !gave.has(i.id) && ok(i); // not just handed off, and doable on this machine
+    const fresh = (i) => !gave.has(i.id) && ok(i); // not just handed off, doable on this machine, in this clone
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
         AND COALESCE(implementer, '') != ?
         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
@@ -1022,7 +1030,7 @@ export class Hub extends EventEmitter {
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
     const lands = !may('build') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'landing' AND holder IS NULL ORDER BY stage_since`).all(p.id)
-      .filter((i) => !gave.has(i.id) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
+      .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
       .map((item) => ({ mode: 'land', item }));
     if (p.parked) return [...lands, ...reviews];
     const ready = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
@@ -1158,9 +1166,14 @@ export class Hub extends EventEmitter {
   }
 
   // The work job's hint: where to cut the branch, in the item's repo and from its base.
+  // An agent that isn't in a clone at all (no remote came with its call) is told to clone the item's first.
   workHint(p, item) {
+    const remote = this.remoteMode(p, item);
     const repo = this.remotesOf(p).length > 1 ? this.repoOf(p, item) : '';
-    return WORK_HINT(item, p, this.remoteMode(p, item), this.baseFor(p, item), repo);
+    const clone = remote && item.branch && this.caller && !this.caller.remote
+      ? `You aren't in a clone of ${this.repoOf(p, item)}: clone it first (git clone ${cloneUrl(this.repoOf(p, item))}) and work in that clone. `
+      : '';
+    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo);
   }
 
   // The branch git found for the latest submission, when the item has none of its own (older work).
@@ -1306,9 +1319,18 @@ const AGENT_OPS = {
         hint: `Finish what you hold first: submit, or handoff if you can't. To work in parallel anyway, claim a specific item.`,
       };
     }
-    const pick = this.pick(p, agent, { powers: this.caller?.powers });
+    const repo = this.caller?.remote ?? '';
+    const pick = this.pick(p, agent, { powers: this.caller?.powers, repo });
     if (!pick) {
       if (p.parked) return { mode: 'idle', hint: 'The human has parked this project: start nothing new. Signoff.' };
+      // Nothing in the clone it is in, but work waits in the project's other repositories.
+      const elsewhere = repo ? [...new Set(this.claimable(p, agent, { powers: this.caller?.powers }).map((o) => this.repoOf(p, o.item)))].filter((r) => r !== repo) : [];
+      if (elsewhere.length) {
+        return {
+          mode: 'idle', repos_with_work: elsewhere,
+          hint: `Nothing is ready for you in ${repo}, the repository you're in. Work waits in ${elsewhere.join(', ')}: work there from a clone of it (${elsewhere.map((r) => `git clone ${cloneUrl(r)}`).join('; ')}), check in from that folder, then call next. Or signoff.`,
+        };
+      }
       const { has } = this.fit(p, agent);
       const gave = [...this.handedOff(p, agent)].map((id) => this.itemById(id))
         .filter((i) => !i.holder && ['ready', 'proposed', 'verifying'].includes(i.stage));
