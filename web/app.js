@@ -195,10 +195,13 @@ function project(v) {
     ? `<div class="inline-form"><input data-draft="mission" id="mission-in" placeholder="What is this project for? Agents read this first." value="${esc(P.mission)}"><button class="btn primary small" data-action="save-mission">Save</button><button class="btn ghost small" data-action="cancel-mission">Cancel</button></div>`
     : `<div class="mission ${P.mission ? '' : 'empty'}" data-action="edit-mission" title="Click to edit. Every agent reads the mission at checkin.">${esc(P.mission || 'Add a mission: the north star every agent reads at checkin')}</div>`;
 
+  const where = S.editPath
+    ? `<div class="inline-form"><input data-draft="path" id="path-in" placeholder="/path/to/the/repo on this machine" value="${esc(P.path)}"><button class="btn primary small" data-action="save-path">Save</button><button class="btn ghost small" data-action="cancel-path">Cancel</button></div>`
+    : `<div class="where" data-action="edit-path" title="Where the code lives. Agents working in this folder find the project on their own, and workers routed here start in it.">${P.path ? `Lives in <code>${esc(P.path)}</code>` : '<span class="faint">Where does the code live? Set it, or the first agent that checks in from its folder teaches the hub.</span>'}</div>`;
   const empty = !v.all.length && !v.agents.length;
   return `
     <div class="phead">
-      <div class="titles"><h1>${esc(P.name)}</h1>${mission}</div>
+      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? where : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
@@ -670,17 +673,20 @@ async function connect() {
   const url = S.info.url;
   const secured = S.info.auth === 'required';
   const env = (url === 'http://127.0.0.1:4747' ? '' : ` -e TRELLIS_URL=${url}`) + (secured ? ' -e TRELLIS_TOKEN=<agent-token>' : '');
+  const where = S.view?.project.path;
   const tomlTok = secured ? ', TRELLIS_TOKEN = "<agent-token>"' : '';
   const envTok = secured ? '  TRELLIS_TOKEN=<agent-token>' : '';
   modal(`<h2>Connect an agent</h2>
-    <p class="lead">Any model can work here. Agents connect over MCP, or use the plain CLI from any shell. They check in, take work, ask, and submit. Several can work at once.</p>
+    <p class="lead">Any model can work here, and many agents at once. Set an agent tool up once: it needs no project. An agent working in a folder the hub knows finds its project; anywhere else, the hub routes it to the work that matters most.</p>
     ${secured ? `<p class="lead">This hub requires tokens. Give each agent its own, so you can revoke one without the others. On the server, run:</p>${copyBlock('node bin/trellis.js token create <agent-name> --role agent')}` : ''}
-    <h4>Claude Code</h4>${copyBlock(`claude mcp add trellis -e TRELLIS_PROJECT=${slug}${env} -- node "${bin}" mcp`)}
-    <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(`[mcp_servers.trellis]\ncommand = "node"\nargs = ["${bin}", "mcp"]\nenv = { TRELLIS_PROJECT = "${slug}", TRELLIS_URL = "${url}"${tomlTok} }`)}
-    <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(`command: node\nargs: ["${bin}", "mcp"]\nenv: TRELLIS_PROJECT=${slug}  TRELLIS_URL=${url}${envTok}`)}
+    <h4>Start a worker (it goes wherever work is waiting)</h4><p class="lead">Each worker gets its own git worktree and branch, so many can run at once. Run it again for more workers.</p>${copyBlock(`node "${bin}" worker --agent claude --run\nnode "${bin}" worker --agent codex --run`)}
+    ${where ? '' : `<p class="lead">⚠ The hub doesn't know where ${esc(S.view?.project.name ?? 'this project')}'s code lives yet. Set it under the mission (5m view), so workers can start there.</p>`}
+    <h4>Claude Code (once, for every project)</h4>${copyBlock(`claude mcp add --scope user trellis${env} -- node "${bin}" mcp`)}
+    <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(`[mcp_servers.trellis]\ncommand = "node"\nargs = ["${bin}", "mcp"]\nenv = { TRELLIS_URL = "${url}"${tomlTok} }`)}
+    <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(`command: node\nargs: ["${bin}", "mcp"]\nenv: TRELLIS_URL=${url}${envTok}`)}
     <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(`node "${bin}" guide --project ${slug}`)}
     <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through Trellis: run the command above and follow it."</i></p>
-    <h4>Start a headless worker</h4><p class="lead">Run this in the project's folder. It checks the hub, then prints a complete command: the MCP server, the project, and the tools the agent may use without asking.</p>${copyBlock(`node "${bin}" worker --agent claude --project ${slug}\nnode "${bin}" worker --agent codex --project ${slug}`)}
+
     <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="/api/tools?format=openai" target="_blank">OpenAI</a> · <a href="/api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="/api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>X-Trellis-Agent: &lt;name&gt;</code>. The agent guide: <a href="/agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
@@ -710,6 +716,9 @@ const ACTIONS = {
   autonomy: (el) => human('settings', { autonomy: el.dataset.level }, 'Autonomy changed; agents have been told'),
   'edit-mission': () => { S.editMission = true; render({ force: true }); setTimeout(() => $('#mission-in')?.focus(), 0); },
   'cancel-mission': () => { S.editMission = false; clearDraft('mission'); render({ force: true }); },
+  'edit-path': () => { S.editPath = true; render({ force: true }); setTimeout(() => $('#path-in')?.focus(), 0); },
+  'cancel-path': () => { S.editPath = false; clearDraft('path'); render({ force: true }); },
+  'save-path': async () => { const v = val('path-in'); S.editPath = false; clearDraft('path'); await human('settings', { path: v }, 'Saved: agents in that folder will find this project'); },
   'save-mission': async () => { const m = val('mission-in'); S.editMission = false; clearDraft('mission'); await human('settings', { mission: m }, 'Mission saved'); },
   'compose-kind': (el) => { S.composeKind = el.dataset.kind; render({ force: true }); },
   'compose-send': async () => {

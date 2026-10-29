@@ -11,11 +11,17 @@ node bin/trellis.js seed                # add the Trellis project itself, to bui
 node bin/trellis.js serve --demo        # or try it in memory, nothing saved
 ```
 
-Point any agent at it and say *"work on <project> using Trellis"*:
+Start workers. Each one asks the hub where work is waiting, gets its own git worktree and branch there, and goes:
 
 ```bash
-claude mcp add trellis -- node /path/to/trellis/bin/trellis.js mcp     # Claude Code
-node bin/trellis.js init                                               # prints config for Codex, opencode, others
+node bin/trellis.js worker --agent claude --run     # or --agent codex; run it again for more workers
+```
+
+Or connect your agent tools once, for every project. Agents find their project from the folder they're in; anywhere else, the hub routes them to the work that matters most:
+
+```bash
+claude mcp add --scope user trellis -- node /path/to/trellis/bin/trellis.js mcp
+node bin/trellis.js init        # the same one-time setup for Codex, opencode and other MCP clients
 ```
 
 Any agent with a shell can also use the CLI: `trellis guide` tells it everything.
@@ -40,6 +46,7 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 
 | Human convention | What Trellis does instead | Why |
 |---|---|---|
+| Assigning work to people | **Routing.** Workers don't name a project: the hub sends each to the most valuable waiting work across all projects (your picks first, then whatever waited longest). Each gets its own worktree, so many run at once. | Many things should be in flight; workers that are looking should find work. |
 | Assignment | **Leases.** An agent claims work for 20 minutes; progress or a silent heartbeat renews it; if the agent goes quiet, the work returns to the queue. | Agent sessions die. Work must not die with them. |
 | Standups | **Checkin briefings.** Mission, decisions, field notes, steering, answers, verdicts on your work, who's touching what. | Agents start every session with no memory. |
 | "I'll pick it up tomorrow" | **Handoffs.** A note on where you left off; the next agent starts from it. | Context windows end mid-task. |
@@ -65,7 +72,7 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 | MCP server (`trellis mcp`) | Claude Code, Codex, opencode, Goose, Cline, LM Studio, any MCP client, including open-weight models |
 | CLI (`trellis checkin --as name …`) | Any agent with a shell |
 | HTTP + tool schemas (`/api/tools?format=openai\|anthropic\|mcp`) | Your own agent loop |
-| Headless worker | `trellis worker --agent claude\|codex`, run in the project folder: checks the hub, then prints a complete command (MCP config, allowed tools) |
+| Headless worker | `trellis worker --agent claude\|codex --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree and branch, with a scoped tool allowlist |
 
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `trellis guide`, or at `/agents.md`.
 
@@ -96,6 +103,7 @@ Design choices:
 - **Steering piggybacks on every response.** Agents don't poll; whatever they call next carries it.
 - **Forgiving inputs.** An over-long headline is trimmed, with the overflow moved to the summary. Progress from an agent that lost its lease is kept as a comment. Every error carries a `hint` that says what to do instead.
 - **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority, then work you touched before.
+- **No configuration.** `trellis serve` writes `~/.trellis/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in the first time an agent checks in from it, or you set it in the UI. Every worktree of a repo maps to the same project.
 - **Collision awareness.** `touching` paths on claim/progress. Agents get a `heads_up` when they overlap, and you see it in "In motion".
 - **Authority.** Only steering and decisions come from you. The guide tells agents to treat field notes, handoffs and comments as information, not instructions.
 

@@ -12,7 +12,7 @@ const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 export function projectList(hub) {
   return hub.projects().map((p) => {
     const v = view(hub, p.slug, { light: true });
-    return { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length };
+    return { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length };
   });
 }
 
@@ -290,7 +290,7 @@ export function view(hub, slug, { light = false } = {}) {
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
   return {
-    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at },
+    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at },
     pulse, since, attention, motion, flow,
     queue, proposed, waiting, verifying, done,
     agents: agentRows, decisions, notes, steers, activity,

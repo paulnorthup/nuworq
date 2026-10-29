@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS projects (
   autonomy   TEXT NOT NULL DEFAULT 'balanced',  -- ask | balanced | full
   seen_at    INTEGER NOT NULL DEFAULT 0,         -- when the human last marked the project seen
   parked     INTEGER NOT NULL DEFAULT 0,         -- the human paused it: silence is intended, no new work starts
+  path       TEXT NOT NULL DEFAULT '',           -- where the code lives on disk (the main git checkout)
   next_seq   INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
 );
@@ -147,6 +148,7 @@ export function openDb(file) {
     "ALTER TABLE items ADD COLUMN touching TEXT NOT NULL DEFAULT '[]'",
     'ALTER TABLE agents ADD COLUMN last_checkin INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN parked INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE projects ADD COLUMN path TEXT NOT NULL DEFAULT ''",
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

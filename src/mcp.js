@@ -25,12 +25,12 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
     initialize(params = {}) {
       clientName = params.clientInfo?.name ?? '';
       agent ??= `${slugify(clientName || 'agent') || 'agent'}-${randomBytes(2).toString('hex')}`;
-      log(`agent ${agent} on project ${project} via ${url}`);
+      log(`agent ${agent} on ${project ? `project ${project}` : 'whatever project the hub routes it to'} via ${url}`);
       return {
         protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : '2025-06-18',
         capabilities: { tools: {} },
         serverInfo: { name: 'trellis', version: PKG.version },
-        instructions: guide({ project, url, via: 'tools' }),
+        instructions: guide({ project: project ?? 'whichever project the hub sends you to', url, via: 'tools' }),
       };
     },
     ping: () => ({}),
@@ -50,6 +50,8 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
       }
       try {
         const result = await client.call(name, args, { agent, project });
+        // The hub resolved or routed us to a project: stay with it for the rest of the session.
+        if (!project && result?.project) project = result.project;
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (e) {
         const body = { ok: false, error: e.message, ...(e.hint ? { hint: e.hint } : {}) };

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // trellis: run the hub, connect agents, and check on projects from a terminal.
-import { writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname, resolve, delimiter } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { createClient, resolveSettings, HubError, DEFAULT_URL } from '../src/client.js';
+import { createClient, resolveSettings, HubError, DEFAULT_URL, HUB_FILE } from '../src/client.js';
 import { tools, guide } from '../src/protocol.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -13,7 +13,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'trellis')));
 const CLI = ON_PATH ? 'trellis' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -106,8 +106,9 @@ const stateColor = (s) => ({ 'needs-you': amber, flowing: green, stalled: amber 
 
 async function status(flags) {
   const client = createClient(flags);
-  const { url, project } = client.settings;
-  if (flags.all) {
+  const { url } = client.settings;
+  const project = client.settings.project ?? (flags.all ? null : (await client.where()).project);
+  if (flags.all || !project) {
     const list = await client.get('/api/projects');
     if (!list.length) return console.log(dim('No projects yet. An agent checkin creates one.'));
     const w = Math.max(...list.map((p) => p.name.length));
@@ -127,9 +128,10 @@ async function status(flags) {
 }
 
 function workerPrompt(flags) {
-  const { project, url } = resolveSettings(flags);
+  const { url } = resolveSettings(flags);
+  const project = resolveSettings(flags).project ?? 'whichever project the Trellis hub sends you to';
   const name = flags.as || process.env.TRELLIS_AGENT || `worker-${randomBytes(2).toString('hex')}`;
-  return `You are an autonomous worker on the project "${project}", coordinated through Trellis: a shared hub where AI agents and a human facilitator organize work.
+  return `You are an autonomous worker on "${project}", coordinated through Trellis: a shared hub where AI agents and a human facilitator organize work.
 
 If you have Trellis tools (checkin, next, progress, submit, ...), use them. Otherwise use the Trellis CLI from your shell: \`${CLI}\`, adding \`--as ${name}\` to every command.
 
@@ -145,109 +147,140 @@ Write everything in layers: headline (one line, outcome first), summary (the 5-m
 ${guide({ project, url, via: 'cli', command: CLI })}`;
 }
 
-// Print a complete, runnable headless worker command. Headless agents can't approve anything,
-// so the command carries everything: the MCP server, the hub, the project, and a scoped tool allowlist.
+// A headless worker: ask the hub where work is waiting, give the worker its own git worktree and
+// branch there (so many can run at once without colliding), and start the agent with everything it
+// needs (MCP server, project, a scoped tool allowlist). Prints the command, or runs it with --run.
 async function worker(flags) {
   const s = resolveSettings(flags);
   const agent = String(flags.agent || 'claude').toLowerCase();
-  const cwd = process.cwd();
-  const env = { TRELLIS_URL: s.url, TRELLIS_PROJECT: s.project, ...(flags.as ? { TRELLIS_AGENT: String(flags.as) } : {}), ...(s.token ? { TRELLIS_TOKEN: '<agent-token>' } : {}) };
-  const task = `Work on the ${s.project} project using Trellis. Do the work in this directory. Keep going until next says there is nothing left for you, then sign off.`;
-
-  const problems = [];
+  if (!['claude', 'codex'].includes(agent)) {
+    throw new HubError(`unknown agent "${agent}"`, { hint: 'Use --agent claude or --agent codex. For anything else, give it the Trellis MCP server (trellis init) and let it check in.' });
+  }
+  const client = createClient(flags);
+  let projects;
   try {
-    const client = createClient(flags);
-    await client.get('/api/health');
-    const projects = await client.get('/api/projects').catch(() => null);
-    if (Array.isArray(projects) && !projects.some((p) => p.slug === s.project)) {
-      problems.push(`The hub has no project "${s.project}" yet. Create it in the UI, or the agent's checkin will create an empty one.`);
-    }
+    projects = await client.get('/api/projects');
   } catch {
-    problems.push(`The hub isn't reachable at ${s.url}. Start it first: ${CLI} serve`);
+    throw new HubError(`The hub isn't reachable at ${s.url}`, { hint: `Start it first: ${CLI} serve` });
   }
 
-  const has = (f) => existsSync(join(cwd, f));
+  // Where to work: the named project, else the one this folder belongs to, else wherever the hub routes us.
+  let target = s.project ? projects.find((p) => p.slug === s.project) : null;
+  let why = '';
+  if (s.project && !target) {
+    throw new HubError(`The hub has no project "${s.project}"`, { hint: `Projects: ${projects.map((p) => p.slug).join(', ') || 'none yet'}. Or leave out --project and the hub picks.` });
+  }
+  if (!target) {
+    const here = (await client.where()).project;
+    if (here) {
+      target = projects.find((p) => p.slug === here);
+      why = 'this folder belongs to it';
+    }
+  }
+  if (!target) {
+    const routes = await client.get('/api/route');
+    const best = routes.find((r) => r.path) ?? routes[0];
+    if (!best) return console.log(dim('No work is waiting in any project: everything is parked, idle, or waiting on you.'));
+    target = projects.find((p) => p.slug === best.project);
+    why = `the hub routed here: ${best.item} ${best.title} (${best.mode}, ${best.priority})`;
+  }
+  const home = target.path || process.cwd();
+  if (!existsSync(home)) {
+    throw new HubError(`${target.name} lives in ${home}, which doesn't exist on this machine`, { hint: 'Set where it lives in the UI (5m view, under the mission).' });
+  }
+
+  const name = String(flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
+  const isRepo = existsSync(join(home, '.git'));
+  const worktree = isRepo && !flags.here ? join(`${home}.worktrees`, name) : null;
+  const branch = `trellis/${name}`;
+  const cwd = worktree ?? home;
+  const env = {
+    TRELLIS_URL: s.url, TRELLIS_PROJECT: target.slug, TRELLIS_AGENT: name,
+    ...(s.token ? { TRELLIS_TOKEN: flags.run ? s.token : '<agent-token>' } : {}),
+  };
+  const task = [
+    `Work on the ${target.name} project using Trellis. Do the work in this directory.`,
+    worktree ? `You are in your own git worktree on branch ${branch}: commit your work there, and include the branch and commit in your evidence when you submit.` : '',
+    'Keep going until next says there is nothing left for you, then sign off.',
+  ].filter(Boolean).join(' ');
+
+  const has = (f) => existsSync(join(home, f));
   const run = [
     has('package.json') && ['Bash(npm test:*)', 'Bash(npm run:*)', 'Bash(node:*)'],
     (has('pyproject.toml') || has('requirements.txt') || has('setup.py')) && ['Bash(python3:*)', 'Bash(pytest:*)'],
     has('Cargo.toml') && ['Bash(cargo:*)'],
     has('go.mod') && ['Bash(go:*)'],
-    has('.git') && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)'],
+    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)'],
   ].filter(Boolean).flat();
   const allow = flags.allow ? String(flags.allow) : ['mcp__trellis', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(ls:*)', ...run].join(',');
   const mcp = JSON.stringify({ mcpServers: { trellis: { command: 'node', args: [BIN, 'mcp'], env } } });
   const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
-  const toml = (v) => JSON.stringify(v);
 
-  let cmd;
+  const lines = [];
+  if (worktree) lines.push(`git -C ${sq(home)} worktree add -q -b ${sq(branch)} ${sq(worktree)}`);
+  lines.push(`cd ${sq(cwd)}`);
   if (agent === 'claude') {
-    cmd = `cd ${sq(cwd)} && claude -p ${sq(task)} \\
-  --mcp-config ${sq(mcp)} \\
-  --allowedTools ${sq(allow)}`;
-  } else if (agent === 'codex') {
-    const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${toml(v)}`).join(',')}}`;
-    cmd = `cd ${sq(cwd)} && codex exec -s workspace-write \\
-  -c ${sq(`mcp_servers.trellis.command="node"`)} \\
-  -c ${sq(`mcp_servers.trellis.args=${JSON.stringify([BIN, 'mcp'])}`)} \\
-  -c ${sq(`mcp_servers.trellis.env=${envToml}`)} \\
-  ${sq(task)}`;
+    lines.push(`claude -p ${sq(task)} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}`);
   } else {
-    throw new HubError(`unknown agent "${agent}"`, { hint: 'Use --agent claude or --agent codex. For anything else, give it the Trellis MCP server (trellis init) and the task line below.' });
+    const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
+    lines.push(`codex exec -s workspace-write \\\n  -c ${sq('mcp_servers.trellis.command="node"')} \\\n  -c ${sq(`mcp_servers.trellis.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq(`mcp_servers.trellis.env=${envToml}`)} \\\n  ${sq(task)}`);
   }
+  const cmd = lines.join(' && \\\n');
 
-  console.log(`${bold(`Headless ${agent} worker for ${s.project}`)}  ${dim(`(works in ${cwd})`)}
-${problems.map((p) => amber(`! ${p}`)).join('\n')}${problems.length ? '\n' : ''}
-${cmd}
-${dim(agent === 'claude'
-    ? `
-Headless agents can't ask permission, so they may only use the tools listed in --allowedTools.
-That list is based on what's in this folder; change it with --allow "Read,Edit,...". It never includes git push.`
-    : `
-Runs in Codex's workspace-write sandbox: file changes stay inside ${cwd}. The Trellis MCP server runs outside the sandbox, so it can reach the hub.`)}${s.token ? dim('\nReplace <agent-token> with an agent token: trellis token create <name> --role agent') : ''}`);
+  console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
+${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Merge the branch when you accept the work, then: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
+  if (!flags.run) {
+    console.log(`\n${cmd}\n`);
+    console.log(dim(agent === 'claude'
+      ? `Headless agents can't ask permission: they may only use the tools in --allowedTools (set from what's in the folder; change with --allow). Never git push.\nAdd --run to start it now.`
+      : `Codex runs in its workspace-write sandbox; the Trellis MCP server runs outside it, so it can reach the hub.\nAdd --run to start it now.`));
+    if (s.token) console.log(dim('Replace <agent-token> with an agent token: trellis token create <name> --role agent'));
+    return;
+  }
+  const { spawn } = await import('node:child_process');
+  const child = spawn('/bin/sh', ['-c', cmd], { stdio: 'inherit' });
+  await new Promise((done) => child.on('exit', (code) => { process.exitCode = code ?? 1; done(); }));
 }
 
 function init(flags) {
   const s = resolveSettings(flags);
-  const file = join(process.cwd(), '.trellis.json');
-  if (existsSync(file) && !flags.force) {
-    console.log(dim(`.trellis.json already exists (use --force to overwrite)`));
-  } else {
-    writeFileSync(file, JSON.stringify({ project: s.project, url: s.url }, null, 2) + '\n');
-    console.log(green(`Wrote .trellis.json → project "${s.project}", hub ${s.url}`));
+  // Optional: pin this folder to a project. Usually unnecessary: the hub learns where projects live.
+  if (flags.project) {
+    const file = join(process.cwd(), '.trellis.json');
+    if (existsSync(file) && !flags.force) {
+      console.log(dim(`.trellis.json already exists (use --force to overwrite)`));
+    } else {
+      writeFileSync(file, JSON.stringify({ project: s.project, url: s.url }, null, 2) + '\n');
+      console.log(green(`Wrote .trellis.json → project "${s.project}", hub ${s.url}`));
+    }
   }
   const q = JSON.stringify(BIN);
-  console.log(`
+  console.log(`${dim('Set up once per agent tool. No project needed: an agent working in a folder the hub knows finds its project; anywhere else, the hub routes it to the work that matters most.')}
+
 ${bold('Claude Code')}
-  claude mcp add trellis -- node ${q} mcp
-  claude mcp add trellis -e TRELLIS_PROJECT=${s.project} -e TRELLIS_MODEL=claude-opus-5-5 -- node ${q} mcp
+  claude mcp add --scope user trellis -- node ${q} mcp
 
 ${bold('Codex')}  ${dim('(~/.codex/config.toml)')}
   [mcp_servers.trellis]
   command = "node"
   args = [${q}, "mcp"]
-  env = { TRELLIS_PROJECT = "${s.project}", TRELLIS_MODEL = "gpt-5" }
 
-${bold('opencode')}  ${dim('(opencode.json)')}
+${bold('opencode')}  ${dim('(~/.config/opencode/opencode.json)')}
   "mcp": {
-    "trellis": {
-      "type": "local",
-      "command": ["node", ${q}, "mcp"],
-      "environment": { "TRELLIS_PROJECT": "${s.project}" },
-      "enabled": true
-    }
+    "trellis": { "type": "local", "command": ["node", ${q}, "mcp"], "enabled": true }
   }
 
 ${bold('Any other MCP client')}
   command: node
   args:    [${q}, "mcp"]
-  env:     TRELLIS_PROJECT=${s.project}  TRELLIS_URL=${s.url}  (optional: TRELLIS_AGENT, TRELLIS_MODEL)
+  ${dim('optional env: TRELLIS_URL (if the hub is elsewhere), TRELLIS_TOKEN, TRELLIS_AGENT, TRELLIS_MODEL, TRELLIS_PROJECT (to pin one)')}
 
 ${bold('Shell-only agents')}  ${dim('(add to AGENTS.md or CLAUDE.md)')}
   This project coordinates work through Trellis. Run \`node ${q} guide\` and follow it.
 
-${bold('Headless worker')}  ${dim('(prints a complete command: MCP config, allowed tools, folder)')}
-  node ${q} worker --agent claude
-  node ${q} worker --agent codex`);
+${bold('Headless worker')}  ${dim('(asks the hub where work is waiting; own worktree and branch; --run starts it)')}
+  node ${q} worker --agent claude --run
+  node ${q} worker --agent codex --run`);
 }
 
 const dbPath = (flags) => flags.db || process.env.TRELLIS_DB || join(homedir(), '.trellis', 'trellis.db');
@@ -295,6 +328,10 @@ hint: Create one, then start again:
   }
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
+    if (!flags.demo) {
+      // Let agents and the CLI on this machine find the hub without configuration.
+      try { mkdirSync(dirname(HUB_FILE), { recursive: true }); writeFileSync(HUB_FILE, JSON.stringify({ url, pid: process.pid }) + '\n'); } catch {}
+    }
     const authLine = auth === 'required'
       ? `${green('locked')}: browsers log in with a human token; agents send TRELLIS_TOKEN (an agent token)${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}`
       : `${amber('open')} on loopback: no login (only this machine can reach it)`;
@@ -302,10 +339,10 @@ hint: Create one, then start again:
   Auth: ${authLine}
 ${dim(`
   Connect an agent:
-    MCP (Claude Code):  claude mcp add trellis${auth === 'required' ? ' -e TRELLIS_TOKEN=<agent-token>' : ''} -- node ${JSON.stringify(BIN)} mcp
+    MCP (Claude Code):  claude mcp add --scope user trellis${auth === 'required' ? ' -e TRELLIS_TOKEN=<agent-token>' : ''} -- node ${JSON.stringify(BIN)} mcp   (once, for every project)
     Shell:              node ${JSON.stringify(BIN)} guide
     Setup for others:   node ${JSON.stringify(BIN)} init     (run in a project folder)
-    Headless worker:    node ${JSON.stringify(BIN)} worker --agent claude|codex   (run in the project folder)
+    Headless worker:    node ${JSON.stringify(BIN)} worker --agent claude|codex --run   (goes wherever work is waiting)
     Tool schemas:       ${url}/api/tools?format=openai`)}`);
   });
   const stop = () => { server.close(); process.exit(0); };
@@ -386,8 +423,10 @@ ${bold('Setup')}
   mcp                                    run the stdio MCP server (one per agent session)
   guide [--via cli|tools]                the agent guide
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
-  worker [--agent claude|codex] [--as name] [--allow tools]
-                                         print a complete headless worker command (run it in the project folder)
+  worker [--agent claude|codex] [--run] [--project p] [--here] [--as name] [--allow tools]
+                                         start a headless worker where work is waiting (the hub routes it),
+                                         in its own git worktree and branch (--here: no worktree). Without
+                                         --run it prints the command instead.
   prompt [--as name]                     just the worker prompt text, for other agents
   seed                                   add the Trellis roadmap project to your hub's database
 
@@ -409,7 +448,7 @@ async function main() {
   if (cmd === 'token') return token(pos, flags);
   if (cmd === 'guide') {
     const s = resolveSettings(flags);
-    return console.log(guide({ project: s.project, url: s.url, via: flags.via || 'cli', command: CLI }));
+    return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
   }
   if (cmd === 'tools') return console.log(JSON.stringify(tools(flags.format || 'mcp', flags.prefix || ''), null, 2));
   if (cmd === 'prompt') return console.log(workerPrompt(flags));

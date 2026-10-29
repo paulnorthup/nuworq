@@ -1,10 +1,13 @@
 // Talks to a running hub over HTTP. Shared by the CLI and the MCP server.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { slugify } from './core.js';
 
 export const DEFAULT_URL = 'http://127.0.0.1:4747';
+// `trellis serve` writes where it is listening, so clients find the hub without configuration.
+export const HUB_FILE = join(homedir(), '.trellis', 'hub.json');
 
 // The nearest .trellis.json walking up from dir, or null.
 export function findConfig(dir = process.cwd()) {
@@ -20,20 +23,32 @@ export function findConfig(dir = process.cwd()) {
   }
 }
 
-function gitRoot(cwd) {
+const git = (cwd, ...args) => {
   try {
-    return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null;
+    return execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null;
   } catch {
     return null;
   }
+};
+
+// The repo's main checkout, even from inside one of its worktrees, so every worktree maps to the same project.
+export function repoRoot(cwd = process.cwd()) {
+  const common = git(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  if (common && basename(common) === '.git') return dirname(common);
+  return git(cwd, 'rev-parse', '--show-toplevel') ?? resolve(cwd);
 }
 
+function discoveredUrl() {
+  try { return JSON.parse(readFileSync(HUB_FILE, 'utf8')).url || null; } catch { return null; }
+}
+
+// project is null unless someone named it (flag, env, or .trellis.json): otherwise the hub decides,
+// from the folder the agent is in, or by routing it to the work that matters most.
 export function resolveSettings({ url, project, token, cwd = process.cwd() } = {}) {
   const config = findConfig(cwd);
-  const hubUrl = (url || process.env.TRELLIS_URL || config?.url || DEFAULT_URL).replace(/\/+$/, '');
-  const root = gitRoot(cwd);
-  const raw = project || process.env.TRELLIS_PROJECT || config?.project || (root ? basename(root) : basename(cwd));
-  return { url: hubUrl, project: slugify(raw), token: token ?? process.env.TRELLIS_TOKEN ?? '', config };
+  const hubUrl = (url || process.env.TRELLIS_URL || config?.url || discoveredUrl() || DEFAULT_URL).replace(/\/+$/, '');
+  const named = project || process.env.TRELLIS_PROJECT || config?.project;
+  return { url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), token: token ?? process.env.TRELLIS_TOKEN ?? '', config };
 }
 
 export class HubError extends Error {
@@ -48,6 +63,7 @@ export function createClient(opts = {}) {
   const settings = resolveSettings(opts);
   const headers = (extra = {}) => ({
     'content-type': 'application/json',
+    'x-trellis-root': encodeURIComponent(settings.root),
     ...(settings.token ? { authorization: `Bearer ${settings.token}` } : {}),
     ...extra,
   });
@@ -77,8 +93,12 @@ export function createClient(opts = {}) {
 
   return {
     settings,
-    call: (op, args = {}, { agent, project } = {}) =>
-      request('POST', `/api/p/${encodeURIComponent(project || settings.project)}/agent/${op}`, { body: args, agent }),
+    call: (op, args = {}, { agent, project } = {}) => {
+      const p = project || settings.project;
+      return request('POST', p ? `/api/p/${encodeURIComponent(p)}/agent/${op}` : `/api/agent/${op}`, { body: args, agent });
+    },
+    // The project this folder belongs to, as far as the hub knows.
+    where: () => request('GET', `/api/where?root=${encodeURIComponent(settings.root)}`),
     get: (path) => request('GET', path),
     post: (path, body) => request('POST', path, { body }),
   };

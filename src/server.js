@@ -19,7 +19,7 @@ const SECURITY_HEADERS = {
 const COOKIE = 'trellis_session';
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me)$/, /^GET \/agents\.md$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where)$/, /^GET \/agents\.md$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
@@ -59,6 +59,9 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
   };
 
   const server = http.createServer(async (req, res) => {
+    // A client that hangs up mid-request (e.g. after an oversized body is refused) must never crash the hub.
+    req.on('error', () => {});
+    res.on('error', () => {});
     const url = new URL(req.url, 'http://local');
     const path = url.pathname;
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
@@ -172,7 +175,19 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b));
+        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req) }));
+      }
+      // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
+      if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {
+        const b = await body(req);
+        const agent = req.headers['x-trellis-agent'] || b.agent;
+        delete b.agent;
+        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req) }));
+      }
+      if (req.method === 'GET' && path === '/api/route') return send(200, hub.route());
+      if (req.method === 'GET' && path === '/api/where') {
+        const p = hub.projectByPath(url.searchParams.get('root') ?? '');
+        return send(200, { project: p?.slug ?? null, path: p?.path ?? null });
       }
       send(404, { ok: false, error: `No route ${req.method} ${path}` });
     } catch (e) {
@@ -190,8 +205,14 @@ function hostname(host) {
   try { return new URL(`http://${host}`).hostname; } catch { return ''; }
 }
 
+const rootOf = (req) => { try { return decodeURIComponent(req.headers['x-trellis-root'] ?? ''); } catch { return ''; } };
+
+const TOO_BIG = () => new UserError('Request body too large (limit 1MB)', { status: 413, hint: 'Keep detail to what a person would read; put long logs in the repo and reference them.' });
+
 async function body(req) {
-  if (Number(req.headers['content-length']) > MAX_BODY) throw new UserError('Request body too large (limit 1MB)', { status: 413 });
+  // Read and discard a moderately oversized body so the client gets a clean 413 instead of a broken pipe;
+  // only refuse outright, unread, when it's absurdly large.
+  if (Number(req.headers['content-length']) > 16 * MAX_BODY) { req.destroy(); throw TOO_BIG(); }
   const chunks = [];
   let size = 0;
   for await (const c of req) {
@@ -199,7 +220,7 @@ async function body(req) {
     if (size > 16 * MAX_BODY) { req.destroy(); break; }
     if (size <= MAX_BODY) chunks.push(c);
   }
-  if (size > MAX_BODY) throw new UserError('Request body too large (limit 1MB)', { status: 413 });
+  if (size > MAX_BODY) throw TOO_BIG();
   const raw = Buffer.concat(chunks).toString('utf8').trim();
   if (!raw) return {};
   try {

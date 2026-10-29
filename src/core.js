@@ -108,6 +108,7 @@ export function normPaths(v) {
   return [...new Set(list.map((x) => str(x).replace(/^\.\//, '').replace(/(\/\*\*|\/\*|\*|\/)+$/, '')).filter(Boolean))].slice(0, 30);
 }
 const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+const normDir = (d) => str(d).replace(/\/+$/, '');
 
 export function slugify(s) {
   return str(s).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
@@ -165,6 +166,39 @@ export class Hub extends EventEmitter {
     }
     if (!p) throw new UserError(`No project "${s}"`, { status: 404, hint: 'An agent checkin creates a project automatically, or create one in the UI.' });
     return p;
+  }
+
+  // The project whose code lives in (or above) this folder. Longest match wins.
+  projectByPath(root) {
+    const r = normDir(root);
+    if (!r) return null;
+    let best = null;
+    for (const p of this.projects()) {
+      const pp = normDir(p.path);
+      if (pp && (r === pp || r.startsWith(pp + '/')) && (!best || pp.length > normDir(best.path).length)) best = p;
+    }
+    return best;
+  }
+
+  // Where the most valuable claimable work is, across every project that isn't parked:
+  // your picks and "now" work first, then building before shaping, then whatever has waited longest.
+  route(agent = '') {
+    this.sweep();
+    const options = [];
+    for (const p of this.projects()) {
+      if (p.parked) continue;
+      const pick = this.pick(p, agent);
+      if (pick) options.push({ p, ...pick });
+    }
+    options.sort((a, b) =>
+      PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
+      (a.mode === 'shape') - (b.mode === 'shape') ||
+      a.item.stage_since - b.item.stage_since);
+    return options.map((o) => ({
+      project: o.p.slug, name: o.p.name, path: o.p.path || null,
+      mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.item.priority,
+      waiting: dur(this.now() - o.item.stage_since),
+    }));
   }
 
   // ── small helpers ───────────────────────────────────────────────────────
@@ -392,12 +426,40 @@ export class Hub extends EventEmitter {
 
   // ── agent operations ────────────────────────────────────────────────────
 
-  agentOp(slug, op, name, args = {}) {
+  // slug may be empty: then the agent's folder (root) picks the project, or the hub routes it to work.
+  agentOp(slug, op, name, args = {}, { root = '' } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     this.sweep();
     const agent = this.requireAgent(name);
-    const p = this.project(slug, { create: op === 'checkin' });
+    let p;
+    let routed = null;
+    if (slug) {
+      p = this.project(slug, { create: op === 'checkin' });
+    } else {
+      p = this.projectByPath(root);
+      if (!p) {
+        if (!['checkin', 'next'].includes(op)) {
+          throw new UserError('Which project?', { hint: 'Call checkin first: the hub sends you to the work that matters most, and remembers it for this session.' });
+        }
+        routed = this.route(agent)[0];
+        if (!routed) {
+          return {
+            ok: true, project: null,
+            next: 'No work is waiting in any project: everything is parked, idle, or waiting on the human. Signoff, or check in to a specific project to propose work.',
+            projects: this.projects().map((x) => x.slug),
+          };
+        }
+        p = this.project(routed.project);
+      }
+    }
+    const here = normDir(root);
+    if (slug && here && !p.path && op === 'checkin') {
+      // Learn where the project lives the first time an agent names it from a folder.
+      this.q('UPDATE projects SET path = ? WHERE id = ?').run(here, p.id);
+      p.path = here;
+      this.event(p, { actor: SYSTEM, type: 'path', headline: `${p.name} lives in ${here}`, summary: `Learned from ${agent}'s checkin. Agents working in that folder now find this project on their own.` });
+    }
     const result = this.tx(() => {
       const presence = this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
       const r = fn.call(this, p, agent, args ?? {}, presence);
@@ -407,6 +469,16 @@ export class Hub extends EventEmitter {
         if (steers.length) {
           r.steers = steers;
           r.hint = `The human has steered you; read it, adjust, then ack. ${r.hint ?? ''}`.trim();
+        }
+      }
+      if (!slug) r.project ??= p.slug; // so clients can stay with the project they were sent to
+      if (['checkin', 'next'].includes(op)) {
+        const where = normDir(p.path);
+        if (routed) r.routed = `The hub sent you to ${p.name}: ${routed.item} ${routed.title} is the most valuable waiting work (${routed.priority}, waiting ${routed.waiting}).`;
+        if (where && here && here !== where && !here.startsWith(where + '/')) {
+          r.workspace = `This project's code lives in ${where}, but you are in ${here}. Do the work there: start a session in that folder, or ask the human.`;
+        } else if (where) {
+          r.workspace = where;
         }
       }
       return r;
@@ -994,8 +1066,12 @@ const HUMAN_OPS = {
     this.q('UPDATE projects SET seen_at = ? WHERE id = ?').run(this.now(), p.id);
   },
 
-  settings(p, { name, mission, autonomy, parked }) {
+  settings(p, { name, mission, autonomy, parked, path }) {
     const changes = [];
+    if (path != null && normDir(path) !== p.path) {
+      this.q('UPDATE projects SET path = ? WHERE id = ?').run(normDir(path), p.id);
+      this.event(p, { actor: HUMAN, type: 'path', headline: normDir(path) ? `You set where ${p.name} lives: ${normDir(path)}` : `You cleared where ${p.name} lives` });
+    }
     if (parked != null && !!parked !== !!p.parked) {
       this.q('UPDATE projects SET parked = ? WHERE id = ?').run(parked ? 1 : 0, p.id);
       this.event(p, { actor: HUMAN, type: 'parked', headline: parked ? 'You parked the project' : 'You unparked the project' });
