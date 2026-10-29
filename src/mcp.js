@@ -22,20 +22,47 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
   const reply = (id, result) => write({ jsonrpc: '2.0', id, result });
   const fail = (id, code, message) => write({ jsonrpc: '2.0', id, error: { code, message } });
 
+  // The tools and the guide come from the hub, so a hub that learned something new teaches it to every open
+  // session, without a reinstall. This package's own definitions stand in only while the hub can't be reached.
+  const meta = createClient({ ...clientOpts, retryMs: 0 });
+  const where = () => project ?? 'whichever project the hub sends you to';
+  let fromHub = null; // { tools, guide } as the hub last said, or null
+  async function fetchProtocol() {
+    try {
+      const [t, g] = await Promise.all([meta.get('/api/tools?format=mcp'), meta.get(`/api/guide?via=tools&project=${encodeURIComponent(where())}`)]);
+      return Array.isArray(t) && typeof g === 'string' ? { tools: t, guide: g } : null;
+    } catch { return null; }
+  }
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  let watching = null;
+  function watch() {
+    const every = Number(envVar('MCP_POLL_MS', env)) || 60_000;
+    watching = setInterval(async () => {
+      const now = await fetchProtocol();
+      if (!now || same(now.tools, fromHub?.tools)) return;
+      fromHub = now;
+      write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+    }, every);
+    watching.unref?.();
+  }
+  const STALE = 'The hub could not be reached when this session started, so these are the tools this nuworq package was built with; they may be stale. Call checkin: the hub will say what it expects.';
+
   const handlers = {
-    initialize(params = {}) {
+    async initialize(params = {}) {
       clientName = params.clientInfo?.name ?? '';
       agent ??= `${slugify(clientName || 'agent') || 'agent'}-${randomBytes(2).toString('hex')}`;
       log(`agent ${agent} on ${project ? `project ${project}` : 'whatever project the hub routes it to'} via ${url}`);
+      fromHub = await fetchProtocol();
+      if (!watching) watch();
       return {
         protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : '2025-06-18',
-        capabilities: { tools: {} },
+        capabilities: { tools: { listChanged: true } },
         serverInfo: { name: 'nuworq', version: PKG.version },
-        instructions: guide({ project: project ?? 'whichever project the hub sends you to', url, via: 'tools' }),
+        instructions: fromHub?.guide ?? `${guide({ project: where(), url, via: 'tools' })}\n${STALE}\n`,
       };
     },
     ping: () => ({}),
-    'tools/list': () => ({ tools: tools('mcp') }),
+    'tools/list': () => ({ tools: fromHub?.tools ?? tools('mcp') }),
     async 'tools/call'(params = {}) {
       agent ??= `agent-${randomBytes(2).toString('hex')}`;
       const name = params.name;
