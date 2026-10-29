@@ -788,6 +788,8 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
   const orgCap = Number(flags['org-cap'] || envVar('ORG_CAP')) || undefined; // organizations one person may create
   const { appFromEnv, appFromFile } = await import('../src/ghapp.js');
+  const { notifyWorkspaces, workspaceUrl } = await import('../src/notify.js');
+  let pushes = null;
   const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')) });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
@@ -798,8 +800,10 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
 ${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w/<workspace>/
   Add one:   node ${JSON.stringify(BIN)} workspace create <name>
   Then:      node ${JSON.stringify(BIN)} token create <you> --role human --workspace <name>`)}`);
+    // Pushes: each workspace's own channels, linking to its own address.
+    pushes = notifyWorkspaces(spaces, (name) => workspaceUrl(name, { baseDomain, publicUrl, url }));
   });
-  const stop = () => { server.close(); spaces.close(); process.exit(0); };
+  const stop = () => { pushes?.stop(); server.close(); spaces.close(); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }

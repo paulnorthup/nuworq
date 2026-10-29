@@ -16,17 +16,20 @@ export function verify(secret, raw, header) {
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
-// The item a pull request is about: "#N" in its title, then the item the branch's agent holds
-// (or last submitted), then "#N" in its body.
+// The item a pull request is about: "#N" in its title, then the item whose own branch it is
+// (nuworq/<seq>-<title>, as the hub names it), then the item the branch's agent holds or last
+// submitted (a race attempt's nuworq/<agent>), then "#N" in its body.
 function itemFor(hub, p, pr) {
   const bySeq = (text) => {
     const n = String(text ?? '').match(/(?:^|[^\w&])#(\d+)\b/)?.[1];
     return n ? hub.q('SELECT * FROM items WHERE project_id = ? AND seq = ?').get(p.id, Number(n)) : null;
   };
-  const agent = String(pr.head?.ref ?? '').match(/^(?:nuworq|trellis)\/(.+)$/)?.[1]; // trellis/: from before the rename
+  const ref = String(pr.head?.ref ?? '');
+  const own = () => ref && hub.q('SELECT * FROM items WHERE project_id = ? AND branch = ? ORDER BY updated_at DESC LIMIT 1').get(p.id, ref);
+  const agent = ref.match(/^(?:nuworq|trellis)\/(.+)$/)?.[1]; // trellis/: from before the rename
   const byBranch = () => agent && hub.q(`SELECT * FROM items WHERE project_id = ? AND (holder = ? OR implementer = ? OR last_worker = ?)
       ORDER BY (holder = ?) DESC, (stage IN ('active', 'verifying')) DESC, updated_at DESC LIMIT 1`).get(p.id, agent, agent, agent, agent);
-  return bySeq(pr.title) || byBranch() || bySeq(pr.body);
+  return bySeq(pr.title) || own() || byBranch() || bySeq(pr.body);
 }
 
 // pass | fail | pending, over every check reported for a commit.

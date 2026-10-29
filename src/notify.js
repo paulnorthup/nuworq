@@ -184,3 +184,28 @@ export class Notifier {
     return results;
   }
 }
+
+// Many workspaces in one process: each has its own channels, so each gets its own notifier, linking to
+// its own address (baseUrlFor(name)). Workspaces created while serving are picked up within `every` ms.
+// Returns { notifiers (name → Notifier), stop() }.
+export function notifyWorkspaces(spaces, baseUrlFor, { every = 30_000, ...opts } = {}) {
+  const notifiers = new Map();
+  const sweep = () => {
+    for (const name of spaces.list()) {
+      if (notifiers.has(name)) continue;
+      const hub = spaces.get(name);
+      if (hub) notifiers.set(name, new Notifier(hub, { baseUrl: baseUrlFor(name), ...opts }).start());
+    }
+  };
+  sweep();
+  const timer = setInterval(sweep, every);
+  timer.unref?.();
+  return { notifiers, sweep, stop: () => { clearInterval(timer); for (const n of notifiers.values()) n.stop(); } };
+}
+
+// A workspace's address, for links in pushes: its subdomain of baseDomain, else /w/<name>/ under the hub.
+export function workspaceUrl(name, { baseDomain = '', publicUrl = '', url = '' } = {}) {
+  const base = (publicUrl || url).replace(/\/+$/, '');
+  if (baseDomain) return `${base.startsWith('http://') ? 'http' : 'https'}://${name}.${baseDomain}`;
+  return `${base}/w/${encodeURIComponent(name)}`;
+}

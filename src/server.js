@@ -424,7 +424,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         who = bearer ? authz.verifyToken(bearer) : sid ? authz.verifySession(sid) : null;
         if (who) who.via = bearer ? 'bearer' : 'cookie';
         if (req.method === 'GET' && path === '/api/me') {
-          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null });
+          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null, ...(who?.projects ? { projects: who.projects } : {}) });
         }
         if (!who) {
           return deny(401, bearer ? 'invalid or revoked token' : 'login required',

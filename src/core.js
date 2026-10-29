@@ -30,8 +30,9 @@ export const SYSTEM = 'nuworq';
 const GITHUB = 'github'; // holds accepted work while the hub opens its pull request
 const PR_LEASE = 2 * MIN;
 const MIRROR_RETRY = 5 * MIN; // after GitHub refuses the app a token for a mirror, ask again this often
-// The hub's own entries on the record: SYSTEM, or "trellis" in events recorded before the rename.
-export const isSystem = (actor) => actor === SYSTEM || actor === 'trellis';
+// The hub's own entries on the record: SYSTEM, GitHub's (webhooks, the pull requests it opens), or
+// "trellis" in events recorded before the rename. None of them is an agent.
+export const isSystem = (actor) => actor === SYSTEM || actor === GITHUB || actor === 'trellis';
 // People act on the record as "@handle"; without accounts (local mode) the one human is "you".
 export const isHuman = (actor) => actor === HUMAN || String(actor ?? '').startsWith('@');
 const You = (by) => (by === HUMAN ? 'You' : by);
@@ -1582,7 +1583,9 @@ const AGENT_OPS = {
       const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
         .filter((i) => !gave.some((g) => g.id === i.id));
       const unfit = open.filter((i) => json(i.needs, []).some((t) => !has.includes(t)));
-      const blocked = open.length - unfit.length;
+      // Waiting on dependencies counts only work this token could take once they're done.
+      const canBuild = !this.caller?.powers || this.caller.powers.includes('build');
+      const blocked = canBuild ? open.filter((i) => !unfit.includes(i) && this.unmetDeps(i).length).length : 0;
       return {
         mode: 'idle',
         hint: [
