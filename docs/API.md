@@ -71,6 +71,8 @@ For an operator: a trusted, attended session (or a tool driving one) that agents
 
 **Who.** An agent that declared `operator` at checkin (`has: ["operator"]`) in this project. Anyone else gets `403` with a hint. Only questions asked with `ask { to: "operator" }` can be answered here; one meant for the human or an issue's reporter gets `403`, an already answered one `409`.
 
+**Default audience.** An `ask` without `to` is routed by a fixed rule (src/audience.js, no model call): a question or context about running a command, permissions or approval, credentials, infrastructure (server, VM, DNS, deploy, prod), the GitHub App or admin, or verifying on a real system goes to an operator; one about direction, scope, priority, money, publishing or deleting, or matching nothing, goes to the human. Human signals win over operator ones. The response always has `to` (`"human"`, `"operator"` or `"reporter"`) and, when the hub picked, `routed`: the reason and how to override. A given `to` is stored as is.
+
 **Finding them.** An operator's `next` returns `mode: "answer"` before any land, review or other work, while one is open: `question` (`id`, `question`, `context`, `detail`, `options`, `assumption`, `blocking`, `asked_by`, `asked`) plus the item's usual context. Blocking questions come first, then the oldest.
 
 **Effect.** As the human's answer: the question is answered by the operator, the item returns to ready once no blocking question is left, and the asker gets the answer in its next checkin. Operator questions never appear in Needs you; if none of this project's agents with `operator` has been seen for a day while some wait, Needs you shows one line saying how many.

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Hub, DAY, HOUR } from '../src/core.js';
 import { view, homeView } from '../src/insight.js';
 import { tools } from '../src/protocol.js';
+import { defaultAudience } from '../src/audience.js';
 
 // #133: questions an agent can't settle alone (running things, permissions, real infra) go to an operator session, not Paul.
 function setup() {
@@ -119,5 +120,60 @@ describe('questions to an operator', () => {
     const t = tools().find((x) => x.name === 'answer');
     assert.ok(t);
     assert.deepEqual(t.inputSchema.required, ['question', 'answer']);
+  });
+});
+
+// #138: left out, `to` is picked from what the question is about; the human when unsure.
+describe('the default audience when to is left out', () => {
+  const cases = [
+    // Real questions from the board (#97, #81, #20/#21, #46, #120 style).
+    ["Can't run `claude` without approval: can someone run the live checks?", '', 'operator'],
+    ["Agents can't write .claude/settings.json", 'Adding Bash(claude:*) needs approval in this session', 'operator'],
+    ['Can the migration be run on prod tonight?', 'I have no access to the server', 'operator'],
+    ['The VM for the Linux runner is down', 'DNS for runner.nuworq.com does not resolve', 'operator'],
+    ['Is the GitHub App installed on paulnorthup/nuworq?', 'The webhook gets 401s', 'operator'],
+    ['Need a token for the llm-proxy API', '', 'operator'],
+    ['Could someone verify the plugin install on a real Claude Code?', '', 'operator'],
+    ['Approve browser workers?', 'They would screenshot UI changes', 'human'],
+    ['Should #120 come before #118?', 'Both are soon; I can only take one', 'human'],
+    ['Which region should it deploy to?', '', 'human'],
+    ['Publish the landing page now?', '', 'human'],
+    ['OK to delete the old demo projects on the server?', '', 'human'],
+    ['Is a $20/month plan worth it?', '', 'human'],
+    ['Tabs or spaces?', '', 'human'],
+    ['What should the empty state say?', '', 'human'],
+  ];
+  for (const [question, context, want] of cases) {
+    test(`${want}: ${question}`, () => {
+      const got = defaultAudience({ question, context });
+      assert.equal(got.audience, want);
+      assert.ok(got.reason.length > 0);
+    });
+  }
+
+  test('ask without to stores the picked audience and says why; with to, exactly what was given', () => {
+    const { hub } = setup();
+    const audience = (id) => hub.q('SELECT audience FROM questions WHERE id = ?').get(id).audience;
+    const op = hub.agentOp('o', 'ask', 'w1', { question: 'Can someone run `npm run e2e` against staging?', assumption: 'skip it' });
+    assert.equal(op.to, 'operator');
+    assert.equal(audience(op.question), 'operator');
+    assert.match(op.routed, /^To an operator: it is about a command\. Pass to: "human"/);
+    const human = hub.agentOp('o', 'ask', 'w1', { question: 'Should the home show archived projects?', assumption: 'no' });
+    assert.equal(human.to, 'human');
+    assert.equal(audience(human.question), '');
+    assert.match(human.routed, /^To the human: .*Pass to: "operator"/);
+    const kept = hub.agentOp('o', 'ask', 'w1', { question: 'Can someone run `npm run e2e` against staging?', assumption: 'skip it', to: 'human' });
+    assert.equal(kept.to, 'human');
+    assert.equal(audience(kept.question), '');
+    assert.equal(kept.routed, undefined, 'given to is never second-guessed');
+    const toOp = hub.agentOp('o', 'ask', 'w1', { question: 'Tabs or spaces?', assumption: 'spaces', to: 'operator' });
+    assert.equal(audience(toOp.question), 'operator');
+  });
+
+  test('the ask tool says what the default does, with an example each way', () => {
+    const t = tools().find((x) => x.name === 'ask');
+    assert.match(t.inputSchema.properties.to.description, /Left out/);
+    assert.match(t.inputSchema.properties.to.description, /`claude`/);
+    assert.match(t.inputSchema.properties.to.description, /approve browser workers/);
   });
 });
