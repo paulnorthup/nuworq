@@ -445,6 +445,15 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   .card .btn, .card .opt, .card .pick, .answer-row input, .pulse .btn, .ov-line, .get-started .btn, .seg button { min-height: 44px; }
   .card .btn, .card .opt { padding: 10px 14px; }
   .card .evidence, .card pre, .card code { max-width: 100%; overflow-x: auto; }
+  #drawer .btn, #drawer .opt, #drawer input { min-height: 44px; }
+  #drawer .btn { padding: 10px 14px; }
+  #drawer .d-sec > .btn { white-space: normal; text-align: left; }
+  #drawer .d-top .x, #drawer .opt { min-width: 44px; }
+  #drawer .d-top .x { font-size: 16px; }
+  /* Send back's form gets a row of its own; the note input gets the whole row, so its placeholder fits, and its buttons sit under it. */
+  #drawer .actions .inline-form { flex-basis: 100%; }
+  #drawer .d-sec .inline-form { flex-wrap: wrap; }
+  #drawer .d-sec .inline-form input { flex: 1 1 100%; }
 }
 
 /* Wide (#141): the same sections in two columns, the work and beside it the 30-second answer, which stays in
