@@ -184,6 +184,39 @@ describe('each item names its repo', () => {
     assert.doesNotMatch(inClone('in-api-2', api, 'checkin').next ?? '', /clone it first/);
   });
 
+  test('end to end: agents in each clone get that clone\'s item, land it on that repo\'s main, and it is done', () => {
+    const { hub, git, api, web, API, WEB, clone, build, item } = twoRepos();
+    hub.humanOp('demo', 'create', { title: 'Web page', acceptance: 'x', repo: WEB });
+    hub.humanOp('demo', 'create', { title: 'Api endpoint', acceptance: 'x', repo: API });
+    // Each agent calls from its clone, so its requests carry that clone's origin (as src/client.js sends it).
+    const macs = { 'in-api': clone(api, 'e2e-api'), 'in-web': clone(web, 'e2e-web') };
+    const origin = { 'in-api': api, 'in-web': web };
+    const op = (agent, name, args = {}) => hub.agentOp('demo', name, agent, args, { remote: origin[agent], root: macs[agent] });
+
+    const jobs = { 'in-api': op('in-api', 'next'), 'in-web': op('in-web', 'next') };
+    assert.equal(jobs['in-api'].item, '#2', 'the api agent gets the api item, though #1 comes first');
+    assert.equal(jobs['in-web'].item, '#1');
+    for (const [agent, job] of Object.entries(jobs)) {
+      build(macs[agent], job.branch, `${agent}.txt`);
+      git(macs[agent], 'push', '-q', 'origin', job.branch);
+      op(agent, 'submit', { item: job.item, headline: 'Built' });
+    }
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    hub.humanOp('demo', 'accept', { item: '#2' });
+    for (const [agent, job] of Object.entries(jobs)) {
+      const land = op(agent, 'next');
+      assert.equal(land.mode, 'land');
+      assert.equal(land.item, job.item, 'each lands its own, in its own repo');
+      git(macs[agent], 'push', '-q', 'origin', `${job.branch}:main`);
+      op(agent, 'submit', { item: job.item, headline: 'Landed' });
+    }
+    assert.equal(item(1).stage, 'done');
+    assert.equal(item(2).stage, 'done');
+    assert.ok(git(web, 'log', '--format=%s', 'main').includes('add in-web.txt'));
+    assert.ok(!git(web, 'log', '--format=%s', 'main').includes('add in-api.txt'));
+    assert.ok(git(api, 'log', '--format=%s', 'main').includes('add in-api.txt'));
+  });
+
   test('an agent in a clone of a repo the project does not have is offered anything', () => {
     const { hub, WEB } = twoRepos();
     hub.humanOp('demo', 'create', { title: 'Web page', acceptance: 'x', repo: WEB });
