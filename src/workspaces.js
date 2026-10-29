@@ -59,7 +59,7 @@ export class Workspaces {
       return null;
     }
     if (!hub && existsSync(this.file(s))) {
-      hub = new Hub({ file: this.file(s), repos: this.repos && join(this.repos, s), keys: this.keys && join(this.keys, s), ...(this.clock ? { clock: this.clock } : {}) });
+      hub = new Hub({ file: this.file(s), repos: this.repos && join(this.repos, s), keys: this.keys && join(this.keys, s), hosted: true, ...(this.clock ? { clock: this.clock } : {}) });
       hub.workspace = s;
       this.open.set(s, hub);
     }

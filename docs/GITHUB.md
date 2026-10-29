@@ -21,6 +21,8 @@ The hub holds a GitHub App's private key, and nothing else holds a GitHub creden
 
 **Install it** (left menu: Install App) on the repositories your projects live in. Choose *Only select repositories*.
 
+**On a shared hub (`--workspaces`), each organization installs the app from inside itself.** Set the app's *Setup URL* to `https://<hub>/api/github/installed` (with *Redirect on update*). An owner or steward opens `/w/<org>/api/github/install`, which sends them to GitHub's install page with a signed state naming the organization. When GitHub sends them back, the hub binds that installation to the organization, and the first binding stands. From then on, the hub mints tokens for an organization's workers, mirrors, pull requests and issues only from installations bound to it. Another organization naming the same repository gets a 403 telling it to install the app for itself. Organizations on a shared hub also never use the hub's own SSH identity or a path on its disk: a mirror is fetched with a bound installation's token, or with the organization's own deploy key under `keys/<org>/`, or not at all.
+
 **Give the hub the app** (by hand only; environment variables win over the saved file), then restart the hub:
 ```bash
 NUWORQ_GITHUB_APP_ID=123456
