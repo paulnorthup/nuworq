@@ -141,6 +141,8 @@ cloudflared service install && systemctl enable --now cloudflared
 ```
 Verified: a valid certificate, 401 without login, a `Secure` session cookie, and the live stream (`/api/stream`) arriving unbuffered through Cloudflare.
 
+**The app on its own host, the landing page on the apex.** Start the hub with `--public-url https://app.nuworq.com --site-host nuworq.com` (`NUWORQ_SITE_HOST`), and route both hostnames to it. On the site host, `/` and `site/`'s files serve the landing page. Every other path (`/api/…`, `/login.html`, `/auth/…`, `/w/…`, `/agents.md`) gets a `308` to the same path and query on the public URL. Old links like `nuworq.com/#/p/<slug>/12` keep working: the fragment never reaches the server, so the landing page's one inline script (allowed by its hash in the CSP) sends them on to the public URL. Every link the hub builds uses the public URL.
+
 ### Keeping a server up to date: it pulls, nothing pushes to it
 `serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. If the new hub doesn't come up healthy, it rolls back. No CI job reaches into your network, and the server only needs read access:
 ```bash

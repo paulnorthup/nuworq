@@ -14,7 +14,10 @@ describe('the landing page', () => {
   test('small, with nothing from third parties', () => {
     const bytes = readdirSync(SITE).reduce((n, f) => n + statSync(join(SITE, f)).size, 0);
     assert.ok(bytes < 60_000, `${bytes} bytes`);
-    assert.doesNotMatch(html, /<script/i, 'no scripts at all');
+    // One small inline script (#119: old #/ links go on to the app), allowed by hash; nothing loaded from anywhere.
+    assert.equal(html.match(/<script/gi).length, 1, 'one script');
+    assert.match(html, /<script>[^<]{1,300}<\/script>/, 'inline and small');
+    assert.doesNotMatch(html, /<script[^>]*\ssrc=/i, 'no external scripts');
     for (const [, href] of html.matchAll(/<link[^>]+href="([^"]+)"/g)) assert.ok(!/^(https?:)?\/\//.test(href), `no external stylesheet or font: ${href}`);
     assert.doesNotMatch(css, /@import|url\((['"]?)https?:/, 'no external CSS resources');
   });

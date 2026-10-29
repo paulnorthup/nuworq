@@ -1558,7 +1558,7 @@ const PR_REBASE_HINT = (item, pr, base = 'main') => [
 ].join(' ');
 
 // What a pull request the hub opens says: the item, who built and reviewed it, and the evidence.
-function prBody(p, item) {
+export function prBody(p, item) {
   const link = this.publicUrl ? `${this.publicUrl.replace(/\/+$/, '')}/#/p/${encodeURIComponent(p.slug)}/${item.seq}` : '';
   const last = (type) => this.q('SELECT * FROM events WHERE item_id = ? AND type = ? ORDER BY at DESC, id DESC LIMIT 1').get(item.id, type);
   const accepted = last('accepted'), submitted = last('submitted');
