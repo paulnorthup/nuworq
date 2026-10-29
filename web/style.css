@@ -402,6 +402,7 @@ main.narrow .faint, .setup .faint, .dialog .faint { color: var(--faint); font-si
 #toast.err { background: var(--bad); color: #fff; }
 #toast:has(.toast-undo) { width: max-content; display: flex; align-items: center; } /* not squeezed to half the screen by left: 50% */
 #toast .toast-undo { margin-left: 10px; min-height: 44px; padding: 4px 12px; border: 1px solid currentColor; border-radius: 6px; background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+#toast a { color: inherit; text-decoration: underline; font-weight: 600; }
 /* The hub out of reach (#142): a bar that stays until it answers, and the pulse marked as possibly stale. */
 #offline { position: sticky; top: 0; z-index: 35; background: var(--warn); color: #fff; font-size: 13px; font-weight: 550; text-align: center; padding: 8px 16px; }
 body.offline .pulse { opacity: .55; filter: grayscale(.7); }

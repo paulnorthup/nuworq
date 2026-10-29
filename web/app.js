@@ -5,6 +5,7 @@ import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
 import { homePage, columns } from './home.js';
 import { missingProject } from './missing.js';
+import { errorText, errorHtml } from './errors.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
@@ -84,6 +85,13 @@ function toast(msg, err = false, undo = null) {
   clearTimeout(toast.t);
   toast.t = setTimeout(() => (t.hidden = true), undo ? 8000 : err ? 5000 : 2200);
 }
+// A failed request, as a person reads it: the error and what to do about it, with any place it names linked (#151).
+function toastError(e) {
+  toast(errorText(e), true);
+  $('#toast').innerHTML = errorHtml(e, esc);
+  // Following the place it names leaves the dialog the error came from.
+  for (const a of $('#toast').querySelectorAll('a')) a.addEventListener('click', () => { closeModal(); $('#toast').hidden = true; });
+}
 
 // The hub out of reach (#142): say so in a bar that stays, mark what's on screen as possibly out of date, and
 // clear it all by itself once the hub answers again. Shown after a moment, so a hub restarting doesn't flash it.
@@ -137,7 +145,7 @@ async function human(action, body = {}, msg) {
     await refresh();
     return r;
   } catch (e) {
-    toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true);
+    toastError(e);
   }
 }
 
@@ -150,7 +158,7 @@ async function removeProject(action, body, msg) {
     go('');
     toast(msg);
   } catch (e) {
-    toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true);
+    toastError(e);
   }
 }
 
@@ -945,7 +953,7 @@ async function connect() {
 
 async function notifySettings() {
   let n;
-  try { n = await api('/api/notify'); } catch (e) { return toast(e.message, true); }
+  try { n = await api('/api/notify'); } catch (e) { return toastError(e); }
   S.notifyPerson = n.person; // who "only what needs me" means
   const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> <span class="faint">${c.person ? `${c.person === n.person ? 'you' : esc(c.person)}: only what they own` : 'everyone'}</span> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
     <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
@@ -1041,7 +1049,7 @@ async function loadRepos(q, page) {
       + (rows && page === 1 && !q ? `<p class="faint" style="margin-top:8px">Not listed? ${installLink('Install the app on more repositories')}.</p>` : '');
     box.dataset.html = box.innerHTML;
     if (r.next_page) box.insertAdjacentHTML('beforeend', `<button class="btn ghost small" data-action="more-repos" data-q="${esc(q)}" data-page="${r.next_page}">More</button>`);
-  } catch (e) { box.innerHTML = `<p class="faint">${esc(e.message)}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="faint">${errorHtml(e, esc)}</p>`; }
 }
 
 // ── events ──
@@ -1148,7 +1156,7 @@ const ACTIONS = {
       const list = await api('/api/projects?archived=1');
       modal(`<h2>Archived projects</h2>${list.length ? list.map((p) => `<div class="row-item"><div class="body"><div class="h">${esc(p.name)}</div>${p.remotes.length ? `<div class="s">${esc(p.remotes.join(', '))}</div>` : ''}</div><button class="btn small" data-action="restore-project" data-slug="${esc(p.slug)}">Restore</button></div>`).join('') : '<p class="lead faint">No archived projects. Removing a project archives it: its history is kept, and you can restore it here.</p>'}
         <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'restore-project': async (el) => {
     try {
@@ -1157,7 +1165,7 @@ const ACTIONS = {
       await loadProjects();
       go(el.dataset.slug);
       refresh({ force: true }); // restored from its own (missing) page, the address doesn't change
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
   'runner-off': () => human('settings', { runner: false }, '`nuworq run` will no longer start workers here'),
@@ -1226,17 +1234,17 @@ const ACTIONS = {
       await api('/api/notify', { method: 'POST', body: JSON.stringify({ kind: val('nt-kind'), url: val('nt-url'), ...(mine?.checked ? { person: S.notifyPerson } : {}) }) });
       toast('Channel added: send a test to check it');
       notifySettings();
-    } catch (e) { toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true); }
+    } catch (e) { toastError(e); }
   },
   'notify-remove': async (el) => {
-    try { await api('/api/notify/remove', { method: 'POST', body: JSON.stringify({ id: Number(el.dataset.id) }) }); notifySettings(); } catch (e) { toast(e.message, true); }
+    try { await api('/api/notify/remove', { method: 'POST', body: JSON.stringify({ id: Number(el.dataset.id) }) }); notifySettings(); } catch (e) { toastError(e); }
   },
   'notify-test': async () => {
     try {
       const r = await api('/api/notify/test', { method: 'POST' });
       toast(r.ok ? 'Test sent to every channel' : `Failed: ${r.results.filter((x) => !x.ok).map((x) => `${x.kind} (${x.error})`).join(', ')}`, !r.ok);
       notifySettings();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'new-project': () => newProject(),
   // Get started's "Link a project to its repository": that project, with its + repo form open.
@@ -1246,7 +1254,7 @@ const ACTIONS = {
     go(el.dataset.slug);
   },
   'get-started-hide': async () => {
-    try { S.gs = await api('/api/get-started/hide', { method: 'POST' }); render({ force: true }); } catch (e) { toast(e.message, true); }
+    try { S.gs = await api('/api/get-started/hide', { method: 'POST' }); render({ force: true }); } catch (e) { toastError(e); }
   },
   'more-repos': (el) => { el.remove(); loadRepos(el.dataset.q, Number(el.dataset.page)); },
   'pick-repo': async (el) => {
@@ -1255,7 +1263,7 @@ const ACTIONS = {
       modal(`<h2>${esc(r.repo.replace('github.com/', ''))} is a project</h2>
         <p class="lead">Let <code>nuworq run</code> staff this project? It starts workers whenever there is work nobody is on, up to the limits it was started with. You can change this later in the project's settings.</p>
         <div class="foot"><button class="btn ghost" data-action="goto-new" data-slug="${esc(r.slug)}">Not now</button><button class="btn primary" data-action="staff-new" data-slug="${esc(r.slug)}">Let run staff it</button></div>`);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'goto-new': (el) => { closeModal(); go(el.dataset.slug); },
   'staff-new': async (el) => {
@@ -1263,7 +1271,7 @@ const ACTIONS = {
       await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/settings`, { method: 'POST', body: JSON.stringify({ runner: true }) });
       closeModal();
       go(el.dataset.slug);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'close-modal': () => closeModal(),
   logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },
@@ -1276,7 +1284,7 @@ const ACTIONS = {
       clearDraft('fp-name', 'fp-mission', 'fp-remotes');
       await loadProjects();
       connectStep({ ...r, name });
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'create-project': async () => {
     const name = val('np-name');
@@ -1285,7 +1293,7 @@ const ACTIONS = {
       const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('np-mission'), remote: val('np-remote') || undefined }) });
       closeModal();
       go(r.slug);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   copy: async (el) => {
     if (await copyText(el.dataset.text)) return toast('Copied');
