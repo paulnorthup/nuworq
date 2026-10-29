@@ -10,6 +10,7 @@ import { measure } from './llmproxy.js';
 import { normPrecondition, describe as describePrecondition, WAIT_DAYS } from './precondition.js';
 import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from './issues.js';
 import { prMerged, prSeen } from './github.js';
+import { defaultAudience } from './audience.js';
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -1861,7 +1862,7 @@ const AGENT_OPS = {
     const assumption = str(args.assumption);
     const to = str(args.to).toLowerCase();
     if (to && !['reporter', 'human', 'operator'].includes(to)) {
-      throw new UserError(`to must be "human", "reporter" or "operator", not "${args.to}"`, { hint: 'Leave it out to ask the human. "operator": running things, permissions, verifying on real infra.' });
+      throw new UserError(`to must be "human", "reporter" or "operator", not "${args.to}"`, { hint: 'Leave it out and the hub picks: running things, permissions, credentials or infra go to an operator; anything else to the human.' });
     }
     const item = args.item ? this.item(p, args.item) : null;
     // To the issue's reporter: posted on the issue as a comment (askReporters in src/issues.js, right after this
@@ -1875,7 +1876,9 @@ const AGENT_OPS = {
     if (issue && !this.github) throw new UserError("This hub has no GitHub App, so it can't post on the issue", { hint: 'Ask the human instead: leave out to.' });
     const blocking = !!issue || args.blocking === true || args.blocking === 'true' || (!assumption && args.blocking == null);
     const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
-    const operator = to === 'operator';
+    // Left out, `to` is picked from what the question is about (src/audience.js); given, it is kept as is.
+    const routed = to ? null : defaultAudience({ question: question.headline, context: `${question.summary}\n${question.detail}` });
+    const operator = (to || routed.audience) === 'operator';
     const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, reporter, issue_repo, issue_number, audience)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, question.headline, question.summary, question.detail,
       JSON.stringify(options), blocking ? 1 : 0, assumption, this.now(), issue?.author ?? '', issue?.repo ?? '', issue?.number ?? 0, operator ? 'operator' : '');
@@ -1899,7 +1902,8 @@ const AGENT_OPS = {
     return {
       ok: true, question: id, blocking,
       ...(issue ? { reporter: `@${issue.author}`, issue: issue.url } : {}),
-      ...(operator ? { to: 'operator' } : {}),
+      to: issue ? 'reporter' : operator ? 'operator' : 'human',
+      ...(routed ? { routed: `${operator ? 'To an operator' : 'To the human'}: ${routed.reason}. Pass to: "${operator ? 'human' : 'operator'}" to send it ${operator ? 'to the human' : 'to an operator'} instead.` } : {}),
       hint: issue
         ? `Posted for @${issue.author} on ${issue.url || 'the issue'}; #${item.seq} is parked until they reply (or, after ${p.reporter_wait}h without a reply, the human answers). Call next and take other work.`
         : blocking
