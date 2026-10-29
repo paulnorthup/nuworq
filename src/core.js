@@ -772,6 +772,17 @@ export class Hub extends EventEmitter {
     return blocking == null ? rows : rows.filter((q) => !!q.blocking === blocking);
   }
 
+  // An operator: a trusted, attended session that declared "operator" at checkin (has). It answers the
+  // questions agents put to: "operator" (running things, permissions, verifying on real infra), not Paul.
+  isOperator(p, agent) {
+    return json(this.q('SELECT has FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.has, []).includes('operator');
+  }
+
+  // The operator question to answer first: blocking before assumptions, then oldest.
+  operatorQuestion(p) {
+    return this.q(`SELECT * FROM questions WHERE project_id = ? AND audience = 'operator' AND status = 'open' ORDER BY blocking DESC, at, id LIMIT 1`).get(p.id) ?? null;
+  }
+
   heldBy(p, agent) {
     return this.q(`SELECT * FROM items WHERE project_id = ? AND (holder = ?
         OR id IN (SELECT item_id FROM attempts WHERE agent = ? AND stage = 'active' AND closed = 0)) ORDER BY seq`).all(p.id, agent, agent);
@@ -1735,6 +1746,21 @@ const AGENT_OPS = {
   },
 
   next(p, agent, args) {
+    // An operator answers what agents can't settle alone before anything else: each answer unparks someone's work.
+    const oq = this.isOperator(p, agent) ? this.operatorQuestion(p) : null;
+    if (oq) {
+      const item = this.itemById(oq.item_id);
+      return {
+        mode: 'answer',
+        question: {
+          id: oq.id, question: oq.question, context: oq.context || undefined, detail: oq.detail || undefined,
+          options: json(oq.options, []).length ? json(oq.options, []) : undefined, assumption: oq.assumption || undefined,
+          blocking: !!oq.blocking, asked_by: oq.asked_by, asked: `${dur(this.now() - oq.at)} ago`,
+        },
+        ...(item ? this.context(p, item, agent) : {}),
+        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}. Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. If only the human can answer, say so in the answer.`,
+      };
+    }
     const holding = this.heldBy(p, agent).filter((i) => ['active', 'proposed', 'landing'].includes(i.stage));
     if (holding.length && args.claim !== false) {
       return {
@@ -1834,7 +1860,9 @@ const AGENT_OPS = {
     const question = layered(args.question, args.context, args.detail, 'question');
     const assumption = str(args.assumption);
     const to = str(args.to).toLowerCase();
-    if (to && !['reporter', 'human'].includes(to)) throw new UserError(`to must be "reporter" or "human", not "${args.to}"`, { hint: 'Leave it out to ask the human.' });
+    if (to && !['reporter', 'human', 'operator'].includes(to)) {
+      throw new UserError(`to must be "human", "reporter" or "operator", not "${args.to}"`, { hint: 'Leave it out to ask the human. "operator": running things, permissions, verifying on real infra.' });
+    }
     const item = args.item ? this.item(p, args.item) : null;
     // To the issue's reporter: posted on the issue as a comment (askReporters in src/issues.js, right after this
     // answer), and the item parks like any blocking question until their reply comes back through the webhook.
@@ -1847,9 +1875,10 @@ const AGENT_OPS = {
     if (issue && !this.github) throw new UserError("This hub has no GitHub App, so it can't post on the issue", { hint: 'Ask the human instead: leave out to.' });
     const blocking = !!issue || args.blocking === true || args.blocking === 'true' || (!assumption && args.blocking == null);
     const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
-    const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, reporter, issue_repo, issue_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, question.headline, question.summary, question.detail,
-      JSON.stringify(options), blocking ? 1 : 0, assumption, this.now(), issue?.author ?? '', issue?.repo ?? '', issue?.number ?? 0);
+    const operator = to === 'operator';
+    const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, reporter, issue_repo, issue_number, audience)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, question.headline, question.summary, question.detail,
+      JSON.stringify(options), blocking ? 1 : 0, assumption, this.now(), issue?.author ?? '', issue?.repo ?? '', issue?.number ?? 0, operator ? 'operator' : '');
     const id = Number(r.lastInsertRowid);
     let parked = false;
     if (blocking && item && ['active', 'ready'].includes(item.stage) && !this.racing(item)) {
@@ -1862,20 +1891,41 @@ const AGENT_OPS = {
     }
     this.event(p, {
       item, actor: agent, type: blocking ? 'question' : 'assumption',
-      headline: issue ? `${agent} asks @${issue.author} on GitHub: ${question.headline}` : blocking ? `${agent} asks: ${question.headline}` : `${agent} assumed "${assumption}"`,
+      headline: issue ? `${agent} asks @${issue.author} on GitHub: ${question.headline}` : operator && blocking ? `${agent} asks an operator: ${question.headline}`
+        : blocking ? `${agent} asks: ${question.headline}` : `${agent} assumed "${assumption}"`,
       summary: blocking ? question.summary : `Question: ${question.headline}${question.summary ? `\n\n${question.summary}` : ''}`,
       detail: question.detail, data: { question: id, ...(issue ? { reporter: issue.author, url: issue.url } : {}) },
     });
     return {
       ok: true, question: id, blocking,
       ...(issue ? { reporter: `@${issue.author}`, issue: issue.url } : {}),
+      ...(operator ? { to: 'operator' } : {}),
       hint: issue
         ? `Posted for @${issue.author} on ${issue.url || 'the issue'}; #${item.seq} is parked until they reply (or, after ${p.reporter_wait}h without a reply, the human answers). Call next and take other work.`
         : blocking
         ? parked
-          ? `#${item.seq} is parked until the human answers. Don't wait: call next and take other work. The answer will be in your next checkin.`
+          ? `#${item.seq} is parked until ${operator ? 'an operator' : 'the human'} answers. Don't wait: call next and take other work. The answer will be in your next checkin.`
           : "Asked. Keep working on anything that doesn't depend on the answer; it will appear in your next checkin."
         : 'Assumption recorded; keep going. If the human overrides it, it will arrive as steering.',
+    };
+  },
+
+  // An operator settles a question put to it, with the same effects as the human's answer.
+  answer(p, agent, args) {
+    if (!this.isOperator(p, agent)) {
+      throw new UserError('Only an operator answers questions', {
+        status: 403, hint: 'Operators are trusted, attended sessions that check in with has: ["operator"]. If yours is one, check in again with it; otherwise leave the question to them.',
+      });
+    }
+    const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(args.question), p.id);
+    if (!q) throw new UserError(`No question ${args.question}`, { status: 404, hint: 'Call next: it hands an operator the question to answer, with its id.' });
+    if (q.audience !== 'operator') throw new UserError(`Question ${q.id} is for ${q.reporter ? `@${q.reporter}, the issue's reporter` : 'the human'}, not an operator`, { status: 403, hint: 'Operators answer only questions asked with to: "operator". Call next for those.' });
+    if (q.status !== 'open') throw new UserError(`Question ${q.id} is already ${q.status}`, { status: 409, hint: 'Call next for the next one.' });
+    HUMAN_OPS.answer.call(this, p, { question: q.id, answer: args.answer }, agent);
+    const item = this.itemById(q.item_id);
+    return {
+      ok: true,
+      hint: `Answered${item ? `; #${item.seq} is ${item.stage}` : ''}. ${q.asked_by} sees it at its next checkin. Call next.`,
     };
   },
 

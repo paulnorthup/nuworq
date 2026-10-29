@@ -73,9 +73,10 @@ const AGENT_CMDS = {
       question: need(rest(p, item ? 1 : 0), '<question>'),
       context: text(f.context), detail: text(f.detail),
       options: f.option, assumption: text(f.assume ?? f.assumption),
-      blocking: f.blocking ? true : undefined,
+      blocking: f.blocking ? true : undefined, to: f.to,
     };
   },
+  answer: (p) => ({ question: need(p[0], '<question-id>'), answer: need(rest(p, 1), '<answer>') }),
   submit: (p, f) => ({
     item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f), acceptance: text(f.acceptance),
     evidence: f.evidence?.map((e) => {
@@ -1108,7 +1109,8 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   claim <item> [--touching "a,b"]        claim a specific item
   progress <item> [headline] [--touching "src/db,src/api.js"]
                                          milestone update (no headline = silent heartbeat); renews your lease
-  ask [<item>] <question> [--assume a] [--option x]... [--blocking]
+  ask [<item>] <question> [--assume a] [--option x]... [--blocking] [--to human|reporter|operator]
+  answer <question-id> <answer>          operators only: answer a question asked to: operator
   submit <item> <headline> [--evidence "label|url"]...
   handoff <item> <headline>              release with where you left off
   propose <title> [--acceptance] [--priority now|soon|later] [--parent] [--depends-on "#1,#2"]

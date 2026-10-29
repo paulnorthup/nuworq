@@ -199,7 +199,8 @@ describe('transports', () => {
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
 
       const list = await rpc('tools/list', {});
-      assert.equal(list.result.tools.length, 15);
+      assert.equal(list.result.tools.length, 16);
+      assert.ok(list.result.tools.some((t) => t.name === 'answer'), 'the operator tool (#133)');
 
       const checkin = await rpc('tools/call', { name: 'checkin', arguments: { model: 'unknown' } }); // NUWORQ_MODEL wins
       assert.ok(!checkin.result.isError, checkin.result.content[0].text);

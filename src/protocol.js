@@ -67,7 +67,7 @@ export const OPS = [
   },
   {
     name: 'ask',
-    description: 'Ask the human a question. Prefer non-blocking: give the assumption you will proceed with and keep working; the human can confirm or override later. Set blocking only if you truly cannot proceed; the item is then parked, and you should take other work with next.',
+    description: 'Ask the human a question. Prefer non-blocking: give the assumption you will proceed with and keep working; the human can confirm or override later. Set blocking only if you truly cannot proceed; the item is then parked, and you should take other work with next. Questions about running things, permissions, or verifying on real infra go to: "operator".',
     params: {
       item: { ...ITEM, description: 'Optional. The item this is about.' },
       question: s('The question, one line.'),
@@ -76,9 +76,18 @@ export const OPS = [
       options: { type: 'array', items: { type: 'string' }, description: 'Optional. Likely answers the human can pick with one click.' },
       assumption: s('What you will assume and proceed with unless told otherwise.'),
       blocking: { type: 'boolean', description: 'True only if you cannot make progress without an answer. Defaults to false when you give an assumption.' },
-      to: { type: 'string', enum: ['human', 'reporter'], description: 'Optional. "reporter": for an item that came from a GitHub issue, ask the person who opened it, on the issue. The item parks until they reply; after a wait, the human can answer instead. Default "human".' },
+      to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: 'Optional. "operator": something you can\'t settle alone but a trusted, attended session can (running things, permissions, verifying on real infra); an operator answers, not the human. "reporter": for an item that came from a GitHub issue, ask the person who opened it, on the issue. The item parks until they reply; after a wait, the human can answer instead. Default "human".' },
     },
     required: ['question'],
+  },
+  {
+    name: 'answer',
+    description: 'Operators only (checked in with has: ["operator"]): answer a question an agent asked with to: "operator". next hands you one as mode "answer". The asker sees your answer at its next checkin, and parked work goes back to ready.',
+    params: {
+      question: { type: 'integer', description: 'The question id, from next.' },
+      answer: s('What you found or decided, so the asker can go on. If only the human can settle it, say so.'),
+    },
+    required: ['question', 'answer'],
   },
   {
     name: 'submit',
@@ -304,10 +313,14 @@ Hub: ${url} · project: ${project} (change with --project).
 4. A question?
    - Can you make a reasonable call? ${c('ask')} with an \`assumption\` and keep going.
    - Truly blocked? ${c('ask')} with \`blocking\`. The item parks; take other work with ${c('next')}.
+   - About running things, permissions, or verifying on real infra? Ask \`to: "operator"\`, not the human.
 5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it. Every item has its own branch, cut from the latest main (the claim names it), so it can land on its own. If you're told main moved, rebase early.
 6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for.
 7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item.
 8. Leaving? ${c('signoff')}.
+
+## Operators
+An operator is a trusted, attended session: it checks in with \`operator\` in \`has\`. Its ${c('next')} first hands it questions agents asked \`to: "operator"\` (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them.
 
 ## Write in layers (0-30-5-30)
 - **headline**: one line, outcome first. "Retries added; 2 flaky tests remain", not "Update".
