@@ -89,6 +89,7 @@ trellis token revoke <name|id>                      # also logs out that token's
 ```
 - These commands work directly on the database file (`--db` or `TRELLIS_DB`; default `~/.trellis/trellis.db`), so run them on the hub host, as the user that owns the file.
 - Tokens look like `trl_` followed by 43 random characters (256 bits). Only a SHA-256 hash and an 8-character prefix are stored.
+- Every human token belongs to a **person**, who acts on the record as `@handle` with a role: *owner* (everything, including people and settings), *steward* (steer, decide, answer, accept, send back, edit work), *member* (comment and propose) or *viewer* (read only). `token create paul --role human` makes `@paul` an owner if they don't exist yet. Otherwise: `trellis person add bea --role steward`, then `trellis token create bea-laptop --role human --person bea`. See also `person list` and `person set-role <handle> <role>`. Human tokens from before people existed become owners. Local loopback mode has no people: the one human is "you".
 - Browser logins exchange a human token for an `HttpOnly; SameSite=Strict` session cookie. It is `Secure` over HTTPS and lasts 30 days.
 
 ### Backups

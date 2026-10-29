@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN } from './core.js';
 import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
@@ -165,7 +165,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
       }
 
+      // A person acts as "@handle" with their role; without accounts the one human is "you", an owner.
+      const by = who.person ? `@${who.person.handle}` : HUMAN;
+      const personRole = who.person?.role ?? 'owner';
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name });
+      if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
+      if (path === '/api/people' || path === '/api/people/role') {
+        if (req.method === 'GET' && path === '/api/people') return send(200, authz.listPeople());
+        if (req.method !== 'POST') return deny(405, 'use GET or POST');
+        if (personRole !== 'owner') return deny(403, 'only an owner manages people', 'Ask an owner of this workspace.');
+        const b = await body(req);
+        try {
+          return send(200, { ok: true, person: path === '/api/people' ? authz.addPerson(b.handle, b.role, { name: b.name, email: b.email }) : authz.setRole(b.handle, b.role) });
+        } catch (e) {
+          throw new UserError(e.message);
+        }
+      }
       if (req.method === 'POST' && path === '/api/logout') {
         authz.deleteSession(cookieOf(req));
         res.setHeader('set-cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=0`);
@@ -183,6 +198,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub));
       if (req.method === 'POST' && path === '/api/projects') {
+        if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't create projects`, 'Ask an owner or steward.');
         const b = await body(req);
         const p = hub.tx(() => hub.project(b.slug || b.name, { create: true, name: b.name }));
         if (b.mission) hub.humanOp(p.slug, 'settings', { mission: b.mission });
@@ -206,7 +222,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/human\/([a-z]+)$/)) && req.method === 'POST') {
         if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404 });
-        return send(200, hub.humanOp(decodeURIComponent(m[1]), m[2], await body(req)));
+        if (!PERSON_CAN[personRole]?.includes(m[2])) return deny(403, `a ${personRole} can't ${m[2]} here`, 'Ask an owner of this workspace for a different role.');
+        const args = await body(req);
+        if (personRole === 'member' && m[2] === 'create') args.stage = 'proposed'; // members propose; stewards decide
+        return send(200, hub.humanOp(decodeURIComponent(m[1]), m[2], args, by));
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);

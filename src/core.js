@@ -17,6 +17,14 @@ const HEADLINE_MAX = 140;
 const STEER_TTL = 3 * DAY;
 export const HUMAN = 'you';
 export const SYSTEM = 'trellis';
+// People act on the record as "@handle"; without accounts (local mode) the one human is "you".
+export const isHuman = (actor) => actor === HUMAN || String(actor ?? '').startsWith('@');
+const You = (by) => (by === HUMAN ? 'You' : by);
+
+// Which human actions each person role may take. Reading is open to every role.
+const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire'];
+export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
 export const STAGES = {
@@ -248,6 +256,7 @@ export class Hub extends EventEmitter {
     if (!n) throw new UserError('agent name is required', { hint: 'Identify yourself: a short unique name such as "claude-1" or "codex-api".' });
     if (n.length > 60) throw new UserError('agent name is too long (max 60 characters)');
     if ([HUMAN, SYSTEM].includes(n.toLowerCase())) throw new UserError(`"${n}" is reserved; pick another agent name`);
+    if (n.startsWith('@')) throw new UserError(`Agent names can't start with "@": that is how people appear on the record`, { hint: 'Pick a name such as "claude-1".' });
     return n;
   }
 
@@ -1098,7 +1107,7 @@ Object.assign(Hub.prototype, {
     const acceptance = str(args.acceptance);
     const priority = PRIORITY_RANK[args.priority] != null ? args.priority : 'soon';
     const parent = args.parent ? this.item(p, args.parent) : null;
-    const human = actor === HUMAN;
+    const human = isHuman(actor);
     const stage = human ? (args.stage === 'proposed' ? 'proposed' : 'ready')
       : p.autonomy !== 'ask' && acceptance ? 'ready' : 'proposed';
     const t = this.now();
@@ -1111,7 +1120,7 @@ Object.assign(Hub.prototype, {
     this.setDeps(p, item, args.depends_on);
     this.event(p, {
       item, actor, type: 'created',
-      headline: human ? `You added #${seq}: ${title}` : `${actor} proposed #${seq}: ${title}`,
+      headline: human ? `${You(actor)} added #${seq}: ${title}` : `${actor} proposed #${seq}: ${title}`,
       summary, data: { stage },
     });
     return item;
@@ -1136,13 +1145,13 @@ Object.assign(Hub.prototype, {
     }
     if (Object.keys(set).length) this.patch(item, set);
     if (Array.isArray(args.depends_on)) { this.setDeps(p, item, args.depends_on); changed.push('dependencies'); }
-    const human = actor === HUMAN;
+    const human = isHuman(actor);
     const promote = item.stage === 'proposed' && !item.holder && item.acceptance && (human || p.autonomy !== 'ask') && args.ready !== false;
     if (promote) { this.move(item, 'ready', actor); changed.push('now ready'); }
     if (changed.length) {
       this.event(p, {
         item, actor, type: 'refined',
-        headline: `${human ? 'You' : actor} refined #${item.seq}: ${changed.join(', ')}`,
+        headline: `${You(actor)} refined #${item.seq}: ${changed.join(', ')}`,
         summary: set.acceptance ? `Done means: ${set.acceptance}` : '',
       });
     }
@@ -1150,7 +1159,7 @@ Object.assign(Hub.prototype, {
   },
 
   verdict(p, actor, item, verdict, { headline, summary = '', detail = '', attempt }) {
-    const who = actor === HUMAN ? 'You' : actor;
+    const who = You(actor);
     if (verdict === 'accept') {
       // A race: keep one attempt, and record the others as not chosen.
       const kept = this.keptAttempt(item, attempt, actor);
@@ -1183,96 +1192,96 @@ Object.assign(Hub.prototype, {
 // ── human operations ───────────────────────────────────────────────────────
 
 const HUMAN_OPS = {
-  answer(p, { question, answer, decide }) {
+  answer(p, { question, answer, decide }, by) {
     const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
     if (!q) throw new UserError(`No question ${question}`, { status: 404 });
     const text = str(answer);
     if (!text) throw new UserError('answer is required');
     const item = this.itemById(q.item_id);
     if (!q.blocking && text.toLowerCase() === q.assumption.trim().toLowerCase()) {
-      return HUMAN_OPS.confirm.call(this, p, { question });
+      return HUMAN_OPS.confirm.call(this, p, { question }, by);
     }
     this.q(`UPDATE questions SET status = 'answered', answer = ?, answered_by = ?, answered_at = ?, seen_by_asker = 0 WHERE id = ?`)
-      .run(text, HUMAN, this.now(), q.id);
+      .run(text, by, this.now(), q.id);
     this.event(p, {
-      item, actor: HUMAN, type: 'answered',
-      headline: `You answered${item ? ` on #${item.seq}` : ''}: ${clip(text)}`,
+      item, actor: by, type: 'answered',
+      headline: `${You(by)} answered${item ? ` on #${item.seq}` : ''}: ${clip(text)}`,
       summary: `${q.asked_by} asked: ${q.question}`, data: { question: q.id },
     });
     if (!q.blocking && q.status === 'open') {
       // Overriding an assumption the agent already acted on: tell whoever is on it now.
-      this.addNote(p, 'steer', `Change of course${item ? ` on #${item.seq}` : ''}: you assumed "${q.assumption}". Instead: ${text}`, item);
+      this.addNote(p, 'steer', `Change of course${item ? ` on #${item.seq}` : ''}: you assumed "${q.assumption}". Instead: ${text}`, item, null, by);
     }
     if (item && item.stage === 'waiting' && !this.openQuestions(item, { blocking: true }).length) {
-      this.move(item, 'ready', HUMAN);
+      this.move(item, 'ready', by);
     }
-    if (decide) this.addNote(p, 'decision', `${q.question} → ${text}`);
+    if (decide) this.addNote(p, 'decision', `${q.question} → ${text}`, null, null, by);
   },
 
-  confirm(p, { question }) {
+  confirm(p, { question }, by) {
     const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
     if (!q) throw new UserError(`No question ${question}`, { status: 404 });
-    this.q(`UPDATE questions SET status = 'confirmed', answered_by = ?, answered_at = ?, seen_by_asker = 0 WHERE id = ?`).run(HUMAN, this.now(), q.id);
-    this.event(p, { item: this.itemById(q.item_id), actor: HUMAN, type: 'assumption_confirmed', headline: `You confirmed ${q.asked_by}'s assumption: ${q.assumption}` });
+    this.q(`UPDATE questions SET status = 'confirmed', answered_by = ?, answered_at = ?, seen_by_asker = 0 WHERE id = ?`).run(by, this.now(), q.id);
+    this.event(p, { item: this.itemById(q.item_id), actor: by, type: 'assumption_confirmed', headline: `${You(by)} confirmed ${q.asked_by}'s assumption: ${q.assumption}` });
   },
 
-  accept(p, { item, note, attempt }) {
+  accept(p, { item, note, attempt }, by) {
     const it = this.item(p, item);
     if (it.stage !== 'verifying') throw new UserError(`#${it.seq} is ${it.stage}, not verifying`, { status: 409 });
-    return this.verdict(p, HUMAN, it, 'accept', { headline: str(note), attempt });
+    return this.verdict(p, by, it, 'accept', { headline: str(note), attempt });
   },
 
-  sendback(p, { item, note }) {
+  sendback(p, { item, note }, by) {
     const it = this.item(p, item);
     const { headline, summary } = layered(note, '', '', 'A reason for sending it back');
     if (!['verifying', 'done'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409 });
-    this.verdict(p, HUMAN, it, 'reject', { headline, summary });
+    this.verdict(p, by, it, 'reject', { headline, summary });
   },
 
-  steer(p, { item, body }) {
-    this.addNote(p, 'steer', body, item ? this.item(p, item) : null);
+  steer(p, { item, body }, by) {
+    this.addNote(p, 'steer', body, item ? this.item(p, item) : null, null, by);
   },
 
-  decide(p, { body }) {
-    this.addNote(p, 'decision', body);
+  decide(p, { body }, by) {
+    this.addNote(p, 'decision', body, null, null, by);
   },
 
-  retire(p, { note }) {
+  retire(p, { note }, by) {
     const n = this.q('SELECT * FROM notes WHERE id = ? AND project_id = ?').get(Number(note), p.id);
     if (!n) throw new UserError(`No note ${note}`, { status: 404 });
     this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
-    this.event(p, { item: this.itemById(n.item_id), actor: HUMAN, type: 'retired', headline: `You retired a ${n.kind === 'learning' ? 'field note' : n.kind}: ${clip(n.body, 100)}` });
+    this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'retired', headline: `${You(by)} retired a ${n.kind === 'learning' ? 'field note' : n.kind}: ${clip(n.body, 100)}` });
   },
 
-  comment(p, { item, body }) {
+  comment(p, { item, body }, by) {
     const { headline, summary } = layered(body, '', '', 'comment');
-    this.event(p, { item: item ? this.item(p, item) : null, actor: HUMAN, type: 'comment', headline, summary });
+    this.event(p, { item: item ? this.item(p, item) : null, actor: by, type: 'comment', headline, summary });
   },
 
-  create(p, args) {
-    return { item: `#${this.createItem(p, HUMAN, args).seq}` };
+  create(p, args, by) {
+    return { item: `#${this.createItem(p, by, args).seq}` };
   },
 
-  update(p, args) {
+  update(p, args, by) {
     const it = this.item(p, args.item);
-    this.refineItem(p, HUMAN, it, args);
+    this.refineItem(p, by, it, args);
     if (args.stage && args.stage !== it.stage) {
       if (!['proposed', 'ready', 'dropped', 'done'].includes(args.stage)) throw new UserError(`You can move work to proposed, ready, done or dropped (not ${args.stage})`);
       const holders = [it.holder, ...(this.racing(it) ? this.attemptsOf(it).filter((a) => a.stage === 'active').map((a) => a.agent) : [])].filter(Boolean);
-      this.move(it, args.stage, HUMAN, { holder: null, lease_until: null });
+      this.move(it, args.stage, by, { holder: null, lease_until: null });
       const verb = { ready: 'moved', proposed: 'moved', done: 'marked', dropped: 'dropped' }[args.stage];
-      this.event(p, { item: it, actor: HUMAN, type: 'staged', headline: `You ${verb} #${it.seq}${args.stage !== 'dropped' ? ` to ${args.stage}` : ''}`, summary: str(args.note) });
-      for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder);
+      this.event(p, { item: it, actor: by, type: 'staged', headline: `${You(by)} ${verb} #${it.seq}${args.stage !== 'dropped' ? ` to ${args.stage}` : ''}`, summary: str(args.note) });
+      for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder, by);
     }
   },
 
-  pick(p, { item }) {
+  pick(p, { item }, by) {
     const it = this.item(p, item);
     if (!['proposed', 'ready'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409 });
     this.patch(it, { priority: 'now' });
     this.event(p, {
-      item: it, actor: HUMAN, type: 'picked',
-      headline: `You picked #${it.seq} as what matters most: ${it.title}`,
+      item: it, actor: by, type: 'picked',
+      headline: `${You(by)} picked #${it.seq} as what matters most: ${it.title}`,
       summary: it.stage === 'proposed' ? 'The next agent to check in will shape it first, then it gets built.' : 'It goes to the front of the queue.',
     });
   },
@@ -1285,16 +1294,16 @@ const HUMAN_OPS = {
     this.q('UPDATE projects SET seen_at = ? WHERE id = ?').run(this.now(), p.id);
   },
 
-  settings(p, { name, mission, autonomy, parked, path }) {
+  settings(p, { name, mission, autonomy, parked, path }, by) {
     const changes = [];
     if (path != null && normDir(path) !== p.path) {
       this.q('UPDATE projects SET path = ? WHERE id = ?').run(normDir(path), p.id);
-      this.event(p, { actor: HUMAN, type: 'path', headline: normDir(path) ? `You set where ${p.name} lives: ${normDir(path)}` : `You cleared where ${p.name} lives` });
+      this.event(p, { actor: by, type: 'path', headline: normDir(path) ? `${You(by)} set where ${p.name} lives: ${normDir(path)}` : `${You(by)} cleared where ${p.name} lives` });
     }
     if (parked != null && !!parked !== !!p.parked) {
       this.q('UPDATE projects SET parked = ? WHERE id = ?').run(parked ? 1 : 0, p.id);
-      this.event(p, { actor: HUMAN, type: 'parked', headline: parked ? 'You parked the project' : 'You unparked the project' });
-      if (parked) this.addNote(p, 'steer', 'The project is parked. Finish or hand off what you hold; start nothing new.', null);
+      this.event(p, { actor: by, type: 'parked', headline: parked ? `${You(by)} parked the project` : `${You(by)} unparked the project` });
+      if (parked) this.addNote(p, 'steer', 'The project is parked. Finish or hand off what you hold; start nothing new.', null, null, by);
     }
     if (name != null && str(name) && str(name) !== p.name) { this.q('UPDATE projects SET name = ? WHERE id = ?').run(str(name), p.id); changes.push('name'); }
     if (mission != null && str(mission) !== p.mission) { this.q('UPDATE projects SET mission = ? WHERE id = ?').run(str(mission), p.id); changes.push('mission'); }
@@ -1302,33 +1311,34 @@ const HUMAN_OPS = {
       if (!AUTONOMY[autonomy]) throw new UserError('autonomy must be ask, balanced or full');
       this.q('UPDATE projects SET autonomy = ? WHERE id = ?').run(autonomy, p.id);
       changes.push('autonomy');
-      this.addNote(p, 'steer', `Autonomy is now "${AUTONOMY[autonomy].label}": ${AUTONOMY[autonomy].agent}`, null);
+      this.addNote(p, 'steer', `Autonomy is now "${AUTONOMY[autonomy].label}": ${AUTONOMY[autonomy].agent}`, null, null, by);
     }
-    if (changes.includes('mission')) this.event(p, { actor: HUMAN, type: 'mission', headline: 'You updated the mission', summary: str(mission) });
+    if (changes.includes('mission')) this.event(p, { actor: by, type: 'mission', headline: `${You(by)} updated the mission`, summary: str(mission) });
   },
 };
 
 Object.assign(Hub.prototype, {
-  addNote(p, kind, body, item = null, target = null) {
+  addNote(p, kind, body, item = null, target = null, author = HUMAN) {
     const text = str(body);
     if (!text) throw new UserError(`${kind} text is required`);
     const r = this.q('INSERT INTO notes (project_id, item_id, kind, target, author, body, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(p.id, item?.id ?? null, kind, target, HUMAN, text, this.now());
+      .run(p.id, item?.id ?? null, kind, target, author, text, this.now());
     this.event(p, {
-      item, actor: HUMAN, type: kind,
-      headline: kind === 'decision' ? `Decision: ${clip(text)}` : `You steered${item ? ` #${item.seq}` : ''}: ${clip(text)}`,
+      item, actor: author, type: kind,
+      headline: kind === 'decision' ? `Decision: ${clip(text)}` : `${You(author)} steered${item ? ` #${item.seq}` : ''}: ${clip(text)}`,
       summary: text.includes('\n') || text.length > 120 ? text : '',
       data: { note: Number(r.lastInsertRowid) },
     });
     return Number(r.lastInsertRowid);
   },
 
-  humanOp(slug, action, args = {}) {
+  // by: who is acting. "you" without accounts; "@handle" for a person.
+  humanOp(slug, action, args = {}, by = HUMAN) {
     const fn = HUMAN_OPS[action];
     if (!fn) throw new UserError(`Unknown action "${action}"`, { status: 404 });
     this.sweep();
     const p = this.project(slug, { create: action === 'create' && args.createProject });
-    const result = this.tx(() => fn.call(this, p, args ?? {})) ?? {};
+    const result = this.tx(() => fn.call(this, p, args ?? {}, by)) ?? {};
     this.changed(p);
     return { ok: true, ...result };
   },

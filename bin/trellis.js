@@ -407,6 +407,33 @@ ${dim(`  Give someone a login: trellis token create <name> --role human --worksp
   throw new HubError('usage: trellis workspace create <name> | list | remove <name>');
 }
 
+// People (the humans, each with a role) are managed on the hub host too, like tokens.
+async function person(pos, flags) {
+  const { openDb } = await import('../src/db.js');
+  const { Auth, PERSON_ROLES } = await import('../src/auth.js');
+  const auth = new Auth(openDb(dbPath(flags)));
+  const [sub, handle, role] = pos;
+  try {
+    if (sub === 'add') {
+      const p = auth.addPerson(need(handle, '<handle>'), flags.role || 'member', { name: flags.name, email: flags.email });
+      return console.log(`${green('Added')} @${p.handle} as ${p.role}. Give them a login: trellis token create <token-name> --role human --person ${p.handle}`);
+    }
+    if (sub === 'list') {
+      const rows = auth.listPeople();
+      if (!rows.length) return console.log(dim('No people yet. Human tokens create one each; or: trellis person add <handle> --role owner'));
+      for (const r of rows) console.log(`@${r.handle.padEnd(20)}${r.role.padEnd(9)}${r.email}`);
+      return;
+    }
+    if (sub === 'set-role') {
+      const p = auth.setRole(need(handle, '<handle>'), need(role ?? flags.role, `<${PERSON_ROLES.join('|')}>`));
+      return console.log(`${green('Updated')} @${p.handle} is now ${p.role}.`);
+    }
+  } catch (e) {
+    throw e instanceof HubError ? e : new HubError(e.message, { hint: 'See: trellis person list' });
+  }
+  throw new HubError(`usage: trellis person add <handle> --role ${PERSON_ROLES.join('|')} [--email e] | list | set-role <handle> <role>`);
+}
+
 // Token management runs on the hub host, straight against the database file.
 async function token(pos, flags) {
   const { openDb } = await import('../src/db.js');
@@ -417,7 +444,7 @@ async function token(pos, flags) {
   if (sub === 'create') {
     const role = flags.role || 'agent';
     let plain;
-    try { plain = auth.createToken(need(name, '<name>'), role); } catch (e) { throw new HubError(e.message, { hint: 'See: trellis token list' }); }
+    try { plain = auth.createToken(need(name, '<name>'), role, { person: flags.person }); } catch (e) { throw new HubError(e.message, { hint: 'See: trellis token list, trellis person list' }); }
     console.log(`${green('Created')} ${role} token ${bold(name)}. It is shown only this once:
 
   ${bold(plain)}
@@ -456,6 +483,12 @@ ${bold('Human')}
                                          Any other host (or --auth): tokens required.
   token create <name> --role human|agent create a token (shown once); run on the hub host
   token list | token revoke <name|id>    see or revoke tokens (revoking logs out sessions)
+                                         human tokens act as a person: --person <handle>
+                                         (default: one named like the token, created as owner)
+  person add <handle> --role owner|steward|member|viewer [--email e]
+  person list | person set-role <handle> <role>
+                                         owners do everything; stewards steer, decide, answer and
+                                         accept; members comment and propose; viewers read
                                          --workspace <name>: that workspace's tokens
   serve --workspaces [--data-dir d] [--base-domain example.com]
                                          one process, many workspaces (one database each),
@@ -509,6 +542,7 @@ async function main() {
   if (cmd === 'status') return status(flags);
   if (cmd === 'token') return token(pos, flags);
   if (cmd === 'workspace') return workspace(pos, flags);
+  if (cmd === 'person') return person(pos, flags);
   if (cmd === 'guide') {
     const s = resolveSettings(flags);
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));

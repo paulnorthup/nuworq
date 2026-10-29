@@ -3,7 +3,7 @@
 //   30s → pulse + the few things that need you, each with the action that moves it on
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
-import { STAGES, AUTONOMY, OPEN_STAGES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS } from './core.js';
+import { STAGES, AUTONOMY, OPEN_STAGES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman } from './core.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
@@ -92,7 +92,7 @@ export function view(hub, slug, { light = false } = {}) {
         sub: shaped ? `${shaped.actor} shaped it ${dur(t - shaped.at)} ago` : `${it.created_by === HUMAN ? 'You' : it.created_by} proposed it ${dur(t - it.created_at)} ago`,
         why: [shaped?.headline, it.summary].filter(Boolean).join('\n\n'), acceptance: it.acceptance, item: ref(it),
       });
-    } else if (it.created_at > p.seen_at && it.created_by !== HUMAN) {
+    } else if (it.created_at > p.seen_at && !isHuman(it.created_by)) {
       push({
         key: `proposal:${it.id}`, level: 'know', kind: 'proposal', at: it.created_at,
         headline: `${it.created_by} proposed: ${it.title}`,
@@ -186,7 +186,7 @@ export function view(hub, slug, { light = false } = {}) {
 
   // ── since you last looked ──
   const sinceEvents = hub.q(`SELECT e.*, i.seq AS item_seq, i.title AS item_title FROM events e LEFT JOIN items i ON i.id = e.item_id
-      WHERE e.project_id = ? AND e.at > ? AND e.actor != ? ORDER BY e.at DESC`).all(p.id, p.seen_at, HUMAN);
+      WHERE e.project_id = ? AND e.at > ? AND e.actor != ? AND e.actor NOT LIKE '@%' ORDER BY e.at DESC`).all(p.id, p.seen_at, HUMAN);
   const finished = sinceEvents.filter((e) => e.type === 'accepted');
   const submitted = sinceEvents.filter((e) => e.type === 'submitted');
   const since = {
@@ -407,7 +407,7 @@ export function itemView(hub, slug, ref) {
     .map((q) => ({ ...q, options: json(q.options, []), blocking: !!q.blocking, ago: dur(t - q.at) }));
   const steers = hub.q(`SELECT * FROM notes WHERE item_id = ? AND kind = 'steer' ORDER BY at`).all(it.id)
     .map((n) => ({ id: n.id, body: n.body, active: !!n.active, ago: dur(t - n.at), acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
-  const agentNames = [...new Set(events.filter((e) => e.actor !== HUMAN && e.actor !== 'trellis').map((e) => e.actor))];
+  const agentNames = [...new Set(events.filter((e) => !isHuman(e.actor) && e.actor !== 'trellis').map((e) => e.actor))];
   const models = Object.fromEntries(agentNames.map((n) => [n, hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, n)?.model ?? '']));
   const parent = hub.itemById(it.parent_id);
   return {
