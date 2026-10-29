@@ -286,6 +286,7 @@ export function openDb(file) {
     'ALTER TABLE usage ADD COLUMN requests INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE usage ADD COLUMN failures INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE usage ADD COLUMN cold_loads INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE channels ADD COLUMN person TEXT NOT NULL DEFAULT ''", // "@handle": a personal channel (only what they own); '' = hub-wide
     "ALTER TABLE issues ADD COLUMN stale TEXT NOT NULL DEFAULT ''", // an agent flagged it stale: why ('' = not flagged)
     'ALTER TABLE issues ADD COLUMN closing INTEGER NOT NULL DEFAULT 0', // 1: the human said close it; 2: closed on GitHub
   ]) {

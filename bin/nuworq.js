@@ -971,13 +971,13 @@ async function notify(pos, flags) {
   const [sub, a, b] = pos;
   try {
     if (sub === 'add') {
-      const c = n.addChannel(db, need(a, 'ntfy|slack|webhook'), need(b, '<url>'));
-      return console.log(`${green('Added')} ${c.kind} channel ${bold(c.id)} (${c.url}). Try it: nuworq notify test`);
+      const c = n.addChannel(db, need(a, 'ntfy|slack|webhook'), need(b, '<url>'), Date.now(), { person: flags.person });
+      return console.log(`${green('Added')} ${c.kind} channel ${bold(c.id)} (${c.url})${c.person ? ` for ${c.person}: only what they own` : ''}. Try it: nuworq notify test`);
     }
     if (sub === 'list') {
       const rows = n.listChannels(db);
       if (!rows.length) return console.log(dim('No push channels. Add one: nuworq notify add ntfy <topic-url> | slack <webhook-url> | webhook <url>'));
-      for (const c of rows) console.log(`${String(c.id).padEnd(4)}${c.kind.padEnd(9)}${c.url}  ${c.failing ? amber(`failing: ${c.last_error}`) : green('ok')}`);
+      for (const c of rows) console.log(`${String(c.id).padEnd(4)}${c.kind.padEnd(9)}${(c.person ?? 'everyone').padEnd(12)}${c.url}  ${c.failing ? amber(`failing: ${c.last_error}`) : green('ok')}`);
       return;
     }
     if (sub === 'remove') { n.removeChannel(db, need(a, '<id>')); return console.log(`${green('Removed')} channel ${a}.`); }
@@ -1021,7 +1021,8 @@ ${bold('Human')}
                                          at <name>.<base-domain> or /w/<name>/. Login always required.
                                          [--org-cap 5]: organizations one signed-in person may create
   workspace create|remove <name> | list  manage workspaces on the hub host
-  notify add ntfy|slack|webhook <url>    push one batched message when something new needs you
+  notify add ntfy|slack|webhook <url> [--person bea]   push one batched message when something new needs you
+                                         (--person: a channel for bea, only what bea owns)
   notify list | remove <id> | test       see, remove or test push channels (run on the hub host)
   status [--all]                         the 30-second view
 
