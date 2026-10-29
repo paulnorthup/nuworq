@@ -14,6 +14,7 @@ import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './
 import { receive } from './github.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
+import { GitHubApp } from './ghapp.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -58,8 +59,10 @@ const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 // workspace by subdomain of baseDomain or a /w/<slug>/ path prefix, and login is always required.
 // oauth: providers people may sign in with ({ github: { id, secret }, google: … }; see src/oauth.js).
 // orgCap: how many organizations one signed-in person may create (workspaces mode).
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP } = {}) {
+// githubApp: the GitHub App that mints one-repo, one-hour tokens for workers ({ id, key, slug } or a GitHubApp; see src/ghapp.js).
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP, githubApp = null } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
+  const app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp(githubApp) : githubApp;
   // The hub's own address names no workspace: the base domain, or the public URL's host (e.g. auth.<base-domain>).
   const rootHost = publicUrl ? hostname(new URL(publicUrl).host) : '';
   const required = spaces ? true : auth === 'required';
@@ -482,6 +485,36 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const agent = header(req, 'agent') || b.agent;
         delete b.agent;
         return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
+      }
+      // git asks for a credential (nuworq git-credential): a token for the repository of the item this
+      // agent holds, minted by the GitHub App for that one repository and an hour. On the record, never shown.
+      if (path === '/api/agent/credential' && req.method === 'POST') {
+        const b = await body(req);
+        const agent = header(req, 'agent') || b.agent;
+        if (!app) return deny(404, "this hub has no GitHub App, so it hands out no GitHub tokens", 'The hub host sets NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE (see docs/GITHUB.md). Until then, push with your own credentials.');
+        const held = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
+          .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
+          .find(({ p }) => !caller.scope || caller.scope.includes(p.slug));
+        if (!held) return deny(409, `${agent || 'this agent'} holds no item to push for`, 'Tokens are for the item you hold: claim one (next), then push.');
+        const { it, p } = held;
+        const repo = it.repo || hub.remotesOf(p)[0] || '';
+        let t;
+        try {
+          t = await app.mint(repo);
+        } catch (e) {
+          if (e instanceof UserError) {
+            hub.event(p, { item: it, actor: agent, type: 'credential_refused', headline: `No GitHub token for ${agent} on #${it.seq}: ${e.message}`, summary: e.hint ?? '', data: { agent, repo } });
+            hub.changed(p);
+          }
+          throw e;
+        }
+        hub.event(p, {
+          item: it, actor: agent, type: 'credential',
+          headline: `${agent} got a GitHub token for ${t.repo} on #${it.seq}, until ${new Date(t.expires_at).toISOString().slice(11, 16)} UTC`,
+          data: { agent, item: it.seq, repo: t.repo, expires_at: t.expires_at, token: caller.token?.name ?? null }, // the agent token that asked
+        });
+        hub.changed(p);
+        return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
       if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {

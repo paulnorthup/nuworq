@@ -334,6 +334,12 @@ function workerSetup(target, agent, flags, s, token = null) {
   if (worktree && origin) lines.push(`git -C ${sq(home)} fetch -q origin`, `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
   else if (worktree) lines.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
   lines.push(`cd ${sq(cwd)}`);
+  // Pushes over HTTPS to GitHub get a one-repo, one-hour token from the hub's GitHub App, asked for by git
+  // itself: this worker's processes only (no config file changes), and the agent never sees the token.
+  if (origin) {
+    const helper = `!NUWORQ_URL=${s.url}${token ? ` NUWORQ_TOKEN=${token}` : ''} node ${JSON.stringify(BIN)} git-credential --as ${name}`;
+    lines.push(`export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0=${sq(helper)} GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath GIT_CONFIG_VALUE_1=true`);
+  }
   // Started here (--run), the agent speaks JSON, so its usage can be read and recorded (src/usage.js tap).
   const json = flags.run ? { claude: ' \\\n  --output-format stream-json --verbose', codex: ' --json', opencode: ' --format json' }[agent] : '';
   if (agent === 'claude') {
@@ -553,7 +559,8 @@ async function serve(flags) {
   }
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
-  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv() });
+  const { appFromEnv } = await import('../src/ghapp.js');
+  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -632,7 +639,8 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const { oauthFromEnv } = await import('../src/oauth.js');
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
   const orgCap = Number(flags['org-cap'] || envVar('ORG_CAP')) || undefined; // organizations one person may create
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv(), orgCap });
+  const { appFromEnv } = await import('../src/ghapp.js');
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();
@@ -872,6 +880,8 @@ ${bold('Setup')}
                                          Checks it, saves it in ~/.nuworq/connect.json (only you can read it).
                                          The token: --token, else NUWORQ_TOKEN, else one line on stdin
   mcp                                    run the stdio MCP server (one per agent session)
+  git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
+                                         <name> holds, from the hub's GitHub App (workers set it up themselves)
   guide [--via cli|tools]                the agent guide
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
   worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags]
@@ -896,6 +906,32 @@ Env: NUWORQ_URL (default ${DEFAULT_URL}), NUWORQ_PROJECT, NUWORQ_AGENT, NUWORQ_M
      NUWORQ_TOKEN (a token the CLI and MCP server send to a hub that requires login),
      NUWORQ_PUBLIC_URL (the hub's address as you reach it, used for links in push messages)
 Deploying on a VM or the internet: docs/DEPLOY.md`;
+
+// git's credential helper protocol (git help credential): for "get" on github.com, a token from the hub's
+// GitHub App for the repository of the item this agent holds. Anything else, or a different repository,
+// gets no answer, and git goes on to its other helpers. Errors go to stderr, where git shows them.
+async function gitCredential(pos, flags) {
+  if (pos[0] !== 'get') return;
+  let input = '';
+  for await (const c of process.stdin) input += c;
+  const ask = Object.fromEntries(input.split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  if (ask.host !== 'github.com') return;
+  const agent = flags.as || envVar('AGENT');
+  if (!agent) throw new HubError('who are you?', { hint: 'The helper needs --as <name> or NUWORQ_AGENT.' });
+  let r;
+  try {
+    r = await createClient(flags).post('/api/agent/credential', { agent });
+  } catch (e) {
+    if (e.status === 404) return; // the hub has no GitHub App: git uses whatever else is set up, quietly
+    throw e;
+  }
+  // With credential.useHttpPath, git says which repository; a token for another one would be refused anyway.
+  const want = String(ask.path ?? '').replace(/\.git$/, '').replace(/\/+$/, '').toLowerCase();
+  if (want && `github.com/${want}` !== r.repo.toLowerCase()) {
+    return console.error(`nuworq: the token is for ${r.repo}, the item you hold; this push goes to github.com/${want}`);
+  }
+  process.stdout.write(`username=${r.username}\npassword=${r.password}\n`);
+}
 
 async function main() {
   const [cmd, ...argv] = process.argv.slice(2);
@@ -924,6 +960,7 @@ async function main() {
   if (cmd === 'seed') return seedCmd(flags);
   if (cmd === 'init') return init(flags);
   if (cmd === 'connect') return connect(pos, flags);
+  if (cmd === 'git-credential') return gitCredential(pos, flags);
 
   const shape = AGENT_CMDS[cmd];
   if (!shape) throw new HubError(`unknown command "${cmd}"`, { hint: 'See: nuworq help' });
