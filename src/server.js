@@ -21,6 +21,8 @@ import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS } from './gha
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { outcomes } from './outcomes.js';
+import { tmpdir } from 'node:os';
+import { buildPackage } from './package.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -72,8 +74,13 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // githubApp: the GitHub App that mints one-repo, one-hour tokens for workers ({ id, key, slug } or a GitHubApp; see src/ghapp.js).
 // appFile: where an app the hub creates for itself (one click, single hub only) is saved, 0600.
 // github: GitHub's addresses ({ web, api }; tests point them at a stub).
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {} } = {}) {
+// packageDir: where the package of the running commit is built and kept (/nuworq.tgz; see src/package.js).
+// source: the checkout it is built from (tests point it at a clone).
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
+  // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
+  let built = null;
+  const pkg = buildPackage(source, packageDir).then((b) => (built = b));
   const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
   let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, ...githubApp }) : githubApp;
   const appStates = new Map(); // one-click app creation: state → expiry (single use, an hour)
@@ -294,6 +301,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     try {
       let am;
       if (req.method === 'GET' && (am = path.match(/^\/auth\/([a-z]+)\/(start|callback)$/))) return await signIn(req, res, url, am[1], am[2], { send, deny });
+      // nuworq itself, as an npm package of the commit this hub runs: public, the same for every workspace.
+      if (req.method === 'GET' && path === '/nuworq.tgz') {
+        const b = await pkg;
+        if (!b) return deny(404, "this hub doesn't run from a git checkout, so it has no package of itself to serve", 'Install nuworq the way this hub was installed, or ask its host.');
+        res.writeHead(200, { 'content-type': 'application/gzip', etag: `"${b.sha256}"`, 'cache-control': 'no-cache', 'content-disposition': 'attachment; filename="nuworq.tgz"' });
+        return res.end(await readFile(b.file));
+      }
       // Which hub: the only one, or the workspace this address names.
       let hub = target, base = '', ws = '';
       if (spaces) {
@@ -558,7 +572,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return;
       }
       if (req.method === 'GET' && path === '/api/info') {
-        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: ((!spaces && publicUrl) || origin(req)) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo() });
+        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: ((!spaces && publicUrl) || origin(req)) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo(),
+          package: built ? { url: `${(!spaces && publicUrl) || origin(req)}/nuworq.tgz`, sha256: built.sha256, commit: built.commit.slice(0, 7) } : null });
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
       const viewer = who.person ? by : undefined;
