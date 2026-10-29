@@ -511,11 +511,11 @@ function flow(v) {
   if (S.stage) {
     const st = f.stages.find((s) => s.stage === S.stage);
     const items = v.all.filter((i) => i.stage === S.stage).slice(-25).reverse();
-    detail = `<div class="stage-detail"><div class="blurb"><b>${esc(st.label)}.</b> ${esc(st.blurb)} ${st.court ? `<i>Whose move: ${st.court === 'you' ? 'yours' : st.court === 'agents' ? "the agents'" : 'nobody yet (waiting for an agent)'}.</i>` : ''} ${st.ms ? `Work spent ${esc(st.time)} here in the last 14 days.` : ''}</div>
+    detail = `<div class="stage-detail"><div class="blurb"><b>${esc(st.label)}.</b> ${esc(st.blurb)} ${st.court ? `<i>Whose move: ${st.court === 'you' ? 'yours' : st.court === 'agents' ? "the agents'" : st.court === 'external' ? 'someone outside this hub' : 'nobody yet (waiting for an agent)'}.</i>` : ''} ${st.ms ? `Work spent ${esc(st.time)} here in the last 14 days.` : ''}</div>
       ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${esc(i.title)} <span class="age">${esc(i.ago)}</span></div>`).join('') : '<div class="age">Nothing here.</div>'}</div>`;
   }
   const c = f.court;
-  const hasTime = c.agents + c.queue + c.you > 0;
+  const hasTime = c.agents + c.queue + c.you + (c.external ?? 0) > 0;
   const max = Math.max(1, ...f.throughput);
   return `<section class="sec"><header><h2>Flow</h2><span class="hint">the lifecycle, and whose move it is (last 14 days)</span></header>
     <div class="flow">
@@ -525,8 +525,9 @@ function flow(v) {
           ${c.agents ? `<span class="seg-c agents" style="flex:${c.agents}">${c.agents >= 8 ? c.agents + '%' : ''}</span>` : ''}
           ${c.queue ? `<span class="seg-c queue" style="flex:${c.queue}">${c.queue >= 8 ? c.queue + '%' : ''}</span>` : ''}
           ${c.you ? `<span class="seg-c you" style="flex:${c.you}">${c.you >= 8 ? c.you + '%' : ''}</span>` : ''}
+          ${c.external ? `<span class="seg-c external" style="flex:${c.external}">${c.external >= 8 ? c.external + '%' : ''}</span>` : ''}
         </div>
-        <div class="legend"><span><i class="agents"></i>Agents working ${c.agents}%</span><span><i class="queue"></i>Waiting for an agent ${c.queue}%</span><span><i class="you"></i>Waiting on you ${c.you}%</span></div>` : ''}
+        <div class="legend"><span><i class="agents"></i>Agents working ${c.agents}%</span><span><i class="queue"></i>Waiting for an agent ${c.queue}%</span><span><i class="you"></i>Waiting on you ${c.you}%</span>${c.external ? `<span><i class="external"></i>Waiting outside ${c.external}%</span>` : ''}</div>` : ''}
       ${f.takeaway ? `<p class="takeaway">${esc(f.takeaway)}</p>` : ''}
       <div class="throughput">
         <div class="spark" title="Finished per day, last 14 days">${f.throughput.map((n) => `<span class="${n ? '' : 'z'}" style="height:${Math.max(2, Math.round((n / max) * 28))}px" title="${n}"></span>`).join('')}</div>
@@ -748,6 +749,7 @@ function renderDrawer() {
         <dt>Agents involved</dt><dd>${it.agents.map((a) => `${who(a.name, a.model)} <span class="age">${esc(a.model)}</span>`).join(', ') || '—'}</dd>
         ${it.parent ? `<dt>Part of</dt><dd>${refLink(it.parent.item)} ${esc(it.parent.title)}</dd>` : ''}
         ${it.children.length ? `<dt>Broken into</dt><dd>${it.children.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
+        ${it.precondition ? `<dt>Waits on</dt><dd>${esc(it.precondition.waits_for)} <span class="age">${it.precondition.met ? 'passed' : it.precondition.last_check ? `last check: ${esc(it.precondition.last_check.detail)}` : 'not checked yet'}</span></dd>` : ''}
         ${it.depends_on.length ? `<dt>Depends on</dt><dd>${it.depends_on.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
       </dl></div>
     ${it.detail ? `<div class="d-sec"><div class="label">Detail</div>${md(it.detail)}</div>` : ''}
@@ -769,7 +771,7 @@ function renderDrawer() {
     <div class="d-now">${holderLine}</div>
     <div class="actions">${actions.join('')}</div>
     ${edit}
-    ${lifebar ? `<div class="d-sec"><div class="label">Lifecycle <span class="count">agents ${esc(it.court_totals.agents)} · queue ${esc(it.court_totals.queue)} · you ${esc(it.court_totals.you)}</span></div>
+    ${lifebar ? `<div class="d-sec"><div class="label">Lifecycle <span class="count">agents ${esc(it.court_totals.agents)} · queue ${esc(it.court_totals.queue)} · you ${esc(it.court_totals.you)}${it.court_ms.external ? ` · outside ${esc(it.court_totals.external)}` : ''}</span></div>
       <div class="lifebar">${lifebar}</div>
       <div class="life-steps">${life.map((l) => `<span><b>${esc(l.label)}</b> ${esc(l.time)}${l.court === 'agents' && l.actor ? ` (${esc(l.actor)})` : ''}</span>`).join('<span>→</span>')}</div></div>` : ''}
     ${it.summary ? `<div class="d-sec"><div class="label">Summary</div>${md(it.summary)}</div>` : ''}

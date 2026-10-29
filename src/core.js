@@ -7,6 +7,7 @@ import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, i
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
+import { normPrecondition, describe as describePrecondition } from './precondition.js';
 import { issuesOf, markDuplicate, markStale, staleAnswered } from './issues.js';
 
 const GIT_CHECK = Symbol('git check');
@@ -45,6 +46,7 @@ export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN
 export const STAGES = {
   proposed:  { label: 'Proposed',  court: 'shaping', blurb: 'An idea someone (human or agent) thinks is worth doing. Agents claim proposals to shape them: they read the code, write what done means, and split big ideas. Then the work becomes Ready (or comes to you for approval).' },
   ready:     { label: 'Ready',     court: 'queue',   blurb: 'Shaped, with acceptance criteria. Any agent can pick it up.' },
+  outside:   { label: 'Outside',   court: 'external', blurb: 'Shaped, but waiting on a fact outside this hub (an API that answers, a page that says it shipped). The hub checks it, backing off, and makes the work Ready when it passes.' },
   active:    { label: 'Active',    court: 'agents',  blurb: 'An agent holds a 20-minute lease and is working. Progress renews the lease; if the agent goes quiet, the work returns to Ready for someone else.' },
   waiting:   { label: 'Waiting',   court: 'you',     blurb: 'An agent hit a question only you can answer and parked the work (it took other work meanwhile). Your answer returns it to Ready.' },
   verifying: { label: 'Verifying', court: 'review',  blurb: 'The agent says it is done and attached evidence. Someone other than the implementer checks it.' },
@@ -52,7 +54,7 @@ export const STAGES = {
   done:      { label: 'Done',      court: null,      blurb: 'Accepted.' },
   dropped:   { label: 'Dropped',   court: null,      blurb: 'Decided not to do. Kept for the record.' },
 };
-export const OPEN_STAGES = ['proposed', 'ready', 'active', 'waiting', 'verifying', 'landing'];
+export const OPEN_STAGES = ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'landing'];
 // Events that mean an agent took a job: building (or a race slot), shaping, reviewing, landing.
 export const CLAIM_TYPES = ['claimed', 'shaping', 'review_started', 'landing'];
 // Accepted work goes to its builder to land first; after this, any agent may land it.
@@ -129,6 +131,13 @@ export function layered(headline, summary = '', detail = '', what = 'headline') 
 const str = (v) => (v == null ? '' : String(v).trim());
 const clip = (v, n = 120) => { const line = str(v).split('\n')[0]; return line.length > n ? line.slice(0, n - 1).trimEnd() + '…' : line; };
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+
+// What an item waits on outside the hub, for agents and the UI: the condition, in words, and the last check. undefined: nothing.
+export function preconditionOut(item) {
+  if (!item.precondition) return undefined;
+  const pre = JSON.parse(item.precondition), last = json(item.last_check, null);
+  return { ...pre, waits_for: describePrecondition(pre), met: !!last?.ok, last_check: last ? { ok: last.ok, detail: last.detail, at: last.at } : null };
+}
 const fmtOther = (o) => `${o.agent} → ${o.item} ${o.title}${o.touching ? ` (changing ${o.touching.join(', ')})` : ''}`;
 
 // Paths an agent says it is changing. Normalised so "src/db/**", "./src/db/" and "src/db" all compare equal.
@@ -559,6 +568,8 @@ export class Hub extends EventEmitter {
   }
 
   move(item, stage, actor, patch = {}) {
+    // Work waiting on an outside fact the hub hasn't seen yet isn't ready, whichever way it got here.
+    if (stage === 'ready' && this.unmetPrecondition(item)) stage = 'outside';
     const t = this.now();
     const fields = { ...patch, stage, stage_since: t, updated_at: t };
     const keys = Object.keys(fields);
@@ -570,6 +581,11 @@ export class Hub extends EventEmitter {
     if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);
     Object.assign(item, fields);
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
+  }
+
+  // The item's precondition (src/precondition.js), unless none or it has passed.
+  unmetPrecondition(item) {
+    return item.precondition && !json(item.last_check, {}).ok ? JSON.parse(item.precondition) : null;
   }
 
   patch(item, fields) {
@@ -908,6 +924,7 @@ export class Hub extends EventEmitter {
       size: item.size || undefined,
       summary: item.summary || undefined,
       detail: item.detail || undefined,
+      precondition: preconditionOut(item),
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
       issue: this.q('SELECT url FROM issues WHERE item_id = ?').get(item.id)?.url || undefined, // the GitHub issue it came from
       repo: this.repoOf(p, item) || undefined,
@@ -1284,6 +1301,10 @@ export class Hub extends EventEmitter {
     if (this.racing(item)) return this.joinRace(p, agent, item);
     if (item.stage === 'active') throw new UserError(`#${item.seq} is held by ${item.holder} (lease ends in ${dur(item.lease_until - t)})`, { status: 409, hint: 'Pick other work with next. If they go quiet, it returns to the queue automatically.' });
     if (item.stage === 'waiting') throw new UserError(`#${item.seq} is parked waiting for the human to answer a question`, { status: 409, hint: 'Pick other work with next.' });
+    if (item.stage === 'outside') {
+      const last = json(item.last_check, null);
+      throw new UserError(`#${item.seq} waits on something outside this hub: ${describePrecondition(JSON.parse(item.precondition))}${last ? ` (last check: ${last.detail})` : ' (not checked yet)'}`, { status: 409, hint: 'The hub checks it and makes the work ready when it passes. Pick other work with next.' });
+    }
     if (item.stage !== 'ready') throw new UserError(`#${item.seq} is ${item.stage}`, { status: 409 });
     const unmet = this.unmetDeps(item);
     if (unmet.length) throw new UserError(`#${item.seq} depends on unfinished work: ${unmet.map((d) => `#${d.seq}`).join(', ')}`, { status: 409, hint: 'Work on a dependency, or pick other work with next.' });
@@ -1907,16 +1928,18 @@ Object.assign(Hub.prototype, {
     const parent = args.parent ? this.item(p, args.parent) : null;
     const repo = this.checkRepo(p, args.repo);
     const human = isHuman(actor);
-    const stage = human ? (args.stage === 'proposed' ? 'proposed' : 'ready')
+    const pre = normPrecondition(args.precondition);
+    let stage = human ? (args.stage === 'proposed' ? 'proposed' : 'ready')
       : p.autonomy !== 'ask' && acceptance ? 'ready' : 'proposed';
+    if (stage === 'ready' && pre) stage = 'outside';
     const t = this.now();
     const seq = this.q('SELECT next_seq FROM projects WHERE id = ?').get(p.id).next_seq;
     this.q('UPDATE projects SET next_seq = next_seq + 1 WHERE id = ?').run(p.id);
     const needs = JSON.stringify(normTags(args.needs));
     const size = SIZES.includes(args.size) ? args.size : '';
     const issue = Number.isInteger(Number(args.issue)) && Number(args.issue) > 0 ? Number(args.issue) : null; // the GitHub issue it came from
-    const r =this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, stage_since, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, t, t, t);
+    const r =this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t);
     const item = this.itemById(Number(r.lastInsertRowid));
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
     this.setDeps(p, item, args.depends_on);
@@ -1974,7 +1997,20 @@ Object.assign(Hub.prototype, {
         changed.push(`repo → ${repo || this.remotesOf(p)[0] || 'unset'}`);
       }
     }
+    // A new precondition starts unchecked (checked at the next sweep); none at all releases waiting work.
+    let gate = null;
+    if (args.precondition !== undefined) {
+      const pre = normPrecondition(args.precondition);
+      const val = pre ? JSON.stringify(pre) : '';
+      if (val !== item.precondition) {
+        if (['active', 'verifying', 'landing', 'done', 'dropped'].includes(item.stage)) throw new UserError(`#${item.seq} is ${item.stage}; a precondition only holds work that hasn't started`, { status: 409 });
+        Object.assign(set, { precondition: val, last_check: '', check_fails: 0, next_check: this.now() });
+        changed.push(pre ? `waits on: ${describePrecondition(pre)}` : 'no longer waits on anything outside');
+        gate = pre ? (item.stage === 'ready' ? 'outside' : null) : (item.stage === 'outside' ? 'ready' : null);
+      }
+    }
     if (Object.keys(set).length) this.patch(item, set);
+    if (gate) this.move(item, 'ready', actor); // to outside, or out of it
     if (Array.isArray(args.depends_on)) { this.setDeps(p, item, args.depends_on); changed.push('dependencies'); }
     const human = isHuman(actor);
     const promote = item.stage === 'proposed' && !item.holder && item.acceptance && (human || p.autonomy !== 'ask') && args.ready !== false;
