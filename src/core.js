@@ -1497,10 +1497,8 @@ function prBody(p, item) {
   const builder = item.implementer || submitted?.actor || '';
   const model = builder ? this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, builder)?.model ?? '' : '';
   const evidence = json(submitted?.data, {}).evidence ?? [];
-  // The issues it closes on merge: the one it was created for, and every GitHub issue linked to it in this repository.
-  const created = json(this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'created' ORDER BY at LIMIT 1`).get(item.id)?.data, {}).issue;
-  const linked = this.q(`SELECT number FROM issues WHERE item_id = ? AND repo = ? AND state = 'open' ORDER BY number`).all(item.id, this.repoOf(p, item)).map((r) => r.number);
-  const fixes = [...new Set([created, ...linked].filter(Boolean))];
+  // The issues it closes on merge: every open GitHub issue linked to it (its import, merged duplicates) in this repository.
+  const fixes = this.q(`SELECT number FROM issues WHERE item_id = ? AND repo = ? AND state = 'open' ORDER BY number`).all(item.id, this.repoOf(p, item)).map((r) => r.number);
   return [
     `nuworq #${item.seq}: ${item.title}${link ? `\n${link}` : ''}`,
     [builder && `Built by ${builder}${model ? ` (${model})` : ''}`, accepted && `reviewed by ${accepted.actor}`].filter(Boolean).join(', ') + '.',
@@ -2009,8 +2007,7 @@ Object.assign(Hub.prototype, {
     this.q('UPDATE projects SET next_seq = next_seq + 1 WHERE id = ?').run(p.id);
     const needs = JSON.stringify(normTags(args.needs));
     const size = SIZES.includes(args.size) ? args.size : '';
-    const issue = Number.isInteger(Number(args.issue)) && Number(args.issue) > 0 ? Number(args.issue) : null; // the GitHub issue it came from
-    const r =this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at)
+    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t);
     const item = this.itemById(Number(r.lastInsertRowid));
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
@@ -2018,7 +2015,7 @@ Object.assign(Hub.prototype, {
     this.event(p, {
       item, actor, type: 'created',
       headline: human ? `${You(actor)} added #${seq}: ${title}` : `${actor} proposed #${seq}: ${title}`,
-      summary, data: { stage, ...(issue ? { issue } : {}) },
+      summary, data: { stage },
     });
     return item;
   },

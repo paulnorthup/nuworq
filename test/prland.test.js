@@ -81,7 +81,11 @@ describe('accepted remote work lands through a pull request the hub opens', () =
   test('accept opens exactly one PR with auto-merge (squash); it waits in landing, not as a land job', async () => {
     const w = world();
     w.hub.humanOp('demo', 'settings', { autonomy: 'full' });
-    w.hub.humanOp('demo', 'create', { title: 'Api endpoint', summary: 'Adds GET /things.', acceptance: 'x', issue: 42 });
+    w.hub.humanOp('demo', 'create', { title: 'Api endpoint', summary: 'Adds GET /things.', acceptance: 'x' });
+    // It came in from issue 42, linked the way intake links it (src/issues.js takeIssue).
+    const p = w.hub.project('demo');
+    w.hub.q(`INSERT INTO issues (project_id, repo, number, item_id, state, url, title, updated_at) VALUES (?, ?, 42, ?, 'open', '', 'Api endpoint', 0)`)
+      .run(p.id, w.hub.repoOf(p), w.item(1).id);
     const j = w.build('a1');
     w.op('r1', 'checkin');
     assert.equal(w.op('r1', 'next').mode, 'review');
