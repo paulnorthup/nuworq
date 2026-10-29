@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, normRemote, slugify } from './core.js';
-import { view, itemView, projectList } from './insight.js';
+import { view, itemView, projectList, homeView } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
@@ -613,6 +613,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
       }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
+      // The home (#124): what needs the viewer across every project, in one request; Mark all seen for all of them.
+      if (path === '/api/home' || path === '/api/home/seen') {
+        if (who.role === 'agent') return deny(403, 'the home is for people', 'Agents start with checkin; workers list projects with GET /api/projects.');
+        if (req.method === 'GET' && path === '/api/home') return send(200, homeView(hub, { viewer }));
+        if (req.method !== 'POST' || path !== '/api/home/seen') return deny(405, path === '/api/home' ? 'use GET' : 'use POST');
+        if (!PERSON_CAN[personRole]?.includes('seen')) return deny(403, `a ${personRole} can't mark projects seen`, 'Ask an owner of this workspace for a different role.');
+        for (const p of hub.projects()) hub.humanOp(p.slug, 'seen', {}, by);
+        return send(200, { ok: true });
+      }
       // Get started (#117): the viewer's checklist, until every step is done or they hide it; then never again.
       if (path === '/api/get-started' || path === '/api/get-started/hide') {
         const me = viewer ?? HUMAN;
