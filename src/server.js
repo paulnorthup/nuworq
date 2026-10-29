@@ -11,7 +11,7 @@ import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner } from './notify.js';
-import { receive } from './github.js';
+import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
@@ -119,6 +119,36 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const state = ok ? 'installed' : 'uninstalled';
     installs.set(hub, { app, at: Date.now(), state });
     return state;
+  };
+  // Accepted remote work lands through a pull request the hub opens, as the app (also one created since start).
+  const adopt = (hub, req, base) => {
+    if (app && hub._app !== app) { hub._app = app; hub.github = prClient(appOf(hub), { web: gh.web }); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
+  };
+  // After a webhook: issues that came in get their one comment; an install brings every open issue in. Both need the app.
+  const intake = async (hub, p, event, r, link) => {
+    if (!app || r.ignored || !(r.sync || event === 'issues')) return r;
+    try {
+      r.github = r.sync ? await syncIssues(hub, p, appOf(hub), r.sync, { link }) : await commentIssues(hub, p, appOf(hub), { link });
+    } catch (e) {
+      r.github = { error: e.message };
+    }
+    return r;
+  };
+  // The app's webhook: one address for every installation, signed with the app's secret. On a shared hub it
+  // reaches only the organization the delivery's installation is bound to.
+  const appHook = async (req, send, deny) => {
+    if (!app?.webhookSecret) return deny(404, 'this hub takes no GitHub App webhooks: it has no app, or no webhook secret for it', "Give the hub the app's webhook secret (NUWORQ_GITHUB_APP_WEBHOOK_SECRET; an app created in one click keeps it in its saved file), or use each project's own webhook (docs/DEPLOY.md).");
+    const event = req.headers['x-github-event'];
+    const hubsOf = (body) => (!spaces ? [target] : [spaces.get(spaces.directory.installation(body.installation?.id) ?? '')].filter(Boolean));
+    const hit = receiveApp(hubsOf, { secret: app.webhookSecret, event, signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) });
+    const projects = [];
+    for (const { hub, p, result } of hit) {
+      const base = spaces ? `/w/${encodeURIComponent(hub.workspace)}` : '';
+      adopt(hub, req, base);
+      const link = (item) => `${publicUrl || origin(req)}${base}/#/p/${encodeURIComponent(p.slug)}/${item.seq}`;
+      projects.push({ project: p.slug, ...(await intake(hub, p, event, result, link)) });
+    }
+    return send(200, { ok: true, ...(event === 'ping' ? { pong: true } : {}), projects });
   };
   // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
   const minted = new Map(); // `${agent}|${item id}|${repo}` → { token, expires_at, repo }
@@ -390,6 +420,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
         return res.end(`${sig}\n`);
       }
+      // GitHub's app deliveries name no workspace: the signature is their credential (as for project webhooks below).
+      if (req.method === 'POST' && path === '/api/hooks/github-app') return await appHook(req, send, deny);
       // Which hub: the only one, or the workspace this address names.
       let hub = target, base = '', ws = '';
       if (spaces) {
@@ -408,8 +440,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
       }
       const { authz, devices, clients } = scopeOf(hub);
-      // Accepted remote work lands through a pull request the hub opens, as the app (also one created since start).
-      if (app && hub._app !== app) { hub._app = app; hub.github = prClient(appOf(hub), { web: gh.web }); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
+      adopt(hub, req, base);
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.
@@ -428,18 +459,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'POST' && (hook = path.match(/^\/api\/hooks\/github\/([^/]+)$/))) {
         const slug = decodeURIComponent(hook[1]);
         const r = receive(hub, slug, { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) });
-        // Issues that came in get their one comment; an install brings every open issue in. Both need the app.
-        if (!r.ignored && (r.sync || req.headers['x-github-event'] === 'issues')) {
-          if (!app) return send(200, { ...r, sync: undefined, github: 'no GitHub App configured: issues that arrive by webhook come in, but the hub can neither list issues nor comment' });
-          const p = hub.project(slug);
-          const link = itemLink(req, p.slug);
-          try {
-            r.github = r.sync ? await syncIssues(hub, p, appOf(hub), r.sync, { link }) : await commentIssues(hub, p, appOf(hub), { link });
-          } catch (e) {
-            r.github = { error: e.message };
-          }
+        if (!app && !r.ignored && (r.sync || req.headers['x-github-event'] === 'issues')) {
+          return send(200, { ...r, sync: undefined, github: 'no GitHub App configured: issues that arrive by webhook come in, but the hub can neither list issues nor comment' });
         }
-        return send(200, r);
+        return send(200, await intake(hub, hub.project(slug), req.headers['x-github-event'], r, itemLink(req, slug)));
       }
 
       // Without login, only answer to loopback names: blocks DNS-rebinding from web pages you visit.
@@ -527,7 +550,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!exp || exp < Date.now() || spaces) return deny(400, 'this GitHub App link was already used, expired, or never started here', 'Start again from the hub: Connect an agent → Create GitHub App.');
         const a = await convert(url.searchParams.get('code') ?? '', { api: gh.api });
         if (appFile) writeFileSync(appFile, JSON.stringify(a, null, 2), { mode: 0o600 });
-        app = new GitHubApp({ id: a.id, key: a.key, slug: a.slug, client_id: a.client_id, client_secret: a.client_secret, api: gh.api, web: gh.web });
+        app = new GitHubApp({ id: a.id, key: a.key, slug: a.slug, client_id: a.client_id, client_secret: a.client_secret, webhook_secret: a.webhook_secret, api: gh.api, web: gh.web });
         for (const p of hub.projects()) {
           hub.event(p, { actor: 'github', type: 'github_app', headline: `The GitHub App ${a.slug || a.id} was created${a.owner ? ` on ${a.owner}` : ''}; install it on this project's repository so workers can push` });
           hub.changed(p);

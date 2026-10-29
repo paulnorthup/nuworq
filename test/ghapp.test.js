@@ -236,8 +236,8 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
       assert.match((await r.json()).hint, /NUWORQ_GITHUB_APP_ID/);
     } finally { plain.close(); }
     assert.equal(appFromEnv({}), null);
-    assert.deepEqual(appFromEnv({ NUWORQ_GITHUB_APP_ID: '7', NUWORQ_GITHUB_APP_KEY: 'pem', NUWORQ_GITHUB_APP_SLUG: 's' }), { id: '7', key: 'pem', slug: 's', client_id: '', client_secret: '' });
-    assert.deepEqual(appFromEnv({ NUWORQ_GITHUB_APP_ID: '7', NUWORQ_GITHUB_APP_KEY: 'pem', NUWORQ_GITHUB_APP_CLIENT_ID: 'Iv1.c', NUWORQ_GITHUB_APP_CLIENT_SECRET: 'cs' }), { id: '7', key: 'pem', slug: '', client_id: 'Iv1.c', client_secret: 'cs' });
+    assert.deepEqual(appFromEnv({ NUWORQ_GITHUB_APP_ID: '7', NUWORQ_GITHUB_APP_KEY: 'pem', NUWORQ_GITHUB_APP_SLUG: 's' }), { id: '7', key: 'pem', slug: 's', webhook_secret: '', client_id: '', client_secret: '' });
+    assert.deepEqual(appFromEnv({ NUWORQ_GITHUB_APP_ID: '7', NUWORQ_GITHUB_APP_KEY: 'pem', NUWORQ_GITHUB_APP_CLIENT_ID: 'Iv1.c', NUWORQ_GITHUB_APP_CLIENT_SECRET: 'cs', NUWORQ_GITHUB_APP_WEBHOOK_SECRET: 'whs' }), { id: '7', key: 'pem', slug: '', webhook_secret: 'whs', client_id: 'Iv1.c', client_secret: 'cs' });
   });
 });
 
