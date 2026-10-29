@@ -5,7 +5,7 @@ import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, skill, planSkill } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
@@ -16,7 +16,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'no-browser', 'no-mcp', 'early-access']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'early-access']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -166,6 +166,7 @@ function detectHas(flags) {
     onPath('codex') && 'codex-cli',
     onPath('opencode') && 'opencode',
     onPath('gh') && 'gh',
+    flags.browser && 'browser', // --browser: the worker gets one (workerSetup)
     ...(refs(flags.has) ?? []),
   ].filter(Boolean).map((t) => String(t).toLowerCase()))];
 }
@@ -181,6 +182,10 @@ function agentOf(flags) {
   }
   if (agent === 'opencode' && (typeof flags.model !== 'string' || !flags.model.includes('/'))) {
     throw new HubError('opencode needs a model: --model <provider>/<model>', { hint: 'e.g. --model ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is configured for you), or any provider in your opencode config. A ~27B tool-calling model is reliable; see docs/OPEN-WEIGHT.md.' });
+  }
+  // Codex would take the server the same way, but its sandbox keeps it from serving the app to look at.
+  if (flags.browser && agent !== 'claude') {
+    throw new HubError('--browser is for Claude workers only', { hint: 'Use --agent claude --browser, or leave out --browser.' });
   }
   // Through llm-proxy (--model proxy/<model>): it serves OpenAI Chat Completions only (its docs/API.md), so
   // only opencode can go through it. Claude Code speaks Anthropic Messages, Codex only the Responses API.
@@ -386,6 +391,18 @@ function codexProvider(flags) {
   return p && p !== 'openai' && /^[\w-]+$/.test(p) ? p : null;
 }
 
+// What a worker started with --browser gets: Playwright's MCP server (pinned) driving this machine's Google
+// Chrome, headless, with a throwaway profile kept in memory, opening local pages only. Playwright says that
+// origin list is no security boundary (redirects aren't checked). Screenshots go to a temp folder, never the worktree.
+// Its one tool that runs code in the server process, outside the allowlist, is denied (Playwright: "RCE-equivalent").
+const PLAYWRIGHT_MCP = '@playwright/mcp@0.0.83';
+const BROWSER_DENY = 'mcp__playwright__browser_run_code_unsafe';
+const browserServer = (name) => ({
+  command: 'npx',
+  args: ['-y', PLAYWRIGHT_MCP, '--headless', '--browser', 'chrome', '--isolated',
+    '--allowed-origins', 'http://127.0.0.1:*;http://localhost:*', '--output-dir', join(tmpdir(), 'nuworq-browser', name)],
+});
+
 // The shell command that gives a worker its worktree (detached at main, or at origin/main after a
 // fetch when there is an origin; reused if it exists) and starts the agent in it.
 // token: the agent token the worker gets when it runs (null: the hub needs none, or we only print).
@@ -400,6 +417,8 @@ function workerSetup(target, agent, flags, s, token = null) {
   const worktree = isRepo && !flags.here ? join(`${home}.worktrees`, name) : null;
   const main = isRepo ? mainBranch(home) : 'main';
   const cwd = worktree ?? home;
+  const has = (f) => existsSync(join(home, f));
+  const browser = agent === 'claude' && !!flags.browser; // --browser: a headless Chrome to look at UI work with
   const tags = detectHas(flags);
   const env = {
     NUWORQ_URL: s.url, NUWORQ_PROJECT: target.slug, NUWORQ_AGENT: name,
@@ -410,11 +429,14 @@ function workerSetup(target, agent, flags, s, token = null) {
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
     worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. To land accepted work, follow the hub's steps: rebase onto origin/${main}, run the checks, then \`git push origin <branch>:${main}\`. Never work in the main checkout, ${home}.`
       : worktree ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} with \`git switch -c <branch> ${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, and include the branch and commit in your evidence when you submit. Never work in the main checkout, ${home}.` : '',
+    browser && (has('bin/nuworq.js')
+      ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login.'
+      : 'To check UI work, start the app from this worktree on a free local port, in the background.'),
+    browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide, each in light and in dark mode (browser_resize, browser_emulate_media). Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
     'While you work, run only the tests that cover what you change; run the full test suite once, just before you submit.',
     'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
 
-  const has = (f) => existsSync(join(home, f));
   const run = [
     has('package.json') && ['Bash(npm test:*)', 'Bash(npm run:*)', 'Bash(node:*)'],
     (has('pyproject.toml') || has('requirements.txt') || has('setup.py')) && ['Bash(python3:*)', 'Bash(pytest:*)'],
@@ -428,8 +450,9 @@ function workerSetup(target, agent, flags, s, token = null) {
     // fast-forward-only by the repository's rules on GitHub (no force-push, no delete).
     origin && ['Bash(git fetch:*)', 'Bash(git push origin:*)'],
   ].filter(Boolean).flat();
-  const allow = flags.allow ? String(flags.allow) : ['mcp__nuworq', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(ls:*)', ...run].join(',');
-  const mcp = JSON.stringify({ mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env } } });
+  const allow = [...(flags.allow ? [String(flags.allow)] : ['mcp__nuworq', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(ls:*)', ...run]),
+    ...(browser ? ['mcp__playwright'] : [])].join(',');
+  const mcp = JSON.stringify({ mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env }, ...(browser ? { playwright: browserServer(name) } : {}) } });
 
   const lines = [];
   if (worktree && origin) lines.push(`git -C ${sq(home)} fetch -q origin`, `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
@@ -452,7 +475,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   const label = clientLabel(target.slug, name);
   if (agent === 'claude') {
     const headers = [process.env.ANTHROPIC_CUSTOM_HEADERS, `x-client-name: ${label}`].filter(Boolean).join('\n');
-    lines.push(`ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}`);
+    lines.push(`ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
@@ -1112,7 +1135,7 @@ ${bold('Setup')}
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
   guide [--via cli|tools]                the agent guide
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
-  worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags]
+  worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags] [--browser]
                                          start a headless worker where work is waiting (the hub routes it),
                                          in its own git worktree, a branch per item (--here: no worktree). Without
                                          --run it prints the command instead. opencode needs --model,
@@ -1122,13 +1145,16 @@ ${bold('Setup')}
                                          On a hub with login, --run needs --agent-token (or
                                          NUWORQ_AGENT_TOKEN): workers never get your own token.
                                          It reports what this machine has (macos/linux, docker, gpu;
-                                         add more with --has).
-  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--max-usd X] [--poll 30] [--has tags] [--until-idle]
+                                         add more with --has). --browser (Claude only): the worker gets a
+                                         headless Chrome (Playwright MCP, local pages only) to check UI
+                                         work with, and has "browser".
+  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--max-usd X] [--poll 30] [--has tags] [--browser] [--until-idle]
                                          keep up to N workers on waiting work in projects you opted in
                                          (UI: "Let nuworq run staff this project"); exits when the
                                          queue is empty. Logs: ~/.nuworq/logs. --max-usd stops launching
                                          once workers' reported spend reaches X (codex and local models
                                          report no cost, so they don't count against it).
+                                         --browser: each worker gets a browser, as with worker --browser.
   update                                 install the hub's newer nuworq now, if it is signed by the release key
                                          this install pinned (otherwise, or offline, it keeps this version and
                                          says why). Every command checks by itself at most every 10 minutes;

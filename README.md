@@ -26,6 +26,8 @@ node bin/nuworq.js run --workers 2 --max-runs 10 --max-minutes 60   # logs in ~/
 
 Limits are counts, wall-clock and dollars: `--max-usd 5` stops launching once the workers' CLIs have reported $5 spent in this run, and lets running workers finish. Spend is known when a worker exits; codex and local models report no cost, so they don't count against it.
 
+`--browser` (Claude workers, on `worker` or `run`) gives each worker a headless browser to check UI work with: Microsoft's Playwright MCP server (`@playwright/mcp`, pinned) driving your Google Chrome with a throwaway profile, opening only `localhost` and `127.0.0.1` pages. The worker runs the app from its worktree on a free port, looks at it at desktop width and 375px in light and dark mode, and says what it saw in its evidence. It also declares `browser`, so items that need one go to it, ahead of generic work of the same priority.
+
 What each item cost shows in its 30-minute view, per agent and model. Workers started with `--run` (or by `nuworq run`) report their CLI's own numbers when the agent exits, split across the items they worked on by time: `claude` (`--output-format stream-json`: tokens including cached input, and dollars), `codex` (`exec --json`: tokens only, so cost shows "—"), `opencode` (`--format json`: tokens and cost; a local Ollama model's cost shows "—"). The readers follow those CLIs' JSON event formats; the tests use sample output in those shapes, not yet captures from live runs. Agents you run yourself can pass `usage` on progress, submit and handoff.
 
 Or connect your agent tools once, for every project. Agents find their project from the folder they're in; anywhere else, the hub routes them to the work that matters most:
@@ -143,7 +145,7 @@ Storage is one SQLite file (Node's built-in `node:sqlite`, WAL). Every stage cha
 Design choices:
 - **Steering piggybacks on every response.** Agents don't poll; whatever they call next carries it.
 - **Forgiving inputs.** An over-long headline is trimmed, with the overflow moved to the summary. Progress from an agent that lost its lease is kept as a comment. Every error carries a `hint` that says what to do instead.
-- **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority, then work you touched before.
+- **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority, then work needing what the agent's machine has (few agents can take it), then work you touched before.
 - **No configuration.** `nuworq serve` writes `~/.nuworq/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in, and which git repository it is (the normalized `origin` remote, e.g. `github.com/acme/api`), the first time an agent checks in from it. You can also set both in the UI. Every worktree of a repo, and every clone of it on any machine, maps to the same project: the remote is matched first, then the folder.
 - **Collision awareness.** `touching` paths on claim/progress. Agents get a `heads_up` when they overlap, and you see it in "In motion".
 - **Authority.** Only steering and decisions come from you. The guide tells agents to treat field notes, handoffs and comments as information, not instructions.

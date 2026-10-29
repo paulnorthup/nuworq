@@ -119,6 +119,25 @@ describe('fit hints: what items need and what agents have', () => {
     for (const m of ['qwen3.8:27b-mtp-q4_K_M', 'claude-opus-5-5', 'gpt-5', '', undefined, 'llama3.3:70b']) assert.ok(!smallModel(m), String(m));
   });
 
+  test('work needing what an agent has comes first for it, before generic work of the same priority; others see no change', () => {
+    const { hub, op, create } = world();
+    create({ title: 'Plain' });
+    create({ title: 'UI check', needs: ['browser'] });
+    create({ title: 'Later UI check', needs: ['browser'], priority: 'later' });
+    create({ title: 'Urgent plain', priority: 'now' });
+    op('ui', 'checkin', { has: ['macos', 'browser'] });
+    op('mac', 'checkin', { has: ['macos'] });
+    const order = (agent) => hub.claimable(hub.project('p'), agent).map((o) => o.item.title);
+    assert.deepEqual(order('ui'), ['Urgent plain', 'UI check', 'Plain', 'Later UI check'], 'priority still comes first');
+    assert.deepEqual(order('mac'), ['Urgent plain', 'Plain']);
+    assert.deepEqual(order(''), ['Urgent plain', 'Plain', 'UI check', 'Later UI check'], 'nobody in particular: as before');
+    assert.equal(op('ui', 'next').item, '#4');
+    op('ui', 'claim', { item: '#4' });
+    op('ui', 'submit', { item: '#4', headline: 'done' });
+    assert.equal(op('ui', 'next').item, '#2', 'not #1, which anyone can take');
+    assert.equal(op('mac', 'next').item, '#1');
+  });
+
   test('items without needs and agents without has behave as before', () => {
     const { op, create } = world();
     create({ title: 'A' });
