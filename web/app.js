@@ -272,7 +272,7 @@ function project(v) {
     ${needsYou(v)}
     ${motion(v)}
     ${z() >= 1 ? worthKnowing(v) : ''}
-    ${z() >= 1 ? flow(v) : ''}
+    ${flow(v)}
     ${z() >= 1 ? upNext(v) : ''}
     ${z() >= 1 ? finished(v) : ''}
     ${z() >= 1 ? steering(v) : ''}
