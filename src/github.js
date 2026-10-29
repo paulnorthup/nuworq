@@ -1,7 +1,8 @@
 // GitHub webhooks: pull requests and CI results link to items without agents typing them.
-// POST /api/hooks/github/<project>, signed with the project's secret (X-Hub-Signature-256).
+// POST /api/hooks/github/<project>, signed with the project's secret (X-Hub-Signature-256), or the
+// GitHub App's webhook, POST /api/hooks/github-app, signed with the app's secret (receiveApp).
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { UserError } from './core.js';
+import { UserError, normRemote } from './core.js';
 import { issueEvent, issueComment, installedRepos } from './issues.js';
 
 const ACTOR = 'github';
@@ -222,9 +223,42 @@ export function receive(hub, slug, { event, signature, raw }) {
   if (!p || !verify(p.github_secret, raw, signature)) {
     throw new UserError('signature check failed', { status: 401, hint: "Set the same secret in the project (UI: GitHub, under the mission) and in the GitHub webhook's settings, with content type application/json." });
   }
-  let body;
-  try { body = JSON.parse(raw.toString('utf8')); } catch { throw new UserError('payload must be JSON', { hint: 'Set the webhook content type to application/json.' }); }
-  const result = hub.tx(() => {
+  const result = handle(hub, p, event, parse(raw));
+  if (!result.ignored && !result.pong) hub.changed(p);
+  return { ok: true, ...result };
+}
+
+// The app's webhook (POST /api/hooks/github-app), signed with the app's webhook secret: one address for
+// every repository the app is installed on, so no project needs a secret of its own. A delivery goes to
+// each project, on the hubs hubsOf(body) names, that has the repository it is about (an installation
+// event: any repository it lists). [{ hub, p, result }]; none when no project has it.
+export function receiveApp(hubsOf, { secret, event, signature, raw }) {
+  if (!verify(secret, raw, signature)) {
+    throw new UserError('signature check failed', { status: 401, hint: "The hub checks app deliveries with the app's webhook secret: the one in its saved app file, or NUWORQ_GITHUB_APP_WEBHOOK_SECRET. Set the same one in the app's settings on GitHub." });
+  }
+  const body = parse(raw);
+  const full = [body.repository, ...(body.repositories ?? []), ...(body.repositories_added ?? [])].map((r) => r?.full_name).filter(Boolean);
+  const named = new Set(full.map((f) => normRemote(`github.com/${f}`)));
+  const out = [];
+  if (event === 'ping' || !named.size) return out;
+  for (const hub of hubsOf(body)) {
+    for (const p of hub.projects()) {
+      if (!hub.remotesOf(p).some((r) => named.has(r))) continue;
+      const result = handle(hub, p, event, body);
+      if (!result.ignored) hub.changed(p);
+      out.push({ hub, p, result });
+    }
+  }
+  return out;
+}
+
+function parse(raw) {
+  try { return JSON.parse(raw.toString('utf8')); } catch { throw new UserError('payload must be JSON', { hint: 'Set the webhook content type to application/json.' }); }
+}
+
+// One genuine delivery, for one project.
+function handle(hub, p, event, body) {
+  return hub.tx(() => {
     if (event === 'ping') return { pong: true };
     if (event === 'pull_request') return pullRequest(hub, p, body);
     if (event === 'pull_request_review') return review(hub, p, body);
@@ -249,6 +283,4 @@ export function receive(hub, slug, { event, signature, raw }) {
     }
     return { ignored: event || 'unknown event' };
   });
-  if (!result.ignored && !result.pong) hub.changed(p);
-  return { ok: true, ...result };
 }

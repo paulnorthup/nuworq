@@ -22,7 +22,7 @@ export function appFromEnv(env = process.env) {
   const file = envVar('GITHUB_APP_KEY_FILE', env);
   const key = envVar('GITHUB_APP_KEY', env) || (file ? readFileSync(file, 'utf8') : '');
   return id && key ? {
-    id, key, slug: envVar('GITHUB_APP_SLUG', env) || '',
+    id, key, slug: envVar('GITHUB_APP_SLUG', env) || '', webhook_secret: envVar('GITHUB_APP_WEBHOOK_SECRET', env) || '',
     client_id: envVar('GITHUB_APP_CLIENT_ID', env) || '', client_secret: envVar('GITHUB_APP_CLIENT_SECRET', env) || '',
   } : null;
 }
@@ -35,17 +35,21 @@ export function appFromFile(file) {
   } catch { return null; }
 }
 
-// What the hub asks GitHub to create: the permissions work needs, nothing more. The webhook URL is
-// registered but off until the hub receives app webhooks; redirect_url brings the owner back here.
+// The events the app's webhook delivers (installation events always come): what per-project webhooks carried.
+export const APP_EVENTS = ['issues', 'issue_comment', 'pull_request', 'pull_request_review', 'check_suite', 'check_run'];
+
+// What the hub asks GitHub to create: the permissions work needs, nothing more. The webhook is on when
+// GitHub can reach the hub (not a loopback address); redirect_url brings the owner back here.
 export function manifest(base, name) {
+  const reachable = !/^https?:\/\/(localhost|127\.|\[::1\])/i.test(base);
   return {
     name: String(name).slice(0, 34), url: base, public: false,
-    hook_attributes: { url: `${base}/api/hooks/github-app`, active: false },
+    hook_attributes: { url: `${base}/api/hooks/github-app`, active: reachable },
     redirect_url: `${base}/api/github/app/callback`,
     // After installing (or changing which repositories it sees), GitHub sends the person back to the hub.
     setup_url: `${base}/#/`, setup_on_update: true,
     default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write' },
-    default_events: [],
+    default_events: reachable ? APP_EVENTS : [],
   };
 }
 
@@ -61,12 +65,14 @@ export async function convert(code, { api = 'https://api.github.com' } = {}) {
 
 export class GitHubApp {
   // id: the app's id. key: its private key (PEM). slug: its name in github.com/apps/<slug>, for install links.
-  // client_id, client_secret: its OAuth credentials, to learn who installed it (installedBy). api, web:
+  // client_id, client_secret: its OAuth credentials, to learn who installed it (installedBy). webhook_secret:
+  // what GitHub signs the app's webhook deliveries with (receiveApp in src/github.js). api, web:
   // GitHub's REST API and site (tests point them at a stub). now: for tests.
-  constructor({ id, key, slug = '', client_id = '', client_secret = '', api = 'https://api.github.com', web = 'https://github.com', now = () => Date.now() }) {
+  constructor({ id, key, slug = '', client_id = '', client_secret = '', webhook_secret = '', api = 'https://api.github.com', web = 'https://github.com', now = () => Date.now() }) {
     this.id = String(id);
     this.key = createPrivateKey(key);
     this.slug = slug;
+    this.webhookSecret = webhook_secret;
     this.clientId = client_id;
     this.clientSecret = client_secret;
     this.api = api.replace(/\/+$/, '');
