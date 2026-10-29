@@ -222,6 +222,21 @@ CREATE TABLE IF NOT EXISTS checks (
   at         INTEGER NOT NULL,
   PRIMARY KEY (project_id, sha, name)
 );
+
+-- Tokens and cost, per item (src/usage.js). cost_usd NULL: unknown (a local model), not free.
+CREATE TABLE IF NOT EXISTS usage (
+  id            INTEGER PRIMARY KEY,
+  project_id    INTEGER NOT NULL,
+  item_id       INTEGER,                      -- NULL: a run that held no item
+  agent         TEXT NOT NULL,
+  model         TEXT NOT NULL DEFAULT '',
+  input_tokens  INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd      REAL,
+  source        TEXT NOT NULL,                -- agent: reported by the agent | runner: read from its CLI
+  at            INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS usage_item ON usage (item_id);
 `;
 
 export function openDb(file) {

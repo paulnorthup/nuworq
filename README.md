@@ -26,6 +26,8 @@ node bin/nuworq.js run --workers 2 --max-runs 10 --max-minutes 60   # logs in ~/
 
 Limits are counts and wall-clock for now; dollar and token budgets come with cost tracking (#16).
 
+What each item cost shows in its 30-minute view, per agent and model. Workers started with `--run` (or by `nuworq run`) report their CLI's own numbers when the agent exits, split across the items they worked on by time: `claude` (`--output-format stream-json`: tokens including cached input, and dollars), `codex` (`exec --json`: tokens only, so cost shows "—"), `opencode` (`--format json`: tokens and cost; a local Ollama model's cost shows "—"). The readers follow those CLIs' JSON event formats; the tests use sample output in those shapes, not yet captures from live runs. Agents you run yourself can pass `usage` on progress, submit and handoff.
+
 Or connect your agent tools once, for every project. Agents find their project from the folder they're in; anywhere else, the hub routes them to the work that matters most:
 
 ```bash
@@ -117,6 +119,7 @@ src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
 src/names.js       the new names, and the old Trellis ones still read (env, config file, data folder)
 src/runner.js      nuworq run: which workers to start (pure plan) and the supervising loop
+src/usage.js       tokens and cost: reading them from agent CLIs' JSON output, splitting a run across items
 scripts/           live-opencode.mjs: an open-weight model works one item against a throwaway hub
 src/seed.js        the demo, replayed through real operations on a moved clock
 web/               the UI: no framework, one delegated event handler

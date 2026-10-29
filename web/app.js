@@ -340,6 +340,15 @@ function attemptsGrid(item, attempts, { keep = true } = {}) {
     </div>`).join('')}</div>`;
 }
 
+// What an item cost, per agent and model. A local model has tokens but no price: its cost is "—".
+function usageTable(u) {
+  const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+  const line = (r) => `${tok(r.input_tokens)} in · ${tok(r.output_tokens)} out · ${r.cost_usd == null ? '—' : `$${r.cost_usd.toFixed(2)}`}`;
+  return `<div class="d-sec"><div class="label">Usage</div><dl class="kv">
+    ${u.rows.map((r) => `<dt>${who(r.agent, r.model)} <span class="age">${esc(r.model || '?')}${r.source === 'agent' ? ' · reported' : ''}</span></dt><dd>${line(r)}</dd>`).join('')}
+    <dt><b>Total</b></dt><dd><b>${line(u.total)}</b></dd></dl></div>`;
+}
+
 function cardActions(a, hasMore, open, key) {
   if (a.kind === 'direction') {
     return `<div class="answer">
@@ -673,6 +682,7 @@ function renderDrawer() {
         ${it.depends_on.length ? `<dt>Depends on</dt><dd>${it.depends_on.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
       </dl></div>
     ${it.detail ? `<div class="d-sec"><div class="label">Detail</div>${md(it.detail)}</div>` : ''}
+    ${it.usage ? usageTable(it.usage) : ''}
     <div class="d-sec"><div class="label">Timeline <span class="count">${it.events.length} events</span></div><div class="timeline">
       ${it.events.map((e) => `<div class="tl t-${e.type}">
         <div class="meta">${who(e.actor)}<span>${esc(e.type.replace('_', ' '))}</span><span>${esc(e.ago)} ago</span></div>

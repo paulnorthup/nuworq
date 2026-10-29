@@ -499,6 +499,7 @@ export function itemView(hub, slug, ref) {
     court_totals: Object.fromEntries(Object.entries(courtTotals).map(([k, v]) => [k, dur(v)])),
     court_ms: courtTotals,
     agents: agentNames.map((n) => ({ name: n, model: models[n], provider: providerOf(models[n]) })),
+    usage: hub.usageOf(it), // null: nothing recorded
     events,
   };
 }

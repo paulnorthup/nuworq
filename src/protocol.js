@@ -6,6 +6,15 @@ const ITEM = s('Item reference, e.g. "#12" or "12".');
 const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Optional. Files or directories you are changing, e.g. ["src/db", "src/api/tags.ts"]. Other agents are warned before they collide with you, and you with them.' };
 const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Optional. What an agent\'s machine must have to do it, e.g. ["docker"], ["linux-vm"], ["browser"], ["gpu"]. Only agents that declared these tags (checkin `has`) are offered it.' };
 const SIZE = { type: 'string', enum: ['small', 'large'], description: 'Optional. "large": multi-step work; small models get it only when nothing else fits.' };
+const USAGE = {
+  type: 'object',
+  description: 'Optional. What this work cost so far, if your client tells you: tokens and dollars since your last report on this item. Leave it out if a runner started you; it records usage itself.',
+  properties: {
+    input_tokens: { type: 'integer' }, output_tokens: { type: 'integer' },
+    cost_usd: { type: 'number', description: 'Leave out when unknown (e.g. a local model).' },
+    model: s('The model id.'),
+  },
+};
 const LAYERS = {
   headline: s('One line, ≤100 characters, outcome first. What a busy person needs in three seconds.'),
   summary: s('Optional. The 5-minute version: a few short lines on what, why, and what is next.'),
@@ -38,7 +47,7 @@ export const OPS = [
   {
     name: 'progress',
     description: 'Report a meaningful milestone on an item you hold (not every step). Renews your lease and returns any steering from the human. During long stretches without a milestone, call it with no headline every ~15 minutes: a silent heartbeat that only renews the lease.',
-    params: { item: ITEM, ...LAYERS, headline: s('One line, ≤100 characters, outcome first. Omit for a silent heartbeat.'), touching: TOUCHING },
+    params: { item: ITEM, ...LAYERS, headline: s('One line, ≤100 characters, outcome first. Omit for a silent heartbeat.'), touching: TOUCHING, usage: USAGE },
     required: ['item'],
   },
   {
@@ -68,6 +77,7 @@ export const OPS = [
         description: 'Proof it meets done_means: tests run and their result, commands, commit hashes, PR links.',
         items: { type: 'object', properties: { label: s('What this shows, e.g. "npm test: 48 passed".'), url: s('Optional link.') }, required: ['label'] },
       },
+      usage: USAGE,
     },
     required: ['item', 'headline'],
   },
@@ -79,6 +89,7 @@ export const OPS = [
       headline: s('Where you left off, one line.'),
       summary: s('What is done, what is next, gotchas the next agent must know.'),
       detail: LAYERS.detail,
+      usage: USAGE,
     },
     required: ['item', 'headline'],
   },

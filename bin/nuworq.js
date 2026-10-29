@@ -244,8 +244,31 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
     return;
   }
   const { spawn } = await import('node:child_process');
-  const child = spawn('/bin/sh', ['-c', cmd], { stdio: 'inherit' });
-  await new Promise((done) => child.on('exit', (code) => { process.exitCode = code ?? 1; done(); }));
+  const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['inherit', 'pipe', 'inherit'] });
+  const usage = await tapUsage(child, agent, flags, (l) => console.log(l));
+  await new Promise((done) => child.on('close', (code) => { process.exitCode = code ?? 1; done(); }));
+  await reportUsage(s, token, target.slug, name, usage());
+}
+
+// Reads the agent's JSON output as it comes: what's worth reading goes to show(), usage is tallied.
+async function tapUsage(child, agent, flags, show) {
+  const { tap, lines } = await import('../src/usage.js');
+  const t = tap(agent, { model: flags.model ? String(flags.model) : '' });
+  const split = lines((l) => { const out = t.line(l); if (out != null) show(out); });
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (c) => split.write(c));
+  child.stdout.on('end', () => split.end());
+  return () => t.usage();
+}
+
+// Recorded against the items the worker held; a hub that can't be reached only costs the record.
+async function reportUsage(s, token, project, name, usage) {
+  if (!usage) return;
+  try {
+    await createClient({ url: s.url, token: token ?? s.token }).call('usage', { usage }, { agent: name, project });
+  } catch (e) {
+    console.error(dim(`Couldn't record ${name}'s usage: ${e.message}`));
+  }
 }
 
 const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
@@ -310,8 +333,10 @@ function workerSetup(target, agent, flags, s, token = null) {
   if (worktree && origin) lines.push(`git -C ${sq(home)} fetch -q origin`, `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
   else if (worktree) lines.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
   lines.push(`cd ${sq(cwd)}`);
+  // Started here (--run), the agent speaks JSON, so its usage can be read and recorded (src/usage.js tap).
+  const json = flags.run ? { claude: ' \\\n  --output-format stream-json --verbose', codex: ' --json', opencode: ' --format json' }[agent] : '';
   if (agent === 'claude') {
-    lines.push(`claude -p ${sq(task)} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}`);
+    lines.push(`claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
@@ -322,10 +347,10 @@ function workerSetup(target, agent, flags, s, token = null) {
       permission: { bash: { 'git push*': 'deny' } },
       ...(provider === 'ollama' ? { provider: { ollama: { npm: '@ai-sdk/openai-compatible', name: 'Ollama', options: { baseURL: process.env.OLLAMA_URL || 'http://localhost:11434/v1' }, models: { [rest.join('/')]: {} } } } } : {}),
     };
-    lines.push(`OPENCODE_CONFIG_CONTENT=${sq(JSON.stringify(config))} \\\n  opencode run -m ${sq(model)} ${sq(task)} < /dev/null`);
+    lines.push(`OPENCODE_CONFIG_CONTENT=${sq(JSON.stringify(config))} \\\n  opencode run${json} -m ${sq(model)} ${sq(task)} < /dev/null`);
   } else {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
-    lines.push(`codex exec -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)} \\\n  ${sq(task)}`);
+    lines.push(`codex exec${json} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)} \\\n  ${sq(task)}`);
   }
   return { name, worktree, main: origin ? `origin/${main}` : main, origin, cwd, cmd: lines.join(' && \\\n') };
 }
@@ -353,12 +378,16 @@ async function runCmd(flags) {
     const out = createWriteStream(log);
     // Its own process group, so stopping it stops the agent too, not just the shell.
     const child = spawn('/bin/sh', ['-c', cmd], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    child.stdout.pipe(out);
-    child.stderr.pipe(out);
+    const usage = await tapUsage(child, agent, flags, (l) => out.write(`${l}\n`));
+    child.stderr.pipe(out, { end: false });
     return {
       name, project: target.slug, where: dim(`${worktree ?? cwd}  log: ${log}`),
       kill: (sig) => { try { process.kill(-child.pid, sig); } catch {} },
-      exited: new Promise((done) => child.on('exit', (code, sig) => done(code ?? (sig ? `${sig}` : 1)))),
+      exited: new Promise((done) => child.on('close', async (code, sig) => {
+        out.end();
+        await reportUsage(s, token, target.slug, name, usage());
+        done(code ?? (sig ? `${sig}` : 1));
+      })),
     };
   };
 

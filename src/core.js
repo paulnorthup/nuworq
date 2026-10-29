@@ -4,8 +4,10 @@ import { EventEmitter } from 'node:events';
 import { openDb } from './db.js';
 import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror } from './git.js';
 import { findSecret } from './secrets.js';
+import { normUsage, split } from './usage.js';
 
 const GIT_CHECK = Symbol('git check');
+const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
 
 export class UserError extends Error {
   constructor(message, { status = 400, hint } = {}) {
@@ -394,6 +396,27 @@ export class Hub extends EventEmitter {
       WHERE project_id = ? AND name = ?`)
       .run(t, str(model), str(model), str(client), str(client), str(status), str(status), p.id, name);
     return { fresh: false, gap: t - a.last_seen, wasSignedOff: !!a.signed_off };
+  }
+
+  // usage: normalized (src/usage.js). The model falls back to the one the agent checked in with.
+  recordUsage(p, item, agent, u, source) {
+    const model = u.model || this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model || '';
+    this.q(`INSERT INTO usage (project_id, item_id, agent, model, input_tokens, output_tokens, cost_usd, source, at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, model, u.input_tokens, u.output_tokens, u.cost_usd, source, this.now());
+  }
+
+  // One item's usage, per agent and model, with totals. Cost stays null while any part of it is unknown.
+  usageOf(item) {
+    const rows = this.q(`SELECT agent, model, source, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+        SUM(cost_usd) AS cost_usd, COUNT(cost_usd) = COUNT(*) AS priced
+      FROM usage WHERE item_id = ? GROUP BY agent, model, source ORDER BY MIN(at)`).all(item.id)
+      .map(({ priced, ...r }) => ({ ...r, cost_usd: priced ? r.cost_usd : null }));
+    if (!rows.length) return null;
+    const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
+    return {
+      rows,
+      total: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cost_usd: rows.some((r) => r.cost_usd != null) ? rows.reduce((a, r) => a + (r.cost_usd ?? 0), 0) : null },
+    };
   }
 
   // Which tokens have spoken as this agent name: more than one is worth the human's eye.
@@ -812,8 +835,11 @@ export class Hub extends EventEmitter {
         });
       }
       this.caller = { powers };
+      // Checked before the op runs, so a malformed usage changes nothing.
+      const usage = USAGE_OPS.includes(op) ? normUsage(args?.usage) : null;
       let r;
       try { r = fn.call(this, p, agent, args ?? {}, presence); } finally { this.caller = null; }
+      if (usage) this.recordUsage(p, this.item(p, args.item), agent, usage, 'agent');
       // Steering rides along on every response, so it lands on the agent's very next call.
       if (op !== 'checkin') {
         const steers = this.pendingSteers(p, agent);
@@ -1477,6 +1503,23 @@ const AGENT_OPS = {
     this.q('UPDATE agents SET signed_off = 1, status = ? WHERE project_id = ? AND name = ?').run(note, p.id, agent);
     this.event(p, { actor: agent, type: 'signoff', headline: `${agent} signed off: ${note}`, summary: str(args.summary) });
     return { ok: true, handed_off: held.map((i) => `#${i.seq}`) };
+  },
+
+  // Not in the protocol: the runner posts what a worker's CLI said the run cost, once the agent exits.
+  // Worker names are unique per run, so everything on the record under the name is that run. It is
+  // split across the items the worker acted on, by how long it worked on each (first to last event).
+  usage(p, agent, args) {
+    const u = normUsage(args.usage);
+    if (!u) return { ok: true, recorded: [] };
+    const spans = this.q(`SELECT item_id, MIN(at) AS a, MAX(at) AS b FROM events
+      WHERE project_id = ? AND actor = ? AND item_id IS NOT NULL GROUP BY item_id ORDER BY MIN(at)`).all(p.id, agent);
+    if (!spans.length) {
+      this.recordUsage(p, null, agent, u, 'runner');
+      return { ok: true, recorded: [] };
+    }
+    const parts = split(u, spans.map((s) => Math.max(s.b - s.a, MIN)));
+    spans.forEach((s, k) => this.recordUsage(p, this.itemById(s.item_id), agent, parts[k], 'runner'));
+    return { ok: true, recorded: spans.map((s) => `#${this.itemById(s.item_id).seq}`) };
   },
 };
 
