@@ -9,7 +9,7 @@
 // database is copied aside, and a rollback puts the copy back: new code may migrate it on startup.
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, copyFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 const short = (sha) => String(sha).slice(0, 7);
@@ -79,6 +79,30 @@ export function backups({ dir, db = null, workspaces = null, keep = KEEP_BACKUPS
       return src;
     },
   };
+}
+
+// Exit code when the supervisor's own code changed under systemd: non-zero, so Restart=on-failure
+// brings it back on the new code (EX_TEMPFAIL).
+export const RESTART_EXIT = 75;
+
+// The supervisor's own code: what this process loaded, as opposed to the hub it runs as a child.
+// Static imports only, from the CLI and this file: the CLI's dynamic imports (server, insight, …)
+// load in the child. read(path) gives a file's text at some commit, or null if it has none.
+export const SELF_ROOTS = ['bin/nuworq.js', 'src/follow.js'];
+export function importGraph(read, roots = SELF_ROOTS) {
+  const seen = new Set();
+  const todo = [...roots];
+  while (todo.length) {
+    const file = todo.pop();
+    if (seen.has(file)) continue;
+    const text = read(file);
+    if (text == null) continue;
+    seen.add(file);
+    for (const m of text.matchAll(/^\s*(?:import|export)\s[^;]*?\sfrom\s+['"](\.\.?\/[^'"]+)['"]/gm)) {
+      todo.push(posix.normalize(posix.join(posix.dirname(file), m[1])));
+    }
+  }
+  return seen;
 }
 
 // The tests run without the hub's own NUWORQ_* / TRELLIS_* settings, so they can't reach its database or
@@ -220,6 +244,16 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
       });
       return `${r.item} in ${project}`;
     },
+    // Files of the supervisor's own code that differ between two commits (either side's import graph).
+    ownCode(from, to) {
+      const changed = git(repo, 'diff', '--name-only', from, to).split('\n').filter(Boolean);
+      const at = (sha) => (file) => { try { return git(repo, 'show', `${sha}:${file}`); } catch { return null; } };
+      const own = new Set([...importGraph(at(from)), ...importGraph(at(to))]);
+      return changed.filter((f) => own.has(f));
+    },
+    // Under systemd (it sets INVOCATION_ID), which restarts the supervisor when it exits non-zero.
+    supervised: () => !!process.env.INVOCATION_ID,
+    exit: (code) => process.exit(code),
     async close() {
       closed = true;
       if (testing) killGroup(testing, 'SIGTERM');
@@ -248,6 +282,28 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
     } catch (e) {
       log(`couldn't ask for ${branch} to be fixed (${e.message}); will ask again at the next red commit`);
     }
+  }
+
+  // The hub moved, but this process still runs the code it started with. If the move changed that code,
+  // under systemd: stop the hub, then exit so systemd starts the new supervisor (from the checkout the
+  // move updated). In a terminal: say so, once per commit.
+  async function ownCodeMoved(from, to) {
+    let files;
+    try {
+      files = sys.ownCode?.(from, to) ?? [];
+    } catch (e) {
+      return log(`couldn't tell whether follow's own code changed at ${short(to)} (${e.message.split('\n')[0]})`);
+    }
+    if (!files.length) return;
+    const what = `follow's own code changed at ${short(to)} (${files.join(', ')})`;
+    if (sys.supervised?.()) {
+      log(`${what}; stopping the hub so systemd restarts serve --follow on it`);
+      await close();
+      return sys.exit(RESTART_EXIT);
+    }
+    if (state.told === to) return;
+    state.told = to;
+    log(`${what}; restart serve --follow to run it`);
   }
 
   // Start on main as it is (there is nothing better to run), then test it like any other commit,
@@ -307,8 +363,10 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       sys.checkout(sha);
       await sys.start();
       if (await sys.healthy()) {
+        const was = state.running;
         Object.assign(state, { running: sha, good: sha, skip: null });
-        return log(`hub moved to ${short(sha)}`);
+        log(`hub moved to ${short(sha)}`);
+        return await ownCodeMoved(was, sha);
       }
       if (state.closed) return;
       log(`the hub didn't answer at ${short(sha)} within ${HEALTHY_MS / 1000}s; going back to ${short(state.good)} and not trying ${short(sha)} again`);

@@ -162,6 +162,8 @@ gh repo deploy-key add api.pub --repo acme/api --title "nuworq hub (read-only)" 
 ```
 No restart is needed: the next fetch uses it. In workspaces mode each workspace has its own folder, `keys/<workspace>/<host>/<owner>/<repo>`, as it does for mirrors.
 
+The supervisor itself keeps running the code it started with. When a move changes that code (`bin/nuworq.js`, `src/follow.js` or a module they import), under systemd it stops the hub and exits with code 75, and `Restart=on-failure` starts it again on the new code. In a terminal it logs one line asking you to restart `serve --follow`. This only works if the supervisor runs from a path the move updates: the unit runs `/opt/nuworq/bin/nuworq.js`, the checkout `--follow` fast-forwards. Don't point `ExecStart` at a copy elsewhere, or a restart brings back the old supervisor.
+
 ### Tokens
 ```bash
 nuworq token create <name> --role human|agent     # prints the token once
