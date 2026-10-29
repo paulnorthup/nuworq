@@ -348,6 +348,17 @@ a.rail-head { display: flex; align-items: center; justify-content: space-between
 a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 .ov-card .m.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ov-card.state-needs-you { border-left: 3px solid var(--you); }
+/* Get started: the steps from sign-in to a first landed item, checked off from the hub's state. */
+.get-started { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin-bottom: 18px; box-shadow: var(--shadow); }
+.get-started .gs-head { display: flex; align-items: baseline; gap: 10px; }
+.get-started .gs-head .link { margin-left: auto; }
+.get-started ol { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.get-started li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--muted); }
+.get-started li.next { color: var(--ink); font-weight: 500; }
+.get-started li.done .label { text-decoration: line-through; color: var(--faint); }
+.get-started .tick { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 11px; flex: none; }
+.get-started li.done .tick { background: var(--ok-tint); border-color: transparent; color: var(--ok); }
+.get-started li .copyable { flex-basis: 100%; margin-left: 28px; }
 
 /* ── modal & toast ── */
 #modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(20,20,18,.3); padding: 16px; }

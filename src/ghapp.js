@@ -131,6 +131,16 @@ export class GitHubApp {
     return all.sort((a, b) => a.repo.localeCompare(b.repo));
   }
 
+  // Whether the app is installed anywhere, or (repo given) on that one repository.
+  async installed(repo) {
+    if (!repo) {
+      const r = await this.call('GET', '/app/installations?per_page=1&page=1');
+      return r.status === 200 && Array.isArray(r.json) && r.json.length > 0;
+    }
+    const [, owner, name] = String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/) ?? [];
+    return !!owner && (await this.call('GET', `/repos/${owner}/${name}/installation`)).status === 200;
+  }
+
   installUrl() {
     return this.slug ? `https://github.com/apps/${this.slug}/installations/new` : 'the app\'s page on GitHub (Settings → Developer settings → GitHub Apps → Install App)';
   }

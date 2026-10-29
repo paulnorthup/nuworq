@@ -15,6 +15,7 @@ import { receive } from './github.js';
 import { syncIssues, commentIssues, closeLanded, closeStale } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
+import { getStarted, facts, finished, finish } from './getstarted.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -84,6 +85,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }).catch(() => {});
   };
   freshSlug();
+  // Whether the app reaches anything (Get started): installed anywhere on a single hub; on a workspaces hub,
+  // on one of the workspace's own repositories. Asked of GitHub at most once a minute per hub.
+  const installs = new WeakMap(); // hub → { app, at, state }
+  const appState = async (hub) => {
+    if (!app) return 'none';
+    const have = installs.get(hub);
+    if (have?.app === app && Date.now() - have.at < 60_000) return have.state;
+    let ok = false;
+    try {
+      if (!spaces) ok = await app.installed();
+      else for (const r of hub.projects().flatMap((p) => hub.remotesOf(p)).filter((r) => r.startsWith('github.com/')).slice(0, 10)) if ((ok = await app.installed(r))) break;
+    } catch { /* GitHub unreachable: not installed, as far as we can tell */ }
+    const state = ok ? 'installed' : 'uninstalled';
+    installs.set(hub, { app, at: Date.now(), state });
+    return state;
+  };
   // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
   const minted = new Map(); // `${agent}|${item id}|${repo}` → { token, expires_at, repo }
   // The hub's own address names no workspace: the base domain, or the public URL's host (e.g. auth.<base-domain>).
@@ -546,6 +563,20 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
       }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
+      // Get started (#117): the viewer's checklist, until every step is done or they hide it; then never again.
+      if (path === '/api/get-started' || path === '/api/get-started/hide') {
+        const me = viewer ?? HUMAN;
+        if (req.method === 'POST' && path === '/api/get-started/hide') return send(200, { ok: true, show: false, ...finish(hub.db, me, 'hidden', hub.now()) });
+        if (req.method !== 'GET' || path !== '/api/get-started') return deny(405, path === '/api/get-started' ? 'use GET' : 'use POST');
+        const gone = finished(hub.db, me);
+        if (gone) return send(200, { show: false, complete: gone.how === 'complete', ...gone, steps: [] });
+        const gs = getStarted(facts(hub, {
+          viewer: me, workspaces: !!spaces, app: await appState(hub), canCreateApp: !spaces && personRole === 'owner',
+          installUrl: app?.slug ? app.installUrl() : '', root: spaces ? authOrigin(req) : '',
+        }));
+        if (gs.complete) finish(hub.db, me, 'complete', hub.now());
+        return send(200, { show: !gs.complete, ...gs });
+      }
       // The repositories the GitHub App can see, to make a project from one. Single hub only: on a workspaces hub
       // the app is shared, and its installations would show other organizations' repository names.
       if (req.method === 'GET' && path === '/api/github/repos') {
