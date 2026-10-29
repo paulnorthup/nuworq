@@ -6,6 +6,7 @@ import { getStartedCard } from './getstarted.js';
 import { homePage, columns } from './home.js';
 import { missingProject } from './missing.js';
 import { errorText, errorHtml } from './errors.js';
+import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
@@ -210,6 +211,7 @@ function render({ force = false } = {}) {
     if (v == null) continue;
     if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
   }
+  markNew(document); // what just shipped (#130), redrawn with everything else
 }
 
 // ── routing ──
@@ -238,7 +240,7 @@ function renderRail() {
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
-    <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects">Projects${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
+    <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--faint)">No projects yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
@@ -920,6 +922,7 @@ function modal(html) {
   const m = $('#modal');
   m.innerHTML = `<div class="dialog">${html}</div>`;
   m.hidden = false;
+  markNew(m);
 }
 const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''; };
 
@@ -978,7 +981,7 @@ function appStatus(st) {
     : st.state === 'created'
       ? [`Created${st.slug ? ` as <code>${esc(st.slug)}</code>` : ''}, not installed: it can't reach any repository yet. GitHub asks which ones it may use.`, '<a class="btn primary small" href="api/github/install">Install</a>']
       : ['No GitHub App yet. Workers push through it: a token for one repository, for an hour, and nobody holds a lasting GitHub credential. GitHub asks you to confirm it, then where to install it.', '<a class="btn primary small" href="api/github/app/new">Create</a>'];
-  return `<div class="app-status ${st.state}"><span class="dot"></span><p>${line}</p>${act}</div>`;
+  return `<div class="app-status ${st.state}" data-new="github-app-status"><span class="dot"></span><p>${line}</p>${act}</div>`;
 }
 
 // Back from installing the app (GitHub sends the person to the app's setup_url with setup_action): say where
@@ -1373,6 +1376,13 @@ document.addEventListener('keydown', (e) => {
   }
 });
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+// Using a feature tagged "new" (#130) retires its tag for this viewer.
+for (const type of ['click', 'focusin']) {
+  document.addEventListener(type, (e) => {
+    const el = e.target.closest?.('.is-new');
+    if (el) { markSeen(el.dataset.new); markNew(document); }
+  }, true);
+}
 // The rail re-renders on every update: the organization menu stays as the person left it.
 document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) S.orgOpen = e.target.open; }, true);
 
