@@ -49,6 +49,7 @@ export const AUTONOMY = {
 };
 
 const PRIORITY_RANK = { now: 0, soon: 1, later: 2 };
+export const MAX_RACE = 4;
 
 // whose court a stage is in, given the project's autonomy
 export function courtOf(stage, autonomy) {
@@ -198,6 +199,7 @@ export class Hub extends EventEmitter {
       project: o.p.slug, name: o.p.name, path: o.p.path || null,
       mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.item.priority,
       waiting: dur(this.now() - o.item.stage_since),
+      slots: this.racing(o.item) ? this.openSlots(o.item) : undefined, // a race with open slots can take that many workers
     }));
   }
 
@@ -228,6 +230,8 @@ export class Hub extends EventEmitter {
     this.q(`UPDATE items SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
       .run(...keys.map((k) => fields[k] ?? null), item.id);
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
+    // Leaving the race (back to the queue, done, dropped) closes this round's attempts.
+    if (item.race > 1 && !['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);
     Object.assign(item, fields);
   }
 
@@ -302,7 +306,70 @@ export class Hub extends EventEmitter {
   }
 
   heldBy(p, agent) {
-    return this.q(`SELECT * FROM items WHERE project_id = ? AND holder = ? ORDER BY seq`).all(p.id, agent);
+    return this.q(`SELECT * FROM items WHERE project_id = ? AND (holder = ?
+        OR id IN (SELECT item_id FROM attempts WHERE agent = ? AND stage = 'active' AND closed = 0)) ORDER BY seq`).all(p.id, agent, agent);
+  }
+
+  // ── races: an item with race > 1 is attempted by several agents at once, each with its own lease ──
+  // Race items never use items.holder while ready or active; their leases live in attempts.
+
+  racing(item) {
+    return item.race > 1 && ['ready', 'active'].includes(item.stage);
+  }
+
+  attemptsOf(item) {
+    return this.q('SELECT * FROM attempts WHERE item_id = ? AND closed = 0 ORDER BY id').all(item.id);
+  }
+
+  attemptOf(item, agent) {
+    return this.q(`SELECT * FROM attempts WHERE item_id = ? AND agent = ? AND stage = 'active' AND closed = 0`).get(item.id, agent);
+  }
+
+  openSlots(item) {
+    return item.race - this.attemptsOf(item).filter((a) => a.stage !== 'abandoned').length;
+  }
+
+  holds(item, agent) {
+    return item.holder === agent || (this.racing(item) && !!this.attemptOf(item, agent));
+  }
+
+  // Racers can't review the race they ran.
+  implementedBy(item, agent) {
+    return item.implementer === agent ||
+      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent = ? AND stage = 'submitted' AND closed = 0`).get(item.id, agent);
+  }
+
+  leaseOf(item, agent) {
+    return this.racing(item) ? this.attemptOf(item, agent)?.lease_until ?? null : item.lease_until;
+  }
+
+  renew(item, agent) {
+    const until = this.now() + LEASE_MS;
+    if (this.racing(item)) this.q('UPDATE attempts SET lease_until = ? WHERE id = ?').run(until, this.attemptOf(item, agent).id);
+    else this.patch(item, { lease_until: until });
+  }
+
+  endAttempt(item, agent, stage, submission = null) {
+    this.q(`UPDATE attempts SET stage = ?, lease_until = NULL, touching = '[]', submission = ? WHERE id = ?`)
+      .run(stage, submission, this.attemptOf(item, agent).id);
+  }
+
+  // When no attempt is still running, the race is over: to review if anyone submitted, else back to the queue.
+  settleRace(p, item, actor) {
+    if (item.race <= 1 || item.stage !== 'active') return;
+    const all = this.attemptsOf(item);
+    if (all.some((a) => a.stage === 'active')) return;
+    const subs = all.filter((a) => a.stage === 'submitted');
+    if (subs.length) {
+      this.move(item, 'verifying', actor, { holder: null, lease_until: null, implementer: subs.at(-1).agent, touching: '[]' });
+      this.event(p, {
+        item, actor: SYSTEM, type: 'race_finished',
+        headline: `The race on #${item.seq} is over: ${subs.length === 1 ? '1 submission' : `${subs.length} submissions`} to review (${subs.map((a) => a.agent).join(', ')})`,
+      });
+    } else {
+      this.move(item, 'ready', actor, { holder: null, lease_until: null, touching: '[]' });
+      this.event(p, { item, actor: SYSTEM, type: 'race_finished', headline: `Every attempt on #${item.seq} was abandoned; it's back in the queue` });
+    }
   }
 
   // Steering an agent has not acknowledged: recent project-wide steers, plus steers on items it holds.
@@ -310,22 +377,31 @@ export class Hub extends EventEmitter {
     return this.q(`SELECT n.*, i.seq AS item_seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
       WHERE n.project_id = ? AND n.kind = 'steer' AND n.active = 1
         AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.note_id = n.id AND a.agent = ?)
-        AND ((n.item_id IS NULL AND n.target IS NULL AND n.at > ?) OR i.holder = ? OR n.target = ?)
-      ORDER BY n.at`).all(p.id, agent, this.now() - STEER_TTL, agent, agent)
+        AND ((n.item_id IS NULL AND n.target IS NULL AND n.at > ?) OR i.holder = ? OR n.target = ?
+          OR EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = n.item_id AND a.agent = ? AND a.stage = 'active' AND a.closed = 0))
+      ORDER BY n.at`).all(p.id, agent, this.now() - STEER_TTL, agent, agent, agent)
       .map((n) => ({ steer: n.id, about: n.item_seq ? `#${n.item_seq}` : 'whole project', from: n.author, body: n.body, ago: dur(this.now() - n.at) }));
   }
 
   // What every other agent is doing right now, and where in the code.
   others(p, agent) {
-    return this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'active' AND holder IS NOT NULL AND holder != ? ORDER BY seq`).all(p.id, agent ?? '')
+    const held = this.q(`SELECT seq, title, holder AS agent, touching FROM items WHERE project_id = ? AND stage = 'active' AND holder IS NOT NULL AND holder != ?`).all(p.id, agent ?? '');
+    const racers = this.q(`SELECT i.seq, i.title, a.agent, a.touching FROM attempts a JOIN items i ON i.id = a.item_id
+      WHERE i.project_id = ? AND i.stage = 'active' AND a.stage = 'active' AND a.closed = 0 AND a.agent != ?`).all(p.id, agent ?? '');
+    return [...held, ...racers].sort((a, b) => a.seq - b.seq)
       .map((i) => {
         const t = json(i.touching, []);
-        return { agent: i.holder, item: `#${i.seq}`, title: i.title, touching: t.length ? t : undefined };
+        return { agent: i.agent, item: `#${i.seq}`, title: i.title, touching: t.length ? t : undefined };
       });
   }
 
+  // What this agent says it is changing on the item: its own attempt's paths, on a race.
+  touchingOf(item, agent) {
+    return json(this.racing(item) ? this.attemptOf(item, agent)?.touching : item.touching, []);
+  }
+
   headsUp(p, agent, item) {
-    const mine = json(item.touching, []);
+    const mine = this.touchingOf(item, agent);
     if (!mine.length) return undefined;
     const clashes = [];
     for (const o of this.others(p, agent)) {
@@ -335,9 +411,10 @@ export class Hub extends EventEmitter {
     return clashes.length ? `${clashes.join('; ')}. Keep your changes there small and coordinate with a comment on their item.` : undefined;
   }
 
-  setTouching(item, v) {
+  setTouching(item, v, agent) {
     if (v == null) return;
-    this.patch(item, { touching: JSON.stringify(normPaths(v)) });
+    if (this.racing(item)) this.q('UPDATE attempts SET touching = ? WHERE id = ?').run(JSON.stringify(normPaths(v)), this.attemptOf(item, agent).id);
+    else this.patch(item, { touching: JSON.stringify(normPaths(v)) });
   }
 
   fieldNotes(p) {
@@ -361,6 +438,9 @@ export class Hub extends EventEmitter {
     const steers = this.q(`SELECT n.* FROM notes n WHERE n.item_id = ? AND n.kind = 'steer' AND n.active = 1
         AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.note_id = n.id AND a.agent = ?) ORDER BY n.at`).all(item.id, agent ?? '');
     const handoff = json(item.handoff, null);
+    const lease = this.leaseOf(item, agent);
+    const touching = this.touchingOf(item, agent);
+    const racers = item.race > 1 ? this.attemptsOf(item) : [];
     return {
       item: `#${item.seq}`,
       title: item.title,
@@ -369,8 +449,14 @@ export class Hub extends EventEmitter {
       summary: item.summary || undefined,
       detail: item.detail || undefined,
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
-      lease: item.holder ? { holder: item.holder, expires_in: dur(item.lease_until - this.now()) } : undefined,
-      touching: json(item.touching, []).length ? json(item.touching, []) : undefined,
+      lease: item.holder ? { holder: item.holder, expires_in: dur(item.lease_until - this.now()) }
+        : this.racing(item) && lease ? { holder: agent, expires_in: dur(lease - this.now()) } : undefined,
+      race: item.race > 1 ? {
+        slots: item.race,
+        attempts: racers.length ? racers.map((a) => `${a.agent}${a.model ? ` (${a.model})` : ''}: ${a.stage}`) : undefined,
+        note: 'Several agents attempt this item at once, each on its own. Work independently; the reviewer compares the submissions.',
+      } : undefined,
+      touching: touching.length ? touching : undefined,
       attempt: item.attempts || undefined,
       last_handoff: handoff ? { by: handoff.by, kind: handoff.kind, headline: handoff.headline, summary: handoff.summary || undefined, ago: dur(this.now() - handoff.at) } : undefined,
       parent: parent ? `#${parent.seq} ${parent.title}` : undefined,
@@ -392,9 +478,26 @@ export class Hub extends EventEmitter {
     const t = this.now();
     const expired = this.q(`SELECT i.*, p.slug FROM items i JOIN projects p ON p.id = i.project_id
       WHERE i.holder IS NOT NULL AND i.lease_until < ?`).all(t);
-    if (!expired.length) return 0;
+    const lapsed = this.q(`SELECT * FROM attempts WHERE stage = 'active' AND closed = 0 AND lease_until < ?`).all(t);
+    if (!expired.length && !lapsed.length) return 0;
     const touched = new Map();
     this.tx(() => {
+      // A lapsed race attempt frees its slot; the other racers carry on.
+      for (const a of lapsed) {
+        const it = this.itemById(a.item_id);
+        const p = this.q('SELECT * FROM projects WHERE id = ?').get(it.project_id);
+        touched.set(p.id, p);
+        const last = this.q(`SELECT headline FROM events WHERE item_id = ? AND actor = ? ORDER BY at DESC LIMIT 1`).get(it.id, a.agent);
+        this.q(`UPDATE attempts SET stage = 'abandoned', lease_until = NULL, touching = '[]' WHERE id = ?`).run(a.id);
+        this.patch(it, { last_worker: a.agent, stalls: it.stalls + 1 });
+        this.event(p, {
+          item: it, actor: SYSTEM, type: 'lease_expired',
+          headline: `${a.agent} went quiet on #${it.seq}; their race slot is open again`,
+          summary: last ? `Their last update: "${last.headline}"` : 'They left no updates.',
+          data: { agent: a.agent },
+        });
+        this.settleRace(p, it, SYSTEM);
+      }
       for (const it of expired) {
         const p = this.q('SELECT * FROM projects WHERE id = ?').get(it.project_id);
         touched.set(p.id, p);
@@ -421,7 +524,7 @@ export class Hub extends EventEmitter {
       }
     });
     for (const p of touched.values()) this.changed(p);
-    return expired.length;
+    return expired.length + lapsed.length;
   }
 
   // ── agent operations ────────────────────────────────────────────────────
@@ -531,7 +634,7 @@ export class Hub extends EventEmitter {
         note: (e.type === 'sent_back' ? json(this.itemById(e.item_id).handoff, {})?.headline : '') || undefined,
       })) : undefined,
       field_notes: (() => { const n = this.fieldNotes(p); return n.length ? n : undefined; })(),
-      holding: holding.length ? holding.map((i) => ({ item: `#${i.seq}`, title: i.title, stage: i.stage, lease_expires_in: dur(i.lease_until - this.now()) })) : undefined,
+      holding: holding.length ? holding.map((i) => ({ item: `#${i.seq}`, title: i.title, stage: i.stage, lease_expires_in: dur(this.leaseOf(i, agent) - this.now()) })) : undefined,
       others_working: (() => { const o = this.others(p, agent); return o.length ? o.map(fmtOther) : undefined; })(),
       board,
       next,
@@ -543,16 +646,26 @@ export class Hub extends EventEmitter {
   pick(p, agent) {
     if (p.autonomy === 'full') {
       const review = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
-          AND COALESCE(implementer, '') != ? ORDER BY stage_since`).get(p.id, agent);
+          AND COALESCE(implementer, '') != ?
+          AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
+        ORDER BY stage_since`).get(p.id, agent, agent);
       if (review) return { mode: 'review', item: review };
     }
     if (p.parked) return null;
     const ready = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
       .filter((i) => !this.unmetDeps(i).length)
       .map((item) => ({ mode: 'work', item }));
+    // Races with an open slot this agent hasn't taken a turn in. A slot goes to a different model first:
+    // an agent on a model already in the race sees it after other work of the same priority.
+    const model = agent ? this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model ?? '' : '';
+    const racing = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'active' AND race > 1`).all(p.id)
+      .map((item) => ({ item, runs: this.attemptsOf(item) }))
+      .filter(({ item, runs }) => this.openSlots(item) > 0 && !runs.some((a) => a.agent === agent))
+      .map(({ item, runs }) => ({ mode: 'work', item, sameModel: !!model && runs.some((a) => a.stage !== 'abandoned' && a.model === model) }));
     const shape = this.shapeable(p).map((item) => ({ mode: 'shape', item }));
-    const all = [...ready, ...shape].sort((a, b) =>
+    const all = [...ready, ...racing, ...shape].sort((a, b) =>
       PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
+      !!a.sameModel - !!b.sameModel ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
       (b.item.last_worker === agent) - (a.item.last_worker === agent) ||
       a.item.seq - b.item.seq);
@@ -563,7 +676,7 @@ export class Hub extends EventEmitter {
     const t = this.now();
     if (item.stage === 'verifying') {
       if (p.autonomy !== 'full') throw new UserError(`#${item.seq} is waiting for the human to verify it`, { hint: 'Pick other work with next.' });
-      if (item.implementer === agent) throw new UserError(`You can't review your own work (#${item.seq})`, { hint: 'Another agent or the human will review it. Pick other work with next.' });
+      if (this.implementedBy(item, agent)) throw new UserError(`You can't review your own work (#${item.seq})`, { hint: 'Another agent or the human will review it. Pick other work with next.' });
       if (item.holder && item.holder !== agent) throw new UserError(`${item.holder} is already reviewing #${item.seq}`, { hint: 'Pick other work with next.' });
       this.patch(item, { holder: agent, lease_until: t + LEASE_MS });
       this.event(p, { item, actor: agent, type: 'review_started', headline: `${agent} started reviewing #${item.seq}` });
@@ -586,6 +699,7 @@ export class Hub extends EventEmitter {
       this.setStatus(p, agent, `Shaping #${item.seq}: ${item.title}`);
       return;
     }
+    if (this.racing(item)) return this.joinRace(p, agent, item);
     if (item.stage === 'active') throw new UserError(`#${item.seq} is held by ${item.holder} (lease ends in ${dur(item.lease_until - t)})`, { status: 409, hint: 'Pick other work with next. If they go quiet, it returns to the queue automatically.' });
     if (item.stage === 'waiting') throw new UserError(`#${item.seq} is parked waiting for the human to answer a question`, { status: 409, hint: 'Pick other work with next.' });
     if (item.stage !== 'ready') throw new UserError(`#${item.seq} is ${item.stage}`, { status: 409 });
@@ -599,11 +713,38 @@ export class Hub extends EventEmitter {
     this.setStatus(p, agent, `Working on #${item.seq}: ${item.title}`);
   }
 
+  // Take a slot in a race: an attempt with its own lease. The first one moves the item to active.
+  joinRace(p, agent, item) {
+    const t = this.now();
+    if (this.attemptOf(item, agent)) {
+      this.renew(item, agent);
+      return;
+    }
+    if (p.parked) throw new UserError(`${p.name} is parked: the human has paused new work`, { status: 409, hint: 'Finish or hand off what you hold, then signoff.' });
+    const unmet = item.stage === 'ready' ? this.unmetDeps(item) : [];
+    if (unmet.length) throw new UserError(`#${item.seq} depends on unfinished work: ${unmet.map((d) => `#${d.seq}`).join(', ')}`, { status: 409, hint: 'Work on a dependency, or pick other work with next.' });
+    if (this.openSlots(item) < 1) {
+      throw new UserError(`All ${item.race} race slots on #${item.seq} are taken (${this.attemptsOf(item).filter((a) => a.stage !== 'abandoned').map((a) => a.agent).join(', ')})`, {
+        status: 409, hint: 'Pick other work with next. If a racer goes quiet, its slot opens again.',
+      });
+    }
+    const model = this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model ?? '';
+    this.q('INSERT INTO attempts (item_id, agent, model, lease_until, at) VALUES (?, ?, ?, ?, ?)').run(item.id, agent, model, t + LEASE_MS, t);
+    const fields = { last_worker: agent, attempts: item.attempts + 1 };
+    if (item.stage === 'ready') this.move(item, 'active', agent, fields);
+    else this.patch(item, fields);
+    const slot = item.race - this.openSlots(item);
+    this.event(p, { item, actor: agent, type: 'claimed', headline: `${agent} joined the race on #${item.seq} (slot ${slot} of ${item.race})`, data: { model } });
+    this.setStatus(p, agent, `Racing on #${item.seq}: ${item.title}`);
+  }
+
   // Find an item this agent is allowed to write to; be helpful when it isn't.
   heldItem(p, agent, ref, verb) {
     const item = this.item(p, ref);
-    if (item.holder === agent) return item;
-    const why = item.holder ? `${item.holder} holds it now` : `it is ${item.stage} and nobody holds it`;
+    if (this.holds(item, agent)) return item;
+    const why = item.holder ? `${item.holder} holds it now`
+      : this.racing(item) ? `you have no running attempt in the race on it`
+      : `it is ${item.stage} and nobody holds it`;
     throw new UserError(`You don't hold #${item.seq} (${why}), so you can't ${verb} it`, {
       status: 409,
       hint: item.stage === 'ready' ? `Claim it first: claim #${item.seq}.` : 'Your lease may have expired. Call next for other work, or comment to add your notes to the record.',
@@ -689,7 +830,7 @@ const AGENT_OPS = {
   claim(p, agent, args) {
     const item = this.item(p, args.item);
     this.claimItem(p, agent, item);
-    if (item.stage === 'active') this.setTouching(item, args.touching);
+    if (item.stage === 'active') this.setTouching(item, args.touching, agent);
     return {
       ...this.context(p, item, agent),
       hint: item.stage === 'verifying'
@@ -702,22 +843,22 @@ const AGENT_OPS = {
 
   progress(p, agent, args) {
     const item = this.item(p, args.item);
-    if (!str(args.headline) && item.holder === agent) {
+    if (!str(args.headline) && this.holds(item, agent)) {
       // A silent heartbeat: renews the lease, adds nothing to the record.
-      this.patch(item, { lease_until: this.now() + LEASE_MS });
-      this.setTouching(item, args.touching);
+      this.renew(item, agent);
+      this.setTouching(item, args.touching, agent);
       return { ok: true, lease_expires_in: dur(LEASE_MS), heads_up: this.headsUp(p, agent, item) };
     }
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
-    if (item.holder !== agent) {
+    if (!this.holds(item, agent)) {
       // Don't lose the work: keep the note on the record, then explain.
       this.event(p, { item, actor: agent, type: 'comment', headline, summary, detail });
       throw new UserError(`You no longer hold #${item.seq}${item.holder ? ` (${item.holder} does)` : ''}. Your update was saved as a comment.`, {
         status: 409, hint: 'Your lease probably expired. Call next to continue with whatever is most useful.',
       });
     }
-    this.patch(item, { lease_until: this.now() + LEASE_MS });
-    this.setTouching(item, args.touching);
+    this.renew(item, agent);
+    this.setTouching(item, args.touching, agent);
     this.event(p, { item, actor: agent, type: 'progress', headline, summary, detail });
     this.setStatus(p, agent, `#${item.seq}: ${headline}`);
     return { ok: true, lease_expires_in: dur(LEASE_MS), heads_up: this.headsUp(p, agent, item) };
@@ -734,7 +875,8 @@ const AGENT_OPS = {
       JSON.stringify(options), blocking ? 1 : 0, assumption, this.now());
     const id = Number(r.lastInsertRowid);
     let parked = false;
-    if (blocking && item && ['active', 'ready'].includes(item.stage)) {
+    if (blocking && item && ['active', 'ready'].includes(item.stage) && !this.racing(item)) {
+      // A race doesn't park for one racer's question: the others keep going.
       this.move(item, 'waiting', agent, { holder: null, lease_until: null, last_worker: item.holder || item.last_worker });
       parked = true;
     } else if (blocking && item?.stage === 'proposed' && item.holder === agent) {
@@ -767,20 +909,37 @@ const AGENT_OPS = {
       // Agents sometimes put the result where the link goes ("unit tests|2 passed"): keep it as text, not a broken link.
       .map((e) => (e.url && !/^https?:\/\//i.test(e.url) ? { label: e.label === e.url ? e.label : `${e.label}: ${e.url}` } : e))
       .filter((e) => e.label);
+    const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
+    const nudge = evidence.length ? '' : 'Next time attach evidence (tests run, commands, commit or PR links); it makes verification fast. ';
+    if (this.racing(item)) {
+      const id = this.event(p, { item, actor: agent, type: 'submitted', headline, summary, detail, data: { evidence, race: true } });
+      this.endAttempt(item, agent, 'submitted', id);
+      this.patch(item, { last_worker: agent });
+      this.setStatus(p, agent, `Submitted an attempt on #${item.seq}`);
+      this.settleRace(p, item, agent);
+      return {
+        ok: true,
+        hint: `${item.stage === 'verifying' ? `The race is over and #${item.seq} is verifying. ${reviewer}` : `Your attempt is in; #${item.seq} goes to review when the other racers finish.`} ${nudge}Call next for more work.`,
+      };
+    }
     this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
     this.event(p, { item, actor: agent, type: 'submitted', headline, summary, detail, data: { evidence } });
     this.setStatus(p, agent, `Submitted #${item.seq}`);
-    const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
     return {
       ok: true,
-      hint: `#${item.seq} is verifying. ${reviewer} ${evidence.length ? '' : 'Next time attach evidence (tests run, commands, commit or PR links); it makes verification fast. '}Call next for more work.`,
+      hint: `#${item.seq} is verifying. ${reviewer} ${nudge}Call next for more work.`,
     };
   },
 
   handoff(p, agent, args) {
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
     const item = this.heldItem(p, agent, args.item, 'hand off');
-    if (item.stage === 'verifying') {
+    const racing = this.racing(item);
+    if (racing) {
+      // Giving up a race slot: it opens for someone else, and the note stays for whoever takes it.
+      this.endAttempt(item, agent, 'abandoned');
+      this.patch(item, { last_worker: agent, handoff: JSON.stringify({ kind: 'handoff', by: agent, headline, summary, at: this.now() }) });
+    } else if (item.stage === 'verifying') {
       this.patch(item, { holder: null, lease_until: null });
     } else if (item.stage === 'proposed') {
       this.patch(item, { holder: null, lease_until: null, last_worker: agent, handoff: JSON.stringify({ kind: 'handoff', by: agent, headline, summary, at: this.now() }) });
@@ -791,6 +950,7 @@ const AGENT_OPS = {
       });
     }
     this.event(p, { item, actor: agent, type: 'handoff', headline: `${agent} handed off #${item.seq}: ${headline}`, summary, detail });
+    if (racing) this.settleRace(p, item, agent);
     this.setStatus(p, agent, `Handed off #${item.seq}`);
     return { ok: true, hint: 'Handed off; the next agent will see your note. Call next or signoff.' };
   },
@@ -817,7 +977,7 @@ const AGENT_OPS = {
     const item = this.item(p, args.item);
     if (p.autonomy !== 'full') throw new UserError('In this project the human verifies finished work', { status: 403, hint: 'Leave a comment with what you noticed instead.' });
     if (item.stage !== 'verifying') throw new UserError(`#${item.seq} is ${item.stage}, not verifying`, { status: 409 });
-    if (item.implementer === agent) throw new UserError("You can't review your own work", { status: 403 });
+    if (this.implementedBy(item, agent)) throw new UserError("You can't review your own work", { status: 403 });
     if (item.holder && item.holder !== agent) throw new UserError(`${item.holder} is reviewing #${item.seq}`, { status: 409 });
     const verdict = str(args.verdict).toLowerCase();
     if (!['accept', 'reject'].includes(verdict)) throw new UserError('verdict must be "accept" or "reject"');
@@ -931,6 +1091,15 @@ Object.assign(Hub.prototype, {
       if (args[k] != null && str(args[k]) !== item[k]) { set[k] = str(args[k]); changed.push(k); }
     }
     if (args.priority && PRIORITY_RANK[args.priority] != null && args.priority !== item.priority) { set.priority = args.priority; changed.push(`priority → ${args.priority}`); }
+    if (args.race != null && args.race !== '') {
+      const n = Number(args.race);
+      if (!Number.isInteger(n) || n < 1 || n > MAX_RACE) throw new UserError(`race must be a whole number from 1 to ${MAX_RACE}`, { hint: '1 means one agent at a time (the usual); 2 or more lets that many agents attempt it at once.' });
+      if (n !== item.race) {
+        if (item.stage === 'active') throw new UserError(`#${item.seq} is being worked on; change its race count while it is ready`, { status: 409 });
+        set.race = n;
+        changed.push(n > 1 ? `race → ${n} agents` : 'no longer a race');
+      }
+    }
     if (Object.keys(set).length) this.patch(item, set);
     if (Array.isArray(args.depends_on)) { this.setDeps(p, item, args.depends_on); changed.push('dependencies'); }
     const human = actor === HUMAN;
@@ -1039,11 +1208,11 @@ const HUMAN_OPS = {
     this.refineItem(p, HUMAN, it, args);
     if (args.stage && args.stage !== it.stage) {
       if (!['proposed', 'ready', 'dropped', 'done'].includes(args.stage)) throw new UserError(`You can move work to proposed, ready, done or dropped (not ${args.stage})`);
-      const holder = it.holder;
+      const holders = [it.holder, ...(this.racing(it) ? this.attemptsOf(it).filter((a) => a.stage === 'active').map((a) => a.agent) : [])].filter(Boolean);
       this.move(it, args.stage, HUMAN, { holder: null, lease_until: null });
       const verb = { ready: 'moved', proposed: 'moved', done: 'marked', dropped: 'dropped' }[args.stage];
       this.event(p, { item: it, actor: HUMAN, type: 'staged', headline: `You ${verb} #${it.seq}${args.stage !== 'dropped' ? ` to ${args.stage}` : ''}`, summary: str(args.note) });
-      if (holder) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder);
+      for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder);
     }
   },
 

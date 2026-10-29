@@ -51,12 +51,28 @@ CREATE TABLE IF NOT EXISTS items (
   attempts    INTEGER NOT NULL DEFAULT 0,
   stalls      INTEGER NOT NULL DEFAULT 0,
   rejections  INTEGER NOT NULL DEFAULT 0,
+  race        INTEGER NOT NULL DEFAULT 1,     -- how many agents may attempt it at once (>1: leases live in attempts)
   stage_since INTEGER NOT NULL,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,
   UNIQUE (project_id, seq)
 );
 CREATE INDEX IF NOT EXISTS items_stage ON items (project_id, stage);
+
+-- Race items: one row per agent attempting it, each with its own lease. Non-race items never use this.
+CREATE TABLE IF NOT EXISTS attempts (
+  id          INTEGER PRIMARY KEY,
+  item_id     INTEGER NOT NULL,
+  agent       TEXT NOT NULL,
+  model       TEXT NOT NULL DEFAULT '',
+  stage       TEXT NOT NULL DEFAULT 'active',  -- active | submitted | abandoned
+  lease_until INTEGER,
+  touching    TEXT NOT NULL DEFAULT '[]',
+  submission  INTEGER,                         -- the 'submitted' event
+  closed      INTEGER NOT NULL DEFAULT 0,      -- 1 once the item leaves this race round (back to ready, done, dropped)
+  at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS attempts_item ON attempts (item_id, closed);
 
 CREATE TABLE IF NOT EXISTS deps (
   item_id    INTEGER NOT NULL,
@@ -149,6 +165,7 @@ export function openDb(file) {
     'ALTER TABLE agents ADD COLUMN last_checkin INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN parked INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE projects ADD COLUMN path TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE items ADD COLUMN race INTEGER NOT NULL DEFAULT 1',
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

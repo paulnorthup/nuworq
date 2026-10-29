@@ -31,6 +31,9 @@ export function view(hub, slug, { light = false } = {}) {
   const in_ = (stage) => items.filter((i) => i.stage === stage);
   const active = in_('active');
   const shaping = in_('proposed').filter((i) => i.holder);
+  // Running race attempts: each is its own line of work, with its own agent and lease.
+  const racers = hub.q(`SELECT a.* FROM attempts a JOIN items i ON i.id = a.item_id
+    WHERE i.project_id = ? AND i.stage = 'active' AND a.stage = 'active' AND a.closed = 0 ORDER BY a.id`).all(p.id);
   const readyFree = in_('ready').filter((i) => !i.holder && !unmet(i).length);
   const shapeable = p.parked ? [] : hub.shapeable(p);
   const recentAgents = agents.filter((a) => !a.signed_off && t - a.last_seen < 30 * MIN);
@@ -200,7 +203,7 @@ export function view(hub, slug, { light = false } = {}) {
   };
 
   // ── pulse: one sentence ──
-  const working = new Set([...active, ...shaping].map((i) => i.holder));
+  const working = new Set([...[...active, ...shaping].map((i) => i.holder).filter(Boolean), ...racers.map((a) => a.agent)]);
   const state = p.parked ? 'parked' : act.length ? 'needs-you' : inFlight ? 'flowing' : claimable ? 'stalled' : 'idle';
   const needs = act.length ? `${plural(act.length, 'thing')} ${act.length === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you.';
   const sentence = (p.parked
@@ -218,17 +221,24 @@ export function view(hub, slug, { light = false } = {}) {
   if (light) return { pulse, attention };
 
   // ── in motion ──
-  const motion = [...active, ...shaping].map((it) => {
-    const last = hub.q(`SELECT * FROM events WHERE item_id = ? AND type IN ('progress','claimed','shaping') ORDER BY at DESC, id DESC LIMIT 1`).get(it.id);
-    const a = agents.find((x) => x.name === it.holder);
+  const lines = [
+    ...[...active, ...shaping].filter((it) => it.holder).map((it) => ({ it, agent: it.holder, lease: it.lease_until, touching: it.touching, since: it.stage_since })),
+    ...racers.map((r) => ({ it: byId.get(r.item_id), agent: r.agent, lease: r.lease_until, touching: r.touching, since: r.at, race: true })),
+  ].sort((x, y) => x.it.seq - y.it.seq);
+  const motion = lines.map(({ it, agent, lease, touching, since, race }) => {
+    const last = race
+      ? hub.q(`SELECT * FROM events WHERE item_id = ? AND actor = ? AND type IN ('progress','claimed') ORDER BY at DESC, id DESC LIMIT 1`).get(it.id, agent)
+      : hub.q(`SELECT * FROM events WHERE item_id = ? AND type IN ('progress','claimed','shaping') ORDER BY at DESC, id DESC LIMIT 1`).get(it.id);
+    const a = agents.find((x) => x.name === agent);
     return {
-      item: ref(it), title: it.title, priority: it.priority, agent: it.holder, model: a?.model ?? '', provider: providerOf(a?.model),
+      item: ref(it), title: it.title, priority: it.priority, agent, model: a?.model ?? '', provider: providerOf(a?.model),
       last: last ? { headline: last.headline, summary: last.summary, ago: dur(t - last.at), type: last.type } : null,
-      for: dur(t - it.stage_since), lease_left: dur(it.lease_until - t), attempt: it.attempts,
-      quiet: it.lease_until - t < LEASE_MS - 10 * MIN, // no milestone or heartbeat in 10 minutes
-      touching: json(it.touching, []),
-      heads_up: hub.headsUp(p, it.holder, it) ?? null,
+      for: dur(t - since), lease_left: dur(lease - t), attempt: it.attempts,
+      quiet: lease - t < LEASE_MS - 10 * MIN, // no milestone or heartbeat in 10 minutes
+      touching: json(touching, []),
+      heads_up: hub.headsUp(p, agent, it) ?? null,
       shaping: it.stage === 'proposed',
+      race: race ? it.race : undefined,
     };
   });
 
@@ -253,7 +263,7 @@ export function view(hub, slug, { light = false } = {}) {
 
   // ── agents and their track records ──
   const agentRows = agents.map((a) => {
-    const holding = items.filter((i) => i.holder === a.name).map(ref);
+    const holding = items.filter((i) => i.holder === a.name || racers.some((r) => r.item_id === i.id && r.agent === a.name)).map(ref);
     const idle = t - a.last_seen;
     const status = a.signed_off ? 'signed off' : holding.length ? (idle > 10 * MIN ? 'quiet' : 'working') : idle < 30 * MIN ? 'idle' : 'away';
     const rec = hub.q(`SELECT
@@ -401,6 +411,8 @@ export function itemView(hub, slug, ref) {
     stage: it.stage, stage_label: STAGES[it.stage].label, stage_blurb: STAGES[it.stage].blurb, court: courtOf(it.stage, p.autonomy),
     priority: it.priority, created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
     holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
+    race: it.race,
+    racers: it.race > 1 ? hub.attemptsOf(it).map((a) => ({ agent: a.agent, model: a.model, stage: a.stage, lease_left: a.lease_until ? dur(a.lease_until - t) : null })) : [],
     implementer: it.implementer, last_worker: it.last_worker,
     attempts: it.attempts, stalls: it.stalls, rejections: it.rejections,
     handoff: json(it.handoff, null),
