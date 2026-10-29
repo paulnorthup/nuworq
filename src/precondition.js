@@ -10,8 +10,10 @@ import { lookup } from 'node:dns/promises';
 
 const str = (v) => (v == null ? '' : String(v).trim());
 export const FIRST_RETRY = 60_000, MAX_RETRY = 3_600_000, PER_HOST = 10_000, CHECK_MS = 10_000;
-const HINT = 'e.g. precondition: "https://api.example.com/v2/health" (answers 200), or { url, status: 200, contains: "v2", json_path: "features.export", equals: true, credential: "VENDOR" }. Pass {} or null to clear.';
+const HINT = 'e.g. precondition: "https://api.example.com/v2/health" (answers 200), or { url, status: 200, contains: "v2", json_path: "features.export", equals: true, credential: "VENDOR" }. Last resort: { kind: "ask", question: "…" } asks the human. Pass {} or null to clear.';
 const VERSION_HINT = 'e.g. { kind: "version", url: "https://api.example.com/version", json_path: "version", min: "2.1.0" } (without json_path, the first version in the body), or { kind: "release", repo: "acme/api", min: "v2.1.0" } (its latest GitHub release).';
+// How long work may sit outside before the human hears about it, unless the project says otherwise.
+export const WAIT_DAYS = 7;
 
 // Forgiving: a URL string alone is a GET expecting 200. Returns null for none (clear), or the normalized object.
 export function normPrecondition(v) {
@@ -24,8 +26,13 @@ export function normPrecondition(v) {
   if (typeof v !== 'object' || Array.isArray(v)) throw new UserError('precondition must be a URL or an object', { hint: HINT });
   if (!Object.keys(v).length) return null;
   const kind = v.kind ?? 'http';
+  // The last resort: no fact the hub can check, so a person says when, through the questions path.
+  if (kind === 'ask') {
+    if (!str(v.question)) throw new UserError('precondition.question is required for kind "ask"', { hint: 'e.g. { kind: "ask", question: "Has the vendor turned on the v2 export for us?" }' });
+    return { kind, question: str(v.question).slice(0, 500) };
+  }
   if (kind === 'release') return normRelease(v);
-  if (kind !== 'http' && kind !== 'version') throw new UserError(`precondition kind "${kind}" isn't known`, { hint: `Use kind "http", "version" or "release". ${HINT}` });
+  if (kind !== 'http' && kind !== 'version') throw new UserError(`precondition kind "${kind}" isn't known`, { hint: `Use kind "http", "version", "release" or "ask". ${HINT}` });
   const out = { kind, url: normUrl(v.url) };
   if (kind === 'version') {
     out.min = normMin(v.min);
@@ -103,6 +110,7 @@ export function compareSemver(a, b) {
 
 // What it waits for, in words: "GET https://… answers 200, contains "v2"".
 export function describe(pre) {
+  if (pre.kind === 'ask') return `a person answers "${pre.question}"`;
   if (pre.kind === 'release') return `the latest release of ${pre.repo} is ${pre.min} or later`;
   if (pre.kind === 'version') return `${pre.url}${pre.json_path ? ` ${pre.json_path}` : ''} reports ${pre.min} or later`;
   return [`${pre.url} answers ${pre.status}`, pre.contains && `contains "${pre.contains}"`,
@@ -225,6 +233,7 @@ export async function runChecks(hub, opts = {}) {
   for (const item of due) {
     if (busy.has(item.id)) continue;
     const pre = JSON.parse(item.precondition);
+    if (pre.kind === 'ask') continue; // a person answers it, not the network
     const host = new URL(pre.kind === 'release' ? opts.github?.api ?? 'https://api.github.com' : pre.url).host;
     if (t - (hosts.get(host) ?? -Infinity) < PER_HOST) continue;
     hosts.set(host, t);

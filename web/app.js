@@ -3,6 +3,7 @@
 import { connectCommands } from './connect.js';
 import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
+import { preconditionSection, toPrecondition } from './precondition.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
@@ -160,7 +161,7 @@ function route() {
   const ref = m?.[2] ? `#${m[2]}` : null;
   if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = false; }
   S.slug = slug;
-  if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; }
+  if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; S.editPre = false; }
   refresh({ force: true });
 }
 const go = (slug, ref) => { location.hash = slug ? `#/p/${encodeURIComponent(slug)}${ref ? '/' + ref.replace('#', '') : ''}` : '#/'; };
@@ -337,6 +338,8 @@ function composer() {
       <input data-draft="nw-title" id="nw-title" placeholder="Outcome, in one line (e.g. 'Users can reset their password')">
       <textarea data-draft="nw-summary" id="nw-summary" placeholder="Why it matters, context, constraints (optional)"></textarea>
       <textarea data-draft="nw-acceptance" id="nw-acceptance" placeholder="Done means… (checkable criteria; agents verify against this)"></textarea>
+      <input data-draft="nw-pre" id="nw-pre" placeholder="Waits on (optional): a URL that must answer 200, or a question for a person">
+
       <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['nw-priority'] ?? 'soon') === p ? 'on' : ''}" data-action="nw-priority" data-p="${p}">${p}</button>`).join('')}</div>
         <span style="flex:1"></span><button class="btn ghost" data-action="toggle-add">Cancel</button><button class="btn primary" data-action="add-work">Add to Ready</button></div>
     </div>` : ''}`;
@@ -485,6 +488,7 @@ function worthKnowing(v) {
     if (a.kind === 'proposal') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Look</button>` + acts;
     if (a.start) acts = `<button class="btn small" data-action="connect">Start an agent</button>` + acts;
     if (a.kind === 'notify-failing') acts = `<button class="btn small" data-action="notify">Check it</button>` + acts;
+    if (a.kind === 'outside-overdue') acts = `<button class="btn small" data-action="check-now" data-item="${esc(a.item)}">Check now</button><button class="btn small" data-action="open" data-item="${esc(a.item)}">Edit it</button>` + acts;
     if (a.kind === 'peer-review-stuck') acts =`<button class="btn small" data-action="open" data-item="${esc(a.item)}">Review it</button>` + acts;
     // Stuck on a capability nobody has: the choices are to let any agent take it, or keep waiting for one that has it.
     if (a.kind === 'unfit') acts = `<button class="btn small" data-action="needs" data-item="${esc(a.item)}" data-needs="${esc(JSON.stringify(a.keep ?? []))}" title="Drop ${esc((a.missing ?? []).join(', '))} from what it needs">Let any agent take it</button><button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Keep waiting</button>`;
@@ -737,6 +741,7 @@ function renderDrawer() {
   if (!['done', 'dropped'].includes(it.stage)) actions.push(`<button class="btn ghost" data-action="drop" data-item="${it.item}">Drop</button>`);
   if (it.stage === 'dropped') actions.push(`<button class="btn" data-action="reopen" data-item="${it.item}">Restore</button>`);
   actions.push(`<button class="btn ghost" data-action="edit-item">Edit</button>`);
+  if (!it.precondition && !S.editPre && ['proposed', 'ready', 'waiting'].includes(it.stage)) actions.push(`<button class="btn ghost" data-action="edit-pre" title="Hold it until a URL answers, or until a person says so">Wait on…</button>`);
 
   const life = it.lifecycle;
   const totalMs = life.reduce((n, l) => n + (l.court ? l.ms : 0), 0) || 1;
@@ -778,7 +783,6 @@ function renderDrawer() {
         <dt>Agents involved</dt><dd>${it.agents.map((a) => `${who(a.name, a.model)} <span class="age">${esc(a.model)}</span>`).join(', ') || '—'}</dd>
         ${it.parent ? `<dt>Part of</dt><dd>${refLink(it.parent.item)} ${esc(it.parent.title)}</dd>` : ''}
         ${it.children.length ? `<dt>Broken into</dt><dd>${it.children.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
-        ${it.precondition ? `<dt>Waits on</dt><dd>${esc(it.precondition.waits_for)} <span class="age">${it.precondition.met ? 'passed' : it.precondition.last_check ? `last check: ${esc(it.precondition.last_check.detail)}` : 'not checked yet'}</span></dd>` : ''}
         ${it.depends_on.length ? `<dt>Depends on</dt><dd>${it.depends_on.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
       </dl></div>
     ${it.detail ? `<div class="d-sec"><div class="label">Detail</div>${md(it.detail)}</div>` : ''}
@@ -805,6 +809,7 @@ function renderDrawer() {
       <div class="life-steps">${life.map((l) => `<span><b>${esc(l.label)}</b> ${esc(l.time)}${l.court === 'agents' && l.actor ? ` (${esc(l.actor)})` : ''}</span>`).join('<span>→</span>')}</div></div>` : ''}
     ${it.summary ? `<div class="d-sec"><div class="label">Summary</div>${md(it.summary)}</div>` : ''}
     <div class="d-sec"><div class="label">Done means</div>${it.acceptance ? md(it.acceptance) : '<p class="age">No acceptance criteria yet. Agents are asked to write them before submitting.</p>'}</div>
+    ${preconditionSection(it, { editing: S.editPre })}
     ${it.submissions?.length ? `<div class="d-sec"><div class="label">The race <span class="count">${it.submissions.length} submitted</span></div>${attemptsGrid(it.item, it.submissions, { keep: it.stage === 'verifying' })}</div>` : ''}
     ${it.submission && it.stage === 'verifying' && !it.submissions?.length ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
       ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
@@ -970,8 +975,9 @@ const ACTIONS = {
   'add-work': async () => {
     const title = val('nw-title');
     if (!title) return toast('Give it a title', true);
-    await human('create', { title, summary: val('nw-summary'), acceptance: val('nw-acceptance'), priority: S.drafts['nw-priority'] ?? 'soon' }, 'Added to Ready');
-    clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority');
+    const pre = val('nw-pre');
+    await human('create', { title, summary: val('nw-summary'), acceptance: val('nw-acceptance'), priority: S.drafts['nw-priority'] ?? 'soon', ...(pre ? { precondition: toPrecondition(pre) } : {}) }, pre ? 'Added; it waits until that holds' : 'Added to Ready');
+    clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority', 'nw-pre');
     S.addWork = false;
     render({ force: true });
   },
@@ -1070,6 +1076,16 @@ const ACTIONS = {
     clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race');
     await human('update', args, 'Saved');
   },
+  'edit-pre': () => { S.editPre = !S.editPre; render({ force: true }); },
+  'save-pre': async (el) => {
+    const k = `pre:${el.dataset.item}`;
+    const precondition = toPrecondition(val(k));
+    S.editPre = false;
+    clearDraft(k);
+    await human('update', { item: el.dataset.item, precondition }, Object.keys(precondition).length ? 'Saved: it waits until that holds' : 'Removed: it no longer waits');
+  },
+  'remove-pre': (el) => human('update', { item: el.dataset.item, precondition: {} }, 'Removed: it no longer waits'),
+  'check-now': (el) => human('check', { item: el.dataset.item }, 'The hub checks it on its next sweep'),
   dismiss: (el) => human('dismiss', { key: el.dataset.key }),
   retire: (el) => human('retire', { note: Number(el.dataset.note) }, 'Retired'),
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
