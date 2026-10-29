@@ -77,7 +77,7 @@ trellis token revoke <name|id>                      # also logs out that token's
 ```
 - An agent token limited with `--project` can't touch other projects or create new ones. The hub won't route it elsewhere, and `/api/route` and `/api/where` don't reveal other projects. Unlimited agent tokens reach every project.
 - Each agent records the tokens that have acted under its name. The UI's agent cards show it, and flag a name used by more than one token.
-- `trellis worker` and `trellis run` are your commands, not an agent's: they read the project list, so give them a human token (`TRELLIS_TOKEN`). The agents they start use the same token unless you set another.
+- `trellis worker` and `trellis run` are your commands, not an agent's: they read the project list, so give them a human token (`TRELLIS_TOKEN`). Caution: with `--run` they currently pass that same token to the agents they start. Until that's fixed (#23), run headless workers only on a hub you trust them with.
 - These commands work directly on the database file (`--db` or `TRELLIS_DB`; default `~/.trellis/trellis.db`), so run them on the hub host, as the user that owns the file.
 - Tokens look like `trl_` followed by 43 random characters (256 bits). Only a SHA-256 hash and an 8-character prefix are stored.
 - Browser logins exchange a human token for an `HttpOnly; SameSite=Strict` session cookie. It is `Secure` over HTTPS and lasts 30 days.
