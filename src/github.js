@@ -67,13 +67,17 @@ function pullRequest(hub, p, body) {
       summary: [pr.head?.ref && `Branch ${pr.head.ref}`, pr.user?.login && `by ${pr.user.login}`].filter(Boolean).join(' · '),
       data: { url: pr.html_url, repo, number: pr.number, state },
     });
-    // Accepted work waiting on its pull request: the merge lands it; closing it unmerged sends it back.
-    if (item.stage === 'landing' && state === 'merged') {
+    // The merge lands it. Accepted work waits for it in landing; but a PR whose check failed keeps its
+    // auto-merge, so the builder's fix merges as soon as it's green, while the item is still with them.
+    const before = item.stage, holder = item.holder;
+    const withFix = old && ['ready', 'active', 'verifying'].includes(before) && hub.prMode(p, item); // the hub's PR, auto-merge on
+    if (state === 'merged' && (before === 'landing' || withFix)) {
       const base = pr.base?.ref ?? 'main';
       hub.move(item, 'done', ACTOR, { holder: null, lease_until: null, touching: '[]' });
       hub.event(p, {
         item, actor: ACTOR, type: 'landed',
         headline: `GitHub merged PR #${pr.number}: #${item.seq} is on ${base}`,
+        summary: before === 'landing' ? '' : `It was ${before}${holder ? ` with ${holder}` : ''}: its pull request merged once its checks passed, so it is done${holder ? '; nothing more to do on it' : ''}.`,
         data: { pr: pr.number, url: pr.html_url, branch: pr.head?.ref ?? item.branch, base, head: pr.merge_commit_sha ?? '' },
       });
     } else if (item.stage === 'landing' && state === 'closed') {

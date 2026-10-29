@@ -124,13 +124,34 @@ describe('a landing PR that cannot merge routes itself', () => {
     w.git(job.dir, 'add', '.');
     w.git(job.dir, 'commit', '-q', '-m', 'fix');
     w.git(job.dir, 'push', '-q', 'origin', job.branch);
+    // GitHub's order: the PR kept its auto-merge, so the fix merges as soon as it's green, while a1 still holds it.
+    w.deliver('check_run', run('success'));
+    w.deliver('pull_request', { action: 'closed', pull_request: w.pr({ state: 'closed', merged: true }) });
+    const done = w.item();
+    assert.equal(done.stage, 'done');
+    assert.equal(done.holder, null, 'released');
+    assert.equal(w.opened.length, 1, 'the same PR, not a new one');
+    const landed = w.events('landed');
+    assert.equal(landed.length, 1);
+    assert.match(landed[0].summary, /It was active with a1: its pull request merged once its checks passed/);
+  });
+
+  test('after a fix, submitting and accepting before the merge still uses the same PR', async () => {
+    const w = world();
+    const job = await w.accepted();
+    w.deliver('check_run', { action: 'completed', check_run: { name: 'test', head_sha: SHA, status: 'completed', conclusion: 'failure' } });
+    w.op('a1', 'next');
+    writeFileSync(join(job.dir, 'fix.txt'), 'fix\n');
+    w.git(job.dir, 'add', '.');
+    w.git(job.dir, 'commit', '-q', '-m', 'fix');
+    w.git(job.dir, 'push', '-q', 'origin', job.branch);
     w.op('a1', 'submit', { item: '#1', headline: 'Fixed' });
     w.hub.humanOp('demo', 'accept', { item: '#1' });
     await w.hub.prsSettled();
     assert.equal(w.opened.length, 1, 'the same PR, not a new one');
-    w.deliver('check_run', run('success'));
     w.deliver('pull_request', { action: 'closed', pull_request: w.pr({ state: 'closed', merged: true }) });
     assert.equal(w.item().stage, 'done');
+    assert.equal(w.events('landed').length, 1);
   });
 
   test("a required approval is one \"needs you\" card with the PR link; the approval clears it", async () => {
