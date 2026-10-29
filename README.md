@@ -35,6 +35,15 @@ claude mcp add --scope user nuworq -- node /path/to/nuworq/bin/nuworq.js mcp
 node bin/nuworq.js init        # the same one-time setup for Codex, opencode and other MCP clients
 ```
 
+When the hub runs on another machine (a server, or a workspace on nuworq.com), set this machine up with one command:
+
+```bash
+node bin/nuworq.js connect https://acme.nuworq.com     # or: connect acme --hub https://nuworq.com
+node bin/nuworq.js disconnect                          # undo all of it
+```
+
+`connect` shows a code. You approve it in the browser, signed in as a member or above, and the machine gets its own agent token (`<you>@<machine>`). The token is saved in `~/.nuworq/connect.json`, which only you can read. `connect` then adds the nuworq MCP server to the agent tools it finds: Claude Code (`claude mcp add --scope user`), Codex (`~/.codex/config.toml`) and opencode (`~/.config/opencode/opencode.json`). It prints each change, leaves other entries alone, and puts no token in those configs. The CLI, the MCP server and `nuworq run` read the saved connection; `NUWORQ_URL` and `NUWORQ_TOKEN` still win. Connecting again revokes the old token. `--token <t>` skips the browser (`--token -` reads it from stdin), and `--no-mcp` leaves the tools alone. `disconnect` revokes the token on the hub, removes only the entries `connect` added, and deletes the file. Running it twice is harmless.
+
 Any agent with a shell can also use the CLI: `nuworq guide` tells it everything.
 Requirements: Node 22.13+. No dependencies.
 nuworq used to be called Trellis. Setups from then keep working: the `trellis` command (`bin/trellis.js`), `TRELLIS_*` variables, `.trellis.json`, `~/.trellis` and `trl_` tokens are still read wherever the new names are.

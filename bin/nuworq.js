@@ -5,6 +5,7 @@ import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { homedir, hostname } from 'node:os';
 import { createClient, resolveSettings, repoRoot, checkoutOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
@@ -14,7 +15,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'no-browser', 'no-mcp']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -455,34 +456,94 @@ async function readSecretLine(prompt) {
   return line.trim();
 }
 
-// nuworq connect <url>: use a hub on another machine (a server) from this one. It checks the hub
-// answers and takes the token, then saves both where the CLI, the MCP server and `run` look.
-async function connect(pos, flags) {
-  if (flags.off) {
-    if (!existsSync(CONNECT_FILE)) return console.log(dim('Not connected to a hub; nothing to forget.'));
-    rmSync(CONNECT_FILE, { force: true });
-    return console.log(`${green('Disconnected.')} ${dim(`Removed ${CONNECT_FILE}. This machine finds its hub as before: NUWORQ_URL, .nuworq.json, or a hub serving here.`)}`);
+const readConnection = () => { try { return JSON.parse(readFileSync(CONNECT_FILE, 'utf8')); } catch { return null; } };
+
+// Revoke the saved token on its hub. Says so when the hub can't be reached; the file goes anyway.
+async function revokeSaved(c) {
+  if (!c?.url || !c.token) return null;
+  try {
+    const r = await createClient({ url: c.url, token: c.token, retryMs: 0 }).post('/api/me/revoke', {});
+    return r.revoked ? `Revoked the token ${r.revoked} on ${c.url}.` : null;
+  } catch (e) {
+    return e.status === 401 ? null : amber(`Couldn't revoke the token on ${c.url} (${e.message}); revoke it there: nuworq token revoke <name>.`);
   }
-  const url = String(need(pos[0], '<url>')).replace(/\/+$/, '');
-  if (!/^https?:\/\/[^/]/i.test(url)) throw new HubError(`"${url}" isn't a hub address`, { hint: 'e.g. nuworq connect https://nuworq.example.com' });
+}
+
+// A device login: the hub shows a code, a person approves it in the browser, the CLI collects a token.
+async function deviceLogin(url, flags) {
+  const hub = createClient({ url, token: '', retryMs: 0 });
+  const d = await hub.post('/api/device/start', { machine: hostname().split('.')[0] });
+  console.log(`To connect this machine, open ${bold(d.verify_url_complete)}
+and approve the code ${bold(d.user_code)} (signed in as a member or above). It expires in ${Math.round(d.expires_in / 60)} minutes.`);
+  // Open the browser when there is a person at this terminal; nothing breaks when it can't.
+  if (process.stdout.isTTY && !flags['no-browser']) {
+    const { spawn } = await import('node:child_process');
+    const opener = { darwin: 'open', win32: 'explorer' }[process.platform] ?? 'xdg-open';
+    try { spawn(opener, [d.verify_url_complete], { stdio: 'ignore', detached: true }).on('error', () => {}).unref(); } catch {}
+  }
+  let wait = d.interval ?? 5;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, wait * 1000));
+    const r = await hub.post('/api/device/poll', { device_code: d.device_code });
+    if (r.status === 'approved') return { token: r.token, by: r.person };
+    if (r.status === 'slow_down') wait = (r.interval ?? wait) + 1;
+  }
+}
+
+// nuworq connect <url> | <workspace> --hub <url>: use a hub on another machine (a server) from this one.
+// It checks the hub answers, gets a token (a device login approved in the browser, or --token), saves
+// both where the CLI, the MCP server and `run` look, and registers the MCP server with the agent tools
+// installed here. nuworq disconnect undoes exactly that.
+async function connect(pos, flags) {
+  if (flags.off) return disconnect();
+  let target = String(need(pos[0], '<url> or <workspace> --hub <url>'));
+  let workspace = null;
+  if (!/^https?:\/\//i.test(target) && flags.hub) {
+    workspace = target.toLowerCase();
+    target = `${String(flags.hub).replace(/\/+$/, '')}/w/${encodeURIComponent(workspace)}`;
+  }
+  const url = target.replace(/\/+$/, '');
+  if (!/^https?:\/\/[^/]/i.test(url)) throw new HubError(`"${url}" isn't a hub address`, { hint: 'e.g. nuworq connect https://acme.nuworq.com, or nuworq connect acme --hub https://nuworq.com' });
+  workspace ??= url.match(/\/w\/([^/]+)$/)?.[1] ?? null;
   const health = await createClient({ url, token: '', retryMs: 0 }).get('/api/health').catch(() => null);
   if (!health?.ok) throw new HubError(`No nuworq hub answers at ${url}`, { hint: 'Check the address (it is what you open in the browser) and that the hub is running.' });
-  const token = String((typeof flags.token === 'string' && flags.token) || envVar('TOKEN') || await readSecretLine('Token (not shown): ')).trim();
+  const open = await createClient({ url, token: '', retryMs: 0 }).get('/api/me');
+  // --token -: read it from stdin (pasted at a hidden prompt, or piped).
+  const given = typeof flags.token === 'string' ? (flags.token === '-' ? await readSecretLine('Token (not shown): ') : flags.token) : envVar('TOKEN');
+  let token = String(given ?? '').trim();
+  if (open.auth === 'required' && !token) token = (await deviceLogin(url, flags)).token;
   const me = await createClient({ url, token, retryMs: 0 }).get('/api/me');
   if (me.auth === 'required' && !me.role) {
-    throw new HubError(token ? 'The hub refused that token (wrong or revoked)' : 'This hub requires login, and no token was given', {
-      hint: 'Pass --token, set NUWORQ_TOKEN, or paste it when asked. Tokens are made on the hub host: nuworq token create <name> --role human|agent.',
+    throw new HubError('The hub refused that token (wrong or revoked)', {
+      hint: 'Leave --token out to log in through the browser, or make one on the hub host: nuworq token create <name> --role agent.',
     });
   }
+  // Connecting again replaces the old token: revoke it first. The tools set up last time stay recorded.
+  const old = readConnection();
+  const notes = [old?.token && old.token !== token ? await revokeSaved(old) : null];
+  const { registerMcp } = await import('../src/connect.js');
+  const mcp = flags['no-mcp'] ? { added: old?.added ?? [], lines: [] } : registerMcp({ bin: BIN, home: homedir(), kept: old?.added ?? [] });
   // Written whole with mode 600 and moved into place, so the token is never in a file others can read.
   mkdirSync(dirname(CONNECT_FILE), { recursive: true, mode: 0o700 });
   const tmp = `${CONNECT_FILE}.${process.pid}`;
   rmSync(tmp, { force: true });
-  writeFileSync(tmp, JSON.stringify({ url, token }, null, 2) + '\n', { mode: 0o600 });
+  writeFileSync(tmp, JSON.stringify({ url, token, ...(workspace ? { workspace } : {}), added: mcp.added }, null, 2) + '\n', { mode: 0o600 });
   renameSync(tmp, CONNECT_FILE);
   console.log(`${green('Connected')} to ${bold(url)}${me.auth === 'required' ? ` as ${me.name} (${me.role} token)` : dim(' (it needs no login)')}.
-${dim(`Saved in ${CONNECT_FILE}, readable only by you. The CLI, the MCP server and nuworq run on this machine use it
-now; NUWORQ_URL and NUWORQ_TOKEN still win. Forget it: nuworq connect --off`)}`);
+${[...notes.filter(Boolean), ...mcp.lines.map((l) => `  ${l}`)].join('\n')}${notes.some(Boolean) || mcp.lines.length ? '\n' : ''}${dim(`Saved in ${CONNECT_FILE}, readable only by you. The CLI, the MCP server and nuworq run on this machine use it
+now; NUWORQ_URL and NUWORQ_TOKEN still win. Undo all of it: nuworq disconnect`)}`);
+}
+
+// nuworq disconnect: revoke the saved token on its hub, remove the MCP entries connect added (only
+// those), and forget the hub. Harmless when not connected.
+async function disconnect() {
+  const c = readConnection();
+  if (!c && !existsSync(CONNECT_FILE)) return console.log(dim('Not connected to a hub; nothing to undo.'));
+  const { unregisterMcp } = await import('../src/connect.js');
+  const lines = [await revokeSaved(c), ...unregisterMcp({ home: homedir(), added: c?.added ?? [] }).map((l) => `  ${l}`)].filter(Boolean);
+  rmSync(CONNECT_FILE, { force: true });
+  console.log(`${green('Disconnected.')}${lines.length ? `\n${lines.join('\n')}` : ''}
+${dim(`Removed ${CONNECT_FILE}. This machine finds its hub as before: NUWORQ_URL, .nuworq.json, or a hub serving here.`)}`);
 }
 
 function init(flags) {
@@ -899,9 +960,12 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
 
 ${bold('Setup')}
   init [--force]                         write .nuworq.json; print MCP config for Claude Code, Codex, opencode
-  connect <url> [--token t] | --off      use the hub at <url> from this machine; the MCP server and run pick it up.
-                                         Checks it, saves it in ~/.nuworq/connect.json (only you can read it).
-                                         The token: --token, else NUWORQ_TOKEN, else one line on stdin
+  connect <url> | <workspace> --hub <url> [--token t|-] [--no-browser] [--no-mcp]
+                                         use that hub from this machine: log in through the browser (a code
+                                         you approve), save it in ~/.nuworq/connect.json (only you can read it),
+                                         and add the nuworq MCP server to Claude Code, Codex and opencode here.
+                                         --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
+  disconnect                             revoke that token, remove what connect added, forget the hub
   mcp                                    run the stdio MCP server (one per agent session)
   git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
@@ -983,6 +1047,7 @@ async function main() {
   if (cmd === 'seed') return seedCmd(flags);
   if (cmd === 'init') return init(flags);
   if (cmd === 'connect') return connect(pos, flags);
+  if (cmd === 'disconnect') return disconnect();
   if (cmd === 'git-credential') return gitCredential(pos, flags);
 
   const shape = AGENT_CMDS[cmd];

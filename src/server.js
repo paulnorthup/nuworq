@@ -372,6 +372,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
         // Cookies ride along automatically, so they must prove the request came from this site.
         if (who.via === 'cookie' && unsafe && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
+        // A token revokes itself (nuworq disconnect). Bearer only: a browser session logs out instead.
+        if (req.method === 'POST' && path === '/api/me/revoke') {
+          if (who.via !== 'bearer') return deny(400, 'only a token can revoke itself', 'Send Authorization: Bearer <token>. To sign out of the browser, use Sign out.');
+          authz.revoke(who.id);
+          return send(200, { ok: true, revoked: who.name });
+        }
         if (who.role === 'agent' && !AGENT_ROUTES.some((r) => r.test(`${req.method} ${path}`))) {
           return deny(403, 'agent tokens can only use agent operations', 'Use a human token for the UI and human actions.');
         }
@@ -383,6 +389,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const by = who.person ? `@${who.person.handle}` : HUMAN;
       const personRole = who.person?.role ?? 'owner';
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
+      if (req.method === 'POST' && path === '/api/me/revoke') return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
       if (path === '/api/invites' || path === '/api/invites/revoke') {
         if (personRole !== 'owner') return deny(403, 'only an owner invites people', 'Ask an owner of this workspace.');
