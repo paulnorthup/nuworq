@@ -163,7 +163,16 @@ function renderRail() {
       <button class="rail-item" data-action="connect">⌁ Connect an agent</button>
       <button class="rail-item" data-action="notify">◔ Notifications</button>
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
+      ${versionLine()}
     </div>`;
+}
+
+// What is live, e.g. "v0.2.0 · c3a3008", the commit linked to GitHub when the hub's code came from there.
+function versionLine() {
+  const { version, commit, commit_url: url } = S.info ?? {};
+  if (!version && !commit) return '';
+  const sha = commit ? (url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(commit)}</a>` : esc(commit)) : '';
+  return `<div class="rail-version">${[version && `v${esc(version)}`, sha].filter(Boolean).join(' · ')}</div>`;
 }
 
 // ── overview: the 30-second view across every project ──
@@ -1000,6 +1009,11 @@ let refreshTimer;
 function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh(), 250); }
 function listen() {
   const es = new EventSource('api/stream');
+  // A hub that moved onto a new commit restarts, so the stream reconnects: pick up the version it runs now.
+  es.onopen = async () => {
+    const info = await api('/api/info').catch(() => null);
+    if (info && info.commit !== S.info?.commit) { S.info = info; scheduleRefresh(); }
+  };
   es.onmessage = () => scheduleRefresh();
   es.onerror = () => { es.close(); setTimeout(listen, 3000); };
 }
@@ -1007,6 +1021,7 @@ function listen() {
 (async function start() {
   window.addEventListener('hashchange', route);
   S.me = await api('/api/me').catch(() => null);
+  S.info = await api('/api/info').catch(() => null) ?? undefined;
   await loadProjects().catch(() => {});
   if (!location.hash || location.hash === '#/') {
     if (S.projects.length === 1) return void (go(S.projects[0].slug), listen());

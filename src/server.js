@@ -1,8 +1,10 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, normRemote } from './core.js';
 import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
@@ -14,6 +16,26 @@ import { receive } from './github.js';
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
 const MAX_BODY = 1024 * 1024;
+
+// What is running: package.json's version and the commit of this code's own folder (under --follow, the
+// hub-src worktree; the hub restarts on every move, so reading it once per process stays true).
+const ROOT = join(WEB, '..');
+let build = null;
+export function buildInfo() {
+  if (build) return build;
+  const git = (...args) => {
+    try { return execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch { return null; }
+  };
+  let version = null;
+  try { version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? null; } catch {}
+  const sha = git('rev-parse', 'HEAD');
+  const remote = normRemote(git('remote', 'get-url', 'origin') ?? '');
+  return (build = {
+    version,
+    commit: sha?.slice(0, 7) ?? null,
+    commit_url: sha && remote.startsWith('github.com/') ? `https://${remote}/commit/${sha}` : null,
+  });
+}
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
@@ -286,7 +308,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return;
       }
       if (req.method === 'GET' && path === '/api/info') {
-        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace });
+        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, ...buildInfo() });
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
       const viewer = who.person ? by : undefined;

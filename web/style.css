@@ -73,6 +73,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .rail-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; padding-top: 16px; }
 .rail-foot .rail-item { color: var(--muted); }
+.rail-version { font-size: 11px; color: var(--faint); padding: 6px 8px 0; font-variant-numeric: tabular-nums; }
+.rail-version a { color: inherit; }
 .badge { background: var(--you); color: #fff; border-radius: 999px; font-size: 11px; font-weight: 650; min-width: 19px; height: 19px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--queue); }
