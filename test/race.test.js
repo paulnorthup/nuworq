@@ -267,6 +267,23 @@ describe('race review', () => {
     assert.equal(rec('a').landed, 1);
   });
 
+  test('changing the race count while verifying leaves no stale attempts behind (#39)', () => {
+    const s = finished({ autonomy: 'balanced' });
+    s.human('update', { item: '#1', race: 1 });
+    s.human('sendback', { item: '#1', note: 'Try again' });
+    assert.ok(s.runs(1).every((x) => x.closed === 1));
+    s.human('update', { item: '#1', race: 2 });
+    assert.equal(s.hub.openSlots(s.row(1)), 2);
+    s.agent('x', 'gemini')('claim', { item: '#1' });
+    s.agent('y', 'qwen')('claim', { item: '#1' });
+    assert.equal(s.runs(1).filter((x) => !x.closed).length, 2, 'two new agents each got a slot');
+    // The old racers are free again: one can review the next round, the other could race it.
+    s.agent('x', 'gemini')('submit', { item: '#1', headline: 'X' });
+    s.agent('y', 'qwen')('submit', { item: '#1', headline: 'Y' });
+    s.human('settings', { autonomy: 'full' });
+    assert.equal(s.a('next').mode, 'review');
+  });
+
   test('a race with a single submission is accepted without naming the attempt', () => {
     const s = setup({ autonomy: 'balanced' });
     s.human('create', { title: 'Hard thing', acceptance: 'It works' });

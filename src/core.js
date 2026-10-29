@@ -250,8 +250,9 @@ export class Hub extends EventEmitter {
     this.q(`UPDATE items SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
       .run(...keys.map((k) => fields[k] ?? null), item.id);
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
-    // Leaving the race (back to the queue, done, dropped) closes this round's attempts.
-    if (item.race > 1 && !['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);
+    // Leaving the race (back to the queue, done, dropped) closes this round's attempts, whatever the race
+    // count is now: it may have been changed while the item was verifying.
+    if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);
     Object.assign(item, fields);
   }
 
