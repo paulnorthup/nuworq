@@ -412,8 +412,11 @@ function cardActions(a, hasMore, open, key) {
     return `<div class="answer">
       ${q.options?.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
       <div class="answer-row"><input data-draft="ans-${q.id}" id="ans-${q.id}" placeholder="${q.options?.length ? 'Or write your own answer…' : 'Your answer…'}"><button class="btn primary" data-action="answer-text" data-q="${q.id}">Answer</button></div>
-      <div class="actions" style="margin-top:0"><label class="check-label"><input type="checkbox" data-draft="dec-${q.id}" id="dec-${q.id}"> Make this a standing decision for all agents</label><span style="flex:1"></span>${moreBtn}</div>
+      <div class="actions" style="margin-top:0"><label class="check-label"><input type="checkbox" data-draft="dec-${q.id}" id="dec-${q.id}"> Make this a standing decision for all agents</label>${a.parked ? `<label class="check-label" title="Record the answer, but don't hand the work back to agents yet"><input type="checkbox" data-draft="keep-${q.id}" id="keep-${q.id}"> Keep it parked</label>` : ''}<span style="flex:1"></span>${moreBtn}</div>
     </div>`;
+  }
+  if (a.kind === 'kept-parked') {
+    return `<div class="actions"><button class="btn go" data-action="unpark" data-item="${esc(a.item)}">Unpark</button><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}</div>`;
   }
   if (a.kind === 'review') {
     const r = `sb:${a.item}`;
@@ -955,17 +958,20 @@ const ACTIONS = {
   answer: (el) => {
     const q = el.dataset.q;
     const decide = document.getElementById(`dec-${q}`)?.checked;
-    clearDraft(`ans-${q}`, `dec-${q}`);
-    return human('answer', { question: Number(q), answer: el.dataset.answer, decide }, decide ? 'Answered, and saved as a decision' : 'Answered; the work is moving again');
+    const keep_parked = document.getElementById(`keep-${q}`)?.checked;
+    clearDraft(`ans-${q}`, `dec-${q}`, `keep-${q}`);
+    return human('answer', { question: Number(q), answer: el.dataset.answer, decide, keep_parked }, keep_parked ? 'Answered; it stays parked until you unpark it' : decide ? 'Answered, and saved as a decision' : 'Answered; the work is moving again');
   },
   'answer-text': (el) => {
     const q = el.dataset.q;
     const answer = val(`ans-${q}`);
     if (!answer) return toast('Write an answer first', true);
     const decide = document.getElementById(`dec-${q}`)?.checked;
-    clearDraft(`ans-${q}`, `dec-${q}`);
-    return human('answer', { question: Number(q), answer, decide }, 'Answered; the work is moving again');
+    const keep_parked = document.getElementById(`keep-${q}`)?.checked;
+    clearDraft(`ans-${q}`, `dec-${q}`, `keep-${q}`);
+    return human('answer', { question: Number(q), answer, decide, keep_parked }, keep_parked ? 'Answered; it stays parked until you unpark it' : 'Answered; the work is moving again');
   },
+  unpark: (el) => human('unpark', { item: el.dataset.item }, 'Unparked: agents can pick it up'),
   confirm: (el) => human('confirm', { question: Number(el.dataset.q) }, 'Assumption confirmed'),
   override: (el) => {
     const q = el.dataset.q;

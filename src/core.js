@@ -42,7 +42,7 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
@@ -590,14 +590,14 @@ export class Hub extends EventEmitter {
     if (stage === 'ready' && this.unmetPrecondition(item)) stage = 'outside';
     const t = this.now();
     const fields = { ...patch, stage, stage_since: t, updated_at: t };
+    if (stage !== 'waiting' && item.parked_by) fields.parked_by = ''; // out of waiting: no longer kept parked
     const keys = Object.keys(fields);
     this.q(`UPDATE items SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
       .run(...keys.map((k) => fields[k] ?? null), item.id);
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
     // Leaving the race (back to the queue, done, dropped) closes this round's attempts, whatever the race
     // count is now: it may have been changed while the item was verifying.
-    if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);
-    Object.assign(item, fields);
+    if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);    Object.assign(item, fields);
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
   }
 
@@ -2151,7 +2151,8 @@ Object.assign(Hub.prototype, {
 // ── human operations ───────────────────────────────────────────────────────
 
 const HUMAN_OPS = {
-  answer(p, { question, answer, decide }, by) {
+  // keep_parked: answered, but not yet: the work stays waiting (parked by whoever answered) until unpark.
+  answer(p, { question, answer, decide, keep_parked }, by) {
     const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
     if (!q) throw new UserError(`No question ${question}`, { status: 404 });
     const text = str(answer);
@@ -2171,11 +2172,24 @@ const HUMAN_OPS = {
       // Overriding an assumption the agent already acted on: tell whoever is on it now.
       this.addNote(p, 'steer', `Change of course${item ? ` on #${item.seq}` : ''}: you assumed "${q.assumption}". Instead: ${text}`, item, null, by);
     }
-    if (item && item.stage === 'waiting' && !this.openQuestions(item, { blocking: true }).length) {
+    if (item && item.stage === 'waiting' && keep_parked) {
+      this.patch(item, { parked_by: by });
+      this.event(p, { item, actor: by, type: 'kept_parked', headline: `${You(by)} kept #${item.seq} parked: agents don't get it until it's unparked` });
+    } else if (item && item.stage === 'waiting' && !this.openQuestions(item, { blocking: true }).length) {
       this.move(item, 'ready', by);
     }
     if (decide) this.addNote(p, 'decision', `${q.question} → ${text}`, null, null, by);
     return staleAnswered(this, p, q, text, by) ?? undefined;
+  },
+
+  // Let work kept parked (answer with keep_parked) go back to agents.
+  unpark(p, { item }, by) {
+    const it = this.item(p, item);
+    if (it.stage !== 'waiting' || !it.parked_by) throw new UserError(`#${it.seq} isn't parked by anyone`, { status: 409, hint: 'Only work kept parked after an answer can be unparked.' });
+    const open = this.openQuestions(it, { blocking: true }).length;
+    this.patch(it, { parked_by: '' });
+    if (!open) this.move(it, 'ready', by);
+    this.event(p, { item: it, actor: by, type: 'unparked', headline: `${You(by)} unparked #${it.seq}${open ? '; it still waits on an open question' : ': agents can pick it up'}` });
   },
 
   confirm(p, { question }, by) {
