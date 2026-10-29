@@ -40,6 +40,7 @@ export function buildInfo() {
     version,
     commit: sha?.slice(0, 7) ?? null,
     commit_url: sha && remote.startsWith('github.com/') ? `https://${remote}/commit/${sha}` : null,
+    source: remote.startsWith('github.com/') ? remote : null, // where to clone nuworq from, for another machine
   });
 }
 const SECURITY_HEADERS = {
@@ -518,7 +519,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return;
       }
       if (req.method === 'GET' && path === '/api/info') {
-        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo() });
+        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: ((!spaces && publicUrl) || origin(req)) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo() });
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
       const viewer = who.person ? by : undefined;

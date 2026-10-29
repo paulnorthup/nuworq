@@ -1,5 +1,6 @@
 // nuworq UI. No framework: state → HTML strings → one delegated event handler.
 // Zoom levels mirror 0-30-5-30: what isn't relevant at a level simply isn't rendered.
+import { connectCommands } from './connect.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
@@ -798,24 +799,22 @@ const copyBlock = (text) => `<div class="copyable"><pre>${esc(text)}</pre><butto
 async function connect() {
   S.info ??= await api('/api/info').catch(() => ({ bin: '/path/to/nuworq/bin/nuworq.js', url: location.origin }));
   const slug = S.slug ?? 'my-project';
-  const bin = S.info.bin;
-  const url = S.info.url;
-  const secured = S.info.auth === 'required';
-  const env = (url === 'http://127.0.0.1:4747' ? '' : ` -e NUWORQ_URL=${url}`) + (secured ? ' -e NUWORQ_TOKEN=<agent-token>' : '');
+  const c = connectCommands(S.info, location, slug);
+  const url = c.url;
   const where = S.view?.project.path;
-  const tomlTok = secured ? ', NUWORQ_TOKEN = "<agent-token>"' : '';
-  const envTok = secured ? '  NUWORQ_TOKEN=<agent-token>' : '';
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set an agent tool up once: it needs no project. An agent working in a folder the hub knows finds its project; anywhere else, the hub routes it to the work that matters most.</p>
-    ${secured ? `<p class="lead">This hub requires tokens. Give each agent its own, so you can revoke one without the others. On the server, run:</p>${copyBlock('node bin/nuworq.js token create <agent-name> --role agent')}` : ''}
-    <h4>Start a worker (it goes wherever work is waiting)</h4><p class="lead">Each worker gets its own git worktree and branch, so many can run at once. Run it again for more workers.</p>${copyBlock(`node "${bin}" worker --agent claude --run\nnode "${bin}" worker --agent codex --run`)}
+    ${c.local ? '' : `<h4>Get nuworq on your machine (once)</h4><p class="lead">It has no dependencies beyond Node 22.13+${c.clone ? ', so a clone is the install' : ': clone its repository into ~/nuworq'}.</p>${c.clone ? copyBlock(c.clone) : ''}`}
+    ${c.connect ? `<h4>Connect this machine (once)</h4><p class="lead">It checks the hub answers, logs you in through the browser for this machine's token, and registers nuworq with Claude Code and Codex if they're installed. Undo it all with <code>disconnect</code>.</p>${copyBlock(c.connect)}` : ''}
+    <h4>Start a worker (it goes wherever work is waiting)</h4><p class="lead">Each worker gets its own git worktree and branch, so many can run at once. Run it again for more workers.</p>${copyBlock(c.worker)}
     ${S.info.github_app === 'create' ? `<h4>GitHub App (once, for this hub)</h4><p class="lead">Workers push through a GitHub App: a token for one repository, for an hour, and nobody holds a lasting GitHub credential.</p><p><a class="btn primary small" href="${esc(url)}/api/github/app/new">Create GitHub App</a></p>`
       : S.info.github_app ? `<p class="lead">Workers push through the GitHub App${typeof S.info.github_app === 'string' ? ` <code>${esc(S.info.github_app)}</code>` : ''}: install it on each project's repository.</p>` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
-    <h4>Claude Code (once, for every project)</h4>${copyBlock(`claude mcp add --scope user nuworq${env} -- node "${bin}" mcp`)}
-    <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(`[mcp_servers.nuworq]\ncommand = "node"\nargs = ["${bin}", "mcp"]\nenv = { NUWORQ_URL = "${url}"${tomlTok} }`)}
-    <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(`command: node\nargs: ["${bin}", "mcp"]\nenv: NUWORQ_URL=${url}${envTok}`)}
-    <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(`node "${bin}" guide --project ${slug}`)}
+    ${c.claude ? `<h4>Claude Code (once, for every project)</h4>${copyBlock(c.claude)}` : ''}
+    <h4>OpenAI Codex (~/.codex/config.toml)${c.connect ? ', if you set it up by hand' : ''}</h4>${copyBlock(c.codex)}
+    <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}
+    ${c.token ? `<p class="lead">By hand, each agent needs its own token, so you can revoke one without the others. Make one on the hub's host, and put it where the config says <code>paste-an-agent-token-here</code>:</p>${copyBlock(c.token)}` : ''}
+    <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(c.guide)}
     <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>
 
     <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>x-nuworq-agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
