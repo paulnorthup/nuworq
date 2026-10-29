@@ -276,6 +276,8 @@ export function openDb(file) {
     "ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE projects ADD COLUMN issue_label TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE projects ADD COLUMN archived_at INTEGER NOT NULL DEFAULT 0', // archived: out of lists and routing, history kept // only issues with this label come in ('' = all) // the repository it lands in (a normalized remote); '': the project's first
+    'ALTER TABLE issues ADD COLUMN landed_comment INTEGER NOT NULL DEFAULT 0', // the hub's comment when its item landed (its id on GitHub)
+    "ALTER TABLE issues ADD COLUMN close_error TEXT NOT NULL DEFAULT ''", // why the hub couldn't close it after its item landed
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

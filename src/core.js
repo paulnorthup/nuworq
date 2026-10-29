@@ -1360,13 +1360,16 @@ function prBody(p, item) {
   const builder = item.implementer || submitted?.actor || '';
   const model = builder ? this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, builder)?.model ?? '' : '';
   const evidence = json(submitted?.data, {}).evidence ?? [];
-  const issue = json(this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'created' ORDER BY at LIMIT 1`).get(item.id)?.data, {}).issue;
+  // The issues it closes on merge: the one it was created for, and every GitHub issue linked to it in this repository.
+  const created = json(this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'created' ORDER BY at LIMIT 1`).get(item.id)?.data, {}).issue;
+  const linked = this.q(`SELECT number FROM issues WHERE item_id = ? AND repo = ? AND state = 'open' ORDER BY number`).all(item.id, this.repoOf(p, item)).map((r) => r.number);
+  const fixes = [...new Set([created, ...linked].filter(Boolean))];
   return [
     `nuworq #${item.seq}: ${item.title}${link ? `\n${link}` : ''}`,
     [builder && `Built by ${builder}${model ? ` (${model})` : ''}`, accepted && `reviewed by ${accepted.actor}`].filter(Boolean).join(', ') + '.',
     item.summary,
     evidence.length ? `Evidence:\n${evidence.map((e) => `- ${e.label}${e.url ? ` (${e.url})` : ''}`).join('\n')}` : '',
-    issue ? `Fixes #${issue}` : '',
+    fixes.map((n) => `Fixes #${n}`).join('\n'),
   ].filter((s) => s && s !== '.').join('\n\n');
 }
 

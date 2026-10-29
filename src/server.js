@@ -12,7 +12,7 @@ import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
 import { receive } from './github.js';
-import { syncIssues, commentIssues } from './issues.js';
+import { syncIssues, commentIssues, closeLanded } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS } from './ghapp.js';
@@ -96,7 +96,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   };
   const hubs = () => (spaces ? spaces.hubs() : [target]);
   const sweeper = setInterval(() => {
-    for (const hub of hubs()) { try { hub.sweep(); hub.refreshMirrorTokens(); } catch (e) { console.error('sweep failed', e); } }
+    for (const hub of hubs()) {
+      try { hub.sweep(); hub.refreshMirrorTokens(); } catch (e) { console.error('sweep failed', e); }
+      // Issues whose work has landed close on GitHub (a hub that has served a request knows its public address).
+      if (app && hub.github?.app === app) for (const p of hub.projects()) closeLanded(hub, p, app).catch((e) => console.error('closing issues failed', e));
+    }
   }, sweepMs);
   const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
 

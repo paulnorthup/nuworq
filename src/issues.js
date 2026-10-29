@@ -1,6 +1,7 @@
 // GitHub issues come in as proposals: on install (every open issue of the project's repos), and through
 // the issues webhook after that. One item per issue, ever; one comment back on the issue with the item's
-// link, and nothing else goes to GitHub. Closing an issue drops its item while nobody has started it.
+// link, and when the item lands, one more as the hub closes the issue (closeLanded). Closing an issue
+// drops its item while nobody has started it.
 // takeIssue() is synchronous (inside the webhook's transaction); syncing and commenting call GitHub
 // through the app (src/ghapp.js) and run after it.
 import { normRemote } from './core.js';
@@ -143,4 +144,72 @@ export async function commentIssues(hub, p, app, { link }) {
     }
   }
   return { commented: posted, ...(failed.length ? { failed } : {}) };
+}
+
+// How long after a pull request's merge the hub leaves its issues to GitHub: the PR body says "Fixes #N",
+// and GitHub closes those itself a moment after the merge.
+export const PR_GRACE = 2 * 60_000;
+
+// An item's page, for GitHub: the hub's public address (set by the server), as in pull request bodies.
+export const itemLink = (hub, p) => (item) => (hub.publicUrl ? `${hub.publicUrl.replace(/\/+$/, '')}/#/p/${encodeURIComponent(p.slug)}/${item.seq}` : `#${item.seq}`);
+
+// Issues whose item is done get closed on GitHub, with one comment: the item's link and the commit on main.
+// Only an issue that is still open: one GitHub closed for a "Fixes #N" merge is just marked closed here. A
+// failure goes on the item's record once, and the next run (the server's sweep) tries again; the comment
+// is recorded as soon as GitHub has it, so it is never posted twice.
+export async function closeLanded(hub, p, app, { link = itemLink(hub, p) } = {}) {
+  // One run per project at a time: the sweep and a webhook may both start one.
+  hub._closingIssues ??= new Set();
+  if (hub._closingIssues.has(p.id)) return { closed: 0, busy: true };
+  hub._closingIssues.add(p.id);
+  try {
+    return await closeEach(hub, p, app, link);
+  } finally {
+    hub._closingIssues.delete(p.id);
+  }
+}
+
+async function closeEach(hub, p, app, link) {
+  const t = hub.now();
+  const rows = hub.q(`SELECT s.*, i.stage_since FROM issues s JOIN items i ON i.id = s.item_id
+    WHERE s.project_id = ? AND s.state = 'open' AND i.stage = 'done' ORDER BY s.repo, s.number`).all(p.id)
+    .filter((r) => t - r.stage_since >= PR_GRACE || !hub.q(`SELECT 1 FROM prs WHERE item_id = ? AND state = 'merged'`).get(r.item_id));
+  const repos = new Map(); // repo → its API, one token for all its issues
+  let closed = 0;
+  for (const row of rows) {
+    const where = [p.id, row.repo, row.number];
+    const item = hub.itemById(row.item_id);
+    let error = '';
+    try {
+      if (!repos.has(row.repo)) repos.set(row.repo, asRepo(app, row.repo));
+      const gh = await repos.get(row.repo);
+      const now = await gh('GET', `/issues/${row.number}`);
+      if (now.status !== 200) throw new Error(`GitHub didn't show the issue (${now.status})`);
+      if (now.json.state !== 'closed') {
+        if (!row.landed_comment) {
+          const head = JSON.parse(hub.q(`SELECT data FROM events WHERE item_id = ? AND type = 'landed' ORDER BY at DESC, id DESC LIMIT 1`).get(item.id)?.data || '{}').head;
+          const r = await gh('POST', `/issues/${row.number}/comments`, {
+            body: `Landed in nuworq as [#${item.seq}](${link(item)})${head ? `, commit ${head} on main` : ''}. Closing this issue.`,
+          });
+          if (r.status !== 201) throw new Error(`GitHub didn't take the comment (${r.status})`);
+          hub.q('UPDATE issues SET landed_comment = ? WHERE project_id = ? AND repo = ? AND number = ?').run(r.json?.id || 1, ...where);
+        }
+        const r = await gh('PATCH', `/issues/${row.number}`, { state: 'closed', state_reason: 'completed' });
+        if (r.status !== 200) throw new Error(`GitHub didn't close it (${r.status})`);
+        closed++;
+        hub.event(p, { item, actor: ACTOR, type: 'issue', headline: `Closed ${row.url || `${row.repo}#${row.number}`}: #${item.seq} landed`, data: { url: row.url, state: 'closed' } });
+      }
+    } catch (e) {
+      error = e.message;
+    }
+    hub.q('UPDATE issues SET state = ?, close_error = ?, updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?').run(error ? 'open' : 'closed', error, hub.now(), ...where);
+    if (error && !row.close_error) {
+      hub.event(p, {
+        item, actor: ACTOR, type: 'issue_close_failed', headline: `The hub couldn't close ${row.url || `${row.repo}#${row.number}`} after #${item.seq} landed: ${clip(error, 120)}`,
+        summary: 'It tries again on its next sweep. The work is done either way.', data: { url: row.url, error },
+      });
+    }
+  }
+  if (rows.length) hub.changed(p);
+  return { closed };
 }
