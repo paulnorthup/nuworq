@@ -11,8 +11,9 @@ const askFor = (s) => (s.workspaces ? 'Ask whoever runs this hub to set up its G
 
 // s: what the hub knows (see facts()). Returns { complete, steps: [{ key, label, done, action? }] };
 // every step that isn't done carries an action: a label, and an href or a ui action the page knows, or
-// note: true when it's something to ask someone else for. GitHub comes after the project, and only while some
-// project is on github.com (or there's none yet): a project elsewhere finishes without it.
+// note: true when it's something to ask someone else for. Once there is a project, linking one to its repository
+// is a step of its own (#147), opened on the newest project. GitHub comes after, and only while some project is
+// on github.com (or none says where its code is yet): a project elsewhere finishes without it.
 export function getStarted(s) {
   const github = s.app === 'installed' ? null
     : s.app === 'none'
@@ -21,6 +22,7 @@ export function getStarted(s) {
   const steps = [
     s.workspaces && { key: 'org', label: 'Create your organization', done: !!s.org, action: { label: 'Create your organization', href: s.root || '/' } },
     { key: 'project', label: 'Add a project', done: !!s.project, action: { label: '+ Project', ui: 'new-project' } },
+    s.project && { key: 'repo', label: 'Link a project to its repository', done: !!s.repo, action: { label: '+ repo', ui: 'link-repo', slug: s.recent } },
     s.github !== false && { key: 'github', label: 'Connect GitHub', done: s.app === 'installed', action: github },
     { key: 'machine', label: 'Install and connect your machine', done: !!s.machine, action: { label: 'Connect your machine', ui: 'connect' } },
     { key: 'agent', label: 'Start an agent', done: !!s.agent, action: { label: 'Start an agent', ui: 'connect', command: 'worker' } },
@@ -42,17 +44,21 @@ export function facts(hub, { viewer = 'you', workspaces = false, app = 'none', c
   } else {
     machine = !!q(`SELECT 1 FROM agents WHERE last_checkin > 0 AND project_id IN (${live})`);
   }
+  // Any live project counts as added; it has a repository once it has a path on disk or a remote.
+  const project = !!q(live);
+  const repo = !!q(`SELECT 1 FROM projects WHERE archived_at = 0 AND (path != '' OR id IN (SELECT project_id FROM project_remotes))`);
   // GitHub matters while some live project is on github.com, or before any project says where its code is.
-  const project = !!q(`SELECT 1 FROM projects WHERE archived_at = 0 AND (path != '' OR id IN (SELECT project_id FROM project_remotes))`);
-  const github = !project || !!q(`SELECT 1 FROM project_remotes WHERE remote LIKE 'github.com/%' AND project_id IN (${live})`);
+  const github = !repo ||!!q(`SELECT 1 FROM project_remotes WHERE remote LIKE 'github.com/%' AND project_id IN (${live})`);
   let owners = [];
   try { owners = hub.q(`SELECT handle FROM people WHERE role = 'owner' ORDER BY id`).all().map((r) => r.handle); } catch { /* no people table yet */ }
   // The board to watch: the project most recently worked on.
   const board = q(`SELECT p.slug FROM projects p LEFT JOIN agents a ON a.project_id = p.id WHERE p.archived_at = 0
     GROUP BY p.id ORDER BY MAX(COALESCE(a.last_seen, 0)) DESC, p.id LIMIT 1`)?.slug ?? null;
+  // Where to link a repository: the newest project.
+  const recent = q(`SELECT slug FROM projects WHERE archived_at = 0 ORDER BY created_at DESC, id DESC LIMIT 1`)?.slug ?? null;
   return {
     workspaces, org: workspaces && !!person, root, app, canCreateApp, installUrl, github, owners,
-    project, machine,
+    project, repo, recent, machine,
     agent: !!q(`SELECT 1 FROM agents WHERE last_seen >= ? AND project_id IN (${live})`, hub.now() - RECENT_MS),
     landed: !!q(`SELECT 1 FROM events WHERE type = 'landed' AND project_id IN (${live})`),
     board,

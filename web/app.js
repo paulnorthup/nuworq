@@ -202,10 +202,13 @@ function route() {
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
   const ref = m?.[2] ? `#${m[2]}` : null;
-  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = false; }
+  // Arriving from Get started's "+ repo" opens this project's repository form, focused.
+  const linking = !!slug && S.linkRepo === slug;
+  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = linking; }
+  S.linkRepo = null;
   S.slug = slug;
   if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; S.editPre = false; }
-  refresh({ force: true });
+  refresh({ force: true }).then(() => linking && $('#remote-in')?.focus());
 }
 const go = (slug, ref) => { location.hash = slug ? `#/p/${encodeURIComponent(slug)}${ref ? '/' + ref.replace('#', '') : ''}` : '#/'; };
 
@@ -292,7 +295,7 @@ function project(v) {
   const empty = !v.all.length && !v.agents.length;
   return `
     <div class="phead">
-      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? remotes : ''}</div>
+      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
@@ -1228,6 +1231,12 @@ const ACTIONS = {
     } catch (e) { toast(e.message, true); }
   },
   'new-project': () => newProject(),
+  // Get started's "Link a project to its repository": that project, with its + repo form open.
+  'link-repo': (el) => {
+    if (el.dataset.slug === S.slug) return ACTIONS['remote-new']();
+    S.linkRepo = el.dataset.slug;
+    go(el.dataset.slug);
+  },
   'get-started-hide': async () => {
     try { S.gs = await api('/api/get-started/hide', { method: 'POST' }); render({ force: true }); } catch (e) { toast(e.message, true); }
   },
