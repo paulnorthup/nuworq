@@ -17,7 +17,7 @@ import { syncIssues, commentIssues, closeLanded, closeStale } from './issues.js'
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
-import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS } from './ghapp.js';
+import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { outcomes } from './outcomes.js';
@@ -83,6 +83,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const pkg = buildPackage(source, packageDir).then((b) => (built = b));
   const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
   let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, ...githubApp }) : githubApp;
+  // The app as a hub may use it: on a shared hub, only the installations bound to that organization
+  // (installed from inside it; see /api/github/installed), so one organization can't read another's repositories.
+  const appOf = (hub) => (!app ? null : spaces ? app.scoped((id) => spaces.directory.installation(id) === hub.workspace) : app);
   const appStates = new Map(); // one-click app creation: state → expiry (single use, an hour)
   // Follow a renamed app: refresh its slug now and then (never blocking a request), and save it.
   let slugAt = 0;
@@ -145,7 +148,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // merged ones land, closed or conflicting ones become land jobs. At most once a minute.
       if (hub.github) hub.mergeReady().catch((e) => console.error('checking pull requests failed', e));
       // Issues whose work has landed close on GitHub (a hub that has served a request knows its public address).
-      if (app && hub.github?.app === app) for (const p of hub.projects()) closeLanded(hub, p, app).catch((e) => console.error('closing issues failed', e));
+      if (app && hub._app === app) for (const p of hub.projects()) closeLanded(hub, p, hub.github.app).catch((e) => console.error('closing issues failed', e));
     }
   }, sweepMs);
   const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
@@ -244,6 +247,16 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       res.setHeader('set-cookie', `${HUB_COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
       return redirect(res, '/');
     }
+    // GitHub's setup page after the app was installed from inside an organization (/api/github/install):
+    // the signed state says which one, and the installation is bound to it. The first binding stands.
+    if (req.method === 'GET' && path === '/api/github/installed') {
+      if (!app) return deny(404, 'this hub has no GitHub App');
+      const ws = readInstallState(app, url.searchParams.get('state'));
+      const id = Number(url.searchParams.get('installation_id'));
+      if (!ws || !spaces.has(ws) || !id) return deny(400, "this install didn't start from an organization on this hub, or its link expired", 'Open your organization, then Connect → Install the GitHub App, and finish the install within the hour.');
+      if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another organization on this hub', 'Install the app for this organization on its own account or repositories.');
+      return redirect(res, `/w/${encodeURIComponent(ws)}/#github-installed`);
+    }
     const sid = jarOf(req).get(HUB_COOKIE);
     const me = dir.verifySession(sid);
     const signIn = sso.enabled ? 'Sign in with GitHub or Google: see GET /api/oauth for where to start.' : 'This hub has no GitHub or Google sign-in set up (see DEPLOY.md).';
@@ -327,7 +340,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       const { authz, devices, clients } = scopeOf(hub);
       // Accepted remote work lands through a pull request the hub opens, as the app (also one created since start).
-      if (app && hub.github?.app !== app) { hub.github = prClient(app, { web: gh.web }); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
+      if (app && hub._app !== app) { hub._app = app; hub.github = prClient(appOf(hub), { web: gh.web }); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.
@@ -345,7 +358,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           const p = hub.project(slug);
           const link = itemLink(req, p.slug);
           try {
-            r.github = r.sync ? await syncIssues(hub, p, app, r.sync, { link }) : await commentIssues(hub, p, app, { link });
+            r.github = r.sync ? await syncIssues(hub, p, appOf(hub), r.sync, { link }) : await commentIssues(hub, p, appOf(hub), { link });
           } catch (e) {
             r.github = { error: e.message };
           }
@@ -494,6 +507,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // The hub's GitHub App: whether it has one, and the one-click page that creates it (owners, single hub).
       if (req.method === 'GET' && (path === '/api/github/app' || path === '/api/info')) freshSlug();
       if (req.method === 'GET' && path === '/api/github/app') return send(200, { configured: !!app, slug: app?.slug || null, can_create: !spaces && personRole === 'owner' });
+      // Install the app for this organization: on a shared hub, the installation is bound to it on the way back.
+      if (req.method === 'GET' && path === '/api/github/install') {
+        if (!app?.slug) return deny(404, 'this hub has no GitHub App to install', 'The hub host sets one up (docs/GITHUB.md).');
+        if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't install the app for this organization`, 'Ask an owner.');
+        return redirect(res, spaces ? `${app.installUrl()}?state=${encodeURIComponent(installState(app, hub.workspace))}` : app.installUrl());
+      }
       if (req.method === 'GET' && path === '/api/github/app/new') {
         if (spaces) return deny(403, 'on a hub with workspaces, the host sets up the GitHub App', 'See docs/GITHUB.md: NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE.');
         if (personRole !== 'owner') return deny(403, 'only an owner creates the GitHub App', 'Ask an owner of this hub.');
@@ -659,7 +678,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!app) return deny(424, 'no GitHub App configured', 'Start the hub with NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY (docs/GITHUB.md).');
         const p = hub.project(decodeURIComponent(m[1]));
         const repos = hub.remotesOf(p).filter((r) => r.startsWith('github.com/'));
-        return send(200, { ok: true, ...(await syncIssues(hub, p, app, repos, { link: itemLink(req, p.slug) })) });
+        return send(200, { ok: true, ...(await syncIssues(hub, p, appOf(hub), repos,{ link: itemLink(req, p.slug) })) });
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/human\/([a-z]+)$/)) && req.method === 'POST') {
         if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404 });
@@ -669,7 +688,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (DECIDES.human.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), args);
         const out = hub.humanOp(decodeURIComponent(m[1]), m[2], args, by);
         // "Close them all" on stale issues: the proposals are dropped; now the issues close on GitHub.
-        if (out.closing) out.github = app ? await closeStale(hub, hub.project(decodeURIComponent(m[1])), app) : { error: 'no GitHub App configured: the issues stay open on GitHub' };
+        if (out.closing) out.github = app ? await closeStale(hub, hub.project(decodeURIComponent(m[1])), appOf(hub)) : { error: 'no GitHub App configured: the issues stay open on GitHub' };
         return send(200, out);
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/agent\/([a-z]+)$/)) && req.method === 'POST') {
@@ -694,7 +713,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           const who = caller.token?.name ?? agent ?? 'a worker';
           let t;
           try {
-            t = await app.mint(repo, CLONE_PERMISSIONS);
+            t = await appOf(hub).mint(repo, CLONE_PERMISSIONS);
           } catch (e) {
             if (e instanceof UserError) {
               hub.event(p, { actor: who, type: 'credential_refused', headline: `No GitHub token for ${who} to clone ${repo}: ${e.message}`, summary: e.hint ?? '', data: { agent: who, repo, purpose: 'clone' } });
@@ -724,7 +743,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
         let t;
         try {
-          t = await app.mint(repo);
+          t = await appOf(hub).mint(repo);
           for (const [k, v] of minted) if (Date.parse(v.expires_at) < Date.now()) minted.delete(k);
           minted.set(key, t);
         } catch (e) {

@@ -3,7 +3,7 @@
 // item lands in, with only the permissions work needs. GitHub expires it after an hour. Agents never
 // hold a long-lived GitHub credential; git asks for the token through `nuworq git-credential`.
 // fetch and node:crypto only.
-import { createSign, createPrivateKey } from 'node:crypto';
+import { createSign, createPrivateKey, createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { UserError } from './core.js';
 import { envVar } from './names.js';
@@ -158,6 +158,12 @@ export class GitHubApp {
       });
     }
     if (inst.status !== 200 || !inst.json.id) throw new UserError(`GitHub didn't say whether the app can reach ${owner}/${name} (${inst.status})`, { status: 502, hint: 'Check the app id and private key the hub was started with; try again in a minute.' });
+    // On a shared hub, one organization's view of the app reaches only installations bound to it (scoped).
+    if (this.allows && !this.allows(inst.json.id)) {
+      throw new UserError(`The nuworq GitHub App on ${owner}/${name} was installed for another organization, not this one`, {
+        status: 403, hint: `An owner of ${owner} installs the app for this organization, starting from its Connect page, so the hub knows the installation is yours.`,
+      });
+    }
     const tok = await this.call('POST', `/app/installations/${inst.json.id}/access_tokens`, { repositories: [name], permissions });
     if (tok.status === 403 || tok.status === 404) {
       throw new UserError(`GitHub refused a token for ${owner}/${name}: the app's installation there is suspended or removed`, {
@@ -167,6 +173,26 @@ export class GitHubApp {
     if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for ${owner}/${name} (${tok.status}${tok.json.message ? `: ${tok.json.message}` : ''})`, { status: 502 });
     return { token: tok.json.token, expires_at: tok.json.expires_at, repo: `github.com/${owner}/${name}` };
   }
+
+  // This app as one organization on a shared hub sees it: the same app, minting only for installations
+  // allows(installationId) says are that organization's.
+  scoped(allows) {
+    return Object.create(this, { allows: { value: allows } });
+  }
+}
+
+// Installing the app from inside an organization: GitHub carries `state` through to the setup page,
+// so the hub learns which organization the installation is for. Signed with the app's key, so it can't
+// be forged; good for an hour.
+export function installState(app, workspace, now = Date.now()) {
+  const body = `${workspace}.${now + 3600_000}`;
+  return `${body}.${createHmac('sha256', app.key.export({ type: 'pkcs8', format: 'pem' })).update(body).digest('base64url')}`;
+}
+export function readInstallState(app, state, now = Date.now()) {
+  const [workspace, until, sig] = String(state ?? '').split('.');
+  if (!workspace || !sig || !(Number(until) > now)) return null;
+  const want = installState(app, workspace, Number(until) - 3600_000).split('.')[2];
+  return want.length === sig.length && timingSafeEqual(Buffer.from(want), Buffer.from(sig)) ? workspace : null;
 }
 
 // GitHub won't turn auto-merge on for a pull request with nothing left to wait for (no required checks, or

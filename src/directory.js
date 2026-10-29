@@ -41,7 +41,26 @@ export class Directory {
         created     INTEGER NOT NULL DEFAULT 0,   -- 1: this identity created the organization
         at          INTEGER NOT NULL,
         PRIMARY KEY (identity_id, workspace)
+      );
+      CREATE TABLE IF NOT EXISTS installations (
+        id        INTEGER PRIMARY KEY,            -- the GitHub App installation id
+        workspace TEXT NOT NULL,                  -- the organization it was installed for
+        at        INTEGER NOT NULL
       );`);
+  }
+
+  // Which organization a GitHub App installation belongs to, or null.
+  installation(id) {
+    return this.db.prepare('SELECT workspace FROM installations WHERE id = ?').get(Number(id))?.workspace ?? null;
+  }
+
+  // Bind an installation to an organization. The first binding stands: an installation already bound to
+  // another organization stays there (returns false).
+  bindInstallation(id, workspace) {
+    const was = this.installation(id);
+    if (was && was !== workspace) return false;
+    if (!was) this.db.prepare('INSERT INTO installations (id, workspace, at) VALUES (?, ?, ?)').run(Number(id), workspace, this.now());
+    return true;
   }
 
   // The identity for a verified email, made on first sign-in.

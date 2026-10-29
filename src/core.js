@@ -201,13 +201,16 @@ export class Hub extends EventEmitter {
   // repos: where the hub keeps mirrors of repositories it has no checkout of (null: it keeps none,
   // so git can't say anything about those projects). keys: per-repository deploy keys for fetching
   // them, <keys>/<host>/<owner>/<repo> (null: the default key only; see sshCommandFor in git.js).
-  constructor({ file = ':memory:', clock = () => Date.now(), repos = null, keys = null } = {}) {
+  // hosted: one organization on a shared hub (workspaces mode): it reaches only repositories it was
+  // granted, never a path on the hub's disk or the hub's own SSH identity (see mirror in git.js).
+  constructor({ file = ':memory:', clock = () => Date.now(), repos = null, keys = null, hosted = false } = {}) {
     super();
     this.setMaxListeners(200);
     this.db = openDb(file);
     this.now = clock;
     this.repos = repos;
     this.keys = keys;
+    this.hosted = hosted;
     this._stmts = new Map();
     this._unreachable = new Set(); // repositories the hub has said it can't reach
     // The app's read tokens for the hub's own mirrors, per remote: { token, expires_at } once minted,
@@ -420,7 +423,7 @@ export class Hub extends EventEmitter {
     if (this.localFor(p, item)) return { path: p.path, mode: 'local' };
     const remote = this.repoOf(p, item);
     if (!remote || !this.repos) return null;
-    const m = mirror(this.repos, remote, { fresh, keys: this.keys, https: this.mirrorHttps(remote), onFetched: () => this.remoteChanged(remote) });
+    const m = mirror(this.repos, remote, { fresh, keys: this.keys, https: this.mirrorHttps(remote), hosted: this.hosted, onFetched: () => this.remoteChanged(remote) });
     if (!m.error) return { path: m.path, mode: 'remote' };
     if (!m.pending && !this._unreachable.has(remote)) {
       this._unreachable.add(remote);
@@ -445,7 +448,7 @@ export class Hub extends EventEmitter {
         this.mirrorHttps(repo);
         await this._mirrorTokens.get(repo)?.pending;
       }
-      const r = await fetchMirror(this.repos, repo, { keys: this.keys, https: this.mirrorHttps(repo) });
+      const r = await fetchMirror(this.repos, repo, { keys: this.keys, https: this.mirrorHttps(repo), hosted: this.hosted });
       if (r.changed) this.remoteChanged(repo);
     } catch { /* the op says what's wrong */ }
   }
@@ -507,6 +510,9 @@ export class Hub extends EventEmitter {
   addRemote(p, remote, actor) {
     const r = normRemote(remote);
     if (!r) throw new UserError('a remote is required', { hint: 'e.g. github.com/acme/api, or any form git accepts (git@github.com:acme/api.git).' });
+    if (this.hosted && r.startsWith('/')) {
+      throw new UserError(`${r} is a path on the hub's machine; an organization on a shared hub links repositories by address`, { hint: 'Use the repository\'s address, e.g. github.com/acme/api.' });
+    }
     const owner = this.projectByRemote(r, null, { archived: true });
     if (owner?.id === p.id) return r;
     if (owner) {
@@ -1086,7 +1092,7 @@ export class Hub extends EventEmitter {
       this.event(p, { actor: SYSTEM, type: 'path', headline: `${p.name} lives in ${here}`, summary: `Learned from ${agent}'s checkin. Agents working in that folder now find this project on their own.` });
     }
     // Learn the repository the same way, unless it already belongs to another project.
-    if (slug && remote && op === 'checkin' && !this.projectByRemote(remote, null, { archived: true })) this.addRemote(p, remote, agent);
+    if (slug && remote && op === 'checkin' && !(this.hosted && remote.startsWith('/')) && !this.projectByRemote(remote, null, { archived: true })) this.addRemote(p, remote, agent);
     // A clone of the project's repository is the right place to work, wherever it sits on disk.
     const ownClone = !!remote && this.projectByRemote(remote)?.id === p.id;
     const result = this.tx(() => {
