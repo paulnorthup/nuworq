@@ -241,6 +241,20 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       hub.changed(p);
     }
   };
+  // For the header's organization switcher: every organization this person (by email) belongs to, each with the
+  // one-click link that signs them in there, and where to make a new one. Entering goes through the hub's own
+  // sign-in, so it works from any organization's address.
+  const orgsHere = (req, hub, ws, person) => {
+    const email = hub.db.prepare('SELECT email FROM people WHERE handle = ?').get(person.handle)?.email;
+    const id = email && spaces.directory.identity(email);
+    const mine = id ? spaces.directory.orgsOf(id, spaces) : [];
+    if (!mine.some((m) => m.workspace === ws)) mine.unshift({ workspace: ws, handle: person.handle, role: person.role });
+    return {
+      org: ws,
+      orgs: mine.map((m) => ({ workspace: m.workspace, role: m.role, current: m.workspace === ws, address: homeOf(req, m.workspace), enter: `${authOrigin(req)}/api/orgs/${encodeURIComponent(m.workspace)}/enter` })),
+      new_org: `${authOrigin(req)}/?new`,
+    };
+  };
   const redirect = (res, location) => { res.writeHead(302, { location, 'cache-control': 'no-store' }); res.end(); };
 
   // GET /auth/<provider>/start?ws=<workspace> and /auth/<provider>/callback: hub-wide, whatever the host.
@@ -350,7 +364,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const sid = jarOf(req).get(HUB_COOKIE);
     const me = dir.verifySession(sid);
     const signIn = sso.enabled ? 'Sign in with GitHub or Google: see GET /api/oauth for where to start.' : 'This hub has no GitHub or Google sign-in set up (see DEPLOY.md).';
-    const known = ['/api/me', '/api/orgs', '/api/logout', '/api/early-access', '/api/early-access/decide'].includes(path) || /^\/api\/orgs\/[^/]+\/enter$/.test(path);
+    const known = ['/api/me', '/api/orgs', '/api/orgs/check', '/api/logout','/api/early-access', '/api/early-access/decide'].includes(path) || /^\/api\/orgs\/[^/]+\/enter$/.test(path);
     if (!known) return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
     if (!me) return deny(401, 'sign in required', signIn);
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
@@ -375,6 +389,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (r.already) return deny(409, `that request was already ${r.already}`, 'Each request is decided once; its link was shown when it was approved.');
         return send(200, { ok: true, state: r.state, ...(r.code ? { link: `${authOrigin(req)}/?grant=${r.code}` } : {}) });
       }
+    }
+    // While the person types: the address a name (or slug) would get, and whether it's free, before they submit.
+    if (req.method === 'GET' && path === '/api/orgs/check') {
+      const asked = url.searchParams.get('slug') || slugify(url.searchParams.get('name') ?? '');
+      const slug = Workspaces.check(asked);
+      if (spaces.has(slug)) throw new UserError(`"${slug}" is taken`, { status: 409, hint: 'Pick another name for the address.' });
+      return send(200, { ok: true, slug, address: homeOf(req, slug) });
     }
     if (req.method === 'POST' && path === '/api/orgs') {
       const b = await body(req);
@@ -602,7 +623,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         who = bearer ? authz.verifyToken(bearer) : sid ? authz.verifySession(sid) : null;
         if (who) who.via = bearer ? 'bearer' : 'cookie';
         if (req.method === 'GET' && path === '/api/me') {
-          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null, ...(who?.projects ? { projects: who.projects } : {}) });
+          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null, ...(who?.projects ? { projects: who.projects } : {}), ...(spaces && who?.person ? orgsHere(req, hub, ws, who.person) : {}) });
         }
         if (!who) {
           return deny(401, bearer ? 'invalid or revoked token' : 'login required',
@@ -770,6 +791,24 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'POST' && path === '/api/projects') {
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't create projects`, 'Ask an owner or steward.');
         const b = await body(req);
+        // Several repositories at once (a new organization's first project): each is linked by the usual rules,
+        // and one that can't be (another project's, a path, not a remote) is reported, not fatal.
+        if (Array.isArray(b.remotes)) {
+          const list = [...new Set(b.remotes.map((r) => String(r ?? '').trim()).filter(Boolean))];
+          const name = String(b.name ?? '').trim() || (normRemote(list[0] ?? '').split('/').at(-1) ?? '');
+          if (!name) return deny(400, 'a name is required', 'e.g. "api", or give a repository and it names the project.');
+          const p = hub.project(slugify(b.slug || name), { create: true, name });
+          const linked = [], refused = [];
+          for (const r of list) {
+            try { linked.push(hub.addRemote(p, r, by)); } catch (e) {
+              if (!(e instanceof UserError)) throw e;
+              refused.push({ remote: r, error: e.message, ...(e.hint ? { hint: e.hint } : {}) });
+            }
+          }
+          if (b.mission) hub.humanOp(p.slug, 'settings', { mission: b.mission });
+          hub.changed(p);
+          return send(200, { ok: true, slug: p.slug, remotes: linked, refused });
+        }
         // From a repository: its name, a free slug, its description as the mission, and the remote linked.
         const repo = b.repo ? normRemote(b.repo) : '';
         if (b.repo && !/^github\.com\/[^/]+\/[^/]+$/.test(repo)) return deny(400, `"${b.repo}" isn't a GitHub repository`, 'e.g. github.com/acme/api');

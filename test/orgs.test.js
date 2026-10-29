@@ -180,6 +180,51 @@ describe('organizations: who belongs where, and making one', () => {
     } finally { sub.close(); }
   });
 
+  test('while a name is typed, its address is checked: free, or taken, reserved or invalid with a hint', async () => {
+    const check = (q, c = bob) => request(port, 'GET', `/api/orgs/check?${q}`, { headers: c ? { cookie: c } : {} });
+    const free = await check('name=Gamma%20Co');
+    assert.equal(free.status, 200, free.text);
+    assert.deepEqual(free.json, { ok: true, slug: 'gamma-co', address: `${origin}/w/gamma-co` });
+    for (const [q, status] of [['slug=acme', 409], ['name=Acme', 409], ['slug=admin', 400], ['slug=A!', 400], ['name=', 400]]) {
+      const r = await check(q);
+      assert.equal(r.status, status, q);
+      assert.ok(r.json.error && r.json.hint, `${q} says why and what to do`);
+    }
+    assert.equal((await check('name=x', null)).status, 401);
+    assert.ok(!spaces.has('gamma-co'), 'checking creates nothing');
+  });
+
+  test("a first project takes several repositories: one another project has is refused with its hint, the rest are linked", async () => {
+    const a = await enter(ann, 'acme');
+    const post = (body) => request(port, 'POST', '/w/acme/api/projects', { headers: { cookie: a.session, origin }, body });
+    assert.deepEqual((await post({ name: 'web', remotes: ['github.com/acme/web'] })).json, { ok: true, slug: 'web', remotes: ['github.com/acme/web'], refused: [] });
+    const r = await post({ name: 'api', mission: 'Never lose an order.', remotes: ['github.com/acme/api', 'git@github.com:acme/web.git', 'https://github.com/acme/docs.git', 'github.com/acme/api'] });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.json.remotes, ['github.com/acme/api', 'github.com/acme/docs']);
+    assert.equal(r.json.refused.length, 1);
+    assert.equal(r.json.refused[0].remote, 'git@github.com:acme/web.git');
+    assert.match(r.json.refused[0].error, /already belongs to web/);
+    assert.match(r.json.refused[0].hint, /one repository maps to one project/);
+    const hub = spaces.get('acme');
+    assert.deepEqual(hub.remotesOf(hub.project('api')), ['github.com/acme/api', 'github.com/acme/docs']);
+    assert.deepEqual(hub.remotesOf(hub.project('web')), ['github.com/acme/web'], 'the other project keeps its repository');
+    assert.equal(hub.project('api').mission, 'Never lose an order.');
+    assert.equal((await post({ remotes: [] })).status, 400, 'a name, or a repository to name it after, is required');
+  });
+
+  test("inside an organization, /api/me lists the person's organizations, with roles, for the switcher", async () => {
+    const a = await enter(ann, 'acme');
+    const r = await request(port, 'GET', '/w/acme/api/me', { headers: { cookie: a.session } });
+    assert.equal(r.json.org, 'acme');
+    assert.deepEqual(r.json.orgs, [
+      { workspace: 'acme', role: 'owner', current: true, address: `${origin}/w/acme`, enter: `${origin}/api/orgs/acme/enter` },
+      { workspace: 'acme-labs', role: 'owner', current: false, address: `${origin}/w/acme-labs`, enter: `${origin}/api/orgs/acme-labs/enter` },
+    ]);
+    assert.equal(r.json.new_org, `${origin}/?new`);
+    const b = await enter(bob, 'beta');
+    assert.deepEqual((await request(port, 'GET', '/w/beta/api/me', { headers: { cookie: b.session } })).json.orgs.map((o) => [o.workspace, o.role]), [['beta', 'owner']]);
+  });
+
   test('signing out of the hub ends the hub session only', async () => {
     const a = await enter(ann, 'acme');
     assert.equal((await request(port, 'POST', '/api/logout', { headers: { cookie: ann, origin } })).status, 200);
