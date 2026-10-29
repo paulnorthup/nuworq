@@ -510,6 +510,7 @@ function agents(v) {
     <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
       <div class="top">${who(a.name, a.model)}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
       <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}</div>
+      ${a.has?.length ? `<div class="model" title="What this agent's machine can do (declared at checkin)">has: ${esc(a.has.join(', '))}</div>` : ''}
       <div class="line" title="${esc(a.line)}">${esc(a.line || '—')}</div>
       <div class="stats">
         <div><b>${a.record.landed}</b><span>landed</span></div>
@@ -633,7 +634,7 @@ function renderDrawer() {
     </div></div>` : '';
 
   d.innerHTML = `
-    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>
+    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
       <button class="btn ghost small x" data-action="close" title="Close (Esc)">✕</button></div>
     <h2 class="title">${esc(it.title)}</h2>
     <div class="d-now">${holderLine}</div>

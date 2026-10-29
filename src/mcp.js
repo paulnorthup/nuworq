@@ -47,6 +47,8 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
       if (name === 'checkin') {
         if (!args.model && env.TRELLIS_MODEL) args.model = env.TRELLIS_MODEL;
         if (!args.client && clientName) args.client = clientName;
+        // Whoever launched us detected what this machine can do (trellis worker sets it).
+        if (args.has == null && env.TRELLIS_HAS) args.has = env.TRELLIS_HAS.split(',');
       }
       try {
         const result = await client.call(name, args, { agent, project });

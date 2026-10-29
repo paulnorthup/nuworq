@@ -4,6 +4,8 @@
 const s = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const ITEM = s('Item reference, e.g. "#12" or "12".');
 const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Optional. Files or directories you are changing, e.g. ["src/db", "src/api/tags.ts"]. Other agents are warned before they collide with you, and you with them.' };
+const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Optional. What an agent\'s machine must have to do it, e.g. ["docker"], ["linux-vm"], ["browser"], ["gpu"]. Only agents that declared these tags (checkin `has`) are offered it.' };
+const SIZE = { type: 'string', enum: ['small', 'large'], description: 'Optional. "large": multi-step work; small models get it only when nothing else fits.' };
 const LAYERS = {
   headline: s('One line, ≤100 characters, outcome first. What a busy person needs in three seconds.'),
   summary: s('Optional. The 5-minute version: a few short lines on what, why, and what is next.'),
@@ -19,6 +21,7 @@ export const OPS = [
       model: s('Your model id, e.g. "claude-opus-5-5", "gpt-5", "qwen3-coder".'),
       client: s('The tool you run in, e.g. "claude-code", "codex", "opencode".'),
       status: s('Optional one-line status.'),
+      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others.' },
     },
   },
   {
@@ -89,6 +92,8 @@ export const OPS = [
       priority: { type: 'string', enum: ['now', 'soon', 'later'], description: 'Default "soon".' },
       parent: { ...ITEM, description: 'Optional. The item this is part of.' },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Items that must be done first.' },
+      needs: NEEDS,
+      size: SIZE,
     },
     required: ['title'],
   },
@@ -103,6 +108,8 @@ export const OPS = [
       acceptance: s('Optional. What done means.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
+      needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
+      size: SIZE,
     },
     required: ['item'],
   },
@@ -186,7 +193,7 @@ Hub: ${url} · project: ${project} (change with --project).
 - **Leave knowledge behind.** When you learn something the hard way (a command, a trap, a convention), ${c('learn')} it once. No agent has to learn it again.
 
 ## The loop
-1. ${c('checkin', cli ? '--model <model> --client <tool>' : '')}. Read it. ${c('ack', cli ? '<steer-id> "how you will adjust"' : '')} any steering.
+1. ${c('checkin', cli ? '--model <model> --client <tool> --has "docker,macos"' : '')}. Say what your machine can do in \`has\` (e.g. docker, linux, macos, browser, gpu), so you only get work you can finish. Read it. ${c('ack', cli ? '<steer-id> "how you will adjust"' : '')} any steering.
 2. ${c('next')} claims the most useful job and hands you its context. Read \`done_means\`, \`history\` and \`last_handoff\`. The job is one of:
    - **work**: build it.
    - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. Finish with ${c('submit')}.
@@ -197,7 +204,7 @@ Hub: ${url} · project: ${project} (change with --project).
    - Truly blocked? ${c('ask')} with \`blocking\`. The item parks; take other work with ${c('next')}.
 5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it.
 6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for.
-7. Noticed other work? ${c('propose')} it with acceptance criteria. Don't grow your current item.
+7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item.
 8. Leaving? ${c('signoff')}.
 
 ## Write in layers (0-30-5-30)

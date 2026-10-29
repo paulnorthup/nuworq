@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS agents (
   status      TEXT NOT NULL DEFAULT '',
   signed_off  INTEGER NOT NULL DEFAULT 0,
   last_checkin INTEGER NOT NULL DEFAULT 0,
+  has         TEXT NOT NULL DEFAULT '[]',     -- JSON: what the agent's machine can do, e.g. ["docker", "macos"]
   first_seen  INTEGER NOT NULL,
   last_seen   INTEGER NOT NULL,
   PRIMARY KEY (project_id, name)
@@ -48,6 +49,8 @@ CREATE TABLE IF NOT EXISTS items (
   implementer TEXT,                           -- who submitted it for verification
   handoff     TEXT NOT NULL DEFAULT '',       -- JSON: latest "where I left off" / "sent back because"
   touching    TEXT NOT NULL DEFAULT '[]',     -- JSON: paths the current holder says it is changing
+  needs       TEXT NOT NULL DEFAULT '[]',     -- JSON: tags an agent must have to take it, e.g. ["docker"]
+  size        TEXT NOT NULL DEFAULT '',       -- '' | small | large
   attempts    INTEGER NOT NULL DEFAULT 0,
   stalls      INTEGER NOT NULL DEFAULT 0,
   rejections  INTEGER NOT NULL DEFAULT 0,
@@ -149,6 +152,9 @@ export function openDb(file) {
     'ALTER TABLE agents ADD COLUMN last_checkin INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN parked INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE projects ADD COLUMN path TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agents ADD COLUMN has TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE items ADD COLUMN needs TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE items ADD COLUMN size TEXT NOT NULL DEFAULT ''",
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

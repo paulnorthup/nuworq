@@ -108,6 +108,19 @@ export function normPaths(v) {
   return [...new Set(list.map((x) => str(x).replace(/^\.\//, '').replace(/(\/\*\*|\/\*|\*|\/)+$/, '')).filter(Boolean))].slice(0, 30);
 }
 const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+
+// Fit tags: what an item needs, and what an agent's machine has. "Docker, linux-vm" → ["docker", "linux-vm"].
+export function normTags(v) {
+  const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[\s,]+/) : [];
+  return [...new Set(list.map((x) => slugify(x)).filter(Boolean))].slice(0, 20);
+}
+export const SIZES = ['small', 'large'];
+
+// A model whose name says it has ≤8B parameters (qwen3:8b, Llama-3.1-8B-Instruct, gemma3n:e2b).
+export function smallModel(model = '') {
+  const m = String(model ?? '').toLowerCase().match(/(?:^|[^\d.])(\d+(?:\.\d+)?)b(?![a-z0-9])/);
+  return !!m && Number(m[1]) <= 8;
+}
 const normDir = (d) => str(d).replace(/\/+$/, '');
 
 export function slugify(s) {
@@ -182,12 +195,13 @@ export class Hub extends EventEmitter {
 
   // Where the most valuable claimable work is, across every project that isn't parked:
   // your picks and "now" work first, then building before shaping, then whatever has waited longest.
-  route(agent = '') {
+  // has: the agent's tags when it is declaring them right now (else what it declared last).
+  route(agent = '', { has } = {}) {
     this.sweep();
     const options = [];
     for (const p of this.projects()) {
       if (p.parked) continue;
-      const pick = this.pick(p, agent);
+      const pick = this.pick(p, agent, { has });
       if (pick) options.push({ p, ...pick });
     }
     options.sort((a, b) =>
@@ -366,6 +380,8 @@ export class Hub extends EventEmitter {
       title: item.title,
       stage: item.stage,
       priority: item.priority,
+      needs: json(item.needs, []).length ? json(item.needs, []) : undefined,
+      size: item.size || undefined,
       summary: item.summary || undefined,
       detail: item.detail || undefined,
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
@@ -442,7 +458,7 @@ export class Hub extends EventEmitter {
         if (!['checkin', 'next'].includes(op)) {
           throw new UserError('Which project?', { hint: 'Call checkin first: the hub sends you to the work that matters most, and remembers it for this session.' });
         }
-        routed = this.route(agent)[0];
+        routed = this.route(agent, { has: op === 'checkin' && args.has != null ? normTags(args.has) : undefined })[0];
         if (!routed) {
           return {
             ok: true, project: null,
@@ -540,23 +556,42 @@ export class Hub extends EventEmitter {
 
   // Pick the most useful thing for this agent. Finish before starting: reviews first, then by priority;
   // at equal priority, build ready work before shaping proposals, and prefer work you touched before.
-  pick(p, agent) {
+  // Never offers work whose needs the agent's machine lacks; large work waits while a weak fit has other work.
+  pick(p, agent, { has } = {}) {
+    const fit = this.fit(p, agent, has);
+    const ok = (i) => !fit.has || json(i.needs, []).every((t) => fit.has.includes(t));
     if (p.autonomy === 'full') {
       const review = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
-          AND COALESCE(implementer, '') != ? ORDER BY stage_since`).get(p.id, agent);
+          AND COALESCE(implementer, '') != ? ORDER BY stage_since`).all(p.id, agent).find(ok);
       if (review) return { mode: 'review', item: review };
     }
     if (p.parked) return null;
     const ready = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
-      .filter((i) => !this.unmetDeps(i).length)
+      .filter((i) => ok(i) && !this.unmetDeps(i).length)
       .map((item) => ({ mode: 'work', item }));
-    const shape = this.shapeable(p).map((item) => ({ mode: 'shape', item }));
+    const shape = this.shapeable(p).filter(ok).map((item) => ({ mode: 'shape', item }));
+    const large = (x) => (fit.weak && x.item.size === 'large' ? 1 : 0);
     const all = [...ready, ...shape].sort((a, b) =>
+      large(a) - large(b) ||
       PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
       (b.item.last_worker === agent) - (a.item.last_worker === agent) ||
       a.item.seq - b.item.seq);
     return all[0] ?? null;
+  }
+
+  // What fits this agent: the tags its machine has (declared at checkin, here or in its latest project),
+  // and whether it is a weak fit for large work: a model recognised as ≤8B, or ≥2 stalls or send-backs
+  // on large items here with none landed. has: null when nobody in particular is asking (any work fits).
+  fit(p, agent, has) {
+    if (!agent && has == null) return { has: null, weak: false };
+    if (has) has = normTags(has);
+    const a = this.q('SELECT has, model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent ?? '')
+      ?? this.q('SELECT has, model FROM agents WHERE name = ? ORDER BY last_seen DESC LIMIT 1').get(agent ?? '');
+    const landed = this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND implementer = ? AND size = 'large' AND stage = 'done'`).get(p.id, agent ?? '').n;
+    const missed = this.q(`SELECT COUNT(*) AS n FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND i.size = 'large'
+        AND ((e.type = 'sent_back' AND i.implementer = ?) OR (e.type = 'lease_expired' AND json_extract(e.data, '$.agent') = ?))`).get(p.id, agent ?? '', agent ?? '').n;
+    return { has: has ?? json(a?.has, []), weak: smallModel(a?.model) || (missed >= 2 && !landed) };
   }
 
   claimItem(p, agent, item) {
@@ -647,6 +682,7 @@ const AGENT_OPS = {
     }
     const last = this.q('SELECT last_checkin FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.last_checkin ?? 0;
     this.q('UPDATE agents SET last_checkin = ? WHERE project_id = ? AND name = ?').run(this.now(), p.id, agent);
+    if (args.has != null) this.q('UPDATE agents SET has = ? WHERE project_id = ? AND name = ?').run(JSON.stringify(normTags(args.has)), p.id, agent);
     return this.briefing(p, agent, last);
   },
 
@@ -662,11 +698,15 @@ const AGENT_OPS = {
     const pick = this.pick(p, agent);
     if (!pick) {
       if (p.parked) return { mode: 'idle', hint: 'The human has parked this project: start nothing new. Signoff.' };
-      const blocked = this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).get(p.id).n;
+      const { has } = this.fit(p, agent);
+      const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id);
+      const unfit = open.filter((i) => json(i.needs, []).some((t) => !has.includes(t)));
+      const blocked = open.length - unfit.length;
       return {
         mode: 'idle',
         hint: [
-          'Nothing is ready or waiting to be shaped right now.',
+          `Nothing is ready${unfit.length ? ' for you' : ''} or waiting to be shaped right now.`,
+          unfit.length ? `${unfit.map((i) => `#${i.seq} needs ${json(i.needs, []).filter((t) => !has.includes(t)).join(', ')}`).join('; ')}, which you didn't declare at checkin (has). If your machine has it, check in again with has.` : '',
           blocked ? `${blocked} ready item(s) are waiting on dependencies or their own sub-items.` : '',
           'Propose work you think matters (with acceptance criteria), or signoff.',
         ].filter(Boolean).join(' '),
@@ -910,8 +950,10 @@ Object.assign(Hub.prototype, {
     const t = this.now();
     const seq = this.q('SELECT next_seq FROM projects WHERE id = ?').get(p.id).next_seq;
     this.q('UPDATE projects SET next_seq = next_seq + 1 WHERE id = ?').run(p.id);
-    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, stage_since, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, t, t, t);
+    const needs = JSON.stringify(normTags(args.needs));
+    const size = SIZES.includes(args.size) ? args.size : '';
+    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, stage_since, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, t, t, t);
     const item = this.itemById(Number(r.lastInsertRowid));
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
     this.setDeps(p, item, args.depends_on);
@@ -931,6 +973,11 @@ Object.assign(Hub.prototype, {
       if (args[k] != null && str(args[k]) !== item[k]) { set[k] = str(args[k]); changed.push(k); }
     }
     if (args.priority && PRIORITY_RANK[args.priority] != null && args.priority !== item.priority) { set.priority = args.priority; changed.push(`priority → ${args.priority}`); }
+    if (args.needs != null && JSON.stringify(normTags(args.needs)) !== item.needs) {
+      set.needs = JSON.stringify(normTags(args.needs));
+      changed.push(`needs → ${normTags(args.needs).join(', ') || 'nothing'}`);
+    }
+    if (args.size != null && (SIZES.includes(args.size) || args.size === '') && args.size !== item.size) { set.size = args.size; changed.push(`size → ${args.size || 'unset'}`); }
     if (Object.keys(set).length) this.patch(item, set);
     if (Array.isArray(args.depends_on)) { this.setDeps(p, item, args.depends_on); changed.push('dependencies'); }
     const human = actor === HUMAN;
