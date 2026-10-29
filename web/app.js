@@ -1,0 +1,869 @@
+// Trellis UI. No framework: state → HTML strings → one delegated event handler.
+// Zoom levels mirror 0-30-5-30: what isn't relevant at a level simply isn't rendered.
+
+const Z = { '30s': 0, '5m': 1, '30m': 2 };
+const store = {
+  get: (k, d) => { try { return localStorage.getItem('trellis:' + k) ?? d; } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem('trellis:' + k, v); } catch {} },
+};
+const S = {
+  projects: [], slug: null, view: null, info: null,
+  itemRef: null, item: null, deep: false,
+  zoom: store.get('zoom', '30s'),
+  open: new Set(), reveal: new Set(), drafts: {},
+  composeKind: 'steer', stage: null, addWork: false, editMission: false, editItem: false,
+  feedAll: false, pending: false,
+};
+const z = () => Z[S.zoom];
+
+// ── utilities ──
+const $ = (sel, el = document) => el.querySelector(sel);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+function md(text) {
+  if (!text) return '';
+  const blocks = [];
+  let s = String(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => { blocks.push(`<pre>${esc(code.replace(/\n$/, ''))}</pre>`); return `\u0000${blocks.length - 1}\u0000`; });
+  s = esc(s)
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  return s.split(/\n{2,}/).map((par) => {
+    const ls = par.split('\n');
+    const bullet = /^\s*([-*•]|\d+\.)\s+/;
+    if (ls.every((l) => bullet.test(l))) return `<ul>${ls.map((l) => `<li>${l.replace(bullet, '')}</li>`).join('')}</ul>`;
+    return `<p>${ls.join('<br>')}</p>`;
+  }).join('').replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[i]);
+}
+
+function providerOf(model = '') {
+  const m = (model || '').toLowerCase();
+  if (!m) return '';
+  if (/claude|anthropic|opus|sonnet|haiku|fable/.test(m)) return 'Anthropic';
+  if (/gpt|openai|codex|^o\d/.test(m)) return 'OpenAI';
+  if (/gemini/.test(m)) return 'Google';
+  return 'Open-weight';
+}
+const modelOf = (name) => S.view?.agents.find((a) => a.name === name)?.model ?? '';
+function who(name, model) {
+  if (!name) return '';
+  if (name === 'you') return '<span class="you-chip">You</span>';
+  if (name === 'trellis') return '<span class="sys-chip">Trellis</span>';
+  model ??= modelOf(name);
+  const prov = providerOf(model);
+  return `<span class="agent prov-${prov.toLowerCase().replace(/[^a-z]/g, '')}" title="${esc([model, prov].filter(Boolean).join(' · '))}"><i></i>${esc(name)}</span>`;
+}
+const refLink = (ref) => (ref ? `<a class="ref" data-action="open" data-item="${esc(ref)}">${esc(ref)}</a>` : '');
+const stagePill = (stage, court) => `<span class="stage-pill ${stage === 'done' ? 'done' : `court-${court ?? ''}`}">${esc(S.view?.stages?.[stage]?.label ?? stage)}</span>`;
+const courtOf = (stage) => S.view?.flow.stages.find((s) => s.stage === stage)?.court;
+const LOGO = `<svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="var(--agents)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>`;
+
+function toast(msg, err = false) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = err ? 'err' : '';
+  t.hidden = false;
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => (t.hidden = true), err ? 5000 : 2200);
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'content-type': 'application/json' }, credentials: 'same-origin' });
+  if (r.status === 401) {
+    location.href = '/login.html';
+    throw new Error('Not signed in');
+  }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), j);
+  return j;
+}
+async function human(action, body = {}, msg) {
+  try {
+    await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
+    if (msg) toast(msg);
+    await refresh();
+  } catch (e) {
+    toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true);
+  }
+}
+
+// ── data ──
+async function loadProjects() {
+  S.projects = await api('/api/projects');
+}
+async function refresh({ force = false } = {}) {
+  try {
+    await loadProjects();
+    if (S.slug && S.projects.some((p) => p.slug === S.slug)) {
+      S.view = await api(`/api/p/${encodeURIComponent(S.slug)}/view`);
+      if (S.itemRef) S.item = await api(`/api/p/${encodeURIComponent(S.slug)}/items/${encodeURIComponent(S.itemRef.replace('#', ''))}`).catch(() => null);
+    } else {
+      S.view = null;
+    }
+  } catch (e) {
+    if (!S.projects.length) $('#main').innerHTML = `<div class="loading">Can't reach the Trellis hub. Is <code>trellis serve</code> running?</div>`;
+    return;
+  }
+  render({ force });
+}
+
+let typing = () => {
+  const a = document.activeElement;
+  return a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && a.type !== 'checkbox')) && a.value;
+};
+function render({ force = false } = {}) {
+  if (!force && typing()) { S.pending = true; return; }
+  S.pending = false;
+  const drawerScroll = $('#drawer').scrollTop;
+  renderRail();
+  $('#main').innerHTML = S.slug && S.view ? project(S.view) : overview();
+  renderDrawer();
+  $('#drawer').scrollTop = drawerScroll;
+  for (const el of document.querySelectorAll('[data-draft]')) {
+    const v = S.drafts[el.dataset.draft];
+    if (v == null) continue;
+    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+  }
+}
+
+// ── routing ──
+function route() {
+  const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
+  const slug = m ? decodeURIComponent(m[1]) : null;
+  const ref = m?.[2] ? `#${m[2]}` : null;
+  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; }
+  S.slug = slug;
+  if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; }
+  refresh({ force: true });
+}
+const go = (slug, ref) => { location.hash = slug ? `#/p/${encodeURIComponent(slug)}${ref ? '/' + ref.replace('#', '') : ''}` : '#/'; };
+
+// ── rail ──
+function renderRail() {
+  const projects = S.projects.map((p) => `
+    <a class="rail-item ${p.slug === S.slug ? 'on' : ''}" href="#/p/${encodeURIComponent(p.slug)}">
+      <span class="dot ${p.pulse.state}"></span><span class="name">${esc(p.name)}</span>
+      ${p.needs ? `<span class="badge" title="${plural(p.needs, 'thing')} need you">${p.needs}</span>` : ''}
+    </a>`).join('');
+  const total = S.projects.reduce((n, p) => n + p.needs, 0);
+  $('#rail').innerHTML = `
+    <div class="brand">${LOGO}<span>Trellis</span></div>
+    ${S.projects.length > 1 ? `<a class="rail-item ${!S.slug ? 'on' : ''}" href="#/"><span class="name">All projects</span>${total ? `<span class="badge">${total}</span>` : ''}</a>` : ''}
+    <div class="rail-label">Projects</div>
+    ${projects || '<div class="rail-item" style="color:var(--faint)">None yet</div>'}
+    <div class="rail-foot">
+      <button class="rail-item" data-action="new-project">+ New project</button>
+      <button class="rail-item" data-action="connect">⌁ Connect an agent</button>
+      ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
+    </div>`;
+}
+
+// ── overview: the 30-second view across every project ──
+function overview() {
+  if (!S.projects.length) {
+    return `<div class="phead"><div class="titles"><h1>Welcome to Trellis</h1>
+      <div class="mission">A hub where you facilitate and AI agents (Claude, OpenAI, open-weight) find, do and verify the work.</div></div></div>
+      <div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" data-action="new-project">create one now</button>.
+      <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`;
+  }
+  const sorted = [...S.projects].sort((a, b) => a.parked - b.parked || b.needs - a.needs || a.name.localeCompare(b.name));
+  const total = sorted.reduce((n, p) => n + p.needs, 0);
+  return `<div class="phead"><div class="titles"><h1>All projects</h1>
+      <div class="mission">${total ? `${plural(total, 'thing')} across ${plural(sorted.filter((p) => p.needs).length, 'project')} ${total === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you anywhere. Work is flowing.'}</div></div></div>
+    <div class="overview">${sorted.map((p) => `
+      <div class="ov-card state-${p.pulse.state} ${p.parked ? 'parked' : ''}" data-action="goto" data-slug="${esc(p.slug)}">
+        <span class="dot ${p.pulse.state}" style="margin-top:7px"></span>
+        <div class="body"><h3>${esc(p.name)}</h3>
+          ${p.mission ? `<div class="m">${esc(p.mission)}</div>` : ''}
+          <div class="sentence">${esc(p.pulse.sentence)}</div></div>
+        ${p.needs ? `<span class="badge">${p.needs}</span>` : ''}
+      </div>`).join('')}</div>`;
+}
+
+// ── project ──
+function project(v) {
+  const P = v.project;
+  const zoomSeg = `<div class="seg" title="How much do you want to see? (keys 1, 2, 3)">${Object.keys(Z).map((k) =>
+    `<button class="${S.zoom === k ? 'on' : ''}" data-action="zoom" data-zoom="${k}">${k}</button>`).join('')}</div>`;
+  const autoSeg = `<div class="seg">${Object.entries(P.autonomy_options).map(([k, o]) =>
+    `<button class="${P.autonomy === k ? 'on' : ''}" data-action="autonomy" data-level="${k}" title="${esc(o.human)}">${esc(o.label)}</button>`).join('')}</div>`;
+  const mission = S.editMission
+    ? `<div class="inline-form"><input data-draft="mission" id="mission-in" placeholder="What is this project for? Agents read this first." value="${esc(P.mission)}"><button class="btn primary small" data-action="save-mission">Save</button><button class="btn ghost small" data-action="cancel-mission">Cancel</button></div>`
+    : `<div class="mission ${P.mission ? '' : 'empty'}" data-action="edit-mission" title="Click to edit. Every agent reads the mission at checkin.">${esc(P.mission || 'Add a mission: the north star every agent reads at checkin')}</div>`;
+
+  const empty = !v.all.length && !v.agents.length;
+  return `
+    <div class="phead">
+      <div class="titles"><h1>${esc(P.name)}</h1>${mission}</div>
+      <div class="controls">
+        <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
+        ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
+        ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
+      </div>
+    </div>
+    ${pulse(v)}
+    ${composer(v)}
+    ${empty ? emptyProject() : ''}
+    ${needsYou(v)}
+    ${z() >= 1 ? worthKnowing(v) : ''}
+    ${motion(v)}
+    ${z() >= 1 ? flow(v) : ''}
+    ${z() >= 1 ? upNext(v) : ''}
+    ${z() >= 1 ? finished(v) : ''}
+    ${z() >= 1 ? steering(v) : ''}
+    ${z() >= 1 ? agents(v) : ''}
+    ${z() >= 2 ? activity(v) : ''}
+    ${z() >= 2 ? allWork(v) : ''}
+    ${z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
+      ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for flow, what's next, and how agents are doing.`
+      : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : ''}`;
+}
+
+function emptyProject() {
+  return `<section class="sec"><div class="zero"><span class="check">→</span><div>
+    <b>No work yet.</b> Add some above, or connect an agent and let it propose what matters.
+    <div style="margin-top:8px"><button class="btn primary small" data-action="connect">Connect an agent</button></div></div></div></section>`;
+}
+
+function pulse(v) {
+  const label = { 'needs-you': 'Needs you', flowing: 'Flowing', stalled: 'Stalled', idle: 'Idle', parked: 'Parked' }[v.pulse.state];
+  const c = v.since.counts;
+  const bits = [
+    c.finished && `<b>${c.finished}</b> finished`,
+    c.submitted && `<b>${c.submitted}</b> submitted`,
+    c.started && `<b>${c.started}</b> started`,
+    c.proposed && `<b>${c.proposed}</b> proposed`,
+    c.sent_back && `<b>${c.sent_back}</b> sent back`,
+  ].filter(Boolean);
+  const since = v.since.at
+    ? bits.length ? `Since you last looked (${v.since.ago} ago): ${bits.join(' · ')}` : `No agent activity since you last looked (${v.since.ago} ago).`
+    : 'First look at this project.';
+  const list = z() >= 1 && v.since.finished.length
+    ? `<div class="since-list">${v.since.finished.slice(0, 6).map((f) => `<div>✓ ${refLink(f.item)} ${esc(f.title)} <span class="age">by ${esc(f.by === 'you' ? 'you' : f.by)}</span></div>`).join('')}</div>` : '';
+  return `<div class="pulse state-${v.pulse.state}">
+      <div class="state-chip"><span class="dot ${v.pulse.state}"></span>${label}</div>
+      <div class="sentence">${esc(v.pulse.sentence)}</div>
+      ${v.project.parked ? `<div class="actions"><button class="btn primary small" data-action="unpark">Unpark</button></div>` : ''}
+      <div class="since"><span>${since}</span><span class="spacer"></span>
+        ${c.updates || !v.since.at ? `<button class="btn small" data-action="seen" title="Reset 'since you last looked' to now">Mark all seen</button>` : ''}
+        ${list}</div>
+    </div>`;
+}
+
+function composer() {
+  const hints = {
+    steer: 'Every agent must read and acknowledge it. You\'ll see who did.',
+    decision: 'A standing rule. Every agent gets it at every checkin.',
+    note: 'For the record. Agents may see it; no acknowledgement needed.',
+  };
+  const kinds = { steer: 'Steer', decision: 'Decision', note: 'Note' };
+  return `<div class="composer">
+      <div class="box">
+        <textarea id="compose" data-draft="compose" placeholder="Say something to your agents… (⌘↵ to send)"></textarea>
+        <div class="row">
+          <div class="seg">${Object.entries(kinds).map(([k, l]) => `<button class="${S.composeKind === k ? 'on' : ''}" data-action="compose-kind" data-kind="${k}">${l}</button>`).join('')}</div>
+          <span class="hint">${hints[S.composeKind]}</span>
+          <button class="btn primary small" data-action="compose-send">Send</button>
+        </div>
+      </div>
+      <button class="btn" data-action="toggle-add" style="height:40px">+ Work</button>
+    </div>
+    ${S.addWork ? `<div class="add-work">
+      <input data-draft="nw-title" id="nw-title" placeholder="Outcome, in one line (e.g. 'Users can reset their password')">
+      <textarea data-draft="nw-summary" id="nw-summary" placeholder="Why it matters, context, constraints (optional)"></textarea>
+      <textarea data-draft="nw-acceptance" id="nw-acceptance" placeholder="Done means… (checkable criteria; agents verify against this)"></textarea>
+      <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['nw-priority'] ?? 'soon') === p ? 'on' : ''}" data-action="nw-priority" data-p="${p}">${p}</button>`).join('')}</div>
+        <span style="flex:1"></span><button class="btn ghost" data-action="toggle-add">Cancel</button><button class="btn primary" data-action="add-work">Add to Ready</button></div>
+    </div>` : ''}`;
+}
+
+// ── 30s: what needs you ──
+function needsYou(v) {
+  const act = v.attention.filter((a) => a.level === 'act');
+  const body = act.length
+    ? `<div class="cards">${act.map(card).join('')}</div>`
+    : `<div class="zero"><span class="check">✓</span><div><b>Nothing needs you.</b> ${v.pulse.active ? 'Agents are working; you\'ll see things here when they need a decision, an answer or a verification.' : 'When agents need a decision, an answer or a verification, it shows up here.'}</div></div>`;
+  return `<section class="sec"><header><h2>Needs you</h2>${act.length ? `<span class="count">${act.length}</span>` : ''}
+    ${act.length ? '<span class="hint">oldest first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
+}
+
+function card(a) {
+  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working' }[a.kind] ?? a.kind;
+  const key = 'a:' + a.key;
+  const open = S.open.has(key) || z() >= 2;
+  const hasMore = a.why || a.detail || a.acceptance;
+  const more = open && hasMore ? `<div class="more">
+      ${a.why ? md(a.why) : ''}
+      ${a.acceptance ? `<div class="label">Done means</div>${md(a.acceptance)}` : ''}
+      ${a.detail ? `<div class="label">Detail</div>${md(a.detail)}` : ''}
+    </div>` : '';
+  return `<article class="card kind-${a.kind}">
+    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${esc(a.sub)}</span></div>
+    <h3>${esc(a.headline)}</h3>
+    ${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
+    ${a.warn ? `<div class="warn">⚠ ${esc(a.warn)}</div>` : ''}
+    ${a.kind === 'proposal' && a.acceptance && !open ? `<div class="more"><div class="label" style="margin-top:0">Done means</div>${md(a.acceptance)}</div>` : ''}
+    ${more}
+    ${cardActions(a, hasMore, open, key)}
+  </article>`;
+}
+
+function cardActions(a, hasMore, open, key) {
+  if (a.kind === 'direction') {
+    return `<div class="answer">
+      <div class="picks">${a.picks.map((p) => `<button class="pick" data-action="pick" data-item="${esc(p.item)}" title="${esc(p.summary || '')}"><span class="ref">${esc(p.item)}</span>${esc(p.title)}</button>`).join('')}</div>
+      <div class="actions" style="margin-top:0"><button class="btn ghost small" data-action="park">Park this project instead</button><span style="flex:1"></span>${hasMore ? `<button class="link" data-action="toggle" data-key="${esc(key)}">${open ? 'Less' : 'How this works'}</button>` : ''}</div>
+    </div>`;
+  }
+  if (a.kind === 'no-agents') {
+    return `<div class="actions"><button class="btn primary" data-action="connect">Start an agent</button><button class="btn ghost" data-action="park">Park this project</button></div>`;
+  }
+  const moreBtn = hasMore ? `<button class="link" data-action="toggle" data-key="${esc(key)}">${open ? 'Less' : 'Why? (5m)'}</button>` : '';
+  if (a.kind === 'question') {
+    const q = a.question;
+    return `<div class="answer">
+      ${q.options?.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+      <div class="answer-row"><input data-draft="ans-${q.id}" id="ans-${q.id}" placeholder="${q.options?.length ? 'Or write your own answer…' : 'Your answer…'}"><button class="btn primary" data-action="answer-text" data-q="${q.id}">Answer</button></div>
+      <div class="actions" style="margin-top:0"><label class="check-label"><input type="checkbox" data-draft="dec-${q.id}" id="dec-${q.id}"> Make this a standing decision for all agents</label><span style="flex:1"></span>${moreBtn}</div>
+    </div>`;
+  }
+  if (a.kind === 'review') {
+    const r = `sb:${a.item}`;
+    return `<div class="actions">
+      <button class="btn go" data-action="accept" data-item="${esc(a.item)}">Accept</button>
+      ${S.reveal.has(r)
+        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What's missing? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
+        : `<button class="btn" data-action="reveal" data-key="${r}">Send back…</button>`}
+      <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
+    </div>`;
+  }
+  if (a.kind === 'proposal') {
+    return `<div class="actions">
+      <button class="btn go" data-action="approve" data-item="${esc(a.item)}">Approve</button>
+      <button class="btn" data-action="drop" data-item="${esc(a.item)}">Drop</button>
+      <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
+    </div>`;
+  }
+  if (a.kind === 'struggling') {
+    const r = `cl:${a.item}`;
+    return `<div class="actions">
+      ${S.reveal.has(r)
+        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="Clarify the intent. Whoever picks it up next must read this."><button class="btn primary" data-action="clarify" data-item="${esc(a.item)}">Steer</button></div>`
+        : `<button class="btn primary" data-action="reveal" data-key="${r}">Clarify…</button>`}
+      <button class="btn" data-action="open" data-item="${esc(a.item)}">Open</button>
+      <button class="btn ghost" data-action="drop" data-item="${esc(a.item)}">Drop</button>
+      <button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}
+    </div>`;
+  }
+  return '';
+}
+
+// ── 5m: worth knowing ──
+function worthKnowing(v) {
+  const know = v.attention.filter((a) => a.level === 'know');
+  if (!know.length) return '';
+  const rows = know.map((a) => {
+    let acts = `<button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Got it</button>`;
+    if (a.kind === 'assumption') {
+      const r = `ov:${a.question.id}`;
+      acts = S.reveal.has(r)
+        ? `<div class="inline-form" style="width:320px"><input data-draft="${r}" id="${r}" placeholder="Instead…"><button class="btn you small" data-action="override" data-q="${a.question.id}">Override</button></div>`
+        : `<button class="btn small" data-action="confirm" data-q="${a.question.id}">Fine</button><button class="btn small" data-action="reveal" data-key="${r}">Override…</button>`;
+    }
+    if (a.kind === 'proposal') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Look</button>` + acts;
+    if (a.start) acts = `<button class="btn small primary" data-action="connect">Start an agent</button>` + acts;
+    if (a.kind === 'peer-review-stuck') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Review it</button>` + acts;
+    return `<div class="row-item"><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
+      ${z() >= 2 && a.why ? `<div class="s" style="margin-top:4px">${esc(a.why)}</div>` : ''}</div><div class="acts">${acts}</div></div>`;
+  }).join('');
+  return `<section class="sec"><header><h2>Worth knowing</h2><span class="count">${know.length}</span><span class="hint">agents carried on without you; glance and confirm, or redirect</span></header><div class="rows">${rows}</div></section>`;
+}
+
+// ── 30s → 5m: what's in motion ──
+function motion(v) {
+  if (!v.motion.length) return '';
+  const rows = v.motion.map((m) => `
+    <div class="row-item clickable" data-action="open" data-item="${esc(m.item)}">
+      <div class="body">
+        <div class="h">${who(m.agent, m.model)} ${refLink(m.item)} <span>${esc(m.title)}</span>${m.shaping ? '<span class="tag shaping">shaping</span>' : ''}${m.priority === 'now' ? '<span class="tag now">now</span>' : ''}${m.attempt > 1 ? `<span class="tag soon">attempt ${m.attempt}</span>` : ''}</div>
+        ${z() >= 1 && m.last ? `<div class="last ${m.quiet ? 'quiet' : ''}">${m.last.type === 'claimed' ? 'Just picked it up' : esc(m.last.headline)}</div>` : ''}
+        ${z() >= 1 && m.touching?.length ? `<div class="touch">${m.touching.map((t) => `<code>${esc(t)}</code>`).join(' ')}</div>` : ''}
+        ${z() >= 1 && m.heads_up ? `<div class="headsup">⚠ ${esc(m.heads_up.split('. ')[0])}</div>` : ''}
+        ${z() >= 2 && m.last?.summary ? `<div class="s">${md(m.last.summary)}</div>` : ''}
+      </div>
+      <span class="age" title="Lease: ${esc(m.lease_left)} left">${m.last ? esc(m.last.ago) + ' ago' : ''}${z() >= 1 ? ` · on it ${esc(m.for)}` : ''}</span>
+    </div>`).join('');
+  return `<section class="sec motion"><header><h2>In motion</h2><span class="count">${v.motion.length}</span></header><div class="rows">${rows}</div></section>`;
+}
+
+// ── 5m: flow ──
+function flow(v) {
+  const f = v.flow;
+  const stages = f.stages.filter((s) => s.stage !== 'dropped' || s.count);
+  const pills = stages.map((s) => `<button class="stage court-${s.court ?? 'none'} ${S.stage === s.stage ? 'on' : ''} ${s.count ? '' : 'zero-count'}" data-action="stage" data-stage="${s.stage}" title="${esc(s.blurb)}"><span class="n">${s.count}</span><span class="l">${esc(s.label)}</span></button>`).join('<span class="arrow">→</span>');
+  let detail = '';
+  if (S.stage) {
+    const st = f.stages.find((s) => s.stage === S.stage);
+    const items = v.all.filter((i) => i.stage === S.stage).slice(-25).reverse();
+    detail = `<div class="stage-detail"><div class="blurb"><b>${esc(st.label)}.</b> ${esc(st.blurb)} ${st.court ? `<i>Whose move: ${st.court === 'you' ? 'yours' : st.court === 'agents' ? "the agents'" : 'nobody yet (waiting for an agent)'}.</i>` : ''} ${st.ms ? `Work spent ${esc(st.time)} here in the last 14 days.` : ''}</div>
+      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${esc(i.title)} <span class="age">${esc(i.ago)}</span></div>`).join('') : '<div class="age">Nothing here.</div>'}</div>`;
+  }
+  const c = f.court;
+  const hasTime = c.agents + c.queue + c.you > 0;
+  const max = Math.max(1, ...f.throughput);
+  return `<section class="sec"><header><h2>Flow</h2><span class="hint">the lifecycle, and whose move it is (last 14 days)</span></header>
+    <div class="flow">
+      <div class="stages">${pills}</div>
+      ${detail}
+      ${hasTime ? `<div class="courtbar">
+          ${c.agents ? `<span class="seg-c agents" style="flex:${c.agents}">${c.agents >= 8 ? c.agents + '%' : ''}</span>` : ''}
+          ${c.queue ? `<span class="seg-c queue" style="flex:${c.queue}">${c.queue >= 8 ? c.queue + '%' : ''}</span>` : ''}
+          ${c.you ? `<span class="seg-c you" style="flex:${c.you}">${c.you >= 8 ? c.you + '%' : ''}</span>` : ''}
+        </div>
+        <div class="legend"><span><i class="agents"></i>Agents working ${c.agents}%</span><span><i class="queue"></i>Waiting for an agent ${c.queue}%</span><span><i class="you"></i>Waiting on you ${c.you}%</span></div>` : ''}
+      ${f.takeaway ? `<p class="takeaway">${esc(f.takeaway)}</p>` : ''}
+      <div class="throughput">
+        <div class="spark" title="Finished per day, last 14 days">${f.throughput.map((n) => `<span class="${n ? '' : 'z'}" style="height:${Math.max(2, Math.round((n / max) * 28))}px" title="${n}"></span>`).join('')}</div>
+        <span>${plural(f.finished, 'item')} finished in 14 days${f.median_cycle ? ` · median ${esc(f.median_cycle)} from ready to done` : ''}</span>
+      </div>
+    </div></section>`;
+}
+
+function itemRow(i, extra = '') {
+  const notes = [
+    i.blocked_by?.length && `after ${i.blocked_by.join(', ')}`,
+    i.handoff?.kind === 'sent_back' && `sent back: "${i.handoff.headline}"`,
+    i.handoff?.kind === 'handoff' && `${i.handoff.by} left a note`,
+    i.attempts > 1 && `${i.attempts} attempts`,
+  ].filter(Boolean).join(' · ');
+  return `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
+    <span class="tag ${i.priority}">${i.priority}</span>
+    <div class="body"><div class="h">${refLink(i.item)} ${esc(i.title)}</div>${notes || extra ? `<div class="s">${esc(notes)}${extra}</div>` : ''}</div>
+    <span class="age">${esc(i.ago)}</span></div>`;
+}
+
+function upNext(v) {
+  if (!v.queue.length) return '';
+  const shown = z() >= 2 ? v.queue : v.queue.slice(0, 5);
+  return `<section class="sec"><header><h2>Up next</h2><span class="count">${v.queue.length}</span><span class="hint">ready for any agent, in the order they'll be picked</span></header>
+    <div class="rows">${shown.map((i) => itemRow(i)).join('')}</div>
+    ${v.queue.length > shown.length ? `<div class="zoom-more">+${v.queue.length - shown.length} more at 30m</div>` : ''}</section>`;
+}
+
+function finished(v) {
+  if (!v.done.length) return '';
+  const shown = z() >= 2 ? v.done : v.done.slice(0, 5);
+  return `<section class="sec"><header><h2>Recently finished</h2><span class="count">${v.done.length}</span><span class="hint">last 3 days</span></header>
+    <div class="rows">${shown.map((i) => `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
+      <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div><div class="s">built by ${who(i.implementer)}${i.accepted ? ` · verified by ${who(i.accepted)}` : ''}</div></div>
+      <span class="age">${esc(i.ago)} ago</span></div>`).join('')}</div></section>`;
+}
+
+function steering(v) {
+  if (!v.steers.length && !v.decisions.length && !v.notes.length) return '';
+  const steers = v.steers.map((s) => {
+    const expected = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off').map((a) => a.name);
+    const missing = s.item ? [] : expected.filter((n) => !s.acks.some((x) => x.agent === n));
+    return `<div class="row-item steer-item"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>
+      <div class="acks">${s.acks.map((a) => `<span class="ack" title="${esc(a.response)}">${esc(a.agent)}${z() >= 2 && a.response ? `: ${esc(a.response)}` : ''}</span>`).join('')}
+      ${missing.map((n) => `<span class="unacked">${esc(n)} hasn't acknowledged</span>`).join('')}
+      ${!s.acks.length && !missing.length ? '<span class="unacked">not seen yet</span>' : ''}</div></div>
+      <div class="acts"><span class="age">${esc(dur(Date.now() - s.at))} ago</span><button class="btn ghost small" data-action="retire" data-note="${s.id}" title="Stop delivering it">Retire</button></div></div>`;
+  }).join('');
+  const decisions = v.decisions.map((d) => `<div class="row-item"><div class="body"><div class="h">${inline(d.body)}</div></div>
+    <div class="acts"><span class="age">${esc(d.ago)} ago</span><button class="btn ghost small" data-action="retire" data-note="${d.id}">Retire</button></div></div>`).join('');
+  const shownNotes = z() >= 2 ? v.notes : v.notes.slice(0, 3);
+  const notes = shownNotes.map((n) => `<div class="row-item"><div class="body"><div class="h">${inline(n.note ?? n.body)}</div><div class="s">${who(n.by)}${n.item ? ` on ${refLink(n.item)}` : ''}</div></div>
+    <div class="acts"><span class="age">${esc(n.ago)} ago</span><button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button></div></div>`).join('');
+  const sub = (label, hint) => `<div class="sublabel">${label}<span>${hint}</span></div>`;
+  return `<section class="sec"><header><h2>Steering &amp; memory</h2><span class="hint">did your nudges land, and what every agent carries into every session</span></header>
+    ${steers ? `${sub('Your steering', 'acknowledged by')}<div class="rows" style="margin-bottom:14px">${steers}</div>` : ''}
+    ${decisions ? `${sub('Decisions', 'standing rules, from you')}<div class="rows" style="margin-bottom:14px">${decisions}</div>` : ''}
+    ${notes ? `${sub('Field notes', 'what agents learned the hard way, left for the next one')}<div class="rows">${notes}</div>
+      ${v.notes.length > shownNotes.length ? `<div class="zoom-more">${v.notes.length} field notes in all; every one at 30m</div>` : ''}` : ''}
+  </section>`;
+}
+function dur(ms) {
+  const m = 60000, h = 60 * m, d = 24 * h;
+  if (ms < m) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < h) return `${Math.round(ms / m)}m`;
+  if (ms < d) return `${+(ms / h).toFixed(ms < 10 * h ? 1 : 0)}h`;
+  return `${+(ms / d).toFixed(1)}d`;
+}
+
+function agents(v) {
+  if (!v.agents.length) return '';
+  if (z() < 2) {
+    const live = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off');
+    const away = v.agents.length - live.length;
+    return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} active</span>${away ? `<span class="hint">${away} away</span>` : ''}</header>
+      <div class="agent-strip">${live.map((a) => `<span class="a">${who(a.name, a.model)}<span class="st">${esc(a.status)}${a.holding.length ? ` ${a.holding.join(', ')}` : ''}</span></span>`).join('') || '<span class="age">No agent is active right now.</span>'}</div></section>`;
+  }
+  return `<section class="sec"><header><h2>Agents</h2><span class="count">${v.agents.length}</span><span class="hint">first-class participants, each with a track record</span></header>
+    <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
+      <div class="top">${who(a.name, a.model)}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
+      <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}</div>
+      <div class="line" title="${esc(a.line)}">${esc(a.line || '—')}</div>
+      <div class="stats">
+        <div><b>${a.record.landed}</b><span>landed</span></div>
+        <div><b>${a.record.sent_back}</b><span>sent back</span></div>
+        <div><b>${a.record.stalls}</b><span>stalls</span></div>
+        <div><b>${a.record.handoffs}</b><span>handoffs</span></div>
+      </div>
+      <div class="model" style="margin-top:6px">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''} · seen ${esc(a.last_seen)} ago</div>
+    </div>`).join('')}</div></section>`;
+}
+
+function activity(v) {
+  const quiet = new Set(['progress', 'checkin', 'review_started']);
+  const events = S.feedAll ? v.activity : v.activity.filter((e) => !quiet.has(e.type));
+  return `<section class="sec feed"><header><h2>Everything that happened</h2><span class="count">${events.length}</span>
+    <span class="right"><label class="check-label"><input type="checkbox" data-action="feed-all" ${S.feedAll ? 'checked' : ''}> include routine progress</label></span></header>
+    <div class="rows">${events.map((e) => {
+      const key = 'e:' + e.id;
+      const open = S.open.has(key);
+      const has = e.summary || e.detail || e.data?.evidence?.length;
+      return `<div class="row-item ${has ? 'clickable' : ''}" ${has ? `data-action="toggle" data-key="${key}"` : ''}>
+        <span class="type">${esc(e.type.replace('_', ' '))}</span>
+        <div class="body"><div class="h">${e.item ? refLink(e.item) + ' ' : ''}${esc(e.headline)}</div>
+          ${open ? `<div class="expand">${md(e.summary)}${e.data?.evidence?.length ? `<div class="evidence">${e.data.evidence.map((x) => `<span class="ev">${esc(x.label)}</span>`).join('')}</div>` : ''}${e.detail ? `<pre>${esc(e.detail)}</pre>` : ''}</div>` : ''}</div>
+        <span class="age">${who(e.actor)} · ${esc(e.ago)}</span></div>`;
+    }).join('')}</div></section>`;
+}
+
+function allWork(v) {
+  const rows = [...v.all].reverse();
+  return `<section class="sec"><header><h2>All work</h2><span class="count">${rows.length}</span></header>
+    <table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Who</th><th>In stage</th></tr></thead><tbody>
+    ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : `<span class="age">${esc(i.by)}</span>`}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
+    </tbody></table></section>`;
+}
+
+// ── item drawer: 30s header, 5m body, 30m deep dive ──
+function renderDrawer() {
+  const d = $('#drawer');
+  const show = !!S.itemRef;
+  d.hidden = !show;
+  $('#scrim').hidden = !show;
+  if (!show) return;
+  const it = S.item;
+  if (!it) { d.innerHTML = '<div class="loading">Loading…</div>'; return; }
+  const holderLine = {
+    proposed: it.holder
+      ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
+      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : it.priority === 'now' ? 'Picked: the next agent shapes it first.' : 'The next free agent can shape it into ready work.'}`,
+    ready: `<b>Ready</b> for any agent · waiting ${esc(it.in_stage)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
+    active: `<b>${who(it.holder)}</b> is on it · ${esc(it.in_stage)} so far · lease ${esc(it.lease_left)} left`,
+    waiting: `<b>Waiting on you</b> for ${esc(it.in_stage)}: an agent parked it to ask a question.`,
+    verifying: `<b>Verifying</b> · ${who(it.implementer)} finished it ${esc(it.in_stage)} ago${it.holder ? ` · ${who(it.holder)} is reviewing` : ''}`,
+    done: `<b>Done</b> ${esc(it.in_stage)} ago · built by ${who(it.implementer)}`,
+    dropped: `<b>Dropped</b> ${esc(it.in_stage)} ago`,
+  }[it.stage];
+
+  const actions = [];
+  if (it.stage === 'verifying') {
+    actions.push(`<button class="btn go" data-action="accept" data-item="${it.item}">Accept</button>`);
+    actions.push(S.reveal.has('dsb') ? `<div class="inline-form grow"><input data-draft="sb:${it.item}" id="sb:${it.item}" placeholder="What's missing?"><button class="btn you" data-action="sendback" data-item="${it.item}">Send back</button></div>`
+      : `<button class="btn" data-action="reveal" data-key="dsb">Send back…</button>`);
+  }
+  if (it.stage === 'proposed' && it.priority !== 'now') actions.push(`<button class="btn primary" data-action="pick" data-item="${it.item}" title="Agents shape and build this first">Make it next</button>`);
+  if (it.stage === 'proposed') actions.push(`<button class="btn ${it.acceptance ? 'go' : ''}" data-action="approve" data-item="${it.item}" title="Skip shaping: it becomes ready as written">Approve as is</button>`);
+  if (it.stage === 'done') actions.push(`<button class="btn" data-action="reopen" data-item="${it.item}">Reopen</button>`);
+  if (!['done', 'dropped'].includes(it.stage)) actions.push(`<button class="btn ghost" data-action="drop" data-item="${it.item}">Drop</button>`);
+  if (it.stage === 'dropped') actions.push(`<button class="btn" data-action="reopen" data-item="${it.item}">Restore</button>`);
+  actions.push(`<button class="btn ghost" data-action="edit-item">Edit</button>`);
+
+  const life = it.lifecycle;
+  const totalMs = life.reduce((n, l) => n + (l.court ? l.ms : 0), 0) || 1;
+  const lifebar = life.filter((l) => l.court && l.ms > 0).map((l) => {
+    const pct = (100 * l.ms) / totalMs;
+    return `<span class="${l.court}" style="flex:${Math.max(pct, 1.5)}" title="${esc(l.label)} · ${esc(l.time)}${l.actor ? ` · ${esc(l.actor)}` : ''}">${pct > 14 ? esc(l.label) : ''}</span>`;
+  }).join('');
+
+  const handoff = it.handoff && it.stage !== 'done' ? `<div class="d-sec"><div class="label">${it.handoff.kind === 'sent_back' ? 'Sent back' : 'Where the last agent left off'}</div>
+    <div class="handoff"><div class="by">${who(it.handoff.by)} · ${esc(dur(Date.now() - it.handoff.at))} ago</div><b>${esc(it.handoff.headline)}</b>${it.handoff.summary ? md(it.handoff.summary) : ''}</div></div>` : '';
+
+  const questions = it.questions.length ? `<div class="d-sec"><div class="label">Questions <span class="count">${it.questions.length}</span></div>
+    ${it.questions.map((q) => `<div class="q ${q.status} ${q.blocking ? 'blocking' : ''}">
+      <div class="meta">${who(q.asked_by)} · ${q.blocking ? 'blocking' : 'non-blocking'} · ${esc(q.ago)} ago · ${esc(q.status)}</div>
+      <div><b>${esc(q.question)}</b></div>${q.context ? md(q.context) : ''}
+      ${q.assumption ? `<div class="a">Assumed: <i>${esc(q.assumption)}</i></div>` : ''}
+      ${q.answer ? `<div class="a">Answer: <b>${esc(q.answer)}</b></div>` : q.status === 'confirmed' ? '<div class="a">You confirmed the assumption.</div>' : ''}
+      ${q.status === 'open' ? `<div class="answer">${q.options.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+        <div class="answer-row"><input data-draft="ans-${q.id}" id="ans-${q.id}" placeholder="${q.blocking ? 'Your answer…' : 'Override with…'}"><button class="btn primary" data-action="${q.blocking ? 'answer-text' : 'override'}" data-q="${q.id}" data-src="ans-${q.id}">${q.blocking ? 'Answer' : 'Override'}</button>
+        ${q.blocking ? '' : `<button class="btn" data-action="confirm" data-q="${q.id}">Fine</button>`}</div></div>` : ''}
+    </div>`).join('')}</div>` : '';
+
+  const steers = it.steers.length ? `<div class="d-sec"><div class="label">Your steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
+      <div class="meta">${esc(s.ago)} ago · ${s.acks.length ? s.acks.map((a) => `<span class="ack">${esc(a.agent)}${a.response ? `: ${esc(a.response)}` : ''}</span>`).join(' ') : '<span class="unacked">not acknowledged yet</span>'}</div></div>`).join('')}</div>` : '';
+
+  const edit = S.editItem ? `<div class="d-sec"><div class="label">Edit</div><div class="add-work" style="margin:0">
+      <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
+      <textarea data-draft="ei-summary" id="ei-summary" placeholder="Summary">${esc(it.summary)}</textarea>
+      <textarea data-draft="ei-acceptance" id="ei-acceptance" placeholder="Done means…">${esc(it.acceptance)}</textarea>
+      <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['ei-priority'] ?? it.priority) === p ? 'on' : ''}" data-action="ei-priority" data-p="${p}">${p}</button>`).join('')}</div>
+      <span style="flex:1"></span><button class="btn ghost" data-action="edit-item">Cancel</button><button class="btn primary" data-action="save-item" data-item="${it.item}">Save</button></div></div></div>` : '';
+
+  const deep = S.deep ? `
+    <div class="d-sec"><div class="label">The record</div>
+      <dl class="kv">
+        <dt>Created</dt><dd>${esc(it.created)} ago by ${who(it.created_by)}</dd>
+        <dt>Attempts</dt><dd>${it.attempts}${it.stalls ? ` · ${plural(it.stalls, 'stall')}` : ''}${it.rejections ? ` · sent back ${it.rejections}×` : ''}</dd>
+        <dt>Agents involved</dt><dd>${it.agents.map((a) => `${who(a.name, a.model)} <span class="age">${esc(a.model)}</span>`).join(', ') || '—'}</dd>
+        ${it.parent ? `<dt>Part of</dt><dd>${refLink(it.parent.item)} ${esc(it.parent.title)}</dd>` : ''}
+        ${it.children.length ? `<dt>Broken into</dt><dd>${it.children.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
+        ${it.depends_on.length ? `<dt>Depends on</dt><dd>${it.depends_on.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
+      </dl></div>
+    ${it.detail ? `<div class="d-sec"><div class="label">Detail</div>${md(it.detail)}</div>` : ''}
+    <div class="d-sec"><div class="label">Timeline <span class="count">${it.events.length} events</span></div><div class="timeline">
+      ${it.events.map((e) => `<div class="tl t-${e.type}">
+        <div class="meta">${who(e.actor)}<span>${esc(e.type.replace('_', ' '))}</span><span>${esc(e.ago)} ago</span></div>
+        <div class="h">${esc(e.headline)}</div>
+        ${e.summary ? `<div class="sm">${md(e.summary)}</div>` : ''}
+        ${e.data?.evidence?.length ? `<div class="evidence">${e.data.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : ''}
+        ${e.detail ? `<details><summary>Detail</summary><pre>${esc(e.detail)}</pre></details>` : ''}
+      </div>`).join('')}
+    </div></div>` : '';
+
+  d.innerHTML = `
+    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>
+      <button class="btn ghost small x" data-action="close" title="Close (Esc)">✕</button></div>
+    <h2 class="title">${esc(it.title)}</h2>
+    <div class="d-now">${holderLine}</div>
+    <div class="actions">${actions.join('')}</div>
+    ${edit}
+    ${lifebar ? `<div class="d-sec"><div class="label">Lifecycle <span class="count">agents ${esc(it.court_totals.agents)} · queue ${esc(it.court_totals.queue)} · you ${esc(it.court_totals.you)}</span></div>
+      <div class="lifebar">${lifebar}</div>
+      <div class="life-steps">${life.map((l) => `<span><b>${esc(l.label)}</b> ${esc(l.time)}${l.court === 'agents' && l.actor ? ` (${esc(l.actor)})` : ''}</span>`).join('<span>→</span>')}</div></div>` : ''}
+    ${it.summary ? `<div class="d-sec"><div class="label">Summary</div>${md(it.summary)}</div>` : ''}
+    <div class="d-sec"><div class="label">Done means</div>${it.acceptance ? md(it.acceptance) : '<p class="age">No acceptance criteria yet. Agents are asked to write them before submitting.</p>'}</div>
+    ${it.submission && it.stage === 'verifying' ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
+      ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}</div>` : ''}
+    ${handoff}
+    ${questions}
+    ${steers}
+    <div class="d-sec"><div class="label">Say something about this item</div>
+      <div class="inline-form"><input data-draft="ic:${it.item}" id="ic:${it.item}" placeholder="Steer whoever works on it next, or leave a note…">
+      <button class="btn primary" data-action="item-steer" data-item="${it.item}" title="The agent on it must read and acknowledge">Steer</button>
+      <button class="btn" data-action="item-note" data-item="${it.item}">Note</button></div></div>
+    <div class="d-sec">${S.deep ? '' : `<button class="btn" data-action="deep">Deep dive (30m): the timeline, every event and its detail</button>`}</div>
+    ${deep}`;
+}
+
+// ── modals ──
+function modal(html) {
+  const m = $('#modal');
+  m.innerHTML = `<div class="dialog">${html}</div>`;
+  m.hidden = false;
+}
+const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''; };
+const copyBlock = (text) => `<div class="copyable"><pre>${esc(text)}</pre><button data-action="copy" data-text="${esc(text)}">Copy</button></div>`;
+
+async function connect() {
+  S.info ??= await api('/api/info').catch(() => ({ bin: '/path/to/trellis/bin/trellis.js', url: location.origin }));
+  const slug = S.slug ?? 'my-project';
+  const bin = S.info.bin;
+  const url = S.info.url;
+  const secured = S.info.auth === 'required';
+  const env = (url === 'http://127.0.0.1:4747' ? '' : ` -e TRELLIS_URL=${url}`) + (secured ? ' -e TRELLIS_TOKEN=<agent-token>' : '');
+  const tomlTok = secured ? ', TRELLIS_TOKEN = "<agent-token>"' : '';
+  const envTok = secured ? '  TRELLIS_TOKEN=<agent-token>' : '';
+  modal(`<h2>Connect an agent</h2>
+    <p class="lead">Any model can work here. Agents connect over MCP, or use the plain CLI from any shell. They check in, take work, ask, and submit. Several can work at once.</p>
+    ${secured ? `<p class="lead">This hub requires tokens. Give each agent its own, so you can revoke one without the others. On the server, run:</p>${copyBlock('node bin/trellis.js token create <agent-name> --role agent')}` : ''}
+    <h4>Claude Code</h4>${copyBlock(`claude mcp add trellis -e TRELLIS_PROJECT=${slug}${env} -- node "${bin}" mcp`)}
+    <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(`[mcp_servers.trellis]\ncommand = "node"\nargs = ["${bin}", "mcp"]\nenv = { TRELLIS_PROJECT = "${slug}", TRELLIS_URL = "${url}"${tomlTok} }`)}
+    <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(`command: node\nargs: ["${bin}", "mcp"]\nenv: TRELLIS_PROJECT=${slug}  TRELLIS_URL=${url}${envTok}`)}
+    <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(`node "${bin}" guide --project ${slug}`)}
+    <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through Trellis: run the command above and follow it."</i></p>
+    <h4>Start a headless worker</h4><p class="lead">Run this in the project's folder. It checks the hub, then prints a complete command: the MCP server, the project, and the tools the agent may use without asking.</p>${copyBlock(`node "${bin}" worker --agent claude --project ${slug}\nnode "${bin}" worker --agent codex --project ${slug}`)}
+    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="/api/tools?format=openai" target="_blank">OpenAI</a> · <a href="/api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="/api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>X-Trellis-Agent: &lt;name&gt;</code>. The agent guide: <a href="/agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
+    <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
+}
+
+function newProject() {
+  modal(`<h2>New project</h2><p class="lead">Agents also create projects automatically when they check in to a new name.</p>
+    <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
+    <label>Mission (optional): the north star every agent reads<textarea id="np-mission" placeholder="What is this for? What matters most?"></textarea></label></div>
+    <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="create-project">Create</button></div>`);
+  setTimeout(() => $('#np-name')?.focus(), 0);
+}
+
+// ── events ──
+const val = (id) => (document.getElementById(id)?.value ?? '').trim();
+const clearDraft = (...keys) => keys.forEach((k) => delete S.drafts[k]);
+
+const ACTIONS = {
+  zoom: (el) => { S.zoom = el.dataset.zoom; store.set('zoom', S.zoom); render({ force: true }); },
+  goto: (el) => go(el.dataset.slug),
+  open: (el) => go(S.slug, el.dataset.item),
+  close: () => { go(S.slug); },
+  deep: () => { S.deep = true; render({ force: true }); },
+  toggle: (el) => { const k = el.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); render({ force: true }); },
+  reveal: (el) => { S.reveal.add(el.dataset.key); render({ force: true }); setTimeout(() => document.getElementById(el.dataset.key.replace('dsb', `sb:${S.itemRef}`))?.focus(), 0); },
+  stage: (el) => { S.stage = S.stage === el.dataset.stage ? null : el.dataset.stage; render({ force: true }); },
+  seen: () => human('seen', {}, 'Marked as seen'),
+  autonomy: (el) => human('settings', { autonomy: el.dataset.level }, 'Autonomy changed; agents have been told'),
+  'edit-mission': () => { S.editMission = true; render({ force: true }); setTimeout(() => $('#mission-in')?.focus(), 0); },
+  'cancel-mission': () => { S.editMission = false; clearDraft('mission'); render({ force: true }); },
+  'save-mission': async () => { const m = val('mission-in'); S.editMission = false; clearDraft('mission'); await human('settings', { mission: m }, 'Mission saved'); },
+  'compose-kind': (el) => { S.composeKind = el.dataset.kind; render({ force: true }); },
+  'compose-send': async () => {
+    const body = val('compose');
+    if (!body) return;
+    const kind = S.composeKind;
+    clearDraft('compose');
+    $('#compose').value = '';
+    if (kind === 'note') await human('comment', { body }, 'Noted');
+    else if (kind === 'decision') await human('decide', { body }, 'Decision recorded: every agent will carry it');
+    else await human('steer', { body }, 'Steer sent: agents will acknowledge it');
+  },
+  'toggle-add': () => { S.addWork = !S.addWork; render({ force: true }); if (S.addWork) setTimeout(() => $('#nw-title')?.focus(), 0); },
+  'nw-priority': (el) => { S.drafts['nw-priority'] = el.dataset.p; render({ force: true }); },
+  'add-work': async () => {
+    const title = val('nw-title');
+    if (!title) return toast('Give it a title', true);
+    await human('create', { title, summary: val('nw-summary'), acceptance: val('nw-acceptance'), priority: S.drafts['nw-priority'] ?? 'soon' }, 'Added to Ready');
+    clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority');
+    S.addWork = false;
+    render({ force: true });
+  },
+  answer: (el) => {
+    const q = el.dataset.q;
+    const decide = document.getElementById(`dec-${q}`)?.checked;
+    clearDraft(`ans-${q}`, `dec-${q}`);
+    return human('answer', { question: Number(q), answer: el.dataset.answer, decide }, decide ? 'Answered, and saved as a decision' : 'Answered; the work is moving again');
+  },
+  'answer-text': (el) => {
+    const q = el.dataset.q;
+    const answer = val(`ans-${q}`);
+    if (!answer) return toast('Write an answer first', true);
+    const decide = document.getElementById(`dec-${q}`)?.checked;
+    clearDraft(`ans-${q}`, `dec-${q}`);
+    return human('answer', { question: Number(q), answer, decide }, 'Answered; the work is moving again');
+  },
+  confirm: (el) => human('confirm', { question: Number(el.dataset.q) }, 'Assumption confirmed'),
+  override: (el) => {
+    const q = el.dataset.q;
+    const src = el.dataset.src ?? `ov:${q}`;
+    const answer = val(src);
+    if (!answer) return toast('Say what to do instead', true);
+    clearDraft(src);
+    S.reveal.delete(`ov:${q}`);
+    return human('answer', { question: Number(q), answer }, 'Overridden: the agent will be steered');
+  },
+  accept: (el) => human('accept', { item: el.dataset.item }, `Accepted ${el.dataset.item}`),
+  sendback: (el) => {
+    const k = `sb:${el.dataset.item}`;
+    const note = val(k);
+    if (!note) return toast('Say what is missing; the next agent starts from it', true);
+    clearDraft(k);
+    S.reveal.delete(k); S.reveal.delete('dsb');
+    return human('sendback', { item: el.dataset.item, note }, 'Sent back with your note');
+  },
+  approve: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Approved: ready for any agent'),
+  pick: (el) => human('pick', { item: el.dataset.item }, `Picked ${el.dataset.item}: the next agent shapes it first`),
+  park: () => { if (confirm('Park this project? No new work starts and nothing here will ask for you until you unpark it.')) human('settings', { parked: true }, 'Parked'); },
+  unpark: () => human('settings', { parked: false }, 'Unparked'),
+  drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
+  reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
+  clarify: (el) => {
+    const k = `cl:${el.dataset.item}`;
+    const body = val(k);
+    if (!body) return;
+    clearDraft(k);
+    S.reveal.delete(k);
+    return human('steer', { item: el.dataset.item, body }, 'Steer attached to the item');
+  },
+  'item-steer': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('steer', { item: el.dataset.item, body }, 'Steer attached: whoever works on it must acknowledge'); },
+  'item-note': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('comment', { item: el.dataset.item, body }, 'Noted'); },
+  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority'); render({ force: true }); },
+  'ei-priority': (el) => { S.drafts['ei-priority'] = el.dataset.p; render({ force: true }); },
+  'save-item': async (el) => {
+    const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance') };
+    if (S.drafts['ei-priority']) args.priority = S.drafts['ei-priority'];
+    S.editItem = false;
+    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority');
+    await human('update', args, 'Saved');
+  },
+  dismiss: (el) => human('dismiss', { key: el.dataset.key }),
+  retire: (el) => human('retire', { note: Number(el.dataset.note) }, 'Retired'),
+  'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
+  connect: () => connect(),
+  'new-project': () => newProject(),
+  'close-modal': () => closeModal(),
+  logout: async () => { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = '/login.html'; },
+  'create-project': async () => {
+    const name = val('np-name');
+    if (!name) return toast('Name it', true);
+    try {
+      const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('np-mission') }) });
+      closeModal();
+      go(r.slug);
+    } catch (e) { toast(e.message, true); }
+  },
+  copy: async (el) => { try { await navigator.clipboard.writeText(el.dataset.text); toast('Copied'); } catch { toast('Copy failed; select the text instead', true); } },
+};
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-action]');
+  if (!el || el.tagName === 'INPUT') return;
+  const fn = ACTIONS[el.dataset.action];
+  if (!fn) return;
+  if (el.tagName === 'A' && el.getAttribute('href')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  fn(el);
+});
+document.addEventListener('change', (e) => {
+  if (e.target.dataset?.action === 'feed-all') ACTIONS['feed-all']();
+  if (e.target.dataset?.draft && e.target.type === 'checkbox') S.drafts[e.target.dataset.draft] = e.target.checked;
+});
+document.addEventListener('input', (e) => {
+  if (e.target.dataset?.draft) S.drafts[e.target.dataset.draft] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+});
+document.addEventListener('focusout', () => setTimeout(() => { if (S.pending && !typing()) render(); }, 150));
+document.addEventListener('keydown', (e) => {
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+  if (e.key === 'Escape') {
+    if (!$('#modal').hidden) return closeModal();
+    if (S.itemRef) return go(S.slug);
+    if (inField) document.activeElement.blur();
+  }
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && document.activeElement?.id === 'compose') return ACTIONS['compose-send']();
+  if (e.key === 'Enter' && inField && document.activeElement.tagName === 'INPUT') {
+    const btn = document.activeElement.parentElement?.querySelector('button[data-action]');
+    if (btn) { e.preventDefault(); btn.click(); }
+  }
+  if (!inField && !e.metaKey && !e.ctrlKey && ['1', '2', '3'].includes(e.key) && S.slug) {
+    S.zoom = Object.keys(Z)[Number(e.key) - 1];
+    store.set('zoom', S.zoom);
+    render({ force: true });
+  }
+});
+$('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+
+// ── live updates ──
+let refreshTimer;
+function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh(), 250); }
+function listen() {
+  const es = new EventSource('/api/stream');
+  es.onmessage = () => scheduleRefresh();
+  es.onerror = () => { es.close(); setTimeout(listen, 3000); };
+}
+
+(async function start() {
+  window.addEventListener('hashchange', route);
+  S.me = await api('/api/me').catch(() => null);
+  await loadProjects().catch(() => {});
+  if (!location.hash || location.hash === '#/') {
+    if (S.projects.length === 1) return void (go(S.projects[0].slug), listen());
+  }
+  route();
+  listen();
+  setInterval(() => refresh(), 30_000);
+})();

@@ -1,0 +1,211 @@
+import http from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { join, extname, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { UserError, HUMAN_OP_NAMES } from './core.js';
+import { view, itemView, projectList } from './insight.js';
+import { tools, guide } from './protocol.js';
+import { Auth, SESSION_MS } from './auth.js';
+
+const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
+const MAX_BODY = 1024 * 1024;
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+};
+const COOKIE = 'trellis_session';
+const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
+// What an agent-role token may reach in required mode.
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me)$/, /^GET \/agents\.md$/];
+const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
+
+// auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
+export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
+  const required = auth === 'required';
+  const authz = new Auth(hub.db);
+  const failures = new Map(); // ip → [timestamps of failed logins]
+  const clients = new Set();
+  hub.on('change', (e) => {
+    const msg = `data: ${JSON.stringify(e)}\n\n`;
+    for (const res of clients) res.write(msg);
+  });
+  const sweeper = setInterval(() => { try { hub.sweep(); } catch (e) { console.error('sweep failed', e); } }, 15_000);
+  const keepalive = setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 25_000);
+
+  const first = (v) => String(v ?? '').split(',')[0].trim();
+  const clientIp = (req) => (trustProxy && first(req.headers['x-forwarded-for'])) || req.socket.remoteAddress || '?';
+  const hostOf = (req) => (trustProxy && first(req.headers['x-forwarded-host'])) || req.headers.host || '';
+  const https = (req) => req.socket.encrypted || (trustProxy && first(req.headers['x-forwarded-proto']) === 'https');
+  const origin = (req) => `${https(req) ? 'https' : 'http'}://${hostOf(req)}`;
+  const cookieOf = (req) => {
+    for (const part of String(req.headers.cookie ?? '').split(';')) {
+      const [k, ...v] = part.trim().split('=');
+      if (k === COOKIE) return v.join('=');
+    }
+    return null;
+  };
+  const sameOrigin = (req) => {
+    try { return new URL(req.headers.origin).host === hostOf(req); } catch { return false; }
+  };
+  const recentFailures = (ip) => {
+    const now = Date.now();
+    const list = (failures.get(ip) ?? []).filter((t) => now - t < LOGIN_WINDOW);
+    failures.set(ip, list);
+    if (failures.size > 10_000) failures.clear();
+    return list;
+  };
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://local');
+    const path = url.pathname;
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+    const send = (status, body, type = 'application/json; charset=utf-8') => {
+      res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
+      res.end(type.startsWith('application/json') ? JSON.stringify(body, null, 2) : body);
+    };
+    const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
+    try {
+      const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+
+      // Without login, only answer to loopback names: blocks DNS-rebinding from web pages you visit.
+      if (!required && !LOOPBACK.test(hostname(req.headers.host))) {
+        return deny(403, 'this hub only answers on localhost', 'To serve it under another name, start it with --auth (tokens required).');
+      }
+      // A browser request from another site never gets to change anything.
+      if (unsafe && req.headers.origin && !sameOrigin(req)) return deny(403, 'cross-origin request refused');
+
+      // ── public ──
+      if (req.method === 'GET' && path === '/api/health') return send(200, { ok: true, name: 'trellis' });
+      if (req.method === 'POST' && path === '/api/login') {
+        if (!required) return send(200, { ok: true, auth: 'local' });
+        const ip = clientIp(req);
+        if (recentFailures(ip).length >= LOGIN_MAX_FAILS) return deny(429, 'too many failed attempts', 'Wait 10 minutes, then try again.');
+        const b = await body(req);
+        const t = authz.verifyToken(b.token);
+        if (!t || t.role !== 'human') {
+          recentFailures(ip).push(Date.now());
+          return t ? deny(403, 'agent tokens cannot log in to the UI', 'Use a token created with --role human.') : deny(401, 'invalid token');
+        }
+        failures.delete(ip);
+        const sid = authz.createSession(t.id);
+        res.setHeader('set-cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
+        return send(200, { ok: true, name: t.name });
+      }
+      if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
+        const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
+        if (file.includes('..')) return send(404, 'not found', 'text/plain');
+        try {
+          return send(200, await readFile(join(WEB, file)), TYPES[extname(file)] ?? 'application/octet-stream');
+        } catch {
+          return send(404, 'not found', 'text/plain');
+        }
+      }
+
+      // ── who is this? ──
+      let who = { role: 'human', name: 'you', via: 'local' };
+      if (required) {
+        const bearer = String(req.headers.authorization ?? '').match(/^Bearer\s+(\S+)/i)?.[1];
+        const sid = cookieOf(req);
+        who = bearer ? authz.verifyToken(bearer) : sid ? authz.verifySession(sid) : null;
+        if (who) who.via = bearer ? 'bearer' : 'cookie';
+        if (req.method === 'GET' && path === '/api/me') {
+          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null });
+        }
+        if (!who) {
+          return deny(401, bearer ? 'invalid or revoked token' : 'login required',
+            bearer ? 'Check TRELLIS_TOKEN; tokens are managed with `trellis token` on the hub host.' : 'Log in at /login.html, or send Authorization: Bearer <token>.');
+        }
+        // Cookies ride along automatically, so they must prove the request came from this site.
+        if (who.via === 'cookie' && unsafe && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
+        if (who.role === 'agent' && !AGENT_ROUTES.some((r) => r.test(`${req.method} ${path}`))) {
+          return deny(403, 'agent tokens can only use agent operations', 'Use a human token for the UI and human actions.');
+        }
+      }
+
+      if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name });
+      if (req.method === 'POST' && path === '/api/logout') {
+        authz.deleteSession(cookieOf(req));
+        res.setHeader('set-cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+        return send(200, { ok: true });
+      }
+      if (req.method === 'GET' && path === '/api/stream') {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+        res.write(': hello\n\n');
+        clients.add(res);
+        req.on('close', () => clients.delete(res));
+        return;
+      }
+      if (req.method === 'GET' && path === '/api/info') {
+        return send(200, { bin: join(WEB, '..', 'bin', 'trellis.js'), url: origin(req), auth: required ? 'required' : 'local' });
+      }
+      if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub));
+      if (req.method === 'POST' && path === '/api/projects') {
+        const b = await body(req);
+        const p = hub.tx(() => hub.project(b.slug || b.name, { create: true, name: b.name }));
+        if (b.mission) hub.humanOp(p.slug, 'settings', { mission: b.mission });
+        hub.changed(p);
+        return send(200, { ok: true, slug: p.slug });
+      }
+      if (req.method === 'GET' && path === '/api/tools') {
+        return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? ''));
+      }
+      if (req.method === 'GET' && (path === '/agents.md' || path === '/api/guide')) {
+        return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req), via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
+      }
+
+      let m;
+      if ((m = path.match(/^\/api\/p\/([^/]+)\/view$/)) && req.method === 'GET') {
+        hub.sweep();
+        return send(200, view(hub, decodeURIComponent(m[1])));
+      }
+      if ((m = path.match(/^\/api\/p\/([^/]+)\/items\/([^/]+)$/)) && req.method === 'GET') {
+        return send(200, itemView(hub, decodeURIComponent(m[1]), decodeURIComponent(m[2])));
+      }
+      if ((m = path.match(/^\/api\/p\/([^/]+)\/human\/([a-z]+)$/)) && req.method === 'POST') {
+        if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404 });
+        return send(200, hub.humanOp(decodeURIComponent(m[1]), m[2], await body(req)));
+      }
+      if ((m = path.match(/^\/api\/p\/([^/]+)\/agent\/([a-z]+)$/)) && req.method === 'POST') {
+        const b = await body(req);
+        const agent = req.headers['x-trellis-agent'] || b.agent;
+        delete b.agent;
+        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b));
+      }
+      send(404, { ok: false, error: `No route ${req.method} ${path}` });
+    } catch (e) {
+      if (e instanceof UserError) return send(e.status, { ok: false, error: e.message, ...(e.hint ? { hint: e.hint } : {}) });
+      console.error(e);
+      send(500, { ok: false, error: String(e?.message ?? e) });
+    }
+  });
+  server.auth = authz;
+  server.on('close', () => { clearInterval(sweeper); clearInterval(keepalive); });
+  return server;
+}
+
+function hostname(host) {
+  try { return new URL(`http://${host}`).hostname; } catch { return ''; }
+}
+
+async function body(req) {
+  if (Number(req.headers['content-length']) > MAX_BODY) throw new UserError('Request body too large (limit 1MB)', { status: 413 });
+  const chunks = [];
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > 16 * MAX_BODY) { req.destroy(); break; }
+    if (size <= MAX_BODY) chunks.push(c);
+  }
+  if (size > MAX_BODY) throw new UserError('Request body too large (limit 1MB)', { status: 413 });
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    throw new UserError('Request body must be JSON');
+  }
+}

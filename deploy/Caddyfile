@@ -1,0 +1,16 @@
+# Automatic HTTPS in front of Trellis. Point DNS for the name at this machine, open 80/443, then:
+#   caddy run --config /etc/caddy/Caddyfile
+# Run Trellis with: serve --host 127.0.0.1 --auth --trust-proxy
+trellis.example.com {
+	reverse_proxy 127.0.0.1:4747 {
+		# Live updates are server-sent events; don't buffer them.
+		flush_interval -1
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+	log {
+		output file /var/log/caddy/trellis.log
+	}
+}

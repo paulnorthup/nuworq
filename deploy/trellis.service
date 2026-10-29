@@ -1,0 +1,51 @@
+# /etc/systemd/system/trellis.service
+#   sudo useradd --system --home /var/lib/trellis --shell /usr/sbin/nologin trellis
+#   sudo git clone <repo> /opt/trellis   (or copy the folder there)
+#   sudo -u trellis node /opt/trellis/bin/trellis.js token create <you> --role human --db /var/lib/trellis/trellis.db
+#   sudo systemctl enable --now trellis
+[Unit]
+Description=Trellis hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trellis
+Group=trellis
+WorkingDirectory=/opt/trellis
+# Loopback + --auth behind Caddy or `tailscale serve`. For LAN-only without a proxy,
+# use --host 0.0.0.0 instead (login is then required automatically) and drop --trust-proxy.
+ExecStart=/usr/bin/node /opt/trellis/bin/trellis.js serve --host 127.0.0.1 --port 4747 --db /var/lib/trellis/trellis.db --auth --trust-proxy
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+StateDirectory=trellis
+StateDirectoryMode=0700
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/trellis
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+# Not set: MemoryDenyWriteExecute (Node's JIT needs writable+executable memory).
+
+[Install]
+WantedBy=multi-user.target

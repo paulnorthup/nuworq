@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trellis",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["bin/trellis.js", "serve"],
+      "port": 4747
+    }
+  ]
+}
