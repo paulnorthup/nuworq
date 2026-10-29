@@ -522,6 +522,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, hub.projects().filter((p) => !caller.scope || caller.scope.includes(p.slug))
           .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner })));
       }
+      if (req.method === 'GET' && path === '/api/projects' && url.searchParams.get('archived')) {
+        return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
+      }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
       if (req.method === 'POST' && path === '/api/projects') {
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't create projects`, 'Ask an owner or steward.');

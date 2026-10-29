@@ -1,8 +1,9 @@
 // The hub's state and every operation agents and humans can perform.
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
+import { rmSync } from 'node:fs';
 import { openDb } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, originOf } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, mirrorPath, originOf } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 
@@ -35,7 +36,7 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
 const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire'];
-export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote'] };
+export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
 export const STAGES = {
@@ -229,8 +230,9 @@ export class Hub extends EventEmitter {
 
   // ── projects ────────────────────────────────────────────────────────────
 
-  projects() {
-    return this.q('SELECT * FROM projects ORDER BY name COLLATE NOCASE').all();
+  // The projects in use; archived ones only when asked for (they keep their history and can be restored).
+  projects({ archived = false } = {}) {
+    return this.q(`SELECT * FROM projects WHERE ${archived ? 'archived_at > 0' : 'archived_at = 0'} ORDER BY name COLLATE NOCASE`).all();
   }
 
   project(slug, { create = false, name } = {}) {
@@ -264,9 +266,10 @@ export class Hub extends EventEmitter {
 
   // The project a repository belongs to, by its normalized remote: the same answer on every machine.
   // scope: slugs to consider (null: all).
-  projectByRemote(remote, scope = null) {
+  // archived: also find an archived project (its repository still belongs to it until it is deleted).
+  projectByRemote(remote, scope = null, { archived = false } = {}) {
     const r = normRemote(remote);
-    const p = r ? this.q('SELECT p.* FROM projects p JOIN project_remotes r ON r.project_id = p.id WHERE r.remote = ?').get(r) ?? null : null;
+    const p = r ? this.q(`SELECT p.* FROM projects p JOIN project_remotes r ON r.project_id = p.id WHERE r.remote = ?${archived ? '' : ' AND p.archived_at = 0'}`).get(r) ?? null : null;
     return p && scope && !scope.includes(p.slug) ? null : p;
   }
 
@@ -363,9 +366,13 @@ export class Hub extends EventEmitter {
   addRemote(p, remote, actor) {
     const r = normRemote(remote);
     if (!r) throw new UserError('a remote is required', { hint: 'e.g. github.com/acme/api, or any form git accepts (git@github.com:acme/api.git).' });
-    const owner = this.projectByRemote(r);
+    const owner = this.projectByRemote(r, null, { archived: true });
     if (owner?.id === p.id) return r;
-    if (owner) throw new UserError(`${r} already belongs to ${owner.name}`, { status: 409, hint: `Remove it from ${owner.name} first: one repository maps to one project.` });
+    if (owner) {
+      throw new UserError(`${r} already belongs to ${owner.name}${owner.archived_at ? ' (archived)' : ''}`, {
+        status: 409, hint: owner.archived_at ? `Restore ${owner.name}, or delete it for good, to use ${r} again.` : `Remove it from ${owner.name} first: one repository maps to one project.`,
+      });
+    }
     this.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(p.id, r, this.now());
     this.event(p, {
       actor, type: 'remote',
@@ -887,6 +894,7 @@ export class Hub extends EventEmitter {
     if (slug) {
       this.inScope(scope, slug);
       p = this.project(slug, { create: op === 'checkin' });
+      if (p.archived_at) throw new UserError(`${p.name} is archived`, { status: 410, hint: 'Nothing is worked on there until an owner restores it. Check in without a project to be sent to work that is waiting.' });
     } else {
       // The repository is the same on every machine; the folder only on this one.
       p = this.projectByRemote(remote, scope) ?? this.projectByPath(root, scope);
@@ -913,7 +921,7 @@ export class Hub extends EventEmitter {
       this.event(p, { actor: SYSTEM, type: 'path', headline: `${p.name} lives in ${here}`, summary: `Learned from ${agent}'s checkin. Agents working in that folder now find this project on their own.` });
     }
     // Learn the repository the same way, unless it already belongs to another project.
-    if (slug && remote && op === 'checkin' && !this.projectByRemote(remote)) this.addRemote(p, remote, agent);
+    if (slug && remote && op === 'checkin' && !this.projectByRemote(remote, null, { archived: true })) this.addRemote(p, remote, agent);
     // A clone of the project's repository is the right place to work, wherever it sits on disk.
     const ownClone = !!remote && this.projectByRemote(remote)?.id === p.id;
     const result = this.tx(() => {
@@ -1982,6 +1990,51 @@ const HUMAN_OPS = {
 
   seen(p) {
     this.q('UPDATE projects SET seen_at = ? WHERE id = ?').run(this.now(), p.id);
+  },
+
+  // Archive: out of the project list and routing, with everything kept; restore brings it back as it was.
+  archive(p, args, by) {
+    if (p.archived_at) return { archived: p.slug };
+    this.q('UPDATE projects SET archived_at = ? WHERE id = ?').run(this.now(), p.id);
+    this.event(p, { actor: by, type: 'project', headline: `${You(by)} archived ${p.name}`, summary: 'Its items and history are kept. Agents are no longer sent here; restore it to work on it again.' });
+    return { archived: p.slug };
+  },
+
+  restore(p, args, by) {
+    if (!p.archived_at) return { restored: p.slug };
+    this.q('UPDATE projects SET archived_at = 0 WHERE id = ?').run(p.id);
+    this.event(p, { actor: by, type: 'project', headline: `${You(by)} restored ${p.name}` });
+    return { restored: p.slug };
+  },
+
+  // Delete for good: every row of the project, its mirrors, and its place in tokens limited to it. Only
+  // after typing its name. The repository on GitHub is never touched.
+  delete(p, { confirm }, by) {
+    if (str(confirm) !== p.name && str(confirm) !== p.slug) {
+      throw new UserError(`Type the project's name (${p.name}) to delete it`, { hint: 'Deleting removes its items, history, notes and mirror for good. Archive it instead to keep them.' });
+    }
+    const remotes = this.remotesOf(p);
+    const items = `SELECT id FROM items WHERE project_id = ${Number(p.id)}`;
+    this.q(`DELETE FROM acks WHERE note_id IN (SELECT id FROM notes WHERE project_id = ?)`).run(p.id);
+    for (const t of ['attempts', 'transitions']) this.q(`DELETE FROM ${t} WHERE item_id IN (${items})`).run();
+    this.q(`DELETE FROM deps WHERE item_id IN (${items}) OR depends_on IN (${items})`).run();
+    for (const t of ['agents', 'events', 'questions', 'notes', 'project_stewards', 'dismissals', 'project_remotes', 'notified', 'prs', 'issues', 'checks', 'usage', 'items']) {
+      this.q(`DELETE FROM ${t} WHERE project_id = ?`).run(p.id);
+    }
+    this.q('DELETE FROM projects WHERE id = ?').run(p.id);
+    // Tokens limited to projects lose this one; a token left with none is revoked, not widened to all.
+    let revoked = 0;
+    if (this.q("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tokens'").get()) {
+      for (const t of this.q("SELECT id, projects FROM tokens WHERE projects != '' AND revoked_at IS NULL").all()) {
+        const scope = t.projects.split(',');
+        if (!scope.includes(p.slug)) continue;
+        const left = scope.filter((s) => s !== p.slug);
+        if (left.length) this.q('UPDATE tokens SET projects = ? WHERE id = ?').run(left.join(','), t.id);
+        else { this.q('UPDATE tokens SET revoked_at = ? WHERE id = ?').run(this.now(), t.id); revoked++; }
+      }
+    }
+    if (this.repos) for (const r of remotes) rmSync(mirrorPath(this.repos, r), { recursive: true, force: true });
+    return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
   settings(p, { name, mission, autonomy, parked, path, runner, github_secret, issue_label }, by) {

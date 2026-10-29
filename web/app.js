@@ -94,6 +94,19 @@ async function human(action, body = {}, msg) {
   }
 }
 
+// Archive or delete the open project, then leave it: it is no longer in the list.
+async function removeProject(action, body, msg) {
+  try {
+    await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
+    closeModal();
+    await loadProjects();
+    go('');
+    toast(msg);
+  } catch (e) {
+    toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true);
+  }
+}
+
 // ── data ──
 async function loadProjects() {
   S.projects = await api('/api/projects');
@@ -160,6 +173,7 @@ function renderRail() {
     ${projects || '<div class="rail-item" style="color:var(--faint)">None yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
+      <button class="rail-item" data-action="archived">Archived projects</button>
       <button class="rail-item" data-action="connect">⌁ Connect an agent</button>
       <button class="rail-item" data-action="notify">◔ Notifications</button>
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
@@ -222,6 +236,7 @@ function project(v) {
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
         ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items with a GitHub webhook">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
         ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
+        ${z() >= 2 ? `<button class="link" data-action="remove-project" title="Archive it (history kept) or delete it for good">Remove project</button>` : ''}
         ${z() >= 1 ? (P.runner
           ? `<button class="link" data-action="runner-off" title="nuworq run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by nuworq run · stop</button>`
           : `<button class="link" data-action="runner-on" title="Let nuworq run start headless workers here whenever work is waiting">Let nuworq run staff this project</button>`) : ''}
@@ -909,6 +924,31 @@ const ACTIONS = {
   pick: (el) => human('pick', { item: el.dataset.item }, `Picked ${el.dataset.item}: the next agent shapes it first`),
   park: () => { if (confirm('Park this project? No new work starts and nothing here will ask for you until you unpark it.')) human('settings', { parked: true }, 'Parked'); },
   unpark: () => human('settings', { parked: false }, 'Unparked'),
+  'remove-project': () => {
+    const P = S.view.project;
+    modal(`<h2>Remove ${esc(P.name)}</h2>
+      <p class="lead"><b>Archive</b> takes it out of the project list and stops agents being sent here. Its items and history are kept, and you can restore it from Archived projects.</p>
+      <p class="lead"><b>Delete</b> removes its items, history, notes and the hub's mirror for good, and tokens limited to it lose it. The repository on GitHub is not touched. Type <code>${esc(P.name)}</code> to delete it.</p>
+      <div class="form"><input id="rm-confirm" placeholder="${esc(P.name)}"></div>
+      <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn ghost" data-action="delete-project">Delete for good</button><button class="btn primary" data-action="archive-project">Archive</button></div>`);
+  },
+  'archive-project': () => removeProject('archive', {}, 'Archived'),
+  'delete-project': () => removeProject('delete', { confirm: val('rm-confirm') }, 'Deleted'),
+  archived: async () => {
+    try {
+      const list = await api('/api/projects?archived=1');
+      modal(`<h2>Archived projects</h2>${list.length ? list.map((p) => `<div class="row-item"><div class="body"><div class="h">${esc(p.name)}</div>${p.remotes.length ? `<div class="s">${esc(p.remotes.join(', '))}</div>` : ''}</div><button class="btn small" data-action="restore-project" data-slug="${esc(p.slug)}">Restore</button></div>`).join('') : '<p class="lead">None.</p>'}
+        <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
+    } catch (e) { toast(e.message, true); }
+  },
+  'restore-project': async (el) => {
+    try {
+      await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/restore`, { method: 'POST', body: '{}' });
+      closeModal();
+      await loadProjects();
+      go(el.dataset.slug);
+    } catch (e) { toast(e.message, true); }
+  },
   'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
   'runner-off': () => human('settings', { runner: false }, '`nuworq run` will no longer start workers here'),
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
