@@ -16,7 +16,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'no-browser', 'no-mcp']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'no-browser', 'no-mcp', 'early-access']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -814,7 +814,8 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const dir = workspacesDir(flags);
   // Plans (#113): off unless the host turns them on; organizations the owners belong to are never limited.
   const plans = /^(1|on|true|yes)$/i.test(String(flags.plans ?? envVar('PLANS') ?? ''));
-  const owners = String(flags.owners ?? envVar('OWNERS') ?? '').split(',').filter(Boolean);
+  // The hub's owners: one list for everything that asks (--owners, NUWORQ_HUB_OWNERS, or NUWORQ_OWNERS).
+  const owners = String(flags.owners ?? envVar('HUB_OWNERS') ?? envVar('OWNERS') ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
   const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags), plans, owners });
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
@@ -823,7 +824,13 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const { appFromEnv, appFromFile } = await import('../src/ghapp.js');
   const { notifyWorkspaces, workspaceUrl } = await import('../src/notify.js');
   let pushes = null;
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package') });
+  // Early access: requests through a Turnstile-checked form, decided by the hub's owners (by verified email).
+  const { turnstile } = await import('../src/directory.js');
+  const secret = envVar('TURNSTILE_SECRET');
+  const earlyAccess = flags['early-access'] || secret || owners.length
+    ? { owners, verify: secret ? turnstile(secret) : null, sitekey: envVar('TURNSTILE_SITEKEY') ?? '', gate: !!flags['early-access'] }
+    : null;
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();
@@ -1040,6 +1047,9 @@ ${bold('Human')}
                                          one process, many workspaces (one database each),
                                          at <name>.<base-domain> or /w/<name>/. Login always required.
                                          [--org-cap 5]: organizations one signed-in person may create
+                                         [--early-access]: making an organization takes an approved request
+                                         (owners: --owners or NUWORQ_HUB_OWNERS emails; form at /early-access with
+                                         NUWORQ_TURNSTILE_SITEKEY, checked with NUWORQ_TURNSTILE_SECRET)
   workspace create|remove <name> | list  manage workspaces on the hub host
   notify add ntfy|slack|webhook <url> [--person bea]   push one batched message when something new needs you
                                          (--person: a channel for bea, only what bea owns)

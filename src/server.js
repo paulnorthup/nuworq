@@ -61,6 +61,8 @@ const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the r
 const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode): who you are, not any one workspace
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
+const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
+const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
 const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
@@ -76,7 +78,10 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // github: GitHub's addresses ({ web, api }; tests point them at a stub).
 // packageDir: where the package of the running commit is built and kept (/nuworq.tgz; see src/package.js).
 // source: the checkout it is built from (tests point it at a clone).
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT } = {}) {
+// earlyAccess (workspaces mode): { owners: [emails], verify: async (token, ip) => bool, gate: bool }. owners
+// decide requests; verify checks the form's Turnstile token (src/directory.js turnstile); gate: making an
+// organization takes an approved request's grant. null: no early access.
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
   let built = null;
@@ -122,6 +127,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const required = spaces ? true : auth === 'required';
   const sso = oauth instanceof OAuth ? oauth : new OAuth(oauth);
   const failures = new Map(); // ip → [timestamps of failed logins]
+  const asks = new Map(); // ip → [timestamps of early-access requests]
   const starts = new Map(); // ip → [timestamps of device logins started]
   // Per hub: its tokens and sessions, and the browsers streaming its changes. Nothing is shared across hubs.
   const scopes = new Map();
@@ -226,9 +232,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const sameOrigin = (req) => {
     try { return new URL(req.headers.origin).host === hostOf(req); } catch { return false; }
   };
-  const recent = (map, ip) => {
+  const recent = (map, ip, window = LOGIN_WINDOW) => {
     const now = Date.now();
-    const list = (map.get(ip) ?? []).filter((t) => now - t < LOGIN_WINDOW);
+    const list = (map.get(ip) ?? []).filter((t) => now - t < window);
     map.set(ip, list);
     if (map.size > 10_000) map.clear();
     return list;
@@ -263,10 +269,38 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another organization on this hub', 'Install the app for this organization on its own account or repositories.');
       return redirect(res, `/w/${encodeURIComponent(ws)}/#github-installed`);
     }
+    // Early access: anyone may ask to come in (a Turnstile token and a per-address limit keep bots out).
+    if (req.method === 'POST' && path === '/api/early-access') {
+      if (!earlyAccess?.verify) return deny(503, 'this hub takes no early-access requests', 'It has no Turnstile secret set (NUWORQ_TURNSTILE_SECRET).');
+      const ip = clientIp(req);
+      // Every attempt counts, passing or not, so the limit also caps calls to Turnstile.
+      if (recent(asks, ip, ASK_WINDOW).length >= ASK_MAX) return deny(429, 'too many requests from this address', 'Try again in an hour.');
+      recent(asks, ip, ASK_WINDOW).push(Date.now());
+      const b = await body(req);
+      if (!(await earlyAccess.verify(b.turnstile, ip))) return deny(400, "the form's check didn't pass", 'Reload the page and try again.');
+      let r;
+      try { r = dir.request({ email: b.email, github: b.github, building: b.building, ip }); } catch (e) { return deny(400, e.message, 'e.g. you@example.com'); }
+      return send(200, { ok: true, state: r.state, created: r.created_at === r.updated_at });
+    }
+    // What the request form needs to show Turnstile's widget: the site key, which is public (never the secret).
+    if (req.method === 'GET' && path === '/api/early-access/config') return send(200, { sitekey: earlyAccess?.sitekey || null, open: !!earlyAccess?.verify });
+    // The request form. Only this page may load Turnstile's script and frame.
+    if (req.method === 'GET' && (path === '/early-access' || path === '/early-access.js')) {
+      if (path === '/early-access') {
+        res.setHeader('content-security-policy', SECURITY_HEADERS['content-security-policy']
+          .replace("script-src 'self'", `script-src 'self' ${TURNSTILE}`).replace("default-src 'self'", `default-src 'self'; frame-src ${TURNSTILE}`).replace("connect-src 'self'", `connect-src 'self' ${TURNSTILE}`));
+      }
+      return send(200, readFileSync(join(WEB, path === '/early-access' ? 'early-access.html' : 'early-access.js'), 'utf8'), path === '/early-access' ? TYPES['.html'] : TYPES['.js']);
+    }
+    // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
+    const page = path === '/' ? '/join.html' : path;
+    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css'].includes(page) && req.method === 'GET') {
+      return send(200, readFileSync(join(WEB, page.slice(1)), 'utf8'), TYPES[extname(page)]);
+    }
     const sid = jarOf(req).get(HUB_COOKIE);
     const me = dir.verifySession(sid);
     const signIn = sso.enabled ? 'Sign in with GitHub or Google: see GET /api/oauth for where to start.' : 'This hub has no GitHub or Google sign-in set up (see DEPLOY.md).';
-    const known = ['/api/me', '/api/orgs', '/api/logout'].includes(path) || /^\/api\/orgs\/[^/]+\/enter$/.test(path);
+    const known = ['/api/me', '/api/orgs', '/api/logout', '/api/early-access', '/api/early-access/decide'].includes(path) || /^\/api\/orgs\/[^/]+\/enter$/.test(path);
     if (!known) return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
     if (!me) return deny(401, 'sign in required', signIn);
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
@@ -279,6 +313,19 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       res.setHeader('set-cookie', `${HUB_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
       return send(200, { ok: true });
     }
+    // The hub's owners (by verified email) read and decide early-access requests.
+    const owner = !!earlyAccess?.owners?.includes(me.email);
+    if (path === '/api/early-access' || path === '/api/early-access/decide') {
+      if (!owner) return deny(403, 'only the hub\'s owners see early-access requests', 'The hub host lists them in NUWORQ_HUB_OWNERS.');
+      if (req.method === 'GET' && path === '/api/early-access') return send(200, { requests: dir.requests({ state: url.searchParams.get('state') ?? '' }) });
+      if (req.method === 'POST' && path === '/api/early-access/decide') {
+        const b = await body(req);
+        const r = dir.decide(b.id, b.approve === true, me.email);
+        if (!r) return deny(404, `no request ${b.id}`);
+        if (r.already) return deny(409, `that request was already ${r.already}`, 'Each request is decided once; its link was shown when it was approved.');
+        return send(200, { ok: true, state: r.state, ...(r.code ? { link: `${authOrigin(req)}/?grant=${r.code}` } : {}) });
+      }
+    }
     if (req.method === 'POST' && path === '/api/orgs') {
       const b = await body(req);
       const slug = Workspaces.check(b.slug || slugify(b.name ?? ''));
@@ -287,7 +334,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Plans on: one free organization per signed-in account (organizations the hub owner is in are never free).
       const free = spaces.plans ? spaces.freeCreatedBy(me) : [];
       if (free.length) return deny(402, `you already have a free organization (${free[0]}); an account gets one`, `Use ${free[0]}, or upgrade it to Pro and then create more.`);
-      spaces.create(slug);
+      // In early access, an organization takes an approved request's grant (its owners need none).
+      if (earlyAccess?.gate && !owner && !dir.useGrant(b.grant, me)) {
+        return deny(403, 'nuworq is in early access: making an organization takes an invitation', 'Request access on nuworq.com; the link you get when you are let in makes your organization.');
+      }
+      try { spaces.create(slug); } catch (e) { if (earlyAccess?.gate && !owner) dir.returnGrant(b.grant); throw e; }
       const hub = spaces.get(slug);
       const authz = scopeOf(hub).authz;
       const person = authz.addPerson(Auth.handleOf(me.email.split('@')[0]), 'owner', { email: me.email });

@@ -14,6 +14,23 @@ import { SESSION_MS } from './auth.js';
 
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 export const ORG_CAP = 5; // organizations one person may create, unless the host says otherwise
+export const GRANT_MS = 14 * 24 * 60 * 60 * 1000; // how long an early-access grant is good for
+
+// Cloudflare Turnstile, checked on the hub (the secret never reaches a browser): resolves true when the
+// token a request form got from the widget is good. The only call early access makes to anyone else.
+export function turnstile(secret, { fetch: get = fetch } = {}) {
+  return async (token, ip) => {
+    if (!secret || !token) return false;
+    try {
+      const r = await get('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ secret, response: String(token), ...(ip ? { remoteip: ip } : {}) }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      return (await r.json())?.success === true;
+    } catch { return false; }
+  };
+}
 
 export class Directory {
   constructor(file, { now = () => Date.now() } = {}) {
@@ -52,6 +69,28 @@ export class Directory {
         plan      TEXT NOT NULL,                  -- free | unlimited (no row: free, while plans are on)
         set_by    TEXT NOT NULL DEFAULT '',
         at        INTEGER NOT NULL
+      );
+      -- Early access: who asked to come in, and what the hub's owners decided.
+      CREATE TABLE IF NOT EXISTS access_requests (
+        id         INTEGER PRIMARY KEY,
+        email      TEXT UNIQUE NOT NULL,          -- lowercase; asking again updates the same request
+        github     TEXT NOT NULL DEFAULT '',
+        building   TEXT NOT NULL DEFAULT '',      -- what they would build, in their words
+        state      TEXT NOT NULL DEFAULT 'new',   -- new | approved | declined
+        ip_hash    TEXT NOT NULL DEFAULT '',      -- sha256 of the address it came from, never the address
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        decided_by TEXT NOT NULL DEFAULT '',
+        decided_at INTEGER
+      );
+      -- An approved request's grant: one organization, created once, before it expires.
+      CREATE TABLE IF NOT EXISTS org_grants (
+        hash       BLOB PRIMARY KEY,              -- sha256 of the code in the link
+        request_id INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_by    INTEGER,                       -- the identity that created its organization
+        used_at    INTEGER
       );`);
   }
 
@@ -94,6 +133,53 @@ export class Directory {
   // The organizations this identity created (whether they still exist is the caller's question).
   created(identity) {
     return this.db.prepare('SELECT workspace FROM memberships WHERE identity_id = ? AND created = 1').all(identity.id).map((m) => m.workspace);
+  }
+
+  // ── early access ──
+
+  // Ask to come in. The same email again is the same request, brought up to date.
+  request({ email, github = '', building = '', ip = '' }) {
+    email = String(email ?? '').trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('a valid email is required');
+    const t = this.now();
+    const clip = (s, n) => String(s ?? '').trim().slice(0, n);
+    this.db.prepare(`INSERT INTO access_requests (email, github, building, ip_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (email) DO UPDATE SET github = CASE WHEN excluded.github != '' THEN excluded.github ELSE github END,
+        building = CASE WHEN excluded.building != '' THEN excluded.building ELSE building END, ip_hash = excluded.ip_hash, updated_at = excluded.updated_at`)
+      .run(email, clip(github, 60).replace(/^@/, ''), clip(building, 2000), ip ? sha(ip).toString('hex') : '', t, t);
+    return this.db.prepare('SELECT id, email, state, created_at, updated_at FROM access_requests WHERE email = ?').get(email);
+  }
+
+  requests({ state = '' } = {}) {
+    return this.db.prepare(`SELECT id, email, github, building, state, created_at, updated_at, decided_by, decided_at FROM access_requests
+      ${state ? 'WHERE state = ?' : ''} ORDER BY created_at DESC`).all(...(state ? [state] : []));
+  }
+
+  // Approve (returns { code }: the grant, shown once, for the link) or decline (mints nothing). Only a new
+  // request is decided: { already } says how an earlier decision went, and nothing changes.
+  decide(id, approve, by) {
+    const r = this.db.prepare('SELECT * FROM access_requests WHERE id = ?').get(Number(id));
+    if (!r) return null;
+    if (r.state !== 'new') return { already: r.state };
+    const t = this.now();
+    this.db.prepare('UPDATE access_requests SET state = ?, decided_by = ?, decided_at = ? WHERE id = ?').run(approve ? 'approved' : 'declined', String(by), t, r.id);
+    if (!approve) return { state: 'declined' };
+    const code = randomBytes(24).toString('base64url');
+    this.db.prepare('INSERT INTO org_grants (hash, request_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha(code), r.id, t, t + GRANT_MS);
+    return { state: 'approved', code };
+  }
+
+  // Use a grant to create one organization: true once, for an unused grant before it expires.
+  useGrant(code, identity) {
+    if (!code) return false;
+    const t = this.now();
+    return this.db.prepare('UPDATE org_grants SET used_by = ?, used_at = ? WHERE hash = ? AND used_at IS NULL AND expires_at > ?')
+      .run(identity.id, t, sha(code), t).changes === 1;
+  }
+
+  // Give a grant back when the organization it was used for couldn't be made after all.
+  returnGrant(code) {
+    this.db.prepare('UPDATE org_grants SET used_by = NULL, used_at = NULL WHERE hash = ?').run(sha(code));
   }
 
   // The identity for a verified email, made on first sign-in.
