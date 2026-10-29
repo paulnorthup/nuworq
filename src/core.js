@@ -8,7 +8,7 @@ import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
 import { normPrecondition, describe as describePrecondition } from './precondition.js';
-import { issuesOf, markDuplicate, markStale, staleAnswered } from './issues.js';
+import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from './issues.js';
 import { prMerged, prSeen } from './github.js';
 
 const GIT_CHECK = Symbol('git check');
@@ -1811,12 +1811,23 @@ const AGENT_OPS = {
   ask(p, agent, args) {
     const question = layered(args.question, args.context, args.detail, 'question');
     const assumption = str(args.assumption);
-    const blocking = args.blocking === true || args.blocking === 'true' || (!assumption && args.blocking == null);
+    const to = str(args.to).toLowerCase();
+    if (to && !['reporter', 'human'].includes(to)) throw new UserError(`to must be "reporter" or "human", not "${args.to}"`, { hint: 'Leave it out to ask the human.' });
     const item = args.item ? this.item(p, args.item) : null;
+    // To the issue's reporter: posted on the issue as a comment (askReporters in src/issues.js, right after this
+    // answer), and the item parks like any blocking question until their reply comes back through the webhook.
+    const issue = to === 'reporter' ? item && reporterIssue(this, item) : null;
+    if (to === 'reporter' && !issue) {
+      throw new UserError(item ? `#${item.seq} didn't come from a GitHub issue with a known author, so there is no reporter to ask` : 'Asking the reporter needs the item whose issue to ask on', {
+        hint: item ? 'Ask the human instead: leave out to.' : 'Pass item, or leave out to and ask the human.',
+      });
+    }
+    if (issue && !this.github) throw new UserError("This hub has no GitHub App, so it can't post on the issue", { hint: 'Ask the human instead: leave out to.' });
+    const blocking = !!issue || args.blocking === true || args.blocking === 'true' || (!assumption && args.blocking == null);
     const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
-    const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, question.headline, question.summary, question.detail,
-      JSON.stringify(options), blocking ? 1 : 0, assumption, this.now());
+    const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, reporter, issue_repo, issue_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, question.headline, question.summary, question.detail,
+      JSON.stringify(options), blocking ? 1 : 0, assumption, this.now(), issue?.author ?? '', issue?.repo ?? '', issue?.number ?? 0);
     const id = Number(r.lastInsertRowid);
     let parked = false;
     if (blocking && item && ['active', 'ready'].includes(item.stage) && !this.racing(item)) {
@@ -1829,13 +1840,16 @@ const AGENT_OPS = {
     }
     this.event(p, {
       item, actor: agent, type: blocking ? 'question' : 'assumption',
-      headline: blocking ? `${agent} asks: ${question.headline}` : `${agent} assumed "${assumption}"`,
+      headline: issue ? `${agent} asks @${issue.author} on GitHub: ${question.headline}` : blocking ? `${agent} asks: ${question.headline}` : `${agent} assumed "${assumption}"`,
       summary: blocking ? question.summary : `Question: ${question.headline}${question.summary ? `\n\n${question.summary}` : ''}`,
-      detail: question.detail, data: { question: id },
+      detail: question.detail, data: { question: id, ...(issue ? { reporter: issue.author, url: issue.url } : {}) },
     });
     return {
       ok: true, question: id, blocking,
-      hint: blocking
+      ...(issue ? { reporter: `@${issue.author}`, issue: issue.url } : {}),
+      hint: issue
+        ? `Posted for @${issue.author} on ${issue.url || 'the issue'}; #${item.seq} is parked until they reply (or, after ${p.reporter_wait}h without a reply, the human answers). Call next and take other work.`
+        : blocking
         ? parked
           ? `#${item.seq} is parked until the human answers. Don't wait: call next and take other work. The answer will be in your next checkin.`
           : "Asked. Keep working on anything that doesn't depend on the answer; it will appear in your next checkin."
@@ -2182,6 +2196,9 @@ Object.assign(Hub.prototype, {
 
 // ── human operations ───────────────────────────────────────────────────────
 
+// An answer from outside the UI (an issue's reporter on GitHub, src/issues.js), inside the caller's transaction.
+export const answerQuestion = (hub, p, args, by) => HUMAN_OPS.answer.call(hub, p, args, by);
+
 const HUMAN_OPS = {
   // keep_parked: answered, but not yet: the work stays waiting (parked by whoever answered) until unpark.
   answer(p, { question, answer, decide, keep_parked }, by) {
@@ -2369,8 +2386,14 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, github_secret, issue_label }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, github_secret, issue_label, reporter_wait }, by) {
     const changes = [];
+    if (reporter_wait != null && Number(reporter_wait) !== p.reporter_wait) {
+      const hours = Number(reporter_wait);
+      if (!Number.isInteger(hours) || hours < 1) throw new UserError('reporter_wait is a whole number of hours, at least 1');
+      this.q('UPDATE projects SET reporter_wait = ? WHERE id = ?').run(hours, p.id);
+      this.event(p, { actor: by, type: 'github', headline: `${You(by)} gave issue reporters ${hours}h to answer a question before it comes to you` });
+    }
     if (issue_label != null && str(issue_label) !== p.issue_label) {
       this.q('UPDATE projects SET issue_label = ? WHERE id = ?').run(str(issue_label), p.id);
       this.event(p, { actor: by, type: 'github', headline: str(issue_label) ? `${You(by)} set GitHub issues to come in only with the label "${str(issue_label)}"` : `${You(by)} let every open GitHub issue come in` });

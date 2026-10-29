@@ -303,6 +303,15 @@ export function openDb(file) {
     "ALTER TABLE channels ADD COLUMN person TEXT NOT NULL DEFAULT ''", // "@handle": a personal channel (only what they own); '' = hub-wide
     "ALTER TABLE issues ADD COLUMN stale TEXT NOT NULL DEFAULT ''", // an agent flagged it stale: why ('' = not flagged)
     'ALTER TABLE issues ADD COLUMN closing INTEGER NOT NULL DEFAULT 0', // 1: the human said close it; 2: closed on GitHub
+    // Questions to an issue's reporter (ask to: "reporter"): who wrote the issue, and the newest comment on it already handled
+    "ALTER TABLE issues ADD COLUMN author TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE issues ADD COLUMN last_comment INTEGER NOT NULL DEFAULT 0',
+    // A question put to an issue's reporter on GitHub: their login, the issue, and the hub's comment there (its id; 0 until posted, -1 posting)
+    "ALTER TABLE questions ADD COLUMN reporter TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE questions ADD COLUMN issue_repo TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE questions ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE questions ADD COLUMN issue_comment INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE projects ADD COLUMN reporter_wait INTEGER NOT NULL DEFAULT 48', // hours a reporter has to answer before the human is asked
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

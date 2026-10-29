@@ -4,7 +4,7 @@
 // drops its item while nobody has started it.
 // takeIssue() is synchronous (inside the webhook's transaction); syncing and commenting call GitHub
 // through the app (src/ghapp.js) and run after it.
-import { normRemote } from './core.js';
+import { normRemote, answerQuestion } from './core.js';
 
 const ACTOR = 'github';
 const MAX_BODY = 2000;
@@ -46,8 +46,8 @@ export function takeIssue(hub, p, repo, issue) {
       summary: [clip(issue.body, MAX_BODY), `From ${issue.html_url}`].filter(Boolean).join('\n\n'),
       repo, stage: 'proposed',
     });
-    hub.q(`INSERT INTO issues (project_id, repo, number, item_id, state, url, title, updated_at) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)`)
-      .run(p.id, repo, issue.number, created.id, issue.html_url ?? '', issue.title ?? '', t);
+    hub.q(`INSERT INTO issues (project_id, repo, number, item_id, state, url, title, author, updated_at) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)`)
+      .run(p.id, repo, issue.number, created.id, issue.html_url ?? '', issue.title ?? '', issue.user?.login ?? '', t);
     return { item: `#${created.seq}`, created: true };
   }
   const changes = [];
@@ -63,8 +63,8 @@ export function takeIssue(hub, p, repo, issue) {
     hub.patch(item, { title: clip(issue.title, 160) });
     changes.push('renamed');
   }
-  hub.q('UPDATE issues SET state = ?, title = ?, url = ?, updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?')
-    .run('open', issue.title ?? row.title, issue.html_url ?? row.url, t, p.id, repo, issue.number);
+  hub.q('UPDATE issues SET state = ?, title = ?, url = ?, author = ?, updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?')
+    .run('open', issue.title ?? row.title, issue.html_url ?? row.url, issue.user?.login || row.author, t, p.id, repo, issue.number);
   return { item: `#${item.seq}`, ...(changes.length ? { changes } : { ignored: 'already in' }) };
 }
 
@@ -305,4 +305,89 @@ export async function closeStale(hub, p, app) {
   }
   if (closed) hub.changed(p);
   return { closed, ...(failed.length ? { failed } : {}) };
+}
+
+// ── questions to an issue's reporter (ask to: "reporter") ──
+// The question goes on the issue as a comment that mentions its author; their next comment there answers it
+// (through answer(), as a human's would). Unanswered after the project's reporter_wait, it shows in "needs you",
+// and a human answer works as ever; a reply after that goes on the record as a comment.
+
+// The issue to ask on: one of the item's with a known author, an open one first.
+export function reporterIssue(hub, item) {
+  const rows = issuesOf(hub, item).filter((r) => r.author);
+  return rows.find((r) => r.state === 'open') ?? rows[0] ?? null;
+}
+
+// Reporter questions not on GitHub yet go out, one comment each. Taken first (-1), as commentIssues does, so
+// two runs never post one twice; given back (0) if GitHub says no, and the sweep tries again.
+export async function askReporters(hub, p, app, { link = itemLink(hub, p) } = {}) {
+  const rows = hub.q(`SELECT * FROM questions WHERE project_id = ? AND reporter != '' AND issue_comment = 0 AND status = 'open' ORDER BY id`).all(p.id);
+  let posted = 0;
+  const failed = [];
+  for (const repo of [...new Set(rows.map((r) => r.issue_repo))]) {
+    let gh;
+    try { gh = await asRepo(app, repo); } catch (e) { failed.push(`${repo}: ${e.message}`); continue; }
+    for (const q of rows.filter((r) => r.issue_repo === repo)) {
+      if (hub.q('UPDATE questions SET issue_comment = -1 WHERE id = ? AND issue_comment = 0').run(q.id).changes !== 1) continue;
+      const item = hub.itemById(q.item_id);
+      const quote = (s) => s.split('\n').map((l) => `> ${l}`).join('\n');
+      const options = JSON.parse(q.options || '[]');
+      let r;
+      try {
+        r = await gh('POST', `/issues/${q.issue_number}/comments`, {
+          body: [
+            `@${q.reporter}, a question from the agent working on this in nuworq ([#${item.seq}](${link(item)})):`,
+            quote(q.question),
+            q.context && quote(q.context),
+            options.length && `Likely answers: ${options.map((o) => `"${o}"`).join(', ')}.`,
+            'Reply here with a comment; your answer goes straight back to the work.',
+          ].filter(Boolean).join('\n\n'),
+        });
+      } catch (e) { r = { status: e.message }; }
+      if (r.status !== 201) {
+        hub.q('UPDATE questions SET issue_comment = 0 WHERE id = ?').run(q.id);
+        failed.push(`${ref({ repo, number: q.issue_number })}: ${r.status}`);
+        continue;
+      }
+      hub.q('UPDATE questions SET issue_comment = ? WHERE id = ?').run(r.json?.id || 1, q.id);
+      posted++;
+    }
+  }
+  return { asked: posted, ...(failed.length ? { failed } : {}) };
+}
+
+// The issue_comment webhook (inside receive()'s transaction). A new comment by the reporter, after the hub's
+// question, answers the oldest open question put to them there. Edits, deletions, redeliveries, the hub's own
+// comments and anyone else's change nothing.
+export function issueComment(hub, p, body) {
+  if (body.action !== 'created') return { ignored: body.action || 'no action' };
+  const c = body.comment ?? {};
+  const login = String(c.user?.login ?? '');
+  if (!c.id || !login) return { ignored: 'no comment' };
+  if (c.performed_via_github_app || c.user?.type === 'Bot') return { ignored: 'a comment by an app' };
+  const repo = repoOf(body.repository?.full_name ?? '');
+  const number = body.issue?.number;
+  const row = hub.q('SELECT * FROM issues WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, repo, number);
+  if (!row) return { ignored: 'not an issue the hub tracks' };
+  if (c.id <= row.last_comment) return { ignored: 'already handled' };
+  hub.q('UPDATE issues SET last_comment = ? WHERE project_id = ? AND repo = ? AND number = ?').run(c.id, p.id, repo, number);
+  const text = clip(c.body, MAX_BODY);
+  if (!text) return { ignored: 'an empty comment' };
+  const mine = hub.q(`SELECT * FROM questions WHERE project_id = ? AND issue_repo = ? AND issue_number = ? AND reporter = ? COLLATE NOCASE AND issue_comment > 0 AND ? > issue_comment ORDER BY id`)
+    .all(p.id, repo, number, login, c.id); // only questions posted before this comment: GitHub's comment ids only grow
+  const by = `github:@${login}`;
+  const open = mine.find((q) => q.status === 'open');
+  if (open) {
+    answerQuestion(hub, p, { question: open.id, answer: text }, by);
+    return { answered: open.id };
+  }
+  // A reply to a question the human has answered already: on the record, not a second answer.
+  const late = mine.at(-1);
+  if (!late) return { ignored: 'not a reply to a question' };
+  hub.event(p, {
+    item: hub.itemById(late.item_id), actor: by, type: 'comment',
+    headline: `@${login} replied on ${ref(row)} after the question was answered: ${clip(text, 100)}`,
+    summary: text, data: { question: late.id, url: c.html_url ?? row.url },
+  });
+  return { noted: late.id };
 }
