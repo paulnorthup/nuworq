@@ -218,7 +218,10 @@ export class Hub extends EventEmitter {
   project(slug, { create = false, name } = {}) {
     const s = slugify(slug);
     if (!s) throw new UserError('project is required', { hint: 'Pass a project slug, e.g. "my-app".' });
-    let p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);
+    // An agent told "work on the Acme API project" names it the way a person would: match the name
+    // too, so it reaches the project instead of creating an empty one beside it.
+    let p = this.q('SELECT * FROM projects WHERE slug = ?').get(s)
+      ?? this.q('SELECT * FROM projects WHERE lower(name) = lower(?) ORDER BY id LIMIT 1').get(String(slug).trim());
     if (!p && create) {
       this.q('INSERT INTO projects (slug, name, created_at) VALUES (?, ?, ?)').run(s, str(name) || s, this.now());
       p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);

@@ -143,3 +143,16 @@ describe('transport', () => {
     assert.equal(repoRoot(dir), dir);
   });
 });
+
+describe('projects are found by name too', () => {
+  test('checking in with a project\'s display name reaches it instead of creating an empty one', () => {
+    const { hub, make, op } = setup();
+    make('trellis');
+    hub.humanOp('trellis', 'settings', { name: 'nuworq' });
+    hub.humanOp('trellis', 'create', { title: 'Real work', acceptance: 'x' });
+    const brief = op('nuworq', 'checkin', 'a');
+    assert.equal(brief.project, 'trellis');
+    assert.equal(hub.projects().length, 1, 'no second, empty project');
+    assert.equal(op('Nuworq', 'next', 'a').item, '#1');
+  });
+});
