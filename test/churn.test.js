@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, MIN } from '../src/core.js';
 import { view } from '../src/insight.js';
+import { createServer } from '../src/server.js';
 
 describe('agents that arrive and leave with nothing', () => {
   function setup() {
@@ -55,5 +56,26 @@ describe('agents that arrive and leave with nothing', () => {
     assert.equal(hub.claimsSince('w1', t0), 1);
     assert.equal(hub.claimsSince('w1', hub.now() + 1), 0);
     assert.equal(hub.claimsSince('w1', t0, { scope: ['other'] }), 0);
+  });
+
+  test("an agent token may ask (nuworq run uses one), and sees only its projects' claims", async () => {
+    const hub = new Hub();
+    hub.tx(() => { hub.project('alpha', { create: true }); hub.project('beta', { create: true }); });
+    hub.humanOp('alpha', 'create', { title: 'A', acceptance: 'x' });
+    hub.humanOp('beta', 'create', { title: 'B', acceptance: 'x' });
+    hub.agentOp('alpha', 'claim', 'w1', { item: '#1' });
+    hub.agentOp('beta', 'claim', 'w1', { item: '#1' });
+    const server = createServer(hub, { auth: 'required' });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const ask = async (token) => {
+        const res = await fetch(`http://127.0.0.1:${server.address().port}/api/claims?agent=w1&since=0`, { headers: { authorization: `Bearer ${token}` } });
+        return [res.status, (await res.json()).claims];
+      };
+      assert.deepEqual(await ask(server.auth.createToken('box', 'agent')), [200, 2]);
+      assert.deepEqual(await ask(server.auth.createToken('alpha-box', 'agent', { projects: ['alpha'] })), [200, 1]);
+    } finally {
+      server.close();
+    }
   });
 });

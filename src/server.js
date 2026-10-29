@@ -51,7 +51,7 @@ const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode)
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects)$/, /^GET \/agents\.md$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
