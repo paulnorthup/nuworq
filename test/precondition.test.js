@@ -5,7 +5,7 @@ import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { itemView, view } from '../src/insight.js';
 import { tools } from '../src/protocol.js';
-import { normPrecondition, check, runChecks, privateAddress, credentialAllows } from '../src/precondition.js';
+import { normPrecondition, check, runChecks, privateAddress, credentialAllows, semver, compareSemver, firstVersion } from '../src/precondition.js';
 
 const MIN = 60_000;
 
@@ -182,5 +182,117 @@ describe('preconditions: work that waits on an outside fact', () => {
       for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.1', '::1', 'fd00::1', 'fe80::1']) assert.ok(privateAddress(ip), ip);
       for (const ip of ['8.8.8.8', '172.32.0.1', '2606:4700::1111']) assert.ok(!privateAddress(ip), ip);
     } finally { v.close(); }
+  });
+});
+
+describe('version preconditions: work that waits for a version', () => {
+  test('semver precedence', () => {
+    const order = ['1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta', '1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0',
+      '1.2.0-alpha', '1.2.0-alpha.1', '1.2.0-beta', '1.2.0-rc.1', '1.2.0', '1.2.9', '1.2.10', '2.0.0'];
+    for (let i = 0; i + 1 < order.length; i++) {
+      assert.ok(compareSemver(order[i], order[i + 1]) < 0, `${order[i]} < ${order[i + 1]}`);
+      assert.ok(compareSemver(order[i + 1], order[i]) > 0, `${order[i + 1]} > ${order[i]}`);
+    }
+    assert.equal(compareSemver('v2.0.0', '2.0.0'), 0);
+    assert.equal(compareSemver('2.0.0+build.7', '2.0.0'), 0, 'build metadata is ignored');
+    assert.equal(compareSemver('1.2.0-rc.1+b1', '1.2.0-rc.1+b2'), 0);
+    for (const bad of ['2.1', '2', 'x.y.z', '01.2.3', '1.2.3-', '']) assert.equal(semver(bad), null, bad);
+    assert.equal(firstVersion('nuworq 2.1.0 (build 7)'), '2.1.0');
+    assert.equal(firstVersion('tag v1.2.0-rc.1, out soon'), '1.2.0-rc.1');
+    assert.equal(firstVersion('no version here, just 1.2'), null);
+  });
+
+  test('forgiving input, with a hint for what it refuses', () => {
+    assert.deepEqual(normPrecondition({ kind: 'version', url: 'https://x.test/v', json_path: 'version', min: 'v2.1.0' }), { kind: 'version', url: 'https://x.test/v', json_path: 'version', min: 'v2.1.0' });
+    for (const repo of ['acme/api', 'github.com/acme/api', 'https://github.com/acme/api.git']) {
+      assert.deepEqual(normPrecondition({ kind: 'release', repo, min: '1.0.0' }), { kind: 'release', repo: 'acme/api', min: '1.0.0' }, repo);
+    }
+    const { hub } = setup();
+    for (const [precondition, why] of [
+      [{ kind: 'version', url: 'https://x.test/v' }, /needs min/],
+      [{ kind: 'version', url: 'https://x.test/v', min: '2.1' }, /"2\.1" isn't a semver version/],
+      [{ kind: 'release', repo: 'acme/api', min: 'latest' }, /isn't a semver version/],
+      [{ kind: 'release', min: '1.0.0' }, /must be a GitHub repository/],
+      [{ kind: 'nightly', url: 'https://x.test' }, /kind "nightly" isn't known/],
+    ]) {
+      assert.throws(() => hub.agentOp('w', 'propose', 'a', { title: 'T', acceptance: 'x', precondition }), (e) => why.test(e.message) && /e\.g\./.test(e.hint), JSON.stringify(precondition));
+      hub.agentOp('w', 'propose', 'a', { title: 'Plain', acceptance: 'x' });
+      assert.throws(() => hub.agentOp('w', 'refine', 'a', { item: '#1', precondition }), why);
+    }
+  });
+
+  test('outside while the fake reports 2.0.9; ready at 2.1.0, with an event naming both versions', async () => {
+    const v = await vendor();
+    try {
+      const { hub, advance, item } = setup();
+      v.state.status = 200; v.state.body = { version: '2.0.9' };
+      hub.agentOp('w', 'propose', 'a', { title: 'Use 2.1', acceptance: 'x', precondition: { kind: 'version', url: `${v.url}/version`, json_path: 'version', min: '2.1.0' } });
+      assert.equal(item(1).stage, 'outside');
+      assert.match(hub.agentOp('w', 'look', 'a', { item: '#1' }).precondition.waits_for, /\/version version reports 2\.1\.0 or later/);
+      await runChecks(hub);
+      assert.equal(item(1).stage, 'outside');
+      assert.match(JSON.parse(item(1).last_check).detail, /reports 2\.0\.9, below 2\.1\.0/);
+
+      v.state.body = { version: '2.1.0-rc.1' };
+      advance(MIN);
+      await runChecks(hub);
+      assert.equal(item(1).stage, 'outside', 'a prerelease of min is below it');
+
+      v.state.body = { version: 'v2.1.0' };
+      advance(2 * MIN);
+      await runChecks(hub);
+      assert.equal(item(1).stage, 'ready');
+      assert.match(hub.q(`SELECT headline FROM events WHERE type = 'precondition_passed'`).get().headline, /#1's precondition passed: .*\/version reports 2\.1\.0, at least 2\.1\.0; it's ready/);
+
+      // Without json_path: the first version in a text body.
+      v.state.body = 'nuworq 3.0.0 (abc123)';
+      assert.deepEqual(await check(normPrecondition({ kind: 'version', url: `${v.url}/v`, min: '3.0.0' })), { ok: true, detail: `${v.url}/v reports 3.0.0, at least 3.0.0` });
+      assert.match((await check(normPrecondition({ kind: 'version', url: `${v.url}/v`, min: '3.0.1' }))).detail, /reports 3\.0\.0, below 3\.0\.1/);
+      assert.match((await check(normPrecondition({ kind: 'version', url: `${v.url}/v`, min: '3.0.1' }), { shared: true, resolve: async () => ({ address: '8.8.8.8' }) })).detail, /reports a version below 3\.0\.1$/, 'a shared hub hides the value');
+    } finally { v.close(); }
+  });
+
+  test('a release precondition goes ready when the latest tag reaches min, through the app where it is installed', async () => {
+    const releases = { 'acme/api': 'v1.4.2' }, auth = [];
+    const gh = http.createServer((req, res) => {
+      auth.push(req.headers.authorization ?? null);
+      const m = req.url.match(/^\/repos\/([^/]+\/[^/]+)\/releases\/latest$/);
+      const tag = m && releases[m[1]];
+      res.writeHead(tag ? 200 : 404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(tag ? { tag_name: tag } : { message: 'Not Found' }));
+    });
+    await new Promise((r) => gh.listen(0, '127.0.0.1', r));
+    const api = `http://127.0.0.1:${gh.address().port}`;
+    try {
+      const { hub, advance, item } = setup();
+      hub.agentOp('w', 'propose', 'a', { title: 'Adopt 1.5', acceptance: 'x', precondition: { kind: 'release', repo: 'acme/api', min: '1.5.0' } });
+      assert.equal(hub.agentOp('w', 'look', 'a', { item: '#1' }).precondition.waits_for, 'the latest release of acme/api is 1.5.0 or later');
+      await runChecks(hub, { github: { api } });
+      assert.equal(item(1).stage, 'outside');
+      assert.match(JSON.parse(item(1).last_check).detail, /acme\/api's latest release is 1\.4\.2, below 1\.5\.0/);
+      assert.equal(auth.at(-1), null, 'no app: the public API');
+
+      releases['acme/api'] = 'v1.5.0';
+      advance(MIN);
+      // An app installed on the repo lends a read token; one that isn't falls back to the public API.
+      const app = { api, mint: async (repo, perms) => { assert.deepEqual(perms, { metadata: 'read', contents: 'read' }); if (repo !== 'github.com/acme/api') throw new Error('not installed'); return { token: 'inst-1' }; } };
+      await runChecks(hub, { github: { app } });
+      assert.equal(item(1).stage, 'ready');
+      assert.equal(auth.at(-1), 'Bearer inst-1');
+      assert.match(hub.q(`SELECT headline FROM events WHERE type = 'precondition_passed'`).get().headline, /acme\/api's latest release is 1\.5\.0, at least 1\.5\.0; it's ready/);
+
+      hub.agentOp('w', 'propose', 'a', { title: 'Other', acceptance: 'x', precondition: { kind: 'release', repo: 'other/lib', min: '1.0.0' } });
+      advance(MIN);
+      await runChecks(hub, { github: { app } });
+      assert.equal(auth.at(-1), null);
+      assert.match(JSON.parse(item(2).last_check).detail, /other\/lib has no releases yet/);
+
+      // A shared hub's app reads only the project's own repositories.
+      hub.agentOp('w', 'refine', 'a', { item: '#2', precondition: { kind: 'release', repo: 'acme/api', min: '1.0.0' } });
+      advance(MIN);
+      await runChecks(hub, { shared: true, github: { app } });
+      assert.equal(auth.at(-1), null, 'acme/api is not this project\'s repository');
+      assert.equal(item(2).stage, 'ready', 'and the public API still answers');
+    } finally { gh.closeAllConnections(); gh.close(); }
   });
 });

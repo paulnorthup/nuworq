@@ -186,6 +186,8 @@ nuworq token revoke <name|id>                      # also logs out that token's 
 ### Credentials for preconditions
 An item can wait on an outside URL (a precondition), and the check may send a credential the hub's host keeps: `NUWORQ_CRED_<NAME>=<value>`. Agents pick the URL, so also say where each credential may go: `NUWORQ_CRED_<NAME>_HOSTS=api.vendor.com,.vendor.io` (a leading dot covers subdomains). Without that list the credential is sent nowhere. It never follows a redirect. A hub with workspaces sends no credentials at all.
 
+A release precondition (`{ kind: "release", repo: "acme/api", min: "2.1.0" }`) reads the repository's latest GitHub release through the hub's GitHub App when the app is installed there (a read-only token), and through GitHub's public API otherwise. A hub with workspaces uses the app only for the project's own repositories.
+
 ### Backups
 Everything lives in one SQLite file, plus its `-wal` and `-shm` files while running.
 ```bash
