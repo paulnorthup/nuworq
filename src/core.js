@@ -1259,7 +1259,8 @@ export class Hub extends EventEmitter {
   }
 
   // Pick the most useful thing for this agent. Finish before starting: reviews first, then by priority;
-  // at equal priority, build ready work before shaping proposals, and prefer work you touched before.
+  // at equal priority, work needing what this agent's machine has first (few can take it), build ready
+  // work before shaping proposals, and prefer work you touched before.
   // powers: what the caller's token may do (null: everything); work it can't do is never offered.
   // Never offers work whose needs the agent's machine lacks; large work waits while a weak fit has other work.
   pick(p, agent, { powers = null, has, repo = '' } = {}) {
@@ -1310,9 +1311,12 @@ export class Hub extends EventEmitter {
       .map(({ item, runs }) => ({ mode: 'work', item, sameModel: !!model && runs.some((a) => a.stage !== 'abandoned' && a.model === model) }));
     const shape = this.shapeable(p).filter(fresh).map((item) => ({ mode: 'shape', item }));
     const large = (x) => (fit.weak && x.item.size === 'large' ? 1 : 0);
+    // Work that needs what this agent's machine has goes to it first: few agents can do it, anyone can do the rest.
+    const own = (x) => (fit.has && json(x.item.needs, []).length ? 0 : 1);
     const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].sort((a, b) =>
       large(a) - large(b) ||
       PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
+      own(a) - own(b) ||
       !!a.sameModel - !!b.sameModel ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
       (b.item.last_worker === agent) - (a.item.last_worker === agent) ||

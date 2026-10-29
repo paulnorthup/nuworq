@@ -184,6 +184,55 @@ describe('nuworq worker --agent claude', () => {
   });
 });
 
+describe('nuworq worker --browser', () => {
+  test('only with --browser: a headless Chrome through Playwright MCP (local pages only), mcp__playwright allowed, and the browser tag', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-ui-')));
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    writeFileSync(join(repo, 'package.json'), '{}');
+    mkdirSync(join(repo, 'bin'));
+    writeFileSync(join(repo, 'bin', 'nuworq.js'), ''); // nuworq itself: it looks at the UI with demo data
+    const hub = new Hub();
+    hub.tx(() => hub.project('ui', { create: true }));
+    hub.humanOp('ui', 'settings', { path: repo });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'ui', '--as', 'b-1', ...a],
+      { env: { ...process.env, NUWORQ_TOKEN: '' } });
+    const parts = ({ stdout }) => ({
+      servers: JSON.parse(stdout.match(/--mcp-config '([^']*)'/)[1]).mcpServers,
+      allow: stdout.match(/--allowedTools '([^']*)'/)[1].split(','),
+      deny: stdout.match(/--disallowedTools '([^']*)'/)?.[1],
+      task: stdout.match(/claude -p '((?:[^']|'\\'')*)'/)[1],
+    });
+    try {
+      const plain = parts(await cli('--agent', 'claude'));
+      assert.deepEqual(Object.keys(plain.servers), ['nuworq']);
+      assert.ok(!plain.allow.includes('mcp__playwright'));
+      assert.ok(!(plain.servers.nuworq.env.NUWORQ_HAS ?? '').split(',').includes('browser'));
+      assert.doesNotMatch(plain.task, /mcp__playwright|375px|serve --demo/);
+      assert.equal(plain.deny, undefined);
+
+      const b = parts(await cli('--agent', 'claude', '--browser'));
+      assert.deepEqual(b.servers.playwright, {
+        command: 'npx',
+        args: ['-y', '@playwright/mcp@0.0.83', '--headless', '--browser', 'chrome', '--isolated',
+          '--allowed-origins', 'http://127.0.0.1:*;http://localhost:*', '--output-dir', join(tmpdir(), 'nuworq-browser', 'b-1')],
+      });
+      assert.deepEqual(b.allow, [...plain.allow, 'mcp__playwright'], 'the same allowlist, plus the browser');
+      assert.equal(b.deny, 'mcp__playwright__browser_run_code_unsafe', 'except its tool that runs any code in the server process');
+      assert.ok(b.servers.nuworq.env.NUWORQ_HAS.split(',').includes('browser'), 'it declares browser, as --has browser would');
+      assert.match(b.task, /`node bin\/nuworq\.js serve --demo --port 0` in the background/);
+      assert.match(b.task, /desktop width and at 375px wide, each in light and in dark mode/);
+      assert.match(b.task, /describe in your evidence what you saw/);
+      assert.deepEqual(parts(await cli('--agent', 'claude', '--browser', '--allow', 'Read')).allow, ['Read', 'mcp__playwright'], '--allow keeps its list');
+
+      await assert.rejects(cli('--agent', 'codex', '--browser'), (e) => e.stderr.includes('--browser is for Claude workers only'));
+    } finally {
+      server.close();
+    }
+  });
+});
+
 describe('workers on a hub that requires login', () => {
   test('get the agent token, never the human one; --run refuses without one', async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-tok-')));
@@ -327,6 +376,27 @@ describe('a worker for a project with no checkout on this machine', () => {
       const logs = join(w.home, '.nuworq', 'logs');
       const log = readdirSync(logs).map((f) => readFileSync(join(logs, f), 'utf8')).join('');
       assert.match(log, new RegExp(`WORKING IN ${clone}\\.worktrees/`), log);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('run --browser: work that needs a browser goes to its workers, and they get one', async () => {
+    const w = far();
+    w.hub.humanOp('far', 'update', { item: '#1', needs: ['browser'] });
+    writeFileSync(join(w.dir, 'bin', 'claude'), '#!/bin/sh\nfor a in "$@"; do echo "ARG $a"; done\n', { mode: 0o755 });
+    const server = createServer(w.hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const run = (...a) => promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--max-runs', '1', '--until-idle', '--poll', '1', ...a], { env: w.env, cwd: w.home });
+    const logs = join(w.home, '.nuworq', 'logs');
+    try {
+      await run();
+      assert.deepEqual(readdirSync(w.repos), [], 'without --browser, nothing here can take it');
+      await run('--browser');
+      const log = readdirSync(logs).map((f) => readFileSync(join(logs, f), 'utf8')).join('');
+      assert.match(log, /^ARG \{"mcpServers":.*"playwright":\{"command":"npx","args":\["-y","@playwright\/mcp@0\.0\.83","--headless"/m, log);
+      assert.match(log, /^ARG mcp__nuworq,.*,mcp__playwright\nARG --disallowedTools\nARG mcp__playwright__browser_run_code_unsafe$/m);
     } finally {
       server.close();
     }
