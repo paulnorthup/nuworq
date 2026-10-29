@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { follower, system, firstFailure, backups, KEEP_BACKUPS, importGraph, RESTART_EXIT } from '../src/follow.js';
 import { Hub } from '../src/core.js';
+import { Workspaces } from '../src/workspaces.js';
 import { createServer } from '../src/server.js';
 
 // A pretend world: main's head, which commits pass their tests or start healthy, and what happened.
@@ -305,23 +306,28 @@ describe('database backups, on real files', () => {
     assert.ok(left.includes(`${shas.at(-1)}.db`));
   });
 
-  test('with workspaces, every workspace file is backed up and restored together', () => {
+  test('with workspaces, every workspace file and the host directory are backed up and restored together', () => {
     const root = scratch();
     const ws = join(root, 'workspaces');
     mkdirSync(ws);
     makeDb(join(ws, 'acme.db'), ['a']).close();
     makeDb(join(ws, 'beta.db'), ['b']).close();
+    makeDb(join(ws, 'directory.sqlite'), ['people']).close();
     const store = backups({ dir: join(root, 'backups'), workspaces: ws });
     store.backup('aaaaaaa1');
-    assert.deepEqual(readdirSync(join(root, 'backups', 'aaaaaaa1')).sort(), ['acme.db', 'beta.db']);
-    for (const f of ['acme.db', 'beta.db']) {
+    assert.deepEqual(readdirSync(join(root, 'backups', 'aaaaaaa1')).sort(), ['acme.db', 'beta.db', 'directory.sqlite']);
+    for (const f of ['acme.db', 'beta.db', 'directory.sqlite']) {
       const d = new DatabaseSync(join(ws, f));
       d.exec("ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''");
       d.close();
     }
+    writeFileSync(join(ws, 'directory.sqlite-wal'), 'from the newer code');
     store.restore('aaaaaaa1');
     assert.deepEqual(columns(join(ws, 'acme.db')), ['id', 'title']);
     assert.deepEqual(columns(join(ws, 'beta.db')), ['id', 'title']);
+    assert.deepEqual(columns(join(ws, 'directory.sqlite')), ['id', 'title'], "the directory's migration is undone too");
+    assert.ok(!existsSync(join(ws, 'directory.sqlite-wal')));
+    assert.deepEqual(new Workspaces({ dir: ws }).list(), ['acme', 'beta'], 'the directory is still never a workspace');
   });
 
   test('a backup that fails leaves no copy behind that could pass for good', () => {

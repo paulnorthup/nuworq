@@ -19,6 +19,7 @@ const STOP_GRACE_MS = 5000;
 const HEALTHY_MS = 15_000;
 const TEST_TIMEOUT_MS = 10 * 60_000;
 export const KEEP_BACKUPS = 10;
+const DIRECTORY_FILE = 'directory.sqlite'; // the workspaces host directory (src/workspaces.js)
 
 // Copies of the hub's database, one per move, named after the commit moved away from: dir/<sha>.db for
 // one database (db), or dir/<sha>/<name>.db for every workspace file in workspaces. Taken only while the
@@ -29,9 +30,11 @@ export function backups({ dir, db = null, workspaces = null, keep = KEEP_BACKUPS
   const orderFile = join(dir, 'order');
   const order = () => { try { return readFileSync(orderFile, 'utf8').split('\n').filter(Boolean); } catch { return []; } };
   const target = (sha) => join(dir, workspaces ? sha : `${sha}.db`);
-  // The live files now, by name: a workspace created since the last move is in the next copy.
+  // The live files now, by name: a workspace created since the last move is in the next copy, and so is
+  // the host directory (people, sessions, memberships), which isn't a .db so it's never taken for a workspace.
+  const copied = (f) => f.endsWith('.db') || f === DIRECTORY_FILE;
   const live = () => workspaces
-    ? (existsSync(workspaces) ? readdirSync(workspaces).filter((f) => f.endsWith('.db')).map((f) => ({ name: f, file: join(workspaces, f) })) : [])
+    ? (existsSync(workspaces) ? readdirSync(workspaces).filter(copied).map((f) => ({ name: f, file: join(workspaces, f) })) : [])
     : existsSync(db) ? [{ name: 'db', file: db }] : [];
   const vacuum = (from, to) => {
     const d = new DatabaseSync(from);
@@ -69,7 +72,7 @@ export function backups({ dir, db = null, workspaces = null, keep = KEEP_BACKUPS
       const src = target(sha);
       if (!existsSync(src)) return null;
       const pairs = workspaces
-        ? readdirSync(src).filter((f) => f.endsWith('.db')).map((f) => [join(src, f), join(workspaces, f)])
+        ? readdirSync(src).filter(copied).map((f) => [join(src, f), join(workspaces, f)])
         : [[src, db]];
       for (const [from, to] of pairs) {
         copyFileSync(from, `${to}.restore`);
