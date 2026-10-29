@@ -9,6 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
+import { fileInTarball } from '../src/update.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
@@ -46,6 +47,21 @@ describe('/nuworq.tgz', () => {
 
     const again = await fetch(`${url}/nuworq.tgz`);
     assert.equal(again.headers.get('etag'), `"${sha}"`, 'built once, served from the cache');
+    // It knows which commit it is, so an install can tell whether the hub has a newer one (#107).
+    const commit = execFileSync('git', ['-C', clone, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    assert.equal(fileInTarball(body, 'src/commit.txt').toString().trim(), commit);
+  });
+
+  test('its release signature is served only when one was put beside it', async () => {
+    const commit = execFileSync('git', ['-C', clone, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    await fetch(`${url}/nuworq.tgz`);
+    const unsigned = await fetch(`${url}/nuworq.tgz.sig`);
+    assert.equal(unsigned.status, 404);
+    assert.match((await unsigned.json()).error, /isn't signed/);
+    writeFileSync(join(dir, 'cache', `nuworq-${commit}.tgz.sig`), 'c2lnbmF0dXJl\n');
+    const signed = await fetch(`${url}/nuworq.tgz.sig`);
+    assert.equal(signed.status, 200);
+    assert.equal(await signed.text(), 'c2lnbmF0dXJl\n');
   });
 
   test('npm installs it on a machine with nothing else, and the CLI runs', { skip: !npm && 'npm is not installed here' }, async () => {

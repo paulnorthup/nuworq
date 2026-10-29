@@ -1,0 +1,186 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { generateKeyPairSync, sign, createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { update, describeUpdate, offReason, fileInTarball, runningCommit, CHECK_EVERY } from '../src/update.js';
+
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
+const tmp = (p) => mkdtempSync(join(tmpdir(), p));
+const keyPair = () => {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  return { privateKey, pub: publicKey.export({ type: 'spki', format: 'pem' }) };
+};
+const RELEASE = keyPair(), OTHER = keyPair();
+const OLD = 'a'.repeat(40), NEW = 'b'.repeat(40);
+
+// An installed package: its commit and the release key it pinned.
+function installed({ pub = RELEASE.pub, commit = OLD } = {}) {
+  const root = tmp('nuworq-upd-root-');
+  mkdirSync(join(root, 'src'));
+  writeFileSync(join(root, 'src', 'commit.txt'), `${commit}\n`);
+  if (pub) writeFileSync(join(root, 'release-key.pub'), pub);
+  return root;
+}
+// A package tarball in npm's layout, carrying the given release key.
+function tarball({ pub = RELEASE.pub, commit = NEW } = {}) {
+  const dir = tmp('nuworq-upd-pkg-');
+  mkdirSync(join(dir, 'package', 'src'), { recursive: true });
+  writeFileSync(join(dir, 'package', 'src', 'commit.txt'), `${commit}\n`);
+  writeFileSync(join(dir, 'package', 'package.json'), '{"name":"nuworq"}');
+  if (pub) writeFileSync(join(dir, 'package', 'release-key.pub'), pub);
+  execFileSync('tar', ['-czf', join(dir, 'p.tgz'), '-C', dir, 'package']);
+  return readFileSync(join(dir, 'p.tgz'));
+}
+const sigOf = (bytes, key = RELEASE.privateKey) => `${sign(null, bytes, key).toString('base64')}\n`;
+
+// A hub serving /api/info, /nuworq.tgz and /nuworq.tgz.sig. Counts what was asked.
+async function fakeHub({ tgz = tarball(), sha = null, sig = undefined, commit = NEW } = {}) {
+  const hits = [];
+  const server = http.createServer((req, res) => {
+    hits.push(req.url);
+    if (req.url === '/api/info') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ package: { url: 'x', sha256: sha ?? createHash('sha256').update(tgz).digest('hex'), commit: commit.slice(0, 7) } })); }
+    if (req.url === '/nuworq.tgz') { res.writeHead(200); return res.end(tgz); }
+    if (req.url === '/nuworq.tgz.sig' && sig !== null) { res.writeHead(200); return res.end(sig ?? sigOf(tgz)); }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${server.address().port}`, hits, close: () => server.close() };
+}
+const installer = () => {
+  const calls = [];
+  return { calls, install: async (file) => { calls.push(readFileSync(file)); return null; } };
+};
+
+describe('the package updates itself only to a release signed by its pinned key', () => {
+  test('a newer, validly signed version is verified and installed; update reports old → new', async () => {
+    const tgz = tarball();
+    const hub = await fakeHub({ tgz });
+    try {
+      const { calls, install } = installer();
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
+      assert.equal(r.status, 'updated', describeUpdate(r));
+      assert.equal(calls.length, 1);
+      assert.ok(calls[0].equals(tgz), 'installs exactly the bytes that verified');
+      assert.equal(describeUpdate(r), `Updated nuworq aaaaaaa → bbbbbbb. The next run uses it.`);
+      assert.equal(fileInTarball(tgz, 'release-key.pub').toString(), RELEASE.pub);
+    } finally { hub.close(); }
+  });
+
+  const refusedFor = async (hubOpts, why) => {
+    const hub = await fakeHub(hubOpts);
+    try {
+      const { calls, install } = installer();
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
+      assert.equal(r.status, 'refused');
+      assert.match(r.reason, why);
+      assert.match(r.reason, /Kept the installed version/);
+      assert.equal(calls.length, 0, 'nothing installed');
+    } finally { hub.close(); }
+  };
+
+  test('tampered bytes: the sha256 the hub gave fails', async () => {
+    const good = tarball();
+    const bad = Buffer.concat([good, Buffer.from('x')]);
+    await refusedFor({ tgz: bad, sha: createHash('sha256').update(good).digest('hex'), sig: sigOf(good) }, /doesn't match the sha256/);
+  });
+
+  test('tampered bytes with a matching sha256 (a compromised hub): the signature fails', async () => {
+    const good = tarball(), bad = tarball({ commit: 'c'.repeat(40) });
+    await refusedFor({ tgz: bad, sig: sigOf(good) }, /isn't from the release key this install trusts/);
+  });
+
+  test('signed by another key', async () => {
+    const tgz = tarball();
+    await refusedFor({ tgz, sig: sigOf(tgz, OTHER.privateKey) }, /isn't from the release key this install trusts/);
+  });
+
+  test('no signature served', async () => {
+    await refusedFor({ sig: null }, /serves no signature .* isn't a signed release/);
+  });
+
+  test('a new package that pins a different release key', async () => {
+    const tgz = tarball({ pub: OTHER.pub });
+    await refusedFor({ tgz, sig: sigOf(tgz) }, /carries a different release key; changing keys takes a reinstall by hand/);
+  });
+
+  test('the same version is current; nothing downloads', async () => {
+    const hub = await fakeHub({ commit: OLD });
+    try {
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), force: true });
+      assert.equal(r.status, 'current');
+      assert.deepEqual(hub.hits, ['/api/info']);
+    } finally { hub.close(); }
+  });
+
+  test('offline: no error, and no second try within 10 minutes', async () => {
+    const closed = await fakeHub();
+    closed.close();
+    const dir = tmp('nuworq-upd-data-'), root = installed();
+    let asked = 0;
+    const get = (...a) => { asked++; return fetch(...a); };
+    const t = Date.now();
+    const r = await update({ root, hub: closed.url, dir, fetch: get, now: t });
+    assert.equal(r.status, 'unreachable');
+    assert.match(describeUpdate(r), /carrying on with the installed version/);
+    assert.equal((await update({ root, hub: closed.url, dir, fetch: get, now: t + CHECK_EVERY - 1 })).status, 'skipped');
+    assert.equal(asked, 1, 'not asked again inside 10 minutes');
+    assert.equal((await update({ root, hub: closed.url, dir, fetch: get, now: t + CHECK_EVERY })).status, 'unreachable');
+    assert.equal(asked, 2);
+  });
+
+  test('two update checks at once install once', async () => {
+    const hub = await fakeHub();
+    try {
+      const { calls, install } = installer();
+      const dir = tmp('nuworq-upd-data-'), root = installed();
+      const rs = await Promise.all([1, 2, 3].map(() => update({ root, hub: hub.url, dir, install, force: true })));
+      assert.equal(calls.length, 1, rs.map(describeUpdate).join(' | '));
+      assert.equal(rs.filter((r) => r.status === 'updated').length, 1);
+      assert.ok(!existsSync(join(dir, 'update.lock')), 'the lock is let go');
+    } finally { hub.close(); }
+  });
+
+  test('npm failing keeps the version and names the command to run by hand', async () => {
+    const hub = await fakeHub();
+    try {
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), install: async () => 'EACCES: permission denied', force: true });
+      assert.equal(r.status, 'failed');
+      assert.match(describeUpdate(r), new RegExp(`EACCES.*Run it yourself: npm install -g ${hub.url}/nuworq.tgz`));
+    } finally { hub.close(); }
+  });
+
+  test('off: no pinned key, a git checkout, NUWORQ_NO_UPDATE, a plain-http remote hub; none downloads', async () => {
+    const checkout = installed();
+    mkdirSync(join(checkout, '.git'));
+    const cases = [
+      [{ root: installed({ pub: null }), hub: 'https://hub.test' }, /no pinned release key/],
+      [{ root: checkout, hub: 'https://hub.test' }, /runs from a git checkout/],
+      [{ root: installed(), hub: 'https://hub.test', env: { NUWORQ_NO_UPDATE: '1' } }, /NUWORQ_NO_UPDATE=1/],
+      [{ root: installed(), hub: 'http://hub.test:4747' }, /isn't https, and isn't on this machine/],
+    ];
+    for (const [opts, why] of cases) {
+      let asked = 0;
+      const r = await update({ ...opts, dir: tmp('nuworq-upd-data-'), force: true, fetch: async () => { asked++; throw new Error('no'); } });
+      assert.equal(r.status, 'off');
+      assert.match(describeUpdate(r), why);
+      assert.equal(asked, 0);
+    }
+    assert.equal(offReason({ root: installed(), hub: 'http://127.0.0.1:4747', env: {} }), null, 'a hub on this machine may be plain http');
+  });
+
+  test('`nuworq update` from this checkout says why it is off', async () => {
+    const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'update', '--url', 'https://hub.test'], { env: { ...process.env, NUWORQ_NO_UPDATE: '' } });
+    assert.match(stdout, /Updates are off: nuworq runs from a git checkout/);
+  });
+
+  test('a package knows its commit; a checkout does not', () => {
+    assert.equal(runningCommit(installed()), OLD);
+    assert.equal(runningCommit(fileURLToPath(new URL('..', import.meta.url))), null, 'the $Format placeholder is not a commit');
+  });
+});

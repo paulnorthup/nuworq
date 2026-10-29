@@ -166,6 +166,21 @@ No restart is needed: the next fetch uses it. In workspaces mode each workspace 
 
 The supervisor itself keeps running the code it started with. When a move changes that code (`bin/nuworq.js`, `src/follow.js` or a module they import), under systemd it stops the hub and exits with code 75, and `Restart=on-failure` starts it again on the new code. In a terminal it logs one line asking you to restart `serve --follow`. This only works if the supervisor runs from a path the move updates: the unit runs `/opt/nuworq/bin/nuworq.js`, the checkout `--follow` fast-forwards. Don't point `ExecStart` at a copy elsewhere, or a restart brings back the old supervisor.
 
+### Signed releases: how installed copies update themselves
+A machine that installed nuworq from the hub (`npm install -g https://<hub>/nuworq.tgz`) checks the hub at most every 10 minutes, when a command or an MCP server starts. It updates only to a package signed by the release key whose public half, `release-key.pub`, shipped in the copy it already has. A sha256 from the hub only proves a download isn't corrupted. The signature is what stops a compromised hub, tunnel or DNS from shipping code. A package with tampered bytes, a missing or foreign signature, or a different `release-key.pub` is refused, and the installed version keeps running. `nuworq update` checks now and says what happened. Updates are off without a pinned key, in a git checkout, with `NUWORQ_NO_UPDATE=1`, and for a plain-http hub that isn't on the same machine.
+
+The private key never goes on the hub. Where the key lives:
+```bash
+node scripts/sign-release.js keygen ~/keys            # once: release-key.pem (keep offline) + release-key.pub
+cp ~/keys/release-key.pub release-key.pub && git add release-key.pub   # commit it: packages pin it from then on
+# each release, once the hub runs the commit: fetch its package, check it, sign it
+curl -o nuworq.tgz https://<hub>/nuworq.tgz            # compare its sha256 with /api/info's package.sha256
+node scripts/sign-release.js sign nuworq.tgz ~/keys/release-key.pem   # writes nuworq.tgz.sig
+# put the signature beside the hub's package, <data dir>/package/nuworq-<full commit>.tgz.sig
+scp nuworq.tgz.sig <hub>:/var/lib/nuworq/package/nuworq-$(git rev-parse HEAD).tgz.sig
+```
+The hub serves it at `/nuworq.tgz.sig` straight away. Until a package is signed, installed copies keep their version. Rotating the key takes a reinstall by hand.
+
 ### Tokens
 ```bash
 nuworq token create <name> --role human|agent     # prints the token once
