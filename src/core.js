@@ -273,7 +273,7 @@ export class Hub extends EventEmitter {
     if (!m.error) return { path: m.path, mode: 'remote' };
     if (!this._unreachable.has(p.id)) {
       this._unreachable.add(p.id);
-      console.error(`nuworq: can't read ${remote} for ${p.name} (${m.error}). Until it can, accepted work there is marked done without checking that main has it. Check the network and the hub's access to the repository (a read-only deploy key is enough).`);
+      console.error(`nuworq: can't read ${remote} for ${p.name} (${m.error}). Until it can, accepted work there waits in landing: the hub can't confirm main has it. Check the network and the hub's access to the repository (a read-only deploy key is enough).`);
     }
     return null;
   }
@@ -1071,6 +1071,15 @@ export class Hub extends EventEmitter {
     return { base, pending: !contains(repo.path, base, branch), head: headOf(repo.path, base) };
   }
 
+  // The land job's hint: the base as git says it, and a push first when the hub can't see the branch.
+  landHint(p, item) {
+    const remote = this.remoteMode(p);
+    const repo = this.repoFor(p);
+    const base = (repo && baseOf(repo.path)) ?? 'main';
+    const unseen = remote && !!item.branch && !(repo && branchExists(repo.path, item.branch));
+    return LAND_HINT(item, p, base, remote, unseen);
+  }
+
   // The branch git found for the latest submission, when the item has none of its own (older work).
   submittedBranch(item) {
     const e = this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'submitted' ORDER BY at DESC LIMIT 1`).get(item.id);
@@ -1108,14 +1117,17 @@ const WORK_HINT = (item, p, remote = false) => !item.branch ? ''
     : `Work on branch ${item.branch}, cut from the latest main: git switch -c ${item.branch} main (or git switch ${item.branch} if it exists). Work in a git worktree, never in ${p.path || 'the main checkout'} itself: it stays on main so work can land there. Commit as you go.`;
 // remote: main is the one on origin (GitHub). Pushing to it succeeds only as a fast-forward, so a
 // rejected push means main moved; the branch is pushed again too, so the hub can see main contains it.
-const LAND_HINT = (item, p, base = 'main', remote = false) => remote ? [
-  `Land #${item.seq}: put ${item.branch} on ${base} on origin.`,
+// unseen: the hub can't see the branch on origin, so it is pushed first. One git command at a time, and
+// pushes as plain "git push origin …": headless workers may run only that prefix.
+const LAND_HINT = (item, p, base = 'main', remote = false, unseen = false) => remote ? [
+  unseen ? `Push it first: git push origin ${item.branch} (the hub can't see ${item.branch} on origin yet).` : '',
+  `${unseen ? 'Then land' : 'Land'} #${item.seq}: put ${item.branch} on ${base} on origin.`,
   `1. In your worktree or clone: git fetch origin, then git switch ${item.branch}, then git rebase origin/${base} (commit or stash anything uncommitted first). Conflicts: resolve them keeping both intents. If resolving changed what the reviewer approved, don't land: submit with conflicts (what you changed and why), and it goes back for review.`,
   `2. Run the project's checks (e.g. npm test) and fix anything the rebase broke.`,
   `3. git push origin ${item.branch}:${base}. If it is rejected as non-fast-forward, ${base} moved: go back to step 1.`,
   `4. git push origin ${item.branch} --force-with-lease (the rebase rewrote the branch; this updates it on origin).`,
   `5. submit #${item.seq}. The hub fetches, checks that ${base} contains the branch, and marks it done.`,
-].join(' ') : [
+].filter(Boolean).join(' ') : [
   `Land #${item.seq}: put ${item.branch} on ${base}.`,
   `1. In your worktree: git switch ${item.branch} (commit or stash anything uncommitted first).`,
   `2. git rebase ${base}. Conflicts: resolve them keeping both intents. If resolving changed what the reviewer approved, don't land: submit with conflicts (what you changed and why), and it goes back for review.`,
@@ -1225,7 +1237,7 @@ const AGENT_OPS = {
       hint: pick.mode === 'review'
         ? `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.${pick.item.race > 1 ? ' It was raced: compare race.submissions and accept with attempt set to the one to keep.' : ''}`
         : pick.mode === 'land' && args.claim !== false
-          ? LAND_HINT(this.itemById(pick.item.id), p, this.baseFor(p), this.remoteMode(p))
+          ? this.landHint(p, this.itemById(pick.item.id))
         : pick.mode === 'shape' && args.claim !== false
           ? SHAPE_HINT(pick.item, p)
           : args.claim === false
@@ -1245,7 +1257,7 @@ const AGENT_OPS = {
         : item.stage === 'proposed'
           ? SHAPE_HINT(item, p)
           : item.stage === 'landing'
-            ? LAND_HINT(this.itemById(item.id), p, this.baseFor(p), this.remoteMode(p))
+            ? this.landHint(p, this.itemById(item.id))
             : `You hold #${item.seq} for ${dur(LEASE_MS)}. ${WORK_HINT(this.itemById(item.id), p, this.remoteMode(p))} ${args.touching ? '' : `${TOUCHING_HINT} `}Progress renews the lease.`.replace(/  +/g, ' '),
     };
   },
@@ -1549,7 +1561,11 @@ Object.assign(Hub.prototype, {
       }
       const branch = kept ? merge : item.branch || this.submittedBranch(item);
       const land = this.toLand(p, branch, { fresh: true });
-      this.move(item, land?.pending ? 'landing' : 'done', actor, {
+      // Done means on main. Remote mode: work with a branch the hub can't see in its mirror (never pushed,
+      // or the remote can't be read right now) still lands. The lander pushes it; finishLanding checks.
+      const unseen = !land && !!branch && !!this.repos && this.remoteMode(p);
+      const landing = !!land?.pending || unseen;
+      this.move(item, landing ? 'landing' : 'done', actor, {
         holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
       });
       this.event(p, {
@@ -1557,15 +1573,19 @@ Object.assign(Hub.prototype, {
         headline: `${who} accepted #${item.seq}${kept ? ` (${kept.agent}'s attempt)` : ''}${headline ? `: ${headline}` : ''}`,
         summary: [
           land?.pending ? `${branch} lands on ${land.base} next: an agent rebases it, runs the checks and fast-forwards ${land.base}.` : '',
-          kept && !land ? `Merge ${merge}${kept.branch ? '' : ' (the worker branch convention; check the evidence)'}.` : '',
+          unseen ? `${branch} lands next: the hub can't see it on origin yet, so the lander pushes it first, then rebases it, runs the checks and pushes it to main.` : '',
+          kept && !land && !unseen ? `Merge ${merge}${kept.branch ? '' : ' (the worker branch convention; check the evidence)'}.` : '',
           summary,
         ].filter(Boolean).join('\n\n'),
-        detail, data: { ...(kept ? { kept: kept.agent, merge } : {}), ...(land ? { branch, base: land.base, landing: land.pending } : {}) },
+        detail, data: {
+          ...(kept ? { kept: kept.agent, merge } : {}),
+          ...(land ? { branch, base: land.base, landing: land.pending } : unseen ? { branch, landing: true, unseen: true } : {}),
+        },
       });
       if (land && !land.pending) {
         this.event(p, { item, actor: SYSTEM, type: 'landed', headline: `#${item.seq} is already on ${land.base}`, data: { branch, base: land.base, head: land.head } });
       }
-      return { ...(kept ? { kept: kept.agent, merge } : {}), ...(land?.pending ? { landing: branch } : {}) };
+      return { ...(kept ? { kept: kept.agent, merge } : {}), ...(landing ? { landing: branch } : {}) };
     } else {
       this.move(item, 'ready', actor, {
         holder: null, lease_until: null, rejections: item.rejections + 1,

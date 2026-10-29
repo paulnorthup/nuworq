@@ -239,6 +239,7 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     assert.match(land.hint, /git push origin nuworq\/1-add-a-greeting-file:main\. If it is rejected as non-fast-forward, main moved: go back to step 1/);
     assert.match(land.hint, /git push origin nuworq\/1-add-a-greeting-file --force-with-lease/);
     assert.doesNotMatch(land.hint, /merge --ff-only/);
+    assert.doesNotMatch(land.hint, /Push it first/, 'origin has the branch already');
 
     assert.throws(() => op('a1', 'submit', { item: '#1', headline: 'Landed' }), /main doesn't contain nuworq\/1-add-a-greeting-file yet/);
     rebase(mac, b);
@@ -330,7 +331,36 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     assert.equal(item(1).stage, 'landing', 'accept fetches first, so it sees the branch pushed since');
   });
 
-  test("with the remote unreachable, git can't say: accepted work is done, and the hub says why once", () => {
+  test('accepted work never pushed to GitHub goes to landing; the land job pushes it, lands it, and it is done', () => {
+    const { hub, origin, git, clone, op, build, push, rebase, item } = remote();
+    hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+    const job = op('a1', 'next');
+    const mac = clone('mac');
+    build(mac, job.branch, 'thing');
+    op('a1', 'submit', { item: '#1', headline: 'Done' });
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    assert.equal(item(1).stage, 'landing', "the mirror lacks the branch: that isn't done, it isn't on main");
+    assert.equal(item(1).branch, 'nuworq/1-thing');
+    assert.match(hub.q(`SELECT summary FROM events WHERE type = 'accepted'`).get().summary, /can't see it on origin yet, so the lander pushes it first/);
+    assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE type = 'landed'`).get().n, 0);
+
+    const land = op('a1', 'next');
+    assert.equal(land.mode, 'land');
+    assert.match(land.hint, /^Push it first: git push origin nuworq\/1-thing \(/);
+    assert.doesNotMatch(land.hint, /&&|push -u|push origin -u/, 'one git command at a time; plain git push origin');
+    push(mac, job.branch);
+    const notYet = (() => { try { op('a1', 'submit', { item: '#1', headline: 'Landed' }); } catch (e) { return e; } })();
+    assert.match(notYet.message, /main doesn't contain nuworq\/1-thing yet/);
+    assert.match(notYet.hint, /^Land #1: put nuworq\/1-thing on main on origin/, 'the hub sees it now: no push first');
+    rebase(mac, job.branch);
+    push(mac, `${job.branch}:main`);
+    push(mac, job.branch, '--force-with-lease');
+    op('a1', 'submit', { item: '#1', headline: 'Landed' });
+    assert.equal(item(1).stage, 'done');
+    assert.equal(git(origin, 'rev-parse', 'main'), git(mac, 'rev-parse', job.branch));
+  });
+
+  test("with the remote unreachable, accepted work with a branch waits in landing; the hub says why once", () => {
     const { hub, clone, op, build, item } = remote({ reachable: false });
     const errors = mock.method(console, 'error', () => {});
     try {
@@ -342,14 +372,27 @@ describe('landing through GitHub, when the hub has no checkout', () => {
       const r = op('a1', 'submit', { item: '#1', headline: 'Done' });
       assert.doesNotMatch(r.hint, /isn't on origin/, "no warning when the hub can't look");
       hub.humanOp('demo', 'accept', { item: '#1' });
-      assert.equal(item(1).stage, 'done');
-      op('a1', 'next');
-      op('a1', 'submit', { item: '#2', headline: 'Done' });
+      assert.equal(item(1).stage, 'landing', "git can't say main has it, so it isn't done");
+
+      const land = op('a1', 'next');
+      assert.equal(land.mode, 'land');
+      assert.match(land.hint, /^Push it first: git push origin nuworq\/1-one /);
+      const refused = (() => { try { op('a1', 'submit', { item: '#1', headline: 'Landed' }); } catch (e) { return e; } })();
+      assert.match(refused.message, /The hub can't see nuworq\/1-one in .*gone/);
+      assert.match(refused.hint, /Push it \(git push origin nuworq\/1-one --force-with-lease\) and submit again/);
+      assert.equal(item(1).stage, 'landing');
+
+      // No branch at all: nothing for git to check, so accepted is done, as before.
+      op('a2', 'checkin');
+      op('a2', 'next');
+      hub.q(`UPDATE items SET branch = '' WHERE seq = 2`).run();
+      op('a2', 'submit', { item: '#2', headline: 'Done' });
       hub.humanOp('demo', 'accept', { item: '#2' });
       assert.equal(item(2).stage, 'done');
+
       const said = errors.mock.calls.map((c) => String(c.arguments[0]));
       assert.equal(said.length, 1, 'logged once per project');
-      assert.match(said[0], /can't read .*gone for demo .* accepted work there is marked done without checking that main has it/);
+      assert.match(said[0], /can't read .*gone for demo .* accepted work there waits in landing/);
     } finally {
       errors.mock.restore();
     }
