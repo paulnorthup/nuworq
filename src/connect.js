@@ -170,16 +170,38 @@ const TOOLS = {
   },
 };
 
+// The nuworq Claude Code plugin (plugin/, see src/plugin.js) brings the MCP server and both skills
+// itself. Claude Code lists installed plugins as "<plugin>@<marketplace>" in installed_plugins.json.
+const CLAUDE_TOOLS = ['claude', 'skill'];
+export function pluginInstalled(home) {
+  try {
+    const { plugins = {} } = JSON.parse(readFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
+    return Object.entries(plugins).some(([key, installs]) => key.startsWith(`${NAME}@`) && [].concat(installs).length > 0);
+  } catch {
+    return false;
+  }
+}
+
 // Register with every installed tool that doesn't have nuworq yet. kept: records from an earlier
 // connect, carried over so disconnect still removes them. Returns { added, lines }: the records to
 // save, and one line per tool saying what happened. url: the hub, which the skill points at.
 export function registerMcp({ bin, home, env = process.env, kept = [], url = '' }) {
   const launch = launcher(bin, env);
   const ctx = { bin, home, env, url, launch };
-  const added = kept.filter((k) => !TOOLS[k.tool]?.refresh);
+  let added = kept.filter((k) => !TOOLS[k.tool]?.refresh);
   const lines = launch.why ? [`Tools start nuworq by its path: ${launch.why}`] : [];
+  // With the plugin, Claude Code is the plugin's: a second server and second copies of the skills
+  // would only compete with it, so what an earlier connect added there goes.
+  const plugin = pluginInstalled(home);
+  if (plugin) {
+    const old = kept.filter((k) => CLAUDE_TOOLS.includes(k.tool));
+    for (const rec of old) TOOLS[rec.tool].remove(ctx, rec);
+    added = added.filter((k) => !CLAUDE_TOOLS.includes(k.tool));
+    lines.push(`Claude Code: left to the ${NAME} plugin, which brings the MCP server and both skills${old.length ? '; removed what an earlier connect added' : ''}`);
+  }
   // What is rewritten every time comes last, so the record reads the same after each connect.
   for (const [tool, t] of Object.entries(TOOLS).sort(([, a], [, b]) => !!a.refresh - !!b.refresh)) {
+    if (plugin && CLAUDE_TOOLS.includes(tool)) continue;
     // An entry in the old node <path> form becomes path-free, whoever wrote it; its other settings stay.
     const up = t.upgrade && t.present(ctx) && launch.command === NAME ? t.upgrade(ctx) : null;
     if (up?.record) {
