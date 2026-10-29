@@ -99,7 +99,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
 
   // A question to an issue's reporter comes to you only once they've had reporter_wait hours to answer on GitHub.
   const wait = p.reporter_wait * HOUR;
-  for (const q of openQs.filter((q) => q.blocking && !(q.reporter && t - q.at < wait))) {
+  // A question to an operator is an operator session's to answer (next mode "answer"), never yours.
+  for (const q of openQs.filter((q) => q.blocking && q.audience !== 'operator' && !(q.reporter && t - q.at < wait))) {
     const it = byId.get(q.item_id);
     push({
       key: `q:${q.id}`, level: 'act', kind: 'question', at: q.reporter ? q.at + wait : q.at,
@@ -109,6 +110,18 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       why: q.context, detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
+    });
+  }
+
+  // Unless no operator has been here for a day: then one line, so the questions don't wait forever.
+  const forOperator = openQs.filter((q) => q.audience === 'operator');
+  if (forOperator.length && !agents.some((a) => t - a.last_seen < DAY && json(a.has, []).includes('operator'))) {
+    push({
+      key: `operator:${forOperator[0].id}`, level: 'act', kind: 'operator-missing', at: forOperator[0].at,
+      headline: `${plural(forOperator.length, 'question')} ${forOperator.length === 1 ? 'waits' : 'wait'} for an operator; none connected`,
+      sub: forOperator.map((q) => q.question).slice(0, 3).join(' · '),
+      why: 'Agents asked an operator: a trusted, attended session that checks in with has: ["operator"] to run things, grant permissions or verify on real infra. None has checked in here in the last day. Start an operator session (the guide\'s Operators section says how).',
+      guide: '/agents.md#operators',
     });
   }
 

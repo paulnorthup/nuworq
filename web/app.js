@@ -408,6 +408,9 @@ function cardActions(a, hasMore, open, key) {
       <div class="actions" style="margin-top:0"><label class="check-label"><input type="checkbox" data-draft="dec-${q.id}" id="dec-${q.id}"> Make this a standing decision for all agents</label>${a.parked ? `<label class="check-label" title="Record the answer, but don't hand the work back to agents yet"><input type="checkbox" data-draft="keep-${q.id}" id="keep-${q.id}"> Keep it parked</label>` : ''}<span style="flex:1"></span>${moreBtn}</div>
     </div>`;
   }
+  if (a.kind === 'operator-missing') {
+    return `<div class="actions"><a class="btn primary" href="${esc(a.guide)}" target="_blank" rel="noopener">How to start an operator</a><button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}</div>`;
+  }
   if (a.kind === 'kept-parked') {
     return `<div class="actions"><button class="btn go" data-action="unpark" data-item="${esc(a.item)}">Unpark</button><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}</div>`;
   }

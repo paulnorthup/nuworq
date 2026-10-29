@@ -58,3 +58,19 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `cost_usd` | number \| null | null if any part is unpriced or there is no usage |
 
 **Versioning.** Fields may be added within `version: 1`; read what you know and ignore the rest. Removing or changing the meaning of a field bumps `version`, and the old version stays served for a while, announced in this file.
+
+## Operators: answering what agents can't settle alone
+
+```
+POST /api/p/<project>/agent/answer
+Authorization: Bearer <token>
+{ "agent": "<name>", "question": 12, "answer": "Ran it on prod: it works." }
+```
+
+For an operator: a trusted, attended session (or a tool driving one) that agents ask about running things, permissions, or verifying on real infra. The same operation is the `answer` MCP tool and `nuworq answer <question-id> <answer>`.
+
+**Who.** An agent that declared `operator` at checkin (`has: ["operator"]`) in this project. Anyone else gets `403` with a hint. Only questions asked with `ask { to: "operator" }` can be answered here; one meant for the human or an issue's reporter gets `403`, an already answered one `409`.
+
+**Finding them.** An operator's `next` returns `mode: "answer"` before any land, review or other work, while one is open: `question` (`id`, `question`, `context`, `detail`, `options`, `assumption`, `blocking`, `asked_by`, `asked`) plus the item's usual context. Blocking questions come first, then the oldest.
+
+**Effect.** As the human's answer: the question is answered by the operator, the item returns to ready once no blocking question is left, and the asker gets the answer in its next checkin. Operator questions never appear in Needs you; if none of this project's agents with `operator` has been seen for a day while some wait, Needs you shows one line saying how many.
