@@ -88,10 +88,11 @@ export function tap(agent, { model = '' } = {}) {
       return parse(e);
     },
     // Local models (Ollama) report tokens but cost nothing anyone pays: cost unknown, shown as "—".
+    // Through llm-proxy (proxy/<model>) the CLI can't price the model; the hub measures it there (#76).
     usage() {
       if (!seen) return null;
-      const local = /^ollama\//.test(name);
-      return { input_tokens: input, output_tokens: output, cost_usd: local ? null : cost, model: name.replace(/^ollama\//, '') };
+      const unpriced = /^(ollama|proxy)\//.test(name);
+      return { input_tokens: input, output_tokens: output, cost_usd: unpriced ? null : cost, model: name.replace(/^(ollama|proxy)\//, '') };
     },
   };
 }

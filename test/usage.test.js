@@ -56,6 +56,11 @@ describe('usage from agent CLI output', () => {
     assert.equal(feed('claude', ['not json']).usage, null, 'no usage seen: nothing to record');
   });
 
+  test('opencode through llm-proxy: tokens, cost left to the hub to measure', () => {
+    const { usage } = feed('opencode', OPENCODE, { model: 'proxy/gpt-5' });
+    assert.deepEqual(usage, { input_tokens: 5000, output_tokens: 500, cost_usd: null, model: 'gpt-5' });
+  });
+
   test('split keeps the totals exact', () => {
     const parts = split({ input_tokens: 1001, output_tokens: 10, cost_usd: 1, model: 'm' }, [1, 2]);
     assert.equal(parts[0].input_tokens + parts[1].input_tokens, 1001);

@@ -181,8 +181,26 @@ function agentOf(flags) {
   if (agent === 'opencode' && (typeof flags.model !== 'string' || !flags.model.includes('/'))) {
     throw new HubError('opencode needs a model: --model <provider>/<model>', { hint: 'e.g. --model ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is configured for you), or any provider in your opencode config. A ~27B tool-calling model is reliable; see docs/OPEN-WEIGHT.md.' });
   }
+  // Through llm-proxy (--model proxy/<model>): it serves OpenAI Chat Completions only (its docs/API.md), so
+  // only opencode can go through it. Claude Code speaks Anthropic Messages, Codex only the Responses API.
+  const proxied = String(flags.model ?? '').startsWith('proxy/');
+  if (flags.proxy === undefined && !proxied) return agent;
+  const unsupported = {
+    claude: 'Claude Code speaks the Anthropic Messages API',
+    codex: 'Codex speaks only the Responses API (it dropped wire_api = "chat")',
+  }[agent];
+  if (unsupported) {
+    throw new HubError(`--agent ${agent} can't go through llm-proxy`, { hint: `llm-proxy serves OpenAI Chat Completions only (POST /v1/chat/completions), and ${unsupported}. Leave out --proxy, or use --agent opencode --model proxy/<model>.` });
+  }
+  if (!proxied) throw new HubError('--proxy needs a proxy/<model> model', { hint: 'e.g. --agent opencode --model proxy/gpt-5 --proxy http://studio.local:8080' });
+  if (!/^https?:\/\/[^/]/.test(proxyUrl(flags))) {
+    throw new HubError("--model proxy/<model> needs llm-proxy's address", { hint: 'Give --proxy http://host:port (or set NUWORQ_LLM_PROXY_URL), and its key in NUWORQ_LLM_PROXY_KEY.' });
+  }
   return agent;
 }
+
+// llm-proxy's address for workers: --proxy, else NUWORQ_LLM_PROXY_URL; without a trailing slash or /v1.
+const proxyUrl = (flags) => String((typeof flags.proxy === 'string' ? flags.proxy : envVar('LLM_PROXY_URL')) ?? '').trim().replace(/\/+$/, '').replace(/\/v1$/, '');
 
 async function hubProjects(client) {
   try {
@@ -445,7 +463,10 @@ function workerSetup(target, agent, flags, s, token = null) {
       permission: { bash: { 'git push*': 'deny' } },
       provider: provider === 'ollama'
         ? { ollama: { npm: '@ai-sdk/openai-compatible', name: 'Ollama', options: { baseURL: process.env.OLLAMA_URL || 'http://localhost:11434/v1', headers }, models: { [rest.join('/')]: {} } } }
-        : { [provider]: { options: { headers } } }, // merged with the provider's own config
+        // The key spends money: opencode reads it from the worker's environment, so it's in neither argv nor this config.
+        : provider === 'proxy'
+          ? { proxy: { npm: '@ai-sdk/openai-compatible', name: 'llm-proxy', options: { baseURL: `${proxyUrl(flags)}/v1`, apiKey: '{env:NUWORQ_LLM_PROXY_KEY}', headers }, models: { [rest.join('/')]: {} } } }
+          : { [provider]: { options: { headers } } }, // merged with the provider's own config
     };
     lines.push(`OPENCODE_CONFIG_CONTENT=${sq(JSON.stringify(config))} \\\n  opencode run${json} -m ${sq(model)} ${sq(task)} < /dev/null`);
   } else {
@@ -1075,6 +1096,8 @@ ${bold('Setup')}
                                          in its own git worktree, a branch per item (--here: no worktree). Without
                                          --run it prints the command instead. opencode needs --model,
                                          e.g. ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is set up for you).
+                                         --model proxy/<model> --proxy <url> (or NUWORQ_LLM_PROXY_URL) routes
+                                         opencode through llm-proxy, key from NUWORQ_LLM_PROXY_KEY (also on run).
                                          On a hub with login, --run needs --agent-token (or
                                          NUWORQ_AGENT_TOKEN): workers never get your own token.
                                          It reports what this machine has (macos/linux, docker, gpu;
