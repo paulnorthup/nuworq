@@ -7,6 +7,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
+import { skill, OPS } from '../src/protocol.js';
 import { Auth } from '../src/auth.js';
 import { Workspaces } from '../src/workspaces.js';
 import { createServer } from '../src/server.js';
@@ -152,8 +153,12 @@ describe('nuworq connect', () => {
       const saved = JSON.parse(readFileSync(m.file, 'utf8'));
       assert.equal(saved.url, url);
       assert.ok(saved.token.startsWith('nwq_'));
-      assert.deepEqual(saved.added.map((a) => a.tool), ['claude', 'codex', 'opencode']);
+      assert.deepEqual(saved.added.map((a) => a.tool), ['claude', 'codex', 'opencode', 'skill']);
       assert.ok(!out.stdout.includes(saved.token), 'the token is never printed');
+      // The nuworq skill, generated, pointing at this hub's guide.
+      const skillFile = join(m.home, '.claude', 'skills', 'nuworq', 'SKILL.md');
+      assert.equal(readFileSync(skillFile, 'utf8'), skill({ url }));
+      assert.match(out.stdout, /Claude Code skill: wrote the nuworq skill/);
 
       // Each tool got nuworq and kept everything else; no config holds the token.
       assert.deepEqual(m.read.claude(), ['mcp get nuworq', `mcp add --scope user nuworq -- node ${BIN} mcp`]);
@@ -179,6 +184,7 @@ describe('nuworq connect', () => {
       assert.equal(m.read.codex(), m.toml, 'Codex config is exactly as before');
       assert.deepEqual(m.read.opencode(), m.oc, 'opencode config has its own entries and nothing else');
       assert.equal(m.read.claude().at(-1), 'mcp remove --scope user nuworq');
+      assert.ok(!existsSync(skillFile) && !existsSync(dirname(skillFile)), 'the skill is gone too');
 
       const again = await cli(['disconnect'], { env: m.env });
       assert.equal(again.code, 0, again.stderr);
@@ -206,7 +212,7 @@ describe('nuworq connect', () => {
       assert.equal(await role(one), null);
       assert.equal(await role(two), 'agent');
       assert.equal(m.read.codex().match(/\[mcp_servers\.nuworq\]/g).length, 1);
-      assert.deepEqual(JSON.parse(readFileSync(m.file, 'utf8')).added.map((a) => a.tool), ['claude', 'codex', 'opencode'], 'still recorded for disconnect');
+      assert.deepEqual(JSON.parse(readFileSync(m.file, 'utf8')).added.map((a) => a.tool), ['claude', 'codex', 'opencode', 'skill'], 'still recorded for disconnect, the skill once');
       await cli(['disconnect'], { env: m.env });
       assert.equal(m.read.codex(), m.toml);
 
@@ -256,5 +262,25 @@ describe('nuworq connect', () => {
     await s.done;
     assert.equal(readFileSync(m.file, 'utf8'), saved);
     assert.ok(existsSync(join(dirname(m.file), 'hub.json')), 'serve wrote its own hub.json instead');
+  });
+});
+
+describe('the nuworq skill is generated from the protocol', () => {
+  test('it names exactly the operations the hub has, points at the guide, and stays short', () => {
+    const text = skill({ url: 'https://hub.test/' });
+    const fm = text.match(/^---\nname: nuworq\ndescription: (.+)\n---\n/);
+    assert.ok(fm && fm[1].length > 40, 'frontmatter with a name and a real description');
+    const named = [...text.matchAll(/^- `([a-z]+)`: /gm)].map((m) => m[1]);
+    assert.deepEqual(named, OPS.map((o) => o.name), 'every operation, and nothing that is not one');
+    assert.match(text, /https:\/\/hub\.test\/agents\.md/);
+    assert.match(text, /follow the hub/);
+    assert.ok(text.split('\n').length <= 60, `${text.split('\n').length} lines`);
+  });
+
+  test('`nuworq skill --dir d` writes it', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-skill-')));
+    const r = await cli(['skill', '--dir', dir], { env: envFor(dir, { NUWORQ_URL: 'http://127.0.0.1:9' }) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(readFileSync(join(dir, 'nuworq', 'SKILL.md'), 'utf8'), skill({ url: 'http://127.0.0.1:9' }));
   });
 });

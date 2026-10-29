@@ -1,9 +1,10 @@
 // nuworq connect: register the nuworq MCP server with the agent tools installed on this machine, and
 // remember exactly what was added, so disconnect removes that and nothing else. No token goes into
 // any tool's config: the MCP server reads the saved connection (connect.json) itself.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, delimiter } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync } from 'node:fs';
+import { join, dirname, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { skill } from './protocol.js';
 
 const NAME = 'nuworq';
 
@@ -24,6 +25,25 @@ const codexBlock = (bin) => `\n[mcp_servers.${NAME}]\ncommand = "node"\nargs = [
 // Each tool: where it keeps MCP servers, whether nuworq is there already, how to add and remove it.
 // add() returns the record to keep (what disconnect needs), or a reason it was left alone.
 const TOOLS = {
+  // The nuworq skill (generated from the protocol; see skill() in src/protocol.js). Rewritten on every
+  // connect, so it follows the hub's tools; disconnect removes it.
+  skill: {
+    label: 'Claude Code skill',
+    refresh: true,
+    where: ({ home }) => join(home, '.claude', 'skills', NAME, 'SKILL.md'),
+    present: ({ env }) => onPath('claude', env),
+    add(ctx) {
+      const file = TOOLS.skill.where(ctx);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, skill({ url: ctx.url }));
+      return { record: { file } };
+    },
+    remove(ctx, rec) {
+      rmSync(rec.file, { force: true });
+      try { rmdirSync(dirname(rec.file)); } catch { /* not empty: something else lives there */ }
+      return null;
+    },
+  },
   claude: {
     label: 'Claude Code',
     where: () => 'claude mcp (user scope)',
@@ -89,18 +109,19 @@ const TOOLS = {
 
 // Register with every installed tool that doesn't have nuworq yet. kept: records from an earlier
 // connect, carried over so disconnect still removes them. Returns { added, lines }: the records to
-// save, and one line per tool saying what happened.
-export function registerMcp({ bin, home, env = process.env, kept = [] }) {
-  const ctx = { bin, home, env };
-  const added = [...kept];
+// save, and one line per tool saying what happened. url: the hub, which the skill points at.
+export function registerMcp({ bin, home, env = process.env, kept = [], url = '' }) {
+  const ctx = { bin, home, env, url };
+  const added = kept.filter((k) => !TOOLS[k.tool]?.refresh);
   const lines = [];
-  for (const [tool, t] of Object.entries(TOOLS)) {
-    if (kept.some((k) => k.tool === tool)) { lines.push(`${t.label}: already set up by an earlier connect`); continue; }
+  // What is rewritten every time comes last, so the record reads the same after each connect.
+  for (const [tool, t] of Object.entries(TOOLS).sort(([, a], [, b]) => !!a.refresh - !!b.refresh)) {
+    if (!t.refresh && kept.some((k) => k.tool === tool)) { lines.push(`${t.label}: already set up by an earlier connect`); continue; }
     if (!t.present(ctx)) continue;
     const r = t.add(ctx);
     if (r.record) {
       added.push({ tool, ...r.record });
-      lines.push(`${t.label}: added the ${NAME} MCP server (${t.where(ctx)})`);
+      lines.push(tool === 'skill' ? `${t.label}: wrote the ${NAME} skill (${t.where(ctx)})` : `${t.label}: added the ${NAME} MCP server (${t.where(ctx)})`);
     } else {
       lines.push(`${t.label}: left alone, ${r.skip}`);
     }
