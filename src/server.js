@@ -62,6 +62,7 @@ const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode)
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
+const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
 const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
@@ -281,6 +282,16 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       try { r = dir.request({ email: b.email, github: b.github, building: b.building, ip }); } catch (e) { return deny(400, e.message, 'e.g. you@example.com'); }
       return send(200, { ok: true, state: r.state, created: r.created_at === r.updated_at });
     }
+    // What the request form needs to show Turnstile's widget: the site key, which is public (never the secret).
+    if (req.method === 'GET' && path === '/api/early-access/config') return send(200, { sitekey: earlyAccess?.sitekey || null, open: !!earlyAccess?.verify });
+    // The request form. Only this page may load Turnstile's script and frame.
+    if (req.method === 'GET' && (path === '/early-access' || path === '/early-access.js')) {
+      if (path === '/early-access') {
+        res.setHeader('content-security-policy', SECURITY_HEADERS['content-security-policy']
+          .replace("script-src 'self'", `script-src 'self' ${TURNSTILE}`).replace("default-src 'self'", `default-src 'self'; frame-src ${TURNSTILE}`).replace("connect-src 'self'", `connect-src 'self' ${TURNSTILE}`));
+      }
+      return send(200, readFileSync(join(WEB, path === '/early-access' ? 'early-access.html' : 'early-access.js'), 'utf8'), path === '/early-access' ? TYPES['.html'] : TYPES['.js']);
+    }
     // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
     const page = path === '/' ? '/join.html' : path;
     if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css'].includes(page) && req.method === 'GET') {
@@ -311,6 +322,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const r = dir.decide(b.id, b.approve === true, me.email);
         if (!r) return deny(404, `no request ${b.id}`);
+        if (r.already) return deny(409, `that request was already ${r.already}`, 'Each request is decided once; its link was shown when it was approved.');
         return send(200, { ok: true, state: r.state, ...(r.code ? { link: `${authOrigin(req)}/?grant=${r.code}` } : {}) });
       }
     }

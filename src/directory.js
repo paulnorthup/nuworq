@@ -155,10 +155,12 @@ export class Directory {
       ${state ? 'WHERE state = ?' : ''} ORDER BY created_at DESC`).all(...(state ? [state] : []));
   }
 
-  // Approve (returns { code }: the grant, shown once, for the link) or decline (mints nothing).
+  // Approve (returns { code }: the grant, shown once, for the link) or decline (mints nothing). Only a new
+  // request is decided: { already } says how an earlier decision went, and nothing changes.
   decide(id, approve, by) {
     const r = this.db.prepare('SELECT * FROM access_requests WHERE id = ?').get(Number(id));
     if (!r) return null;
+    if (r.state !== 'new') return { already: r.state };
     const t = this.now();
     this.db.prepare('UPDATE access_requests SET state = ?, decided_by = ?, decided_at = ? WHERE id = ?').run(approve ? 'approved' : 'declined', String(by), t, r.id);
     if (!approve) return { state: 'declined' };

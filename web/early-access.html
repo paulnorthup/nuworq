@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request early access · nuworq</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="narrow">
+  <h1>Request early access</h1>
+  <p class="lead">nuworq is letting people in by hand for now. Tell us who you are and what you'd build; we'll send you a link to set up your organization.</p>
+  <form id="ask" class="form">
+    <label>Email<input id="email" type="email" required autocomplete="email" placeholder="you@example.com"></label>
+    <label>GitHub handle (optional)<input id="github" autocomplete="username" placeholder="@you"></label>
+    <label>What would you build with it?<textarea id="building" maxlength="2000" placeholder="A few words are plenty."></textarea></label>
+    <div id="check"></div>
+    <button class="btn primary" type="submit">Request access</button>
+    <p id="said" class="lead"></p>
+  </form>
+</main>
+<script type="module" src="/early-access.js"></script>
+</body>
+</html>

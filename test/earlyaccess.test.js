@@ -12,7 +12,7 @@ async function hub({ gate = true } = {}) {
   const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
   const checked = [];
   const verify = async (token, ip) => { checked.push({ token, ip }); return token === 'good'; };
-  const server = createServer(spaces, { earlyAccess: { owners: ['paul@example.com'], verify, gate } });
+  const server = createServer(spaces, { earlyAccess: { owners: ['paul@example.com'], verify, gate, sitekey: '0xSITEKEY' } });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const dir = spaces.directory;
@@ -87,6 +87,40 @@ describe('early access', () => {
     try {
       assert.equal((await open.call('POST', '/api/orgs', { slug: 'free' }, open.as('zed@example.com'))).status, 200);
     } finally { open.close(); }
+  });
+
+  test('the form: /early-access answers without sign-in, may load Turnstile, and is told only the site key', async () => {
+    const h = await hub();
+    try {
+      const page = await fetch(`${h.base}/early-access`);
+      assert.equal(page.status, 200);
+      assert.match(page.headers.get('content-type'), /text\/html/);
+      const csp = page.headers.get('content-security-policy');
+      assert.match(csp, /script-src 'self' https:\/\/challenges\.cloudflare\.com/);
+      assert.match(csp, /frame-src https:\/\/challenges\.cloudflare\.com/);
+      const html = await page.text();
+      assert.match(html, /<form id="ask"/);
+      assert.match(html, /\/early-access\.js/);
+      assert.equal((await fetch(`${h.base}/early-access.js`)).status, 200);
+      assert.deepEqual(await (await fetch(`${h.base}/api/early-access/config`)).json(), { sitekey: '0xSITEKEY', open: true });
+      // Only that page may load Turnstile.
+      assert.doesNotMatch((await fetch(`${h.base}/requests.html`)).headers.get('content-security-policy'), /cloudflare/);
+    } finally { h.close(); }
+  });
+
+  test('a request is decided once', async () => {
+    const h = await hub();
+    try {
+      await h.call('POST', '/api/early-access', { email: 'ann@example.com', turnstile: 'good' });
+      const paul = h.as('paul@example.com');
+      const id = h.dir.requests()[0].id;
+      assert.equal((await h.call('POST', '/api/early-access/decide', { id, approve: true }, paul)).status, 200);
+      const again = await h.call('POST', '/api/early-access/decide', { id, approve: false }, paul);
+      assert.equal(again.status, 409);
+      assert.match(again.json.error, /already approved/);
+      assert.equal(h.dir.requests()[0].state, 'approved');
+      assert.equal(h.dir.db.prepare('SELECT COUNT(*) AS n FROM org_grants').get().n, 1);
+    } finally { h.close(); }
   });
 
   test('turnstile() checks the token with the secret on the hub, and says no on any failure', async () => {
