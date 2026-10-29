@@ -6,6 +6,7 @@ import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN } from './core.js';
 import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
+import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
 import { receive } from './github.js';
@@ -22,6 +23,7 @@ const SECURITY_HEADERS = {
 const COOKIE = 'nuworq_session';
 const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
+const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 // What an agent-role token may reach in required mode.
 const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects)$/, /^GET \/agents\.md$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
@@ -33,12 +35,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const spaces = target instanceof Workspaces ? target : null;
   const required = spaces ? true : auth === 'required';
   const failures = new Map(); // ip → [timestamps of failed logins]
+  const starts = new Map(); // ip → [timestamps of device logins started]
   // Per hub: its tokens and sessions, and the browsers streaming its changes. Nothing is shared across hubs.
   const scopes = new Map();
   const scopeOf = (hub) => {
     let s = scopes.get(hub);
     if (!s) {
-      s = { authz: new Auth(hub.db), clients: new Set() };
+      const authz = new Auth(hub.db);
+      s = { authz, devices: new Devices(authz), clients: new Set() };
       hub.on('change', (e) => {
         const msg = `data: ${JSON.stringify(e)}\n\n`;
         for (const res of s.clients) res.write(msg);
@@ -70,13 +74,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const sameOrigin = (req) => {
     try { return new URL(req.headers.origin).host === hostOf(req); } catch { return false; }
   };
-  const recentFailures = (ip) => {
+  const recent = (map, ip) => {
     const now = Date.now();
-    const list = (failures.get(ip) ?? []).filter((t) => now - t < LOGIN_WINDOW);
-    failures.set(ip, list);
-    if (failures.size > 10_000) failures.clear();
+    const list = (map.get(ip) ?? []).filter((t) => now - t < LOGIN_WINDOW);
+    map.set(ip, list);
+    if (map.size > 10_000) map.clear();
     return list;
   };
+  const recentFailures = (ip) => recent(failures, ip);
 
   const server = http.createServer(async (req, res) => {
     // A client that hangs up mid-request (e.g. after an oversized body is refused) must never crash the hub.
@@ -110,7 +115,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           if (!path) { res.writeHead(308, { location: `${base}/` }); return res.end(); }
         }
       }
-      const { authz, clients } = scopeOf(hub);
+      const { authz, devices, clients } = scopeOf(hub);
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
 
@@ -163,6 +168,28 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           hub.changed(p);
         }
         return send(200, { ok: true, person: who, role: r.person.role });
+      }
+      // Device login, the CLI's side: start a request, then poll until a person approves it in the browser.
+      if (req.method === 'POST' && (path === '/api/device/start' || path === '/api/device/poll')) {
+        if (!required) return deny(400, 'this hub has no logins', 'A hub without --auth needs no token: connect to it directly.');
+        const ip = clientIp(req);
+        const b = await body(req);
+        if (path === '/api/device/start') {
+          if (recent(starts, ip).length >= DEVICE_MAX_STARTS) return deny(429, 'too many device logins started', 'Wait 10 minutes, then try again.');
+          recent(starts, ip).push(Date.now());
+          const d = devices.start(b.machine);
+          const verify = `${origin(req)}${base}/device.html`;
+          return send(200, { ok: true, ...d, verify_url: verify, verify_url_complete: `${verify}?code=${d.user_code}` });
+        }
+        if (recentFailures(ip).length >= LOGIN_MAX_FAILS) return deny(429, 'too many failed attempts', 'Wait 10 minutes, then try again.');
+        try {
+          const r = devices.poll(b.device_code);
+          return send(200, { ok: true, ...r, ...(r.status === 'approved' ? {} : { hint: r.status === 'slow_down' ? `Poll every ${r.interval} seconds.` : 'Waiting for a person to approve the code in the browser.' }) });
+        } catch (e) {
+          if (e.code === 'invalid') recentFailures(ip).push(Date.now());
+          if (!e.code) throw e;
+          return deny(e.code === 'invalid' ? 404 : 410, e.message, e.code === 'used' ? 'The token was handed out once; start a new device login for another.' : 'Start a new device login.');
+        }
       }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
@@ -226,6 +253,25 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         } catch (e) {
           throw new UserError(e.message);
         }
+      }
+      // Device login, the person's side: see which machine asks, then approve or deny it.
+      if (req.method === 'POST' && (path === '/api/device/peek' || path === '/api/device/approve')) {
+        if (!who.person) return deny(400, 'this hub has no logins', 'Device login is for hubs that require login (--auth or --workspaces).');
+        const b = await body(req);
+        const peek = devices.peek(b.user_code);
+        if (!peek.ok) return deny(410, peek.error, 'Check the code the CLI shows, or start the device login again.');
+        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
+        const approve = b.approve !== false;
+        if (approve && personRole === 'viewer') return deny(403, "a viewer can't connect machines", 'Ask an owner for a member role.');
+        let d;
+        try { d = devices.decide(b.user_code, who.person.handle, approve); } catch (e) { throw new UserError(e.message); }
+        if (d.name) {
+          for (const p of hub.projects()) {
+            hub.event(p, { actor: by, type: 'connected', headline: `${by} connected ${d.machine} (agent token ${d.name})` });
+            hub.changed(p);
+          }
+        }
+        return send(200, { ok: true, machine: d.machine, approved: !!d.name, token_name: d.name ?? undefined });
       }
       if (req.method === 'POST' && path === '/api/logout') {
         authz.deleteSession(cookieOf(req));
