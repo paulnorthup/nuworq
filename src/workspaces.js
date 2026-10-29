@@ -4,9 +4,10 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hub, UserError } from './core.js';
+import { Directory } from './directory.js';
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-export const RESERVED = new Set(['www', 'api', 'app', 'admin', 'w', 'static', 'login']);
+export const RESERVED = new Set(['www', 'api', 'app', 'admin', 'w', 'static', 'login', 'auth', 'hub']);
 
 export class Workspaces {
   // repos: where hubs keep mirrors of repositories they have no checkout of; each workspace gets
@@ -24,10 +25,16 @@ export class Workspaces {
     return join(this.dir, `${slug}.db`);
   }
 
+  // Who is signed in to the hub itself, and their organizations (src/directory.js). Not a .db, so
+  // it is never mistaken for a workspace.
+  get directory() {
+    return (this._directory ??= new Directory(join(this.dir, 'directory.sqlite'), this.clock ? { now: this.clock } : {}));
+  }
+
   static check(slug) {
     const s = String(slug ?? '').trim().toLowerCase();
     if (!SLUG.test(s) || s.length < 2) throw new UserError(`"${slug}" is not a workspace name`, { hint: '2–40 characters: lowercase letters, digits and dashes, e.g. "acme".' });
-    if (RESERVED.has(s)) throw new UserError(`"${s}" is reserved; pick another workspace name`);
+    if (RESERVED.has(s)) throw new UserError(`"${s}" is reserved; pick another workspace name`, { hint: `Reserved for the hub itself: ${[...RESERVED].join(', ')}.` });
     return s;
   }
 
@@ -86,5 +93,7 @@ export class Workspaces {
   close() {
     for (const hub of this.open.values()) hub.db.close();
     this.open.clear();
+    this._directory?.close();
+    this._directory = null;
   }
 }

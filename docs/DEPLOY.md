@@ -67,7 +67,7 @@ nuworq serve --workspaces --base-domain nuworq.example.com --host 127.0.0.1 --au
 ```
 - **Subdomains**: with `--base-domain nuworq.example.com` and wildcard DNS (`*.nuworq.example.com`) plus a wildcard certificate at the proxy, `acme.nuworq.example.com` is the acme workspace.
 - **No wildcard DNS?** Every workspace is also at `https://<host>/w/<name>/`. Agents use that as their `NUWORQ_URL` (e.g. `https://nuworq.example.com/w/acme`), and the session cookie is limited to that path.
-- Login is always required in this mode, even on loopback. An address that names no workspace, or an unknown one, gets a 404.
+- Login is always required in this mode, even on loopback. An unknown workspace gets a 404; an address that names none is the hub itself (see Organizations, under sign-in).
 - `nuworq workspace list`, and `nuworq workspace remove <name>` (it deletes the file; a running hub stops serving it at once). `--data-dir` or `NUWORQ_DATA_DIR` moves the folder.
 - Without `--workspaces`, nothing changes: one database, as above.
 
@@ -84,6 +84,8 @@ People can sign in with an account they already have instead of pasting a token.
    (in the systemd unit, an `EnvironmentFile=` readable only by the hub's user).
 
 Who gets in: the hub asks the provider for a **verified** email (GitHub: the primary verified one; Google: `email_verified`). It signs in the person with that email (`nuworq person add bea --role steward --email bea@example.com`), or uses an open invite bound to that email (`invite create --email`), creating the person with the invite's role. Anyone else is told to ask an owner for an invite. A person exists per workspace, so a member of acme can't sign in to globex. The flow uses a signed, 10-minute state bound to the browser by a cookie, and PKCE; the provider's access token is used once and never stored. Token login keeps working.
+
+**Organizations (with `--workspaces`).** People can also sign in to the hub itself, at the address that names no workspace (the base domain, the `--public-url` host, or `/` without subdomains): `/auth/<provider>/start` with no `ws`. There, `GET /api/me` lists their organizations (workspaces where a person has their verified email) with role, address and an `enter` link that signs them in there in one click. `POST /api/orgs {name, slug}` creates a workspace with them as its owner. Each person may create up to 5 (`--org-cap`, `NUWORQ_ORG_CAP`). The hub keeps who-belongs-where in `<data-dir>/workspaces/directory.sqlite` and checks it against each workspace's people on every read, so role changes and removals show at once. Reserved names: www, api, app, admin, w, static, login, auth, hub.
 
 ### Connecting agents to a remote hub
 Create one agent token per machine or agent, so you can revoke them one at a time:

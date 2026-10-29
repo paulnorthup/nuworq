@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, normRemote } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, normRemote, slugify } from './core.js';
 import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
@@ -13,6 +13,7 @@ import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
 import { receive } from './github.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
+import { ORG_CAP } from './directory.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -45,6 +46,7 @@ const SECURITY_HEADERS = {
 };
 const COOKIE = 'nuworq_session';
 const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
+const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode): who you are, not any one workspace
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 // What an agent-role token may reach in required mode.
@@ -55,8 +57,11 @@ const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 // target: one Hub (today's single hub), or a Workspaces registry: then each request is resolved to a
 // workspace by subdomain of baseDomain or a /w/<slug>/ path prefix, and login is always required.
 // oauth: providers people may sign in with ({ github: { id, secret }, google: … }; see src/oauth.js).
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {} } = {}) {
+// orgCap: how many organizations one signed-in person may create (workspaces mode).
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
+  // The hub's own address names no workspace: the base domain, or the public URL's host (e.g. auth.<base-domain>).
+  const rootHost = publicUrl ? hostname(new URL(publicUrl).host) : '';
   const required = spaces ? true : auth === 'required';
   const sso = oauth instanceof OAuth ? oauth : new OAuth(oauth);
   const failures = new Map(); // ip → [timestamps of failed logins]
@@ -121,9 +126,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!sso.providers[provider]) return deny(404, `sign-in with ${provider} isn't set up on this hub`, `The hub host sets NUWORQ_${provider.toUpperCase()}_CLIENT_ID and _SECRET (see DEPLOY.md).`);
     const callback = `${authOrigin(req)}/auth/${provider}/callback`;
     if (step === 'start') {
+      // No workspace: sign in to the hub itself, to see and create organizations.
       const ws = spaces ? String(url.searchParams.get('ws') ?? '').toLowerCase() : '';
-      if (spaces && !spaces.get(ws)) return deny(404, `no workspace "${ws}"`, 'Start from your workspace\'s login page.');
-      const go = sso.start(provider, { ws, back: homeOf(req, ws), callback });
+      if (spaces && ws && !spaces.get(ws)) return deny(404, `no workspace "${ws}"`, 'Start from your workspace\'s login page.');
+      const go = sso.start(provider, { ws, back: spaces && !ws ? authOrigin(req) : homeOf(req, ws), callback });
       res.setHeader('set-cookie', `${FLOW_COOKIE}=${go.nonce}; HttpOnly; SameSite=Lax; Path=/auth/; Max-Age=600${https(req) ? '; Secure' : ''}`);
       return redirect(res, go.url);
     }
@@ -139,10 +145,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     let email;
     try { email = await sso.email(provider, url.searchParams.get('code'), flow); } catch (e) { return fail(e.message); }
     if (!email) return fail(`${sso.providers[provider].label} has no verified email for you. Verify one there, then try again`);
+    // Every verified sign-in teaches the directory who this is, so their organizations follow them.
+    const id = spaces?.directory.identify(email, provider);
+    if (spaces && !flow.ws) return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket('', spaces.directory.createSession(id.id))}`);
     const hub = spaces ? spaces.get(flow.ws) : target;
     if (!hub) return fail('that workspace is gone');
     const r = scopeOf(hub).authz.signInByEmail(email, provider);
     if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
+    spaces?.directory.join(email, flow.ws);
     if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
     return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}`);
   }
@@ -157,6 +167,62 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return list;
   };
   const recentFailures = (ip) => recent(failures, ip);
+
+  // The hub's own address (workspaces mode): who you are, your organizations, and making a new one.
+  // Only GitHub/Google sign-in reaches it; tokens belong to one workspace.
+  async function hubRoot(req, res, url, path, { send, deny }) {
+    if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', workspaces: true });
+    const dir = spaces.directory;
+    if (req.method === 'GET' && path === '/api/oauth') {
+      return send(200, { providers: sso.list().map((p) => ({ ...p, start: `${authOrigin(req)}/auth/${p.name}/start` })) });
+    }
+    if (req.method === 'GET' && path === '/api/oauth/finish') {
+      const sid = sso.redeem(url.searchParams.get('ticket'), '');
+      if (!sid) return deny(400, 'that sign-in link was already used or expired', 'Sign in again.');
+      res.setHeader('set-cookie', `${HUB_COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
+      return redirect(res, '/');
+    }
+    const sid = jarOf(req).get(HUB_COOKIE);
+    const me = dir.verifySession(sid);
+    const signIn = sso.enabled ? 'Sign in with GitHub or Google: see GET /api/oauth for where to start.' : 'This hub has no GitHub or Google sign-in set up (see DEPLOY.md).';
+    const known = ['/api/me', '/api/orgs', '/api/logout'].includes(path) || /^\/api\/orgs\/[^/]+\/enter$/.test(path);
+    if (!known) return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
+    if (!me) return deny(401, 'sign in required', signIn);
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
+
+    // An organization as the browser reaches it: its address, and a link that signs you in there.
+    const org = (m) => ({ ...m, address: homeOf(req, m.workspace), enter: `/api/orgs/${m.workspace}/enter` });
+    if (req.method === 'GET' && path === '/api/me') return send(200, { auth: 'required', email: me.email, orgs: dir.orgsOf(me, spaces).map(org) });
+    if (req.method === 'POST' && path === '/api/logout') {
+      dir.deleteSession(sid);
+      res.setHeader('set-cookie', `${HUB_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+      return send(200, { ok: true });
+    }
+    if (req.method === 'POST' && path === '/api/orgs') {
+      const b = await body(req);
+      const slug = Workspaces.check(b.slug || slugify(b.name ?? ''));
+      if (spaces.has(slug)) throw new UserError(`"${slug}" is taken`, { status: 409, hint: 'Pick another name for the address.' });
+      if (dir.createdBy(me, spaces) >= orgCap) return deny(429, `you have created ${orgCap} organizations, the most this hub allows`, 'Ask the hub host to raise --org-cap, or use one you have.');
+      spaces.create(slug);
+      const hub = spaces.get(slug);
+      const authz = scopeOf(hub).authz;
+      const person = authz.addPerson(Auth.handleOf(me.email.split('@')[0]), 'owner', { email: me.email });
+      dir.join(me.email, slug, { created: true });
+      return send(200, { ok: true, ...org({ workspace: slug, handle: person.handle, role: 'owner', created: true }) });
+    }
+    const enter = path.match(/^\/api\/orgs\/([^/]+)\/enter$/);
+    if (req.method === 'GET' && enter) {
+      const ws = decodeURIComponent(enter[1]).toLowerCase();
+      const hub = spaces.get(ws);
+      // The person with this email there, or an open invite to it: the same rule as signing in there.
+      const r = hub && scopeOf(hub).authz.signInByEmail(me.email, me.provider);
+      if (!r) return deny(404, `${me.email} isn't a member of "${ws}"`, 'Ask an owner there for an invite (to this email).');
+      dir.join(me.email, ws);
+      if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
+      return redirect(res, `${homeOf(req, ws)}/api/oauth/finish?ticket=${sso.ticket(ws, r.sid)}`);
+    }
+    return deny(405, `use ${path === '/api/orgs' ? 'POST' : 'GET'}`);
+  }
 
   const server = http.createServer(async (req, res) => {
     // A client that hangs up mid-request (e.g. after an oversized body is refused) must never crash the hub.
@@ -177,13 +243,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       let hub = target, base = '', ws = '';
       if (spaces) {
         const host = hostname(hostOf(req));
-        const sub = baseDomain && host.endsWith(`.${baseDomain}`) ? host.slice(0, -baseDomain.length - 1) : null;
+        const sub = baseDomain && host !== rootHost && host.endsWith(`.${baseDomain}`) ? host.slice(0, -baseDomain.length - 1) : null;
         const pre = sub == null ? path.match(/^\/w\/([^/]+)(\/.*)?$/) : null;
         const slug = sub ?? (pre ? decodeURIComponent(pre[1]) : null);
-        if (slug == null) {
-          if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', workspaces: true });
-          return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
-        }
+        if (slug == null) return await hubRoot(req, res, url, path, { send, deny });
         hub = spaces.get(slug);
         if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: nuworq workspace create <name>.');
         ws = slug.toLowerCase();
@@ -250,6 +313,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         let r;
         try { r = authz.acceptInvite(b.token, b.handle); } catch (e) { return deny(400, e.message, 'Pick another handle: lowercase letters, digits, ., _ or -.'); }
         res.setHeader('set-cookie', sessionCookie(req, r.sid, cookiePath));
+        if (r.person.email) spaces?.directory.join(r.person.email, ws);
         joined(hub, r.person, r.person.role, r.invitedBy);
         return send(200, { ok: true, person: `@${r.person.handle}`, role: r.person.role });
       }
@@ -333,7 +397,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (personRole !== 'owner') return deny(403, 'only an owner manages people', 'Ask an owner of this workspace.');
         const b = await body(req);
         try {
-          return send(200, { ok: true, person: path === '/api/people' ? authz.addPerson(b.handle, b.role, { name: b.name, email: b.email }) : authz.setRole(b.handle, b.role) });
+          const person = path === '/api/people' ? authz.addPerson(b.handle, b.role, { name: b.name, email: b.email }) : authz.setRole(b.handle, b.role);
+          if (person.email) spaces?.directory.join(person.email, ws);
+          return send(200, { ok: true, person });
         } catch (e) {
           throw new UserError(e.message);
         }

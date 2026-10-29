@@ -623,7 +623,8 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv() });
+  const orgCap = Number(flags['org-cap'] || envVar('ORG_CAP')) || undefined; // organizations one person may create
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv(), orgCap });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();
@@ -830,6 +831,7 @@ ${bold('Human')}
   serve --workspaces [--data-dir d] [--base-domain example.com]
                                          one process, many workspaces (one database each),
                                          at <name>.<base-domain> or /w/<name>/. Login always required.
+                                         [--org-cap 5]: organizations one signed-in person may create
   workspace create|remove <name> | list  manage workspaces on the hub host
   notify add ntfy|slack|webhook <url>    push one batched message when something new needs you
   notify list | remove <id> | test       see, remove or test push channels (run on the hub host)
