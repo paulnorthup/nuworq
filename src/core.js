@@ -852,7 +852,8 @@ export class Hub extends EventEmitter {
     const parent = this.itemById(item.parent_id);
     const children = this.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(item.id);
     const history = this.q(`SELECT * FROM events WHERE item_id = ?
-        AND type IN ('handoff','sent_back','lease_expired','answered','assumption_confirmed','submitted','shaped','picked','comment','steer','refined')
+        AND type IN ('handoff','sent_back','lease_expired','answered','assumption_confirmed','submitted','shaped','picked','comment','steer','refined',
+          'accepted','pr_failed','pr_blocked','rebased','issue_close_failed')
         ORDER BY at DESC LIMIT 8`).all(item.id).reverse();
     const questions = this.q('SELECT * FROM questions WHERE item_id = ? ORDER BY at').all(item.id);
     const steers = this.q(`SELECT n.* FROM notes n WHERE n.item_id = ? AND n.kind = 'steer' AND n.active = 1

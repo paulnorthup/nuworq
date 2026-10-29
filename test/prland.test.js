@@ -231,6 +231,8 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     assert.equal(land.mode, 'land');
     assert.match(land.hint, /couldn't open a pull request for it \(see its history\), so land it by hand/);
     assert.match(land.hint, /git rebase origin\/main/);
+    const failed = land.history.find((e) => e.type === 'pr_failed');
+    assert.match(failed?.headline ?? '', /403: Resource not accessible by integration/, 'the history the hint points to says why');
   });
 
   test('auto-merge refused: the PR is still opened and linked, and the record says to merge it on GitHub', async () => {
