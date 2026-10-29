@@ -56,6 +56,12 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
   'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
+// A page of the Connect GitHub flow that the hub serves itself: the sign-in card's look (style.css,
+// login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
+const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nuworq · ${title}</title><link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/login.css"></head>
+<body><main class="login"><div class="login-card flow-card"><div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--agents)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg><span>nuworq</span></div>
+<h1>${title}</h1>${body}</div></main></body></html>`;
 const COOKIE = 'nuworq_session';
 const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
 const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode): who you are, not any one workspace
@@ -119,6 +125,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const state = ok ? 'installed' : 'uninstalled';
     installs.set(hub, { app, at: Date.now(), state });
     return state;
+  };
+  // Where the app stands, for whoever closed a tab mid-flow: 'none', 'created' (installed nowhere) or 'installed'
+  // on N repositories. N only on a single hub, whose app is its own; asked of GitHub at most once a minute.
+  let counted = { app: null, at: 0, n: null };
+  const appStatus = async (hub) => {
+    const state = await appState(hub);
+    const status = { state: state === 'uninstalled' ? 'created' : state, repositories: null, install_url: app?.slug ? app.installUrl() : null };
+    if (state !== 'installed' || spaces) return status;
+    if (counted.app !== app || Date.now() - counted.at >= 60_000) {
+      try { counted = { app, at: Date.now(), n: (await app.repos()).length }; } catch { counted = { app, at: Date.now(), n: null }; }
+    }
+    return { ...status, repositories: counted.n };
   };
   // Accepted remote work lands through a pull request the hub opens, as the app (also one created since start).
   const adopt = (hub, req, base) => {
@@ -555,8 +573,16 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           hub.event(p, { actor: 'github', type: 'github_app', headline: `The GitHub App ${a.slug || a.id} was created${a.owner ? ` on ${a.owner}` : ''}; install it on this project's repository so workers can push` });
           hub.changed(p);
         }
-        // Creating the app doesn't install it: go straight to choosing its repositories (GitHub then returns to setup_url).
-        return redirect(res, a.slug ? app.installUrl() : `${base}/#github-app=${encodeURIComponent(a.id)}`);
+        // Creating the app doesn't install it: go straight on to choosing its repositories (GitHub then returns to
+        // setup_url), saying so on the way, and with a button in case the browser doesn't follow the refresh.
+        if (!a.slug) return redirect(res, `${base}/#github-app=${encodeURIComponent(a.id)}`);
+        const to = app.installUrl().replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        const name = a.slug.replace(/[<>&"]/g, '');
+        res.setHeader('refresh', `3;url=${app.installUrl()}`);
+        return send(200, flowPage(base, 'GitHub App created', `
+<p class="lead">The app <b>${name}</b> exists${a.owner ? ` on the GitHub account ${a.owner.replace(/[<>&"]/g, '')}` : ''}, but it can't reach any repository yet. Next, GitHub asks where to install it: all your repositories, or only the ones you pick.</p>
+<p class="lead">Then you come back here, with <b>+ Project</b> open on those repositories.</p>
+<a class="btn primary" href="${to}">Choose repositories on GitHub</a><p class="hint">Taking you there in a moment.</p>`), 'text/html; charset=utf-8');
       }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
@@ -605,7 +631,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
       // The hub's GitHub App: whether it has one, and the one-click page that creates it (owners, single hub).
       if (req.method === 'GET' && (path === '/api/github/app' || path === '/api/info')) freshSlug();
-      if (req.method === 'GET' && path === '/api/github/app') return send(200, { configured: !!app, slug: app?.slug || null, can_create: !spaces && personRole === 'owner' });
+      // ?fresh: just back from installing it on GitHub, so ask GitHub again rather than trust the last minute's answer.
+      if (req.method === 'GET' && path === '/api/github/app' && url.searchParams.has('fresh') && ['owner', 'steward'].includes(personRole)) { installs.delete(hub); counted.at = 0; }
+      if (req.method === 'GET' && path === '/api/github/app') return send(200, { configured: !!app, slug: app?.slug || null, can_create: !spaces && personRole === 'owner', ...await appStatus(hub) });
       // Install the app for this organization: on a shared hub, the installation is bound to it on the way back.
       if (req.method === 'GET' && path === '/api/github/install') {
         if (!app?.slug) return deny(404, 'this hub has no GitHub App to install', 'The hub host sets one up (docs/GITHUB.md).');
@@ -625,11 +653,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const q = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
         // This one page may post a form to GitHub; everything else keeps form-action 'self'.
         res.setHeader('content-security-policy', SECURITY_HEADERS['content-security-policy'].replace("form-action 'self'", `form-action 'self' ${gh.web}`));
-        return send(200, `<!doctype html><meta charset="utf-8"><title>Create the nuworq GitHub App</title><link rel="stylesheet" href="${base}/style.css">
-<main class="narrow"><h1>Create the nuworq GitHub App</h1>
-<p>GitHub creates an app for this hub${org ? ` in <b>${q(org)}</b>` : ' on your account'}: it can push branches, open pull requests and read CI and issues, on the repositories you install it on, and nothing else. You come back here when it's made.</p>
-<form method="post" action="${q(action)}"><input type="hidden" name="manifest" value="${q(m)}"><button class="btn primary" type="submit">Create GitHub App</button></form>
-<p class="faint">For an organization, open this page with ?org=&lt;name&gt;.</p></main>`, 'text/html; charset=utf-8');
+        return send(200, flowPage(base, 'Create the nuworq GitHub App', `
+<p class="lead">Workers push through this app: a token for one repository, for an hour, so nobody holds a lasting GitHub credential. It can push branches, open pull requests, and read CI and issues on the repositories you install it on, and nothing else.</p>
+<p class="lead">Next, GitHub shows the app${org ? ` for <b>${q(org)}</b>` : ' on your account'} with its name and permissions filled in, and asks you to confirm. Then it asks which repositories it may use, and you come back here with <b>+ Project</b> open on them.</p>
+<form method="post" action="${q(action)}" class="flow-form"><input type="hidden" name="manifest" value="${q(m)}"><button class="btn primary" type="submit">Create GitHub App</button></form>
+<p class="hint">${org ? `For your account instead, open this page without ?org.` : 'For an organization, open this page with ?org=&lt;name&gt;.'} <a href="${base}/#/">Back to nuworq</a></p>`), 'text/html; charset=utf-8');
       }
       if (path === '/api/invites' || path === '/api/invites/revoke') {
         if (personRole !== 'owner') return deny(403, 'only an owner invites people', 'Ask an owner of this workspace.');

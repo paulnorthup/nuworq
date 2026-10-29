@@ -832,14 +832,14 @@ async function connect() {
   const slug = S.slug ?? 'my-project';
   const c = connectCommands(S.info, location, slug);
   const url = c.url;
+  const gh = await api('/api/github/app').catch(() => null);
   const where = S.view?.project.path;
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set an agent tool up once: it needs no project. An agent working in a folder the hub knows finds its project; anywhere else, the hub routes it to the work that matters most.</p>
     ${c.local ? '' : `<h4>Get nuworq on your machine (once)</h4><p class="lead">It has no dependencies beyond Node 22.13+${c.clone ? ', so a clone is the install' : ': clone its repository into ~/nuworq'}.</p>${c.clone ? copyBlock(c.clone) : ''}`}
     ${c.connect ? `<h4>Connect this machine (once)</h4><p class="lead">It checks the hub answers, logs you in through the browser for this machine's token, and registers nuworq with Claude Code and Codex if they're installed. Undo it all with <code>disconnect</code>.</p>${copyBlock(c.connect)}` : ''}
     <h4>Start a worker (it goes wherever work is waiting)</h4><p class="lead">Each worker gets its own git worktree and branch, so many can run at once. Run it again for more workers.</p>${copyBlock(c.worker)}
-    ${S.info.github_app === 'create' ? `<h4>GitHub App (once, for this hub)</h4><p class="lead">Workers push through a GitHub App: a token for one repository, for an hour, and nobody holds a lasting GitHub credential.</p><p><a class="btn primary small" href="${esc(url)}/api/github/app/new">Create GitHub App</a></p>`
-      : S.info.github_app ? `<p class="lead">Workers push through the GitHub App${typeof S.info.github_app === 'string' ? ` <code>${esc(S.info.github_app)}</code>` : ''}: install it on each project's repository.</p>` : ''}
+    ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
     ${c.claude ? `<h4>Claude Code (once, for every project)</h4>${copyBlock(c.claude)}` : ''}
     <h4>OpenAI Codex (~/.codex/config.toml)${c.connect ? ', if you set it up by hand' : ''}</h4>${copyBlock(c.codex)}
@@ -869,11 +869,36 @@ async function notifySettings() {
     <div class="foot">${n.channels.length ? '<button class="btn" data-action="notify-test">Send a test</button>' : ''}<button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
 
+// Where the hub's GitHub App stands (/api/github/app), one line and its next step, so a person who closed a
+// tab mid-flow knows where they are. Nothing when there's no app and this person can't make one.
+function appStatus(st) {
+  if (!st || (st.state === 'none' && !st.can_create)) return '';
+  const [line, act] = st.state === 'installed'
+    ? [`Installed${st.repositories == null ? '' : ` on ${plural(st.repositories, 'repository', 'repositories')}`}${st.slug ? ` as <code>${esc(st.slug)}</code>` : ''}: workers push there with a token for one repository, for an hour.`,
+      st.install_url ? `<a class="btn small" href="${esc(st.install_url)}" target="_blank" rel="noopener">Manage on GitHub</a>` : '']
+    : st.state === 'created'
+      ? [`Created${st.slug ? ` as <code>${esc(st.slug)}</code>` : ''}, not installed: it can't reach any repository yet. GitHub asks which ones it may use.`, '<a class="btn primary small" href="api/github/install">Install</a>']
+      : ['No GitHub App yet. Workers push through it: a token for one repository, for an hour, and nobody holds a lasting GitHub credential. GitHub asks you to confirm it, then where to install it.', '<a class="btn primary small" href="api/github/app/new">Create</a>'];
+  return `<div class="app-status ${st.state}"><span class="dot"></span><p>${line}</p>${act}</div>`;
+}
+
+// Back from installing the app (GitHub sends the person to the app's setup_url with setup_action): say where
+// it stands now, and open "+ Project" on the repositories it can see.
+async function backFromGitHub() {
+  const st = await api('/api/github/app?fresh=1').catch(() => null);
+  if (st) S.info = { ...S.info, github_app: st.slug || S.info?.github_app || true };
+  if (st?.state === 'installed') toast(`GitHub App installed${st.repositories == null ? '' : ` on ${plural(st.repositories, 'repository', 'repositories')}`}: pick one to make it a project`);
+  else if (st) toast('Back from GitHub, but the app isn\'t installed anywhere yet', true);
+  newProject();
+}
+
 async function githubSettings() {
   S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
   const P = S.view.project;
   const hook = `${S.info.url}/api/hooks/github/${encodeURIComponent(P.slug)}`;
+  const st = S.info.workspace ? null : await api('/api/github/app').catch(() => null);
   modal(`<h2>GitHub</h2>
+    ${st && st.state !== 'none' ? `<h4>The hub's GitHub App</h4>${appStatus(st)}<h4>This project's webhook</h4>` : ''}
     <p class="lead">A webhook links pull requests to items (a <code>nuworq/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
     <h4>1. In the repo on GitHub: Settings → Webhooks → Add webhook</h4>
     <p class="lead">Payload URL (GitHub must be able to reach it; see docs/DEPLOY.md):</p>${copyBlock(hook)}
@@ -1211,10 +1236,14 @@ function listen() {
 }
 
 (async function start() {
+  // GitHub returns to the app's setup_url (#/) with ?installation_id=…&setup_action=install, before or in the hash.
+  const fromGitHub = /[?&]setup_action=(install|update)\b/.test(location.search + location.hash);
+  if (fromGitHub) history.replaceState(null, '', `${location.pathname}#/`);
   window.addEventListener('hashchange', route);
   S.me = await api('/api/me').catch(() => null);
   S.info = await api('/api/info').catch(() => null) ?? undefined;
   await loadProjects().catch(() => {});
+  if (fromGitHub) return void (route(), listen(), setInterval(() => refresh(), 30_000), backFromGitHub());
   if (!location.hash || location.hash === '#/') {
     // One project opens it, unless Get started still has steps to show on All projects.
     S.gs = await api('/api/get-started').catch(() => null);
