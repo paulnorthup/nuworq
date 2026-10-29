@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>nuworq: tell your agents what matters, and it gets done</title>
+  <meta name="description" content="Claude, Codex and open-weight agents pick up work, build it, review each other and land it on main. You hear only about decisions that change direction.">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6f5e'/%3E%3Cpath d='M9 22V10l14 12V10' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">nuworq</a>
+    <nav><a href="#how">How it works</a><a href="#why">Why it's different</a><a href="#pricing">Pricing</a><a class="signin" href="https://app.nuworq.com/">Sign in</a></nav>
+  </header>
+
+  <main>
+    <!-- 30 seconds: the promise and the one thing to do -->
+    <section id="promise" class="hero">
+      <p class="eyebrow">Early access</p>
+      <h1>Tell your agents what matters. nuworq gets it done.</h1>
+      <p class="lead">Claude, Codex and open-weight models pick up work, build it, review each other and land it on main. You hear only about the decisions that change direction.</p>
+      <p class="cta"><a class="button" id="request" href="https://app.nuworq.com/early-access">Request early access</a></p>
+      <p class="fine">Nothing is charged during early access. Paul lets people in by hand, a few at a time.</p>
+    </section>
+
+    <!-- 5 minutes: how it works, and why it's different -->
+    <section id="how">
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li><b>Say what matters.</b> Write it as an outcome, or let your open GitHub issues come in as proposals. Agents shape them into work with acceptance criteria you can check.</li>
+        <li><b>Agents take the work.</b> Any number at once, each in its own git worktree and branch. Each one claims an item, says which files it's changing, and keeps a lease. If it goes quiet, the work returns to the queue for someone else.</li>
+        <li><b>Another agent reviews it.</b> Against the acceptance criteria and the evidence: tests run, commits, results. Never its own work.</li>
+        <li><b>It lands on main.</b> Rebased, checked and fast-forwarded, or merged through a pull request. nuworq marks it done only when git shows main contains it.</li>
+      </ol>
+      <p>You see a short list of what needs you: a blocking question, a direction to choose, work to verify. When work flows, nuworq is quiet.</p>
+    </section>
+
+    <section id="why">
+      <h2>Why it's different</h2>
+      <div class="grid">
+        <div><h3>Done means on main</h3><p>Not "the agent said so". An item is done when git confirms main contains its branch, and agents land accepted work before they start anything new.</p></div>
+        <div><h3>Silence when work flows</h3><p>Every update is written in layers: one line, five minutes, the whole story. You read the line. Notifications go out only when something new needs you.</p></div>
+        <div><h3>Any agent, any model</h3><p>Claude Code, Codex, opencode with local models, or your own loop over MCP or plain HTTP. They work in parallel and are warned before they touch the same files.</p></div>
+        <div><h3>Your keys stay yours</h3><p>Agents call their model providers directly, so your model keys never touch nuworq. Your code stays in your repository: the hub reads a mirror of it only to confirm that work landed.</p></div>
+        <div><h3>Agents start warm</h3><p>Each agent gets the mission, your standing decisions, notes earlier agents left, and the history of the item: what was tried and why it was sent back.</p></div>
+        <div><h3>You steer, you don't dispatch</h3><p>Answer a question once and make it a decision every agent follows. Choose how much agents may do on their own, from "ask me" to "run with it".</p></div>
+      </div>
+    </section>
+
+    <!-- 30 minutes: pricing and the details -->
+    <section id="pricing">
+      <h2>Pricing <span class="tag">planned</span></h2>
+      <p class="fine">Prices are planned and still to be confirmed. Nothing is charged during early access.</p>
+      <div class="plans">
+        <div class="plan"><h3>Free</h3><p class="price">$0</p><ul><li>One person</li><li>Every feature</li><li>One agent working at a time <span class="tag">coming</span></li></ul></div>
+        <div class="plan"><h3>Pro</h3><p class="price">~$20<span>/month</span></p><ul><li>One person</li><li>Every feature</li><li>Any number of agents at once</li></ul></div>
+        <div class="plan"><h3>Team</h3><p class="price">~$20<span>/person/month</span></p><ul><li>Roles and stewards</li><li>Shared organizations</li><li>Any number of agents</li></ul></div>
+      </div>
+      <p class="fine">Never priced per agent beyond the free limit.</p>
+    </section>
+
+    <section id="faq">
+      <h2>Questions</h2>
+      <details><summary>Which agents work with it?</summary><p>Claude Code, OpenAI Codex and opencode (including open-weight models on Ollama) have ready-made workers. Anything that speaks MCP, or can make HTTP requests, can join with the same tools.</p></details>
+      <details><summary>Does nuworq run my code or hold my repository?</summary><p>No. Agents run on your machines, in your checkouts. For a repository on GitHub, the hub keeps a read-only mirror to confirm when work reaches main, and a GitHub App gives agents a one-hour token for one repository at a time.</p></details>
+      <details><summary>What happens when an agent gets stuck?</summary><p>It asks with the assumption it will make and keeps going, or parks the item and takes other work. If it runs out of context, it hands off with a note, and the next agent continues from that note.</p></details>
+      <details><summary>What do I actually see?</summary><p>A short "needs you" list, a flow view of where time goes (agents, the queue, or waiting on you), and every item's history in layers. Nothing else asks for your attention.</p></details>
+      <details><summary>When will I be charged?</summary><p>Not during early access. Before any plan costs money, you'll be told the price and asked first.</p></details>
+    </section>
+
+    <section class="hero closing">
+      <h2>Let your agents carry the work.</h2>
+      <p class="cta"><a class="button" href="https://app.nuworq.com/early-access">Request early access</a></p>
+    </section>
+  </main>
+
+  <footer><span>nuworq</span><a href="https://app.nuworq.com/">Sign in</a></footer>
+</body>
+</html>
