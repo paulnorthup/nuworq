@@ -15,10 +15,50 @@ const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 
 // viewer: the person looking ("@handle"), so "needs you" counts only their own; none in local mode.
 export function projectList(hub, { viewer } = {}) {
-  return hub.projects().map((p) => {
-    const v = view(hub, p.slug, { light: true, viewer });
-    return { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length };
-  });
+  return hub.projects().map((p) => projectLine(hub, p, view(hub, p.slug, { light: true, viewer })));
+}
+
+const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
+
+// The home: does anything need you, anywhere? One aggregate pulse, every act entry of the viewer's across
+// projects (tagged with its project, oldest first as on a project page), then one line per project. 5m adds
+// worth knowing per project and what's in motion. Parked projects are listed but never set the pulse.
+const URGENCY = ['needs-you', 'stalled', 'flowing', 'idle'];
+export function homeView(hub, { viewer } = {}) {
+  const t = hub.now();
+  const rows = hub.projects().map((p) => ({ p, v: view(hub, p.slug, { light: true, viewer }) }));
+  const tag = (p) => ({ slug: p.slug, name: p.name });
+  const needs = rows.flatMap(({ p, v }) => v.attention.filter((a) => a.level === 'act').map((a) => ({ ...a, project: tag(p) })))
+    .sort((a, b) => a.at - b.at);
+  const live = rows.filter(({ p }) => !p.parked);
+  const state = needs.length ? 'needs-you' : URGENCY.find((s) => live.some(({ v }) => v.pulse.state === s)) ?? 'idle';
+  const across = (n) => (n > 1 ? ` across ${plural(n, 'project')}` : '');
+  const working = live.reduce((n, { v }) => n + v.pulse.working, 0), inFlight = live.reduce((n, { v }) => n + v.pulse.active, 0);
+  const stalled = live.filter(({ v }) => v.pulse.state === 'stalled').length;
+  const finished = rows.flatMap(({ p, v }) => v.since.finished.map((f) => ({ ...f, project: tag(p) })));
+  const sentence = [
+    needs.length ? `${plural(needs.length, 'thing')}${across(new Set(needs.map((a) => a.project.slug)).size)} ${needs.length === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you.',
+    inFlight ? `${plural(working, 'agent')} working on ${plural(inFlight, 'item')}${across(live.filter(({ v }) => v.pulse.active).length)}.`
+      : stalled ? `Nothing is moving: work is waiting in ${plural(stalled, 'project')}.` : 'No work in flight.',
+    finished.length ? `${finished.length} finished since you last looked.` : '',
+  ].filter(Boolean).join(' ');
+  const counts = {};
+  for (const { v } of rows) for (const [k, n] of Object.entries(v.since.counts)) counts[k] = (counts[k] ?? 0) + n;
+  const seen = live.map(({ p }) => p.seen_at).filter(Boolean);
+  const motion = rows.flatMap(({ p }) => hub.q(`SELECT seq, title, stage, holder AS agent FROM items WHERE project_id = ? AND holder IS NOT NULL AND holder != '' AND stage IN ('active', 'proposed', 'landing')
+      UNION ALL SELECT i.seq, i.title, i.stage, a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND i.stage = 'active' AND a.stage = 'active' AND a.closed = 0
+      ORDER BY seq`).all(p.id, p.id)
+    .map((r) => ({ agent: r.agent, item: `#${r.seq}`, title: r.title, stage: r.stage, project: tag(p) })));
+  return {
+    pulse: {
+      state, sentence, act: needs.length, working, active: inFlight,
+      since: { at: seen.length ? Math.min(...seen) : 0, ago: seen.length ? dur(t - Math.min(...seen)) : null, counts, finished },
+    },
+    needs,
+    projects: rows.map(({ p, v }) => projectLine(hub, p, v)),
+    worth_knowing: rows.map(({ p, v }) => ({ ...tag(p), count: v.attention.filter((a) => a.level !== 'act').length })).filter((w) => w.count),
+    motion,
+  };
 }
 
 // The repository an item lands in, short (acme/api), when the project has several; null with one.
@@ -342,7 +382,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     ]).filter(Boolean).join(' ');
   const pulse = { state, sentence, act: act.length, know: attention.length - act.length, working: working.size, active: inFlight };
 
-  if (light) return { pulse, attention };
+  if (light) return { pulse, attention, since };
 
   // ── in motion ──
   const lines = [
