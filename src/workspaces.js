@@ -8,17 +8,23 @@ import { Directory } from './directory.js';
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 export const RESERVED = new Set(['www', 'api', 'app', 'admin', 'w', 'static', 'login', 'auth', 'hub']);
+export const PLANS = ['free', 'unlimited'];
+export const FREE_AGENTS = 1; // agents working at once on the Free plan
 
 export class Workspaces {
   // repos: where hubs keep mirrors of repositories they have no checkout of; each workspace gets
   // its own folder there, like its own database. keys: per-repository deploy keys, likewise one
   // folder per workspace, so one workspace's key never fetches for another.
-  constructor({ dir, clock, repos = null, keys = null } = {}) {
+  // plans: whether plan limits apply (off by default: early access changes nothing). owners: the hub
+  // owner's emails; an organization they belong to is never limited.
+  constructor({ dir, clock, repos = null, keys = null, plans = false, owners = [] } = {}) {
     if (!dir) throw new Error('Workspaces needs a directory');
     this.dir = dir;
     this.clock = clock;
     this.repos = repos;
     this.keys = keys;
+    this.plans = !!plans;
+    this.owners = owners.map((e) => String(e).trim().toLowerCase()).filter(Boolean);
     this.open = new Map(); // slug → Hub
     mkdirSync(dir, { recursive: true });
   }
@@ -61,6 +67,9 @@ export class Workspaces {
     if (!hub && existsSync(this.file(s))) {
       hub = new Hub({ file: this.file(s), repos: this.repos && join(this.repos, s), keys: this.keys && join(this.keys, s), hosted: true, ...(this.clock ? { clock: this.clock } : {}) });
       hub.workspace = s;
+      // Asked at each claim and each repository linked, so a plan change applies at once.
+      hub.planLimit = () => (this.planOf(s) === 'free' ? FREE_AGENTS : null);
+      hub.repoGuard = (remote) => this.repoTaken(s, remote);
       this.open.set(s, hub);
     }
     return hub ?? null;
@@ -71,6 +80,41 @@ export class Workspaces {
     if (existsSync(this.file(s))) throw new UserError(`Workspace "${s}" already exists`, { status: 409 });
     new Hub({ file: this.file(s) }).db.close();
     return s;
+  }
+
+  // ── plans (#113): Free runs one agent at a time; Pro and Team are unlimited ──
+
+  static checkPlan(plan) {
+    if (!PLANS.includes(plan)) throw new UserError(`"${plan}" is not a plan`, { hint: `One of: ${PLANS.join(', ')}.` });
+    return plan;
+  }
+
+  // free or unlimited. With plans off, every organization is unlimited; one the hub owner belongs to always
+  // is. Otherwise the plan the hub owner set; with none, free if someone signed up for it, and unlimited if
+  // the host made it (nuworq workspace create).
+  planOf(slug) {
+    if (!this.plans) return 'unlimited';
+    if (this.directory.hasMember(slug, this.owners)) return 'unlimited';
+    return this.directory.plan(slug) ?? (this.directory.madeBySomeone(slug) ? 'free' : 'unlimited');
+  }
+
+  setPlan(slug, plan, by = '') {
+    const s = Workspaces.check(slug);
+    if (!this.has(s)) throw new UserError(`No workspace "${s}"`, { status: 404 });
+    this.directory.setPlan(s, Workspaces.checkPlan(plan), by);
+  }
+
+  // The free organization other than slug that already has remote, or null. A repository belongs to one
+  // free organization; paid ones may share it.
+  repoTaken(slug, remote) {
+    if (this.planOf(slug) !== 'free') return null;
+    return this.list().find((other) => other !== slug && this.planOf(other) === 'free'
+      && this.get(other)?.projects().some((p) => this.get(other).remotesOf(p).includes(remote))) ?? null;
+  }
+
+  // A signed-in person's free organizations that still exist: one is the most they may create.
+  freeCreatedBy(identity) {
+    return this.directory.created(identity).filter((w) => this.has(w) && this.planOf(w) === 'free');
   }
 
   remove(slug) {
