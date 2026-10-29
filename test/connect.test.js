@@ -231,6 +231,46 @@ describe('nuworq connect', () => {
     }
   });
 
+  test('with the nuworq plugin installed, connect leaves Claude Code to it, and takes back what it added there before', async () => {
+    const hub = new Hub();
+    const server = createServer(hub, { auth: 'required' });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const token = () => server.auth.createToken(`t${Math.random()}`, 'agent');
+    const installPlugin = (home) => {
+      mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
+      writeFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
+        version: 2, plugins: { 'nuworq@nuworq': [{ scope: 'user', installPath: join(home, 'cache'), version: '0.2.0' }] },
+      }));
+    };
+    const skillDir = (home) => join(home, '.claude', 'skills', 'nuworq');
+    try {
+      // A clean machine: plugin install, then a plain connect.
+      const fresh = machine();
+      installPlugin(fresh.home);
+      const r = await cli(['connect', url, '--token', token()], { env: fresh.env });
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /Claude Code: left to the nuworq plugin, which brings the MCP server and both skills\n/);
+      assert.deepEqual(fresh.read.claude(), [], 'no second MCP server');
+      assert.ok(!existsSync(skillDir(fresh.home)), 'no second copy of the skills');
+      assert.deepEqual(JSON.parse(readFileSync(fresh.file, 'utf8')).added.map((a) => a.tool), ['codex', 'opencode']);
+
+      // Connected before the plugin: connecting again removes the server and skills it added.
+      const before = machine();
+      await cli(['connect', url, '--token', token()], { env: before.env });
+      assert.ok(existsSync(skillDir(before.home)));
+      installPlugin(before.home);
+      const again = await cli(['connect', url, '--token', token()], { env: before.env });
+      assert.equal(again.code, 0, again.stderr);
+      assert.match(again.stdout, /left to the nuworq plugin.*; removed what an earlier connect added/);
+      assert.equal(before.read.claude().at(-1), 'mcp remove --scope user nuworq');
+      assert.ok(!existsSync(skillDir(before.home)) && !existsSync(join(before.home, '.claude', 'skills', 'nuworq-plan')));
+      assert.deepEqual(JSON.parse(readFileSync(before.file, 'utf8')).added.map((a) => a.tool), ['codex', 'opencode']);
+    } finally {
+      server.close();
+    }
+  });
+
   test('connect <workspace> --hub <url> reaches that workspace', async () => {
     const m = machine();
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ws-')) });
