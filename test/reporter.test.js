@@ -5,6 +5,12 @@ import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { Hub, HOUR } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { createServer } from '../src/server.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Workspaces } from '../src/workspaces.js';
+import { Auth } from '../src/auth.js';
+import { GitHubApp } from '../src/ghapp.js';
 
 const SECRET = 'a-long-shared-secret';
 const sign = (raw) => 'sha256=' + createHmac('sha256', SECRET).update(raw).digest('hex');
@@ -153,5 +159,51 @@ describe('ask to: "reporter" puts the question on the GitHub issue', () => {
     const { askReporters } = await import('../src/issues.js');
     assert.deepEqual(await askReporters(hub, hub.project('app'), hub.github.app), { asked: 1 });
     assert.equal(gh.state.comments.length, 1);
+  });
+});
+
+// A shared hub (#59): the question goes out only through an installation bound to the asking organization.
+describe('on a shared hub, ask to: "reporter" uses only its own organization\'s installation', () => {
+  test("an organization the app wasn't installed for posts nothing on another's repository", async () => {
+    const gh = github();
+    const api = `http://127.0.0.1:${await listen(gh.server)}`;
+    const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-rep-ws-')) });
+    const tokens = {};
+    for (const ws of ['alpha', 'bravo']) {
+      spaces.create(ws);
+      const hub = spaces.get(ws);
+      hub.tx(() => hub.project('app', { create: true }));
+      hub.addRemote(hub.project('app'), 'https://github.com/acme/api.git', 'you');
+      hub.humanOp('app', 'settings', { github_secret: SECRET, autonomy: 'full' });
+      tokens[ws] = new Auth(hub.db).createToken('w1', 'agent');
+    }
+    spaces.directory.bindInstallation(42, 'alpha');
+    const server = createServer(spaces, { githubApp: new GitHubApp({ id: 1, key: PEM, slug: 'nuworq-test', api }) });
+    const url = `http://127.0.0.1:${await listen(server)}`;
+    const ask = async (ws) => {
+      const raw = JSON.stringify({ action: 'opened', repository, issue });
+      const hook = await fetch(`${url}/w/${ws}/api/hooks/github/app`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-github-event': 'issues', 'x-hub-signature-256': sign(raw) }, body: raw });
+      assert.equal(hook.status, 200, await hook.text());
+      const hub = spaces.get(ws);
+      hub.agentOp('app', 'refine', 'shaper', { item: '#1', acceptance: 'Export takes under a second.' });
+      hub.agentOp('app', 'claim', 'w1', { item: '#1' });
+      gh.state.comments.length = 0;
+      const r = await fetch(`${url}/w/${ws}/api/p/app/agent/ask`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${tokens[ws]}` }, body: JSON.stringify({ agent: 'w1', item: '#1', to: 'reporter', question: 'CSV or PDF?' }) });
+      return { status: r.status, body: await r.json(), comments: gh.state.comments.length };
+    };
+    try {
+      const alpha = await ask('alpha');
+      assert.equal(alpha.status, 200, JSON.stringify(alpha.body));
+      assert.deepEqual([alpha.body.github, alpha.comments], [{ asked: 1 }, 1], 'its own installation: posted');
+
+      const bravo = await ask('bravo');
+      assert.equal(bravo.status, 200, JSON.stringify(bravo.body));
+      assert.equal(bravo.comments, 0, "nothing posted through alpha's installation");
+      assert.match(JSON.stringify(bravo.body.github), /another organization/);
+    } finally {
+      server.close();
+      gh.server.close();
+      spaces.close();
+    }
   });
 });

@@ -367,7 +367,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const askedReporter = async (h, rq, out) => {
         if (!out?.reporter || !app) return out;
         const p = h.q('SELECT * FROM projects WHERE id = (SELECT project_id FROM questions WHERE id = ?)').get(out.question);
-        try { out.github = await askReporters(h, p, app, { link: itemLink(rq, p.slug) }); } catch (e) { out.github = { error: e.message }; }
+        try { out.github = await askReporters(h, p, appOf(h), { link: itemLink(rq, p.slug) }); } catch (e) { out.github = { error: e.message }; }
         return out;
       };
 
