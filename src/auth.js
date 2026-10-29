@@ -53,7 +53,7 @@ export class Auth {
         id         INTEGER PRIMARY KEY,
         hash       BLOB UNIQUE NOT NULL,        -- sha256 of the invite token; the link is shown once
         role       TEXT NOT NULL,
-        email      TEXT NOT NULL DEFAULT '',    -- shown on the invite; enforced once sign-in (#42) exists
+        email      TEXT NOT NULL DEFAULT '',    -- shown on the invite; signing in with GitHub/Google as this email uses it
         created_by TEXT NOT NULL DEFAULT '',    -- "@handle" of the owner who invited
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL,
@@ -152,6 +152,44 @@ export class Auth {
       const sid = this.createSession(tokenId);
       this.db.exec('COMMIT');
       return { person: p, sid, invitedBy: inv.created_by };
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  // Sign in with a verified email from GitHub or Google: the person with that email, else the open invite
+  // bound to it (the person is created with the invite's role and a handle from the email). Else null.
+  signInByEmail(email, provider) {
+    email = String(email ?? '').trim().toLowerCase();
+    if (!email.includes('@')) return null;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      let p = this.db.prepare('SELECT * FROM people WHERE email = ? ORDER BY id').get(email), invitedBy;
+      if (!p) {
+        const t = this.now();
+        const inv = this.db.prepare('SELECT * FROM invites WHERE email = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at >= ? ORDER BY id').get(email, t);
+        if (!inv) { this.db.exec('ROLLBACK'); return null; }
+        const stem = Auth.handleOf(email.split('@')[0]).slice(0, 36);
+        let handle = stem;
+        for (let n = 2; this.person(handle); n++) handle = `${stem}-${n}`;
+        p = this.addPerson(handle, inv.role, { email });
+        this.db.prepare('UPDATE invites SET used_at = ?, used_by = ? WHERE id = ?').run(t, p.handle, inv.id);
+        invitedBy = inv.created_by;
+      }
+      // One login token per person and provider, never shown: sessions hang off it, and revoking it signs them out.
+      const stem = `${p.handle}-${provider}`.slice(0, 50);
+      let tok = this.db.prepare(`SELECT id FROM tokens WHERE (name = ? OR name LIKE ?) AND role = 'human' AND person_id = ? AND revoked_at IS NULL ORDER BY id DESC`)
+        .get(stem, `${stem}-%`, p.id);
+      if (!tok) {
+        let name = stem;
+        for (let n = 2; this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name); n++) name = `${stem}-${n}`;
+        this.createToken(name, 'human', { person: p.handle });
+        tok = this.db.prepare('SELECT id FROM tokens WHERE name = ?').get(name);
+      }
+      const sid = this.createSession(tok.id);
+      this.db.exec('COMMIT');
+      return { person: p, sid, invitedBy, joined: invitedBy !== undefined };
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;

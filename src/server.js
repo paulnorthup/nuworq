@@ -12,6 +12,7 @@ import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
 import { receive } from './github.js';
+import { OAuth, FLOW_COOKIE } from './oauth.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -53,9 +54,11 @@ const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
 // target: one Hub (today's single hub), or a Workspaces registry: then each request is resolved to a
 // workspace by subdomain of baseDomain or a /w/<slug>/ path prefix, and login is always required.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '' } = {}) {
+// oauth: providers people may sign in with ({ github: { id, secret }, google: … }; see src/oauth.js).
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {} } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   const required = spaces ? true : auth === 'required';
+  const sso = oauth instanceof OAuth ? oauth : new OAuth(oauth);
   const failures = new Map(); // ip → [timestamps of failed logins]
   const starts = new Map(); // ip → [timestamps of device logins started]
   // Per hub: its tokens and sessions, and the browsers streaming its changes. Nothing is shared across hubs.
@@ -85,14 +88,64 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const hostOf = (req) => (trustProxy && first(req.headers['x-forwarded-host'])) || req.headers.host || '';
   const https = (req) => req.socket.encrypted || (trustProxy && first(req.headers['x-forwarded-proto']) === 'https');
   const origin = (req) => `${https(req) ? 'https' : 'http'}://${hostOf(req)}`;
-  const cookieOf = (req) => {
+  const jarOf = (req) => {
     const jar = new Map();
     for (const part of String(req.headers.cookie ?? '').split(';')) {
       const [k, ...v] = part.trim().split('=');
       if (!jar.has(k)) jar.set(k, v.join('='));
     }
-    return jar.get(COOKIE) ?? jar.get(OLD_COOKIE) ?? null;
+    return jar;
   };
+  const cookieOf = (req) => { const jar = jarOf(req); return jar.get(COOKIE) ?? jar.get(OLD_COOKIE) ?? null; };
+  const sessionCookie = (req, sid, path) => `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=${path}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`;
+  // Where sign-in with GitHub or Google starts and returns: the hub's public address, the same for every workspace.
+  const authOrigin = (req) => publicUrl || origin(req);
+  // Where a workspace lives, as the browser should reach it after signing in.
+  const homeOf = (req, ws) => {
+    if (!spaces) return authOrigin(req);
+    if (baseDomain) return `${new URL(authOrigin(req)).protocol}//${ws}.${baseDomain}`;
+    return `${authOrigin(req)}/w/${encodeURIComponent(ws)}`;
+  };
+  const joined = (hub, person, role, invitedBy) => {
+    const who = `@${person.handle}`;
+    for (const p of hub.projects()) {
+      hub.event(p, { actor: who, type: 'joined', headline: `${who} joined as ${role}${invitedBy ? `, invited by ${invitedBy}` : ''}` });
+      hub.changed(p);
+    }
+  };
+  const redirect = (res, location) => { res.writeHead(302, { location, 'cache-control': 'no-store' }); res.end(); };
+
+  // GET /auth/<provider>/start?ws=<workspace> and /auth/<provider>/callback: hub-wide, whatever the host.
+  async function signIn(req, res, url, provider, step, { send, deny }) {
+    if (!required) return deny(400, 'this hub has no logins', 'Sign-in is for hubs that require login (--auth or --workspaces).');
+    if (!sso.providers[provider]) return deny(404, `sign-in with ${provider} isn't set up on this hub`, `The hub host sets NUWORQ_${provider.toUpperCase()}_CLIENT_ID and _SECRET (see DEPLOY.md).`);
+    const callback = `${authOrigin(req)}/auth/${provider}/callback`;
+    if (step === 'start') {
+      const ws = spaces ? String(url.searchParams.get('ws') ?? '').toLowerCase() : '';
+      if (spaces && !spaces.get(ws)) return deny(404, `no workspace "${ws}"`, 'Start from your workspace\'s login page.');
+      const go = sso.start(provider, { ws, back: homeOf(req, ws), callback });
+      res.setHeader('set-cookie', `${FLOW_COOKIE}=${go.nonce}; HttpOnly; SameSite=Lax; Path=/auth/; Max-Age=600${https(req) ? '; Secure' : ''}`);
+      return redirect(res, go.url);
+    }
+    res.setHeader('set-cookie', `${FLOW_COOKIE}=; HttpOnly; SameSite=Lax; Path=/auth/; Max-Age=0`);
+    let flow;
+    try {
+      flow = sso.claim(provider, url.searchParams.get('state'), jarOf(req).get(FLOW_COOKIE));
+    } catch (e) {
+      return send(400, `<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
+    }
+    const fail = (msg) => redirect(res, `${flow.back}/login.html#error=${encodeURIComponent(msg)}`);
+    if (url.searchParams.get('error')) return fail(`${sso.providers[provider].label} sign-in was cancelled`);
+    let email;
+    try { email = await sso.email(provider, url.searchParams.get('code'), flow); } catch (e) { return fail(e.message); }
+    if (!email) return fail(`${sso.providers[provider].label} has no verified email for you. Verify one there, then try again`);
+    const hub = spaces ? spaces.get(flow.ws) : target;
+    if (!hub) return fail('that workspace is gone');
+    const r = scopeOf(hub).authz.signInByEmail(email, provider);
+    if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
+    if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
+    return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}`);
+  }
   const sameOrigin = (req) => {
     try { return new URL(req.headers.origin).host === hostOf(req); } catch { return false; }
   };
@@ -118,8 +171,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
+      let am;
+      if (req.method === 'GET' && (am = path.match(/^\/auth\/([a-z]+)\/(start|callback)$/))) return await signIn(req, res, url, am[1], am[2], { send, deny });
       // Which hub: the only one, or the workspace this address names.
-      let hub = target, base = '';
+      let hub = target, base = '', ws = '';
       if (spaces) {
         const host = hostname(hostOf(req));
         const sub = baseDomain && host.endsWith(`.${baseDomain}`) ? host.slice(0, -baseDomain.length - 1) : null;
@@ -131,6 +186,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
         hub = spaces.get(slug);
         if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: nuworq workspace create <name>.');
+        ws = slug.toLowerCase();
         if (pre) {
           base = `/w/${pre[1]}`;
           path = pre[2] ?? '';
@@ -169,8 +225,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
         failures.delete(ip);
         const sid = authz.createSession(t.id);
-        res.setHeader('set-cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
+        res.setHeader('set-cookie', sessionCookie(req, sid, cookiePath));
         return send(200, { ok: true, name: t.name });
+      }
+      // Sign in with GitHub or Google: which providers the login page offers, and the last step of the flow.
+      if (req.method === 'GET' && path === '/api/oauth') {
+        return send(200, { providers: required ? sso.list().map((p) => ({ ...p, start: `${authOrigin(req)}/auth/${p.name}/start${spaces ? `?ws=${encodeURIComponent(ws)}` : ''}` })) : [] });
+      }
+      if (req.method === 'GET' && path === '/api/oauth/finish') {
+        const sid = required ? sso.redeem(url.searchParams.get('ticket'), ws) : null;
+        if (!sid) return redirect(res, `${base}/login.html#error=${encodeURIComponent('That sign-in link was already used, expired, or belongs to another workspace. Sign in again')}`);
+        res.setHeader('set-cookie', sessionCookie(req, sid, cookiePath));
+        return redirect(res, `${base}/`);
       }
       // An invite link: peek at what it offers, or accept it with a handle (creates the person, signs them in).
       if (req.method === 'POST' && (path === '/api/invite/peek' || path === '/api/invite/accept')) {
@@ -183,13 +249,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (path === '/api/invite/peek') return send(200, { ok: true, role: peek.invite.role, email: peek.invite.email || undefined, invited_by: peek.invite.created_by || undefined });
         let r;
         try { r = authz.acceptInvite(b.token, b.handle); } catch (e) { return deny(400, e.message, 'Pick another handle: lowercase letters, digits, ., _ or -.'); }
-        res.setHeader('set-cookie', `${COOKIE}=${r.sid}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
-        const who = `@${r.person.handle}`;
-        for (const p of hub.projects()) {
-          hub.event(p, { actor: who, type: 'joined', headline: `${who} joined as ${r.person.role}${r.invitedBy ? `, invited by ${r.invitedBy}` : ''}` });
-          hub.changed(p);
-        }
-        return send(200, { ok: true, person: who, role: r.person.role });
+        res.setHeader('set-cookie', sessionCookie(req, r.sid, cookiePath));
+        joined(hub, r.person, r.person.role, r.invitedBy);
+        return send(200, { ok: true, person: `@${r.person.handle}`, role: r.person.role });
       }
       // Device login, the CLI's side: start a request, then poll until a person approves it in the browser.
       if (req.method === 'POST' && (path === '/api/device/start' || path === '/api/device/poll')) {
@@ -376,7 +438,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { ok: true });
       }
       if (req.method === 'POST' && path === '/api/notify/test') {
-        const results = await testChannels(hub.db, { baseUrl: publicUrl || origin(req) + base, now: () => hub.now() });
+        const results = await testChannels(hub.db, { baseUrl: (!spaces && publicUrl) || origin(req) + base, now: () => hub.now() });
         hub.emit('change', { project: null, at: hub.now() });
         return send(200, { ok: results.every((r) => r.ok), results });
       }

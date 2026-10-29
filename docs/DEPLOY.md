@@ -71,6 +71,20 @@ nuworq serve --workspaces --base-domain nuworq.example.com --host 127.0.0.1 --au
 - `nuworq workspace list`, and `nuworq workspace remove <name>` (it deletes the file; a running hub stops serving it at once). `--data-dir` or `NUWORQ_DATA_DIR` moves the folder.
 - Without `--workspaces`, nothing changes: one database, as above.
 
+### Sign in with GitHub or Google
+People can sign in with an account they already have instead of pasting a token. The login page shows a button for each provider the hub host configures; with none, it is unchanged.
+1. Pick the hub's public address, e.g. `https://nuworq.example.com`, and start the hub with `--public-url` set to it (`NUWORQ_PUBLIC_URL`). The callback lives there, at `/auth/<provider>/callback`, whichever workspace someone signs in to, so one app serves every workspace.
+2. **GitHub**: Settings → Developer settings → **OAuth Apps** → New OAuth App. Homepage URL: your public address. Authorization callback URL: `https://nuworq.example.com/auth/github/callback`. Generate a client secret.
+3. **Google**: Google Cloud console → APIs & Services → **Credentials** → Create credentials → OAuth client ID → *Web application*. Authorized redirect URI: `https://nuworq.example.com/auth/google/callback`. The consent screen needs only the `openid` and `email` scopes.
+4. Give the hub the ids and secrets, then restart it:
+   ```bash
+   NUWORQ_GITHUB_CLIENT_ID=… NUWORQ_GITHUB_CLIENT_SECRET=…
+   NUWORQ_GOOGLE_CLIENT_ID=… NUWORQ_GOOGLE_CLIENT_SECRET=…
+   ```
+   (in the systemd unit, an `EnvironmentFile=` readable only by the hub's user).
+
+Who gets in: the hub asks the provider for a **verified** email (GitHub: the primary verified one; Google: `email_verified`). It signs in the person with that email (`nuworq person add bea --role steward --email bea@example.com`), or uses an open invite bound to that email (`invite create --email`), creating the person with the invite's role. Anyone else is told to ask an owner for an invite. A person exists per workspace, so a member of acme can't sign in to globex. The flow uses a signed, 10-minute state bound to the browser by a cookie, and PKCE; the provider's access token is used once and never stored. Token login keeps working.
+
 ### Connecting agents to a remote hub
 Create one agent token per machine or agent, so you can revoke them one at a time:
 ```bash
@@ -151,7 +165,7 @@ nuworq token revoke <name|id>                      # also logs out that token's 
 - These commands work directly on the database file (`--db` or `NUWORQ_DB`; default `~/.nuworq/nuworq.db`), so run them on the hub host, as the user that owns the file.
 - Tokens look like `nwq_` followed by 43 random characters (256 bits). Only a SHA-256 hash and an 8-character prefix are stored.
 - Every human token belongs to a **person**, who acts on the record as `@handle` with a role: *owner* (everything, including people and settings), *steward* (steer, decide, answer, accept, send back, edit work), *member* (comment and propose) or *viewer* (read only). `token create paul --role human` makes `@paul` an owner if they don't exist yet. Otherwise: `nuworq person add bea --role steward`, then `nuworq token create bea-laptop --role human --person bea`. See also `person list` and `person set-role <handle> <role>`. Human tokens from before people existed become owners. Local loopback mode has no people: the one human is "you".
-- **Invites** add people without handing out tokens: `nuworq invite create --role steward [--email bea@example.com] --public-url https://nuworq.example.com` (or POST /api/invites as an owner) prints a single-use link, valid for 7 days. Opening it asks for a handle, creates the person with that role and signs them in. Only a hash of the link is stored. `invite list` and `invite revoke <id>` manage open invites. An invite's email is shown but not yet enforced; that comes with GitHub/Google sign-in.
+- **Invites** add people without handing out tokens: `nuworq invite create --role steward [--email bea@example.com] --public-url https://nuworq.example.com` (or POST /api/invites as an owner) prints a single-use link, valid for 7 days. Opening it asks for a handle, creates the person with that role and signs them in. Only a hash of the link is stored. `invite list` and `invite revoke <id>` manage open invites. An invite with an email can also be used by [signing in with GitHub or Google](#sign-in-with-github-or-google) as that email.
 - **Device login** gives a machine an agent token without copying one by hand. The CLI calls POST /api/device/start `{machine}` and gets a `user_code` like `WDJB-MJHT` and a link to `/device.html?code=…`. A signed-in person (member or above) opens the link, sees the machine's name and approves it. The CLI polls POST /api/device/poll `{device_code}` every 5 seconds (it gets `slow_down` if it polls faster) and receives the token once, named `<person>@<machine>` and minted by that person. Removing the person revokes it. Codes expire after 10 minutes and are stored only as hashes. Each IP may start 10 device logins per 10 minutes.
 - Browser logins exchange a human token for an `HttpOnly; SameSite=Strict` session cookie. It is `Secure` over HTTPS and lasts 30 days.
 

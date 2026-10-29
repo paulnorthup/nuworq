@@ -549,7 +549,8 @@ async function serve(flags) {
     }
   }
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
-  const server = createServer(hub, { auth, trustProxy, publicUrl });
+  const { oauthFromEnv } = await import('../src/oauth.js');
+  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv() });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -619,7 +620,9 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const dir = workspacesDir(flags);
   const spaces = new Workspaces({ dir, repos: reposDir(flags) });
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
-  const server = createServer(spaces, { trustProxy, baseDomain });
+  const { oauthFromEnv } = await import('../src/oauth.js');
+  const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv() });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();

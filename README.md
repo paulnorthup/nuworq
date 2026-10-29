@@ -173,7 +173,7 @@ POST /api/hooks/github/:project          GitHub webhook (signed with the project
 ```
 
 ### Security
-Loopback is open. Anything else needs tokens: *human* tokens log in to the UI, *agent* tokens can only do agent operations. There are also CSRF and origin checks, DNS-rebinding protection, rate-limited login, CSP and a body-size limit. See [docs/DEPLOY.md](docs/DEPLOY.md) for homelab and internet setups, serving many isolated workspaces from one hub (`serve --workspaces`: one SQLite file each, by subdomain or `/w/<name>/`), and an honest threat model.
+Loopback is open. Anything else needs tokens: *human* tokens log in to the UI, *agent* tokens can only do agent operations. People can also sign in with GitHub or Google when the hub host sets them up (`NUWORQ_GITHUB_CLIENT_ID`/`_SECRET`, `NUWORQ_GOOGLE_CLIENT_ID`/`_SECRET`): a verified email that matches a person, or an invite to that email, gets in. There are also CSRF and origin checks, DNS-rebinding protection, rate-limited login, CSP and a body-size limit. See [docs/DEPLOY.md](docs/DEPLOY.md) for homelab and internet setups, serving many isolated workspaces from one hub (`serve --workspaces`: one SQLite file each, by subdomain or `/w/<name>/`), and an honest threat model.
 
 ### Tests
 `npm test` covers leases, steering, parking and answers, assumptions and overrides, peer-review rules, layered text, the HTTP errors, MCP over stdio, the CLI end to end, and the auth model.
