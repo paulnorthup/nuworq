@@ -116,38 +116,59 @@ export function sshCommandFor(keys, remote) {
   return `ssh -i '${key.replace(/'/g, `'\\''`)}' -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10`;
 }
 
+// An installation token for git over HTTPS, as an extra header on requests under url only. It reaches
+// git through the environment (GIT_CONFIG_*, after any the hub already has): never argv, where ps
+// shows it, and never a config file. Environment variables for execFileSync.
+export function tokenEnv(url, token, env = process.env) {
+  const n = Number(env.GIT_CONFIG_COUNT) || 0;
+  return {
+    GIT_CONFIG_COUNT: String(n + 1),
+    [`GIT_CONFIG_KEY_${n}`]: `http.${url}.extraheader`,
+    [`GIT_CONFIG_VALUE_${n}`]: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
+  };
+}
+
 // Git over the network: no prompts (a hub has nobody to answer them), bounded in time. ssh: the
 // repository's own key (sshCommandFor); a GIT_SSH_COMMAND or GIT_SSH set for the hub still wins.
-// Returns null, or the last line git said about the failure.
-function netGit(args, timeout, ssh = null) {
+// extra: more environment (tokenEnv). Returns null, or the last line git said about the failure.
+function netGit(args, timeout, ssh = null, extra = {}) {
   const quiet = process.env.GIT_SSH_COMMAND || process.env.GIT_SSH ? {}
     : ssh ? { GIT_SSH_COMMAND: ssh }
     : git('.', 'config', '--get', 'core.sshCommand') ? {} : { GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10' };
   try {
-    execFileSync('git', args, { timeout, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...quiet } });
+    execFileSync('git', args, { timeout, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...quiet, ...extra } });
     return null;
   } catch (e) {
     return String(e.stderr ?? '').trim().split('\n').filter(Boolean).pop() || (e.signal ? 'timed out' : e.message);
   }
 }
 
+// Fetch remote's mirror at the next ask, however recently it was fetched (the hub just got a way in).
+export const refetch = (dir, remote) => fetched.delete(mirrorPath(dir, remote));
+
 // The mirror of remote under dir, created or fetched first: { path } or { error }. fresh: fetch
 // now, whenever it was last fetched (before deciding a landing); otherwise at most every FETCH_EVERY.
 // keys: where per-repository deploy keys live (see sshCommandFor); null: the default key only.
-export function mirror(dir, remote, { fresh = false, keys = null } = {}) {
+// https: { url, token }: fetch from url (no credentials in it) with a GitHub App installation token
+// instead (tokenEnv); the mirror keeps url as its remote, never the token.
+export function mirror(dir, remote, { fresh = false, keys = null, https = null } = {}) {
   const path = mirrorPath(dir, remote), source = mirrorSource(remote);
   if (!path || !source) return { error: `${remote} isn't a repository address the hub can fetch` };
   const last = fetched.get(path);
   if (!fresh && last && Date.now() - last.at < FETCH_EVERY) return last.error ? { error: last.error } : { path };
-  const ssh = sshCommandFor(keys, remote);
+  const ssh = https ? null : sshCommandFor(keys, remote);
+  const env = https ? tokenEnv(https.url, https.token) : {};
+  const from = https?.url ?? source;
   let error;
   if (isRepo(path)) {
-    error = netGit(['-C', path, 'fetch', '-q', '--prune'], FETCH_MS, ssh);
+    // A mirror cloned one way (SSH) and fetched another (the app's HTTPS) is fetched from where it is reached now.
+    const elsewhere = originOf(path) === from ? [] : ['--', from, '+refs/*:refs/*'];
+    error = netGit(['-C', path, 'fetch', '-q', '--prune', ...elsewhere], FETCH_MS, ssh, env);
   } else {
     // A clone cut short leaves a folder that isn't a repository yet: start again.
     rmSync(path, { recursive: true, force: true });
     mkdirSync(dirname(path), { recursive: true });
-    error = netGit(['clone', '-q', '--mirror', '--', source, path], CLONE_MS, ssh);
+    error = netGit(['clone', '-q', '--mirror', '--', from, path], CLONE_MS, ssh, env);
   }
   fetched.set(path, { at: Date.now(), error });
   return error ? { error } : { path };

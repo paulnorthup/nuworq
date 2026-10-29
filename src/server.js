@@ -96,7 +96,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   };
   const hubs = () => (spaces ? spaces.hubs() : [target]);
   const sweeper = setInterval(() => {
-    for (const hub of hubs()) { try { hub.sweep(); } catch (e) { console.error('sweep failed', e); } }
+    for (const hub of hubs()) { try { hub.sweep(); hub.refreshMirrorTokens(); } catch (e) { console.error('sweep failed', e); } }
   }, sweepMs);
   const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
 
@@ -270,7 +270,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       const { authz, devices, clients } = scopeOf(hub);
       // Accepted remote work lands through a pull request the hub opens, as the app (also one created since start).
-      if (app && hub.github?.app !== app) { hub.github = prClient(app); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
+      if (app && hub.github?.app !== app) { hub.github = prClient(app, { web: gh.web }); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.

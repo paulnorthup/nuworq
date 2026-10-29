@@ -77,6 +77,18 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     });
   }
 
+  // The hub's GitHub App can't read a repository for its mirror: it falls back to a deploy key, if there is one.
+  for (const remote of remotes) {
+    const trouble = hub.mirrorTrouble(remote);
+    if (!trouble) continue;
+    push({
+      key: `app-read:${remote}:${trouble.since}`, level: 'know', kind: 'app-read', at: trouble.since,
+      headline: `The hub can't read ${remote} through its GitHub App`,
+      sub: trouble.error,
+      why: `${trouble.hint ? `${trouble.hint} ` : ''}Meanwhile the hub fetches it with a deploy key, if it has one; without either, it can't tell when work there reaches main.`,
+    });
+  }
+
   // Agents keep arriving and leaving with nothing: routed here for work they can't take.
   const churnSince = t - CHURN_WINDOW;
   const arrivals = hub.q(`SELECT actor, MIN(id) AS first FROM events WHERE project_id = ? AND type = 'checkin' AND at >= ? GROUP BY actor ORDER BY first`).all(p.id, churnSince);

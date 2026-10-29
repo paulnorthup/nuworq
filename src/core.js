@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { rmSync } from 'node:fs';
 import { openDb } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, mirrorPath, originOf } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, mirrorPath, originOf, refetch } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 
@@ -27,6 +27,7 @@ export const HUMAN = 'you';
 export const SYSTEM = 'nuworq';
 const GITHUB = 'github'; // holds accepted work while the hub opens its pull request
 const PR_LEASE = 2 * MIN;
+const MIRROR_RETRY = 5 * MIN; // after GitHub refuses the app a token for a mirror, ask again this often
 // The hub's own entries on the record: SYSTEM, or "trellis" in events recorded before the rename.
 export const isSystem = (actor) => actor === SYSTEM || actor === 'trellis';
 // People act on the record as "@handle"; without accounts (local mode) the one human is "you".
@@ -195,6 +196,9 @@ export class Hub extends EventEmitter {
     this.keys = keys;
     this._stmts = new Map();
     this._unreachable = new Set(); // repositories the hub has said it can't reach
+    // The app's read tokens for the hub's own mirrors, per remote: { token, expires_at } once minted,
+    // { pending } while minting, { error, hint, at } when GitHub said no. Memory only, never the database.
+    this._mirrorTokens = new Map();
     // github: opens pull requests and turns on auto-merge, as the GitHub App ({ covers, openPr, autoMerge }; see
     // prClient in src/ghapp.js). Set by the server when it has an app; tests set a fake. publicUrl: links in PR bodies.
     this.github = null;
@@ -348,13 +352,61 @@ export class Hub extends EventEmitter {
     if (this.localFor(p, item)) return { path: p.path, mode: 'local' };
     const remote = this.repoOf(p, item);
     if (!remote || !this.repos) return null;
-    const m = mirror(this.repos, remote, { fresh, keys: this.keys });
+    const m = mirror(this.repos, remote, { fresh, keys: this.keys, https: this.mirrorHttps(remote) });
     if (!m.error) return { path: m.path, mode: 'remote' };
     if (!this._unreachable.has(remote)) {
       this._unreachable.add(remote);
-      console.error(`nuworq: can't read ${remote} for ${p.name} (${m.error}). Until it can, accepted work there waits in landing: the hub can't confirm main has it. Check the network and the hub's access to the repository (a read-only deploy key is enough${this.keys && !remote.startsWith('/') ? `, as ${this.keys}/${remote}` : ''}).`);
+      console.error(`nuworq: can't read ${remote} for ${p.name} (${m.error}). Until it can, accepted work there waits in landing: the hub can't confirm main has it. Check the network and the hub's access to the repository (the hub's GitHub App installed on it, or a read-only deploy key${this.keys && !remote.startsWith('/') ? `, as ${this.keys}/${remote}` : ''}).`);
     }
     return null;
+  }
+
+  // How the hub reaches remote's mirror over HTTPS with the GitHub App: { url, token }, or null to use
+  // SSH and deploy keys as before (no app, not a GitHub repository, GitHub said no, or no token yet).
+  // repoFor is synchronous and minting isn't, so this uses a token already minted, reused until 5
+  // minutes before it expires, and starts minting the next one; the fetch after it lands uses it.
+  mirrorHttps(remote) {
+    const gh = this.github;
+    if (!gh?.readToken || !gh.covers(remote)) return null;
+    const have = this._mirrorTokens.get(remote), t = Date.now();
+    const good = have?.token && Date.parse(have.expires_at) - 5 * 60_000 > t;
+    // After a refusal, ask again every few minutes: someone may have installed the app since.
+    if (!good && !have?.pending && !(have?.error && t - have.at < MIRROR_RETRY)) this.mintMirrorToken(remote);
+    return good ? { url: `${gh.web ?? 'https://github.com'}/${remote.split('/').slice(1).join('/')}.git`, token: have.token } : null;
+  }
+
+  mintMirrorToken(remote) {
+    const was = this._mirrorTokens.get(remote);
+    const pending = this.github.readToken(remote).then(
+      ({ token, expires_at }) => {
+        this._mirrorTokens.set(remote, { token, expires_at });
+        // Fetch with it at the next ask, and say again if even that can't read the repository.
+        refetch(this.repos, remote);
+        this._unreachable.delete(remote);
+        if (was?.error) this.remoteChanged(remote);
+      },
+      (e) => {
+        const same = was?.error === e.message;
+        this._mirrorTokens.set(remote, { error: e.message, hint: e.hint ?? '', at: Date.now(), since: same ? was.since : this.now() });
+        if (!same) this.remoteChanged(remote);
+      });
+    this._mirrorTokens.set(remote, { ...(was ?? {}), pending });
+    return pending;
+  }
+
+  // Mint ahead the mirror tokens that are due (or retry refusals), so fetches rarely wait a turn on SSH. On a timer.
+  refreshMirrorTokens() {
+    for (const remote of this._mirrorTokens.keys()) this.mirrorHttps(remote);
+  }
+
+  // Why the GitHub App can't read remote for the hub ({ error, hint, since }), or null.
+  mirrorTrouble(remote) {
+    const have = this._mirrorTokens.get(remote);
+    return have?.error ? { error: have.error, hint: have.hint, since: have.since } : null;
+  }
+
+  remoteChanged(remote) {
+    for (const p of this.projects()) if (this.remotesOf(p).includes(remote)) this.changed(p);
   }
 
   // The branch work lands on, as far as git can say: main, else master; main when it can't.

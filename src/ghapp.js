@@ -10,7 +10,8 @@ import { envVar } from './names.js';
 
 // What a worker's token may do: push branches, open pull requests, read CI. Nothing else.
 export const WORK_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read' };
-// What a worker's token may do to clone a project's repository before it holds an item: read it.
+// What a worker's token may do to clone a project's repository before it holds an item, and the hub's
+// token for its own mirror of it: read it.
 export const CLONE_PERMISSIONS = { contents: 'read', metadata: 'read' };
 
 const b64 = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
@@ -112,12 +113,15 @@ export class GitHubApp {
 
 // What the hub does on GitHub to land accepted work through a pull request (#63), as the app, on the one
 // repository: open the PR (or find the one already open for the branch) and turn on auto-merge (squash).
-export function prClient(app) {
+// Also a read-only token for the hub's own mirror of the repository, fetched over HTTPS from web.
+export function prClient(app, { web = 'https://github.com' } = {}) {
   const parts = (repo) => String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/)?.slice(1) ?? [];
   const shape = (pr) => ({ number: pr.number, url: pr.html_url, node_id: pr.node_id, head_ref: pr.head?.ref, head_sha: pr.head?.sha });
   return {
     app,
+    web: web.replace(/\/+$/, ''),
     covers: (repo) => parts(repo).length === 2, // GitHub repositories only
+    readToken: (repo) => app.mint(repo, CLONE_PERMISSIONS),
     async openPr({ repo, head, base, title, body }) {
       const [owner, name] = parts(repo);
       const { token } = await app.mint(repo);
