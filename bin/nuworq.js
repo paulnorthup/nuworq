@@ -5,7 +5,7 @@ import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { createClient, resolveSettings, repoRoot, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
+import { createClient, resolveSettings, repoRoot, checkoutOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 
@@ -283,15 +283,25 @@ const hasOrigin = (home) => {
   try { return !!execFileSync('git', ['-C', home, 'remote', 'get-url', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return false; }
 };
 
+// Where a worker on target works: this folder with --here; the project's folder if it is on this
+// machine; else this machine's checkout of the project's repository, found by remote (a hub on a
+// server knows projects by remote, and has no folder for them here); with neither, this folder.
+function homeOf(target, flags) {
+  if (flags.here) return process.cwd();
+  if (target.path && existsSync(target.path)) return target.path;
+  if (target.remotes?.length) return checkoutOf(target.remotes);
+  if (target.path) {
+    throw new HubError(`${target.name} lives in ${target.path}, which doesn't exist on this machine`, { hint: 'Run the worker from a clone of its repository with --here.' });
+  }
+  return process.cwd();
+}
+
 // The shell command that gives a worker its worktree (detached at main, or at origin/main after a
 // fetch when there is an origin; reused if it exists) and starts the agent in it.
 // token: the agent token the worker gets when it runs (null: the hub needs none, or we only print).
 // --here: work in this folder (a clone of the project), whatever folder the hub has on record.
 function workerSetup(target, agent, flags, s, token = null) {
-  const home = (flags.here && process.cwd()) || target.path || process.cwd();
-  if (!existsSync(home)) {
-    throw new HubError(`${target.name} lives in ${home}, which doesn't exist on this machine`, { hint: 'Run the worker from a clone of its repository with --here.' });
-  }
+  const home = homeOf(target, flags);
 
   const name = String(flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
   const isRepo = existsSync(join(home, '.git'));
@@ -380,7 +390,15 @@ async function runCmd(flags) {
     const projects = await hubProjects(client);
     const target = projects.find((p) => p.slug === r.project);
     if (!target) throw new HubError(`the hub no longer has project "${r.project}"`);
-    const { name, worktree, cwd, cmd } = workerSetup(target, agent, { ...flags, as: undefined, run: true }, s, token);
+    let setup;
+    try {
+      setup = workerSetup(target, agent, { ...flags, as: undefined, run: true }, s, token);
+    } catch (e) {
+      // This machine can't work on the project (no checkout of it here): the runner leaves it to others.
+      if (e instanceof HubError) e.skip = true;
+      throw e;
+    }
+    const { name, worktree, cwd, cmd } = setup;
     const log = join(logs, `${name}.log`);
     const out = createWriteStream(log);
     // Its own process group, so stopping it stops the agent too, not just the shell.
@@ -512,6 +530,8 @@ const dataHome = (flags) => flags['data-dir'] || envVar('DATA_DIR') || dataDir()
 // Workspaces mode keeps one database per workspace here (see src/workspaces.js).
 const workspacesDir = (flags) => join(dataHome(flags), 'workspaces');
 const reposDir = (flags) => join(dataHome(flags), 'repos');
+// One deploy key per repository the hub mirrors: keys/<host>/<owner>/<repo> (see sshCommandFor in src/git.js).
+const keysDir = (flags) => join(dataHome(flags), 'keys');
 const dbPath = (flags) => {
   if (flags.workspace) {
     const file = join(workspacesDir(flags), `${String(flags.workspace).toLowerCase()}.db`);
@@ -548,7 +568,7 @@ async function serve(flags) {
   const trustProxy = !!flags['trust-proxy'];
   if (flags.workspaces) return serveWorkspaces(flags, { host, port, trustProxy });
   const db = flags.demo ? ':memory:' : dbPath(flags);
-  const hub = new Hub({ file: db, repos: flags.demo ? null : reposDir(flags) });
+  const hub = new Hub({ file: db, repos: flags.demo ? null : reposDir(flags), keys: flags.demo ? null : keysDir(flags) });
   if (flags.demo) {
     try {
       const { seed } = await import('../src/seed.js');
@@ -634,7 +654,7 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const { Workspaces } = await import('../src/workspaces.js');
   const { createServer } = await import('../src/server.js');
   const dir = workspacesDir(flags);
-  const spaces = new Workspaces({ dir, repos: reposDir(flags) });
+  const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags) });
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');

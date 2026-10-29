@@ -15,7 +15,7 @@ const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 export function projectList(hub, { viewer } = {}) {
   return hub.projects().map((p) => {
     const v = view(hub, p.slug, { light: true, viewer });
-    return { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, runner: !!p.runner, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length };
+    return { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length };
   });
 }
 

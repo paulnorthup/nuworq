@@ -1,8 +1,9 @@
 // Talks to a running hub over HTTP. Shared by the CLI and the MCP server.
-import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname, basename, resolve } from 'node:path';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { join, dirname, basename, resolve, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { slugify, normRemote } from './core.js';
+import { mirrorSource } from './git.js';
 import { envVar, dataDir, CONFIG_FILES } from './names.js';
 
 export const DEFAULT_URL = 'http://127.0.0.1:4747';
@@ -43,6 +44,34 @@ export function repoRoot(cwd = process.cwd()) {
 // The repo's origin remote, normalized (github.com/acme/api): the same on every machine and clone.
 export function repoRemote(cwd = process.cwd()) {
   return normRemote(git(cwd, 'remote', 'get-url', 'origin') ?? '');
+}
+
+const folders = (dir) => {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((e) => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith('.')).map((e) => join(dir, e.name));
+  } catch {
+    return [];
+  }
+};
+
+// This machine's checkout of a project the hub knows by its remotes (a hub on a server has no
+// folder for it here). Looks in the repo cwd is in, then the folders beside that repo, then the
+// folders inside each of roots (NUWORQ_REPOS, ':'-separated); one level, no deeper. Returns the
+// repo's main checkout, never one of its worktrees. None: a HubError whose hint is the clone command.
+export function checkoutOf(remotes, { cwd = process.cwd(), roots = envVar('REPOS') ?? '' } = {}) {
+  const want = new Set(remotes.map(normRemote).filter(Boolean));
+  const here = git(cwd, 'rev-parse', '--show-toplevel') ? repoRoot(cwd) : null;
+  const beside = here ? dirname(here) : resolve(cwd);
+  const seen = new Set();
+  for (const dir of [here, ...[beside, ...String(roots).split(delimiter)].filter(Boolean).flatMap(folders)]) {
+    if (!dir || seen.has(dir) || !existsSync(join(dir, '.git'))) continue;
+    seen.add(dir);
+    if (want.has(repoRemote(dir))) return repoRoot(dir);
+  }
+  const remote = [...want][0] ?? '';
+  throw new HubError(`No checkout of ${remote || 'its repository'} on this machine`, {
+    hint: `git clone ${mirrorSource(remote) ?? remote} ${join(beside, basename(remote) || 'repo')}   (workers look in the repo they start in, the folders beside it, and the folders in NUWORQ_REPOS)`,
+  });
 }
 
 function discoveredUrl() {

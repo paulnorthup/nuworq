@@ -1,7 +1,7 @@
 // What git says about a submission: the worker's branch, its commits, and whether commits named in
 // the evidence exist. Shells out to git with short timeouts; any failure means "no git facts".
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 const MAX_COMMITS = 20;
@@ -100,11 +100,29 @@ export function mirrorPath(dir, remote) {
   return `${join(dir, ...parts)}.git`;
 }
 
-// Git over the network: no prompts (a hub has nobody to answer them), bounded in time.
+// A deploy key opens one repository, so a hub that mirrors several keeps one key per repository:
+// a private key file at <keys>/<host>/<owner>/<repo> (keys: the hub's <data dir>/keys). The ssh
+// command that uses only that key, or null: no such file (the hub's default key is used), or a
+// remote that isn't host/owner/repo (a path, or one with "..").
+export function sshCommandFor(keys, remote) {
+  const r = String(remote ?? '');
+  if (!keys || r.startsWith('/') || !mirrorSource(r)) return null;
+  const key = join(keys, ...r.split('/'));
+  try {
+    if (!statSync(key).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return `ssh -i '${key.replace(/'/g, `'\\''`)}' -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10`;
+}
+
+// Git over the network: no prompts (a hub has nobody to answer them), bounded in time. ssh: the
+// repository's own key (sshCommandFor); a GIT_SSH_COMMAND or GIT_SSH set for the hub still wins.
 // Returns null, or the last line git said about the failure.
-function netGit(args, timeout) {
-  const quiet = process.env.GIT_SSH_COMMAND || process.env.GIT_SSH || git('.', 'config', '--get', 'core.sshCommand')
-    ? {} : { GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10' };
+function netGit(args, timeout, ssh = null) {
+  const quiet = process.env.GIT_SSH_COMMAND || process.env.GIT_SSH ? {}
+    : ssh ? { GIT_SSH_COMMAND: ssh }
+    : git('.', 'config', '--get', 'core.sshCommand') ? {} : { GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10' };
   try {
     execFileSync('git', args, { timeout, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...quiet } });
     return null;
@@ -115,19 +133,21 @@ function netGit(args, timeout) {
 
 // The mirror of remote under dir, created or fetched first: { path } or { error }. fresh: fetch
 // now, whenever it was last fetched (before deciding a landing); otherwise at most every FETCH_EVERY.
-export function mirror(dir, remote, { fresh = false } = {}) {
+// keys: where per-repository deploy keys live (see sshCommandFor); null: the default key only.
+export function mirror(dir, remote, { fresh = false, keys = null } = {}) {
   const path = mirrorPath(dir, remote), source = mirrorSource(remote);
   if (!path || !source) return { error: `${remote} isn't a repository address the hub can fetch` };
   const last = fetched.get(path);
   if (!fresh && last && Date.now() - last.at < FETCH_EVERY) return last.error ? { error: last.error } : { path };
+  const ssh = sshCommandFor(keys, remote);
   let error;
   if (isRepo(path)) {
-    error = netGit(['-C', path, 'fetch', '-q', '--prune'], FETCH_MS);
+    error = netGit(['-C', path, 'fetch', '-q', '--prune'], FETCH_MS, ssh);
   } else {
     // A clone cut short leaves a folder that isn't a repository yet: start again.
     rmSync(path, { recursive: true, force: true });
     mkdirSync(dirname(path), { recursive: true });
-    error = netGit(['clone', '-q', '--mirror', '--', source, path], CLONE_MS);
+    error = netGit(['clone', '-q', '--mirror', '--', source, path], CLONE_MS, ssh);
   }
   fetched.set(path, { at: Date.now(), error });
   return error ? { error } : { path };

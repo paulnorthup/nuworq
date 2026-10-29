@@ -154,6 +154,14 @@ gh repo deploy-key add id_ed25519.pub --repo <owner>/<repo> --title "nuworq serv
 ```
 If `main` fails its tests, the hub stays on the last good commit and files one "main fails its tests" item at priority `now`, so the next agent fixes it first.
 
+**Each further project's repository needs its own deploy key.** GitHub accepts a deploy key on one repository only, so the key above reads nuworq's repository and nothing else. For projects the hub has no checkout of, it keeps mirrors in `<data dir>/repos`, and it fetches each one with a key of its own when a private key file exists at `<data dir>/keys/<host>/<owner>/<repo>`. Without that file it uses the default key, as before, and a `GIT_SSH_COMMAND` set for the hub still wins over both. For `github.com/acme/api` on the unit above (data dir `/var/lib/nuworq`):
+```bash
+sudo -u nuworq mkdir -p -m 700 /var/lib/nuworq/keys/github.com/acme
+sudo -u nuworq ssh-keygen -t ed25519 -N "" -C "nuworq hub: acme/api (read-only)" -f /var/lib/nuworq/keys/github.com/acme/api
+gh repo deploy-key add api.pub --repo acme/api --title "nuworq hub (read-only)"   # the .pub written beside it
+```
+No restart is needed: the next fetch uses it. In workspaces mode each workspace has its own folder, `keys/<workspace>/<host>/<owner>/<repo>`, as it does for mirrors.
+
 ### Tokens
 ```bash
 nuworq token create <name> --role human|agent     # prints the token once

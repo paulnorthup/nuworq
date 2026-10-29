@@ -227,6 +227,39 @@ describe('a worker started --here', () => {
   });
 });
 
+describe('a worker for a project the hub knows only by remote (a hub on a server)', () => {
+  test("works in this machine's checkout of that repository, not the one it started in; a folder that exists still wins", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-byremote-')));
+    const clone = (name, origin) => {
+      execFileSync('git', ['init', '-q', '-b', 'main', join(dir, name)]);
+      execFileSync('git', ['-C', join(dir, name), 'remote', 'add', 'origin', origin]);
+      return join(dir, name);
+    };
+    const a = clone('a', 'git@github.com:acme/a.git'), b = clone('b', 'git@github.com:acme/b.git');
+    const hub = new Hub();
+    for (const [slug, remote] of [['bee', 'github.com/acme/b'], ['gone', 'github.com/acme/nope'], ['pinned', 'github.com/acme/pinned']]) {
+      hub.tx(() => hub.project(slug, { create: true }));
+      hub.humanOp(slug, 'remote', { add: remote });
+    }
+    hub.humanOp('pinned', 'settings', { path: a });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const cli = (project) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', project, '--agent', 'claude', '--as', 'w'],
+      { env: { ...process.env, HOME: dir, NUWORQ_TOKEN: '', NUWORQ_REPOS: '' }, cwd: a });
+    try {
+      const bee = (await cli('bee')).stdout;
+      assert.ok(bee.includes(`git -C '${b}' fetch -q origin`) && bee.includes(`cd '${b}.worktrees/w'`), bee);
+      assert.ok(!bee.includes(`'${a}`), 'nothing in the repo it started in');
+      await assert.rejects(cli('gone'), (e) => e.stderr.includes('No checkout of github.com/acme/nope on this machine')
+        && e.stderr.includes(`git clone git@github.com:acme/nope.git ${join(dir, 'nope')}`));
+      assert.ok((await cli('pinned')).stdout.includes(`cd '${a}.worktrees/w'`), "the project's folder, since it exists here");
+    } finally {
+      server.close();
+    }
+  });
+});
+
 // A fake world: time only moves when the runner sleeps; workers are promises we resolve by hand.
 function world(routesSeq) {
   let t = 0;
@@ -329,6 +362,25 @@ describe('run: the supervising loop', () => {
     const res = await p;
     assert.equal(res.spent, 0);
     assert.doesNotMatch(w.lines.at(-1), /spent/);
+  });
+
+  test("skips a project this machine has no checkout of: says so once, gives its slots to others, doesn't count it as a failure", async () => {
+    const w = world([[route('far', 2), route('a', 1)], [route('far', 2), route('a', 1)], [route('far', 2)]]);
+    const start = w.opts.launch;
+    w.opts.launch = async (r) => {
+      if (r.project === 'far') throw Object.assign(new Error('No checkout of github.com/acme/far on this machine'), { skip: true, hint: 'git clone git@github.com:acme/far.git /src/far' });
+      return start(r);
+    };
+    const p = run({ ...w.opts, workers: 2, untilIdle: true });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(w.workers.map((x) => x.project), ['a'], "far's slots went to a");
+    w.workers[0].finish(0);
+    const res = await p;
+    assert.equal(res.launched, 1);
+    assert.match(res.why, /no work this machine can take is waiting/);
+    assert.equal(w.lines.filter((l) => /^Skipping far: No checkout of github\.com\/acme\/far on this machine\n {2}git clone /.test(l)).length, 1, 'said once, with the clone command');
+    assert.ok(!w.lines.some((l) => /Couldn't start|failed within seconds/.test(l)));
+    assert.match(w.lines.at(-1), /1 launched, 1 exited cleanly, 0 failed/);
   });
 
   test('gives up after workers keep failing within seconds', async () => {

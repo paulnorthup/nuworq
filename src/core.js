@@ -174,13 +174,15 @@ export function slugify(s) {
 
 export class Hub extends EventEmitter {
   // repos: where the hub keeps mirrors of repositories it has no checkout of (null: it keeps none,
-  // so git can't say anything about those projects).
-  constructor({ file = ':memory:', clock = () => Date.now(), repos = null } = {}) {
+  // so git can't say anything about those projects). keys: per-repository deploy keys for fetching
+  // them, <keys>/<host>/<owner>/<repo> (null: the default key only; see sshCommandFor in git.js).
+  constructor({ file = ':memory:', clock = () => Date.now(), repos = null, keys = null } = {}) {
     super();
     this.setMaxListeners(200);
     this.db = openDb(file);
     this.now = clock;
     this.repos = repos;
+    this.keys = keys;
     this._stmts = new Map();
     this._unreachable = new Set(); // repositories the hub has said it can't reach
   }
@@ -300,11 +302,11 @@ export class Hub extends EventEmitter {
     if (this.localFor(p, item)) return { path: p.path, mode: 'local' };
     const remote = this.repoOf(p, item);
     if (!remote || !this.repos) return null;
-    const m = mirror(this.repos, remote, { fresh });
+    const m = mirror(this.repos, remote, { fresh, keys: this.keys });
     if (!m.error) return { path: m.path, mode: 'remote' };
     if (!this._unreachable.has(remote)) {
       this._unreachable.add(remote);
-      console.error(`nuworq: can't read ${remote} for ${p.name} (${m.error}). Until it can, accepted work there waits in landing: the hub can't confirm main has it. Check the network and the hub's access to the repository (a read-only deploy key is enough).`);
+      console.error(`nuworq: can't read ${remote} for ${p.name} (${m.error}). Until it can, accepted work there waits in landing: the hub can't confirm main has it. Check the network and the hub's access to the repository (a read-only deploy key is enough${this.keys && !remote.startsWith('/') ? `, as ${this.keys}/${remote}` : ''}).`);
     }
     return null;
   }

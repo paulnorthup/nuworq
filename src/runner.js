@@ -25,6 +25,8 @@ const KILL_GRACE_MS = 10_000;
 
 // routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal),
 // exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited }.
+// launch throws an error with skip: true when this machine can't work on the route's project (no
+// checkout of it here): that project is left to others for this round, said once, and isn't a failure.
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
 // maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
 export async function run({
@@ -42,6 +44,7 @@ export async function run({
   let wake = () => {};
   let hubDown = false;
   let idle = false;
+  const cant = new Map(); // project → why this machine can't work on it, as last said
   const stop = (reason) => { if (!stopping) { stopping = true; why = reason; } wake(); };
   let interrupted = false;
   onInterrupt?.(() => {
@@ -78,40 +81,56 @@ export async function run({
       }
     }
     if (list && !stopping) {
-      for (const r of plan(list, running, { workers, maxRuns, launched })) {
-        if (stopping) break;
-        let w;
-        launched++;
-        try {
-          w = await launch(r);
-        } catch (e) {
-          log(`Couldn't start a worker for ${r.name ?? r.project}: ${e.message}`);
-          done.push({ name: '(not started)', project: r.project, code: 'error', secs: 0 });
-          failedFast();
-          continue;
+      // Projects this machine can't work on this round; their slots go to the others (plan again).
+      const skip = new Set();
+      for (let again = true; again && !stopping;) {
+        again = false;
+        for (const r of plan(list.filter((x) => !skip.has(x.project)), running, { workers, maxRuns, launched })) {
+          if (stopping) break;
+          let w;
+          try {
+            w = await launch(r);
+          } catch (e) {
+            if (e.skip) {
+              if (cant.get(r.project) !== e.message) log(`Skipping ${r.name ?? r.project}: ${e.message}${e.hint ? `\n  ${e.hint}` : ''}`);
+              cant.set(r.project, e.message);
+              skip.add(r.project);
+              again = true;
+              break;
+            }
+            launched++;
+            log(`Couldn't start a worker for ${r.name ?? r.project}: ${e.message}`);
+            done.push({ name: '(not started)', project: r.project, code: 'error', secs: 0 });
+            failedFast();
+            continue;
+          }
+          launched++;
+          cant.delete(r.project);
+          w.started = now();
+          running.push(w);
+          log(`▶ ${w.name} → ${r.name ?? r.project}: ${r.item} ${r.title} (${r.mode})${w.where ? `  ${w.where}` : ''}`);
+          w.exited.then((code) => {
+            running.splice(running.indexOf(w), 1);
+            const secs = Math.round((now() - w.started) / 1000);
+            done.push({ name: w.name, project: w.project, code, secs });
+            const usd = Number(w.spent?.()) || 0;
+            spent += usd;
+            log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s${usd ? `, spent $${usd.toFixed(2)}` : ''}`);
+            if (spent >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${spent.toFixed(2)} spent)${running.length ? `; letting ${running.length} running worker(s) finish` : ''}`);
+            if (code !== 0 && !interrupted && !w.killedAt && now() - w.started < FAST_FAIL_MS) failedFast();
+            else fastFails = 0;
+            wake();
+          });
         }
-        w.started = now();
-        running.push(w);
-        log(`▶ ${w.name} → ${r.name ?? r.project}: ${r.item} ${r.title} (${r.mode})${w.where ? `  ${w.where}` : ''}`);
-        w.exited.then((code) => {
-          running.splice(running.indexOf(w), 1);
-          const secs = Math.round((now() - w.started) / 1000);
-          done.push({ name: w.name, project: w.project, code, secs });
-          const usd = Number(w.spent?.()) || 0;
-          spent += usd;
-          log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s${usd ? `, spent $${usd.toFixed(2)}` : ''}`);
-          if (spent >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${spent.toFixed(2)} spent)${running.length ? `; letting ${running.length} running worker(s) finish` : ''}`);
-          if (code !== 0 && !interrupted && !w.killedAt && now() - w.started < FAST_FAIL_MS) failedFast();
-          else fastFails = 0;
-          wake();
-        });
       }
       // Work starts the moment it's ready: by default, wait for it rather than exit.
-      if (list.length) idle = false;
-      else if (!running.length && untilIdle) stop('no work is waiting in opted-in projects');
+      // Work this machine can't take doesn't count.
+      const elsewhere = list.some((x) => cant.has(x.project));
+      if (list.some((x) => !cant.has(x.project))) idle = false;
+      else if (!running.length && untilIdle) stop(elsewhere ? 'no work this machine can take is waiting' : 'no work is waiting in opted-in projects');
       else if (!running.length && !idle) {
         idle = true;
-        log(`Nothing is waiting in opted-in projects; checking every ${pollSeconds}s. Ctrl-C stops.`);
+        log(`${elsewhere ? 'Nothing this machine can take is waiting' : 'Nothing is waiting in opted-in projects'}; checking every ${pollSeconds}s. Ctrl-C stops.`);
       }
     }
     if (!stopping && launched >= maxRuns && !running.length) stop(`reached --max-runs ${maxRuns}`);

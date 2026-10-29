@@ -1,11 +1,11 @@
 import { test, describe, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Hub, LAND_GRACE } from '../src/core.js';
-import { mirrorSource, mirrorPath, isRepo } from '../src/git.js';
+import { mirrorSource, mirrorPath, isRepo, sshCommandFor, mirror } from '../src/git.js';
 
 // A real repo with main, a hub whose project lives there, and agents that work in their own worktrees.
 function setup() {
@@ -405,5 +405,51 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     assert.equal(mirrorSource('-oProxyCommand=x/a/b'), null);
     assert.equal(mirrorPath('/data/repos', 'github.com/acme/api'), '/data/repos/github.com/acme/api.git');
     assert.equal(mirrorPath('/data/repos', '/srv/../etc'), null);
+  });
+
+  test('a deploy key per repository: <keys>/<host>/<owner>/<repo>, used only when that file is there', () => {
+    const keys = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-keys-')));
+    assert.equal(sshCommandFor(keys, 'github.com/acme/api'), null, 'no key file: the default key, as before');
+    mkdirSync(join(keys, 'github.com', 'acme', 'folder'), { recursive: true });
+    writeFileSync(join(keys, 'github.com', 'acme', 'api'), 'a private key\n', { mode: 0o600 });
+    assert.equal(sshCommandFor(keys, 'github.com/acme/api'),
+      `ssh -i '${keys}/github.com/acme/api' -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10`);
+    assert.equal(sshCommandFor(keys, 'github.com/acme/web'), null, "one repository's key never fetches another");
+    assert.equal(sshCommandFor(keys, 'github.com/acme/folder'), null, 'a folder is not a key');
+    assert.equal(sshCommandFor(keys, 'github.com/acme/../acme/api'), null, 'no ".." in a segment');
+    assert.equal(sshCommandFor(keys, '../keys/github.com/acme/api'), null);
+    assert.equal(sshCommandFor(keys, 'github.com/acme/..'), null);
+    assert.equal(sshCommandFor(keys, '/srv/git/api'), null, 'a path is read as it is, with no key');
+    assert.equal(sshCommandFor(null, 'github.com/acme/api'), null, 'a hub without a keys folder');
+    const odd = join(keys, "it's");
+    mkdirSync(join(odd, 'github.com', 'acme'), { recursive: true });
+    writeFileSync(join(odd, 'github.com', 'acme', 'api'), 'k\n');
+    assert.match(sshCommandFor(odd, 'github.com/acme/api'), /^ssh -i '.*it'\\''s\/github\.com\/acme\/api' /, 'quoted for the shell git runs it in');
+  });
+
+  test("the mirror is cloned with the repository's key; a GIT_SSH_COMMAND set for the hub still wins", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-sshkey-')));
+    const keys = join(dir, 'keys'), log = join(dir, 'ssh.log');
+    mkdirSync(join(dir, 'bin'));
+    // A stand-in ssh: records how it was called and refuses, so nothing goes over the network.
+    writeFileSync(join(dir, 'bin', 'ssh'), `#!/bin/sh\necho "$@" >> '${log}'\nexit 255\n`, { mode: 0o755 });
+    mkdirSync(join(keys, 'github.com', 'acme'), { recursive: true });
+    writeFileSync(join(keys, 'github.com', 'acme', 'api'), 'a private key\n', { mode: 0o600 });
+    const saved = { PATH: process.env.PATH, GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND, GIT_SSH: process.env.GIT_SSH };
+    process.env.PATH = `${join(dir, 'bin')}:${process.env.PATH}`;
+    delete process.env.GIT_SSH_COMMAND;
+    delete process.env.GIT_SSH;
+    const calls = () => (existsSync(log) ? readFileSync(log, 'utf8') : '');
+    try {
+      assert.ok(mirror(join(dir, 'repos'), 'github.com/acme/api', { fresh: true, keys }).error);
+      assert.match(calls(), new RegExp(`-i ${keys}/github\\.com/acme/api -o IdentitiesOnly=yes -o BatchMode=yes .*git@github\\.com`));
+      writeFileSync(log, '');
+      process.env.GIT_SSH_COMMAND = 'ssh -o Explicit=yes';
+      assert.ok(mirror(join(dir, 'repos'), 'github.com/acme/api', { fresh: true, keys }).error);
+      assert.match(calls(), /-o Explicit=yes/);
+      assert.doesNotMatch(calls(), /-i /, 'the explicit command is used as it is');
+    } finally {
+      for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
   });
 });

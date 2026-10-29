@@ -11,12 +11,14 @@ export const RESERVED = new Set(['www', 'api', 'app', 'admin', 'w', 'static', 'l
 
 export class Workspaces {
   // repos: where hubs keep mirrors of repositories they have no checkout of; each workspace gets
-  // its own folder there, like its own database.
-  constructor({ dir, clock, repos = null } = {}) {
+  // its own folder there, like its own database. keys: per-repository deploy keys, likewise one
+  // folder per workspace, so one workspace's key never fetches for another.
+  constructor({ dir, clock, repos = null, keys = null } = {}) {
     if (!dir) throw new Error('Workspaces needs a directory');
     this.dir = dir;
     this.clock = clock;
     this.repos = repos;
+    this.keys = keys;
     this.open = new Map(); // slug → Hub
     mkdirSync(dir, { recursive: true });
   }
@@ -57,7 +59,7 @@ export class Workspaces {
       return null;
     }
     if (!hub && existsSync(this.file(s))) {
-      hub = new Hub({ file: this.file(s), repos: this.repos && join(this.repos, s), ...(this.clock ? { clock: this.clock } : {}) });
+      hub = new Hub({ file: this.file(s), repos: this.repos && join(this.repos, s), keys: this.keys && join(this.keys, s), ...(this.clock ? { clock: this.clock } : {}) });
       hub.workspace = s;
       this.open.set(s, hub);
     }
