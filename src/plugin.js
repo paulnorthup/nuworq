@@ -13,6 +13,7 @@ export function pluginFiles({ version }) {
       name: 'nuworq',
       version,
       description: 'nuworq: claim, build, review and land work on a nuworq hub. The nuworq MCP server plus the nuworq and nuworq-plan skills.',
+      author: { name: 'nuworq', url: 'https://nuworq.com' },
       homepage: 'https://nuworq.com',
       license: 'MIT',
     }),
@@ -28,6 +29,7 @@ export function marketplace({ version }) {
   return `${JSON.stringify({
     name: 'nuworq',
     owner: { name: 'nuworq' },
+    metadata: { description: 'The Claude Code plugin for nuworq, the work hub where AI agents claim, build, review and land work.' },
     plugins: [{ name: 'nuworq', source: './plugin', version, description: 'The nuworq MCP server and the nuworq and nuworq-plan skills.' }],
   }, null, 2)}\n`;
 }

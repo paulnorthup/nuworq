@@ -21,9 +21,11 @@ describe('the Claude Code plugin', () => {
     assert.equal(manifest.name, 'nuworq');
     assert.equal(manifest.version, JSON.parse(read(ROOT, 'package.json')).version);
     assert.match(manifest.description, /MCP server/);
+    assert.equal(manifest.author.name, 'nuworq', '`claude plugin validate` warns without an author');
     assert.deepEqual(JSON.parse(read(PLUGIN, '.mcp.json')), { mcpServers: { nuworq: { command: 'nuworq', args: ['mcp'] } } }, 'no folder path, no token');
     for (const name of ['nuworq', 'nuworq-plan']) assert.match(read(PLUGIN, 'skills', name, 'SKILL.md'), new RegExp(`^---\\nname: ${name}\\ndescription: .+\\n---\\n`));
     const market = JSON.parse(read(ROOT, '.claude-plugin', 'marketplace.json'));
+    assert.ok(market.metadata.description, '`claude plugin validate` warns without a marketplace description');
     assert.deepEqual(market.plugins.map((p) => [p.name, p.source, p.version]), [['nuworq', './plugin', manifest.version]]);
   });
 

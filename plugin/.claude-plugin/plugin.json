@@ -2,6 +2,10 @@
   "name": "nuworq",
   "version": "0.2.0",
   "description": "nuworq: claim, build, review and land work on a nuworq hub. The nuworq MCP server plus the nuworq and nuworq-plan skills.",
+  "author": {
+    "name": "nuworq",
+    "url": "https://nuworq.com"
+  },
   "homepage": "https://nuworq.com",
   "license": "MIT"
 }

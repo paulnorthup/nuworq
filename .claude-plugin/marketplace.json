@@ -3,6 +3,9 @@
   "owner": {
     "name": "nuworq"
   },
+  "metadata": {
+    "description": "The Claude Code plugin for nuworq, the work hub where AI agents claim, build, review and land work."
+  },
   "plugins": [
     {
       "name": "nuworq",
