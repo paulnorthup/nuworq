@@ -168,8 +168,7 @@ function renderRail() {
   const total = S.projects.reduce((n, p) => n + p.needs, 0);
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
-    ${S.projects.length > 1 ? `<a class="rail-item ${!S.slug ? 'on' : ''}" href="#/"><span class="name">All projects</span>${total ? `<span class="badge">${total}</span>` : ''}</a>` : ''}
-    <div class="rail-label">Projects</div>
+    <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects">Projects${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--faint)">None yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>

@@ -338,6 +338,9 @@ table.work tr:hover td { background: var(--sunken); cursor: pointer; }
 .ov-card h3 { font-size: 16px; }
 .ov-card .sentence { margin-top: 4px; }
 .ov-card .m { color: var(--muted); font-size: 13px; }
+/* The Projects heading in the rail is the way to All projects. */
+a.rail-head { display: flex; align-items: center; justify-content: space-between; text-decoration: none; cursor: pointer; }
+a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 .ov-card .m.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ov-card.state-needs-you { border-left: 3px solid var(--you); }
 
