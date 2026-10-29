@@ -101,6 +101,9 @@ describe('early access', () => {
       const html = await page.text();
       assert.match(html, /<form id="ask"/);
       assert.match(html, /\/early-access\.js/);
+      // It looks like the sign-in card (#121): both stylesheets come from the hub's own address.
+      assert.match(html, /href="\/login\.css"/);
+      for (const css of ['/style.css', '/login.css']) assert.match((await fetch(h.base + css)).headers.get('content-type'), /text\/css/, css);
       assert.equal((await fetch(`${h.base}/early-access.js`)).status, 200);
       assert.deepEqual(await (await fetch(`${h.base}/api/early-access/config`)).json(), { sitekey: '0xSITEKEY', open: true });
       // Only that page may load Turnstile.

@@ -2,9 +2,12 @@
 const $ = (s) => document.querySelector(s);
 let token = '';
 
+// Replace the form with a message, keeping the card's brand.
+const say = (title, line) => { $('#ask').innerHTML = `${$('#ask .brand').outerHTML}<h1>${title}</h1><p class="lead thanks">${line}</p>`; };
+
 const { sitekey, open } = await fetch('/api/early-access/config').then((r) => r.json()).catch(() => ({}));
 if (!open) {
-  $('#ask').innerHTML = '<p class="lead">This hub isn\'t taking requests right now.</p>';
+  say('Request early access', 'This hub isn\'t taking requests right now.');
 } else if (sitekey) {
   window.onTurnstile = () => window.turnstile.render('#check', { sitekey, callback: (t) => { token = t; } });
   const s = document.createElement('script');
@@ -16,6 +19,7 @@ if (!open) {
 $('#ask')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const said = $('#said');
+  said.className = 'hint';
   said.textContent = 'Sending…';
   const r = await fetch('/api/early-access', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -23,10 +27,12 @@ $('#ask')?.addEventListener('submit', async (e) => {
   }).catch(() => null);
   const j = r ? await r.json().catch(() => ({})) : { error: "couldn't reach nuworq" };
   if (r?.ok) {
-    $('#ask').innerHTML = `<p class="lead">Thanks: we have your request${j.created ? '' : ' (updated)'}. We'll be in touch at the address you gave.</p>`;
+    say('Thanks, we\'ll be in touch', `We have your request${j.created ? '' : ' (updated)'}, and we'll write to the address you gave.`);
     return;
   }
-  said.textContent = `${j.error ?? 'Something went wrong'}${j.hint ? ` — ${j.hint}` : ''}`;
+  said.className = 'login-error';
+  const error = j.error ?? 'something went wrong';
+  said.textContent = `${error[0].toUpperCase()}${error.slice(1)}.${j.hint ? ` ${j.hint}` : ''}`;
   window.turnstile?.reset();
   token = '';
 });

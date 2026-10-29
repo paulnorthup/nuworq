@@ -344,7 +344,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
     const page = path === '/' ? '/join.html' : path;
-    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css'].includes(page) && req.method === 'GET') {
+    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css', '/login.css'].includes(page) && req.method === 'GET') {
       return send(200, readFileSync(join(WEB, page.slice(1)), 'utf8'), TYPES[extname(page)]);
     }
     const sid = jarOf(req).get(HUB_COOKIE);
