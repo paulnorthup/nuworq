@@ -52,6 +52,14 @@ export function describe(pre) {
 
 const dig = (o, path) => path.split('.').reduce((a, k) => (a == null ? undefined : a[/^\d+$/.test(k) && Array.isArray(a) ? Number(k) : k]), o);
 
+// Where a named credential may be sent: NUWORQ_CRED_<NAME>_HOSTS, a comma-separated list of host names
+// (".vendor.com" also covers its subdomains). Unset: nowhere, so a credential is never sent by default.
+export function credentialAllows(name, host, env = process.env) {
+  const h = String(host).toLowerCase();
+  return String(envVar(`CRED_${name}_HOSTS`, env) ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    .some((a) => (a.startsWith('.') ? h.endsWith(a) || h === a.slice(1) : h === a));
+}
+
 // Loopback, private, link-local (cloud metadata) and unique-local addresses.
 export const privateAddress = (ip) => /^(127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::$|f[cd][0-9a-f]{2}:|fe80:|::ffff:(127|10|192\.168|169\.254)\.)/i.test(ip);
 
@@ -69,12 +77,18 @@ export async function check(pre, { fetch: get = fetch, env = process.env, timeou
   if (pre.credential) {
     const value = envVar(`CRED_${pre.credential}`, env);
     if (!value) return { ok: false, detail: `NUWORQ_CRED_${pre.credential} isn't set on the hub's host` };
+    // Agents choose the URL, so a credential goes only to the hosts the hub's host named for it.
+    const host = new URL(pre.url).hostname;
+    if (!credentialAllows(pre.credential, host, env)) {
+      return { ok: false, detail: `NUWORQ_CRED_${pre.credential} isn't allowed for ${host}: the hub's host lists where it may go in NUWORQ_CRED_${pre.credential}_HOSTS` };
+    }
     headers.authorization = /^(Bearer|Basic|token) /i.test(value) ? value : `Bearer ${value}`;
   }
   let res, body;
   try {
-    // A shared hub doesn't follow redirects: one could lead to an address it just refused.
-    res = await get(pre.url, { headers, signal: AbortSignal.timeout(timeoutMs), redirect: shared ? 'manual' : 'follow' });
+    // No redirects on a shared hub (one could lead to an address it just refused), nor with a credential
+    // (one could carry it to a host it isn't allowed for).
+    res = await get(pre.url, { headers, signal: AbortSignal.timeout(timeoutMs), redirect: shared || pre.credential ? 'manual' : 'follow' });
     body = await res.text();
   } catch (e) {
     return { ok: false, detail: `${new URL(pre.url).host} didn't answer (${e.cause?.code ?? e.name})` };

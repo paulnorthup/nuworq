@@ -5,7 +5,7 @@ import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { itemView, view } from '../src/insight.js';
 import { tools } from '../src/protocol.js';
-import { normPrecondition, check, runChecks, privateAddress } from '../src/precondition.js';
+import { normPrecondition, check, runChecks, privateAddress, credentialAllows } from '../src/precondition.js';
 
 const MIN = 60_000;
 
@@ -16,6 +16,7 @@ async function vendor() {
     state.hits++;
     state.auth.push(req.headers.authorization ?? null);
     if (state.hang) return;
+    if (state.redirect) { res.writeHead(302, { location: state.redirect }); return res.end(); }
     res.writeHead(state.status, { 'content-type': 'application/json' });
     res.end(typeof state.body === 'string' ? state.body : JSON.stringify(state.body));
   });
@@ -158,8 +159,24 @@ describe('preconditions: work that waits on an outside fact', () => {
       v.state.status = 200;
       const pre = normPrecondition({ url: `${v.url}/x`, credential: 'VENDOR' });
       assert.deepEqual(await check(pre, { env: {} }), { ok: false, detail: "NUWORQ_CRED_VENDOR isn't set on the hub's host" });
-      assert.equal((await check(pre, { env: { NUWORQ_CRED_VENDOR: 'k1' } })).ok, true);
+      const asked = v.state.auth.length;
+      assert.match((await check(pre, { env: { NUWORQ_CRED_VENDOR: 'k1' } })).detail, /isn't allowed for 127\.0\.0\.1: .*NUWORQ_CRED_VENDOR_HOSTS/, 'no hosts named: sent nowhere');
+      assert.equal(v.state.auth.length, asked, 'and the vendor was never asked');
+      assert.match((await check(pre, { env: { NUWORQ_CRED_VENDOR: 'k1', NUWORQ_CRED_VENDOR_HOSTS: 'api.vendor.com,.vendor.io' } })).detail, /isn't allowed for 127\.0\.0\.1/, 'another host named: not this one');
+      assert.equal((await check(pre, { env: { NUWORQ_CRED_VENDOR: 'k1', NUWORQ_CRED_VENDOR_HOSTS: 'api.vendor.com, 127.0.0.1' } })).ok, true);
       assert.equal(v.state.auth.at(-1), 'Bearer k1');
+      assert.ok(credentialAllows('VENDOR', 'eu.vendor.io', { NUWORQ_CRED_VENDOR_HOSTS: '.vendor.io' }));
+      assert.ok(credentialAllows('VENDOR', 'vendor.io', { NUWORQ_CRED_VENDOR_HOSTS: '.vendor.io' }));
+      assert.ok(!credentialAllows('VENDOR', 'evilvendor.io', { NUWORQ_CRED_VENDOR_HOSTS: '.vendor.io' }));
+      // The allowed host redirects elsewhere: the credential doesn't follow.
+      const evil = await vendor();
+      try {
+        v.state.redirect = `${evil.url.replace('127.0.0.1', 'localhost')}/steal`;
+        const r = await check(pre, { env: { NUWORQ_CRED_VENDOR: 'k1', NUWORQ_CRED_VENDOR_HOSTS: '127.0.0.1' } });
+        assert.equal(r.ok, false);
+        assert.match(r.detail, /answered 302/);
+        assert.equal(evil.state.hits, 0, 'the redirect target never saw the request');
+      } finally { evil.close(); v.state.redirect = null; }
       assert.match((await check(pre, { shared: true })).detail, /private address/);
       assert.match((await check(normPrecondition('https://vendor.test/x'), { shared: true, resolve: async () => ({ address: '169.254.169.254' }) })).detail, /private address/);
       for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.1', '::1', 'fd00::1', 'fe80::1']) assert.ok(privateAddress(ip), ip);

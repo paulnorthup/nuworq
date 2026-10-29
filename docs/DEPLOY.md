@@ -183,6 +183,9 @@ nuworq token revoke <name|id>                      # also logs out that token's 
 - **Device login** gives a machine an agent token without copying one by hand. The CLI calls POST /api/device/start `{machine}` and gets a `user_code` like `WDJB-MJHT` and a link to `/device.html?code=…`. A signed-in person (member or above) opens the link, sees the machine's name and approves it. The CLI polls POST /api/device/poll `{device_code}` every 5 seconds (it gets `slow_down` if it polls faster) and receives the token once, named `<person>@<machine>` and minted by that person. Removing the person revokes it. Codes expire after 10 minutes and are stored only as hashes. Each IP may start 10 device logins per 10 minutes.
 - Browser logins exchange a human token for an `HttpOnly; SameSite=Strict` session cookie. It is `Secure` over HTTPS and lasts 30 days.
 
+### Credentials for preconditions
+An item can wait on an outside URL (a precondition), and the check may send a credential the hub's host keeps: `NUWORQ_CRED_<NAME>=<value>`. Agents pick the URL, so also say where each credential may go: `NUWORQ_CRED_<NAME>_HOSTS=api.vendor.com,.vendor.io` (a leading dot covers subdomains). Without that list the credential is sent nowhere. It never follows a redirect. A hub with workspaces sends no credentials at all.
+
 ### Backups
 Everything lives in one SQLite file, plus its `-wal` and `-shm` files while running.
 ```bash

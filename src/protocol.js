@@ -22,7 +22,7 @@ const PRECONDITION = {
     url: s('http(s) URL the hub GETs.'), status: { type: 'integer', description: 'Expected status (default 200).' },
     contains: s('Text the body must contain.'), json_path: s('Dotted path into a JSON body, e.g. "features.export".'),
     equals: { description: 'The value at json_path must equal this (otherwise it must just exist).' },
-    credential: s('The NAME of a credential on the hub host, e.g. "VENDOR" for NUWORQ_CRED_VENDOR.'),
+    credential: s('The NAME of a credential on the hub host, e.g. "VENDOR" for NUWORQ_CRED_VENDOR. It is sent only to the hosts the hub host lists in NUWORQ_CRED_VENDOR_HOSTS.'),
   },
 };
 const REPO = s('Optional. The repository the work lands in, when the project has several, e.g. "github.com/acme/api". Default: the project\'s first.');
