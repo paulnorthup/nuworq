@@ -6,6 +6,7 @@ import { UserError, HUMAN_OP_NAMES } from './core.js';
 import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -23,7 +24,7 @@ const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/age
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
-export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
+export function createServer(hub, { auth = 'local', trustProxy = false, publicUrl = '' } = {}) {
   const required = auth === 'required';
   const authz = new Auth(hub.db);
   const failures = new Map(); // ip → [timestamps of failed logins]
@@ -183,6 +184,24 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
         return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req) }));
+      }
+      // Push channels (hub-wide). Agent tokens never reach these.
+      if (req.method === 'GET' && path === '/api/notify') return send(200, { channels: listChannels(hub.db), kinds: KINDS });
+      if (req.method === 'POST' && path === '/api/notify') {
+        const b = await body(req);
+        const c = addChannel(hub.db, b.kind, b.url, hub.now());
+        hub.emit('change', { project: null, at: hub.now() });
+        return send(200, { ok: true, ...c });
+      }
+      if (req.method === 'POST' && path === '/api/notify/remove') {
+        removeChannel(hub.db, (await body(req)).id);
+        hub.emit('change', { project: null, at: hub.now() });
+        return send(200, { ok: true });
+      }
+      if (req.method === 'POST' && path === '/api/notify/test') {
+        const results = await testChannels(hub.db, { baseUrl: publicUrl || origin(req), now: () => hub.now() });
+        hub.emit('change', { project: null, at: hub.now() });
+        return send(200, { ok: results.every((r) => r.ok), results });
       }
       if (req.method === 'GET' && path === '/api/route') return send(200, hub.route());
       if (req.method === 'GET' && path === '/api/where') {

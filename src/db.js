@@ -136,6 +136,23 @@ CREATE TABLE IF NOT EXISTS dismissals (
   at         INTEGER NOT NULL,
   PRIMARY KEY (project_id, key)
 );
+
+-- Push channels (hub-wide) and which act-level attention entries were already pushed (src/notify.js).
+CREATE TABLE IF NOT EXISTS channels (
+  id            INTEGER PRIMARY KEY,
+  kind          TEXT NOT NULL,                -- ntfy | slack | webhook
+  url           TEXT UNIQUE NOT NULL,         -- holds the secret: never shown back in full
+  failing_since INTEGER,
+  last_error    TEXT NOT NULL DEFAULT '',
+  created_at    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notified (
+  project_id INTEGER NOT NULL,
+  key        TEXT NOT NULL,
+  at         INTEGER NOT NULL,
+  seen_at    INTEGER NOT NULL,                -- last time the entry was still there
+  PRIMARY KEY (project_id, key)
+);
 `;
 
 export function openDb(file) {

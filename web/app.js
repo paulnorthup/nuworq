@@ -158,6 +158,7 @@ function renderRail() {
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
       <button class="rail-item" data-action="connect">⌁ Connect an agent</button>
+      <button class="rail-item" data-action="notify">◔ Notifications</button>
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
     </div>`;
 }
@@ -379,7 +380,8 @@ function worthKnowing(v) {
     }
     if (a.kind === 'proposal') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Look</button>` + acts;
     if (a.start) acts = `<button class="btn small primary" data-action="connect">Start an agent</button>` + acts;
-    if (a.kind === 'peer-review-stuck') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Review it</button>` + acts;
+    if (a.kind === 'notify-failing') acts = `<button class="btn small" data-action="notify">Check it</button>` + acts;
+    if (a.kind === 'peer-review-stuck') acts =`<button class="btn small" data-action="open" data-item="${esc(a.item)}">Review it</button>` + acts;
     return `<div class="row-item"><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
       ${z() >= 2 && a.why ? `<div class="s" style="margin-top:4px">${esc(a.why)}</div>` : ''}</div><div class="acts">${acts}</div></div>`;
   }).join('');
@@ -691,6 +693,21 @@ async function connect() {
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
 
+async function notifySettings() {
+  let n;
+  try { n = await api('/api/notify'); } catch (e) { return toast(e.message, true); }
+  const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
+    <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
+  modal(`<h2>Notifications</h2>
+    <p class="lead">When something new needs you (a blocking question, work to verify, "what matters most?"), Trellis sends one message, batched over 2 minutes, with a link. Healthy work sends nothing.</p>
+    ${rows || '<p class="lead faint">No channels yet.</p>'}
+    <h4>Add a channel</h4>
+    <div class="inline-form"><select id="nt-kind">${Object.keys(n.kinds).map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
+      <input id="nt-url" placeholder="https://ntfy.sh/your-secret-topic, a Slack webhook, or any URL"><button class="btn primary small" data-action="notify-add">Add</button></div>
+    <p class="lead">${Object.entries(n.kinds).map(([k, v]) => `<b>${esc(k)}</b>: ${esc(v)}`).join('<br>')}</p>
+    <div class="foot">${n.channels.length ? '<button class="btn" data-action="notify-test">Send a test</button>' : ''}<button class="btn primary" data-action="close-modal">Done</button></div>`);
+}
+
 function newProject() {
   modal(`<h2>New project</h2><p class="lead">Agents also create projects automatically when they check in to a new name.</p>
     <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
@@ -803,6 +820,24 @@ const ACTIONS = {
   retire: (el) => human('retire', { note: Number(el.dataset.note) }, 'Retired'),
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
   connect: () => connect(),
+  notify: () => notifySettings(),
+  'notify-add': async () => {
+    try {
+      await api('/api/notify', { method: 'POST', body: JSON.stringify({ kind: val('nt-kind'), url: val('nt-url') }) });
+      toast('Channel added: send a test to check it');
+      notifySettings();
+    } catch (e) { toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true); }
+  },
+  'notify-remove': async (el) => {
+    try { await api('/api/notify/remove', { method: 'POST', body: JSON.stringify({ id: Number(el.dataset.id) }) }); notifySettings(); } catch (e) { toast(e.message, true); }
+  },
+  'notify-test': async () => {
+    try {
+      const r = await api('/api/notify/test', { method: 'POST' });
+      toast(r.ok ? 'Test sent to every channel' : `Failed: ${r.results.filter((x) => !x.ok).map((x) => `${x.kind} (${x.error})`).join(', ')}`, !r.ok);
+      notifySettings();
+    } catch (e) { toast(e.message, true); }
+  },
   'new-project': () => newProject(),
   'close-modal': () => closeModal(),
   logout: async () => { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = '/login.html'; },

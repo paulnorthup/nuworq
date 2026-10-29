@@ -177,6 +177,17 @@ export function view(hub, slug, { light = false } = {}) {
     }
   }
 
+  if (!p.parked) {
+    for (const c of hub.q('SELECT id, kind, last_error, failing_since FROM channels WHERE failing_since IS NOT NULL').all()) {
+      push({
+        key: `notify:${c.id}:${c.failing_since}`, level: 'know', kind: 'notify-failing', at: c.failing_since,
+        headline: `Push notifications to ${c.kind} are failing (${c.last_error})`,
+        sub: `since ${dur(t - c.failing_since)} ago · retried once`,
+        why: 'Things that need you are not reaching your phone or chat. Check the channel under Notifications, or run `trellis notify test`.',
+      });
+    }
+  }
+
   attention.sort((a, b) => (a.level === b.level ? a.at - b.at : a.level === 'act' ? -1 : 1));
   const act = attention.filter((a) => a.level === 'act');
 

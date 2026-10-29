@@ -65,6 +65,18 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
   - *Check with me*: you approve proposals.
   - *Keep moving*: agents shape their own work; you verify.
   - *Run with it*: agents peer-review each other, never their own work.
+- **Push**: when something new needs you, the hub sends one message to your phone or chat. Otherwise it stays silent (see below).
+
+### Getting pinged (ntfy, Slack, or any webhook)
+The 30-second view only helps if you look. Add a channel and the hub pushes to it when a new *act*-level entry appears in a project that isn't parked: a blocking question, work to verify, "What matters most?". The first new entry opens a 2-minute window, so a burst arrives as one message with one line per entry and a link to the project. Each entry is pushed once. Entries you dismiss or resolve inside the window are dropped. Progress, claims and *know*-level entries send nothing.
+```
+trellis notify add ntfy https://ntfy.sh/<a-long-secret-topic>   # phone push (a bare topic means ntfy.sh)
+trellis notify add slack https://hooks.slack.com/services/…      # Slack incoming webhook
+trellis notify add webhook https://example.com/hook              # JSON POST: { text, title, url, entries }
+trellis notify test                                              # send a test line to each channel
+trellis notify list | trellis notify remove <id>
+```
+You can also set channels up in the UI, under **Notifications** in the left rail. Channels are hub-wide. The URL is the secret, so it is never shown back in full. Run the CLI on the hub host (like `trellis token`). Links use the address the hub listens on: behind a proxy, set `--public-url https://trellis.example.com` (or `TRELLIS_PUBLIC_URL`). A failing channel (error, timeout or non-2xx) is retried once, then shows under "Worth knowing" until it works again. Sending never blocks agents. For email, point a webhook at an email-sending service for now.
 
 ### Connecting agents (any model, the same way)
 | How | For |
@@ -88,6 +100,7 @@ src/insight.js     the 0-30-5-30 lens: attention engine, pulse, flow and time ac
 src/protocol.js    the agent protocol, defined once → MCP tools, OpenAI/Anthropic schemas, the guide
 src/server.js      HTTP API, SSE live updates, static UI, auth enforcement, security headers
 src/auth.js        human/agent tokens (hashed), sessions
+src/notify.js      push channels (ntfy, Slack, webhook): new act-level entries, batched, each sent once
 src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
 src/seed.js        the demo, replayed through real operations on a moved clock
@@ -120,6 +133,7 @@ Design choices:
 | New agent proposals | know |
 | Steering nobody acknowledged | know |
 | Agents out of work (everything left waits on you) | know |
+| A push channel is failing | know |
 | Healthy work, recovered stalls | 0 |
 
 ### API
@@ -133,6 +147,8 @@ POST /api/p/:project/human/:action       answer, confirm, accept, sendback, stee
 GET  /api/tools?format=mcp|openai|anthropic
 GET  /agents.md?project=<p>&via=tools|cli
 GET  /api/stream                         server-sent events
+GET  /api/notify | POST /api/notify {kind,url} | POST /api/notify/remove {id} | POST /api/notify/test
+                                         push channels (human only; URLs come back masked)
 ```
 
 ### Security
