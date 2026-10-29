@@ -7,7 +7,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-const RUNS = ['bin', 'src', 'web', 'package.json', 'README.md', 'LICENSE'];
+// release-key.pub: the public half of the key releases are signed with, pinned by every install (src/update.js).
+const RUNS = ['bin', 'src', 'web', 'package.json', 'README.md', 'LICENSE', 'release-key.pub'];
 
 const run = (args) => new Promise((resolve, reject) => {
   execFile('git', args, { timeout: 60_000 }, (e, out, err) => (e ? reject(new Error(String(err || e.message).trim())) : resolve(out)));
@@ -18,6 +19,12 @@ export function commitOf(root) {
   try {
     return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
   } catch { return null; }
+}
+
+// The release signature for a package (base64 ed25519 over its bytes), made where the release key lives
+// (scripts/sign-release.js) and put beside it in dir as <file>.sig. The hub never holds the key. null: unsigned.
+export function signatureOf(b) {
+  try { return readFileSync(`${b.file}.sig`, 'utf8').trim() || null; } catch { return null; }
 }
 
 // Build (or find) the package of root's commit in dir. Resolves { file, sha256, commit }, or null when

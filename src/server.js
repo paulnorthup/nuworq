@@ -22,7 +22,7 @@ import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { outcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
-import { buildPackage } from './package.js';
+import { buildPackage, signatureOf } from './package.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -321,6 +321,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!b) return deny(404, "this hub doesn't run from a git checkout, so it has no package of itself to serve", 'Install nuworq the way this hub was installed, or ask its host.');
         res.writeHead(200, { 'content-type': 'application/gzip', etag: `"${b.sha256}"`, 'cache-control': 'no-cache', 'content-disposition': 'attachment; filename="nuworq.tgz"' });
         return res.end(await readFile(b.file));
+      }
+      // Its release signature, when one was made for it: installs update only to a package it verifies.
+      if (req.method === 'GET' && path === '/nuworq.tgz.sig') {
+        const sig = (await pkg) && signatureOf(built);
+        if (!sig) return deny(404, "this hub's package isn't signed", 'Installed copies keep their version until a signed release is served (docs/DEPLOY.md, "Signed releases").');
+        res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
+        return res.end(`${sig}\n`);
       }
       // Which hub: the only one, or the workspace this address names.
       let hub = target, base = '', ws = '';

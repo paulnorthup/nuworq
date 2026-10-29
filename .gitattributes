@@ -1,0 +1,2 @@
+# The package (src/package.js, git archive) learns which commit it was built from (src/update.js).
+src/commit.txt export-subst

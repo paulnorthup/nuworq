@@ -9,6 +9,7 @@ import { homedir, hostname } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, skill, planSkill } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
+import { update, describeUpdate } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(BIN), '..');
@@ -1085,6 +1086,10 @@ ${bold('Setup')}
                                          queue is empty. Logs: ~/.nuworq/logs. --max-usd stops launching
                                          once workers' reported spend reaches X (codex and local models
                                          report no cost, so they don't count against it).
+  update                                 install the hub's newer nuworq now, if it is signed by the release key
+                                         this install pinned (otherwise, or offline, it keeps this version and
+                                         says why). Every command checks by itself at most every 10 minutes;
+                                         NUWORQ_NO_UPDATE=1 turns that off.
   prompt [--as name]                     just the worker prompt text, for other agents
   seed                                   add the nuworq roadmap project to your hub's database
 
@@ -1127,12 +1132,33 @@ async function gitCredential(pos, flags) {
   process.stdout.write(`username=${r.username}\npassword=${r.password}\n`);
 }
 
+// The package's self-update (src/update.js). Never throws: offline, or anything else, keeps this version.
+async function selfUpdate(flags, { force = false } = {}) {
+  try {
+    return await update({ root: ROOT, hub: resolveSettings(flags).url, dir: join(dataDir(), 'update'), force, ...(force ? {} : { timeoutMs: 3000 }) });
+  } catch (e) {
+    return { status: 'skipped', reason: e.message };
+  }
+}
+
 async function main() {
   const [cmd, ...argv] = process.argv.slice(2);
   const { pos, flags } = parse(argv);
   if (!cmd || cmd === 'help' || flags.help || flags.h || cmd === '--help' || cmd === '-h') return console.log(HELP);
 
   if (cmd === 'serve') return serve(flags);
+  if (cmd === 'update') {
+    const r = await selfUpdate(flags, { force: true });
+    console.log(describeUpdate(r));
+    if (['refused', 'failed'].includes(r.status)) process.exitCode = 1;
+    return;
+  }
+  // A signed new version from the hub, at most every 10 minutes; it applies to the next run. A git
+  // credential helper answers git right away. An MCP server checks in the background, for the next session.
+  if (cmd !== 'git-credential') {
+    const pending = selfUpdate(flags).then((r) => { if (['updated', 'refused', 'failed'].includes(r.status)) console.error(`nuworq: ${describeUpdate(r)}`); });
+    if (cmd !== 'mcp') await pending;
+  }
   if (cmd === 'mcp') {
     const { runMcp } = await import('../src/mcp.js');
     return runMcp({ clientOpts: { url: flags.url, project: flags.project } });
