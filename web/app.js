@@ -3,6 +3,7 @@
 import { connectCommands } from './connect.js';
 import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
+import { homePage } from './home.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
@@ -89,9 +90,11 @@ async function api(path, opts = {}) {
   if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), j);
   return j;
 }
+// On the open project, or on the home the project of the card clicked (S.actSlug); with neither, the home's own.
 async function human(action, body = {}, msg) {
   try {
-    const r = await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
+    const slug = S.slug ?? S.actSlug;
+    const r = await api(slug ? `/api/p/${encodeURIComponent(slug)}/human/${action}` : `/api/home/${action}`, { method: 'POST', body: JSON.stringify(body) });
     if (msg) toast(msg);
     await refresh();
     return r;
@@ -119,12 +122,15 @@ async function loadProjects() {
 }
 async function refresh({ force = false } = {}) {
   try {
-    await loadProjects();
+    if (S.slug) await loadProjects();
     if (S.slug && S.projects.some((p) => p.slug === S.slug)) {
       S.view = await api(`/api/p/${encodeURIComponent(S.slug)}/view`);
       if (S.itemRef) S.item = await api(`/api/p/${encodeURIComponent(S.slug)}/items/${encodeURIComponent(S.itemRef.replace('#', ''))}`).catch(() => null);
     } else {
       S.view = null;
+      // The home: one request, which also brings the project lines the rail shows.
+      S.home = await api('/api/home');
+      S.projects = S.home.projects;
       // Get started: asked until it says it's gone (finished or hidden), then never again this visit.
       if (S.gs?.show !== false) S.gs = await api('/api/get-started').catch(() => S.gs);
     }
@@ -202,39 +208,20 @@ function zoomControl() {
     `<button class="${S.zoom === k ? 'on' : ''}" data-action="zoom" data-zoom="${k}">${k}</button>`).join('')}</div>`;
 }
 
-// All projects at 30s: what needs you and whether each is moving. 5m adds the mission (two lines);
-// 30m the whole mission, its repos and whether nuworq run staffs it. Parked projects wait until 5m.
+// The home, across every project (web/home.js): the pulse, what needs you, a line per project.
 const getStarted = () => getStartedCard(S.gs, { worker: S.info ? connectCommands(S.info, location).worker : '' });
 function overview() {
-  if (!S.projects.length) {
+  if (!S.projects.length || !S.home) {
     return `<div class="phead"><div class="titles"><h1>Welcome to nuworq</h1>
       <div class="mission">A hub where you facilitate and AI agents (Claude, OpenAI, open-weight) find, do and verify the work.</div></div></div>
       ${getStarted()}
       <div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" data-action="new-project">create one now</button>.
       <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`;
   }
-  const sorted = [...S.projects].sort((a, b) => a.parked - b.parked || b.needs - a.needs || a.name.localeCompare(b.name));
-  const total = sorted.reduce((n, p) => n + p.needs, 0);
-  const shown = z() >= 1 ? sorted : sorted.filter((p) => !p.parked);
-  const parked = sorted.length - shown.length;
-  const details = (p) => z() < 2 ? '' : `<div class="s">${[
-    p.remotes?.length ? esc(p.remotes.join(', ')) : 'No repo linked',
-    p.runner ? 'nuworq run staffs it' : 'nuworq run leaves it alone',
-    p.parked ? 'parked' : '',
-  ].filter(Boolean).join(' · ')}</div>`;
-  return `<div class="phead"><div class="titles"><h1>All projects</h1>
-      <div class="mission">${total ? `${plural(total, 'thing')} across ${plural(sorted.filter((p) => p.needs).length, 'project')} ${total === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you anywhere. Work is flowing.'}</div></div>
+  return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div></div></div>
     ${getStarted()}
-    <div class="overview">${shown.map((p) => `
-      <div class="ov-card state-${p.pulse.state} ${p.parked ? 'parked' : ''}" data-action="goto" data-slug="${esc(p.slug)}">
-        <span class="dot ${p.pulse.state}" style="margin-top:7px"></span>
-        <div class="body"><h3>${esc(p.name)}</h3>
-          ${z() >= 1 && p.mission ? `<div class="m ${z() < 2 ? 'clamp' : ''}">${esc(p.mission)}</div>` : ''}
-          <div class="sentence">${esc(p.pulse.sentence)}</div>${details(p)}</div>
-        ${p.needs ? `<span class="badge">${p.needs}</span>` : ''}
-      </div>`).join('')}</div>
-    ${parked ? `<div class="zoom-more">${plural(parked, 'parked project')} not shown. <button data-action="zoom" data-zoom="5m">Go to 5m</button> to see ${parked === 1 ? 'it' : 'them'}.</div>` : ''}`;
+    ${homePage(S.home, { z: z(), pulse, card, esc, plural })}`;
 }
 
 // ── project ──
@@ -303,9 +290,10 @@ function pulse(v) {
   ].filter(Boolean);
   const since = v.since.at
     ? bits.length ? `Since you last looked (${v.since.ago} ago): ${bits.join(' · ')}` : `No agent activity since you last looked (${v.since.ago} ago).`
-    : 'First look at this project.';
+    : v.home ? 'First look.' : 'First look at this project.';
+  // On the home, each finished item names its project, and its link opens it there.
   const list = z() >= 1 && v.since.finished.length
-    ? `<div class="since-list">${v.since.finished.slice(0, 6).map((f) => `<div>✓ ${refLink(f.item)} ${esc(f.title)} <span class="age">by ${esc(f.by === 'you' ? 'you' : f.by)}</span></div>`).join('')}</div>` : '';
+    ? `<div class="since-list">${v.since.finished.slice(0, 6).map((f) => `<div${f.project ? ` data-project="${esc(f.project.slug)}"` : ''}>✓ ${refLink(f.item)} ${esc(f.title)} <span class="age">${f.project ? `${esc(f.project.name)} · ` : ''}by ${esc(f.by === 'you' ? 'you' : f.by)}</span></div>`).join('')}</div>` : '';
   return `<div class="pulse state-${v.pulse.state}">
       <div class="state-chip"><span class="dot ${v.pulse.state}"></span>${label}</div>
       <div class="sentence">${esc(v.pulse.sentence)}</div>
@@ -944,7 +932,7 @@ const clearDraft = (...keys) => keys.forEach((k) => delete S.drafts[k]);
 const ACTIONS = {
   zoom: (el) => { S.zoom = el.dataset.zoom; store.set('zoom', S.zoom); render({ force: true }); },
   goto: (el) => go(el.dataset.slug),
-  open: (el) => go(S.slug, el.dataset.item),
+  open: (el) => go(S.slug ?? S.actSlug, el.dataset.item),
   close: () => { go(S.slug); },
   deep: () => { S.deep = true; render({ force: true }); },
   toggle: (el) => { const k = el.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); render({ force: true }); },
@@ -1172,6 +1160,8 @@ document.addEventListener('click', (e) => {
   if (el.tagName === 'A' && el.getAttribute('href')) return;
   e.preventDefault();
   e.stopPropagation();
+  // On the home, a card's actions belong to its own project.
+  S.actSlug = el.closest('[data-project]')?.dataset.project ?? null;
   fn(el);
 });
 document.addEventListener('change', (e) => {
