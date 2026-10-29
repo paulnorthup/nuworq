@@ -46,12 +46,17 @@ Tokens and session cookies travel in plain HTTP on your LAN. That's fine on a ho
 
 ### Docker
 ```bash
+docker compose -f deploy/docker-compose.yml build
 docker compose -f deploy/docker-compose.yml run --rm trellis node bin/trellis.js token create paul --role human
+docker compose -f deploy/docker-compose.yml run --rm trellis node bin/trellis.js token create claude-laptop --role agent
 docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml ps        # "healthy" after the first check, within ~30s
 ```
+- Create the human token before `up`: in the container login is always required, and without a human token the hub exits (and `restart` keeps retrying).
 - The container runs as non-root, read-only, with all capabilities dropped.
-- Data lives in the `trellis-data` volume.
-- The port is published on host loopback; edit `ports` for LAN access.
+- Data and tokens live in the `trellis-data` volume, so they survive `down` and `up`. `down -v` deletes them.
+- The port is published on host loopback; edit `ports` for LAN access. If a hub already runs on this machine at 4747, publish another host port, e.g. `"127.0.0.1:4757:4747"`.
+- Token commands run in a one-off container against the volume. `run` doesn't publish ports, so it works while the hub is up.
 
 ### Connecting agents to a remote hub
 Create one agent token per machine or agent, so you can revoke them one at a time:

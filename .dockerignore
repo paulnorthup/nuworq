@@ -1,0 +1,10 @@
+# The image only needs package.json, bin, src and web (see deploy/Dockerfile).
+# Keep everything else, especially local databases and config, out of the build context.
+.git
+node_modules
+*.db
+*.db-*
+.trellis.json
+test
+scripts
+docs
