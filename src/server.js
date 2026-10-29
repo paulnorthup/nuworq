@@ -267,6 +267,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       new_org: `${authOrigin(req)}/?new`,
     };
   };
+  // A device-login code as the CLI shows it (ABCD-EFGH), or '' for anything else.
+  const deviceCode = (s) => (/^[A-Z]{4}-[A-Z]{4}$/i.test(String(s ?? '')) ? String(s).toUpperCase() : '');
   const redirect = (res, location) => { res.writeHead(302, { location, 'cache-control': 'no-store' }); res.end(); };
 
   // The site host: its own files from site/, and every app path (/api, /login.html, /w/…, /agents.md) on to the app.
@@ -297,7 +299,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // No workspace: sign in to the hub itself, to see and create organizations.
       const ws = spaces ? String(url.searchParams.get('ws') ?? '').toLowerCase() : '';
       if (spaces && ws && !spaces.get(ws)) return deny(404, `no workspace "${ws}"`, 'Start from your workspace\'s login page.');
-      const go = sso.start(provider, { ws, back: spaces && !ws ? authOrigin(req) : homeOf(req, ws), callback });
+      const go = sso.start(provider, { ws, back: spaces && !ws ? authOrigin(req) : homeOf(req, ws), callback, device: deviceCode(url.searchParams.get('device')) });
       res.setHeader('set-cookie', `${FLOW_COOKIE}=${go.nonce}; HttpOnly; SameSite=Lax; Path=/auth/; Max-Age=600${https(req) ? '; Secure' : ''}`);
       return redirect(res, go.url);
     }
@@ -308,7 +310,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     } catch (e) {
       return send(400, `<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
     }
-    const fail = (msg) => redirect(res, `${flow.back}/login.html#error=${encodeURIComponent(msg)}`);
+    // A sign-in started from a device approval page (#153) keeps its code, so it ends back on that page.
+    const dev = flow.device ? `device=${flow.device}` : '';
+    const fail = (msg) => redirect(res, `${flow.back}/login.html${dev ? `?${dev}` : ''}#error=${encodeURIComponent(msg)}`);
     if (url.searchParams.get('error')) return fail(`${sso.providers[provider].label} sign-in was cancelled`);
     let email;
     try { email = await sso.email(provider, url.searchParams.get('code'), flow); } catch (e) { return fail(e.message); }
@@ -322,7 +326,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
     spaces?.directory.join(email, flow.ws);
     if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
-    return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}`);
+    return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}${dev ? `&${dev}` : ''}`);
   }
   const sameOrigin = (req) => {
     try { return new URL(req.headers.origin).host === hostOf(req); } catch { return false; }
@@ -572,7 +576,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const sid = required ? sso.redeem(url.searchParams.get('ticket'), ws) : null;
         if (!sid) return redirect(res, `${base}/login.html#error=${encodeURIComponent('That sign-in link was already used, expired, or belongs to another workspace. Sign in again')}`);
         res.setHeader('set-cookie', sessionCookie(req, sid, cookiePath));
-        return redirect(res, `${base}/`);
+        // Only ever this hub's own device page, with a code of the right shape: never an address from the link.
+        const dev = deviceCode(url.searchParams.get('device'));
+        return redirect(res, `${base}/${dev ? `device.html?code=${dev}` : ''}`);
       }
       // An invite link: peek at what it offers, or accept it with a handle (creates the person, signs them in).
       if (req.method === 'POST' && (path === '/api/invite/peek' || path === '/api/invite/accept')) {
