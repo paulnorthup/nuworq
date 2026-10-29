@@ -2,6 +2,9 @@
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
 import { openDb } from './db.js';
+import { gitFacts, gitWarning } from './git.js';
+
+const GIT_CHECK = Symbol('git check');
 
 export class UserError extends Error {
   constructor(message, { status = 400, hint } = {}) {
@@ -504,6 +507,17 @@ export class Hub extends EventEmitter {
       }
       return r;
     });
+    const check = result[GIT_CHECK];
+    if (check) {
+      delete result[GIT_CHECK];
+      const g = gitFacts(p.path, agent, check.claim);
+      if (g) {
+        const e = this.q('SELECT data FROM events WHERE id = ?').get(check.event);
+        this.q('UPDATE events SET data = ? WHERE id = ?').run(JSON.stringify({ ...json(e.data, {}), git: g }), check.event);
+        const warn = gitWarning(g);
+        if (warn) result.hint = `${warn}: the reviewer will see this. ${result.hint}`;
+      }
+    }
     this.changed(p);
     return result;
   }
@@ -806,12 +820,13 @@ const AGENT_OPS = {
       .map((e) => (e.url && !/^https?:\/\//i.test(e.url) ? { label: e.label === e.url ? e.label : `${e.label}: ${e.url}` } : e))
       .filter((e) => e.label);
     this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
-    this.event(p, { item, actor: agent, type: 'submitted', headline, summary, detail, data: { evidence } });
+    const event = this.event(p, { item, actor: agent, type: 'submitted', headline, summary, detail, data: { evidence } });
     this.setStatus(p, agent, `Submitted #${item.seq}`);
     const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
     return {
       ok: true,
       hint: `#${item.seq} is verifying. ${reviewer} ${evidence.length ? '' : 'Next time attach evidence (tests run, commands, commit or PR links); it makes verification fast. '}Call next for more work.`,
+      [GIT_CHECK]: { event, claim: { headline, summary, evidence } }, // asked of git once the transaction is done
     };
   },
 

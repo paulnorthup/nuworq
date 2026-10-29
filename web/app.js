@@ -311,6 +311,7 @@ function card(a) {
     <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${esc(a.sub)}</span></div>
     <h3>${esc(a.headline)}</h3>
     ${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
+    ${commits(a.git)}
     ${a.warn ? `<div class="warn">⚠ ${esc(a.warn)}</div>` : ''}
     ${a.kind === 'proposal' && a.acceptance && !open ? `<div class="more"><div class="label" style="margin-top:0">Done means</div>${md(a.acceptance)}</div>` : ''}
     ${more}
@@ -501,6 +502,12 @@ function dur(ms) {
   return `${+(ms / d).toFixed(1)}d`;
 }
 
+// What git says the worker committed, read by the hub from the repo at submit time.
+function commits(g) {
+  if (!g?.commits?.length) return '';
+  return `<div class="evidence" title="Read from the repo when the work was submitted"><span class="age">On <code>${esc(g.branch)}</code>:</span>${g.commits.map((c) => `<span class="ev"><code>${esc(c.hash)}</code> ${esc(c.subject)}</span>`).join('')}</div>`;
+}
+
 function agents(v) {
   if (!v.agents.length) return '';
   if (z() < 2) {
@@ -649,7 +656,8 @@ function renderDrawer() {
     ${it.summary ? `<div class="d-sec"><div class="label">Summary</div>${md(it.summary)}</div>` : ''}
     <div class="d-sec"><div class="label">Done means</div>${it.acceptance ? md(it.acceptance) : '<p class="age">No acceptance criteria yet. Agents are asked to write them before submitting.</p>'}</div>
     ${it.submission && it.stage === 'verifying' ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
-      ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}</div>` : ''}
+      ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
+      ${commits(it.git)}${it.git_warning ? `<div class="warn">⚠ ${esc(it.git_warning)}</div>` : ''}</div>` : ''}
     ${handoff}
     ${questions}
     ${steers}

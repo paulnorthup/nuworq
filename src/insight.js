@@ -4,6 +4,7 @@
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
 import { STAGES, AUTONOMY, OPEN_STAGES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS } from './core.js';
+import { gitWarning } from './git.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
@@ -55,14 +56,14 @@ export function view(hub, slug, { light = false } = {}) {
   if (p.autonomy !== 'full') {
     for (const it of in_('verifying')) {
       const sub = lastEvent(it, ['submitted']);
-      const evidence = json(sub?.data, {}).evidence ?? [];
+      const { evidence = [], git = null } = json(sub?.data, {});
       push({
         key: `review:${it.id}:${sub?.id ?? 0}`, level: 'act', kind: 'review', at: it.stage_since,
         headline: sub?.headline || it.title,
         sub: `${it.title} · ${it.implementer ?? 'an agent'} finished it ${dur(t - it.stage_since)} ago`,
         why: sub?.summary, detail: sub?.detail,
-        acceptance: it.acceptance, evidence,
-        warn: evidence.length ? null : 'No evidence attached',
+        acceptance: it.acceptance, evidence, git,
+        warn: [evidence.length ? null : 'No evidence attached', gitWarning(git)].filter(Boolean).join(' · ') || null,
         item: ref(it),
       });
     }
@@ -407,7 +408,7 @@ export function itemView(hub, slug, ref) {
     parent: parent ? { item: `#${parent.seq}`, title: parent.title, stage: parent.stage } : null,
     children: hub.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(it.id).map((c) => ({ item: `#${c.seq}`, title: c.title, stage: c.stage })),
     depends_on: hub.deps(it).map((d) => ({ item: `#${d.seq}`, title: d.title, stage: d.stage })),
-    evidence: submit?.data?.evidence ?? [], submission: submit ?? null,
+    evidence: submit?.data?.evidence ?? [], git: submit?.data?.git ?? null, git_warning: gitWarning(submit?.data?.git), submission: submit ?? null,
     questions, steers, lifecycle,
     court_totals: Object.fromEntries(Object.entries(courtTotals).map(([k, v]) => [k, dur(v)])),
     court_ms: courtTotals,
