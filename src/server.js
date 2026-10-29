@@ -196,7 +196,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && path === '/api/info') {
         return send(200, { bin: join(WEB, '..', 'bin', 'trellis.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace });
       }
-      if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub));
+      // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
+      const viewer = who.person ? by : undefined;
+      if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
       if (req.method === 'POST' && path === '/api/projects') {
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't create projects`, 'Ask an owner or steward.');
         const b = await body(req);
@@ -215,7 +217,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       let m;
       if ((m = path.match(/^\/api\/p\/([^/]+)\/view$/)) && req.method === 'GET') {
         hub.sweep();
-        return send(200, view(hub, decodeURIComponent(m[1])));
+        return send(200, view(hub, decodeURIComponent(m[1]), { viewer }));
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/items\/([^/]+)$/)) && req.method === 'GET') {
         return send(200, itemView(hub, decodeURIComponent(m[1]), decodeURIComponent(m[2])));

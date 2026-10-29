@@ -13,15 +13,7 @@ export class Auth {
   constructor(db, { now = () => Date.now() } = {}) {
     this.db = db;
     this.now = now;
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS people (
-        id         INTEGER PRIMARY KEY,
-        handle     TEXT UNIQUE NOT NULL,        -- acts as "@handle" on the record
-        name       TEXT NOT NULL DEFAULT '',
-        email      TEXT NOT NULL DEFAULT '',
-        role       TEXT NOT NULL,               -- owner | steward | member | viewer
-        created_at INTEGER NOT NULL
-      );`);
+    // The people table itself is in src/db.js, so the hub can route attention without an Auth.
     db.exec(`
       CREATE TABLE IF NOT EXISTS tokens (
         id           INTEGER PRIMARY KEY,

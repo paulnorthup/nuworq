@@ -25,7 +25,7 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
 const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire'];
-export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings'] };
+export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
 export const STAGES = {
@@ -474,6 +474,30 @@ export class Hub extends EventEmitter {
       .map((n) => ({ id: n.id, note: n.body, by: n.author, about: n.seq ? `#${n.seq}` : undefined }));
   }
 
+  // ── who a "needs you" belongs to, when there are people ──
+
+  hasPeople() {
+    return !!this.q('SELECT 1 FROM people LIMIT 1').get();
+  }
+
+  // The project's stewards; with none named, the workspace's owners and stewards.
+  stewardsOf(p) {
+    const named = this.q('SELECT handle FROM project_stewards WHERE project_id = ? ORDER BY handle').all(p.id).map((r) => `@${r.handle}`);
+    if (named.length) return named;
+    return this.q(`SELECT handle FROM people WHERE role IN ('owner', 'steward') ORDER BY id`).all().map((r) => `@${r.handle}`);
+  }
+
+  // People who have steered this item (active steers): they own what comes up on it.
+  steerersOf(item) {
+    return this.q(`SELECT author FROM notes WHERE item_id = ? AND kind = 'steer' AND active = 1 AND author LIKE '@%'
+      GROUP BY author ORDER BY MIN(at), MIN(id)`).all(item.id).map((r) => r.author);
+  }
+
+  ownersOf(p, item) {
+    const steerers = item ? this.steerersOf(item) : [];
+    return steerers.length ? steerers : this.stewardsOf(p);
+  }
+
   decisions(p) {
     return this.q(`SELECT id, body, at FROM notes WHERE project_id = ? AND kind = 'decision' AND active = 1 ORDER BY at`).all(p.id);
   }
@@ -491,6 +515,7 @@ export class Hub extends EventEmitter {
     const handoff = json(item.handoff, null);
     const lease = this.leaseOf(item, agent);
     const touching = this.touchingOf(item, agent);
+    const steerers = this.steerersOf(item);
     const racers = item.race > 1 ? this.attemptsOf(item) : [];
     return {
       item: `#${item.seq}`,
@@ -522,6 +547,10 @@ export class Hub extends EventEmitter {
         assumption: q.assumption || undefined, answer: q.answer || undefined,
       })) : undefined,
       steers: steers.length ? steers.map((n) => ({ steer: n.id, from: n.author, body: n.body, ago: dur(this.now() - n.at) })) : undefined,
+      // The hub can't tell whether two people's steers conflict; the agent can, and its question reaches both.
+      steered_by: steerers.length > 1
+        ? `Steers from ${steerers.slice(0, -1).join(', ')} and ${steerers.at(-1)}. If they disagree, ask: the question goes to all of them.`
+        : undefined,
       history: history.length ? history.map((e) => ({ ago: dur(this.now() - e.at), by: e.actor, type: e.type, headline: e.headline, summary: e.summary || undefined })) : undefined,
       others_working: (() => { const o = this.others(p, agent); return o.length ? o.map(fmtOther) : undefined; })(),
       heads_up: agent ? this.headsUp(p, agent, item) : undefined,
@@ -1296,6 +1325,21 @@ const HUMAN_OPS = {
       item: it, actor: by, type: 'picked',
       headline: `${You(by)} picked #${it.seq} as what matters most: ${it.title}`,
       summary: it.stage === 'proposed' ? 'The next agent to check in will shape it first, then it gets built.' : 'It goes to the front of the queue.',
+    });
+  },
+
+  // Who looks after this project: its "needs you" go to them. An empty list falls back to owners and stewards.
+  stewards(p, { set }, by) {
+    if (!Array.isArray(set)) throw new UserError('set is required: a list of people, e.g. ["@sam"]');
+    const handles = [...new Set(set.map((h) => str(h).replace(/^@/, '').toLowerCase()).filter(Boolean))];
+    for (const h of handles) {
+      if (!this.q('SELECT 1 FROM people WHERE handle = ?').get(h)) throw new UserError(`No person @${h}`, { status: 404, hint: 'Add them first: trellis person add <handle>.' });
+    }
+    this.q('DELETE FROM project_stewards WHERE project_id = ?').run(p.id);
+    for (const h of handles) this.q('INSERT INTO project_stewards (project_id, handle) VALUES (?, ?)').run(p.id, h);
+    this.event(p, {
+      actor: by, type: 'stewards',
+      headline: handles.length ? `${You(by)} made ${handles.map((h) => `@${h}`).join(', ')} steward${handles.length > 1 ? 's' : ''} of ${p.name}` : `${You(by)} cleared ${p.name}'s stewards`,
     });
   },
 

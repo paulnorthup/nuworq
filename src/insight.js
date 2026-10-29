@@ -9,14 +9,15 @@ const FLOW_WINDOW = 14 * DAY;
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 
-export function projectList(hub) {
+// viewer: the person looking ("@handle"), so "needs you" counts only their own; none in local mode.
+export function projectList(hub, { viewer } = {}) {
   return hub.projects().map((p) => {
-    const v = view(hub, p.slug, { light: true });
+    const v = view(hub, p.slug, { light: true, viewer });
     return { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length };
   });
 }
 
-export function view(hub, slug, { light = false } = {}) {
+export function view(hub, slug, { light = false, viewer } = {}) {
   const p = hub.project(slug);
   const t = hub.now();
   const items = hub.q('SELECT * FROM items WHERE project_id = ? ORDER BY seq').all(p.id);
@@ -181,6 +182,18 @@ export function view(hub, slug, { light = false } = {}) {
     }
   }
 
+  // With people, every "needs you" has owners: whoever steered the item, else the project's stewards.
+  // The viewer's own stay act; everyone else's become worth knowing, so "needs you" means you.
+  if (hub.hasPeople()) {
+    const bySeq = new Map(items.map((i) => [ref(i), i]));
+    for (const a of attention.filter((x) => x.level === 'act')) {
+      a.owners = hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
+      if (viewer && !a.owners.includes(viewer)) {
+        a.level = 'know';
+        a.sub = [a.owners.length ? `needs ${a.owners.join(', ')}` : 'needs a steward (none set)', a.sub].filter(Boolean).join(' · ');
+      }
+    }
+  }
   attention.sort((a, b) => (a.level === b.level ? a.at - b.at : a.level === 'act' ? -1 : 1));
   const act = attention.filter((a) => a.level === 'act');
 

@@ -146,6 +146,22 @@ CREATE TABLE IF NOT EXISTS acks (
   PRIMARY KEY (note_id, agent)
 );
 
+-- The humans, when there are accounts (src/auth.js manages them). None in local mode: the one human is "you".
+CREATE TABLE IF NOT EXISTS people (
+  id         INTEGER PRIMARY KEY,
+  handle     TEXT UNIQUE NOT NULL,        -- acts as "@handle" on the record
+  name       TEXT NOT NULL DEFAULT '',
+  email      TEXT NOT NULL DEFAULT '',
+  role       TEXT NOT NULL,               -- owner | steward | member | viewer
+  created_at INTEGER NOT NULL
+);
+-- Who looks after a project: its "needs you" entries go to them (else to the owners and stewards).
+CREATE TABLE IF NOT EXISTS project_stewards (
+  project_id INTEGER NOT NULL,
+  handle     TEXT NOT NULL,
+  PRIMARY KEY (project_id, handle)
+);
+
 CREATE TABLE IF NOT EXISTS dismissals (
   project_id INTEGER NOT NULL,
   key        TEXT NOT NULL,
