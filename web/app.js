@@ -72,9 +72,10 @@ function toast(msg, err = false) {
 }
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { 'content-type': 'application/json' }, credentials: 'same-origin' });
+  // Relative, so the UI also works under a workspace path prefix (/w/<slug>/).
+  const r = await fetch(path.replace(/^\//, ''), { ...opts, headers: { 'content-type': 'application/json' }, credentials: 'same-origin' });
   if (r.status === 401) {
-    location.href = '/login.html';
+    location.href = 'login.html';
     throw new Error('Not signed in');
   }
   const j = await r.json().catch(() => ({}));
@@ -690,7 +691,7 @@ async function connect() {
     <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(`node "${bin}" guide --project ${slug}`)}
     <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through Trellis: run the command above and follow it."</i></p>
 
-    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="/api/tools?format=openai" target="_blank">OpenAI</a> · <a href="/api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="/api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>X-Trellis-Agent: &lt;name&gt;</code>. The agent guide: <a href="/agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
+    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>X-Trellis-Agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
 
@@ -810,7 +811,7 @@ const ACTIONS = {
   connect: () => connect(),
   'new-project': () => newProject(),
   'close-modal': () => closeModal(),
-  logout: async () => { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = '/login.html'; },
+  logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },
   'create-project': async () => {
     const name = val('np-name');
     if (!name) return toast('Name it', true);
@@ -865,7 +866,7 @@ $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') clos
 let refreshTimer;
 function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh(), 250); }
 function listen() {
-  const es = new EventSource('/api/stream');
+  const es = new EventSource('api/stream');
   es.onmessage = () => scheduleRefresh();
   es.onerror = () => { es.close(); setTimeout(listen, 3000); };
 }

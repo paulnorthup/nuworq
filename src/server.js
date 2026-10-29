@@ -6,6 +6,7 @@ import { UserError, HUMAN_OP_NAMES } from './core.js';
 import { view, itemView, projectList } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
+import { Workspaces } from './workspaces.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -23,17 +24,32 @@ const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/age
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 
 // auth: 'local' (no login; loopback only) or 'required' (tokens + sessions).
-export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
-  const required = auth === 'required';
-  const authz = new Auth(hub.db);
+// target: one Hub (today's single hub), or a Workspaces registry: then each request is resolved to a
+// workspace by subdomain of baseDomain or a /w/<slug>/ path prefix, and login is always required.
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000 } = {}) {
+  const spaces = target instanceof Workspaces ? target : null;
+  const required = spaces ? true : auth === 'required';
   const failures = new Map(); // ip → [timestamps of failed logins]
-  const clients = new Set();
-  hub.on('change', (e) => {
-    const msg = `data: ${JSON.stringify(e)}\n\n`;
-    for (const res of clients) res.write(msg);
-  });
-  const sweeper = setInterval(() => { try { hub.sweep(); } catch (e) { console.error('sweep failed', e); } }, 15_000);
-  const keepalive = setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 25_000);
+  // Per hub: its tokens and sessions, and the browsers streaming its changes. Nothing is shared across hubs.
+  const scopes = new Map();
+  const scopeOf = (hub) => {
+    let s = scopes.get(hub);
+    if (!s) {
+      s = { authz: new Auth(hub.db), clients: new Set() };
+      hub.on('change', (e) => {
+        const msg = `data: ${JSON.stringify(e)}\n\n`;
+        for (const res of s.clients) res.write(msg);
+      });
+      hub.once('closed', () => { for (const res of s.clients) res.end(); scopes.delete(hub); });
+      scopes.set(hub, s);
+    }
+    return s;
+  };
+  const hubs = () => (spaces ? spaces.hubs() : [target]);
+  const sweeper = setInterval(() => {
+    for (const hub of hubs()) { try { hub.sweep(); } catch (e) { console.error('sweep failed', e); } }
+  }, sweepMs);
+  const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
 
   const first = (v) => String(v ?? '').split(',')[0].trim();
   const clientIp = (req) => (trustProxy && first(req.headers['x-forwarded-for'])) || req.socket.remoteAddress || '?';
@@ -63,7 +79,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
     req.on('error', () => {});
     res.on('error', () => {});
     const url = new URL(req.url, 'http://local');
-    const path = url.pathname;
+    let path = url.pathname;
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
     const send = (status, body, type = 'application/json; charset=utf-8') => {
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -71,6 +87,27 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
+      // Which hub: the only one, or the workspace this address names.
+      let hub = target, base = '';
+      if (spaces) {
+        const host = hostname(hostOf(req));
+        const sub = baseDomain && host.endsWith(`.${baseDomain}`) ? host.slice(0, -baseDomain.length - 1) : null;
+        const pre = sub == null ? path.match(/^\/w\/([^/]+)(\/.*)?$/) : null;
+        const slug = sub ?? (pre ? decodeURIComponent(pre[1]) : null);
+        if (slug == null) {
+          if (path === '/api/health') return send(200, { ok: true, name: 'trellis', workspaces: true });
+          return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
+        }
+        hub = spaces.get(slug);
+        if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: trellis workspace create <name>.');
+        if (pre) {
+          base = `/w/${pre[1]}`;
+          path = pre[2] ?? '';
+          if (!path) { res.writeHead(308, { location: `${base}/` }); return res.end(); }
+        }
+      }
+      const { authz, clients } = scopeOf(hub);
+      const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
 
       // Without login, only answer to loopback names: blocks DNS-rebinding from web pages you visit.
@@ -94,7 +131,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         }
         failures.delete(ip);
         const sid = authz.createSession(t.id);
-        res.setHeader('set-cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
+        res.setHeader('set-cookie', `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
         return send(200, { ok: true, name: t.name });
       }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
@@ -131,7 +168,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name });
       if (req.method === 'POST' && path === '/api/logout') {
         authz.deleteSession(cookieOf(req));
-        res.setHeader('set-cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+        res.setHeader('set-cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=0`);
         return send(200, { ok: true });
       }
       if (req.method === 'GET' && path === '/api/stream') {
@@ -142,7 +179,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         return;
       }
       if (req.method === 'GET' && path === '/api/info') {
-        return send(200, { bin: join(WEB, '..', 'bin', 'trellis.js'), url: origin(req), auth: required ? 'required' : 'local' });
+        return send(200, { bin: join(WEB, '..', 'bin', 'trellis.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace });
       }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub));
       if (req.method === 'POST' && path === '/api/projects') {
@@ -156,7 +193,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
         return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? ''));
       }
       if (req.method === 'GET' && (path === '/agents.md' || path === '/api/guide')) {
-        return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req), via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
+        return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req) + base, via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
       }
 
       let m;
@@ -196,7 +233,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false } = {}) {
       send(500, { ok: false, error: String(e?.message ?? e) });
     }
   });
-  server.auth = authz;
+  if (!spaces) server.auth = scopeOf(target).authz;
   server.on('close', () => { clearInterval(sweeper); clearInterval(keepalive); });
   return server;
 }

@@ -13,7 +13,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'trellis')));
 const CLI = ON_PATH ? 'trellis' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -283,7 +283,16 @@ ${bold('Headless worker')}  ${dim('(asks the hub where work is waiting; own work
   node ${q} worker --agent codex --run`);
 }
 
-const dbPath = (flags) => flags.db || process.env.TRELLIS_DB || join(homedir(), '.trellis', 'trellis.db');
+// Workspaces mode keeps one database per workspace here (see src/workspaces.js).
+const workspacesDir = (flags) => join(flags['data-dir'] || process.env.TRELLIS_DATA_DIR || join(homedir(), '.trellis'), 'workspaces');
+const dbPath = (flags) => {
+  if (flags.workspace) {
+    const file = join(workspacesDir(flags), `${String(flags.workspace).toLowerCase()}.db`);
+    if (!existsSync(file)) throw new HubError(`no workspace "${flags.workspace}" in ${workspacesDir(flags)}`, { hint: 'See: trellis workspace list' });
+    return file;
+  }
+  return flags.db || process.env.TRELLIS_DB || join(homedir(), '.trellis', 'trellis.db');
+};
 
 // Load the Trellis roadmap project into a real hub database, so Trellis can be built with Trellis.
 async function seedCmd(flags) {
@@ -306,6 +315,7 @@ async function serve(flags) {
   const loopback = host === 'localhost' || host === '::1' || host.startsWith('127.');
   const auth = flags.auth || !loopback ? 'required' : 'local';
   const trustProxy = !!flags['trust-proxy'];
+  if (flags.workspaces) return serveWorkspaces(flags, { host, port, trustProxy });
   const db = flags.demo ? ':memory:' : dbPath(flags);
   const hub = new Hub({ file: db });
   if (flags.demo) {
@@ -348,6 +358,53 @@ ${dim(`
   const stop = () => { server.close(); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+}
+
+// Many workspaces, one process: each workspace is its own database, reached by subdomain or /w/<name>/.
+async function serveWorkspaces(flags, { host, port, trustProxy }) {
+  const { Workspaces } = await import('../src/workspaces.js');
+  const { createServer } = await import('../src/server.js');
+  const dir = workspacesDir(flags);
+  const spaces = new Workspaces({ dir });
+  const baseDomain = String(flags['base-domain'] || process.env.TRELLIS_BASE_DOMAIN || '').toLowerCase().replace(/^\.+|\.+$/g, '');
+  const server = createServer(spaces, { trustProxy, baseDomain });
+  server.listen(port, host, () => {
+    const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
+    const names = spaces.list();
+    console.log(`${green('●')} ${bold('Trellis')} is serving workspaces at ${bold(url)}  ${dim(`(${dir})`)}
+  Auth: ${green('locked')}: every workspace has its own tokens${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}
+  Workspaces: ${names.length ? names.join(', ') : dim('none yet')}
+${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w/<workspace>/
+  Add one:   node ${JSON.stringify(BIN)} workspace create <name>
+  Then:      node ${JSON.stringify(BIN)} token create <you> --role human --workspace <name>`)}`);
+  });
+  const stop = () => { server.close(); spaces.close(); process.exit(0); };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+}
+
+async function workspace(pos, flags) {
+  const { Workspaces } = await import('../src/workspaces.js');
+  const spaces = new Workspaces({ dir: workspacesDir(flags) });
+  const [sub, name] = pos;
+  try {
+    if (sub === 'create') {
+      const s = spaces.create(need(name, '<name>'));
+      return console.log(`${green('Created')} workspace ${bold(s)} (${spaces.file(s)}).
+${dim(`  Give someone a login: trellis token create <name> --role human --workspace ${s}`)}`);
+    }
+    if (sub === 'list') {
+      const names = spaces.list();
+      return console.log(names.length ? names.join('\n') : dim(`No workspaces in ${spaces.dir}. Add one: trellis workspace create <name>`));
+    }
+    if (sub === 'remove') {
+      spaces.remove(need(name, '<name>'));
+      return console.log(`${green('Removed')} workspace ${bold(name)} and its database. A running hub stops serving it at once.`);
+    }
+  } catch (e) {
+    throw e.hint || e.status ? new HubError(e.message, { hint: e.hint }) : e;
+  }
+  throw new HubError('usage: trellis workspace create <name> | list | remove <name>');
 }
 
 // Token management runs on the hub host, straight against the database file.
@@ -399,6 +456,11 @@ ${bold('Human')}
                                          Any other host (or --auth): tokens required.
   token create <name> --role human|agent create a token (shown once); run on the hub host
   token list | token revoke <name|id>    see or revoke tokens (revoking logs out sessions)
+                                         --workspace <name>: that workspace's tokens
+  serve --workspaces [--data-dir d] [--base-domain example.com]
+                                         one process, many workspaces (one database each),
+                                         at <name>.<base-domain> or /w/<name>/. Login always required.
+  workspace create|remove <name> | list  manage workspaces on the hub host
   status [--all]                         the 30-second view
 
 ${bold('Agents')}  (every command takes --as <name>, --project, --url)
@@ -446,6 +508,7 @@ async function main() {
   }
   if (cmd === 'status') return status(flags);
   if (cmd === 'token') return token(pos, flags);
+  if (cmd === 'workspace') return workspace(pos, flags);
   if (cmd === 'guide') {
     const s = resolveSettings(flags);
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));

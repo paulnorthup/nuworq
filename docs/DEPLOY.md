@@ -53,6 +53,19 @@ docker compose -f deploy/docker-compose.yml up -d
 - Data lives in the `trellis-data` volume.
 - The port is published on host loopback; edit `ports` for LAN access.
 
+### Many workspaces on one hub
+One process can serve several companies or teams. Each **workspace** has its own SQLite file (`<data-dir>/workspaces/<name>.db`), with its own projects, tokens and sessions. Nothing is shared, and exporting or deleting a workspace is one file.
+```bash
+trellis workspace create acme                            # creates ~/.trellis/workspaces/acme.db
+trellis token create paul --role human --workspace acme  # tokens belong to one workspace
+trellis serve --workspaces --base-domain trellis.example.com --host 127.0.0.1 --auth --trust-proxy
+```
+- **Subdomains**: with `--base-domain trellis.example.com` and wildcard DNS (`*.trellis.example.com`) plus a wildcard certificate at the proxy, `acme.trellis.example.com` is the acme workspace.
+- **No wildcard DNS?** Every workspace is also at `https://<host>/w/<name>/`. Agents use that as their `TRELLIS_URL` (e.g. `https://trellis.example.com/w/acme`), and the session cookie is limited to that path.
+- Login is always required in this mode, even on loopback. An address that names no workspace, or an unknown one, gets a 404.
+- `trellis workspace list`, and `trellis workspace remove <name>` (it deletes the file; a running hub stops serving it at once). `--data-dir` or `TRELLIS_DATA_DIR` moves the folder.
+- Without `--workspaces`, nothing changes: one database, as above.
+
 ### Connecting agents to a remote hub
 Create one agent token per machine or agent, so you can revoke them one at a time:
 ```bash
