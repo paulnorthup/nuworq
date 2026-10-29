@@ -1121,7 +1121,8 @@ document.addEventListener('keydown', (e) => {
     const btn = document.activeElement.parentElement?.querySelector('button[data-action]');
     if (btn) { e.preventDefault(); btn.click(); }
   }
-  if (!inField && !e.metaKey && !e.ctrlKey && ['1', '2', '3'].includes(e.key) && S.slug) {
+  // 1, 2, 3 set the depth everywhere: a project, and All projects.
+  if (!inField && !e.metaKey && !e.ctrlKey && !e.altKey && ['1', '2', '3'].includes(e.key)) {
     S.zoom = Object.keys(Z)[Number(e.key) - 1];
     store.set('zoom', S.zoom);
     render({ force: true });
