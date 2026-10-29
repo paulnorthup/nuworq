@@ -12,7 +12,7 @@ import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
 import { receive } from './github.js';
-import { syncIssues, commentIssues, closeLanded } from './issues.js';
+import { syncIssues, commentIssues, closeLanded, closeStale } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS } from './ghapp.js';
@@ -593,7 +593,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!PERSON_CAN[personRole]?.includes(m[2])) return deny(403, `a ${personRole} can't ${m[2]} here`, 'Ask an owner of this workspace for a different role.');
         const args = await body(req);
         if (personRole === 'member' && m[2] === 'create') args.stage = 'proposed'; // members propose; stewards decide
-        return send(200, hub.humanOp(decodeURIComponent(m[1]), m[2], args, by));
+        const out = hub.humanOp(decodeURIComponent(m[1]), m[2], args, by);
+        // "Close them all" on stale issues: the proposals are dropped; now the issues close on GitHub.
+        if (out.closing) out.github = app ? await closeStale(hub, hub.project(decodeURIComponent(m[1])), app) : { error: 'no GitHub App configured: the issues stay open on GitHub' };
+        return send(200, out);
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);

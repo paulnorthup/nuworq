@@ -7,6 +7,7 @@ import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, i
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
+import { issuesOf, markDuplicate, markStale, staleAnswered } from './issues.js';
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -1892,6 +1893,22 @@ Object.assign(Hub.prototype, {
   },
 
   refineItem(p, actor, item, args) {
+    // Shaping an imported backlog: a duplicate of another item, or a stale issue for the human to close.
+    const dup = str(args.duplicate_of), stale = str(args.stale);
+    if (dup || stale) {
+      if (!issuesOf(this, item).length) {
+        throw new UserError(`#${item.seq} didn't come from a GitHub issue`, { hint: 'duplicate_of and stale are for proposals imported from issues. For other work, drop it in the UI or ask the human.' });
+      }
+      if (dup) {
+        const target = this.item(p, dup);
+        if (target.id === item.id) throw new UserError(`#${item.seq} can't duplicate itself`);
+        if (target.stage === 'dropped') throw new UserError(`#${target.seq} is dropped`, { hint: 'Point duplicate_of at the item that carries on.' });
+        markDuplicate(this, p, item, target, actor);
+        return [`duplicate of #${target.seq}`];
+      }
+      markStale(this, p, item, stale, actor);
+      return ['flagged stale'];
+    }
     const changed = [];
     const set = {};
     if (args.title != null && str(args.title) && str(args.title) !== item.title) { set.title = layered(args.title).headline; changed.push('title'); }
@@ -2017,6 +2034,7 @@ const HUMAN_OPS = {
       this.move(item, 'ready', by);
     }
     if (decide) this.addNote(p, 'decision', `${q.question} → ${text}`, null, null, by);
+    return staleAnswered(this, p, q, text, by) ?? undefined;
   },
 
   confirm(p, { question }, by) {

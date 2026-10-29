@@ -213,3 +213,96 @@ async function closeEach(hub, p, app, link) {
   if (rows.length) hub.changed(p);
   return { closed };
 }
+
+// ── bulk shaping of an imported backlog: duplicates, and stale issues closed in one go ──
+
+const ASKER = 'nuworq'; // the hub asks the "close these?" question itself
+export const CLOSE_ALL = 'Close them all', KEEP_ALL = 'Keep them all';
+
+// The issues an item is linked to (its import, and duplicates merged into it).
+export const issuesOf = (hub, item) => hub.q('SELECT * FROM issues WHERE item_id = ? ORDER BY repo, number').all(item.id);
+
+const ref = (r) => `${r.repo.replace(/^github\.com\//, '')}#${r.number}`;
+
+// A duplicate: its issue links move to the item it duplicates, and the proposal is dropped. Nothing goes to
+// GitHub now; the issues close together when the surviving item lands.
+export function markDuplicate(hub, p, item, target, by) {
+  const links = issuesOf(hub, item);
+  hub.q('UPDATE issues SET item_id = ? WHERE item_id = ?').run(target.id, item.id);
+  hub.move(item, 'dropped', by, { holder: null, lease_until: null });
+  const which = links.map(ref).join(', ');
+  hub.event(p, { item, actor: by, type: 'duplicate', headline: `${by} dropped #${item.seq} as a duplicate of #${target.seq}`, summary: `${which} now belong${links.length === 1 ? 's' : ''} to #${target.seq}.`, data: { target: target.seq } });
+  hub.event(p, { item: target, actor: by, type: 'duplicate', headline: `#${target.seq} now also tracks ${which} (from #${item.seq}, a duplicate)`, data: { from: item.seq } });
+}
+
+// A stale flag: the issue joins the project's one open "close these?" question.
+export function markStale(hub, p, item, reason, by) {
+  hub.q("UPDATE issues SET stale = ? WHERE item_id = ? AND state = 'open' AND closing = 0").run(reason, item.id);
+  hub.event(p, { item, actor: by, type: 'stale', headline: `${by} flagged #${item.seq} stale: ${clip(reason, 120)}` });
+  staleQuestion(hub, p);
+}
+
+// The flagged issues still waiting for the human's word.
+const flagged = (hub, p) => hub.q(`SELECT s.*, i.seq, i.title AS item_title FROM issues s JOIN items i ON i.id = s.item_id
+  WHERE s.project_id = ? AND s.stale != '' AND s.closing = 0 AND s.state = 'open' AND i.stage NOT IN ('done', 'dropped') ORDER BY s.repo, s.number`).all(p.id);
+
+const openStaleQuestion = (hub, p) => hub.q(`SELECT * FROM questions WHERE project_id = ? AND asked_by = ? AND status = 'open' AND question LIKE 'Close these %' ORDER BY id DESC LIMIT 1`).get(p.id, ASKER);
+
+// One question per project while unanswered, rewritten as flags come in; after an answer, a new flag starts a new one.
+function staleQuestion(hub, p) {
+  const rows = flagged(hub, p);
+  if (!rows.length) return;
+  const q = openStaleQuestion(hub, p);
+  const question = `Close these ${rows.length} stale issues?`;
+  const context = rows.map((r) => `- ${ref(r)} (#${r.seq}) ${r.title || r.item_title}: ${r.stale}`).join('\n');
+  const options = JSON.stringify([CLOSE_ALL, KEEP_ALL]);
+  if (q) {
+    hub.q('UPDATE questions SET question = ?, context = ?, options = ? WHERE id = ?').run(question, context, options, q.id);
+    return;
+  }
+  hub.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at) VALUES (?, NULL, ?, ?, ?, '', ?, 1, '', ?)`)
+    .run(p.id, ASKER, question, context, options, hub.now());
+  hub.event(p, { actor: ASKER, type: 'question', headline: `${ASKER} asks: close stale issues?`, summary: context });
+}
+
+// The human answered the "close these?" question (inside answer()'s transaction). Close them all: the
+// proposals drop now, and closeStale() closes the issues on GitHub right after. Keep them all: the flags
+// clear. Anything else is an ordinary answer, which agents read at their next checkin.
+export function staleAnswered(hub, p, q, text, by) {
+  if (q.asked_by !== ASKER || !q.question.startsWith('Close these')) return null;
+  const rows = flagged(hub, p);
+  if (text === KEEP_ALL) {
+    for (const r of rows) hub.q("UPDATE issues SET stale = '' WHERE project_id = ? AND repo = ? AND number = ?").run(p.id, r.repo, r.number);
+    return { kept: rows.length };
+  }
+  if (text !== CLOSE_ALL) return null;
+  for (const r of rows) {
+    hub.q('UPDATE issues SET closing = 1 WHERE project_id = ? AND repo = ? AND number = ?').run(p.id, r.repo, r.number);
+    const item = hub.itemById(r.item_id);
+    if (!['done', 'dropped'].includes(item.stage)) {
+      hub.move(item, 'dropped', by, { holder: null, lease_until: null });
+      hub.event(p, { item, actor: by, type: 'stale', headline: `#${item.seq} dropped: ${ref(r)} closed as stale`, summary: r.stale });
+    }
+  }
+  return { closing: rows.length };
+}
+
+// Close on GitHub what the human said to close: one comment each with the reason, then the issue closes.
+export async function closeStale(hub, p, app) {
+  const rows = hub.q('SELECT * FROM issues WHERE project_id = ? AND closing = 1 ORDER BY repo, number').all(p.id);
+  let closed = 0;
+  const failed = [];
+  for (const repo of [...new Set(rows.map((r) => r.repo))]) {
+    let gh;
+    try { gh = await asRepo(app, repo); } catch (e) { failed.push(`${repo}: ${e.message}`); continue; }
+    for (const r of rows.filter((x) => x.repo === repo)) {
+      const c = await gh('POST', `/issues/${r.number}/comments`, { body: `Closed as stale via nuworq: ${r.stale}` });
+      const s = c.status === 201 ? await gh('PATCH', `/issues/${r.number}`, { state: 'closed', state_reason: 'not_planned' }) : c;
+      if (s.status !== 200) { failed.push(`${ref(r)}: ${s.status}`); continue; }
+      hub.q("UPDATE issues SET closing = 2, state = 'closed', updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?").run(hub.now(), p.id, r.repo, r.number);
+      closed++;
+    }
+  }
+  if (closed) hub.changed(p);
+  return { closed, ...(failed.length ? { failed } : {}) };
+}

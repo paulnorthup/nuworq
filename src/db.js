@@ -223,6 +223,8 @@ CREATE TABLE IF NOT EXISTS issues (
   url        TEXT NOT NULL DEFAULT '',
   title      TEXT NOT NULL DEFAULT '',
   commented  INTEGER NOT NULL DEFAULT 0,      -- the hub's one comment (its id on GitHub), 0 until posted
+  stale      TEXT NOT NULL DEFAULT '',        -- an agent flagged it stale: why, in one line ('' = not flagged)
+  closing    INTEGER NOT NULL DEFAULT 0,      -- 1: the human said close it, not yet closed on GitHub; 2: closed
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (project_id, repo, number)
 );
@@ -284,6 +286,8 @@ export function openDb(file) {
     'ALTER TABLE usage ADD COLUMN requests INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE usage ADD COLUMN failures INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE usage ADD COLUMN cold_loads INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE issues ADD COLUMN stale TEXT NOT NULL DEFAULT ''", // an agent flagged it stale: why ('' = not flagged)
+    'ALTER TABLE issues ADD COLUMN closing INTEGER NOT NULL DEFAULT 0', // 1: the human said close it; 2: closed on GitHub
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }
