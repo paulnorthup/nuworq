@@ -253,6 +253,13 @@ CREATE TABLE IF NOT EXISTS usage (
   at            INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_item ON usage (item_id);
+
+-- Get started (src/getstarted.js): who finished the checklist or hid it, so it never shows for them again.
+CREATE TABLE IF NOT EXISTS get_started (
+  who TEXT PRIMARY KEY,                       -- "@handle", or "you" on a hub without logins
+  how TEXT NOT NULL,                          -- complete | hidden
+  at  INTEGER NOT NULL
+);
 `;
 
 export function openDb(file) {

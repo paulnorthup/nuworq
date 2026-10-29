@@ -2,6 +2,7 @@
 // Zoom levels mirror 0-30-5-30: what isn't relevant at a level simply isn't rendered.
 import { connectCommands } from './connect.js';
 import { copyBlock, copyText } from './copy.js';
+import { getStartedCard } from './getstarted.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
@@ -121,6 +122,8 @@ async function refresh({ force = false } = {}) {
       if (S.itemRef) S.item = await api(`/api/p/${encodeURIComponent(S.slug)}/items/${encodeURIComponent(S.itemRef.replace('#', ''))}`).catch(() => null);
     } else {
       S.view = null;
+      // Get started: asked until it says it's gone (finished or hidden), then never again this visit.
+      if (S.gs?.show !== false) S.gs = await api('/api/get-started').catch(() => S.gs);
     }
   } catch (e) {
     if (!S.projects.length) $('#main').innerHTML = `<div class="loading">Can't reach the nuworq hub. Is <code>nuworq serve</code> running?</div>`;
@@ -198,10 +201,12 @@ function zoomControl() {
 
 // All projects at 30s: what needs you and whether each is moving. 5m adds the mission (two lines);
 // 30m the whole mission, its repos and whether nuworq run staffs it. Parked projects wait until 5m.
+const getStarted = () => getStartedCard(S.gs, { worker: S.info ? connectCommands(S.info, location).worker : '' });
 function overview() {
   if (!S.projects.length) {
     return `<div class="phead"><div class="titles"><h1>Welcome to nuworq</h1>
       <div class="mission">A hub where you facilitate and AI agents (Claude, OpenAI, open-weight) find, do and verify the work.</div></div></div>
+      ${getStarted()}
       <div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" data-action="new-project">create one now</button>.
       <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`;
   }
@@ -217,6 +222,7 @@ function overview() {
   return `<div class="phead"><div class="titles"><h1>All projects</h1>
       <div class="mission">${total ? `${plural(total, 'thing')} across ${plural(sorted.filter((p) => p.needs).length, 'project')} ${total === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you anywhere. Work is flowing.'}</div></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div></div></div>
+    ${getStarted()}
     <div class="overview">${shown.map((p) => `
       <div class="ov-card state-${p.pulse.state} ${p.parked ? 'parked' : ''}" data-action="goto" data-slug="${esc(p.slug)}">
         <span class="dot ${p.pulse.state}" style="margin-top:7px"></span>
@@ -1076,6 +1082,9 @@ const ACTIONS = {
     } catch (e) { toast(e.message, true); }
   },
   'new-project': () => newProject(),
+  'get-started-hide': async () => {
+    try { S.gs = await api('/api/get-started/hide', { method: 'POST' }); render({ force: true }); } catch (e) { toast(e.message, true); }
+  },
   'more-repos': (el) => { el.remove(); loadRepos(el.dataset.q, Number(el.dataset.page)); },
   'pick-repo': async (el) => {
     try {
@@ -1172,7 +1181,9 @@ function listen() {
   S.info = await api('/api/info').catch(() => null) ?? undefined;
   await loadProjects().catch(() => {});
   if (!location.hash || location.hash === '#/') {
-    if (S.projects.length === 1) return void (go(S.projects[0].slug), listen());
+    // One project opens it, unless Get started still has steps to show on All projects.
+    S.gs = await api('/api/get-started').catch(() => null);
+    if (S.projects.length === 1 && !S.gs?.show) return void (go(S.projects[0].slug), listen());
   }
   route();
   listen();
