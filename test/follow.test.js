@@ -239,3 +239,25 @@ describe('the real world, in a scratch repo', () => {
     }
   });
 });
+
+describe('a server checkout follows GitHub', () => {
+  test('head() fast-forwards main from its upstream, and leaves a checkout that is ahead alone', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-pull-')));
+    const g = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const commit = (cwd, file) => { writeFileSync(join(cwd, file), file); g(cwd, 'add', '.'); g(cwd, 'commit', '-q', '-m', file); return g(cwd, 'rev-parse', 'HEAD'); };
+    mkdirSync(join(root, 'dev'));
+    g(join(root, 'dev'), 'init', '-q', '-b', 'main');
+    commit(join(root, 'dev'), 'a');
+    g(root, 'clone', '-q', '--bare', join(root, 'dev'), 'hub.git');
+    g(join(root, 'dev'), 'remote', 'add', 'origin', join(root, 'hub.git'));
+    g(root, 'clone', '-q', join(root, 'hub.git'), 'server');
+    const server = system({ repo: join(root, 'server'), dir: join(root, 'src'), fetchMs: 0 });
+
+    const b = commit(join(root, 'dev'), 'b');
+    g(join(root, 'dev'), 'push', '-q', 'origin', 'main');
+    assert.equal(server.head('main'), b, 'the server pulled the new main');
+
+    const local = commit(join(root, 'server'), 'landed-here');
+    assert.equal(server.head('main'), local, 'a checkout ahead of its upstream keeps its own main');
+  });
+});

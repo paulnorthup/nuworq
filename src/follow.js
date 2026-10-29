@@ -54,13 +54,29 @@ function place(repo, path, sha) {
 // repo: the checkout whose main is followed. dir: the worktree the hub runs from. next: the worktree
 // candidates are tested in. args: the hub's serve flags. url: where the hub answers. cwd: the hub's
 // working directory (relative --db paths mean what they did).
-export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd() }) {
+export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000 }) {
   let child = null;
   let testing = null;
+  let fetched = 0;
+  const pull = (branch) => {
+    if (Date.now() - fetched < fetchMs) return;
+    fetched = Date.now();
+    try {
+      const up = git(repo, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', `${branch}@{u}`);
+      git(repo, 'fetch', '-q', up.split('/')[0]);
+      // Only a fast-forward, and only when this checkout has main out: never a merge, never lose work.
+      if (git(repo, 'rev-parse', '--abbrev-ref', 'HEAD') === branch && git(repo, 'rev-parse', branch) !== git(repo, 'rev-parse', up)) {
+        git(repo, 'merge', '-q', '--ff-only', up);
+      }
+    } catch { /* no upstream, offline, or diverged: follow the local branch as it is */ }
+  };
   let closed = false;
   const killGroup = (p, sig) => { try { process.kill(-p.pid, sig); } catch {} };
   return {
+    // main as it is here, after taking whatever its upstream (GitHub) has that it doesn't: a server
+    // checkout pulls; a checkout where agents land locally is usually ahead, and is left alone.
     head(branch) {
+      pull(branch);
       try { return git(repo, 'rev-parse', '--verify', '-q', `${branch}^{commit}`); } catch { return null; }
     },
     // Move the hub's own worktree: only while the hub is stopped, right before it starts.
