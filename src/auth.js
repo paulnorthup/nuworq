@@ -12,6 +12,8 @@ const HANDLE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 const same = (a, b) => a.length === b.length && timingSafeEqual(a, b);
 const scopeOf = (s) => (s ? s.split(',') : null); // null: every project
+// Tokens start nwq_ (invites nwi_). Tokens made before the rename start trl_ and still work.
+const TOKEN_PREFIXES = ['nwq_', 'trl_'];
 
 export class Auth {
   constructor(db, { now = () => Date.now() } = {}) {
@@ -107,7 +109,7 @@ export class Auth {
 
   createInvite(role, { email = '', by = '', ttl = INVITE_MS } = {}) {
     if (!PERSON_ROLES.includes(role)) throw new Error(`role must be one of ${PERSON_ROLES.join(', ')}`);
-    const token = 'tri_' + randomBytes(24).toString('base64url');
+    const token = 'nwi_' + randomBytes(24).toString('base64url');
     const t = this.now();
     const r = this.db.prepare('INSERT INTO invites (hash, role, email, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(sha(token), role, String(email).trim().toLowerCase(), String(by), t, t + ttl);
@@ -184,7 +186,7 @@ export class Auth {
         power = JSON.stringify([...new Set(list)]);
       }
     }
-    const token = 'trl_' + randomBytes(32).toString('base64url');
+    const token = TOKEN_PREFIXES[0] + randomBytes(32).toString('base64url');
     this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, person_id, minted_by, runner, powers, created_at, projects) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(name, role, sha(token), token.slice(0, 8), personId, minter, runner ? String(runner) : null, power, this.now(), projects.join(','));
     return token;
@@ -237,7 +239,7 @@ export class Auth {
 
   verifyToken(token) {
     token = String(token ?? '').trim();
-    if (!token.startsWith('trl_') || token.length < 20) return null;
+    if (!TOKEN_PREFIXES.some((p) => token.startsWith(p)) || token.length < 20) return null;
     const h = sha(token);
     const match = this.db.prepare('SELECT * FROM tokens WHERE prefix = ? AND revoked_at IS NULL').all(token.slice(0, 8))
       .find((t) => same(Buffer.from(t.hash), h));

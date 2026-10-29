@@ -41,7 +41,7 @@ export class Workspaces {
     let s;
     try { s = Workspaces.check(slug); } catch { return null; }
     let hub = this.open.get(s);
-    // Removed from the host (trellis workspace remove) while we had it open: let it go.
+    // Removed from the host (nuworq workspace remove) while we had it open: let it go.
     if (hub && !existsSync(this.file(s))) {
       this.evict(s);
       return null;

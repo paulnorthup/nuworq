@@ -22,7 +22,7 @@ function itemFor(hub, p, pr) {
     const n = String(text ?? '').match(/(?:^|[^\w&])#(\d+)\b/)?.[1];
     return n ? hub.q('SELECT * FROM items WHERE project_id = ? AND seq = ?').get(p.id, Number(n)) : null;
   };
-  const agent = String(pr.head?.ref ?? '').match(/^trellis\/(.+)$/)?.[1];
+  const agent = String(pr.head?.ref ?? '').match(/^(?:nuworq|trellis)\/(.+)$/)?.[1]; // trellis/: from before the rename
   const byBranch = () => agent && hub.q(`SELECT * FROM items WHERE project_id = ? AND (holder = ? OR implementer = ? OR last_worker = ?)
       ORDER BY (holder = ?) DESC, (stage IN ('active', 'verifying')) DESC, updated_at DESC LIMIT 1`).get(p.id, agent, agent, agent, agent);
   return bySeq(pr.title) || byBranch() || bySeq(pr.body);

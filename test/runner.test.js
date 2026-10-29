@@ -10,7 +10,7 @@ import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { plan, run } from '../src/runner.js';
 
-const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
 const route = (project, claimable, holders = []) => ({ project, name: project, item: '#1', title: 't', mode: 'work', claimable, holders });
 
@@ -59,9 +59,9 @@ describe('the hub routes the runner only to opted-in, unparked projects', () => 
   });
 });
 
-describe('trellis worker --agent opencode', () => {
-  test('prints an opencode run with Trellis MCP and Ollama in the environment, nothing written to the repo', async () => {
-    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'trellis-oc-')));
+describe('nuworq worker --agent opencode', () => {
+  test('prints an opencode run with nuworq MCP and Ollama in the environment, nothing written to the repo', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-oc-')));
     const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: repo, stdio: 'ignore' });
     g('init', '-q', '-b', 'main');
     writeFileSync(join(repo, 'f'), 'x');
@@ -73,15 +73,15 @@ describe('trellis worker --agent opencode', () => {
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
-    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'oc', '--agent', 'opencode', ...a], { env: { ...process.env, TRELLIS_TOKEN: '' } });
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'oc', '--agent', 'opencode', ...a], { env: { ...process.env, NUWORQ_TOKEN: '' } });
     try {
       const { stdout } = await cli('--model', 'ollama/qwen3:8b', '--as', 'oc-1');
-      assert.match(stdout, /git -C '.*' worktree add -q -b 'trellis\/oc-1'/);
-      assert.match(stdout, /opencode run -m 'ollama\/qwen3:8b' '.*trellis\/oc-1.*' < \/dev\/null/);
+      assert.match(stdout, /git -C '.*' worktree add -q -b 'nuworq\/oc-1'/);
+      assert.match(stdout, /opencode run -m 'ollama\/qwen3:8b' '.*nuworq\/oc-1.*' < \/dev\/null/);
       const config = JSON.parse(stdout.match(/OPENCODE_CONFIG_CONTENT='([^']*)'/)[1]);
-      assert.deepEqual(config.mcp.trellis.command, ['node', BIN, 'mcp']);
-      assert.equal(config.mcp.trellis.environment.TRELLIS_PROJECT, 'oc');
-      assert.equal(config.mcp.trellis.environment.TRELLIS_AGENT, 'oc-1');
+      assert.deepEqual(config.mcp.nuworq.command, ['node', BIN, 'mcp']);
+      assert.equal(config.mcp.nuworq.environment.NUWORQ_PROJECT, 'oc');
+      assert.equal(config.mcp.nuworq.environment.NUWORQ_AGENT, 'oc-1');
       assert.ok(config.provider.ollama.models['qwen3:8b']);
       assert.equal(config.permission.bash['git push*'], 'deny');
       assert.deepEqual(readdirSync(repo).sort(), ['.git', 'f'], 'no config file left in the repo');
@@ -95,7 +95,7 @@ describe('trellis worker --agent opencode', () => {
 
 describe('workers on a hub that requires login', () => {
   test('get the agent token, never the human one; --run refuses without one', async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trellis-tok-')));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-tok-')));
     const bin = join(dir, 'bin');
     execFileSync('mkdir', [bin]);
     writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "ARGS: $*"\n', { mode: 0o755 });
@@ -107,19 +107,19 @@ describe('workers on a hub that requires login', () => {
     const agent = server.auth.createToken('box', 'agent', { projects: ['lock'] });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TRELLIS_TOKEN: human, TRELLIS_AGENT_TOKEN: '' };
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, NUWORQ_TOKEN: human, NUWORQ_AGENT_TOKEN: '' };
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'lock', '--here', '--as', 'w', ...a], { env, cwd: dir });
     try {
       const printed = (await cli()).stdout;
-      assert.match(printed, /"TRELLIS_TOKEN":"<agent-token>"/);
+      assert.match(printed, /"NUWORQ_TOKEN":"<agent-token>"/);
       assert.ok(!printed.includes(human));
 
       await assert.rejects(cli('--run'), (e) => /workers need their own agent token/.test(e.stderr) && /--agent-token/.test(e.stderr));
       await assert.rejects(cli('--run', '--agent-token', human), (e) => /is a human token/.test(e.stderr));
-      await assert.rejects(cli('--run', '--agent-token', 'trl_not-a-real-token-at-all'), (e) => /refused the agent token/.test(e.stderr));
+      await assert.rejects(cli('--run', '--agent-token', 'nwq_not-a-real-token-at-all'), (e) => /refused the agent token/.test(e.stderr));
 
       const ran = (await cli('--run', '--agent-token', agent)).stdout;
-      assert.match(ran, /ARGS: .*"TRELLIS_TOKEN":"trl_/);
+      assert.match(ran, /ARGS: .*"NUWORQ_TOKEN":"nwq_/);
       assert.ok(ran.includes(agent) && !ran.includes(human), 'the agent gets the agent token only');
     } finally {
       server.close();

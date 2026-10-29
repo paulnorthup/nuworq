@@ -1,19 +1,19 @@
-# Deploying Trellis
+# Deploying nuworq
 
 ## 30 seconds: which setup?
 
 | You want… | Do this | Login |
 |---|---|---|
-| Just you, on this machine | `trellis serve` | none (loopback only) |
+| Just you, on this machine | `nuworq serve` | none (loopback only) |
 | **Homelab: your devices and agents, anywhere you are** | VM + Tailscale ([below](#homelab-vm--tailscale-recommended)) | tokens |
 | Homelab, LAN only | VM + `--host 0.0.0.0` | tokens |
 | The open internet | VM + Caddy (HTTPS) + `--trust-proxy` | tokens |
 
-One rule: **Trellis only skips login on 127.0.0.1.** Bind anything else, or pass `--auth`, and it needs tokens. It won't start until a human token exists.
+One rule: **nuworq only skips login on 127.0.0.1.** Bind anything else, or pass `--auth`, and it needs tokens. It won't start until a human token exists.
 
 Two kinds of token:
 - **human**: logs in to the web UI; can do everything.
-- **agent**: goes in an agent's `TRELLIS_TOKEN`; can only check in, claim, report, ask and submit.
+- **agent**: goes in an agent's `NUWORQ_TOKEN`; can only check in, claim, report, ask and submit.
 
 ---
 
@@ -23,62 +23,62 @@ Two kinds of token:
 Nothing is exposed to the internet. Your laptop, phone and agent machines reach the hub over your tailnet with HTTPS.
 
 ```bash
-# on the VM (Node 22.13+), from the trellis folder
-node bin/trellis.js token create paul --role human        # copy it; shown once
-node bin/trellis.js serve --auth --trust-proxy             # listens on 127.0.0.1:4747
+# on the VM (Node 22.13+), from the nuworq folder
+node bin/nuworq.js token create paul --role human        # copy it; shown once
+node bin/nuworq.js serve --auth --trust-proxy             # listens on 127.0.0.1:4747
 tailscale serve --bg 4747                                  # https://<vm>.<tailnet>.ts.net
 ```
-Keep it running with [deploy/trellis.service](../deploy/trellis.service) (systemd) or [deploy/docker-compose.yml](../deploy/docker-compose.yml).
+Keep it running with [deploy/nuworq.service](../deploy/nuworq.service) (systemd) or [deploy/docker-compose.yml](../deploy/docker-compose.yml).
 
 ### LAN only, no proxy
 ```bash
-node bin/trellis.js token create paul --role human
-node bin/trellis.js serve --host 0.0.0.0                   # login required automatically
+node bin/nuworq.js token create paul --role human
+node bin/nuworq.js serve --host 0.0.0.0                   # login required automatically
 ```
 Tokens and session cookies travel in plain HTTP on your LAN. That's fine on a home network you trust; otherwise use Tailscale or Caddy.
 
 ### Open internet: Caddy + HTTPS
 1. Point a DNS name at the VM. Open ports 80 and 443 only; never 4747.
-2. Run Trellis on loopback with `--auth --trust-proxy`. The systemd unit already does this.
+2. Run nuworq on loopback with `--auth --trust-proxy`. The systemd unit already does this.
 3. Edit the name in [deploy/Caddyfile](../deploy/Caddyfile) and run Caddy. It gets the certificate and adds HSTS.
 
-`--trust-proxy` makes Trellis believe `X-Forwarded-For/-Proto/-Host`. Use it **only** when a proxy you control is the sole way in. Otherwise anyone can claim to be on HTTPS, or spoof an IP to dodge the login rate limit.
+`--trust-proxy` makes nuworq believe `X-Forwarded-For/-Proto/-Host`. Use it **only** when a proxy you control is the sole way in. Otherwise anyone can claim to be on HTTPS, or spoof an IP to dodge the login rate limit.
 
 ### Docker
 ```bash
 docker compose -f deploy/docker-compose.yml build
-docker compose -f deploy/docker-compose.yml run --rm trellis node bin/trellis.js token create paul --role human
-docker compose -f deploy/docker-compose.yml run --rm trellis node bin/trellis.js token create claude-laptop --role agent
+docker compose -f deploy/docker-compose.yml run --rm nuworq node bin/nuworq.js token create paul --role human
+docker compose -f deploy/docker-compose.yml run --rm nuworq node bin/nuworq.js token create claude-laptop --role agent
 docker compose -f deploy/docker-compose.yml up -d
 docker compose -f deploy/docker-compose.yml ps        # "healthy" after the first check, within ~30s
 ```
 - Create the human token before `up`: in the container login is always required, and without a human token the hub exits (and `restart` keeps retrying).
 - The container runs as non-root, read-only, with all capabilities dropped.
-- Data and tokens live in the `trellis-data` volume, so they survive `down` and `up`. `down -v` deletes them.
+- Data and tokens live in the `nuworq-data` volume, so they survive `down` and `up`. `down -v` deletes them.
 - The port is published on host loopback; edit `ports` for LAN access. If a hub already runs on this machine at 4747, publish another host port, e.g. `"127.0.0.1:4757:4747"`.
 - Token commands run in a one-off container against the volume. `run` doesn't publish ports, so it works while the hub is up.
 
 ### Many workspaces on one hub
 One process can serve several companies or teams. Each **workspace** has its own SQLite file (`<data-dir>/workspaces/<name>.db`), with its own projects, tokens and sessions. Nothing is shared, and exporting or deleting a workspace is one file.
 ```bash
-trellis workspace create acme                            # creates ~/.trellis/workspaces/acme.db
-trellis token create paul --role human --workspace acme  # tokens belong to one workspace
-trellis serve --workspaces --base-domain trellis.example.com --host 127.0.0.1 --auth --trust-proxy
+nuworq workspace create acme                            # creates ~/.nuworq/workspaces/acme.db
+nuworq token create paul --role human --workspace acme  # tokens belong to one workspace
+nuworq serve --workspaces --base-domain nuworq.example.com --host 127.0.0.1 --auth --trust-proxy
 ```
-- **Subdomains**: with `--base-domain trellis.example.com` and wildcard DNS (`*.trellis.example.com`) plus a wildcard certificate at the proxy, `acme.trellis.example.com` is the acme workspace.
-- **No wildcard DNS?** Every workspace is also at `https://<host>/w/<name>/`. Agents use that as their `TRELLIS_URL` (e.g. `https://trellis.example.com/w/acme`), and the session cookie is limited to that path.
+- **Subdomains**: with `--base-domain nuworq.example.com` and wildcard DNS (`*.nuworq.example.com`) plus a wildcard certificate at the proxy, `acme.nuworq.example.com` is the acme workspace.
+- **No wildcard DNS?** Every workspace is also at `https://<host>/w/<name>/`. Agents use that as their `NUWORQ_URL` (e.g. `https://nuworq.example.com/w/acme`), and the session cookie is limited to that path.
 - Login is always required in this mode, even on loopback. An address that names no workspace, or an unknown one, gets a 404.
-- `trellis workspace list`, and `trellis workspace remove <name>` (it deletes the file; a running hub stops serving it at once). `--data-dir` or `TRELLIS_DATA_DIR` moves the folder.
+- `nuworq workspace list`, and `nuworq workspace remove <name>` (it deletes the file; a running hub stops serving it at once). `--data-dir` or `NUWORQ_DATA_DIR` moves the folder.
 - Without `--workspaces`, nothing changes: one database, as above.
 
 ### Connecting agents to a remote hub
 Create one agent token per machine or agent, so you can revoke them one at a time:
 ```bash
-node bin/trellis.js token create claude-laptop          # role defaults to agent
+node bin/nuworq.js token create claude-laptop          # role defaults to agent
 ```
 On the agent's machine:
 ```bash
-claude mcp add trellis -e TRELLIS_URL=https://trellis.example.com -e TRELLIS_TOKEN=trl_… -- node /path/to/trellis/bin/trellis.js mcp
+claude mcp add nuworq -e NUWORQ_URL=https://nuworq.example.com -e NUWORQ_TOKEN=nwq_… -- node /path/to/nuworq/bin/nuworq.js mcp
 ```
 Codex, opencode and the plain CLI read the same two variables.
 
@@ -92,7 +92,7 @@ A signed webhook links pull requests to items and shows CI results on them. When
    - Events: *Pull requests*, *Check suites*, *Check runs*, *Statuses*
 3. GitHub sends a `ping`. "Recent Deliveries" should show 200.
 
-How a PR finds its item: `#N` in the PR title first. Then the branch: on `trellis/<agent>`, it's the item that agent holds, or the one it last submitted. Then `#N` in the PR body. A PR that matches nothing is acknowledged and ignored. Later events for a linked PR (pushes, merge, close) follow it. CI is summarised per head commit: any failed check means failing, all green means passing. Only changes of state go on the item's timeline.
+How a PR finds its item: `#N` in the PR title first. Then the branch: on `nuworq/<agent>`, it's the item that agent holds, or the one it last submitted. Then `#N` in the PR body. A PR that matches nothing is acknowledged and ignored. Later events for a linked PR (pushes, merge, close) follow it. CI is summarised per head commit: any failed check means failing, all green means passing. Only changes of state go on the item's timeline.
 
 GitHub must be able to reach the hub:
 - **Public hub (Caddy):** nothing more to do.
@@ -107,26 +107,31 @@ Deliveries need no token: the HMAC-SHA256 signature (`X-Hub-Signature-256`) is t
 
 ### Tokens
 ```bash
-trellis token create <name> --role human|agent     # prints the token once
-trellis token create <name> --project a,b          # an agent token limited to those projects
-trellis token list                                  # name, role, prefix, created, last used, status, projects
-trellis token revoke <name|id>                      # also logs out that token's browser sessions
+nuworq token create <name> --role human|agent     # prints the token once
+nuworq token create <name> --project a,b          # an agent token limited to those projects
+nuworq token list                                  # name, role, prefix, created, last used, status, projects
+nuworq token revoke <name|id>                      # also logs out that token's browser sessions
 ```
 - An agent token limited with `--project` can't touch other projects or create new ones. The hub won't route it elsewhere, and `/api/route` and `/api/where` don't reveal other projects. Unlimited agent tokens reach every project.
 - Each agent records the tokens that have acted under its name. The UI's agent cards show it, and flag a name used by more than one token.
-- `trellis worker` and `trellis run` are your commands, not an agent's: they read the project list, so give them a human token (`TRELLIS_TOKEN`). The agents they start never get it: with `--run` they need an agent token (`--agent-token` or `TRELLIS_AGENT_TOKEN`, ideally limited with `--project`), and they refuse a human token.
-- These commands work directly on the database file (`--db` or `TRELLIS_DB`; default `~/.trellis/trellis.db`), so run them on the hub host, as the user that owns the file.
-- Tokens look like `trl_` followed by 43 random characters (256 bits). Only a SHA-256 hash and an 8-character prefix are stored.
-- Every human token belongs to a **person**, who acts on the record as `@handle` with a role: *owner* (everything, including people and settings), *steward* (steer, decide, answer, accept, send back, edit work), *member* (comment and propose) or *viewer* (read only). `token create paul --role human` makes `@paul` an owner if they don't exist yet. Otherwise: `trellis person add bea --role steward`, then `trellis token create bea-laptop --role human --person bea`. See also `person list` and `person set-role <handle> <role>`. Human tokens from before people existed become owners. Local loopback mode has no people: the one human is "you".
-- **Invites** add people without handing out tokens: `trellis invite create --role steward [--email bea@example.com] --public-url https://trellis.example.com` (or POST /api/invites as an owner) prints a single-use link, valid for 7 days. Opening it asks for a handle, creates the person with that role and signs them in. Only a hash of the link is stored. `invite list` and `invite revoke <id>` manage open invites. An invite's email is shown but not yet enforced; that comes with GitHub/Google sign-in.
+- `nuworq worker` and `nuworq run` are your commands, not an agent's: they read the project list, so give them a human token (`NUWORQ_TOKEN`). The agents they start never get it: with `--run` they need an agent token (`--agent-token` or `NUWORQ_AGENT_TOKEN`, ideally limited with `--project`), and they refuse a human token.
+- These commands work directly on the database file (`--db` or `NUWORQ_DB`; default `~/.nuworq/nuworq.db`), so run them on the hub host, as the user that owns the file.
+- Tokens look like `nwq_` followed by 43 random characters (256 bits). Only a SHA-256 hash and an 8-character prefix are stored.
+- Every human token belongs to a **person**, who acts on the record as `@handle` with a role: *owner* (everything, including people and settings), *steward* (steer, decide, answer, accept, send back, edit work), *member* (comment and propose) or *viewer* (read only). `token create paul --role human` makes `@paul` an owner if they don't exist yet. Otherwise: `nuworq person add bea --role steward`, then `nuworq token create bea-laptop --role human --person bea`. See also `person list` and `person set-role <handle> <role>`. Human tokens from before people existed become owners. Local loopback mode has no people: the one human is "you".
+- **Invites** add people without handing out tokens: `nuworq invite create --role steward [--email bea@example.com] --public-url https://nuworq.example.com` (or POST /api/invites as an owner) prints a single-use link, valid for 7 days. Opening it asks for a handle, creates the person with that role and signs them in. Only a hash of the link is stored. `invite list` and `invite revoke <id>` manage open invites. An invite's email is shown but not yet enforced; that comes with GitHub/Google sign-in.
 - Browser logins exchange a human token for an `HttpOnly; SameSite=Strict` session cookie. It is `Secure` over HTTPS and lasts 30 days.
 
 ### Backups
 Everything lives in one SQLite file, plus its `-wal` and `-shm` files while running.
 ```bash
-sqlite3 /var/lib/trellis/trellis.db ".backup '/backups/trellis-$(date +%F).db'"   # safe while running
+sqlite3 /var/lib/nuworq/nuworq.db ".backup '/backups/nuworq-$(date +%F).db'"   # safe while running
 ```
-Or stop the service and copy the `.db` file. To restore, put the file back and start Trellis. Tokens are in the same file, so a backup is also a credential store: keep it private.
+Or stop the service and copy the `.db` file. To restore, put the file back and start nuworq. Tokens are in the same file, so a backup is also a credential store: keep it private.
+
+### Upgrading a deployment from before the rename
+nuworq used to be called Trellis, and so did these recipes: the `trellis` user, `/opt/trellis`, `/var/lib/trellis/trellis.db` and `trellis.service`; in Docker, the `trellis` service, the `trellis-data` volume and `/data/trellis.db`. The code still answers to the old names: `bin/trellis.js` runs nuworq, and old tokens (`trl_…`), sessions, `TRELLIS_*` variables and `trellis/<agent>` branches keep working.
+- **systemd**: your installed unit keeps running as it is after `git pull`. To move to the new names, stop it and move the database to `/var/lib/nuworq/nuworq.db` (owned by the `nuworq` user) before starting `nuworq.service`.
+- **Docker**: the compose file in the repo is the recipe, so after an update `up` would start a new `nuworq` service on an empty `nuworq-data` volume, next to the old container. Stop the old container first and copy `trellis.db` into the new volume as `nuworq.db` (owned by the container's user), or keep using your previous compose file.
 
 ### Threat model (honest version)
 **What it protects against**
@@ -135,15 +140,15 @@ Or stop the service and copy the `.db` file. To restore, put the file back and s
 - Cross-site attacks:
   - Writes authenticated by cookie must carry a matching `Origin` (CSRF).
   - Every browser write from another origin is refused, even in local mode.
-  - Without login, Trellis only answers to loopback `Host` names, which blocks DNS rebinding from web pages you visit.
+  - Without login, nuworq only answers to loopback `Host` names, which blocks DNS rebinding from web pages you visit.
 - Login brute force: 10 failures per IP per 10 minutes, then 429. 256-bit tokens make guessing hopeless anyway.
 - Oversized requests: bodies over 1MB are refused.
 - Clickjacking and injected scripts: strict CSP (`script-src 'self'`), `X-Frame-Options: DENY`, `nosniff`, `no-referrer`.
 
 **What it doesn't (yet)**
 - **Per-project scoping.** Any agent token can work in every project and read project data through agent operations (`look`, `checkin`). A leaked agent token exposes all projects' work items, decisions and field notes.
-- **A trustworthy agent identity.** Within a token, the agent name (`X-Trellis-Agent`) is self-declared. One token can act as many agent names.
-- **Prompt injection.** Agents read text written by other agents and by you: steers, notes, item descriptions. A compromised or careless agent can write instructions that others may follow. Treat Trellis content as data, the same way you treat issue text.
+- **A trustworthy agent identity.** Within a token, the agent name (`x-nuworq-agent`) is self-declared. One token can act as many agent names.
+- **Prompt injection.** Agents read text written by other agents and by you: steers, notes, item descriptions. A compromised or careless agent can write instructions that others may follow. Treat nuworq content as data, the same way you treat issue text.
 - **Strong login.** No passkeys, OAuth/SSO or 2FA. The human token *is* the credential, so guard it like a password.
 - **Encryption at rest.** The database isn't encrypted. Rely on disk encryption and file permissions; the systemd unit sets `UMask=0077` and a private state directory.
 - **Audit.** There's no separate audit log, though every action lands in the project's event history with its actor.

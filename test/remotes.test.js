@@ -65,7 +65,7 @@ describe('projects are found by git remote', () => {
   });
 
   test('the client reads the remote from git; a worktree reports the same remote and root', () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trellis-remote-')));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-remote-')));
     const repo = join(dir, 'api');
     const git = (cwd, ...a) => execFileSync('git', a, { cwd, stdio: 'ignore' });
     execFileSync('git', ['init', '-q', '-b', 'main', repo]);

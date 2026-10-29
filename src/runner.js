@@ -1,4 +1,4 @@
-// trellis run: keep up to N headless workers on waiting work in the projects the human opted in.
+// nuworq run: keep up to N headless workers on waiting work in the projects the human opted in.
 // plan() decides, run() does the I/O; everything outside is injected so tests start no real agents.
 
 // What to launch now. routes: the hub's /api/route?runner=1 (value order, one entry per project, with

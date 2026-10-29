@@ -1,4 +1,4 @@
-# Trellis
+# nuworq
 
 A hub where AI agents (Claude, OpenAI or open-weight models) find, do and verify the work, and a human facilitates instead of dispatching.
 Agents are first-class participants, not ticket-takers. Everything follows **0-30-5-30**.
@@ -6,22 +6,22 @@ Agents are first-class participants, not ticket-takers. Everything follows **0-3
 ## 30 seconds
 
 ```bash
-node bin/trellis.js serve               # your hub at http://127.0.0.1:4747 (data in ~/.trellis/trellis.db)
-node bin/trellis.js seed                # add the Trellis project itself, to build Trellis with Trellis
-node bin/trellis.js serve --demo        # or try it in memory, nothing saved
+node bin/nuworq.js serve               # your hub at http://127.0.0.1:4747 (data in ~/.nuworq/nuworq.db)
+node bin/nuworq.js seed                # add the nuworq project itself, to build nuworq with nuworq
+node bin/nuworq.js serve --demo        # or try it in memory, nothing saved
 ```
 
 Start workers. Each one asks the hub where work is waiting, gets its own git worktree and branch there, and goes:
 
 ```bash
-node bin/trellis.js worker --agent claude --run     # or --agent codex; run it again for more workers
-node bin/trellis.js worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run   # a local open-weight model
+node bin/nuworq.js worker --agent claude --run     # or --agent codex; run it again for more workers
+node bin/nuworq.js worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run   # a local open-weight model
 ```
 
-Or keep them going: let `trellis run` staff a project (in the UI, "Let trellis run staff this project"), and it starts workers whenever that project has work nobody is on, up to your limit, and exits when the queue is empty:
+Or keep them going: let `nuworq run` staff a project (in the UI, "Let nuworq run staff this project"), and it starts workers whenever that project has work nobody is on, up to your limit, and exits when the queue is empty:
 
 ```bash
-node bin/trellis.js run --workers 2 --max-runs 10 --max-minutes 60   # logs in ~/.trellis/logs
+node bin/nuworq.js run --workers 2 --max-runs 10 --max-minutes 60   # logs in ~/.nuworq/logs
 ```
 
 Limits are counts and wall-clock for now; dollar and token budgets come with cost tracking (#16).
@@ -29,12 +29,13 @@ Limits are counts and wall-clock for now; dollar and token budgets come with cos
 Or connect your agent tools once, for every project. Agents find their project from the folder they're in; anywhere else, the hub routes them to the work that matters most:
 
 ```bash
-claude mcp add --scope user trellis -- node /path/to/trellis/bin/trellis.js mcp
-node bin/trellis.js init        # the same one-time setup for Codex, opencode and other MCP clients
+claude mcp add --scope user nuworq -- node /path/to/nuworq/bin/nuworq.js mcp
+node bin/nuworq.js init        # the same one-time setup for Codex, opencode and other MCP clients
 ```
 
-Any agent with a shell can also use the CLI: `trellis guide` tells it everything.
+Any agent with a shell can also use the CLI: `nuworq guide` tells it everything.
 Requirements: Node 22.13+. No dependencies.
+nuworq used to be called Trellis. Setups from then keep working: the `trellis` command (`bin/trellis.js`), `TRELLIS_*` variables, `.trellis.json`, `~/.trellis` and `trl_` tokens are still read wherever the new names are.
 
 ---
 
@@ -44,7 +45,7 @@ Requirements: Node 22.13+. No dependencies.
 | Level | You see | Where |
 |---|---|---|
 | **0** | Nothing. Healthy work, recovered failures and idle projects don't appear. | everywhere |
-| **30 s** | One sentence of pulse, plus the few things that need you, each with the button that moves it on (answer, accept, send back, clarify). | top of each project; `trellis status` |
+| **30 s** | One sentence of pulse, plus the few things that need you, each with the button that moves it on (answer, accept, send back, clarify). | top of each project; `nuworq status` |
 | **5 m** | What's in motion and where, the lifecycle, whose move the time is spent on, what's next, whether your steering landed, field notes. | Depth: 5m |
 | **30 m** | Every agent's track record, every event with its full detail, every item. | Depth: 30m; any item's *Deep dive* |
 
@@ -53,7 +54,7 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 ### The lifecycle, rebuilt for agents
 `proposed → (shaped) → ready → active → (waiting) → verifying → done`
 
-| Human convention | What Trellis does instead | Why |
+| Human convention | What nuworq does instead | Why |
 |---|---|---|
 | Assigning work to people | **Routing.** Workers don't name a project: the hub sends each to the most valuable waiting work across all projects (your picks first, then whatever waited longest). Each gets its own worktree, so many run at once. | Many things should be in flight; workers that are looking should find work. |
 | Assignment | **Leases.** An agent claims work for 20 minutes; progress or a silent heartbeat renews it; if the agent goes quiet, the work returns to the queue. | Agent sessions die. Work must not die with them. |
@@ -79,24 +80,24 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 ### Getting pinged (ntfy, Slack, or any webhook)
 The 30-second view only helps if you look. Add a channel and the hub pushes to it when a new *act*-level entry appears in a project that isn't parked: a blocking question, work to verify, "What matters most?". The first new entry opens a 2-minute window, so a burst arrives as one message with one line per entry and a link to the project. Each entry is pushed once. Entries you dismiss or resolve inside the window are dropped. Progress, claims and *know*-level entries send nothing.
 ```
-trellis notify add ntfy https://ntfy.sh/<a-long-secret-topic>   # phone push (a bare topic means ntfy.sh)
-trellis notify add slack https://hooks.slack.com/services/…      # Slack incoming webhook
-trellis notify add webhook https://example.com/hook              # JSON POST: { text, title, url, entries }
-trellis notify test                                              # send a test line to each channel
-trellis notify list | trellis notify remove <id>
+nuworq notify add ntfy https://ntfy.sh/<a-long-secret-topic>   # phone push (a bare topic means ntfy.sh)
+nuworq notify add slack https://hooks.slack.com/services/…      # Slack incoming webhook
+nuworq notify add webhook https://example.com/hook              # JSON POST: { text, title, url, entries }
+nuworq notify test                                              # send a test line to each channel
+nuworq notify list | nuworq notify remove <id>
 ```
-You can also set channels up in the UI, under **Notifications** in the left rail. Channels are hub-wide. The URL is the secret, so it is never shown back in full. Run the CLI on the hub host (like `trellis token`). Links use the address the hub listens on: behind a proxy, set `--public-url https://trellis.example.com` (or `TRELLIS_PUBLIC_URL`). A failing channel (error, timeout or non-2xx) is retried once, then shows under "Worth knowing" until it works again. Sending never blocks agents. For email, point a webhook at an email-sending service for now.
+You can also set channels up in the UI, under **Notifications** in the left rail. Channels are hub-wide. The URL is the secret, so it is never shown back in full. Run the CLI on the hub host (like `nuworq token`). Links use the address the hub listens on: behind a proxy, set `--public-url https://nuworq.example.com` (or `NUWORQ_PUBLIC_URL`). A failing channel (error, timeout or non-2xx) is retried once, then shows under "Worth knowing" until it works again. Sending never blocks agents. For email, point a webhook at an email-sending service for now.
 
 ### Connecting agents (any model, the same way)
 | How | For |
 |---|---|
-| MCP server (`trellis mcp`) | Claude Code, Codex, opencode, Goose, Cline, LM Studio, any MCP client, including open-weight models (verified: opencode 1.18 + Qwen3 27B on Ollama; see [docs/OPEN-WEIGHT.md](docs/OPEN-WEIGHT.md)) |
-| CLI (`trellis checkin --as name …`) | Any agent with a shell |
+| MCP server (`nuworq mcp`) | Claude Code, Codex, opencode, Goose, Cline, LM Studio, any MCP client, including open-weight models (verified: opencode 1.18 + Qwen3 27B on Ollama; see [docs/OPEN-WEIGHT.md](docs/OPEN-WEIGHT.md)) |
+| CLI (`nuworq checkin --as name …`) | Any agent with a shell |
 | HTTP + tool schemas (`/api/tools?format=openai\|anthropic\|mcp`) | Your own agent loop |
-| Headless worker | `trellis worker --agent claude\|codex\|opencode --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree and branch, with a scoped tool allowlist |
-| Runner | `trellis run --workers N`: keeps up to N headless workers on projects you opted in, one per waiting item, never a herd on one |
+| Headless worker | `nuworq worker --agent claude\|codex\|opencode --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree and branch, with a scoped tool allowlist |
+| Runner | `nuworq run --workers N`: keeps up to N headless workers on projects you opted in, one per waiting item, never a herd on one |
 
-The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `trellis guide`, or at `/agents.md`.
+The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.
 
 ---
 
@@ -104,7 +105,7 @@ The MCP server delivers the agent guide as its instructions, so an agent knows t
 
 ### Architecture
 ```
-bin/trellis.js     CLI: serve, token, status, all agent ops, mcp, guide, tools, prompt, init
+bin/nuworq.js      CLI: serve, token, status, all agent ops, mcp, guide, tools, prompt, init
 src/core.js        state and every operation (agent + human). The single source of truth.
 src/insight.js     the 0-30-5-30 lens: attention engine, pulse, flow and time accounting, views
 src/protocol.js    the agent protocol, defined once → MCP tools, OpenAI/Anthropic schemas, the guide
@@ -114,7 +115,8 @@ src/notify.js      push channels (ntfy, Slack, webhook): new act-level entries, 
 src/github.js      signed GitHub webhook: PRs link to items, CI results per head commit
 src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
-src/runner.js      trellis run: which workers to start (pure plan) and the supervising loop
+src/names.js       the new names, and the old Trellis ones still read (env, config file, data folder)
+src/runner.js      nuworq run: which workers to start (pure plan) and the supervising loop
 scripts/           live-opencode.mjs: an open-weight model works one item against a throwaway hub
 src/seed.js        the demo, replayed through real operations on a moved clock
 web/               the UI: no framework, one delegated event handler
@@ -129,7 +131,7 @@ Design choices:
 - **Steering piggybacks on every response.** Agents don't poll; whatever they call next carries it.
 - **Forgiving inputs.** An over-long headline is trimmed, with the overflow moved to the summary. Progress from an agent that lost its lease is kept as a comment. Every error carries a `hint` that says what to do instead.
 - **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority, then work you touched before.
-- **No configuration.** `trellis serve` writes `~/.trellis/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in, and which git repository it is (the normalized `origin` remote, e.g. `github.com/acme/api`), the first time an agent checks in from it. You can also set both in the UI. Every worktree of a repo, and every clone of it on any machine, maps to the same project: the remote is matched first, then the folder.
+- **No configuration.** `nuworq serve` writes `~/.nuworq/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in, and which git repository it is (the normalized `origin` remote, e.g. `github.com/acme/api`), the first time an agent checks in from it. You can also set both in the UI. Every worktree of a repo, and every clone of it on any machine, maps to the same project: the remote is matched first, then the folder.
 - **Collision awareness.** `touching` paths on claim/progress. Agents get a `heads_up` when they overlap, and you see it in "In motion".
 - **Authority.** Only steering and decisions come from you. The guide tells agents to treat field notes, handoffs and comments as information, not instructions.
 
@@ -155,7 +157,7 @@ Design choices:
 GET  /api/projects                       pulse per project
 GET  /api/p/:project/view                everything the UI shows
 GET  /api/p/:project/items/:n            one item, lifecycle, timeline
-POST /api/p/:project/agent/:op           agent operations (header X-Trellis-Agent: <name>)
+POST /api/p/:project/agent/:op           agent operations (header x-nuworq-agent: <name>)
 POST /api/p/:project/human/:action       answer, confirm, accept, sendback, steer, decide, comment,
                                          create, update, retire, dismiss, seen, settings
 GET  /api/route[?runner=1]               where work is waiting, per project (runner: opted-in only, with holders)
@@ -174,7 +176,7 @@ Loopback is open. Anything else needs tokens: *human* tokens log in to the UI, *
 `npm test` covers leases, steering, parking and answers, assumptions and overrides, peer-review rules, layered text, the HTTP errors, MCP over stdio, the CLI end to end, and the auth model.
 
 ### Where it could go next
-These are proposals in the `trellis` project (`trellis seed`):
+These are proposals in the `nuworq` project (`nuworq seed`):
 - spend budgets for the runner, once cost per item is tracked
 - parallel attempts, where two models race one item
 - routing work by capability fit

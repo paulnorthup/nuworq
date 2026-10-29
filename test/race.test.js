@@ -230,14 +230,14 @@ describe('race review', () => {
     assert.throws(() => s.human('accept', { item: '#1' }), /say which one to keep/);
     assert.throws(() => s.human('accept', { item: '#1', attempt: 7 }), /No submitted attempt "7"/);
     const r = s.human('accept', { item: '#1', attempt: 'c' });
-    assert.deepEqual([r.kept, r.merge], ['c', 'trellis/c']);
+    assert.deepEqual([r.kept, r.merge], ['c', 'nuworq/c']);
     assert.equal(s.row(1).stage, 'done');
     assert.equal(s.row(1).implementer, 'c');
     assert.deepEqual(s.runs(1).map((x) => x.stage), ['not_chosen', 'chosen']);
     const events = s.hub.q(`SELECT type, headline, summary FROM events WHERE type IN ('not_chosen', 'accepted') ORDER BY id`).all();
     assert.match(events[0].headline, /a's attempt on #1 was not chosen/);
     assert.match(events[1].headline, /You accepted #1 \(c's attempt\)/);
-    assert.match(events[1].summary, /Merge trellis\/c/);
+    assert.match(events[1].summary, /Merge nuworq\/c/);
   });
 
   test('send all back returns it to ready and clears the attempts for a fresh race', () => {

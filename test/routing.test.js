@@ -118,7 +118,7 @@ describe('transport', () => {
     try {
       const res = await fetch(`${base}/api/agent/checkin`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-trellis-agent': 'a', 'x-trellis-root': encodeURIComponent('/code/my lantern') },
+        headers: { 'content-type': 'application/json', 'x-nuworq-agent': 'a', 'x-nuworq-root': encodeURIComponent('/code/my lantern') },
         body: '{}',
       });
       assert.equal((await res.json()).project, 'lantern');
@@ -132,13 +132,13 @@ describe('transport', () => {
   });
 
   test('a git worktree maps back to its main checkout', () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trellis-wt-')));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-wt-')));
     const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, stdio: 'ignore' });
     g('init', '-q', '-b', 'main');
     writeFileSync(join(dir, 'f'), 'x');
     g('add', '.');
     g('commit', '-q', '-m', 'init');
-    g('worktree', 'add', '-q', '-b', 'trellis/w1', `${dir}.worktrees/w1`);
+    g('worktree', 'add', '-q', '-b', 'nuworq/w1', `${dir}.worktrees/w1`);
     assert.equal(repoRoot(`${dir}.worktrees/w1`), dir);
     assert.equal(repoRoot(dir), dir);
   });

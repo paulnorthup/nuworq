@@ -12,7 +12,7 @@ import { Auth } from '../src/auth.js';
 import { openDb } from '../src/db.js';
 import { createServer } from '../src/server.js';
 
-const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
 function request(port, method, path, { headers = {}, body } = {}) {
   const data = body === undefined ? undefined : JSON.stringify(body);
@@ -137,7 +137,7 @@ describe('existing human tokens', () => {
 
 describe('the person CLI', () => {
   test('add, list, set-role, and tokens tied to a person', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trellis-people-'));
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-people-'));
     const db = join(dir, 't.db');
     const run = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--db', db], { env: { ...process.env, HOME: dir, NO_COLOR: '1' } });
     await run('person', 'add', 'bea', '--role', 'steward', '--email', 'bea@example.com');

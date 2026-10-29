@@ -1,31 +1,31 @@
-# /etc/systemd/system/trellis.service
-#   sudo useradd --system --home /var/lib/trellis --shell /usr/sbin/nologin trellis
-#   sudo git clone <repo> /opt/trellis   (or copy the folder there)
-#   sudo -u trellis node /opt/trellis/bin/trellis.js token create <you> --role human --db /var/lib/trellis/trellis.db
-#   sudo systemctl enable --now trellis
+# /etc/systemd/system/nuworq.service
+#   sudo useradd --system --home /var/lib/nuworq --shell /usr/sbin/nologin nuworq
+#   sudo git clone <repo> /opt/nuworq   (or copy the folder there)
+#   sudo -u nuworq node /opt/nuworq/bin/nuworq.js token create <you> --role human --db /var/lib/nuworq/nuworq.db
+#   sudo systemctl enable --now nuworq
 [Unit]
-Description=Trellis hub
+Description=nuworq hub
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=trellis
-Group=trellis
-WorkingDirectory=/opt/trellis
+User=nuworq
+Group=nuworq
+WorkingDirectory=/opt/nuworq
 # Loopback + --auth behind Caddy or `tailscale serve`. For LAN-only without a proxy,
 # use --host 0.0.0.0 instead (login is then required automatically) and drop --trust-proxy.
-ExecStart=/usr/bin/node /opt/trellis/bin/trellis.js serve --host 127.0.0.1 --port 4747 --db /var/lib/trellis/trellis.db --auth --trust-proxy
+ExecStart=/usr/bin/node /opt/nuworq/bin/nuworq.js serve --host 127.0.0.1 --port 4747 --db /var/lib/nuworq/nuworq.db --auth --trust-proxy
 Restart=on-failure
 RestartSec=3
 Environment=NODE_ENV=production
-StateDirectory=trellis
+StateDirectory=nuworq
 StateDirectoryMode=0700
 
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/trellis
+ReadWritePaths=/var/lib/nuworq
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

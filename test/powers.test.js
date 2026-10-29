@@ -12,7 +12,7 @@ import { Auth } from '../src/auth.js';
 import { view } from '../src/insight.js';
 import { createServer } from '../src/server.js';
 
-const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
 function request(port, method, path, { headers = {}, body } = {}) {
   const data = body === undefined ? undefined : JSON.stringify(body);
@@ -50,7 +50,7 @@ describe('agent token powers and provenance', () => {
   });
   after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
 
-  const op = (token, agent, name, body = {}) => request(ctx.port, 'POST', `/api/p/demo/agent/${name}`, { headers: { authorization: `Bearer ${ctx.tok[token]}`, 'x-trellis-agent': agent }, body });
+  const op = (token, agent, name, body = {}) => request(ctx.port, 'POST', `/api/p/demo/agent/${name}`, { headers: { authorization: `Bearer ${ctx.tok[token]}`, 'x-nuworq-agent': agent }, body });
 
   test('a build-only token gets work from next but never a review, and its review call is refused with a hint', async () => {
     const { hub } = ctx;
@@ -119,7 +119,7 @@ describe('agent token powers and provenance', () => {
 
 describe('the token CLI shows who and what', () => {
   test('token create --powers/--minted-by/--runner and token list', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trellis-powers-'));
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-powers-'));
     const db = join(dir, 't.db');
     const run = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--db', db], { env: { ...process.env, HOME: dir, NO_COLOR: '1' } });
     await run('person', 'add', 'dev', '--role', 'steward');

@@ -1,10 +1,11 @@
-// Trellis UI. No framework: state → HTML strings → one delegated event handler.
+// nuworq UI. No framework: state → HTML strings → one delegated event handler.
 // Zoom levels mirror 0-30-5-30: what isn't relevant at a level simply isn't rendered.
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
+// Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
 const store = {
-  get: (k, d) => { try { return localStorage.getItem('trellis:' + k) ?? d; } catch { return d; } },
-  set: (k, v) => { try { localStorage.setItem('trellis:' + k, v); } catch {} },
+  get: (k, d) => { try { return localStorage.getItem('nuworq:' + k) ?? localStorage.getItem('trellis:' + k) ?? d; } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem('nuworq:' + k, v); } catch {} },
 };
 const S = {
   projects: [], slug: null, view: null, info: null,
@@ -52,7 +53,7 @@ const modelOf = (name) => S.view?.agents.find((a) => a.name === name)?.model ?? 
 function who(name, model) {
   if (!name) return '';
   if (name === 'you') return '<span class="you-chip">You</span>';
-  if (name === 'trellis') return '<span class="sys-chip">Trellis</span>';
+  if (name === 'nuworq' || name === 'trellis') return '<span class="sys-chip">nuworq</span>'; // trellis: events from before the rename
   model ??= modelOf(name);
   const prov = providerOf(model);
   return `<span class="agent prov-${prov.toLowerCase().replace(/[^a-z]/g, '')}" title="${esc([model, prov].filter(Boolean).join(' · '))}"><i></i>${esc(name)}</span>`;
@@ -107,7 +108,7 @@ async function refresh({ force = false } = {}) {
       S.view = null;
     }
   } catch (e) {
-    if (!S.projects.length) $('#main').innerHTML = `<div class="loading">Can't reach the Trellis hub. Is <code>trellis serve</code> running?</div>`;
+    if (!S.projects.length) $('#main').innerHTML = `<div class="loading">Can't reach the nuworq hub. Is <code>nuworq serve</code> running?</div>`;
     return;
   }
   render({ force });
@@ -153,7 +154,7 @@ function renderRail() {
     </a>`).join('');
   const total = S.projects.reduce((n, p) => n + p.needs, 0);
   $('#rail').innerHTML = `
-    <div class="brand">${LOGO}<span>Trellis</span></div>
+    <div class="brand">${LOGO}<span>nuworq</span></div>
     ${S.projects.length > 1 ? `<a class="rail-item ${!S.slug ? 'on' : ''}" href="#/"><span class="name">All projects</span>${total ? `<span class="badge">${total}</span>` : ''}</a>` : ''}
     <div class="rail-label">Projects</div>
     ${projects || '<div class="rail-item" style="color:var(--faint)">None yet</div>'}
@@ -168,7 +169,7 @@ function renderRail() {
 // ── overview: the 30-second view across every project ──
 function overview() {
   if (!S.projects.length) {
-    return `<div class="phead"><div class="titles"><h1>Welcome to Trellis</h1>
+    return `<div class="phead"><div class="titles"><h1>Welcome to nuworq</h1>
       <div class="mission">A hub where you facilitate and AI agents (Claude, OpenAI, open-weight) find, do and verify the work.</div></div></div>
       <div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" data-action="new-project">create one now</button>.
       <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`;
@@ -216,8 +217,8 @@ function project(v) {
         ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items with a GitHub webhook">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
         ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
         ${z() >= 1 ? (P.runner
-          ? `<button class="link" data-action="runner-off" title="trellis run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by trellis run · stop</button>`
-          : `<button class="link" data-action="runner-on" title="Let trellis run start headless workers here whenever work is waiting">Let trellis run staff this project</button>`) : ''}
+          ? `<button class="link" data-action="runner-off" title="nuworq run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by nuworq run · stop</button>`
+          : `<button class="link" data-action="runner-on" title="Let nuworq run start headless workers here whenever work is waiting">Let nuworq run staff this project</button>`) : ''}
       </div>
     </div>
     ${pulse(v)}
@@ -722,27 +723,27 @@ const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''
 const copyBlock = (text) => `<div class="copyable"><pre>${esc(text)}</pre><button data-action="copy" data-text="${esc(text)}">Copy</button></div>`;
 
 async function connect() {
-  S.info ??= await api('/api/info').catch(() => ({ bin: '/path/to/trellis/bin/trellis.js', url: location.origin }));
+  S.info ??= await api('/api/info').catch(() => ({ bin: '/path/to/nuworq/bin/nuworq.js', url: location.origin }));
   const slug = S.slug ?? 'my-project';
   const bin = S.info.bin;
   const url = S.info.url;
   const secured = S.info.auth === 'required';
-  const env = (url === 'http://127.0.0.1:4747' ? '' : ` -e TRELLIS_URL=${url}`) + (secured ? ' -e TRELLIS_TOKEN=<agent-token>' : '');
+  const env = (url === 'http://127.0.0.1:4747' ? '' : ` -e NUWORQ_URL=${url}`) + (secured ? ' -e NUWORQ_TOKEN=<agent-token>' : '');
   const where = S.view?.project.path;
-  const tomlTok = secured ? ', TRELLIS_TOKEN = "<agent-token>"' : '';
-  const envTok = secured ? '  TRELLIS_TOKEN=<agent-token>' : '';
+  const tomlTok = secured ? ', NUWORQ_TOKEN = "<agent-token>"' : '';
+  const envTok = secured ? '  NUWORQ_TOKEN=<agent-token>' : '';
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set an agent tool up once: it needs no project. An agent working in a folder the hub knows finds its project; anywhere else, the hub routes it to the work that matters most.</p>
-    ${secured ? `<p class="lead">This hub requires tokens. Give each agent its own, so you can revoke one without the others. On the server, run:</p>${copyBlock('node bin/trellis.js token create <agent-name> --role agent')}` : ''}
+    ${secured ? `<p class="lead">This hub requires tokens. Give each agent its own, so you can revoke one without the others. On the server, run:</p>${copyBlock('node bin/nuworq.js token create <agent-name> --role agent')}` : ''}
     <h4>Start a worker (it goes wherever work is waiting)</h4><p class="lead">Each worker gets its own git worktree and branch, so many can run at once. Run it again for more workers.</p>${copyBlock(`node "${bin}" worker --agent claude --run\nnode "${bin}" worker --agent codex --run`)}
     ${where ? '' : `<p class="lead">⚠ The hub doesn't know where ${esc(S.view?.project.name ?? 'this project')}'s code lives yet. Set it under the mission (5m view), so workers can start there.</p>`}
-    <h4>Claude Code (once, for every project)</h4>${copyBlock(`claude mcp add --scope user trellis${env} -- node "${bin}" mcp`)}
-    <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(`[mcp_servers.trellis]\ncommand = "node"\nargs = ["${bin}", "mcp"]\nenv = { TRELLIS_URL = "${url}"${tomlTok} }`)}
-    <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(`command: node\nargs: ["${bin}", "mcp"]\nenv: TRELLIS_URL=${url}${envTok}`)}
+    <h4>Claude Code (once, for every project)</h4>${copyBlock(`claude mcp add --scope user nuworq${env} -- node "${bin}" mcp`)}
+    <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(`[mcp_servers.nuworq]\ncommand = "node"\nargs = ["${bin}", "mcp"]\nenv = { NUWORQ_URL = "${url}"${tomlTok} }`)}
+    <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(`command: node\nargs: ["${bin}", "mcp"]\nenv: NUWORQ_URL=${url}${envTok}`)}
     <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(`node "${bin}" guide --project ${slug}`)}
-    <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through Trellis: run the command above and follow it."</i></p>
+    <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>
 
-    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>X-Trellis-Agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
+    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>x-nuworq-agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
 
@@ -752,7 +753,7 @@ async function notifySettings() {
   const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
     <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
   modal(`<h2>Notifications</h2>
-    <p class="lead">When something new needs you (a blocking question, work to verify, "what matters most?"), Trellis sends one message, batched over 2 minutes, with a link. Healthy work sends nothing.</p>
+    <p class="lead">When something new needs you (a blocking question, work to verify, "what matters most?"), nuworq sends one message, batched over 2 minutes, with a link. Healthy work sends nothing.</p>
     ${rows || '<p class="lead faint">No channels yet.</p>'}
     <h4>Add a channel</h4>
     <div class="inline-form"><select id="nt-kind">${Object.keys(n.kinds).map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
@@ -766,7 +767,7 @@ async function githubSettings() {
   const P = S.view.project;
   const hook = `${S.info.url}/api/hooks/github/${encodeURIComponent(P.slug)}`;
   modal(`<h2>GitHub</h2>
-    <p class="lead">A webhook links pull requests to items (a <code>trellis/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
+    <p class="lead">A webhook links pull requests to items (a <code>nuworq/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
     <h4>1. In the repo on GitHub: Settings → Webhooks → Add webhook</h4>
     <p class="lead">Payload URL (GitHub must be able to reach it; see docs/DEPLOY.md):</p>${copyBlock(hook)}
     <p class="lead">Content type <code>application/json</code>. Events: <i>Pull requests</i>, <i>Check suites</i>, <i>Check runs</i>, <i>Statuses</i>.</p>
@@ -870,8 +871,8 @@ const ACTIONS = {
   pick: (el) => human('pick', { item: el.dataset.item }, `Picked ${el.dataset.item}: the next agent shapes it first`),
   park: () => { if (confirm('Park this project? No new work starts and nothing here will ask for you until you unpark it.')) human('settings', { parked: true }, 'Parked'); },
   unpark: () => human('settings', { parked: false }, 'Unparked'),
-  'runner-on': () => human('settings', { runner: true }, '`trellis run` may now start workers here'),
-  'runner-off': () => human('settings', { runner: false }, '`trellis run` will no longer start workers here'),
+  'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
+  'runner-off': () => human('settings', { runner: false }, '`nuworq run` will no longer start workers here'),
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
   clarify: (el) => {

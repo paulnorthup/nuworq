@@ -7,7 +7,7 @@ import { Hub, LEASE_MS, MIN } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { view } from '../src/insight.js';
 
-const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 const run = promisify(execFile);
 
 function setup(start = Date.UTC(2026, 9, 1, 9)) {
@@ -163,14 +163,14 @@ describe('transports', () => {
     const b1 = await r1.json();
     assert.ok(b1.hint);
 
-    const r2 = await post('/api/p/no-such-project/agent/next', {}, { 'x-trellis-agent': 'claude-1' });
+    const r2 = await post('/api/p/no-such-project/agent/next', {}, { 'x-nuworq-agent': 'claude-1' });
     assert.equal(r2.status, 404);
   });
 
   test('MCP: initialize, list tools, call checkin and next', async () => {
     hub.humanOp(hub.tx(() => hub.project('mcp-proj', { create: true })).slug, 'create', { title: 'MCP task', acceptance: 'x' });
     const child = spawn(process.execPath, [BIN, 'mcp'], {
-      env: { ...process.env, TRELLIS_URL: url, TRELLIS_PROJECT: 'mcp-proj', TRELLIS_MODEL: 'gpt-5', TRELLIS_AGENT: '' },
+      env: { ...process.env, NUWORQ_URL: url, NUWORQ_PROJECT: 'mcp-proj', NUWORQ_MODEL: 'gpt-5', NUWORQ_AGENT: '' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const pending = new Map();
@@ -201,7 +201,7 @@ describe('transports', () => {
       const list = await rpc('tools/list', {});
       assert.equal(list.result.tools.length, 15);
 
-      const checkin = await rpc('tools/call', { name: 'checkin', arguments: { model: 'unknown' } }); // TRELLIS_MODEL wins
+      const checkin = await rpc('tools/call', { name: 'checkin', arguments: { model: 'unknown' } }); // NUWORQ_MODEL wins
       assert.ok(!checkin.result.isError, checkin.result.content[0].text);
       const brief = JSON.parse(checkin.result.content[0].text);
       assert.match(brief.you, /^codex-[0-9a-f]{4}$/);
@@ -227,7 +227,7 @@ describe('transports', () => {
   });
 
   test('CLI: checkin, propose, next, submit', async () => {
-    const env = { ...process.env, TRELLIS_URL: url, TRELLIS_PROJECT: 'cli-proj', TRELLIS_AGENT: '' };
+    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_PROJECT: 'cli-proj', NUWORQ_AGENT: '' };
     const cli = (...args) => run(process.execPath, [BIN, ...args], { env });
 
     const c = JSON.parse((await cli('checkin', '--as', 'cli-1', '--model', 'qwen3-coder', '--client', 'opencode')).stdout);

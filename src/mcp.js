@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { createClient } from './client.js';
 import { tools, guide } from './protocol.js';
 import { slugify } from './core.js';
+import { envVar } from './names.js';
 
 const VERSIONS = ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25'];
 const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -13,10 +14,10 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
   const client = createClient(clientOpts);
   const { url } = client.settings;
   let project = client.settings.project;
-  let agent = env.TRELLIS_AGENT || null;
+  let agent = envVar('AGENT', env) || null;
   let clientName = '';
 
-  const log = (...a) => process.stderr.write(`[trellis-mcp] ${a.join(' ')}\n`);
+  const log = (...a) => process.stderr.write(`[nuworq-mcp] ${a.join(' ')}\n`);
   const write = (msg) => output.write(JSON.stringify(msg) + '\n');
   const reply = (id, result) => write({ jsonrpc: '2.0', id, result });
   const fail = (id, code, message) => write({ jsonrpc: '2.0', id, error: { code, message } });
@@ -29,7 +30,7 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
       return {
         protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : '2025-06-18',
         capabilities: { tools: {} },
-        serverInfo: { name: 'trellis', version: PKG.version },
+        serverInfo: { name: 'nuworq', version: PKG.version },
         instructions: guide({ project: project ?? 'whichever project the hub sends you to', url, via: 'tools' }),
       };
     },
@@ -46,10 +47,12 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
       }
       if (name === 'checkin') {
         // Whoever launched us knows the model better than the model does (open-weight ones say "unknown").
-        if (env.TRELLIS_MODEL) args.model = env.TRELLIS_MODEL;
+        const model = envVar('MODEL', env);
+        if (model) args.model = model;
         if (!args.client && clientName) args.client = clientName;
-        // Whoever launched us detected what this machine can do (trellis worker sets it).
-        if (args.has == null && env.TRELLIS_HAS) args.has = env.TRELLIS_HAS.split(',');
+        // Whoever launched us detected what this machine can do (nuworq worker sets it).
+        const has = envVar('HAS', env);
+        if (args.has == null && has) args.has = has.split(',');
       }
       try {
         const result = await client.call(name, args, { agent, project });

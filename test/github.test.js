@@ -9,20 +9,20 @@ import { createServer } from '../src/server.js';
 const SECRET = 'a-long-shared-secret';
 const sign = (raw, secret = SECRET) => 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex');
 
-// Payloads shaped like GitHub's deliveries (trimmed to the fields Trellis reads, plus some it ignores).
-const repository = { id: 1, full_name: 'paul/trellis', html_url: 'https://github.com/paul/trellis' };
+// Payloads shaped like GitHub's deliveries (trimmed to the fields nuworq reads, plus some it ignores).
+const repository = { id: 1, full_name: 'paul/nuworq', html_url: 'https://github.com/paul/nuworq' };
 const pr = (over = {}) => ({
   action: 'opened', number: 42, repository, sender: { login: 'paul' },
   pull_request: {
-    number: 42, html_url: 'https://github.com/paul/trellis/pull/42', state: 'open', merged: false, draft: false,
+    number: 42, html_url: 'https://github.com/paul/nuworq/pull/42', state: 'open', merged: false, draft: false,
     title: 'Push notifications', body: 'Adds ntfy/Slack/webhook channels.', user: { login: 'paul' },
-    head: { ref: 'trellis/claude-1', sha: 'aaaaaaa1111111111111111111111111111111aa' }, base: { ref: 'main' },
+    head: { ref: 'nuworq/claude-1', sha: 'aaaaaaa1111111111111111111111111111111aa' }, base: { ref: 'main' },
     ...over,
   },
 });
 const checkRun = (name, conclusion, sha = 'aaaaaaa1111111111111111111111111111111aa') => ({
   action: 'completed', repository,
-  check_run: { name, head_sha: sha, status: 'completed', conclusion, html_url: `https://github.com/paul/trellis/runs/${name}`, app: { name: 'GitHub Actions' } },
+  check_run: { name, head_sha: sha, status: 'completed', conclusion, html_url: `https://github.com/paul/nuworq/runs/${name}`, app: { name: 'GitHub Actions' } },
 });
 
 let hub, server, base;
@@ -64,21 +64,21 @@ describe('GitHub webhooks', () => {
     assert.deepEqual((await deliver('ping', { zen: 'Keep it logically awesome.', hook_id: 1 })).body, { ok: true, pong: true });
   });
 
-  test('a PR from trellis/<agent> links to the item that agent holds, with its link and state on the record', async () => {
+  test('a PR from nuworq/<agent> links to the item that agent holds, with its link and state on the record', async () => {
     const r = await deliver('pull_request', pr());
     assert.equal(r.status, 200);
     assert.deepEqual(r.body, { ok: true, item: '#1', pr: 42, state: 'open' });
     const it = itemView(hub, 'app', '#1');
-    assert.deepEqual(it.prs.map((x) => [x.number, x.state, x.url]), [[42, 'open', 'https://github.com/paul/trellis/pull/42']]);
+    assert.deepEqual(it.prs.map((x) => [x.number, x.state, x.url]), [[42, 'open', 'https://github.com/paul/nuworq/pull/42']]);
     assert.match(events('pr')[0].headline, /PR #42 opened: Push notifications/);
     // a push to the branch moves the head without adding to the record
-    await deliver('pull_request', pr({ head: { ref: 'trellis/claude-1', sha: 'bbbbbbb2222222222222222222222222222222bb' } }));
+    await deliver('pull_request', pr({ head: { ref: 'nuworq/claude-1', sha: 'bbbbbbb2222222222222222222222222222222bb' } }));
     await deliver('pull_request', pr());
     assert.equal(events('pr').length, 1);
   });
 
   test('"#N" in the title links a PR from any branch', async () => {
-    const r = await deliver('pull_request', { ...pr(), number: 7, pull_request: { ...pr().pull_request, number: 7, html_url: 'https://github.com/paul/trellis/pull/7', title: 'Fix the other thing (#2)', head: { ref: 'fix/other', sha: 'c'.repeat(40) } } });
+    const r = await deliver('pull_request', { ...pr(), number: 7, pull_request: { ...pr().pull_request, number: 7, html_url: 'https://github.com/paul/nuworq/pull/7', title: 'Fix the other thing (#2)', head: { ref: 'fix/other', sha: 'c'.repeat(40) } } });
     assert.equal(r.body.item, '#2');
     const none = await deliver('pull_request', { ...pr(), number: 8, pull_request: { ...pr().pull_request, number: 8, title: 'Unrelated', body: '', head: { ref: 'random', sha: 'd'.repeat(40) } } });
     assert.equal(none.body.ignored, 'no matching item');
@@ -94,7 +94,7 @@ describe('GitHub webhooks', () => {
     assert.equal(card.level, 'act');
     assert.equal(card.item, '#1');
     assert.match(card.sub, /PR #42 · lint/);
-    assert.equal(card.pr.checks[0].url, 'https://github.com/paul/trellis/runs/lint');
+    assert.equal(card.pr.checks[0].url, 'https://github.com/paul/nuworq/runs/lint');
     assert.deepEqual(events('ci').map((e) => e.headline), ['CI passed on PR #42', 'CI failed on PR #42: lint']);
     // fixed: the card goes away, and the record says so once
     await deliver('check_run', checkRun('lint', 'success'));
@@ -126,7 +126,7 @@ describe('GitHub webhooks', () => {
     const locked = createServer(hub, { auth: 'required' });
     await new Promise((r) => locked.listen(0, '127.0.0.1', r));
     try {
-      assert.equal(await post(locked.address().port, 'trellis.example.com'), 200);
+      assert.equal(await post(locked.address().port, 'nuworq.example.com'), 200);
     } finally {
       locked.close();
     }

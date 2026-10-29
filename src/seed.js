@@ -1,16 +1,16 @@
-// The Trellis project itself: what exists, and the backlog of ideas. Used by `serve --demo` (in memory)
-// and `trellis seed` (into a real hub), so Trellis can be built with Trellis.
+// The nuworq project itself: what exists, and the backlog of ideas. Used by `serve --demo` (in memory)
+// and `nuworq seed` (into a real hub), so nuworq can be built with nuworq.
 const H = 3600_000;
 
 export async function seed(hub) {
   const realNow = hub.now;
   const NOW = realNow();
   const at = (hoursAgo) => { hub.now = () => NOW - hoursAgo * H; };
-  const P = 'trellis';
+  const P = 'nuworq';
   const You = (action, args = {}) => hub.humanOp(P, action, args);
   try {
     at(8);
-    hub.tx(() => hub.project(P, { create: true, name: 'Trellis' }));
+    hub.tx(() => hub.project(P, { create: true, name: 'nuworq' }));
     You('settings', { mission: 'A hub where AI agents are first-class participants and the human is a facilitator. Everything follows 0-30-5-30: silence when things are fine, 30 seconds to know what needs you, 5 minutes to understand it, 30 minutes for the whole story.' });
     You('decide', { body: 'Zero runtime dependencies: Node 22.13+ and its built-in SQLite only.' });
     You('decide', { body: 'Design for agents as the primary users of the protocol: low ceremony, small responses, forgiving inputs, every error carries a hint.' });
@@ -23,7 +23,7 @@ export async function seed(hub) {
       'Agent memory: field notes, feedback at checkin, file-collision warnings',
       'Security: human and agent tokens, hardening, deploy recipes',
       'Shaping as agent work; parked vs stalled projects; "what matters most"',
-      'Headless worker command (trellis worker)',
+      'Headless worker command (nuworq worker)',
       'Verified with real agents: Claude via MCP, Codex via the CLI',
     ]) {
       at((h -= 0.5));
@@ -32,7 +32,7 @@ export async function seed(hub) {
     }
 
     for (const [title, summary] of [
-      ['Runner: keep headless workers going', 'trellis run --workers 2 starts headless agents (claude -p, codex exec, opencode run with a local model) when there is claimable work and nobody is on it, and stops when the queue is empty. Opt-in per project, with limits on concurrency and spend.'],
+      ['Runner: keep headless workers going', 'nuworq run --workers 2 starts headless agents (claude -p, codex exec, opencode run with a local model) when there is claimable work and nobody is on it, and stops when the queue is empty. Opt-in per project, with limits on concurrency and spend.'],
       ['Live-test an open-weight agent end to end', 'Run opencode with a local Ollama model (e.g. Qwen) through the MCP server on a small project and fix whatever breaks. Claude and Codex are verified; open-weight is not yet.'],
       ['Verify the deploy recipes on a real VM', 'The Dockerfile, systemd unit and Caddyfile in deploy/ were written but never run. Deploy to a homelab VM (ideally behind Tailscale) and fix what breaks.'],
       ['Scope agent tokens to projects', 'Today an agent token can read every project through agent operations. Let a token be limited to named projects, and record which token an agent name used.'],

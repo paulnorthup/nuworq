@@ -55,7 +55,7 @@ describe('push notifications', () => {
     n.stop();
     assert.equal(got.length, 2, 'one message per channel');
     const hook = JSON.parse(got.find((g) => g.path === '/hook').body);
-    assert.equal(hook.title, 'Trellis: 2 things need you');
+    assert.equal(hook.title, 'nuworq: 2 things need you');
     assert.equal(hook.url, 'http://hub.test/#/p/app');
     assert.equal(hook.entries.length, 2);
     assert.match(hook.text, /#1 question: Postgres or SQLite\?/);
@@ -177,9 +177,9 @@ describe('push notifications', () => {
     blockingAsk(op, 'a', '#1', 'Postgres or SQLite?');
     n.scan();
     await n.flush();
-    assert.equal(got[0].headers.title, 'Trellis: 1 thing needs you');
+    assert.equal(got[0].headers.title, 'nuworq: 1 thing needs you');
     assert.equal(got[0].headers.click, 'http://hub.test/#/p/app');
-    assert.match(got[0].body, /^Trellis: 1 thing needs you\n• #1 question: Postgres or SQLite\?\n→ /);
+    assert.match(got[0].body, /^nuworq: 1 thing needs you\n• #1 question: Postgres or SQLite\?\n→ /);
     const hub2 = new Hub();
     assert.equal(addChannel(hub2.db, 'ntfy', 'just-a-topic-name').url, 'https://ntfy.sh/…name');
   });

@@ -12,7 +12,7 @@ import { createServer } from '../src/server.js';
 import { runMcp } from '../src/mcp.js';
 import { tools, guide } from '../src/protocol.js';
 
-const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
 function world() {
   const clock = { t: Date.UTC(2026, 9, 1, 9) };
@@ -138,7 +138,7 @@ describe('fit hints: what items need and what agents have', () => {
 });
 
 describe('workers report what their machine has', () => {
-  test('the MCP server adds TRELLIS_HAS to checkin', async () => {
+  test('the MCP server adds NUWORQ_HAS to checkin', async () => {
     const hub = new Hub();
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -148,7 +148,7 @@ describe('workers report what their machine has', () => {
     const lines = [];
     output.on('data', (d) => lines.push(...String(d).split('\n').filter(Boolean).map((l) => JSON.parse(l))));
     try {
-      runMcp({ input, output, env: { TRELLIS_AGENT: 'w', TRELLIS_HAS: 'docker,macos' }, clientOpts: { url: `http://127.0.0.1:${server.address().port}`, project: 'fitp', token: '' } });
+      runMcp({ input, output, env: { NUWORQ_AGENT: 'w', NUWORQ_HAS: 'docker,macos' }, clientOpts: { url: `http://127.0.0.1:${server.address().port}`, project: 'fitp', token: '' } });
       input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'checkin', arguments: {} } }) + '\n');
       for (let i = 0; i < 100 && !lines.length; i++) await new Promise((r) => setTimeout(r, 20));
       assert.ok(!lines[0].result.isError, lines[0].result.content[0].text);
@@ -158,8 +158,8 @@ describe('workers report what their machine has', () => {
     }
   });
 
-  test('trellis worker detects tags, puts them in TRELLIS_HAS, and routes with them', async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trellis-fit-')));
+  test('nuworq worker detects tags, puts them in NUWORQ_HAS, and routes with them', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-fit-')));
     const bin = join(dir, 'bin');
     (await import('node:fs')).mkdirSync(bin);
     writeFileSync(join(bin, 'docker'), '#!/bin/sh\n', { mode: 0o755 });
@@ -174,10 +174,10 @@ describe('workers report what their machine has', () => {
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--here', '--as', 'w', ...a],
-      { cwd: tmpdir(), env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, TRELLIS_TOKEN: '', TRELLIS_PROJECT: '' } });
+      { cwd: tmpdir(), env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, NUWORQ_TOKEN: '', NUWORQ_PROJECT: '' } });
     try {
       const plain = (await cli()).stdout;
-      const has = JSON.parse(plain.match(/--mcp-config '([^']*)'/)[1]).mcpServers.trellis.env.TRELLIS_HAS.split(',');
+      const has = JSON.parse(plain.match(/--mcp-config '([^']*)'/)[1]).mcpServers.nuworq.env.NUWORQ_HAS.split(',');
       assert.ok(has.includes('docker'));
       assert.ok(has.includes({ darwin: 'macos', linux: 'linux' }[process.platform] ?? has[0]));
       assert.match(plain, /w → plain/, 'the GPU job is not routed to a machine without a GPU');

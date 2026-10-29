@@ -34,7 +34,7 @@ export function addChannel(db, kind, url, now = Date.now()) {
   let u;
   try { u = new URL(raw); } catch { throw new UserError('a channel needs a URL', { hint: KINDS[kind] }); }
   if (!['http:', 'https:'].includes(u.protocol)) throw new UserError('channel URLs must be http or https', { hint: KINDS[kind] });
-  if (db.prepare('SELECT 1 FROM channels WHERE url = ?').get(u.href)) throw new UserError('that channel is already set up', { hint: 'See: trellis notify list' });
+  if (db.prepare('SELECT 1 FROM channels WHERE url = ?').get(u.href)) throw new UserError('that channel is already set up', { hint: 'See: nuworq notify list' });
   const r = db.prepare('INSERT INTO channels (kind, url, created_at) VALUES (?, ?, ?)').run(kind, u.href, now);
   return { id: Number(r.lastInsertRowid), kind, url: mask(u.href) };
 }
@@ -47,7 +47,7 @@ export function listChannels(db) {
 
 export function removeChannel(db, id) {
   const r = db.prepare('DELETE FROM channels WHERE id = ?').run(Number(id));
-  if (!r.changes) throw new UserError(`no channel ${id}`, { status: 404, hint: 'See: trellis notify list' });
+  if (!r.changes) throw new UserError(`no channel ${id}`, { status: 404, hint: 'See: nuworq notify list' });
 }
 
 // ── sending ──
@@ -82,7 +82,7 @@ export async function deliver(db, c, msg, { fetch = globalThis.fetch, timeout = 
 
 export async function testChannels(db, { baseUrl = '', ...opts } = {}) {
   const channels = db.prepare('SELECT * FROM channels ORDER BY id').all();
-  const msg = { title: 'Trellis', text: `Trellis: test message. When something needs you, it arrives here.${baseUrl ? `\n→ ${baseUrl}` : ''}`, url: baseUrl || undefined, entries: [] };
+  const msg = { title: 'nuworq', text: `nuworq: test message. When something needs you, it arrives here.${baseUrl ? `\n→ ${baseUrl}` : ''}`, url: baseUrl || undefined, entries: [] };
   return Promise.all(channels.map((c) => deliver(db, c, msg, opts)));
 }
 
@@ -90,7 +90,7 @@ export function compose(entries, baseUrl = '') {
   const slugs = [...new Set(entries.map((e) => e.project))];
   const link = (slug) => (baseUrl ? `${baseUrl}/#/p/${encodeURIComponent(slug)}` : '');
   const url = baseUrl ? (slugs.length === 1 ? link(slugs[0]) : `${baseUrl}/#/`) : '';
-  const title = `Trellis: ${plural(entries.length, 'thing')} ${entries.length === 1 ? 'needs' : 'need'} you`;
+  const title = `nuworq: ${plural(entries.length, 'thing')} ${entries.length === 1 ? 'needs' : 'need'} you`;
   const lines = entries.map((e) => `• ${slugs.length > 1 ? `${e.name} ` : ''}${e.entry.item ? `${e.entry.item} ` : ''}${LABEL[e.entry.kind] ?? e.entry.kind}: ${clip(e.entry.headline)}`);
   return {
     title, url,

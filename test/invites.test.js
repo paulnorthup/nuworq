@@ -11,7 +11,7 @@ import { Hub } from '../src/core.js';
 import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
 
-const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
 function request(port, method, path, { headers = {}, body } = {}) {
   const data = body === undefined ? undefined : JSON.stringify(body);
@@ -49,7 +49,7 @@ describe('invite links', () => {
   test('an owner creates an invite and gets the link once; non-owners get 403', async () => {
     const r = await call('POST', '/api/invites', { headers: as('paul'), body: { role: 'steward', email: 'bea@example.com' } });
     assert.equal(r.status, 200);
-    assert.match(r.json.link, /^http:\/\/127\.0\.0\.1:\d+\/invite\.html#tri_[\w-]{30,}$/);
+    assert.match(r.json.link, /^http:\/\/127\.0\.0\.1:\d+\/invite\.html#nwi_[\w-]{30,}$/);
     assert.equal((await call('POST', '/api/invites', { headers: as('sam'), body: { role: 'member' } })).status, 403);
     assert.equal((await call('GET', '/api/invites', { headers: as('sam') })).status, 403);
     const list = await call('GET', '/api/invites', { headers: as('paul') });
@@ -89,7 +89,7 @@ describe('invite links', () => {
     const rev = await call('POST', '/api/invites', { headers: as('paul'), body: { role: 'member' } });
     await call('POST', '/api/invites/revoke', { headers: as('paul'), body: { id: rev.json.id } });
     assert.equal((await call('POST', '/api/invite/accept', { body: { token: tokenOf(rev.json.link), handle: 'dee' } })).json.error, 'this invite was revoked');
-    assert.equal((await call('POST', '/api/invite/accept', { body: { token: 'tri_nonsense', handle: 'dee' } })).json.error, 'this invite link is not valid');
+    assert.equal((await call('POST', '/api/invite/accept', { body: { token: 'nwi_nonsense', handle: 'dee' } })).json.error, 'this invite link is not valid');
     assert.equal(people(), n, 'nobody was created');
     // A taken handle leaves the invite usable.
     const fresh = tokenOf((await call('POST', '/api/invites', { headers: as('paul'), body: { role: 'viewer' } })).json.link);
@@ -103,7 +103,7 @@ describe('invite links', () => {
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
       let last;
-      for (let i = 0; i < 11; i++) last = await request(server.address().port, 'POST', '/api/invite/accept', { body: { token: `tri_bad${i}`, handle: 'x' } });
+      for (let i = 0; i < 11; i++) last = await request(server.address().port, 'POST', '/api/invite/accept', { body: { token: `nwi_bad${i}`, handle: 'x' } });
       assert.equal(last.status, 429);
     } finally {
       server.close();
@@ -123,11 +123,11 @@ describe('invite links', () => {
 
 describe('the invite CLI', () => {
   test('create prints the link once; list shows state; revoke', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trellis-inv-'));
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-inv-'));
     const db = join(dir, 't.db');
     const run = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--db', db], { env: { ...process.env, HOME: dir, NO_COLOR: '1' } });
-    const out = (await run('invite', 'create', '--role', 'steward', '--email', 'bea@example.com', '--public-url', 'https://trellis.example.com')).stdout;
-    assert.match(out, /https:\/\/trellis\.example\.com\/invite\.html#tri_/);
+    const out = (await run('invite', 'create', '--role', 'steward', '--email', 'bea@example.com', '--public-url', 'https://nuworq.example.com')).stdout;
+    assert.match(out, /https:\/\/nuworq\.example\.com\/invite\.html#nwi_/);
     assert.match((await run('invite', 'list')).stdout, /1\s+steward\s+bea@example.com\s+open/);
     await run('invite', 'revoke', '1');
     assert.match((await run('invite', 'list')).stdout, /revoked/);

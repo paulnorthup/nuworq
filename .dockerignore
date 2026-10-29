@@ -4,6 +4,7 @@
 node_modules
 *.db
 *.db-*
+.nuworq.json
 .trellis.json
 test
 scripts

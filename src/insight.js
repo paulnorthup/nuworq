@@ -3,7 +3,7 @@
 //   30s → pulse + the few things that need you, each with the action that moves it on
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
-import { STAGES, AUTONOMY, OPEN_STAGES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman } from './core.js';
+import { STAGES, AUTONOMY, OPEN_STAGES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem } from './core.js';
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 
@@ -156,7 +156,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       key: `steer:${s.id}`, level: 'know', kind: 'steer-unseen', at: s.at,
       headline: `No agent has picked up your steer yet (${dur(t - s.at)})`,
       sub: `"${s.body.slice(0, 120)}"`,
-      why: recentAgents.length ? 'Agents see steering on their next call to Trellis.' : 'No agents are active right now. They will see it when they check in.',
+      why: recentAgents.length ? 'Agents see steering on their next call to nuworq.' : 'No agents are active right now. They will see it when they check in.',
       item: s.item,
     });
   }
@@ -217,7 +217,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
         key: `notify:${c.id}:${c.failing_since}`, level: 'know', kind: 'notify-failing', at: c.failing_since,
         headline: `Push notifications to ${c.kind} are failing (${c.last_error})`,
         sub: `since ${dur(t - c.failing_since)} ago · retried once`,
-        why: 'Things that need you are not reaching your phone or chat. Check the channel under Notifications, or run `trellis notify test`.',
+        why: 'Things that need you are not reaching your phone or chat. Check the channel under Notifications, or run `nuworq notify test`.',
       });
     }
   }
@@ -463,7 +463,7 @@ export function itemView(hub, slug, ref) {
     .map((q) => ({ ...q, options: json(q.options, []), blocking: !!q.blocking, ago: dur(t - q.at) }));
   const steers = hub.q(`SELECT * FROM notes WHERE item_id = ? AND kind = 'steer' ORDER BY at`).all(it.id)
     .map((n) => ({ id: n.id, body: n.body, active: !!n.active, ago: dur(t - n.at), acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
-  const agentNames = [...new Set(events.filter((e) => !isHuman(e.actor) && e.actor !== 'trellis').map((e) => e.actor))];
+  const agentNames = [...new Set(events.filter((e) => !isHuman(e.actor) && !isSystem(e.actor)).map((e) => e.actor))];
   const models = Object.fromEntries(agentNames.map((n) => [n, hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, n)?.model ?? '']));
   const parent = hub.itemById(it.parent_id);
   return {

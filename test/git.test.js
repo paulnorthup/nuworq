@@ -9,14 +9,14 @@ import { view } from '../src/insight.js';
 import { claimedHashes } from '../src/git.js';
 
 function repo() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trellis-git-')));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-git-')));
   const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, encoding: 'utf8' }).trim();
   g('init', '-q', '-b', 'main');
   writeFileSync(join(dir, 'f'), '0');
   g('add', '.');
   g('commit', '-qm', 'init');
-  g('branch', 'trellis/idle'); // a worker that never committed
-  g('checkout', '-q', '-b', 'trellis/w1');
+  g('branch', 'nuworq/idle'); // a worker that never committed
+  g('checkout', '-q', '-b', 'nuworq/w1');
   for (const n of [1, 2]) {
     writeFileSync(join(dir, 'f'), String(n));
     g('commit', '-qam', `change ${n}`);
@@ -45,9 +45,9 @@ describe('git facts on submit', () => {
   test("records the worker's branch and commits; real hashes raise nothing", () => {
     const { dir, head } = repo();
     const { submit, git, card } = world(dir);
-    const { item, r } = submit('w1', { evidence: [{ label: `commit ${head} on trellis/w1` }] });
+    const { item, r } = submit('w1', { evidence: [{ label: `commit ${head} on nuworq/w1` }] });
     const g = git();
-    assert.equal(g.branch, 'trellis/w1');
+    assert.equal(g.branch, 'nuworq/w1');
     assert.equal(g.base, 'main');
     assert.deepEqual(g.commits.map((c) => c.subject), ['change 2', 'change 1']);
     assert.deepEqual(g.missing, []);
@@ -68,12 +68,12 @@ describe('git facts on submit', () => {
     const { dir } = repo();
     const { submit, card } = world(dir);
     const { item, r } = submit('idle', { evidence: [{ label: 'looked at it' }] });
-    assert.match(r.hint, /No commits on trellis\/idle ahead of main/);
-    assert.match(card(item).warn, /No commits on trellis\/idle/);
+    assert.match(r.hint, /No commits on nuworq\/idle ahead of main/);
+    assert.match(card(item).warn, /No commits on nuworq\/idle/);
   });
 
   test('no repo where the project lives: submit is exactly as before', () => {
-    const { submit, git } = world(realpathSync(mkdtempSync(join(tmpdir(), 'trellis-norepo-'))));
+    const { submit, git } = world(realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-norepo-'))));
     const { r } = submit('w1', { headline: 'committed as 9f3c2ab', evidence: [{ label: 'x' }] });
     assert.equal(git(), undefined);
     assert.doesNotMatch(r.hint, /repo|commits/);

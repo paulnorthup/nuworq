@@ -16,7 +16,7 @@ const FAKES = {
   'a Slack token': 'xoxb-' + r(12, '0123456789') + '-' + r(24),
   'a Slack webhook URL': `https://hooks.slack.com/services/T${r(8, 'ABCDEFGH0123456789')}/B${r(8, 'ABCDEFGH0123456789')}/${r(24)}`,
   'a private key': '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----',
-  'a Trellis token': 'trl_' + r(43),
+  'a nuworq token': 'nwq_' + r(43),
   'a bearer token': 'curl -H "Authorization: Bearer ' + r(40) + '" https://api.example.com',
 };
 
@@ -31,13 +31,16 @@ describe('secret shapes', () => {
 
   test('SHAs, UUIDs, hashes, base64 and ordinary prose pass', () => {
     const fine = [
+      'Commit 3f786850e387550fdab836ed7e6dc881de23001b on nuworq/claude-a62b',
       'Commit 3f786850e387550fdab836ed7e6dc881de23001b on trellis/claude-a62b',
       'fixed in 3f78685',
       `request ${randomUUID()}`,
       createHash('sha256').update('x').digest('hex'),
       Buffer.from('ordinary text that is fairly long, for base64 purposes').toString('base64'),
       'the task-scheduler-implementation-details and sk-learn-style-transformers-pipeline doc',
+      'Set NUWORQ_TOKEN to your agent token (nwq_…); send Authorization: Bearer <token>',
       'Set TRELLIS_TOKEN to your agent token (trl_…); send Authorization: Bearer <token>',
+      'risk-assessment-for-the-new-module; ask for a token with `nuworq token create`',
       'risk-assessment-for-the-new-module; ask for a token with `trellis token create`',
     ];
     for (const s of fine) assert.equal(findSecret(s), null, s);
@@ -45,7 +48,7 @@ describe('secret shapes', () => {
 
   test('the path points into nested values', () => {
     assert.deepEqual(findSecret({ evidence: [{ label: 'ok' }, { label: 'x', url: `https://x.test/?key=${FAKES['a GitHub token']}` }] }), { path: 'evidence[1].url', kind: 'a GitHub token' });
-    assert.deepEqual(findSecret({ options: ['a', FAKES['a Trellis token']] }), { path: 'options[1]', kind: 'a Trellis token' });
+    assert.deepEqual(findSecret({ options: ['a', FAKES['a nuworq token']] }), { path: 'options[1]', kind: 'a nuworq token' });
   });
 });
 

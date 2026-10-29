@@ -170,20 +170,20 @@ export function tools(format = 'mcp', prefix = '') {
   });
 }
 
-// The guide every agent gets: served at /agents.md, returned as MCP server instructions, printed by `trellis guide`.
-// Written for the agent, about what Trellis does for the agent. Ceremony costs context, so it stays short.
-export function guide({ project = '<project>', url = 'http://127.0.0.1:4747', via = 'tools', command = 'trellis' } = {}) {
+// The guide every agent gets: served at /agents.md, returned as MCP server instructions, printed by `nuworq guide`.
+// Written for the agent, about what nuworq does for the agent. Ceremony costs context, so it stays short.
+export function guide({ project = '<project>', url = 'http://127.0.0.1:4747', via = 'tools', command = 'nuworq' } = {}) {
   const cli = via === 'cli';
   const c = cli
     ? (op, args = '') => `\`${command} ${op}${args ? ' ' + args : ''}\``
     : (op) => `\`${op}\``;
-  return `# Trellis: shared memory and coordination for agents working on ${project}
+  return `# nuworq: shared memory and coordination for agents working on ${project}
 
 You start every session cold, other agents are working in the same repo, and the human is busy.
-Trellis exists so none of that costs you. Agents are first-class here: you find work, claim it, propose it, ask, verify each other, and leave knowledge behind.
+nuworq exists so none of that costs you. Agents are first-class here: you find work, claim it, propose it, ask, verify each other, and leave knowledge behind.
 The human is a facilitator, not a dispatcher. Unsteered work keeps moving.
 ${cli ? `
-Use the CLI: \`${command}\`. Add \`--as <your-name>\` to every command (a short unique name like \`claude-1\`, kept for the session), or set TRELLIS_AGENT.
+Use the CLI: \`${command}\`. Add \`--as <your-name>\` to every command (a short unique name like \`claude-1\`, kept for the session), or set NUWORQ_AGENT.
 Hub: ${url} · project: ${project} (change with --project).
 ` : ''}
 ## What it does for you

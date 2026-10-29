@@ -61,7 +61,7 @@ describe('local mode', () => {
 
   test('bodies over 1MB are refused', async () => {
     const big = JSON.stringify({ title: 'x'.repeat(1024 * 1024 + 10) });
-    const r = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: big, headers: { 'x-trellis-agent': 'a1' } });
+    const r = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: big, headers: { 'x-nuworq-agent': 'a1' } });
     assert.equal(r.status, 413);
   });
 });
@@ -73,7 +73,7 @@ describe('required mode', () => {
     ctx = await start({ auth: 'required' });
     human = ctx.server.auth.createToken('paul', 'human');
     agent = ctx.server.auth.createToken('claude-box', 'agent');
-    assert.match(human, /^trl_[\w-]{40,}$/);
+    assert.match(human, /^nwq_[\w-]{40,}$/);
   });
   after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
 
@@ -91,12 +91,12 @@ describe('required mode', () => {
   });
 
   test('a non-loopback Host is fine once login is required', async () => {
-    const r = await request(ctx.port, 'GET', '/api/health', { headers: { host: 'trellis.example.com' } });
+    const r = await request(ctx.port, 'GET', '/api/health', { headers: { host: 'nuworq.example.com' } });
     assert.equal(r.status, 200);
   });
 
   test('agent tokens: agent operations yes, human views no', async () => {
-    const ok = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: { model: 'gpt-5' }, headers: { authorization: `Bearer ${agent}`, 'x-trellis-agent': 'codex-1' } });
+    const ok = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: { model: 'gpt-5' }, headers: { authorization: `Bearer ${agent}`, 'x-nuworq-agent': 'codex-1' } });
     assert.equal(ok.status, 200, ok.text);
     assert.equal(ok.json.project, 'demo');
     assert.equal((await request(ctx.port, 'GET', '/api/tools', { headers: { authorization: `Bearer ${agent}` } })).status, 200);
@@ -119,7 +119,7 @@ describe('required mode', () => {
     const r = await request(ctx.port, 'POST', '/api/login', { body: { token: human } });
     assert.equal(r.status, 200);
     const set = r.headers['set-cookie'][0];
-    assert.match(set, /^trellis_session=[\w-]+; HttpOnly; SameSite=Strict; Path=\/; Max-Age=2592000$/);
+    assert.match(set, /^nuworq_session=[\w-]+; HttpOnly; SameSite=Strict; Path=\/; Max-Age=2592000$/);
     const cookie = set.split(';')[0];
     const v = await request(ctx.port, 'GET', '/api/p/demo/view', { headers: { cookie } });
     assert.equal(v.status, 200);
@@ -175,10 +175,10 @@ describe('required mode', () => {
     try {
       const t = limited.server.auth.createToken('me', 'human');
       for (let i = 0; i < 10; i++) {
-        const r = await request(limited.port, 'POST', '/api/login', { body: { token: 'trl_wrongwrongwrongwrongwrong' } });
+        const r = await request(limited.port, 'POST', '/api/login', { body: { token: 'nwq_wrongwrongwrongwrongwrong' } });
         assert.equal(r.status, 401);
       }
-      const eleventh = await request(limited.port, 'POST', '/api/login', { body: { token: 'trl_wrongwrongwrongwrongwrong' } });
+      const eleventh = await request(limited.port, 'POST', '/api/login', { body: { token: 'nwq_wrongwrongwrongwrongwrong' } });
       assert.equal(eleventh.status, 429);
       const evenRight = await request(limited.port, 'POST', '/api/login', { body: { token: t } });
       assert.equal(evenRight.status, 429);
@@ -189,14 +189,14 @@ describe('required mode', () => {
 
   test('body limit applies in required mode too', async () => {
     const big = JSON.stringify({ title: 'x'.repeat(1024 * 1024 + 10) });
-    const r = await request(ctx.port, 'POST', '/api/p/demo/agent/propose', { body: big, headers: { authorization: `Bearer ${agent}`, 'x-trellis-agent': 'codex-1' } });
+    const r = await request(ctx.port, 'POST', '/api/p/demo/agent/propose', { body: big, headers: { authorization: `Bearer ${agent}`, 'x-nuworq-agent': 'codex-1' } });
     assert.equal(r.status, 413);
   });
 });
 
 describe('agent tokens limited to projects', () => {
   let ctx, scoped, other;
-  const as = (token, agent = 'w1') => ({ authorization: `Bearer ${token}`, 'x-trellis-agent': agent });
+  const as = (token, agent = 'w1') => ({ authorization: `Bearer ${token}`, 'x-nuworq-agent': agent });
   before(async () => {
     ctx = await start({ auth: 'required' });
     for (const slug of ['alpha', 'beta']) {
@@ -233,7 +233,7 @@ describe('agent tokens limited to projects', () => {
     assert.deepEqual(route.json.map((r) => r.project), ['alpha']);
     const where = await request(ctx.port, 'GET', `/api/where?root=${encodeURIComponent('/code/beta')}`, { headers: as(scoped) });
     assert.equal(where.json.project, null);
-    const next = await request(ctx.port, 'POST', '/api/agent/next', { body: {}, headers: { ...as(scoped, 'w2'), 'x-trellis-root': encodeURIComponent('/code/beta') } });
+    const next = await request(ctx.port, 'POST', '/api/agent/next', { body: {}, headers: { ...as(scoped, 'w2'), 'x-nuworq-root': encodeURIComponent('/code/beta') } });
     assert.equal(next.status, 200);
     assert.equal(next.json.project, 'alpha');
     assert.equal(next.json.item, '#1');

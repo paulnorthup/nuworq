@@ -19,7 +19,8 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
   'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
-const COOKIE = 'trellis_session';
+const COOKIE = 'nuworq_session';
+const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 // What an agent-role token may reach in required mode.
 const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where)$/, /^GET \/agents\.md$/];
@@ -59,11 +60,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const https = (req) => req.socket.encrypted || (trustProxy && first(req.headers['x-forwarded-proto']) === 'https');
   const origin = (req) => `${https(req) ? 'https' : 'http'}://${hostOf(req)}`;
   const cookieOf = (req) => {
+    const jar = new Map();
     for (const part of String(req.headers.cookie ?? '').split(';')) {
       const [k, ...v] = part.trim().split('=');
-      if (k === COOKIE) return v.join('=');
+      if (!jar.has(k)) jar.set(k, v.join('='));
     }
-    return null;
+    return jar.get(COOKIE) ?? jar.get(OLD_COOKIE) ?? null;
   };
   const sameOrigin = (req) => {
     try { return new URL(req.headers.origin).host === hostOf(req); } catch { return false; }
@@ -97,11 +99,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const pre = sub == null ? path.match(/^\/w\/([^/]+)(\/.*)?$/) : null;
         const slug = sub ?? (pre ? decodeURIComponent(pre[1]) : null);
         if (slug == null) {
-          if (path === '/api/health') return send(200, { ok: true, name: 'trellis', workspaces: true });
+          if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', workspaces: true });
           return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
         }
         hub = spaces.get(slug);
-        if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: trellis workspace create <name>.');
+        if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: nuworq workspace create <name>.');
         if (pre) {
           base = `/w/${pre[1]}`;
           path = pre[2] ?? '';
@@ -127,7 +129,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (unsafe && req.headers.origin && !sameOrigin(req)) return deny(403, 'cross-origin request refused');
 
       // ── public ──
-      if (req.method === 'GET' && path === '/api/health') return send(200, { ok: true, name: 'trellis' });
+      if (req.method === 'GET' && path === '/api/health') return send(200, { ok: true, name: 'nuworq' });
       if (req.method === 'POST' && path === '/api/login') {
         if (!required) return send(200, { ok: true, auth: 'local' });
         const ip = clientIp(req);
@@ -184,7 +186,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
         if (!who) {
           return deny(401, bearer ? 'invalid or revoked token' : 'login required',
-            bearer ? 'Check TRELLIS_TOKEN; tokens are managed with `trellis token` on the hub host.' : 'Log in at /login.html, or send Authorization: Bearer <token>.');
+            bearer ? 'Check NUWORQ_TOKEN; tokens are managed with `nuworq token` on the hub host.' : 'Log in at /login.html, or send Authorization: Bearer <token>.');
         }
         // Cookies ride along automatically, so they must prove the request came from this site.
         if (who.via === 'cookie' && unsafe && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
@@ -238,7 +240,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return;
       }
       if (req.method === 'GET' && path === '/api/info') {
-        return send(200, { bin: join(WEB, '..', 'bin', 'trellis.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace });
+        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace });
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
       const viewer = who.person ? by : undefined;
@@ -275,14 +277,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);
-        const agent = req.headers['x-trellis-agent'] || b.agent;
+        const agent = header(req, 'agent') || b.agent;
         delete b.agent;
         return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
       if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);
-        const agent = req.headers['x-trellis-agent'] || b.agent;
+        const agent = header(req, 'agent') || b.agent;
         delete b.agent;
         return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
       }
@@ -329,8 +331,10 @@ function hostname(host) {
   try { return new URL(`http://${host}`).hostname; } catch { return ''; }
 }
 
-const rootOf = (req) => { try { return decodeURIComponent(req.headers['x-trellis-root'] ?? ''); } catch { return ''; } };
-const remoteOf = (req) => { try { return decodeURIComponent(req.headers['x-trellis-remote'] ?? ''); } catch { return ''; } };
+// x-nuworq-<name>, else the old x-trellis-<name> that clients from before the rename send.
+const header = (req, name) => req.headers[`x-nuworq-${name}`] ?? req.headers[`x-trellis-${name}`];
+const rootOf = (req) => { try { return decodeURIComponent(header(req, 'root') ?? ''); } catch { return ''; } };
+const remoteOf = (req) => { try { return decodeURIComponent(header(req, 'remote') ?? ''); } catch { return ''; } };
 
 const TOO_BIG = () => new UserError('Request body too large (limit 1MB)', { status: 413, hint: 'Keep detail to what a person would read; put long logs in the repo and reference them.' });
 

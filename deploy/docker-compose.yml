@@ -1,8 +1,8 @@
 # From the repository root:
-#   docker compose -f deploy/docker-compose.yml run --rm trellis node bin/trellis.js token create <you> --role human
+#   docker compose -f deploy/docker-compose.yml run --rm nuworq node bin/nuworq.js token create <you> --role human
 #   docker compose -f deploy/docker-compose.yml up -d
 services:
-  trellis:
+  nuworq:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -12,9 +12,9 @@ services:
     ports:
       - "127.0.0.1:4747:4747"
     # Behind a reverse proxy, trust its X-Forwarded-* headers (client IP, https, host):
-    # command: ["node", "bin/trellis.js", "serve", "--host", "0.0.0.0", "--db", "/data/trellis.db", "--trust-proxy"]
+    # command: ["node", "bin/nuworq.js", "serve", "--host", "0.0.0.0", "--db", "/data/nuworq.db", "--trust-proxy"]
     volumes:
-      - trellis-data:/data
+      - nuworq-data:/data
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -22,4 +22,4 @@ services:
     tmpfs: [/tmp]
 
 volumes:
-  trellis-data:
+  nuworq-data:

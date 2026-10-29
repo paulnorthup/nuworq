@@ -1,8 +1,8 @@
-// Live test: opencode + a local Ollama model works one Trellis item through MCP, against a throwaway hub
-// and a tiny throwaway repo. Nothing touches your real hub or ~/.trellis.
+// Live test: opencode + a local Ollama model works one nuworq item through MCP, against a throwaway hub
+// and a tiny throwaway repo. Nothing touches your real hub or ~/.nuworq.
 // usage: node scripts/live-opencode.mjs <ollama-model> [small|big] [minutes] [direct|run]
 //   e.g. node scripts/live-opencode.mjs qwen3.8:27b-mtp-q4_K_M big 20
-//   run: go through `trellis run --agent opencode` (own worktree and branch) instead of starting opencode here.
+//   run: go through `nuworq run --agent opencode` (own worktree and branch) instead of starting opencode here.
 // Needs: opencode on PATH, Ollama running with the model pulled. Results: docs/OPEN-WEIGHT.md.
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, createWriteStream } from 'node:fs';
@@ -13,8 +13,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 const [MODEL, SIZE = 'small', MINUTES = '15', VIA = 'direct'] = process.argv.slice(2);
 if (!MODEL) { console.error('usage: node scripts/live-opencode.mjs <ollama-model> [small|big] [minutes]'); process.exit(1); }
-const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
-const T = mkdtempSync(join(tmpdir(), 'trellis-ow-'));
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
+const T = mkdtempSync(join(tmpdir(), 'nuworq-ow-'));
 const repo = join(T, 'repo');
 const U = 'http://127.0.0.1:4798';
 mkdirSync(repo);
@@ -24,15 +24,15 @@ writeFileSync(join(repo, 'greet.js'), 'export const greet = (name) => `Hello, ${
 git('add', '.');
 git('commit', '-qm', 'init');
 
-// The same MCP setup `trellis init` prints for opencode, plus a local Ollama provider.
+// The same MCP setup `nuworq init` prints for opencode, plus a local Ollama provider.
 let agent = `opencode-${MODEL.replace(/[^a-z0-9]+/gi, '-')}`;
 if (VIA === 'direct') writeFileSync(join(repo, 'opencode.json'), JSON.stringify({
   $schema: 'https://opencode.ai/config.json',
   provider: { ollama: { npm: '@ai-sdk/openai-compatible', name: 'Ollama', options: { baseURL: 'http://localhost:11434/v1' }, models: { [MODEL]: { name: MODEL } } } },
-  mcp: { trellis: { type: 'local', command: ['node', BIN, 'mcp'], enabled: true, environment: { TRELLIS_URL: U, TRELLIS_PROJECT: 'demo', TRELLIS_AGENT: agent, TRELLIS_MODEL: MODEL } } },
+  mcp: { nuworq: { type: 'local', command: ['node', BIN, 'mcp'], enabled: true, environment: { NUWORQ_URL: U, NUWORQ_PROJECT: 'demo', NUWORQ_AGENT: agent, NUWORQ_MODEL: MODEL } } },
 }, null, 2));
 
-// HOME=T: `trellis serve` writes ~/.trellis/hub.json, which would repoint every agent on the machine.
+// HOME=T: `nuworq serve` writes ~/.nuworq/hub.json, which would repoint every agent on the machine.
 const serve = spawn('node', [BIN, 'serve', '--port', '4798', '--db', join(T, 'hub.db')], { stdio: 'ignore', env: { ...process.env, HOME: T } });
 await new Promise((r) => setTimeout(r, 1000));
 const H = (a, b) => fetch(`${U}/api/p/demo/human/${a}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: U }, body: JSON.stringify(b) }).then((r) => r.json());
@@ -55,7 +55,7 @@ try {
     const wt = `${repo}.worktrees/${agent}`;
     console.log(`\nworktree ${wt}:\n${execFileSync('git', ['-C', wt, 'log', '--oneline', 'main..HEAD'], { encoding: 'utf8' })}${execFileSync('git', ['-C', wt, 'status', '--short'], { encoding: 'utf8' }) || '(clean)\n'}`);
   } else {
-  const task = 'Work on the demo project using Trellis. Do the work in this directory. Commit your work with git, and include the commit in your evidence when you submit. Keep going until next says there is nothing left for you, then sign off.';
+  const task = 'Work on the demo project using nuworq. Do the work in this directory. Commit your work with git, and include the commit in your evidence when you submit. Keep going until next says there is nothing left for you, then sign off.';
   const log = join(T, 'opencode.log');
   console.log(`dir ${T}\nagent ${agent}\nlog ${log}`);
   // opencode run waits on a non-TTY stdin, and takes its project folder from $PWD, not the cwd.

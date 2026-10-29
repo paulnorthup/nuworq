@@ -21,7 +21,9 @@ export const HANDOFF_COOLDOWN = 30 * MIN; // work you just handed off isn't offe
 const HEADLINE_MAX = 140;
 const STEER_TTL = 3 * DAY;
 export const HUMAN = 'you';
-export const SYSTEM = 'trellis';
+export const SYSTEM = 'nuworq';
+// The hub's own entries on the record: SYSTEM, or "trellis" in events recorded before the rename.
+export const isSystem = (actor) => actor === SYSTEM || actor === 'trellis';
 // People act on the record as "@handle"; without accounts (local mode) the one human is "you".
 export const isHuman = (actor) => actor === HUMAN || String(actor ?? '').startsWith('@');
 const You = (by) => (by === HUMAN ? 'You' : by);
@@ -90,7 +92,7 @@ export function providerOf(model = '') {
   return 'Open-weight';
 }
 
-// Everything written into Trellis has up to three layers. Be forgiving: an over-long
+// Everything written into nuworq has up to three layers. Be forgiving: an over-long
 // headline is trimmed and the overflow moved into the summary rather than rejected.
 export function layered(headline, summary = '', detail = '', what = 'headline') {
   headline = String(headline ?? '').trim();
@@ -143,7 +145,7 @@ function refuseSecrets(args) {
   if (hit) {
     throw new UserError(`${hit.path} looks like ${hit.kind}; nothing was saved`, {
       status: 422,
-      hint: `Remove or redact it (e.g. "sk-…abcd") and send again. Secrets don't belong in Trellis: everything written here is stored and shown to others.`,
+      hint: `Remove or redact it (e.g. "sk-…abcd") and send again. Secrets don't belong in nuworq: everything written here is stored and shown to others.`,
     });
   }
 }
@@ -259,7 +261,7 @@ export class Hub extends EventEmitter {
 
   // Where the most valuable claimable work is, across every project that isn't parked:
   // your picks and "now" work first, then building before shaping, then whatever has waited longest.
-  // With runner, only projects the human lets `trellis run` staff. scope: the slugs a token may reach;
+  // With runner, only projects the human lets `nuworq run` staff. scope: the slugs a token may reach;
   // powers: what it may do (null: everything); has: the agent's tags when it is declaring them right
   // now (else what it declared last).
   route(agent = '', { runner = false, scope = null, powers = null, has } = {}) {
@@ -332,7 +334,7 @@ export class Hub extends EventEmitter {
     const n = str(name);
     if (!n) throw new UserError('agent name is required', { hint: 'Identify yourself: a short unique name such as "claude-1" or "codex-api".' });
     if (n.length > 60) throw new UserError('agent name is too long (max 60 characters)');
-    if ([HUMAN, SYSTEM].includes(n.toLowerCase())) throw new UserError(`"${n}" is reserved; pick another agent name`);
+    if (n.toLowerCase() === HUMAN || isSystem(n.toLowerCase())) throw new UserError(`"${n}" is reserved; pick another agent name`);
     if (n.startsWith('@')) throw new UserError(`Agent names can't start with "@": that is how people appear on the record`, { hint: 'Pick a name such as "claude-1".' });
     return n;
   }
@@ -748,7 +750,7 @@ export class Hub extends EventEmitter {
       const need = powers && this.powerFor(p, op, args ?? {});
       if (need && !powers.includes(need)) {
         throw new UserError(`This agent's token can't ${need} (its powers: ${powers.join(', ')})`, {
-          status: 403, hint: `Call next: it only offers work this token may do. A token with ${need} comes from: trellis token create <name> --powers ${need}.`,
+          status: 403, hint: `Call next: it only offers work this token may do. A token with ${need} comes from: nuworq token create <name> --powers ${need}.`,
         });
       }
       this.caller = { powers };
@@ -1385,7 +1387,7 @@ Object.assign(Hub.prototype, {
     if (verdict === 'accept') {
       // A race: keep one attempt, and record the others as not chosen.
       const kept = this.keptAttempt(item, attempt, actor);
-      const merge = kept && (kept.branch ?? `trellis/${kept.agent}`);
+      const merge = kept && (kept.branch ?? `nuworq/${kept.agent}`);
       if (kept) {
         for (const a of this.attemptsOf(item).filter((x) => x.stage === 'submitted')) {
           const chosen = a.agent === kept.agent;
@@ -1513,7 +1515,7 @@ const HUMAN_OPS = {
     if (!Array.isArray(set)) throw new UserError('set is required: a list of people, e.g. ["@sam"]');
     const handles = [...new Set(set.map((h) => str(h).replace(/^@/, '').toLowerCase()).filter(Boolean))];
     for (const h of handles) {
-      if (!this.q('SELECT 1 FROM people WHERE handle = ?').get(h)) throw new UserError(`No person @${h}`, { status: 404, hint: 'Add them first: trellis person add <handle>.' });
+      if (!this.q('SELECT 1 FROM people WHERE handle = ?').get(h)) throw new UserError(`No person @${h}`, { status: 404, hint: 'Add them first: nuworq person add <handle>.' });
     }
     this.q('DELETE FROM project_stewards WHERE project_id = ?').run(p.id);
     for (const h of handles) this.q('INSERT INTO project_stewards (project_id, handle) VALUES (?, ?)').run(p.id, h);
@@ -1544,7 +1546,7 @@ const HUMAN_OPS = {
     const changes = [];
     if (runner != null && !!runner !== !!p.runner) {
       this.q('UPDATE projects SET runner = ? WHERE id = ?').run(runner ? 1 : 0, p.id);
-      this.event(p, { actor: by, type: 'runner', headline: runner ? `${You(by)} let \`trellis run\` start workers here` : `${You(by)} stopped \`trellis run\` starting workers here` });
+      this.event(p, { actor: by, type: 'runner', headline: runner ? `${You(by)} let \`nuworq run\` start workers here` : `${You(by)} stopped \`nuworq run\` starting workers here` });
     }
     if (github_secret != null && str(github_secret) !== p.github_secret) {
       this.q('UPDATE projects SET github_secret = ? WHERE id = ?').run(str(github_secret), p.id);

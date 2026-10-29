@@ -31,8 +31,9 @@ export function gitFacts(repo, agent, claim) {
   if (!repo || !existsSync(join(repo, '.git')) || git(repo, 'rev-parse', '--git-dir') === null) return null;
   const base = ['main', 'master'].find((b) => exists(repo, b)) ?? null;
   const text = [claim.headline, claim.summary, ...(claim.evidence ?? []).map((e) => e.label)].join(' ');
-  const named = text.match(/\btrellis\/[\w.@-]+/)?.[0];
-  const branch = [`trellis/${agent}`, named].find((b) => b && exists(repo, b)) ?? null;
+  // Worker branches are nuworq/<agent>; trellis/<agent> ones from before the rename still count.
+  const named = text.match(/\b(?:nuworq|trellis)\/[\w.@-]+/)?.[0];
+  const branch = [`nuworq/${agent}`, `trellis/${agent}`, named].find((b) => b && exists(repo, b)) ?? null;
   const commits = branch && base
     ? (git(repo, 'log', '--format=%h%x09%s', '-n', String(MAX_COMMITS), `${base}..${branch}`) ?? '')
       .split('\n').filter(Boolean).map((l) => { const [hash, ...s] = l.split('\t'); return { hash, subject: s.join('\t') }; })

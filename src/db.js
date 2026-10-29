@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS projects (
   seen_at    INTEGER NOT NULL DEFAULT 0,         -- when the human last marked the project seen
   parked     INTEGER NOT NULL DEFAULT 0,         -- the human paused it: silence is intended, no new work starts
   path       TEXT NOT NULL DEFAULT '',           -- where the code lives on disk (the main git checkout)
-  runner     INTEGER NOT NULL DEFAULT 0,         -- the human lets "trellis run" start headless workers here
+  runner     INTEGER NOT NULL DEFAULT 0,         -- the human lets "nuworq run" start headless workers here
   next_seq   INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
 );

@@ -12,8 +12,8 @@ import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
 import { LEASE_MS, MIN } from '../src/core.js';
 
-const BIN = fileURLToPath(new URL('../bin/trellis.js', import.meta.url));
-const BASE = 'trellis.test';
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
+const BASE = 'nuworq.test';
 
 function request(port, method, path, { headers = {}, body } = {}) {
   const data = body === undefined ? undefined : JSON.stringify(body);
@@ -51,7 +51,7 @@ const at = (slug) => ({ host: `${slug}.${BASE}` });
 
 describe('the workspace registry', () => {
   test('create makes one file, list shows it, remove deletes it (and its WAL files)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trellis-ws-'));
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-ws-'));
     const spaces = new Workspaces({ dir });
     spaces.create('acme');
     assert.deepEqual(readdirSync(dir), ['acme.db']);
@@ -71,7 +71,7 @@ describe('the workspace registry', () => {
 describe('one server, two workspaces', () => {
   let ctx;
   before(async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trellis-ws-'));
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-ws-'));
     const clock = { t: Date.UTC(2026, 9, 1, 9) };
     const spaces = new Workspaces({ dir, clock: () => clock.t });
     const tokens = {};
@@ -90,13 +90,13 @@ describe('one server, two workspaces', () => {
 
   test('a subdomain and a /w/<name>/ prefix both reach the workspace; unknown names get a 404 with a hint', async () => {
     const a = ctx.tokens.acme;
-    const sub = await call('POST', '/api/p/rockets/agent/checkin', { headers: { ...at('acme'), ...bearer(a.agent), 'x-trellis-agent': 'bot' }, body: {} });
+    const sub = await call('POST', '/api/p/rockets/agent/checkin', { headers: { ...at('acme'), ...bearer(a.agent), 'x-nuworq-agent': 'bot' }, body: {} });
     assert.equal(sub.status, 200, sub.text);
     const viaPath = await call('GET', '/w/acme/api/projects', { headers: bearer(a.human) });
     assert.deepEqual(viaPath.json.map((p) => p.slug), ['rockets']);
     const none = await call('GET', '/api/projects', { headers: at('initech') });
     assert.equal(none.status, 404);
-    assert.match(none.json.hint, /trellis workspace create/);
+    assert.match(none.json.hint, /nuworq workspace create/);
     const bare = await call('GET', '/api/projects');
     assert.equal(bare.status, 404);
     assert.match(bare.json.hint, /\/w\/<workspace>/);
@@ -152,7 +152,7 @@ describe('one server, two workspaces', () => {
 
   test('expired leases are swept in every open workspace', async () => {
     const g = ctx.tokens.globex;
-    const h = { ...at('globex'), ...bearer(g.agent), 'x-trellis-agent': 'bot' };
+    const h = { ...at('globex'), ...bearer(g.agent), 'x-nuworq-agent': 'bot' };
     await call('POST', '/api/p/mines/agent/checkin', { headers: h, body: {} });
     ctx.spaces.get('globex').humanOp('mines', 'create', { title: 'Dig', acceptance: 'x' });
     const next = await call('POST', '/api/p/mines/agent/next', { headers: h, body: {} });
@@ -174,12 +174,12 @@ describe('one server, two workspaces', () => {
 
 describe('the CLI manages workspaces on the host', () => {
   test('workspace create, list, token --workspace, remove', async () => {
-    const data = mkdtempSync(join(tmpdir(), 'trellis-ws-cli-'));
+    const data = mkdtempSync(join(tmpdir(), 'nuworq-ws-cli-'));
     const run = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--data-dir', data], { env: { ...process.env, HOME: data, NO_COLOR: '1' } });
     assert.match((await run('workspace', 'create', 'acme')).stdout, /Created workspace/);
     assert.ok(existsSync(join(data, 'workspaces', 'acme.db')));
     assert.equal((await run('workspace', 'list')).stdout.trim(), 'acme');
-    assert.match((await run('token', 'create', 'boss', '--role', 'human', '--workspace', 'acme')).stdout, /trl_/);
+    assert.match((await run('token', 'create', 'boss', '--role', 'human', '--workspace', 'acme')).stdout, /nwq_/);
     await run('workspace', 'remove', 'acme');
     assert.deepEqual(readdirSync(join(data, 'workspaces')), []);
     await assert.rejects(run('token', 'list', '--workspace', 'acme'), /no workspace "acme"/);
