@@ -398,6 +398,10 @@ main.narrow .faint, .setup .faint, .dialog .faint { color: var(--faint); font-si
 .copyable button { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--line-strong); background: var(--panel); }
 #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 9px; font-size: 13px; z-index: 40; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 90vw; }
 #toast.err { background: var(--bad); color: #fff; }
+/* The hub out of reach (#142): a bar that stays until it answers, and the pulse marked as possibly stale. */
+#offline { position: sticky; top: 0; z-index: 35; background: var(--warn); color: #fff; font-size: 13px; font-weight: 550; text-align: center; padding: 8px 16px; }
+body.offline .pulse { opacity: .55; filter: grayscale(.7); }
+body.offline .pulse .state-chip::after { content: '· out of date'; color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 500; }
 
 .add-work { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 8px; margin: -14px 0 26px; }
 .add-work .row { display: flex; gap: 8px; align-items: center; }

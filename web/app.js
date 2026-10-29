@@ -79,9 +79,41 @@ function toast(msg, err = false) {
   toast.t = setTimeout(() => (t.hidden = true), err ? 5000 : 2200);
 }
 
+// The hub out of reach (#142): say so in a bar that stays, mark what's on screen as possibly out of date, and
+// clear it all by itself once the hub answers again. Shown after a moment, so a hub restarting doesn't flash it.
+const OFFLINE = "Couldn't reach the hub; nothing was changed. Try again when it's back.";
+function offline() {
+  if (S.offline) return;
+  S.offline = Date.now();
+  clearTimeout(offline.t);
+  offline.t = setTimeout(() => {
+    if (!S.offline) return;
+    const at = new Date(S.offline).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    let bar = $('#offline');
+    if (!bar) { bar = document.createElement('div'); bar.id = 'offline'; bar.setAttribute('role', 'status'); document.body.prepend(bar); }
+    bar.textContent = `Can't reach the hub since ${at}; what you see may be out of date.`;
+    document.body.classList.add('offline');
+  }, 2000);
+}
+function online() {
+  if (!S.offline) return;
+  S.offline = null;
+  clearTimeout(offline.t);
+  $('#offline')?.remove();
+  document.body.classList.remove('offline');
+  scheduleRefresh();
+}
+
 async function api(path, opts = {}) {
   // Relative, so the UI also works under a workspace path prefix (/w/<slug>/).
-  const r = await fetch(path.replace(/^\//, ''), { ...opts, headers: { 'content-type': 'application/json' }, credentials: 'same-origin' });
+  let r;
+  try {
+    r = await fetch(path.replace(/^\//, ''), { ...opts, headers: { 'content-type': 'application/json' }, credentials: 'same-origin' });
+  } catch {
+    offline();
+    throw new Error(OFFLINE); // the browser's own words ("Failed to fetch") mean nothing to a person
+  }
+  online();
   if (r.status === 401) {
     location.href = 'login.html';
     throw new Error('Not signed in');
@@ -1280,11 +1312,12 @@ function listen() {
   const es = new EventSource('api/stream');
   // A hub that moved onto a new commit restarts, so the stream reconnects: pick up the version it runs now.
   es.onopen = async () => {
+    online();
     const info = await api('/api/info').catch(() => null);
     if (info && info.commit !== S.info?.commit) { S.info = info; scheduleRefresh(); }
   };
   es.onmessage = () => scheduleRefresh();
-  es.onerror = () => { es.close(); setTimeout(listen, 3000); };
+  es.onerror = () => { es.close(); offline(); setTimeout(listen, 3000); };
 }
 
 (async function start() {
