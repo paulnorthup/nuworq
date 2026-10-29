@@ -23,6 +23,8 @@ import { outcomes } from './outcomes.js';
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
 const MAX_BODY = 1024 * 1024;
+// The ops that decide on git state (landing, the submit check): their mirror is fetched first (hub.prefetch).
+const DECIDES = { human: ['accept'], agent: ['submit', 'review'] };
 
 // What is running: package.json's version and the commit of this code's own folder (under --follow, the
 // hub-src worktree; the hub restarts on every move, so reading it once per process stays true).
@@ -612,6 +614,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!PERSON_CAN[personRole]?.includes(m[2])) return deny(403, `a ${personRole} can't ${m[2]} here`, 'Ask an owner of this workspace for a different role.');
         const args = await body(req);
         if (personRole === 'member' && m[2] === 'create') args.stage = 'proposed'; // members propose; stewards decide
+        if (DECIDES.human.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), args);
         const out = hub.humanOp(decodeURIComponent(m[1]), m[2], args, by);
         // "Close them all" on stale issues: the proposals are dropped; now the issues close on GitHub.
         if (out.closing) out.github = app ? await closeStale(hub, hub.project(decodeURIComponent(m[1])), app) : { error: 'no GitHub App configured: the issues stay open on GitHub' };
@@ -621,6 +624,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
         delete b.agent;
+        if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
         return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
       }
       // git asks for a credential (nuworq git-credential): a token for the repository of the item this
@@ -691,6 +695,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
         delete b.agent;
+        if (DECIDES.agent.includes(m[1])) await hub.prefetch('', b, { remote: remoteOf(req), root: rootOf(req), scope: caller.scope });
         return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller }));
       }
       // Push channels (hub-wide, or workspace-wide). Agent tokens never reach these; only an owner changes them.

@@ -132,13 +132,12 @@ describe("the hub's mirrors use the GitHub App's token", () => {
 
   test('cloned and fetched over HTTPS with a read-only token, minted once while it is good', async () => {
     const p = hub.project('api');
-    // The first ask has no token yet: it tries the deploy key (refused here) and starts minting.
-    assert.equal(hub.repoFor(p, null, { fresh: true }), null);
-    await settle('github.com/acme/api');
+    // Before an op that decides on git state, the server prefetches: it waits for the read token, then clones with it.
+    await hub.prefetch('api');
     assert.deepEqual(state.mints, [{ repositories: ['api'], permissions: { contents: 'read', metadata: 'read' } }]);
 
     const repo = hub.repoFor(p);
-    assert.equal(repo?.mode, 'remote', 'cloned at the next ask, without waiting out the fetch interval');
+    assert.equal(repo?.mode, 'remote');
     assert.equal(git(repo.path, 'rev-parse', 'main'), git(join(root, 'seed-api'), 'rev-parse', 'HEAD'));
 
     // Work pushed since reaches the mirror at the next fresh fetch, with the same token.
@@ -149,7 +148,7 @@ describe("the hub's mirrors use the GitHub App's token", () => {
     git(seed, 'commit', '-q', '-m', 'x');
     git(seed, 'push', '-q', 'origin', 'nuworq/1-x');
     const before = served();
-    assert.ok(hub.repoFor(p, null, { fresh: true }));
+    await hub.prefetch('api');
     assert.ok(served() > before, 'fetched over HTTPS, let in by the token');
     assert.equal(git(repo.path, 'rev-parse', 'nuworq/1-x'), git(seed, 'rev-parse', 'HEAD'));
     assert.equal(state.mints.length, 1, 'the token is reused until 5 minutes before it expires');
@@ -177,9 +176,8 @@ describe("the hub's mirrors use the GitHub App's token", () => {
     git(root, 'clone', '-q', '--mirror', join(root, 'served', 'acme', 'web.git'), path);
     git(path, 'remote', 'set-url', 'origin', 'git@github.com:acme/web.git');
     const before = readFileSync(log, 'utf8').length;
-    assert.equal(hub.repoFor(p, null, { fresh: true }), null);
-    await settle(remote);
-    assert.equal(hub.repoFor(p, null, { fresh: true }), null, 'no token: the deploy key, refused here');
+    await hub.prefetch('web');
+    assert.equal(hub.repoFor(p), null, 'no token: the deploy key, refused here');
     assert.ok(readFileSync(log, 'utf8').slice(before).split('\n').includes(`-C ${path} fetch -q --prune`), 'fetched from its SSH remote, as before the app');
     const know = () => view(hub, 'web').attention.filter((a) => a.kind === 'app-read');
     assert.equal(know().length, 1);
@@ -204,6 +202,7 @@ describe("the hub's mirrors use the GitHub App's token", () => {
     git(seed, 'add', '.');
     git(seed, 'commit', '-q', '-m', 'y');
     git(seed, 'push', '-q', 'origin', 'main');
+    await hub.prefetch('web');
     assert.equal(hub.repoFor(p)?.path, path);
     assert.equal(git(path, 'rev-parse', 'main'), git(seed, 'rev-parse', 'HEAD'));
     assert.equal(git(path, 'remote', 'get-url', 'origin'), 'git@github.com:acme/web.git');
