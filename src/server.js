@@ -99,6 +99,8 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // the landing page (site/) and sends every other path to the same path on publicUrl.
 export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
+  // What people call the place they're in (#158): an organization on a shared hub, else the hub itself.
+  const place = spaces ? 'organization' : 'hub';
   siteHost = String(siteHost).toLowerCase();
   if (siteHost && !publicUrl) throw new Error('a site host needs the public URL the app lives at (--public-url)');
   // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
@@ -298,7 +300,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (step === 'start') {
       // No workspace: sign in to the hub itself, to see and create organizations.
       const ws = spaces ? String(url.searchParams.get('ws') ?? '').toLowerCase() : '';
-      if (spaces && ws && !spaces.get(ws)) return deny(404, `no workspace "${ws}"`, 'Start from your workspace\'s login page.');
+      if (spaces && ws && !spaces.get(ws)) return deny(404, `no organization "${ws}"`, 'Start from your organization\'s sign-in page.');
       const go = sso.start(provider, { ws, back: spaces && !ws ? authOrigin(req) : homeOf(req, ws), callback, device: deviceCode(url.searchParams.get('device')) });
       res.setHeader('set-cookie', `${FLOW_COOKIE}=${go.nonce}; HttpOnly; SameSite=Lax; Path=/auth/; Max-Age=600${https(req) ? '; Secure' : ''}`);
       return redirect(res, go.url);
@@ -400,7 +402,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const me = dir.verifySession(sid);
     const signIn = sso.enabled ? 'Sign in with GitHub or Google: see GET /api/oauth for where to start.' : 'This hub has no GitHub or Google sign-in set up (see DEPLOY.md).';
     const known = ['/api/me', '/api/orgs', '/api/orgs/check', '/api/logout','/api/early-access', '/api/early-access/decide'].includes(path) || /^\/api\/orgs\/[^/]+\/enter$/.test(path);
-    if (!known) return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
+    if (!known) return deny(404, 'this address names no organization', `Use <organization>.${baseDomain || '<base-domain>'} or /w/<organization>/.`);
     if (!me) return deny(401, 'sign in required', signIn);
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
 
@@ -506,7 +508,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const slug = sub ?? (pre ? decodeURIComponent(pre[1]) : null);
         if (slug == null) return await hubRoot(req, res, url, path, { send, deny });
         hub = spaces.get(slug);
-        if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: nuworq workspace create <name>.');
+        if (!hub) return deny(404, `no organization "${slug}"`, 'Check the address, or sign in to the hub to see your organizations.');
         ws = slug.toLowerCase();
         if (pre) {
           base = `/w/${pre[1]}`;
@@ -719,7 +721,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 <p class="hint">${org ? `For your account instead, open this page without ?org.` : 'For an organization, open this page with ?org=&lt;name&gt;.'} <a href="${base}/#/">Back to nuworq</a></p>`), 'text/html; charset=utf-8');
       }
       if (path === '/api/invites' || path === '/api/invites/revoke') {
-        if (personRole !== 'owner') return deny(403, 'only an owner invites people', 'Ask an owner of this workspace.');
+        if (personRole !== 'owner') return deny(403, 'only an owner invites people', `Ask an owner of this ${place}.`);
         if (req.method === 'GET' && path === '/api/invites') return send(200, authz.listInvites());
         if (req.method !== 'POST') return deny(405, 'use GET or POST');
         const b = await body(req);
@@ -735,7 +737,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (path === '/api/people' || path === '/api/people/role') {
         if (req.method === 'GET' && path === '/api/people') return send(200, authz.listPeople());
         if (req.method !== 'POST') return deny(405, 'use GET or POST');
-        if (personRole !== 'owner') return deny(403, 'only an owner manages people', 'Ask an owner of this workspace.');
+        if (personRole !== 'owner') return deny(403, 'only an owner manages people', `Ask an owner of this ${place}.`);
         const b = await body(req);
         try {
           const person = path === '/api/people' ? authz.addPerson(b.handle, b.role, { name: b.name, email: b.email }) : authz.setRole(b.handle, b.role);
@@ -796,7 +798,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (who.role === 'agent') return deny(403, 'the home is for people', 'Agents start with checkin; workers list projects with GET /api/projects.');
         if (req.method === 'GET' && path === '/api/home') return send(200, homeView(hub, { viewer }));
         if (req.method !== 'POST' || path !== '/api/home/seen') return deny(405, path === '/api/home' ? 'use GET' : 'use POST');
-        if (!PERSON_CAN[personRole]?.includes('seen')) return deny(403, `a ${personRole} can't mark projects seen`, 'Ask an owner of this workspace for a different role.');
+        if (!PERSON_CAN[personRole]?.includes('seen')) return deny(403, `a ${personRole} can't mark projects seen`, `Ask an owner of this ${place} for a different role.`);
         for (const p of hub.projects()) hub.humanOp(p.slug, 'seen', {}, by);
         return send(200, { ok: true });
       }
@@ -895,7 +897,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/human\/([a-z]+)$/)) && req.method === 'POST') {
         if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404 });
-        if (!PERSON_CAN[personRole]?.includes(m[2])) return deny(403, `a ${personRole} can't ${m[2]} here`, 'Ask an owner of this workspace for a different role.');
+        if (!PERSON_CAN[personRole]?.includes(m[2])) return deny(403, `a ${personRole} can't ${m[2]} here`, `Ask an owner of this ${place} for a different role.`);
         const args = await body(req);
         if (personRole === 'member' && m[2] === 'create') args.stage = 'proposed'; // members propose; stewards decide
         if (DECIDES.human.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), args);

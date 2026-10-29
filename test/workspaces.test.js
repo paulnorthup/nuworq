@@ -96,10 +96,11 @@ describe('one server, two workspaces', () => {
     assert.deepEqual(viaPath.json.map((p) => p.slug), ['rockets']);
     const none = await call('GET', '/api/projects', { headers: at('initech') });
     assert.equal(none.status, 404);
-    assert.match(none.json.hint, /nuworq workspace create/);
+    assert.equal(none.json.error, 'no organization "initech"');
+    assert.match(none.json.hint, /Check the address/);
     const bare = await call('GET', '/api/projects');
     assert.equal(bare.status, 404);
-    assert.match(bare.json.hint, /\/w\/<workspace>/);
+    assert.match(bare.json.hint, /\/w\/<organization>/);
     assert.equal((await call('GET', '/api/health')).status, 200);
     const redirect = await call('GET', '/w/acme');
     assert.deepEqual([redirect.status, redirect.headers.location], [308, '/w/acme/']);
@@ -169,6 +170,24 @@ describe('one server, two workspaces', () => {
     ctx.spaces.remove('tempco');
     assert.equal((await call('GET', '/w/tempco/api/projects', { headers: bearer(t) })).status, 404);
     assert.ok(!existsSync(join(ctx.dir, 'tempco.db')));
+  });
+
+  // #158: an organization's people call it an organization, so its errors and hints never say "workspace".
+  test("a member's 403 and an unknown organization's sign-in say organization, not workspace", async () => {
+    const auth = new Auth(ctx.spaces.get('acme').db);
+    auth.addPerson('ann', 'member');
+    const ann = auth.createToken('ann-l', 'human', { person: 'ann' });
+    const denied = await call('POST', '/w/acme/api/invites', { headers: bearer(ann), body: { role: 'member' } });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.json.hint, 'Ask an owner of this organization.');
+    const sso = createServer(ctx.spaces, { oauth: { github: { id: 'gh', secret: 's', authorize: 'http://127.0.0.1:9/a', token: 'http://127.0.0.1:9/t', api: 'http://127.0.0.1:9' } } });
+    await new Promise((r) => sso.listen(0, '127.0.0.1', r));
+    try {
+      const start = await request(sso.address().port, 'GET', '/auth/github/start?ws=initech');
+      assert.equal(start.status, 404);
+      assert.equal(start.json.error, 'no organization "initech"');
+      for (const r of [denied, start]) assert.doesNotMatch(r.text, /workspace/i);
+    } finally { sso.close(); sso.closeAllConnections(); }
   });
 });
 
