@@ -160,6 +160,11 @@ function detectHas(flags) {
     { darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform],
     onPath('docker') && 'docker',
     onPath('nvidia-smi') && 'gpu',
+    // The agent CLIs this machine can run, so items that need one (e.g. a check with a real headless Claude) find it.
+    onPath('claude') && 'claude-cli',
+    onPath('codex') && 'codex-cli',
+    onPath('opencode') && 'opencode',
+    onPath('gh') && 'gh',
     ...(refs(flags.has) ?? []),
   ].filter(Boolean).map((t) => String(t).toLowerCase()))];
 }

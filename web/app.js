@@ -231,8 +231,8 @@ function project(v) {
     ${composer(v)}
     ${empty ? emptyProject() : ''}
     ${needsYou(v)}
-    ${z() >= 1 ? worthKnowing(v) : ''}
     ${motion(v)}
+    ${z() >= 1 ? worthKnowing(v) : ''}
     ${z() >= 1 ? flow(v) : ''}
     ${z() >= 1 ? upNext(v) : ''}
     ${z() >= 1 ? finished(v) : ''}
