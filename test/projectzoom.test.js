@@ -9,13 +9,14 @@ const start = app.indexOf('function projectBody(');
 const body = app.slice(start, app.indexOf('\n}\n', start));
 const at = (section) => body.match(new RegExp(`\\b\\w+: (?:z\\(\\) >= (\\d) \\? )?${section}\\(v\\)`))?.[1] ?? '0';
 
-test('at 30s a project shows the pulse, composer, Needs you and In motion; Flow first appears at 5m', () => {
-  for (const s of ['pulse', 'composer', 'needsYou', 'motion']) assert.equal(at(s), '0', `${s} at 30s`);
-  for (const s of ['worthKnowing', 'flow', 'upNext', 'finished', 'steering', 'agents']) assert.equal(at(s), '1', `${s} from 5m`);
+// Flow is at every depth by Paul's standing decision (2026-10-29): the lifecycle belongs in the glance.
+test('at 30s a project shows the pulse, composer, Needs you, In motion and Flow', () => {
+  for (const s of ['pulse', 'composer', 'needsYou', 'motion', 'flow']) assert.equal(at(s), '0', `${s} at 30s`);
+  for (const s of ['worthKnowing', 'upNext', 'finished', 'steering', 'agents']) assert.equal(at(s), '1', `${s} from 5m`);
   for (const s of ['activity', 'allWork']) assert.equal(at(s), '2', `${s} from 30m`);
 });
 
 test("the 30s footer names what 5m adds", () => {
   const footer = app.match(/That's the 30-second view\.[^`]*`/)[0];
-  for (const words of ['worth knowing', 'flow', "what's next", 'what finished', 'agents']) assert.ok(footer.includes(words), words);
+  for (const words of ['worth knowing', "what's next", 'what finished', 'agents']) assert.ok(footer.includes(words), words);
 });

@@ -329,14 +329,14 @@ function project(v) {
 }
 
 // The project's sections: one column on a phone; wide (#141), the work in the main column and the pulse,
-// flow and agents beside it, the same sections either way. Each starts at its own depth (#144: Flow at 5m).
+// flow and agents beside it, the same sections either way. Each starts at its own depth; Flow at every depth (Paul's decision).
 function projectBody(v, empty) {
   const more = z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
-    ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, flow, what's next, what finished, and how agents are doing.`
+    ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, what's next, what finished, and how agents are doing.`
     : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : '';
   const s = {
     pulse: pulse(v), composer: composer(v), empty: empty ? emptyProject() : '', needs: needsYou(v), motion: motion(v),
-    worth: z() >= 1 ? worthKnowing(v) : '', flow: z() >= 1 ? flow(v) : '', next: z() >= 1 ? upNext(v) : '', finished: z() >= 1 ? finished(v) : '',
+    worth: z() >= 1 ? worthKnowing(v) : '', flow: flow(v), next: z() >= 1 ? upNext(v) : '', finished: z() >= 1 ? finished(v) : '',
     steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
   };
   const order = (keys) => keys.map((k) => s[k]).join('');
