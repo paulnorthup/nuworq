@@ -405,7 +405,7 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
   #main { padding: 14px 12px 60px; overflow-x: hidden; }
   .cards, .ov-lines, .home-card { min-width: 0; max-width: 100%; }
   .card .actions, .answer-row, .opts { flex-wrap: wrap; }
-  .card .btn, .card .opt, .card .pick, .answer-row input, .pulse .btn, .ov-line { min-height: 44px; }
+  .card .btn, .card .opt, .card .pick, .answer-row input, .pulse .btn, .ov-line, .get-started .btn, .seg button { min-height: 44px; }
   .card .btn, .card .opt { padding: 10px 14px; }
   .card .evidence, .card pre, .card code { max-width: 100%; overflow-x: auto; }
 }
