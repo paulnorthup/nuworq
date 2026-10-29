@@ -353,6 +353,20 @@ async function setupOrClone(target, agent, flags, s, client, token) {
   }
 }
 
+// How a worker's model traffic names itself to llm-proxy: nuworq/<project>/<agent>.
+const clientLabel = (project, agent) => `nuworq/${project}/${agent}`;
+
+// The custom model provider Codex is set to use (model_provider in ~/.codex/config.toml), or null for its
+// built-in one. Only the top-level key counts, not one inside a [profile] table.
+function codexProvider(flags) {
+  if (flags['codex-provider']) return String(flags['codex-provider']);
+  let text = '';
+  try { text = readFileSync(join(homedir(), '.codex', 'config.toml'), 'utf8'); } catch { return null; }
+  const top = text.split(/^\s*\[/m)[0];
+  const p = top.match(/^\s*model_provider\s*=\s*"([^"]+)"/m)?.[1];
+  return p && p !== 'openai' && /^[\w-]+$/.test(p) ? p : null;
+}
+
 // The shell command that gives a worker its worktree (detached at main, or at origin/main after a
 // fetch when there is an origin; reused if it exists) and starts the agent in it.
 // token: the agent token the worker gets when it runs (null: the hub needs none, or we only print).
@@ -409,22 +423,32 @@ function workerSetup(target, agent, flags, s, token = null) {
   }
   // Started here (--run), the agent speaks JSON, so its usage can be read and recorded (src/usage.js tap).
   const json = flags.run ? { claude: ' \\\n  --output-format stream-json --verbose', codex: ' --json', opencode: ' --format json' }[agent] : '';
+  // Model traffic says who it is, so llm-proxy (when it goes through one) can be read per worker (#76).
+  // Other endpoints ignore the header.
+  const label = clientLabel(target.slug, name);
   if (agent === 'claude') {
-    lines.push(`claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}`);
+    const headers = [process.env.ANTHROPIC_CUSTOM_HEADERS, `x-client-name: ${label}`].filter(Boolean).join('\n');
+    lines.push(`ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
     const model = String(flags.model);
     const [provider, ...rest] = model.split('/');
+    const headers = { 'x-client-name': label };
     const config = {
       mcp: { nuworq: { type: 'local', command: ['node', BIN, 'mcp'], enabled: true, environment: { ...env, NUWORQ_MODEL: rest.join('/') } } },
       permission: { bash: { 'git push*': 'deny' } },
-      ...(provider === 'ollama' ? { provider: { ollama: { npm: '@ai-sdk/openai-compatible', name: 'Ollama', options: { baseURL: process.env.OLLAMA_URL || 'http://localhost:11434/v1' }, models: { [rest.join('/')]: {} } } } } : {}),
+      provider: provider === 'ollama'
+        ? { ollama: { npm: '@ai-sdk/openai-compatible', name: 'Ollama', options: { baseURL: process.env.OLLAMA_URL || 'http://localhost:11434/v1', headers }, models: { [rest.join('/')]: {} } } }
+        : { [provider]: { options: { headers } } }, // merged with the provider's own config
     };
     lines.push(`OPENCODE_CONFIG_CONTENT=${sq(JSON.stringify(config))} \\\n  opencode run${json} -m ${sq(model)} ${sq(task)} < /dev/null`);
   } else {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
-    lines.push(`codex exec${json} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)} \\\n  ${sq(task)}`);
+    // Codex's built-in openai provider takes no headers; a custom one (how traffic reaches llm-proxy) does.
+    const provider = codexProvider(flags);
+    const named = provider ? ` \\\n  -c ${sq(`model_providers.${provider}.http_headers={"x-client-name"=${JSON.stringify(label)}}`)}` : '';
+    lines.push(`codex exec${json} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
   }
   return { name, worktree, main: origin ? `origin/${main}` : main, origin, cwd, cmd: lines.join(' && \\\n') };
 }
