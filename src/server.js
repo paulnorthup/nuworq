@@ -233,14 +233,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req) }));
+        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), token: who.role === 'agent' ? who : null }));
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
       if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req) }));
+        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), token: who.role === 'agent' ? who : null }));
       }
       if (req.method === 'GET' && path === '/api/route') return send(200, hub.route());
       if (req.method === 'GET' && path === '/api/where') {

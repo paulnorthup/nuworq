@@ -5,6 +5,8 @@ export const SESSION_MS = 30 * 24 * 3600_000;
 const ROLES = ['human', 'agent'];
 // What a person may do here: owner > steward > member > viewer (see PERSON_CAN in core.js).
 export const PERSON_ROLES = ['owner', 'steward', 'member', 'viewer'];
+// What an agent token may do; reading, asking, proposing and notes are always allowed (see core.js).
+export const POWERS = ['shape', 'build', 'review'];
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 const same = (a, b) => a.length === b.length && timingSafeEqual(a, b);
@@ -32,7 +34,14 @@ export class Auth {
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
       );`);
-    try { db.exec('ALTER TABLE tokens ADD COLUMN person_id INTEGER'); } catch { /* already there */ }
+    for (const sql of [
+      'ALTER TABLE tokens ADD COLUMN person_id INTEGER', // human tokens: the person they log in as
+      'ALTER TABLE tokens ADD COLUMN minted_by INTEGER', // agent tokens: the person accountable for them
+      'ALTER TABLE tokens ADD COLUMN runner TEXT', // or a named runner (CI, cloud agents) that outlives any one person
+      'ALTER TABLE tokens ADD COLUMN powers TEXT', // JSON subset of shape/build/review; NULL means all
+    ]) {
+      try { db.exec(sql); } catch { /* already there */ }
+    }
     // Human tokens from before people existed: each becomes an owner, so nobody loses access.
     for (const t of db.prepare(`SELECT id, name FROM tokens WHERE role = 'human' AND person_id IS NULL`).all()) {
       const handle = Auth.handleOf(t.name);
@@ -80,31 +89,63 @@ export class Auth {
   // ── tokens ──
 
   // Human tokens belong to a person (by default one named like the token, created as an owner if new).
-  createToken(name, role = 'agent', { person, personRole = 'owner' } = {}) {
+  // Agent tokens may name who minted them (a person) or the runner they belong to, and limit their powers.
+  createToken(name, role = 'agent', { person, personRole = 'owner', mintedBy, runner, powers } = {}) {
     name = String(name ?? '').trim();
     if (!/^[\w.@-]{1,60}$/.test(name)) throw new Error('token name: 1–60 letters, digits, ., _, @ or -');
     if (!ROLES.includes(role)) throw new Error('role must be "human" or "agent"');
     if (this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name)) throw new Error(`a token named "${name}" already exists (revoke it first, or pick another name)`);
-    let personId = null;
+    let personId = null, minter = null, power = null;
     if (role === 'human') {
       const handle = person ? String(person).replace(/^@/, '').toLowerCase() : Auth.handleOf(name);
       personId = (this.person(handle) ?? this.addPerson(handle, personRole)).id;
+    } else {
+      if (mintedBy && runner) throw new Error('a token is minted by a person or belongs to a runner, not both');
+      if (mintedBy) {
+        minter = this.person(mintedBy)?.id;
+        if (!minter) throw new Error(`no person @${String(mintedBy).replace(/^@/, '')}`);
+      }
+      if (powers != null) {
+        const list = (Array.isArray(powers) ? powers : String(powers).split(/[\s,]+/)).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+        const bad = list.filter((x) => !POWERS.includes(x));
+        if (bad.length || !list.length) throw new Error(`powers: one or more of ${POWERS.join(', ')}`);
+        power = JSON.stringify([...new Set(list)]);
+      }
     }
     const token = 'trl_' + randomBytes(32).toString('base64url');
-    this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, person_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(name, role, sha(token), token.slice(0, 8), personId, this.now());
+    this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, person_id, minted_by, runner, powers, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(name, role, sha(token), token.slice(0, 8), personId, minter, runner ? String(runner) : null, power, this.now());
     return token;
   }
 
   listTokens() {
-    return this.db.prepare(`SELECT t.id, t.name, t.role, t.prefix, t.created_at, t.last_used_at, t.revoked_at, p.handle AS person
-      FROM tokens t LEFT JOIN people p ON p.id = t.person_id ORDER BY t.id`).all();
+    return this.db.prepare(`SELECT t.id, t.name, t.role, t.prefix, t.created_at, t.last_used_at, t.revoked_at, p.handle AS person,
+        m.handle AS minted_by, t.runner, t.powers
+      FROM tokens t LEFT JOIN people p ON p.id = t.person_id LEFT JOIN people m ON m.id = t.minted_by ORDER BY t.id`).all()
+      .map((t) => ({ ...t, powers: t.role === 'agent' ? (t.powers ? JSON.parse(t.powers) : [...POWERS]) : null }));
+  }
+
+  // Removing a person revokes their logins and every agent token they minted. Runner tokens stay.
+  removePerson(handle) {
+    const p = this.person(handle);
+    if (!p) throw new Error(`no person @${String(handle).replace(/^@/, '')}`);
+    if (p.role === 'owner' && this.db.prepare(`SELECT COUNT(*) AS n FROM people WHERE role = 'owner'`).get().n === 1) {
+      throw new Error(`@${p.handle} is the last owner; make someone else an owner first`);
+    }
+    const ids = this.db.prepare('SELECT id FROM tokens WHERE person_id = ? OR minted_by = ?').all(p.id, p.id).map((t) => t.id);
+    for (const id of ids) this.revoke(id);
+    this.db.prepare('DELETE FROM people WHERE id = ?').run(p.id);
+    return { handle: p.handle, revoked: ids.length };
   }
 
   // Who a token or session acts as: agents by their token, humans as their person.
   identity(row) {
     if (!row) return null;
     const out = { id: row.id, name: row.name, role: row.role };
+    if (row.role === 'agent') {
+      const full = this.db.prepare('SELECT powers FROM tokens WHERE id = ?').get(row.id);
+      out.powers = full?.powers ? JSON.parse(full.powers) : [...POWERS];
+    }
     if (row.role === 'human') {
       const p = row.person_id != null ? this.db.prepare('SELECT * FROM people WHERE id = ?').get(row.person_id) : null;
       if (!p) return null;

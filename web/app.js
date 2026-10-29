@@ -523,7 +523,7 @@ function agents(v) {
   return `<section class="sec"><header><h2>Agents</h2><span class="count">${v.agents.length}</span><span class="hint">first-class participants, each with a track record</span></header>
     <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
       <div class="top">${who(a.name, a.model)}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
-      <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}</div>
+      <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}${a.via ? ` · <span title="Who answers for this agent's token">${esc(a.via)}</span>` : ''}</div>
       <div class="line" title="${esc(a.line)}">${esc(a.line || '—')}</div>
       <div class="stats">
         <div><b>${a.record.landed}</b><span>landed</span></div>

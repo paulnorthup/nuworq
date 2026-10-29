@@ -424,6 +424,10 @@ async function person(pos, flags) {
       for (const r of rows) console.log(`@${r.handle.padEnd(20)}${r.role.padEnd(9)}${r.email}`);
       return;
     }
+    if (sub === 'remove') {
+      const r = auth.removePerson(need(handle, '<handle>'));
+      return console.log(`${green('Removed')} @${r.handle}; ${r.revoked} token(s) they held or minted are revoked. Runner tokens are untouched.`);
+    }
     if (sub === 'set-role') {
       const p = auth.setRole(need(handle, '<handle>'), need(role ?? flags.role, `<${PERSON_ROLES.join('|')}>`));
       return console.log(`${green('Updated')} @${p.handle} is now ${p.role}.`);
@@ -444,7 +448,11 @@ async function token(pos, flags) {
   if (sub === 'create') {
     const role = flags.role || 'agent';
     let plain;
-    try { plain = auth.createToken(need(name, '<name>'), role, { person: flags.person }); } catch (e) { throw new HubError(e.message, { hint: 'See: trellis token list, trellis person list' }); }
+    try {
+      plain = auth.createToken(need(name, '<name>'), role, {
+        person: flags.person, mintedBy: flags['minted-by'], runner: flags.runner === true ? name : flags.runner, powers: flags.powers,
+      });
+    } catch (e) { throw new HubError(e.message, { hint: 'See: trellis token list, trellis person list' }); }
     console.log(`${green('Created')} ${role} token ${bold(name)}. It is shown only this once:
 
   ${bold(plain)}
@@ -461,9 +469,10 @@ async function token(pos, flags) {
     if (!rows.length) return console.log(dim(`No tokens in ${db}. Create one: trellis token create <name> --role human`));
     const when = (t) => (t ? new Date(t).toISOString().slice(0, 16).replace('T', ' ') : '—');
     const w = Math.max(4, ...rows.map((r) => r.name.length));
-    console.log(dim(`${'id'.padEnd(4)}${'name'.padEnd(w + 2)}${'role'.padEnd(7)}${'prefix'.padEnd(11)}${'created'.padEnd(18)}${'last used'.padEnd(18)}status`));
+    console.log(dim(`${'id'.padEnd(4)}${'name'.padEnd(w + 2)}${'role'.padEnd(7)}${'prefix'.padEnd(11)}${'created'.padEnd(18)}${'last used'.padEnd(18)}${'status'.padEnd(9)}who · powers`));
     for (const r of rows) {
-      console.log(`${String(r.id).padEnd(4)}${r.name.padEnd(w + 2)}${r.role.padEnd(7)}${(r.prefix + '…').padEnd(11)}${when(r.created_at).padEnd(18)}${when(r.last_used_at).padEnd(18)}${r.revoked_at ? amber('revoked') : green('active')}`);
+      const who = r.person ? `@${r.person}` : r.runner ? `runner ${r.runner}` : r.minted_by ? `minted by @${r.minted_by}` : '—';
+      console.log(`${String(r.id).padEnd(4)}${r.name.padEnd(w + 2)}${r.role.padEnd(7)}${(r.prefix + '…').padEnd(11)}${when(r.created_at).padEnd(18)}${when(r.last_used_at).padEnd(18)}${(r.revoked_at ? amber('revoked') : green('active')).padEnd(9)}${who}${r.powers ? ` · ${r.powers.join(',')}` : ''}`);
     }
     return;
   }
@@ -486,7 +495,9 @@ ${bold('Human')}
                                          human tokens act as a person: --person <handle>
                                          (default: one named like the token, created as owner)
   person add <handle> --role owner|steward|member|viewer [--email e]
-  person list | person set-role <handle> <role>
+  person list | person set-role <handle> <role> | person remove <handle>   (revokes tokens they minted)
+  token create <name> [--powers shape,build,review] [--minted-by <handle> | --runner [name]]
+                                         agent tokens: what they may do, and who answers for them
                                          owners do everything; stewards steer, decide, answer and
                                          accept; members comment and propose; viewers read
                                          --workspace <name>: that workspace's tokens

@@ -203,12 +203,12 @@ export class Hub extends EventEmitter {
 
   // Where the most valuable claimable work is, across every project that isn't parked:
   // your picks and "now" work first, then building before shaping, then whatever has waited longest.
-  route(agent = '') {
+  route(agent = '', { powers = null } = {}) {
     this.sweep();
     const options = [];
     for (const p of this.projects()) {
       if (p.parked) continue;
-      const pick = this.pick(p, agent);
+      const pick = this.pick(p, agent, { powers });
       if (pick) options.push({ p, ...pick });
     }
     options.sort((a, b) =>
@@ -614,12 +614,14 @@ export class Hub extends EventEmitter {
   // ── agent operations ────────────────────────────────────────────────────
 
   // slug may be empty: then the agent's folder (root) picks the project, or the hub routes it to work.
-  agentOp(slug, op, name, args = {}, { root = '' } = {}) {
+  // token: the calling agent token's identity (required mode), with its powers; none means every power.
+  agentOp(slug, op, name, args = {}, { root = '', token = null } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     refuseSecrets(args);
     this.sweep();
     const agent = this.requireAgent(name);
+    const powers = token?.powers ?? null;
     let p;
     let routed = null;
     if (slug) {
@@ -630,7 +632,7 @@ export class Hub extends EventEmitter {
         if (!['checkin', 'next'].includes(op)) {
           throw new UserError('Which project?', { hint: 'Call checkin first: the hub sends you to the work that matters most, and remembers it for this session.' });
         }
-        routed = this.route(agent)[0];
+        routed = this.route(agent, { powers })[0];
         if (!routed) {
           return {
             ok: true, project: null,
@@ -650,7 +652,16 @@ export class Hub extends EventEmitter {
     }
     const result = this.tx(() => {
       const presence = this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
-      const r = fn.call(this, p, agent, args ?? {}, presence);
+      if (token?.id != null) this.q('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ?').run(token.id, p.id, agent);
+      const need = powers && this.powerFor(p, op, args ?? {});
+      if (need && !powers.includes(need)) {
+        throw new UserError(`This agent's token can't ${need} (its powers: ${powers.join(', ')})`, {
+          status: 403, hint: `Call next: it only offers work this token may do. A token with ${need} comes from: trellis token create <name> --powers ${need}.`,
+        });
+      }
+      this.caller = { powers };
+      let r;
+      try { r = fn.call(this, p, agent, args ?? {}, presence); } finally { this.caller = null; }
       // Steering rides along on every response, so it lands on the agent's very next call.
       if (op !== 'checkin') {
         const steers = this.pendingSteers(p, agent);
@@ -726,10 +737,22 @@ export class Hub extends EventEmitter {
     };
   }
 
+  // The power an agent op needs: shaping proposals, building work, or reviewing it. Others need none.
+  powerFor(p, op, args) {
+    if (op === 'review') return 'review';
+    if (op === 'refine') return 'shape';
+    if (!['claim', 'progress', 'submit', 'handoff'].includes(op)) return null;
+    let item;
+    try { item = this.item(p, args.item); } catch { return null; } // a bad reference is reported by the op itself
+    return item.stage === 'proposed' ? 'shape' : item.stage === 'verifying' ? 'review' : 'build';
+  }
+
   // Pick the most useful thing for this agent. Finish before starting: reviews first, then by priority;
   // at equal priority, build ready work before shaping proposals, and prefer work you touched before.
-  pick(p, agent) {
-    if (p.autonomy === 'full') {
+  // powers: what the caller's token may do (null: everything); work it can't do is never offered.
+  pick(p, agent, { powers = null } = {}) {
+    const may = (power) => !powers || powers.includes(power);
+    if (p.autonomy === 'full' && may('review')) {
       const review = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
           AND COALESCE(implementer, '') != ?
           AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
@@ -748,7 +771,7 @@ export class Hub extends EventEmitter {
       .filter(({ item, runs }) => this.openSlots(item) > 0 && !runs.some((a) => a.agent === agent))
       .map(({ item, runs }) => ({ mode: 'work', item, sameModel: !!model && runs.some((a) => a.stage !== 'abandoned' && a.model === model) }));
     const shape = this.shapeable(p).map((item) => ({ mode: 'shape', item }));
-    const all = [...ready, ...racing, ...shape].sort((a, b) =>
+    const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].sort((a, b) =>
       PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
       !!a.sameModel - !!b.sameModel ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
@@ -885,7 +908,7 @@ const AGENT_OPS = {
         hint: `Finish what you hold first: submit, or handoff if you can't. To work in parallel anyway, claim a specific item.`,
       };
     }
-    const pick = this.pick(p, agent);
+    const pick = this.pick(p, agent, { powers: this.caller?.powers });
     if (!pick) {
       if (p.parked) return { mode: 'idle', hint: 'The human has parked this project: start nothing new. Signoff.' };
       const blocked = this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).get(p.id).n;

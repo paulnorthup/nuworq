@@ -294,10 +294,13 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const sentBack = hub.q(`SELECT COUNT(*) AS n FROM events e JOIN items i ON i.id = e.item_id
         WHERE e.project_id = ? AND e.type = 'sent_back' AND i.implementer = ?`).get(p.id, a.name).n;
     const stalls = hub.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'lease_expired' AND data LIKE ?`).get(p.id, `%"agent":"${a.name}"%`).n;
+    // Who answers for this agent: the person who minted its token, or the runner it belongs to.
+    const tok = a.token_id != null ? hub.q(`SELECT t.runner, m.handle FROM tokens t LEFT JOIN people m ON m.id = t.minted_by WHERE t.id = ?`).get(a.token_id) : null;
+    const via = tok?.runner ? `runner ${tok.runner}` : tok?.handle ? `via @${tok.handle}` : null;
     const races = hub.q(`SELECT COUNT(*) AS entered, COALESCE(SUM(a.stage = 'chosen'), 0) AS won FROM attempts a JOIN items i ON i.id = a.item_id
         WHERE i.project_id = ? AND a.agent = ?`).get(p.id, a.name);
     return {
-      name: a.name, model: a.model, client: a.client, provider: providerOf(a.model),
+      name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), via,
       status, line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
       record: {
         landed, sent_back: sentBack, stalls,

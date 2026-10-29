@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS agents (
   status      TEXT NOT NULL DEFAULT '',
   signed_off  INTEGER NOT NULL DEFAULT 0,
   last_checkin INTEGER NOT NULL DEFAULT 0,
+  token_id    INTEGER,                        -- the agent token it last called with (required mode)
   first_seen  INTEGER NOT NULL,
   last_seen   INTEGER NOT NULL,
   PRIMARY KEY (project_id, name)
@@ -182,6 +183,7 @@ export function openDb(file) {
     'ALTER TABLE projects ADD COLUMN parked INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE projects ADD COLUMN path TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE items ADD COLUMN race INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE agents ADD COLUMN token_id INTEGER',
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }
