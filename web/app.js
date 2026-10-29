@@ -305,7 +305,7 @@ function project(v) {
     ${needsYou(v)}
     ${motion(v)}
     ${z() >= 1 ? worthKnowing(v) : ''}
-    ${flow(v)}
+    ${z() >= 1 ? flow(v) : ''}
     ${z() >= 1 ? upNext(v) : ''}
     ${z() >= 1 ? finished(v) : ''}
     ${z() >= 1 ? steering(v) : ''}
@@ -313,7 +313,7 @@ function project(v) {
     ${z() >= 2 ? activity(v) : ''}
     ${z() >= 2 ? allWork(v) : ''}
     ${z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
-      ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for flow, what's next, and how agents are doing.`
+      ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, flow, what's next, what finished, and how agents are doing.`
       : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : ''}`;
 }
 
