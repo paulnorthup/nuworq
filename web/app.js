@@ -389,7 +389,7 @@ function needsYou(v) {
 }
 
 function card(a) {
-  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub' }[a.kind] ?? a.kind;
+  const label = { question: a.escalation ? 'Escalated by an operator' : 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub' }[a.kind] ?? a.kind;
   const key = 'a:' + a.key;
   const open = S.open.has(key) || z() >= 2;
   const hasMore = a.why || a.detail || a.acceptance;
@@ -791,8 +791,9 @@ function renderDrawer() {
 
   const questions = it.questions.length ? `<div class="d-sec"><div class="label">Questions <span class="count">${it.questions.length}</span></div>
     ${it.questions.map((q) => `<div class="q ${q.status} ${q.blocking ? 'blocking' : ''}">
-      <div class="meta">${who(q.asked_by)} · ${q.blocking ? 'blocking' : 'non-blocking'} · ${esc(q.ago)} ago · ${esc(q.status)}</div>
-      <div><b>${esc(q.question)}</b></div>${q.context ? md(q.context) : ''}
+      <div class="meta">${who(q.asked_by)} · ${q.escalation ? `escalated ${esc(q.escalation.asked_by)}'s question` : q.blocking ? 'blocking' : 'non-blocking'} · ${esc(q.ago)} ago · ${esc(q.status)}</div>
+      <div><b>${esc(q.question)}</b></div>${q.escalation ? `<div class="a">${esc(q.escalation.asked_by)} asked an operator: <i>${esc(q.escalation.question)}</i></div>` : ''}${q.context ? md(q.context) : ''}
+      ${q.evidence?.length ? `<div class="evidence">${q.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
       ${q.assumption ? `<div class="a">Assumed: <i>${esc(q.assumption)}</i></div>` : ''}
       ${q.answer ? `<div class="a">Answer: <b>${esc(q.answer)}</b></div>` : q.status === 'confirmed' ? '<div class="a">You confirmed the assumption.</div>' : ''}
       ${q.status === 'open' ? `<div class="answer">${q.options.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}

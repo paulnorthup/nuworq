@@ -780,8 +780,10 @@ export class Hub extends EventEmitter {
   }
 
   // The operator question to answer first: blocking before assumptions, then oldest.
+  // One already escalated to the human waits for the human's answer instead.
   operatorQuestion(p) {
-    return this.q(`SELECT * FROM questions WHERE project_id = ? AND audience = 'operator' AND status = 'open' ORDER BY blocking DESC, at, id LIMIT 1`).get(p.id) ?? null;
+    return this.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'open'
+      AND NOT EXISTS (SELECT 1 FROM questions e WHERE e.escalates = q.id AND e.status = 'open') ORDER BY blocking DESC, at, id LIMIT 1`).get(p.id) ?? null;
   }
 
   heldBy(p, agent) {
@@ -1734,6 +1736,50 @@ function finishShaping(p, agent, item, { headline, summary, detail, acceptance }
   };
 }
 
+// Evidence as agents send it: strings or { label, url }, one or many.
+function evidenceList(raw) {
+  return (Array.isArray(raw) ? raw : raw ? [raw] : [])
+    .map((e) => (typeof e === 'string' ? { label: e } : { label: str(e.label || e.url), url: str(e.url) || undefined }))
+    // Agents sometimes put the result where the link goes ("unit tests|2 passed"): keep it as text, not a broken link.
+    .map((e) => (e.url && !/^https?:\/\//i.test(e.url) ? { label: e.label === e.url ? e.label : `${e.label}: ${e.url}` } : e))
+    .filter((e) => e.label);
+}
+
+// An operator carries a question it may not settle alone (risky, irreversible, a product call) up to the human:
+// one precise question with its evidence. The human's answer to it answers the original too (HUMAN_OPS.answer).
+function escalate(p, agent, args) {
+  if (!this.isOperator(p, agent)) {
+    throw new UserError('Only an operator escalates questions', {
+      status: 403, hint: 'Leave out escalates to ask the human yourself. Operators are sessions that check in with has: ["operator"].',
+    });
+  }
+  const orig = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(args.escalates), p.id);
+  if (!orig) throw new UserError(`No question ${args.escalates}`, { status: 404, hint: 'escalates takes the id of an operator question, as next (mode "answer") hands it to you.' });
+  if (orig.audience !== 'operator') throw new UserError(`Question ${orig.id} wasn't asked to an operator`, { status: 403, hint: 'Only questions asked with to: "operator" can be escalated; the others already go to the human or the reporter.' });
+  if (orig.status !== 'open') throw new UserError(`Question ${orig.id} is already ${orig.status}`, { status: 409, hint: 'Call next for the next one.' });
+  if (this.q(`SELECT 1 FROM questions WHERE escalates = ? AND status = 'open'`).get(orig.id)) {
+    throw new UserError(`Question ${orig.id} is already escalated`, { status: 409, hint: "The human's answer will settle it. Call next." });
+  }
+  const question = layered(args.question, args.context, args.detail, 'question');
+  const evidence = evidenceList(args.evidence);
+  if (!evidence.length) throw new UserError('An escalation needs evidence', { hint: 'Pass evidence: what you ran or checked, e.g. [{ "label": "dry run: 3 tables dropped", "url": "https://…" }], so the human can decide without redoing it.' });
+  const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
+  const item = this.itemById(orig.item_id);
+  const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, escalates, evidence)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?, ?)`).run(p.id, orig.item_id, agent, question.headline, question.summary, question.detail,
+    JSON.stringify(options), this.now(), orig.id, JSON.stringify(evidence));
+  const id = Number(r.lastInsertRowid);
+  this.event(p, {
+    item, actor: agent, type: 'question', headline: `${agent} escalates ${orig.asked_by}'s question: ${question.headline}`,
+    summary: `${orig.asked_by} asked an operator: ${orig.question}${question.summary ? `\n\n${question.summary}` : ''}`,
+    detail: question.detail, data: { question: id, escalates: orig.id, evidence },
+  });
+  return {
+    ok: true, question: id, escalates: orig.id,
+    hint: `Escalated to the human. Their answer answers question ${orig.id} too, so ${orig.asked_by} gets it at its next checkin${item ? ` and #${item.seq} unparks` : ''}. Call next.`,
+  };
+}
+
 const AGENT_OPS = {
   checkin(p, agent, args, presence) {
     if (presence.fresh || presence.gap > 30 * MIN || presence.wasSignedOff) {
@@ -1759,7 +1805,7 @@ const AGENT_OPS = {
           blocking: !!oq.blocking, asked_by: oq.asked_by, asked: `${dur(this.now() - oq.at)} ago`,
         },
         ...(item ? this.context(p, item, agent) : {}),
-        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}. Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. If only the human can answer, say so in the answer.`,
+        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}. Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. If it needs the human's approval (risky, irreversible, or a product call), escalate instead: ask with escalates: ${oq.id}, one precise question, and your evidence.`,
       };
     }
     const holding = this.heldBy(p, agent).filter((i) => ['active', 'proposed', 'landing'].includes(i.stage));
@@ -1858,6 +1904,7 @@ const AGENT_OPS = {
   },
 
   ask(p, agent, args) {
+    if (args.escalates != null && args.escalates !== '') return escalate.call(this, p, agent, args);
     const question = layered(args.question, args.context, args.detail, 'question');
     const assumption = str(args.assumption);
     const to = str(args.to).toLowerCase();
@@ -1925,6 +1972,8 @@ const AGENT_OPS = {
     if (!q) throw new UserError(`No question ${args.question}`, { status: 404, hint: 'Call next: it hands an operator the question to answer, with its id.' });
     if (q.audience !== 'operator') throw new UserError(`Question ${q.id} is for ${q.reporter ? `@${q.reporter}, the issue's reporter` : 'the human'}, not an operator`, { status: 403, hint: 'Operators answer only questions asked with to: "operator". Call next for those.' });
     if (q.status !== 'open') throw new UserError(`Question ${q.id} is already ${q.status}`, { status: 409, hint: 'Call next for the next one.' });
+    // Settled after all: the escalation no longer needs the human.
+    this.q(`UPDATE questions SET status = 'withdrawn' WHERE escalates = ? AND status = 'open'`).run(q.id);
     HUMAN_OPS.answer.call(this, p, { question: q.id, answer: args.answer }, agent);
     const item = this.itemById(q.item_id);
     return {
@@ -1939,11 +1988,7 @@ const AGENT_OPS = {
     if (item.stage === 'proposed') return finishShaping.call(this, p, agent, item, { headline, summary, detail, acceptance: args.acceptance });
     if (item.stage === 'landing') return finishLanding.call(this, p, agent, item, { headline, summary, detail, conflicts: str(args.conflicts) });
     if (item.stage !== 'active') throw new UserError(`#${item.seq} is ${item.stage}; only active work can be submitted`, { status: 409 });
-    const evidence = (Array.isArray(args.evidence) ? args.evidence : args.evidence ? [args.evidence] : [])
-      .map((e) => (typeof e === 'string' ? { label: e } : { label: str(e.label || e.url), url: str(e.url) || undefined }))
-      // Agents sometimes put the result where the link goes ("unit tests|2 passed"): keep it as text, not a broken link.
-      .map((e) => (e.url && !/^https?:\/\//i.test(e.url) ? { label: e.label === e.url ? e.label : `${e.label}: ${e.url}` } : e))
-      .filter((e) => e.label);
+    const evidence = evidenceList(args.evidence);
     const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
     const nudge = evidence.length ? '' : 'Next time attach evidence (tests run, commands, commit or PR links); it makes verification fast. ';
     if (this.racing(item)) {
@@ -2294,6 +2339,10 @@ const HUMAN_OPS = {
     if (!q.blocking && text.toLowerCase() === q.assumption.trim().toLowerCase()) {
       return HUMAN_OPS.confirm.call(this, p, { question }, by);
     }
+    // An operator's escalation: the answer settles the question the operator carried up as well, so its asker
+    // hears it and its work unparks. That one first, so the item moves only once both are answered.
+    const orig = q.escalates ? this.q(`SELECT * FROM questions WHERE id = ? AND status = 'open'`).get(q.escalates) : null;
+    if (orig) HUMAN_OPS.answer.call(this, p, { question: orig.id, answer: text }, by);
     this.q(`UPDATE questions SET status = 'answered', answer = ?, answered_by = ?, answered_at = ?, seen_by_asker = 0 WHERE id = ?`)
       .run(text, by, this.now(), q.id);
     this.event(p, {

@@ -76,3 +76,15 @@ For an operator: a trusted, attended session (or a tool driving one) that agents
 **Finding them.** An operator's `next` returns `mode: "answer"` before any land, review or other work, while one is open: `question` (`id`, `question`, `context`, `detail`, `options`, `assumption`, `blocking`, `asked_by`, `asked`) plus the item's usual context. Blocking questions come first, then the oldest.
 
 **Effect.** As the human's answer: the question is answered by the operator, the item returns to ready once no blocking question is left, and the asker gets the answer in its next checkin. Operator questions never appear in Needs you; if none of this project's agents with `operator` has been seen for a day while some wait, Needs you shows one line saying how many.
+
+**Escalating to the human.** When settling a question needs the human's approval (risky, irreversible, or a product call), the operator escalates it instead of answering: the `ask` operation with `escalates`.
+
+```
+POST /api/p/<project>/agent/ask
+{ "agent": "<name>", "escalates": 12, "question": "Drop the 3 orphaned tables on prod?",
+  "evidence": [{ "label": "dry run: 3 tables, 0 rows referenced", "url": "https://…" }] }
+```
+
+`evidence` is required (labels, optional links). Only an operator can escalate (`403` otherwise), and only an open operator question (`403` for any other, `404` unknown, `409` answered or already escalated). The escalation is a blocking question to the human: it shows in Needs you with the original question, its asker and the evidence, and on the item page. While it is open, operators' `next` skips the original. The human's answer answers both: the original's asker gets it at its next checkin, and the item unparks once no blocking question is left. If the operator answers the original after all, the escalation is withdrawn. In the CLI: `nuworq ask "<question>" --escalates 12 --evidence "label|url"`.
+
+**What operators settled.** An operator question answered without escalation shows for a day under Worth knowing (`kind: "operator-answered"`, "Operator answered …"), never in Needs you.

@@ -77,6 +77,8 @@ export const OPS = [
       assumption: s('What you will assume and proceed with unless told otherwise.'),
       blocking: { type: 'boolean', description: 'True only if you cannot make progress without an answer. Defaults to false when you give an assumption.' },
       to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: 'Optional. "operator": something you can\'t settle alone but a trusted, attended session can (running things, permissions, verifying on real infra); an operator answers, not the human. "reporter": for an item that came from a GitHub issue, ask the person who opened it, on the issue. The item parks until they reply; after a wait, the human can answer instead. Left out, the hub picks: running a command, permissions, credentials or infra go to an operator (e.g. "can\'t run `claude` without approval"); direction, scope, money, publishing, deleting or anything unclear goes to the human (e.g. "approve browser workers?"). The response says which it picked; pass `to` to choose yourself.' },
+      escalates: { type: 'integer', description: 'Operators only: the id of an operator question that needs the human\'s approval (risky, irreversible, or a product call). Ask the human one precise question with your evidence; their answer answers the original too.' },
+      evidence: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, url: { type: 'string' } }, required: ['label'] }, description: 'With escalates (required there): what you ran or checked, so the human can decide without redoing it.' },
     },
     required: ['question'],
   },
@@ -320,7 +322,7 @@ Hub: ${url} · project: ${project} (change with --project).
 8. Leaving? ${c('signoff')}.
 
 ## Operators
-An operator is a trusted, attended session: it checks in with \`operator\` in \`has\`. Its ${c('next')} first hands it questions agents asked \`to: "operator"\` (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them.
+An operator is a trusted, attended session: it checks in with \`operator\` in \`has\`. Its ${c('next')} first hands it questions agents asked \`to: "operator"\` (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them. If one needs the human's approval (risky, irreversible, or a product call), escalate it: ${c('ask')} with \`escalates\` (the question id), one precise question, and \`evidence\`. The human's answer reaches the original asker.
 
 ## Write in layers (0-30-5-30)
 - **headline**: one line, outcome first. "Retries added; 2 flaky tests remain", not "Update".
