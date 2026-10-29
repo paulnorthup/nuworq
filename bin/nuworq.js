@@ -812,7 +812,10 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const { Workspaces } = await import('../src/workspaces.js');
   const { createServer } = await import('../src/server.js');
   const dir = workspacesDir(flags);
-  const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags) });
+  // Plans (#113): off unless the host turns them on; organizations the owners belong to are never limited.
+  const plans = /^(1|on|true|yes)$/i.test(String(flags.plans ?? envVar('PLANS') ?? ''));
+  const owners = String(flags.owners ?? envVar('OWNERS') ?? '').split(',').filter(Boolean);
+  const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags), plans, owners });
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
@@ -844,6 +847,7 @@ async function workspace(pos, flags) {
   const [sub, name] = pos;
   try {
     if (sub === 'create') {
+      // Made by the hub's host, so unlimited (people who sign up get Free): see Workspaces.planOf.
       const s = spaces.create(need(name, '<name>'));
       return console.log(`${green('Created')} workspace ${bold(s)} (${spaces.file(s)}).
 ${dim(`  Give someone a login: nuworq token create <name> --role human --workspace ${s}`)}`);
@@ -852,6 +856,12 @@ ${dim(`  Give someone a login: nuworq token create <name> --role human --workspa
       const names = spaces.list();
       return console.log(names.length ? names.join('\n') : dim(`No workspaces in ${spaces.dir}. Add one: nuworq workspace create <name>`));
     }
+    // The hub owner's override: unlimited (Pro, Team, or yours), or free.
+    if (sub === 'plan') {
+      const plan = need(pos[2], '<free|unlimited>');
+      spaces.setPlan(need(name, '<name>'), plan, 'host');
+      return console.log(`${green('Set')} ${bold(name)} to ${bold(plan)}. A running hub applies it at the next claim.`);
+    }
     if (sub === 'remove') {
       spaces.remove(need(name, '<name>'));
       return console.log(`${green('Removed')} workspace ${bold(name)} and its database. A running hub stops serving it at once.`);
@@ -859,7 +869,7 @@ ${dim(`  Give someone a login: nuworq token create <name> --role human --workspa
   } catch (e) {
     throw e.hint || e.status ? new HubError(e.message, { hint: e.hint }) : e;
   }
-  throw new HubError('usage: nuworq workspace create <name> | list | remove <name>');
+  throw new HubError('usage: nuworq workspace create <name> | list | remove <name> | plan <name> <free|unlimited>');
 }
 
 // People (the humans, each with a role) are managed on the hub host too, like tokens.

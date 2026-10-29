@@ -283,6 +283,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const slug = Workspaces.check(b.slug || slugify(b.name ?? ''));
       if (spaces.has(slug)) throw new UserError(`"${slug}" is taken`, { status: 409, hint: 'Pick another name for the address.' });
       if (dir.createdBy(me, spaces) >= orgCap) return deny(429, `you have created ${orgCap} organizations, the most this hub allows`, 'Ask the hub host to raise --org-cap, or use one you have.');
+      // Plans on: one free organization per signed-in account (organizations the hub owner is in are never free).
+      const free = spaces.plans ? spaces.freeCreatedBy(me) : [];
+      if (free.length) return deny(402, `you already have a free organization (${free[0]}); an account gets one`, `Use ${free[0]}, or upgrade it to Pro and then create more.`);
       spaces.create(slug);
       const hub = spaces.get(slug);
       const authz = scopeOf(hub).authz;

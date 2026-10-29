@@ -453,6 +453,23 @@ export class Hub extends EventEmitter {
     } catch { /* the op says what's wrong */ }
   }
 
+  // The plan's limit on agents working at once (planLimit, set per organization by Workspaces; null or
+  // unset: no limit). Enforced where work is claimed: the hub holds every lease, so an agent that would be
+  // one too many is refused, and the ones already working carry on.
+  checkPlan(agent) {
+    const limit = this.planLimit?.();
+    if (!limit) return;
+    const working = new Set([
+      ...this.q(`SELECT DISTINCT holder FROM items WHERE holder IS NOT NULL AND holder != ?`).all(GITHUB).map((r) => r.holder),
+      ...this.q(`SELECT DISTINCT agent FROM attempts WHERE stage = 'active' AND closed = 0`).all().map((r) => r.agent),
+    ]);
+    if (working.has(agent) || working.size < limit) return;
+    throw new UserError(`The Free plan runs ${limit} agent at a time, and ${[...working].join(', ')} is working now`, {
+      status: 402,
+      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. To run agents side by side, upgrade the organization to Pro.`,
+    });
+  }
+
   // How the hub reaches remote's mirror over HTTPS with the GitHub App: { url, token }, or null to use
   // SSH and deploy keys as before (no app, not a GitHub repository, GitHub said no, or no token yet).
   // repoFor is synchronous and minting isn't, so this uses a token already minted, reused until 5
@@ -518,6 +535,13 @@ export class Hub extends EventEmitter {
     if (owner) {
       throw new UserError(`${r} already belongs to ${owner.name}${owner.archived_at ? ' (archived)' : ''}`, {
         status: 409, hint: owner.archived_at ? `Restore ${owner.name}, or delete it for good, to use ${r} again.` : `Remove it from ${owner.name} first: one repository maps to one project.`,
+      });
+    }
+    // On the Free plan, a repository belongs to one free organization (repoGuard, set by Workspaces).
+    const other = this.repoGuard?.(r);
+    if (other) {
+      throw new UserError(`${r} is already in the free organization ${other}; a repository can be in one free organization`, {
+        status: 402, hint: `Work on it in ${other}, or upgrade this organization to Pro to use it here too.`,
       });
     }
     this.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(p.id, r, this.now());
@@ -1092,7 +1116,8 @@ export class Hub extends EventEmitter {
       this.event(p, { actor: SYSTEM, type: 'path', headline: `${p.name} lives in ${here}`, summary: `Learned from ${agent}'s checkin. Agents working in that folder now find this project on their own.` });
     }
     // Learn the repository the same way, unless it already belongs to another project.
-    if (slug && remote && op === 'checkin' && !(this.hosted && remote.startsWith('/')) && !this.projectByRemote(remote, null, { archived: true })) this.addRemote(p, remote, agent);
+    // (Not one another free organization has: the checkin goes on, the repository stays unlinked here.)
+    if (slug && remote && op === 'checkin' && !(this.hosted && remote.startsWith('/')) && !this.projectByRemote(remote, null, { archived: true }) && !this.repoGuard?.(remote)) this.addRemote(p, remote, agent);
     // A clone of the project's repository is the right place to work, wherever it sits on disk.
     const ownClone = !!remote && this.projectByRemote(remote)?.id === p.id;
     const result = this.tx(() => {
@@ -1106,6 +1131,7 @@ export class Hub extends EventEmitter {
           status: 403, hint: `Call next: it only offers work this token may do. A token with ${need} comes from: nuworq token create <name> --powers ${need}.`,
         });
       }
+      if (op === 'claim' || (op === 'next' && args?.claim !== false)) this.checkPlan(agent);
       this.caller = { powers, remote };
       // Checked before the op runs, so a malformed usage changes nothing.
       const usage = USAGE_OPS.includes(op) ? normUsage(args?.usage) : null;

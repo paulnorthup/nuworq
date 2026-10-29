@@ -46,6 +46,12 @@ export class Directory {
         id        INTEGER PRIMARY KEY,            -- the GitHub App installation id
         workspace TEXT NOT NULL,                  -- the organization it was installed for
         at        INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS plans (
+        workspace TEXT PRIMARY KEY,
+        plan      TEXT NOT NULL,                  -- free | unlimited (no row: free, while plans are on)
+        set_by    TEXT NOT NULL DEFAULT '',
+        at        INTEGER NOT NULL
       );`);
   }
 
@@ -61,6 +67,33 @@ export class Directory {
     if (was && was !== workspace) return false;
     if (!was) this.db.prepare('INSERT INTO installations (id, workspace, at) VALUES (?, ?, ?)').run(Number(id), workspace, this.now());
     return true;
+  }
+
+  // An organization's plan as set by the hub owner, or null when nobody set one.
+  plan(workspace) {
+    return this.db.prepare('SELECT plan FROM plans WHERE workspace = ?').get(workspace)?.plan ?? null;
+  }
+
+  setPlan(workspace, plan, by = '') {
+    this.db.prepare(`INSERT INTO plans (workspace, plan, set_by, at) VALUES (?, ?, ?, ?)
+      ON CONFLICT (workspace) DO UPDATE SET plan = excluded.plan, set_by = excluded.set_by, at = excluded.at`).run(workspace, plan, String(by), this.now());
+  }
+
+  // Whether any of these emails belongs to the organization (a membership the hub has seen).
+  hasMember(workspace, emails) {
+    if (!emails.length) return false;
+    return !!this.db.prepare(`SELECT 1 FROM memberships m JOIN identities i ON i.id = m.identity_id
+      WHERE m.workspace = ? AND i.email IN (${emails.map(() => '?').join(',')})`).get(workspace, ...emails);
+  }
+
+  // Whether a signed-in person created the organization (else the host did, on the command line).
+  madeBySomeone(workspace) {
+    return !!this.db.prepare('SELECT 1 FROM memberships WHERE workspace = ? AND created = 1').get(workspace);
+  }
+
+  // The organizations this identity created (whether they still exist is the caller's question).
+  created(identity) {
+    return this.db.prepare('SELECT workspace FROM memberships WHERE identity_id = ? AND created = 1').all(identity.id).map((m) => m.workspace);
   }
 
   // The identity for a verified email, made on first sign-in.
