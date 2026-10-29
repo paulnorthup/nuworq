@@ -156,3 +156,15 @@ describe('projects are found by name too', () => {
     assert.equal(op('Nuworq', 'next', 'a').item, '#1');
   });
 });
+
+describe('learning where a project lives', () => {
+  test('a checkin from a clone of another repository does not teach the project its folder', () => {
+    const { hub, make, op } = setup();
+    make('proxy');
+    hub.humanOp('proxy', 'remote', { add: 'git@github.com:acme/proxy.git' });
+    hub.agentOp('proxy', 'checkin', 'a', {}, { root: '/code/other-repo', remote: 'github.com/acme/other' });
+    assert.equal(hub.project('proxy').path, '', 'the wrong folder is not learned');
+    hub.agentOp('proxy', 'checkin', 'b', {}, { root: '/code/proxy', remote: 'github.com/acme/proxy' });
+    assert.equal(hub.project('proxy').path, '/code/proxy', 'its own clone is');
+  });
+});

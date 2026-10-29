@@ -1060,8 +1060,10 @@ export class Hub extends EventEmitter {
       }
     }
     const here = normDir(root);
-    if (slug && here && !p.path && op === 'checkin') {
-      // Learn where the project lives the first time an agent names it from a folder.
+    // Learn where the project lives the first time an agent names it from a folder, but only a folder
+    // that is a clone of the project's repository: a worker started in the wrong repo must not teach it.
+    const knownRemotes = this.remotesOf(p);
+    if (slug && here && !p.path && op === 'checkin' && (!knownRemotes.length || knownRemotes.includes(remote))) {
       this.q('UPDATE projects SET path = ? WHERE id = ?').run(here, p.id);
       p.path = here;
       this.event(p, { actor: SYSTEM, type: 'path', headline: `${p.name} lives in ${here}`, summary: `Learned from ${agent}'s checkin. Agents working in that folder now find this project on their own.` });
