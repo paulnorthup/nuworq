@@ -16,7 +16,7 @@ export function getStartedCard(gs, { worker = '' } = {}) {
     if (a.note) return `<span class="faint">${esc(a.label)}</span>`; // someone else's to do: nothing to click
     const cls = s.key === next ? 'btn primary small' : 'link';
     if (a.href) return `<a class="${cls}" href="${esc(a.href)}"${/^https?:/.test(a.href) ? ' target="_blank" rel="noopener"' : ''}>${esc(a.label)}</a>`;
-    return `<button class="${cls}" data-action="${esc(a.ui)}">${esc(a.label)}</button>`;
+    return `<button class="${cls}" data-action="${esc(a.ui)}"${a.slug ? ` data-slug="${esc(a.slug)}"` : ''}>${esc(a.label)}</button>`;
   };
   const rows = gs.steps.map((s) => `<li class="${s.done ? 'done' : s.key === next ? 'next' : ''}" data-step="${esc(s.key)}">
       <span class="tick">${s.done ? '✓' : ''}</span><span class="label">${esc(s.label)}</span>${s.done ? '' : action(s)}
