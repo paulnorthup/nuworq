@@ -21,16 +21,22 @@ export function plan(routes, running, { workers = 1, maxRuns = Infinity, launche
 
 const FAST_FAIL_MS = 15_000;
 const FAST_FAILS = 3;
+// Clean exits this soon without claiming anything: the hub routed a worker to work it couldn't take.
+const EMPTY_MS = 60_000;
+const EMPTIES = 3;
+const PAUSE_MS = 5 * 60_000;
+const MAX_PAUSE_MS = 30 * 60_000;
 const KILL_GRACE_MS = 10_000;
 
 // routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal),
 // exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited }.
 // launch throws an error with skip: true when this machine can't work on the route's project (no
 // checkout of it here): that project is left to others for this round, said once, and isn't a failure.
+// claimed(worker): whether the hub saw it take a job since it started (absent: assume it did).
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
 // maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
 export async function run({
-  routes, launch, log = console.log,
+  routes, launch, claimed = async () => true, log = console.log,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
@@ -39,6 +45,9 @@ export async function run({
   let launched = 0;
   let spent = 0;
   let fastFails = 0;
+  let empties = [];
+  let pausedUntil = 0;
+  let pauseMs = PAUSE_MS;
   let stopping = false;
   let why = '';
   let wake = () => {};
@@ -56,6 +65,16 @@ export async function run({
     fastFails++;
     if (fastFails >= FAST_FAILS) stop(`${FAST_FAILS} workers in a row failed within seconds; check the agent runs on its own (see its log)`);
   };
+  const foundNothing = (w) => {
+    empties.push(w.project);
+    if (empties.length < EMPTIES) return;
+    const reason = `${EMPTIES} workers in a row found nothing to claim in ${[...new Set(empties)].join(', ')}`;
+    empties = [];
+    if (untilIdle) return stop(reason);
+    log(`Paused ${pauseMs / 60_000}m: ${reason}. The hub routed them to work they couldn't take; check the project's needs and opt-ins.`);
+    pausedUntil = now() + pauseMs;
+    pauseMs = Math.min(pauseMs * 2, MAX_PAUSE_MS);
+  };
 
   for (;;) {
     const t = now();
@@ -70,7 +89,7 @@ export async function run({
     }
 
     let list = null;
-    if (!stopping) {
+    if (!stopping && t >= pausedUntil) {
       try {
         list = await routes();
         if (hubDown) log('The hub is back.');
@@ -109,16 +128,22 @@ export async function run({
           w.started = now();
           running.push(w);
           log(`▶ ${w.name} → ${r.name ?? r.project}: ${r.item} ${r.title} (${r.mode})${w.where ? `  ${w.where}` : ''}`);
-          w.exited.then((code) => {
-            running.splice(running.indexOf(w), 1);
-            const secs = Math.round((now() - w.started) / 1000);
+          w.exited.then(async (code) => {
+            const ms = now() - w.started;
+            const secs = Math.round(ms / 1000);
             done.push({ name: w.name, project: w.project, code, secs });
             const usd = Number(w.spent?.()) || 0;
             spent += usd;
             log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s${usd ? `, spent $${usd.toFixed(2)}` : ''}`);
-            if (spent >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${spent.toFixed(2)} spent)${running.length ? `; letting ${running.length} running worker(s) finish` : ''}`);
-            if (code !== 0 && !interrupted && !w.killedAt && now() - w.started < FAST_FAIL_MS) failedFast();
+            const others = running.length - 1; // this one is still in the list until the hub answers below
+            if (spent >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${spent.toFixed(2)} spent)${others ? `; letting ${others} running worker(s) finish` : ''}`);
+            if (code !== 0 && !interrupted && !w.killedAt && ms < FAST_FAIL_MS) failedFast();
             else fastFails = 0;
+            // It counts as running until the hub answers, so no replacement starts meanwhile.
+            const empty = code === 0 && !interrupted && !w.killedAt && ms < EMPTY_MS && !(await claimed(w).catch(() => true));
+            if (empty) foundNothing(w);
+            else if (code === 0) empties = [];
+            running.splice(running.indexOf(w), 1);
             wake();
           });
         }

@@ -3,11 +3,13 @@
 //   30s → pulse + the few things that need you, each with the action that moves it on
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
-import { STAGES, AUTONOMY, OPEN_STAGES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem } from './core.js';
+import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem } from './core.js';
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 
 const FLOW_WINDOW = 14 * DAY;
+const CHURN_WINDOW = 15 * MIN;
+const CHURN_AGENTS = 3;
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 
@@ -72,6 +74,19 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       headline: `${ref(it)} was accepted ${dur(t - it.stage_since)} ago but isn't on main yet`,
       sub: it.title, why: `No agent has landed ${it.branch || 'its branch'}. Start an agent; land jobs come before any other work.`,
       item: ref(it),
+    });
+  }
+
+  // Agents keep arriving and leaving with nothing: routed here for work they can't take.
+  const churnSince = t - CHURN_WINDOW;
+  const arrivals = hub.q(`SELECT actor, MIN(id) AS first FROM events WHERE project_id = ? AND type = 'checkin' AND at >= ? GROUP BY actor ORDER BY first`).all(p.id, churnSince);
+  const claims = hub.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND at >= ? AND type IN (${CLAIM_TYPES.map(() => '?').join(',')})`).get(p.id, churnSince, ...CLAIM_TYPES).n;
+  if (arrivals.length >= CHURN_AGENTS && !claims) {
+    push({
+      key: `churn:${Math.min(...arrivals.map((a) => a.first))}`, level: 'know', kind: 'churn', at: t,
+      headline: `${arrivals.length} agents checked in to ${p.name} in the last ${dur(CHURN_WINDOW)} and none took any work`,
+      sub: arrivals.map((a) => a.actor).join(', '),
+      why: 'They were sent here but found nothing they could claim. Check what the waiting work needs against what the agents declared (has), and which projects `nuworq run` staffs.',
     });
   }
 

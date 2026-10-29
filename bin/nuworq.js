@@ -423,6 +423,9 @@ async function runCmd(flags) {
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}`),
     launch, workers,
+    // Asked of the hub, not the routes: a quick worker can claim and exit between two polls. A minute
+    // of slack covers clocks that differ.
+    claimed: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).claims > 0,
     maxRuns: num(flags['max-runs'], Infinity),
     untilIdle: !!flags['until-idle'],
     maxMinutes: num(flags['max-minutes'], Infinity),

@@ -546,6 +546,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null,
         has: url.searchParams.has('has') ? url.searchParams.get('has').split(',').filter(Boolean) : undefined,
       }));
+      if (req.method === 'GET' && path === '/api/claims') {
+        return send(200, { claims: hub.claimsSince(url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0, { scope: caller.scope }) });
+      }
       if (req.method === 'GET' && path === '/api/where') {
         const p = hub.projectByRemote(url.searchParams.get('remote') ?? '', caller.scope) ?? hub.projectByPath(url.searchParams.get('root') ?? '', caller.scope);
         return send(200, { project: p?.slug ?? null, path: p?.path ?? null });

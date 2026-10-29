@@ -390,4 +390,43 @@ describe('run: the supervising loop', () => {
     assert.match(res.why, /failed within seconds/);
     assert.equal(res.launched, 3);
   });
+
+  // Workers that exit cleanly the moment they start (well within a minute); claims says which took a job.
+  const empty = (routesSeq, claims = () => false) => {
+    const w = world(routesSeq);
+    const launch = w.opts.launch;
+    w.opts.launch = async (r) => {
+      const x = Object.assign(await launch(r), { at: w.opts.now() });
+      setImmediate(() => x.finish(0));
+      return x;
+    };
+    w.opts.claimed = async (x) => claims(x);
+    return w;
+  };
+
+  test('pauses 5m after 3 workers in a row find nothing to claim, then 10m on the next streak', async () => {
+    const w = empty([[route('a', 5)]]);
+    const res = await run({ ...w.opts, workers: 1, maxRuns: 6 });
+    assert.match(res.why, /max-runs 6/);
+    const paused = w.lines.filter((l) => /^Paused/.test(l));
+    assert.equal(paused.length, 2);
+    assert.match(paused[0], /^Paused 5m: 3 workers in a row found nothing to claim in a\./);
+    assert.match(paused[1], /^Paused 10m: /, 'the next streak pauses longer');
+    const gap = w.workers[3].at - w.workers[2].at;
+    assert.ok(gap >= 5 * 60_000 && gap < 5 * 60_000 + 10_000, `no 4th worker for 5 minutes, then it resumes (gap ${gap}ms)`);
+    assert.ok(w.workers[1].at - w.workers[0].at < 10_000, 'no pause before the streak');
+  });
+
+  test('a quick worker that claimed something resets the streak', async () => {
+    const w = empty([[route('a', 5)]], (x) => x.name === 'w3');
+    await run({ ...w.opts, workers: 1, maxRuns: 5 });
+    assert.ok(!w.lines.some((l) => /^Paused/.test(l)), 'w1 w2 empty, w3 claimed, w4 w5 empty: never 3 in a row');
+  });
+
+  test('with --until-idle, the streak stops run instead', async () => {
+    const w = empty([[route('a', 5)]]);
+    const res = await run({ ...w.opts, workers: 1, untilIdle: true });
+    assert.equal(res.why, '3 workers in a row found nothing to claim in a');
+    assert.equal(res.launched, 3);
+  });
 });

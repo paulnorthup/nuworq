@@ -47,6 +47,8 @@ export const STAGES = {
   dropped:   { label: 'Dropped',   court: null,      blurb: 'Decided not to do. Kept for the record.' },
 };
 export const OPEN_STAGES = ['proposed', 'ready', 'active', 'waiting', 'verifying', 'landing'];
+// Events that mean an agent took a job: building (or a race slot), shaping, reviewing, landing.
+export const CLAIM_TYPES = ['claimed', 'shaping', 'review_started', 'landing'];
 // Accepted work goes to its builder to land first; after this, any agent may land it.
 export const LAND_GRACE = 3 * MIN;
 
@@ -360,6 +362,18 @@ export class Hub extends EventEmitter {
           UNION SELECT a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND a.stage = 'active' AND a.closed = 0`)
         .all(o.p.id, o.p.id).map((h) => h.holder) } : {}),
     }));
+  }
+
+  // How many jobs an agent took since a moment, across the projects a token may reach: tells
+  // `nuworq run` whether a worker that exited quickly did anything, even between its polls.
+  claimsSince(agent, since, { scope = null } = {}) {
+    let n = 0;
+    for (const p of this.projects()) {
+      if (scope && !scope.includes(p.slug)) continue;
+      n += this.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND actor = ? AND at >= ?
+          AND type IN (${CLAIM_TYPES.map(() => '?').join(',')})`).get(p.id, agent, since, ...CLAIM_TYPES).n;
+    }
+    return n;
   }
 
   // ── small helpers ───────────────────────────────────────────────────────
