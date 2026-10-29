@@ -512,3 +512,9 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 .where { color: var(--muted); font-size: 12.5px; margin-top: 4px; cursor: text; }
 .where:hover { color: var(--ink); }
 .where .faint { color: var(--faint); font-style: italic; }
+
+/* What just shipped (#130, web/new.js): a quiet pill over the corner, so it takes no room and moves nothing. */
+.is-new { position: relative; }
+.is-new::after { content: 'new'; position: absolute; bottom: calc(100% - 3px); right: -6px; z-index: 1; pointer-events: none;
+  font: 650 10px/1 var(--font); letter-spacing: .02em; text-transform: lowercase; padding: 2px 5px; border-radius: 999px;
+  color: var(--agents); background: var(--agents-tint); box-shadow: 0 0 0 1.5px var(--panel); }
