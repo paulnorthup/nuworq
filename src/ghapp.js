@@ -21,7 +21,10 @@ export function appFromEnv(env = process.env) {
   const id = envVar('GITHUB_APP_ID', env);
   const file = envVar('GITHUB_APP_KEY_FILE', env);
   const key = envVar('GITHUB_APP_KEY', env) || (file ? readFileSync(file, 'utf8') : '');
-  return id && key ? { id, key, slug: envVar('GITHUB_APP_SLUG', env) || '' } : null;
+  return id && key ? {
+    id, key, slug: envVar('GITHUB_APP_SLUG', env) || '',
+    client_id: envVar('GITHUB_APP_CLIENT_ID', env) || '', client_secret: envVar('GITHUB_APP_CLIENT_SECRET', env) || '',
+  } : null;
 }
 
 // The app the hub made for itself (one click, below), kept in a file only the hub's user can read. null if none.
@@ -58,13 +61,44 @@ export async function convert(code, { api = 'https://api.github.com' } = {}) {
 
 export class GitHubApp {
   // id: the app's id. key: its private key (PEM). slug: its name in github.com/apps/<slug>, for install links.
-  // api: GitHub's REST API (tests point it at a stub). now: for tests.
-  constructor({ id, key, slug = '', api = 'https://api.github.com', now = () => Date.now() }) {
+  // client_id, client_secret: its OAuth credentials, to learn who installed it (installedBy). api, web:
+  // GitHub's REST API and site (tests point them at a stub). now: for tests.
+  constructor({ id, key, slug = '', client_id = '', client_secret = '', api = 'https://api.github.com', web = 'https://github.com', now = () => Date.now() }) {
     this.id = String(id);
     this.key = createPrivateKey(key);
     this.slug = slug;
+    this.clientId = client_id;
+    this.clientSecret = client_secret;
     this.api = api.replace(/\/+$/, '');
+    this.web = web.replace(/\/+$/, '');
     this.now = now;
+  }
+
+  // Whether the person who just installed the app can see installation id, by their own word to GitHub:
+  // the OAuth code GitHub sends with the setup redirect ("Request user authorization during installation")
+  // becomes a user token, and GET /user/installations lists what that person can reach. The redirect's
+  // installation_id alone can be forged; this can't. Throws a UserError when it can't be checked.
+  async installedBy(code, id) {
+    if (!this.clientId || !this.clientSecret) {
+      throw new UserError("this hub can't check who installed the app: it has no client id and secret for it", { status: 424, hint: 'Set NUWORQ_GITHUB_APP_CLIENT_ID and NUWORQ_GITHUB_APP_CLIENT_SECRET from the app\'s settings page (docs/GITHUB.md), then install again.' });
+    }
+    if (!code) {
+      throw new UserError("GitHub didn't say who installed the app", { hint: 'In the app\'s settings, tick "Request user authorization (OAuth) during installation", then install again from your organization.' });
+    }
+    const t = await fetch(`${this.web}/login/oauth/access_token`, {
+      method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'nuworq' },
+      body: JSON.stringify({ client_id: this.clientId, client_secret: this.clientSecret, code }), signal: AbortSignal.timeout(10_000),
+    });
+    const tok = (await t.json().catch(() => ({}))).access_token;
+    if (!tok) throw new UserError("GitHub didn't accept the install's authorization code (it works once, for 10 minutes)", { hint: 'Install again from your organization.' });
+    for (let page = 1; page <= 10; page++) {
+      const r = await this.call('GET', `/user/installations?per_page=100&page=${page}`, null, tok);
+      if (r.status !== 200) throw new UserError(`GitHub didn't list your installations (${r.status})`, { status: 502, hint: 'Try the install again in a minute.' });
+      const list = r.json.installations ?? [];
+      if (list.some((i) => Number(i.id) === Number(id))) return true;
+      if (list.length < 100) return false;
+    }
+    return false;
   }
 
   // The app's own credential: a JWT signed with its key, good for ~10 minutes (backdated a minute for clock skew).

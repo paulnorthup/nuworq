@@ -82,7 +82,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   let built = null;
   const pkg = buildPackage(source, packageDir).then((b) => (built = b));
   const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
-  let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, ...githubApp }) : githubApp;
+  let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, web: gh.web, ...githubApp }) : githubApp;
   // The app as a hub may use it: on a shared hub, only the installations bound to that organization
   // (installed from inside it; see /api/github/installed), so one organization can't read another's repositories.
   const appOf = (hub) => (!app ? null : spaces ? app.scoped((id) => spaces.directory.installation(id) === hub.workspace) : app);
@@ -249,12 +249,16 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       return redirect(res, '/');
     }
     // GitHub's setup page after the app was installed from inside an organization (/api/github/install):
-    // the signed state says which one, and the installation is bound to it. The first binding stands.
+    // the signed state says which one, and the installation is bound to it once GitHub confirms, through the
+    // installer's OAuth code, that they can see it (the redirect's installation_id can be forged). The first binding stands.
     if (req.method === 'GET' && path === '/api/github/installed') {
       if (!app) return deny(404, 'this hub has no GitHub App');
       const ws = readInstallState(app, url.searchParams.get('state'));
       const id = Number(url.searchParams.get('installation_id'));
       if (!ws || !spaces.has(ws) || !id) return deny(400, "this install didn't start from an organization on this hub, or its link expired", 'Open your organization, then Connect → Install the GitHub App, and finish the install within the hour.');
+      if (!(await app.installedBy(url.searchParams.get('code'), id))) {
+        return deny(403, `GitHub says you can't see installation ${id}, so it isn't bound to ${ws}`, 'Install the app from your organization on an account or repositories you manage, and let GitHub send you back here.');
+      }
       if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another organization on this hub', 'Install the app for this organization on its own account or repositories.');
       return redirect(res, `/w/${encodeURIComponent(ws)}/#github-installed`);
     }
@@ -452,7 +456,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!exp || exp < Date.now() || spaces) return deny(400, 'this GitHub App link was already used, expired, or never started here', 'Start again from the hub: Connect an agent → Create GitHub App.');
         const a = await convert(url.searchParams.get('code') ?? '', { api: gh.api });
         if (appFile) writeFileSync(appFile, JSON.stringify(a, null, 2), { mode: 0o600 });
-        app = new GitHubApp({ id: a.id, key: a.key, slug: a.slug, api: gh.api });
+        app = new GitHubApp({ id: a.id, key: a.key, slug: a.slug, client_id: a.client_id, client_secret: a.client_secret, api: gh.api, web: gh.web });
         for (const p of hub.projects()) {
           hub.event(p, { actor: 'github', type: 'github_app', headline: `The GitHub App ${a.slug || a.id} was created${a.owner ? ` on ${a.owner}` : ''}; install it on this project's repository so workers can push` });
           hub.changed(p);
