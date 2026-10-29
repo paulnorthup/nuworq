@@ -84,10 +84,20 @@ describe('a shared hub keeps organizations apart', () => {
 
   test('an app installation belongs to the organization it was installed from; others get no token for its repositories', async () => {
     // GitHub: one installation (42) that reaches acme/api.
-    const mints = [];
+    // Installers: code "alice" is a person who can see installation 42 (and 7); "mallory" sees only 99.
+    const mints = [], users = { alice: [42, 7], mallory: [99] };
     const api = http.createServer(async (req, res) => {
       const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
-      for await (const _ of req);
+      let raw = '';
+      for await (const c of req) raw += c;
+      if (req.method === 'POST' && req.url === '/login/oauth/access_token') {
+        const b = JSON.parse(raw);
+        return json(200, b.client_id === 'cid' && b.client_secret === 'csec' && users[b.code] ? { access_token: `ghu_${b.code}` } : { error: 'bad_verification_code' });
+      }
+      if (req.url.startsWith('/user/installations')) {
+        const who = String(req.headers.authorization).replace('Bearer ghu_', '');
+        return users[who] ? json(200, { total_count: users[who].length, installations: users[who].map((id) => ({ id })) }) : json(401, {});
+      }
       if (req.url === '/repos/acme/api/installation') return json(200, { id: 42 });
       if (req.url === '/app/installations/42/access_tokens') { mints.push(1); return json(201, { token: 'ghs_x', expires_at: new Date(Date.now() + 3600e3).toISOString() }); }
       json(404, {});
@@ -96,16 +106,26 @@ describe('a shared hub keeps organizations apart', () => {
     const spaces = new Workspaces({ dir: tmp('nuworq-iso-app-') });
     spaces.create('alpha');
     spaces.create('bravo');
-    const app = new GitHubApp({ id: 1, key: PEM, slug: 'nuworq-test', api: apiUrl });
+    const app = new GitHubApp({ id: 1, key: PEM, slug: 'nuworq-test', client_id: 'cid', client_secret: 'csec', api: apiUrl, web: apiUrl });
     const server = createServer(spaces, { githubApp: app });
     const url = `http://127.0.0.1:${await listen(server)}`;
-    const installed = (state, id = 42) => fetch(`${url}/api/github/installed?installation_id=${id}&state=${encodeURIComponent(state)}`, { redirect: 'manual' });
+    const installed = (state, id = 42, code = 'alice') => fetch(`${url}/api/github/installed?installation_id=${id}&state=${encodeURIComponent(state)}${code ? `&code=${code}` : ''}`, { redirect: 'manual' });
     const as = (ws) => app.scoped((id) => spaces.directory.installation(id) === ws);
     try {
       // Before anyone installed from inside an organization, neither gets a token.
       await assert.rejects(as('bravo').mint('github.com/acme/api'), (e) => e.status === 403 && /installed for another organization/.test(e.message));
 
       assert.equal((await installed('alpha.9999999999999.forged')).status, 400, 'a forged state binds nothing');
+      // A real state from bravo, but an installation_id its installer can't see: alpha's, forged into the redirect.
+      const forged = await installed(installState(app, 'bravo'), 42, 'mallory');
+      assert.equal(forged.status, 403);
+      assert.match((await forged.json()).error, /can't see installation 42/);
+      assert.equal(spaces.directory.installation(42), null, 'nothing bound');
+      const noCode = await installed(installState(app, 'bravo'), 42, '');
+      assert.equal(noCode.status, 400);
+      assert.match((await noCode.json()).hint, /Request user authorization \(OAuth\) during installation/);
+      assert.equal((await installed(installState(app, 'bravo'), 42, 'expired')).status, 400, 'a code GitHub refuses binds nothing');
+
       const ok = await installed(installState(app, 'alpha'));
       assert.equal(ok.status, 302);
       assert.equal(ok.headers.get('location'), '/w/alpha/#github-installed');
@@ -116,6 +136,8 @@ describe('a shared hub keeps organizations apart', () => {
       await assert.rejects(as('bravo').mint('github.com/acme/api'), (e) => e.status === 403 && /install/i.test(e.hint));
       assert.equal(mints.length, 1, 'bravo never got as far as a token');
       assert.equal((await app.mint('github.com/acme/api')).token, 'ghs_x', 'the unscoped app (single hub) is unchanged');
+      // An app without its client id and secret can't check, so it binds nothing.
+      await assert.rejects(new GitHubApp({ id: 1, key: PEM, api: apiUrl, web: apiUrl }).installedBy('alice', 42), (e) => e.status === 424 && /NUWORQ_GITHUB_APP_CLIENT_ID/.test(e.hint));
     } finally {
       server.close();
       api.close();
