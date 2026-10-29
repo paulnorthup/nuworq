@@ -281,6 +281,12 @@ export function openDb(file) {
     'ALTER TABLE issues ADD COLUMN landed_comment INTEGER NOT NULL DEFAULT 0', // the hub's comment when its item landed (its id on GitHub)
     "ALTER TABLE issues ADD COLUMN close_error TEXT NOT NULL DEFAULT ''", // why the hub couldn't close it after its item landed
     "ALTER TABLE prs ADD COLUMN blocked TEXT NOT NULL DEFAULT ''", // why an open landing PR can't merge: '' | conflict | review
+    // An outside fact the item waits on (src/precondition.js): JSON, '' for none; the last check { at, ok, detail };
+    // when to check next; failures in a row (the backoff)
+    "ALTER TABLE items ADD COLUMN precondition TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE items ADD COLUMN last_check TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE items ADD COLUMN next_check INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE items ADD COLUMN check_fails INTEGER NOT NULL DEFAULT 0',
     // What llm-proxy measured (source 'llm-proxy'; 0 on reported rows): model time, requests, failed ones, cold model loads
     'ALTER TABLE usage ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE usage ADD COLUMN requests INTEGER NOT NULL DEFAULT 0',

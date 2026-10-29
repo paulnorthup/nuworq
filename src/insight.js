@@ -3,7 +3,7 @@
 //   30s → pulse + the few things that need you, each with the action that moves it on
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
-import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem } from './core.js';
+import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem, preconditionOut } from './core.js';
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 
@@ -437,7 +437,7 @@ export function eventOut(e, t) {
 // Time accounting over the last two weeks: how long work spends in each stage and in whose court.
 function flowStats(hub, p, items, t) {
   const from = t - FLOW_WINDOW;
-  const court = { agents: 0, queue: 0, you: 0 };
+  const court = { agents: 0, queue: 0, you: 0, external: 0 }; // external: waiting on a fact outside the hub
   const stageTime = Object.fromEntries(Object.keys(STAGES).map((s) => [s, 0]));
   const byItem = new Map(items.map((i) => [i.id, i]));
   const rows = hub.q(`SELECT t.* FROM transitions t JOIN items i ON i.id = t.item_id WHERE i.project_id = ? ORDER BY t.item_id, t.at, t.id`).all(p.id);
@@ -455,7 +455,7 @@ function flowStats(hub, p, items, t) {
       if (c) court[c] += end - start;
     }
   }
-  const total = court.agents + court.queue + court.you;
+  const total = court.agents + court.queue + court.you + court.external;
   const share = (n) => (total ? Math.round((100 * n) / total) : 0);
 
   // throughput: items accepted per day over the window
@@ -495,7 +495,7 @@ function flowStats(hub, p, items, t) {
       stage: s, label: STAGES[s].label, blurb: STAGES[s].blurb, court: courtOf(s, p.autonomy) ?? (STAGES[s].court ? 'backlog' : null),
       count: items.filter((i) => i.stage === s).length, time: dur(stageTime[s]), ms: stageTime[s],
     })),
-    court: { agents: share(court.agents), queue: share(court.queue), you: share(court.you), ms: court },
+    court: { agents: share(court.agents), queue: share(court.queue), you: share(court.you), external: share(court.external), ms: court },
     throughput: perDay,
     finished: doneAt.length,
     median_cycle: median ? dur(median) : null,
@@ -543,7 +543,7 @@ export function itemView(hub, slug, ref) {
     const end = k + 1 < trs.length ? trs[k + 1].at : ['done', 'dropped'].includes(r.stage) ? r.at : t;
     return { stage: r.stage, label: STAGES[r.stage]?.label, actor: r.actor, at: r.at, ms: end - r.at, time: dur(end - r.at), court: courtOf(r.stage, p.autonomy), current: k === trs.length - 1 };
   });
-  const courtTotals = { agents: 0, queue: 0, you: 0 };
+  const courtTotals = { agents: 0, queue: 0, you: 0, external: 0 };
   for (const l of lifecycle) if (l.court) courtTotals[l.court] += l.ms;
   const events = hub.q(`SELECT e.*, i.seq AS item_seq FROM events e LEFT JOIN items i ON i.id = e.item_id WHERE e.item_id = ? ORDER BY e.at, e.id`).all(it.id).map((e) => eventOut(e, t));
   const submit = [...events].reverse().find((e) => e.type === 'submitted');
@@ -576,6 +576,7 @@ export function itemView(hub, slug, ref) {
     court_ms: courtTotals,
     agents: agentNames.map((n) => ({ name: n, model: models[n], provider: providerOf(models[n]) })),
     usage: hub.usageOf(it), // null: nothing recorded
+    precondition: preconditionOut(it) ?? null,
     events,
   };
 }

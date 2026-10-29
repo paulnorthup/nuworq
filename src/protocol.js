@@ -15,6 +15,16 @@ const USAGE = {
     model: s('The model id.'),
   },
 };
+const PRECONDITION = {
+  type: 'object',
+  description: 'Optional, and rarely needed: usually build against the documented contract with a fake instead. A fact outside this hub the work must wait for; until the hub sees it, the item waits in "outside" and next doesn\'t offer it. A URL alone means it must answer 200. Or { url, status, contains, json_path, equals, credential } where credential is a NAME (the hub host\'s NUWORQ_CRED_<NAME>), never a secret. {} clears it.',
+  properties: {
+    url: s('http(s) URL the hub GETs.'), status: { type: 'integer', description: 'Expected status (default 200).' },
+    contains: s('Text the body must contain.'), json_path: s('Dotted path into a JSON body, e.g. "features.export".'),
+    equals: { description: 'The value at json_path must equal this (otherwise it must just exist).' },
+    credential: s('The NAME of a credential on the hub host, e.g. "VENDOR" for NUWORQ_CRED_VENDOR.'),
+  },
+};
 const REPO = s('Optional. The repository the work lands in, when the project has several, e.g. "github.com/acme/api". Default: the project\'s first.');
 const LAYERS = {
   headline: s('One line, ≤100 characters, outcome first. What a busy person needs in three seconds.'),
@@ -108,6 +118,7 @@ export const OPS = [
       needs: NEEDS,
       size: SIZE,
       repo: REPO,
+      precondition: PRECONDITION,
     },
     required: ['title'],
   },
@@ -125,6 +136,7 @@ export const OPS = [
       needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
       size: SIZE,
       repo: REPO,
+      precondition: { ...PRECONDITION, description: `${PRECONDITION.description} Replaces any earlier one.` },
       duplicate_of: { ...ITEM, description: 'Optional, for a proposal imported from a GitHub issue: the item it duplicates. Its issue moves there and this proposal is dropped.' },
       stale: s('Optional, for a proposal imported from a GitHub issue: why it is stale, in one line. The human gets one question to close all flagged issues at once.'),
       race: { type: 'integer', minimum: 1, maximum: 4, description: 'Optional. For hard items: how many agents may attempt it at once (each on its own; the reviewer keeps the best). 1 is the usual single worker. Only while it is not being worked on.' },
@@ -167,7 +179,7 @@ export const OPS = [
   {
     name: 'look',
     description: 'Look around. With item: full context for that item. Without: the board grouped by stage, plus standing decisions.',
-    params: { item: { ...ITEM, description: 'Optional.' }, stage: { type: 'string', enum: ['proposed', 'ready', 'active', 'waiting', 'verifying', 'done'] } },
+    params: { item: { ...ITEM, description: 'Optional.' }, stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'done'] } },
   },
   {
     name: 'signoff',

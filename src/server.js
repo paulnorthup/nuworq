@@ -12,6 +12,7 @@ import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
 import { receive } from './github.js';
+import { runChecks } from './precondition.js';
 import { syncIssues, commentIssues, closeLanded, closeStale } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
@@ -111,6 +112,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const sweeper = setInterval(() => {
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); } catch (e) { console.error('sweep failed', e); }
+      // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
+      runChecks(hub, spaces ? { shared: true } : {}).catch((e) => console.error('checking preconditions failed', e));
       // Issues whose work has landed close on GitHub (a hub that has served a request knows its public address).
       if (app && hub.github?.app === app) for (const p of hub.projects()) closeLanded(hub, p, app).catch((e) => console.error('closing issues failed', e));
     }
