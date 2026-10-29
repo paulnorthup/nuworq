@@ -92,6 +92,15 @@ describe('"+ Project" from the repositories the GitHub App can see', () => {
       assert.equal(cli.json.slug, 'cli-2', 'an unlinked project named cli keeps its name; the new one gets its own');
       assert.deepEqual(hub.remotesOf(hub.project('cli')), []);
       assert.equal((await call('POST', '/api/projects', { repo: 'gitlab.com/x/y' })).status, 400);
+
+      // By name, with a remote typed in: linked the same way, and a remote already in a project is a 409.
+      const byName = await call('POST', '/api/projects', { name: 'Proxy', remote: 'git@gitlab.com:acme/proxy.git' });
+      assert.deepEqual(byName.json, { ok: true, slug: 'proxy' });
+      assert.deepEqual(hub.remotesOf(hub.project('proxy')), ['gitlab.com/acme/proxy']);
+      const taken = await call('POST', '/api/projects', { name: 'Proxy two', remote: 'https://gitlab.com/acme/proxy' });
+      assert.equal(taken.status, 409);
+      assert.match(taken.json.error, /gitlab\.com\/acme\/proxy is already the project Proxy/);
+      assert.equal(hub.projects().some((x) => x.name === 'Proxy two'), false, 'nothing half-made');
     } finally { close(); }
   });
 

@@ -549,14 +549,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         // From a repository: its name, a free slug, its description as the mission, and the remote linked.
         const repo = b.repo ? normRemote(b.repo) : '';
         if (b.repo && !/^github\.com\/[^/]+\/[^/]+$/.test(repo)) return deny(400, `"${b.repo}" isn't a GitHub repository`, 'e.g. github.com/acme/api');
-        const owner = repo && hub.projectByRemote(repo);
-        if (owner) return deny(409, `${repo} is already the project ${owner.name}`, `Open it: /#/p/${owner.slug}`);
+        // By name: a remote typed in (any form git accepts) is linked too.
+        const link = repo || (b.remote ? normRemote(b.remote) : '');
+        if (b.remote && !link) return deny(400, `"${b.remote}" isn't a remote git understands`, 'e.g. github.com/acme/api or git@github.com:acme/api.git');
+        const owner = link && hub.projectByRemote(link);
+        if (owner) return deny(409, `${link} is already the project ${owner.name}`, `Open it: /#/p/${owner.slug}`);
         const name = b.name || repo.split('/').at(-1);
         const p = hub.tx(() => {
           let slug = slugify(b.slug || name);
           if (repo) for (let n = 2; hub.projects().some((x) => x.slug === slug); n++) slug = `${slugify(name)}-${n}`;
           const made = hub.project(slug, { create: true, name });
-          if (repo) hub.addRemote(made, repo, by);
+          if (link) hub.addRemote(made, link, by);
           return made;
         });
         if (b.mission) hub.humanOp(p.slug, 'settings', { mission: b.mission });

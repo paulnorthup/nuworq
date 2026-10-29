@@ -858,6 +858,7 @@ function newProject() {
       <div class="form"><label>Search<input id="np-q" placeholder="owner/name"></label></div><div id="np-repos" class="repo-list"><p class="faint">Loading…</p></div>
       <details><summary>Or add one by name</summary>` : `<p class="lead">${why} Agents also create projects when they check in to a new name.</p>`}
     <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
+    <label>Repository (optional): its git remote, so agents in a clone find the project<input id="np-remote" placeholder="e.g. github.com/acme/llm-proxy"></label>
     <label>Mission (optional): the north star every agent reads<textarea id="np-mission" placeholder="What is this for? What matters most?"></textarea></label></div>
     ${picker ? '</details>' : ''}
     <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="create-project">Create by name</button></div>`);
@@ -1077,7 +1078,7 @@ const ACTIONS = {
     const name = val('np-name');
     if (!name) return toast('Name it', true);
     try {
-      const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('np-mission') }) });
+      const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('np-mission'), remote: val('np-remote') || undefined }) });
       closeModal();
       go(r.slug);
     } catch (e) { toast(e.message, true); }
