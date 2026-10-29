@@ -184,14 +184,14 @@ export function createServer(hub, { auth = 'local', trustProxy = false, publicUr
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req) }));
+        return send(200, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req) }));
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
       if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {
         const b = await body(req);
         const agent = req.headers['x-trellis-agent'] || b.agent;
         delete b.agent;
-        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req) }));
+        return send(200, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req) }));
       }
       // Push channels (hub-wide). Agent tokens never reach these.
       if (req.method === 'GET' && path === '/api/notify') return send(200, { channels: listChannels(hub.db), kinds: KINDS });
@@ -213,7 +213,7 @@ export function createServer(hub, { auth = 'local', trustProxy = false, publicUr
       }
       if (req.method === 'GET' && path === '/api/route') return send(200, hub.route());
       if (req.method === 'GET' && path === '/api/where') {
-        const p = hub.projectByPath(url.searchParams.get('root') ?? '');
+        const p = hub.projectByRemote(url.searchParams.get('remote') ?? '') ?? hub.projectByPath(url.searchParams.get('root') ?? '');
         return send(200, { project: p?.slug ?? null, path: p?.path ?? null });
       }
       send(404, { ok: false, error: `No route ${req.method} ${path}` });
@@ -233,6 +233,7 @@ function hostname(host) {
 }
 
 const rootOf = (req) => { try { return decodeURIComponent(req.headers['x-trellis-root'] ?? ''); } catch { return ''; } };
+const remoteOf = (req) => { try { return decodeURIComponent(req.headers['x-trellis-remote'] ?? ''); } catch { return ''; } };
 
 const TOO_BIG = () => new UserError('Request body too large (limit 1MB)', { status: 413, hint: 'Keep detail to what a person would read; put long logs in the repo and reference them.' });
 

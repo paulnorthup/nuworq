@@ -110,6 +110,17 @@ export function normPaths(v) {
 const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
 const normDir = (d) => str(d).replace(/\/+$/, '');
 
+// A git remote in the one form every clone shares: host/owner/repo. ssh, scp-style and https forms
+// of the same repository compare equal (git@github.com:Acme/api.git → github.com/acme/api).
+export function normRemote(url) {
+  let s = str(url);
+  if (!s) return '';
+  const scp = !/^[a-z][a-z0-9+.-]*:\/\//i.test(s) && s.match(/^(?:[^@/]+@)?([^:/]+):(?!\/)(.+)$/);
+  if (scp) s = `${scp[1]}/${scp[2]}`;
+  else s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^[^@/]+@/, '').replace(/^([^/:]+):\d*(?=\/|$)/, '$1');
+  return s.replace(/\/+$/, '').replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase();
+}
+
 export function slugify(s) {
   return str(s).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
@@ -178,6 +189,31 @@ export class Hub extends EventEmitter {
       if (pp && (r === pp || r.startsWith(pp + '/')) && (!best || pp.length > normDir(best.path).length)) best = p;
     }
     return best;
+  }
+
+  // The project a repository belongs to, by its normalized remote: the same answer on every machine.
+  projectByRemote(remote) {
+    const r = normRemote(remote);
+    return r ? this.q('SELECT p.* FROM projects p JOIN project_remotes r ON r.project_id = p.id WHERE r.remote = ?').get(r) ?? null : null;
+  }
+
+  remotesOf(p) {
+    return this.q('SELECT remote FROM project_remotes WHERE project_id = ? ORDER BY at').all(p.id).map((r) => r.remote);
+  }
+
+  addRemote(p, remote, actor) {
+    const r = normRemote(remote);
+    if (!r) throw new UserError('a remote is required', { hint: 'e.g. github.com/acme/api, or any form git accepts (git@github.com:acme/api.git).' });
+    const owner = this.projectByRemote(r);
+    if (owner?.id === p.id) return r;
+    if (owner) throw new UserError(`${r} already belongs to ${owner.name}`, { status: 409, hint: `Remove it from ${owner.name} first: one repository maps to one project.` });
+    this.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(p.id, r, this.now());
+    this.event(p, {
+      actor, type: 'remote',
+      headline: actor === HUMAN ? `You linked ${r} to ${p.name}` : `${p.name} is the repository ${r}`,
+      summary: actor === HUMAN ? '' : `Learned from ${actor}'s checkin. Agents in any clone of it, on any machine, now find this project on their own.`,
+    });
+    return r;
   }
 
   // Where the most valuable claimable work is, across every project that isn't parked:
@@ -427,17 +463,19 @@ export class Hub extends EventEmitter {
   // ── agent operations ────────────────────────────────────────────────────
 
   // slug may be empty: then the agent's folder (root) picks the project, or the hub routes it to work.
-  agentOp(slug, op, name, args = {}, { root = '' } = {}) {
+  agentOp(slug, op, name, args = {}, { root = '', remote = '' } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     this.sweep();
     const agent = this.requireAgent(name);
+    remote = normRemote(remote);
     let p;
     let routed = null;
     if (slug) {
       p = this.project(slug, { create: op === 'checkin' });
     } else {
-      p = this.projectByPath(root);
+      // The repository is the same on every machine; the folder only on this one.
+      p = this.projectByRemote(remote) ?? this.projectByPath(root);
       if (!p) {
         if (!['checkin', 'next'].includes(op)) {
           throw new UserError('Which project?', { hint: 'Call checkin first: the hub sends you to the work that matters most, and remembers it for this session.' });
@@ -460,6 +498,10 @@ export class Hub extends EventEmitter {
       p.path = here;
       this.event(p, { actor: SYSTEM, type: 'path', headline: `${p.name} lives in ${here}`, summary: `Learned from ${agent}'s checkin. Agents working in that folder now find this project on their own.` });
     }
+    // Learn the repository the same way, unless it already belongs to another project.
+    if (slug && remote && op === 'checkin' && !this.projectByRemote(remote)) this.addRemote(p, remote, agent);
+    // A clone of the project's repository is the right place to work, wherever it sits on disk.
+    const ownClone = !!remote && this.projectByRemote(remote)?.id === p.id;
     const result = this.tx(() => {
       const presence = this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
       const r = fn.call(this, p, agent, args ?? {}, presence);
@@ -475,7 +517,9 @@ export class Hub extends EventEmitter {
       if (['checkin', 'next'].includes(op)) {
         const where = normDir(p.path);
         if (routed) r.routed = `The hub sent you to ${p.name}: ${routed.item} ${routed.title} is the most valuable waiting work (${routed.priority}, waiting ${routed.waiting}).`;
-        if (where && here && here !== where && !here.startsWith(where + '/')) {
+        if (ownClone && here) {
+          r.workspace = here;
+        } else if (where && here && here !== where && !here.startsWith(where + '/')) {
           r.workspace = `This project's code lives in ${where}, but you are in ${here}. Do the work there: start a session in that folder, or ask the human.`;
         } else if (where) {
           r.workspace = where;
@@ -1056,6 +1100,15 @@ const HUMAN_OPS = {
       headline: `You picked #${it.seq} as what matters most: ${it.title}`,
       summary: it.stage === 'proposed' ? 'The next agent to check in will shape it first, then it gets built.' : 'It goes to the front of the queue.',
     });
+  },
+
+  remote(p, { add, remove }) {
+    if (add) this.addRemote(p, add, HUMAN);
+    if (remove) {
+      const r = normRemote(remove);
+      if (!this.q('DELETE FROM project_remotes WHERE project_id = ? AND remote = ?').run(p.id, r).changes) throw new UserError(`${p.name} has no remote ${r}`, { status: 404 });
+      this.event(p, { actor: HUMAN, type: 'remote', headline: `You unlinked ${r} from ${p.name}` });
+    }
   },
 
   dismiss(p, { key }) {

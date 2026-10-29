@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { slugify } from './core.js';
+import { slugify, normRemote } from './core.js';
 
 export const DEFAULT_URL = 'http://127.0.0.1:4747';
 // `trellis serve` writes where it is listening, so clients find the hub without configuration.
@@ -38,6 +38,11 @@ export function repoRoot(cwd = process.cwd()) {
   return git(cwd, 'rev-parse', '--show-toplevel') ?? resolve(cwd);
 }
 
+// The repo's origin remote, normalized (github.com/acme/api): the same on every machine and clone.
+export function repoRemote(cwd = process.cwd()) {
+  return normRemote(git(cwd, 'remote', 'get-url', 'origin') ?? '');
+}
+
 function discoveredUrl() {
   try { return JSON.parse(readFileSync(HUB_FILE, 'utf8')).url || null; } catch { return null; }
 }
@@ -48,7 +53,7 @@ export function resolveSettings({ url, project, token, cwd = process.cwd() } = {
   const config = findConfig(cwd);
   const hubUrl = (url || process.env.TRELLIS_URL || config?.url || discoveredUrl() || DEFAULT_URL).replace(/\/+$/, '');
   const named = project || process.env.TRELLIS_PROJECT || config?.project;
-  return { url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), token: token ?? process.env.TRELLIS_TOKEN ?? '', config };
+  return { url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd), token: token ?? process.env.TRELLIS_TOKEN ?? '', config };
 }
 
 export class HubError extends Error {
@@ -64,6 +69,7 @@ export function createClient(opts = {}) {
   const headers = (extra = {}) => ({
     'content-type': 'application/json',
     'x-trellis-root': encodeURIComponent(settings.root),
+    ...(settings.remote ? { 'x-trellis-remote': encodeURIComponent(settings.remote) } : {}),
     ...(settings.token ? { authorization: `Bearer ${settings.token}` } : {}),
     ...extra,
   });
@@ -98,7 +104,7 @@ export function createClient(opts = {}) {
       return request('POST', p ? `/api/p/${encodeURIComponent(p)}/agent/${op}` : `/api/agent/${op}`, { body: args, agent });
     },
     // The project this folder belongs to, as far as the hub knows.
-    where: () => request('GET', `/api/where?root=${encodeURIComponent(settings.root)}`),
+    where: () => request('GET', `/api/where?root=${encodeURIComponent(settings.root)}&remote=${encodeURIComponent(settings.remote)}`),
     get: (path) => request('GET', path),
     post: (path, body) => request('POST', path, { body }),
   };

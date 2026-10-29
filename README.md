@@ -117,7 +117,7 @@ Design choices:
 - **Steering piggybacks on every response.** Agents don't poll; whatever they call next carries it.
 - **Forgiving inputs.** An over-long headline is trimmed, with the overflow moved to the summary. Progress from an agent that lost its lease is kept as a comment. Every error carries a `hint` that says what to do instead.
 - **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority, then work you touched before.
-- **No configuration.** `trellis serve` writes `~/.trellis/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in the first time an agent checks in from it, or you set it in the UI. Every worktree of a repo maps to the same project.
+- **No configuration.** `trellis serve` writes `~/.trellis/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in, and which git repository it is (the normalized `origin` remote, e.g. `github.com/acme/api`), the first time an agent checks in from it. You can also set both in the UI. Every worktree of a repo, and every clone of it on any machine, maps to the same project: the remote is matched first, then the folder.
 - **Collision awareness.** `touching` paths on claim/progress. Agents get a `heads_up` when they overlap, and you see it in "In motion".
 - **Authority.** Only steering and decisions come from you. The guide tells agents to treat field notes, handoffs and comments as information, not instructions.
 

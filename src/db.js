@@ -137,6 +137,13 @@ CREATE TABLE IF NOT EXISTS dismissals (
   PRIMARY KEY (project_id, key)
 );
 
+-- The git repositories a project is (normalized remotes: github.com/acme/api). One repository, one project.
+CREATE TABLE IF NOT EXISTS project_remotes (
+  project_id INTEGER NOT NULL,
+  remote     TEXT UNIQUE NOT NULL,
+  at         INTEGER NOT NULL
+);
+
 -- Push channels (hub-wide) and which act-level attention entries were already pushed (src/notify.js).
 CREATE TABLE IF NOT EXISTS channels (
   id            INTEGER PRIMARY KEY,

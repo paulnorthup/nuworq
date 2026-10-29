@@ -315,7 +315,7 @@ export function view(hub, slug, { light = false } = {}) {
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
   return {
-    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret },
+    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
     pulse, since, attention, motion, flow,
     queue, proposed, waiting, verifying, done,
     agents: agentRows, decisions, notes, steers, activity,

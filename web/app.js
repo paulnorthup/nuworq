@@ -135,7 +135,7 @@ function route() {
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
   const ref = m?.[2] ? `#${m[2]}` : null;
-  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; }
+  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = false; }
   S.slug = slug;
   if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; }
   refresh({ force: true });
@@ -199,10 +199,15 @@ function project(v) {
   const where = S.editPath
     ? `<div class="inline-form"><input data-draft="path" id="path-in" placeholder="/path/to/the/repo on this machine" value="${esc(P.path)}"><button class="btn primary small" data-action="save-path">Save</button><button class="btn ghost small" data-action="cancel-path">Cancel</button></div>`
     : `<div class="where" data-action="edit-path" title="Where the code lives. Agents working in this folder find the project on their own, and workers routed here start in it.">${P.path ? `Lives in <code>${esc(P.path)}</code>` : '<span class="faint">Where does the code live? Set it, or the first agent that checks in from its folder teaches the hub.</span>'}</div>`;
+  // The repositories this project is: any clone of one, on any machine, finds the project.
+  const remotes = `<div class="where">${P.remotes.length ? `Repo ${P.remotes.map((r) => `<code>${esc(r)}</code><button class="link" data-action="remote-remove" data-remote="${esc(r)}" title="Unlink this repository">×</button>`).join(' ')}` : '<span class="faint">No repository linked yet: the first agent that checks in from a clone teaches the hub.</span>'}
+    ${S.addRemote
+      ? `<div class="inline-form"><input data-draft="remote" id="remote-in" placeholder="github.com/acme/api, or any git remote URL"><button class="btn primary small" data-action="remote-add">Link</button><button class="btn ghost small" data-action="remote-cancel">Cancel</button></div>`
+      : `<button class="link" data-action="remote-new" title="Link a git remote: every clone of it, on any machine, reaches this project">+ repo</button>`}</div>`;
   const empty = !v.all.length && !v.agents.length;
   return `
     <div class="phead">
-      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? where : ''}</div>
+      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? where + remotes : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
@@ -767,6 +772,10 @@ const ACTIONS = {
   'cancel-path': () => { S.editPath = false; clearDraft('path'); render({ force: true }); },
   'save-path': async () => { const v = val('path-in'); S.editPath = false; clearDraft('path'); await human('settings', { path: v }, 'Saved: agents in that folder will find this project'); },
   'save-mission': async () => { const m = val('mission-in'); S.editMission = false; clearDraft('mission'); await human('settings', { mission: m }, 'Mission saved'); },
+  'remote-new': () => { S.addRemote = true; render({ force: true }); setTimeout(() => $('#remote-in')?.focus(), 0); },
+  'remote-cancel': () => { S.addRemote = false; clearDraft('remote'); render({ force: true }); },
+  'remote-add': async () => { const v = val('remote-in'); if (!v) return; S.addRemote = false; clearDraft('remote'); await human('remote', { add: v }, 'Linked: agents in any clone of it find this project'); },
+  'remote-remove': (el) => { if (confirm(`Unlink ${el.dataset.remote}?`)) human('remote', { remove: el.dataset.remote }, 'Unlinked'); },
   'compose-kind': (el) => { S.composeKind = el.dataset.kind; render({ force: true }); },
   'compose-send': async () => {
     const body = val('compose');
