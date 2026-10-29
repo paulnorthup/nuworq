@@ -1020,6 +1020,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
   });
   if (!spaces) server.auth = scopeOf(target).authz;
+  server.package = pkg; // resolves to the built package, or null when this hub serves none
+
   server.on('close', () => { clearInterval(sweeper); clearInterval(keepalive); });
   return server;
 }

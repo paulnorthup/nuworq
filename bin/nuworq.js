@@ -798,7 +798,7 @@ hint: Create one, then start again:
       node ${JSON.stringify(BIN)} token create <your-name> --role human --db ${JSON.stringify(db)}`);
     process.exit(1);
   }
-  server.listen(port, host, () => {
+  server.listen(port, host, async () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     if (!flags.demo) {
       // Let agents and the CLI on this machine find the hub without configuration.
@@ -809,15 +809,17 @@ hint: Create one, then start again:
     const authLine = auth === 'required'
       ? `${green('locked')}: browsers log in with a human token; agents send NUWORQ_TOKEN (an agent token)${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}`
       : `${amber('open')} on loopback: no login (only this machine can reach it)`;
+    // The same commands as the Connect dialog: the installed `nuworq`, never a path into this checkout (#157).
+    const base = publicUrl || url;
+    const pkg = await server.package;
     console.log(`${green('●')} ${bold('nuworq')} is running at ${bold(url)}${flags.demo ? dim('  (demo data, in memory)') : dim(`  (${db})`)}
   Auth: ${authLine}
 ${dim(`
-  Connect an agent:
-    MCP (Claude Code):  claude mcp add --scope user nuworq${auth === 'required' ? ' -e NUWORQ_TOKEN=<agent-token>' : ''} -- node ${JSON.stringify(BIN)} mcp   (once, for every project)
-    Shell:              node ${JSON.stringify(BIN)} guide
-    Setup for others:   node ${JSON.stringify(BIN)} init     (run in a project folder)
-    Headless worker:    node ${JSON.stringify(BIN)} worker --agent claude|codex --run   (goes wherever work is waiting)
-    Tool schemas:       ${url}/api/tools?format=openai`)}`);
+  Connect an agent (on any machine):
+${pkg ? `    Install (once):     npm install -g ${base}/nuworq.tgz\n` : ''}    Connect (once):     nuworq connect ${base}   (logs in, registers nuworq with Claude Code, Codex and opencode)
+    Keep workers going: nuworq run --workers 3 --agent claude   (add --browser for UI checks; Ctrl-C stops)
+    Shell:              nuworq guide
+    Tool schemas:       ${base}/api/tools?format=openai`)}`);
   });
   const stop = () => { server.close(); process.exit(0); };
   process.on('SIGINT', stop);
