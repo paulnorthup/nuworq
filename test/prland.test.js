@@ -235,6 +235,40 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     assert.match(failed?.headline ?? '', /403: Resource not accessible by integration/, 'the history the hint points to says why');
   });
 
+  test('the App not installed on the repository: no doomed PR, a hand landing that says why, and PRs again once it is', async () => {
+    const w = world();
+    let installed = false;
+    w.hub.github.readToken = async () => {
+      if (!installed) throw new Error("The nuworq GitHub App isn't installed on acme/api (or was uninstalled), so the hub can't give out tokens for it");
+      return { token: 'ghs_x', expires_at: new Date(Date.now() + 3600_000).toISOString() };
+    };
+    w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+    w.build('a1');
+    await Promise.all([...w.hub._mirrorTokens.values()].map((m) => m.pending));
+    w.hub.humanOp('demo', 'accept', { item: '#1' });
+    await w.hub.prsSettled();
+    assert.equal(w.calls.opened.length, 0, 'no PR to fail');
+    assert.equal(w.events(1, 'pr_failed').length, 0);
+    const land = w.op('a1', 'next');
+    assert.equal(land.mode, 'land');
+    assert.match(land.hint, /lands by hand: the hub can't open a pull request because the nuworq GitHub App isn't installed on acme\/api/);
+    assert.match(land.hint, /git push origin \S+:main/);
+
+    // Installed: the next mint succeeds, and the same land job goes through a PR after all. (The fixture's
+    // repository is a local path, so the mirror keeps fetching it directly rather than over the App's HTTPS.)
+    installed = true;
+    const p = w.hub.project('demo');
+    const remote = w.hub.repoOf(p, w.item(1));
+    await w.hub.mintMirrorToken(remote);
+    assert.equal(w.hub.appTrouble(p, w.item(1)), null);
+    w.hub._mirrorTokens.delete(remote);
+    delete w.hub.github.readToken;
+    assert.match(w.hub.landHint(p, w.item(1)), /has no pull request yet\. Submit #1: the hub opens one/);
+    w.op('a1', 'submit', { item: '#1', headline: 'Submitted' });
+    await w.hub.prsSettled();
+    assert.equal(w.calls.opened.length, 1);
+  });
+
   test('auto-merge refused: the PR is still opened and linked, and the record says to merge it on GitHub', async () => {
     const w = world({ autoFail: 'Pull request Auto merge is not allowed for this repository' });
     w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });

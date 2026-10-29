@@ -85,7 +85,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       key: `app-read:${remote}:${trouble.since}`, level: 'know', kind: 'app-read', at: trouble.since,
       headline: `The hub can't read ${remote} through its GitHub App`,
       sub: trouble.error,
-      why: `${trouble.hint ? `${trouble.hint} ` : ''}Meanwhile the hub fetches it with a deploy key, if it has one; without either, it can't tell when work there reaches main.`,
+      why: `${trouble.hint ? `${trouble.hint} ` : ''}Meanwhile accepted work there lands by hand instead of through a pull request, and the hub fetches it with a deploy key, if it has one; without either, it can't tell when work there reaches main.`,
     });
   }
 
