@@ -187,14 +187,25 @@ export class Notifier {
 
 // Many workspaces in one process: each has its own channels, so each gets its own notifier, linking to
 // its own address (baseUrlFor(name)). Workspaces created while serving are picked up within `every` ms.
-// Returns { notifiers (name → Notifier), stop() }.
+// A workspace whose hub closes (evicted, or removed, even from another process) loses its notifier;
+// re-created, it gets a fresh one. Returns { notifiers (name → Notifier), sweep(), stop() }.
 export function notifyWorkspaces(spaces, baseUrlFor, { every = 30_000, ...opts } = {}) {
   const notifiers = new Map();
   const sweep = () => {
-    for (const name of spaces.list()) {
+    const names = spaces.list();
+    for (const [name, n] of notifiers) {
+      if (names.includes(name)) continue;
+      spaces.get(name); // removed from the host: lets its hub go
+      n.stop();
+      notifiers.delete(name);
+    }
+    for (const name of names) {
       if (notifiers.has(name)) continue;
       const hub = spaces.get(name);
-      if (hub) notifiers.set(name, new Notifier(hub, { baseUrl: baseUrlFor(name), ...opts }).start());
+      if (!hub) continue;
+      const n = new Notifier(hub, { baseUrl: baseUrlFor(name), ...opts }).start();
+      hub.once('closed', () => { n.stop(); if (notifiers.get(name) === n) notifiers.delete(name); });
+      notifiers.set(name, n);
     }
   };
   sweep();
