@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
-import { tools, guide } from '../src/protocol.js';
+import { tools, guide, skill } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -580,7 +580,7 @@ async function connect(pos, flags) {
   const old = readConnection();
   const notes = [old?.token && old.token !== token ? await revokeSaved(old) : null];
   const { registerMcp } = await import('../src/connect.js');
-  const mcp = flags['no-mcp'] ? { added: old?.added ?? [], lines: [] } : registerMcp({ bin: BIN, home: homedir(), kept: old?.added ?? [] });
+  const mcp = flags['no-mcp'] ? { added: old?.added ?? [], lines: [] } : registerMcp({ bin: BIN, home: homedir(), kept: old?.added ?? [], url });
   // Written whole with mode 600 and moved into place, so the token is never in a file others can read.
   mkdirSync(dirname(CONNECT_FILE), { recursive: true, mode: 0o700 });
   const tmp = `${CONNECT_FILE}.${process.pid}`;
@@ -1030,6 +1030,7 @@ ${bold('Setup')}
                                          and add the nuworq MCP server to Claude Code, Codex and opencode here.
                                          --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
   disconnect                             revoke that token, remove what connect added, forget the hub
+  skill [--dir d]                        write the nuworq skill for Claude (generated; connect does it too)
   mcp                                    run the stdio MCP server (one per agent session)
   git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
@@ -1111,6 +1112,13 @@ async function main() {
   if (cmd === 'guide') {
     const s = resolveSettings(flags);
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
+  }
+  if (cmd === 'skill') {
+    // The nuworq skill for Claude, generated from the protocol: <dir>/nuworq/SKILL.md (default ~/.claude/skills).
+    const file = join(resolve(String(flags.dir || join(homedir(), '.claude', 'skills'))), 'nuworq', 'SKILL.md');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, skill({ url: resolveSettings(flags).url }));
+    return console.log(`${green('Wrote')} ${file}`);
   }
   if (cmd === 'tools') return console.log(JSON.stringify(tools(flags.format || 'mcp', flags.prefix || ''), null, 2));
   if (cmd === 'prompt') return console.log(workerPrompt(flags));
