@@ -21,6 +21,36 @@ export function appFromEnv(env = process.env) {
   return id && key ? { id, key, slug: envVar('GITHUB_APP_SLUG', env) || '' } : null;
 }
 
+// The app the hub made for itself (one click, below), kept in a file only the hub's user can read. null if none.
+export function appFromFile(file) {
+  try {
+    const a = JSON.parse(readFileSync(file, 'utf8'));
+    return a.id && a.key ? a : null;
+  } catch { return null; }
+}
+
+// What the hub asks GitHub to create: the permissions work needs, nothing more. The webhook URL is
+// registered but off until the hub receives app webhooks; redirect_url brings the owner back here.
+export function manifest(base, name) {
+  return {
+    name: String(name).slice(0, 34), url: base, public: false,
+    hook_attributes: { url: `${base}/api/hooks/github-app`, active: false },
+    redirect_url: `${base}/api/github/app/callback`,
+    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write' },
+    default_events: [],
+  };
+}
+
+// GitHub's side of the one click: trade the code it sent back for the new app's id, key and secrets.
+export async function convert(code, { api = 'https://api.github.com' } = {}) {
+  const r = await fetch(`${api.replace(/\/+$/, '')}/app-manifests/${encodeURIComponent(code)}/conversions`, {
+    method: 'POST', headers: { accept: 'application/vnd.github+json', 'user-agent': 'nuworq' }, signal: AbortSignal.timeout(10_000),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (r.status !== 201 || !j.id || !j.pem) throw new UserError(`GitHub didn't hand over the new app (${r.status}${j.message ? `: ${j.message}` : ''})`, { status: 502, hint: 'The code works once and for an hour: start again from the hub.' });
+  return { id: String(j.id), slug: j.slug ?? '', key: j.pem, webhook_secret: j.webhook_secret ?? '', client_id: j.client_id ?? '', client_secret: j.client_secret ?? '', owner: j.owner?.login ?? '' };
+}
+
 export class GitHubApp {
   // id: the app's id. key: its private key (PEM). slug: its name in github.com/apps/<slug>, for install links.
   // api: GitHub's REST API (tests point it at a stub). now: for tests.

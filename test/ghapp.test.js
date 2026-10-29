@@ -4,13 +4,13 @@ import http from 'node:http';
 import { generateKeyPairSync, createVerify } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdtempSync, realpathSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
-import { appFromEnv } from '../src/ghapp.js';
+import { appFromEnv, appFromFile } from '../src/ghapp.js';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'nuworq.js');
 const listen = (server) => new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
@@ -19,9 +19,18 @@ const PEM = privateKey.export({ type: 'pkcs8', format: 'pem' });
 
 // GitHub's REST API, as far as the app uses it. It checks the app's JWT, and knows which repos have the app.
 function github() {
-  const state = { installed: new Set(['acme/api']), suspended: false, mints: [], jwts: [] };
+  // expiresIn: how long minted tokens live. Under 5 minutes by default, so the hub never reuses them
+  // unless a test says so.
+  const state = { installed: new Set(['acme/api']), suspended: false, mints: [], jwts: [], expiresIn: 4 * 60_000 };
   const server = http.createServer(async (req, res) => {
     const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+    // The manifest flow's code exchange needs no credential: the one-time code is it.
+    let c;
+    if (req.method === 'POST' && (c = req.url.match(/^\/app-manifests\/([^/]+)\/conversions$/))) {
+      return c[1] === 'good'
+        ? json(201, { id: 999, slug: 'nuworq-hub', pem: PEM, webhook_secret: 'whs', client_id: 'cid', client_secret: 'csec', owner: { login: 'paul' } })
+        : json(404, { message: 'Not Found' });
+    }
     const jwt = String(req.headers.authorization ?? '').replace('Bearer ', '');
     const [h, p, sig] = jwt.split('.');
     const ok = sig && createVerify('RSA-SHA256').update(`${h}.${p}`).verify(publicKey, Buffer.from(sig, 'base64url'));
@@ -36,7 +45,7 @@ function github() {
       let raw = '';
       for await (const c of req) raw += c;
       state.mints.push(JSON.parse(raw));
-      return json(201, { token: `ghs_secret${state.mints.length}`, expires_at: '2026-10-29T13:00:00Z', repository_selection: 'selected' });
+      return json(201, { token: `ghs_secret${state.mints.length}`, expires_at: new Date(Date.now() + state.expiresIn).toISOString(), repository_selection: 'selected' });
     }
     json(404, { message: 'Not Found' });
   });
@@ -73,7 +82,8 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     hub.agentOp('api', 'claim', 'a1', { item: '#1' });
     const r = await credential('a1');
     assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.deepEqual({ ...r.json, password: undefined }, { ok: true, username: 'x-access-token', password: undefined, repo: 'github.com/acme/api', expires_at: '2026-10-29T13:00:00Z' });
+    const expires = r.json.expires_at;
+    assert.deepEqual({ ...r.json, password: undefined }, { ok: true, username: 'x-access-token', password: undefined, repo: 'github.com/acme/api', expires_at: expires });
     assert.equal(r.json.password, 'ghs_secret1');
     assert.deepEqual(gh.state.mints[0], { repositories: ['api'], permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read' } });
     const jwt = gh.state.jwts.at(-1);
@@ -82,8 +92,8 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
 
     const e = hub.q(`SELECT * FROM events WHERE type = 'credential'`).get();
     assert.equal(e.actor, 'a1');
-    assert.match(e.headline, /a1 got a GitHub token for github\.com\/acme\/api on #1, until 13:00 UTC/);
-    assert.deepEqual(JSON.parse(e.data), { agent: 'a1', item: 1, repo: 'github.com/acme/api', expires_at: '2026-10-29T13:00:00Z', token: null });
+    assert.match(e.headline, new RegExp(`a1 got a GitHub token for github\\.com/acme/api on #1, until ${expires.slice(11, 16)} UTC`));
+    assert.deepEqual(JSON.parse(e.data), { agent: 'a1', item: 1, repo: 'github.com/acme/api', expires_at: expires, token: null });
     assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE data LIKE '%ghs_%' OR headline LIKE '%ghs_%'`).get().n, 0, 'the token itself is never stored');
   });
 
@@ -117,6 +127,24 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     assert.equal((await git('protocol=https\nhost=gitlab.com\npath=acme/api.git\n\n')).stdout, '');
   });
 
+  test('git asking again reuses the token until 5 minutes before it expires: one mint, one event', async () => {
+    const events = () => hub.q(`SELECT COUNT(*) AS n FROM events WHERE type = 'credential'`).get().n;
+    const mints = gh.state.mints.length, logged = events();
+    gh.state.expiresIn = 3600_000;
+    const [a, b, c] = [await credential('a1'), await credential('a1'), await credential('a1')];
+    gh.state.expiresIn = 4 * 60_000;
+    assert.equal(gh.state.mints.length, mints + 1, 'one mint for three asks');
+    assert.equal(events(), logged + 1, 'one event on the record');
+    assert.equal(b.json.password, a.json.password);
+    assert.equal(c.json.password, a.json.password);
+    // A token with under 5 minutes left is not handed out again: the next ask mints a fresh one.
+    hub.agentOp('web', 'handoff', 'a2', { item: '#1', headline: 'later' });
+    gh.state.installed.add('acme/web');
+    hub.agentOp('web', 'claim', 'a2', { item: '#1' });
+    const [d, e] = [await credential('a2'), await credential('a2')];
+    assert.notEqual(d.json.password, e.json.password, 'short-lived tokens are minted again');
+  });
+
   test('a hub without an app says so (404, which the helper takes as "step aside")', async () => {
     const plain = createServer(new Hub());
     const pp = await listen(plain);
@@ -127,6 +155,50 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     } finally { plain.close(); }
     assert.equal(appFromEnv({}), null);
     assert.deepEqual(appFromEnv({ NUWORQ_GITHUB_APP_ID: '7', NUWORQ_GITHUB_APP_KEY: 'pem', NUWORQ_GITHUB_APP_SLUG: 's' }), { id: '7', key: 'pem', slug: 's' });
+  });
+});
+
+describe('an owner creates the hub\'s GitHub App in one click', () => {
+  test('the page posts the manifest to GitHub; the callback trades the code, saves the app 0600, and the hub uses it', async () => {
+    const gh = github();
+    const stub = `http://127.0.0.1:${await listen(gh.server)}`;
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-app-'));
+    const appFile = join(dir, 'github-app.json');
+    const hub = new Hub();
+    hub.tx(() => hub.project('api', { create: true }));
+    hub.addRemote(hub.project('api'), 'github.com/acme/api', 'you');
+    hub.humanOp('api', 'create', { title: 'api work', acceptance: 'done' });
+    const server = createServer(hub, { appFile, github: { web: stub, api: stub }, publicUrl: 'http://hub.test' });
+    const port = await listen(server);
+    const get = (path) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual' });
+    try {
+      assert.deepEqual(await (await get('/api/github/app')).json(), { configured: false, slug: null, can_create: true });
+      const page = await get('/api/github/app/new');
+      assert.equal(page.status, 200);
+      assert.match(page.headers.get('content-security-policy'), new RegExp(`form-action 'self' ${stub}`));
+      const html = await page.text();
+      const action = html.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&');
+      assert.ok(action.startsWith(`${stub}/settings/apps/new?state=`), action);
+      const m = JSON.parse(html.match(/name="manifest" value="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+      assert.deepEqual(m.default_permissions, { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write' });
+      assert.equal(m.redirect_url, 'http://hub.test/api/github/app/callback');
+      assert.equal(m.hook_attributes.url, 'http://hub.test/api/hooks/github-app');
+      const state = new URL(action).searchParams.get('state');
+
+      assert.equal((await get(`/api/github/app/callback?code=good&state=forged`)).status, 400, 'a state the hub never made is refused');
+      const back = await get(`/api/github/app/callback?code=good&state=${state}`);
+      assert.equal(back.status, 302);
+      assert.equal((statSync(appFile).mode & 0o777).toString(8), '600');
+      assert.deepEqual(JSON.parse(readFileSync(appFile, 'utf8')), { id: '999', slug: 'nuworq-hub', key: PEM, webhook_secret: 'whs', client_id: 'cid', client_secret: 'csec', owner: 'paul' });
+      assert.equal((await get(`/api/github/app/callback?code=good&state=${state}`)).status, 400, 'a state works once');
+      assert.deepEqual(await (await get('/api/github/app')).json(), { configured: true, slug: 'nuworq-hub', can_create: true });
+      assert.deepEqual(appFromFile(appFile).id, '999', 'serve picks it up from the file next time');
+
+      hub.agentOp('api', 'claim', 'a1', { item: '#1' });
+      const r = await fetch(`http://127.0.0.1:${port}/api/agent/credential`, { method: 'POST', headers: { 'x-nuworq-agent': 'a1' }, body: '{}' });
+      assert.equal(r.status, 200, 'the new app mints at once, no restart');
+      assert.equal(gh.state.jwts.at(-1).iss, '999');
+    } finally { for (const s of [server, gh.server]) { s.close(); s.closeAllConnections(); } }
   });
 });
 

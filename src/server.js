@@ -14,7 +14,9 @@ import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './
 import { receive } from './github.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
-import { GitHubApp } from './ghapp.js';
+import { GitHubApp, manifest, convert } from './ghapp.js';
+import { writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -60,9 +62,15 @@ const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 // oauth: providers people may sign in with ({ github: { id, secret }, google: … }; see src/oauth.js).
 // orgCap: how many organizations one signed-in person may create (workspaces mode).
 // githubApp: the GitHub App that mints one-repo, one-hour tokens for workers ({ id, key, slug } or a GitHubApp; see src/ghapp.js).
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP, githubApp = null } = {}) {
+// appFile: where an app the hub creates for itself (one click, single hub only) is saved, 0600.
+// github: GitHub's addresses ({ web, api }; tests point them at a stub).
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {} } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
-  const app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp(githubApp) : githubApp;
+  const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
+  let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, ...githubApp }) : githubApp;
+  const appStates = new Map(); // one-click app creation: state → expiry (single use, an hour)
+  // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
+  const minted = new Map(); // `${agent}|${item id}|${repo}` → { token, expires_at, repo }
   // The hub's own address names no workspace: the base domain, or the public URL's host (e.g. auth.<base-domain>).
   const rootHost = publicUrl ? hostname(new URL(publicUrl).host) : '';
   const required = spaces ? true : auth === 'required';
@@ -346,6 +354,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           return deny(e.code === 'invalid' ? 404 : 410, e.message, e.code === 'used' ? 'The token was handed out once; start a new device login for another.' : 'Start a new device login.');
         }
       }
+      // Back from GitHub after an owner created the hub's app. Cross-site, so the Strict session cookie doesn't
+      // come along: the single-use state the owner's own request made is what proves it.
+      if (req.method === 'GET' && path === '/api/github/app/callback') {
+        const state = String(url.searchParams.get('state') ?? '');
+        const exp = appStates.get(state);
+        appStates.delete(state);
+        if (!exp || exp < Date.now() || spaces) return deny(400, 'this GitHub App link was already used, expired, or never started here', 'Start again from the hub: Connect an agent → Create GitHub App.');
+        const a = await convert(url.searchParams.get('code') ?? '', { api: gh.api });
+        if (appFile) writeFileSync(appFile, JSON.stringify(a, null, 2), { mode: 0o600 });
+        app = new GitHubApp({ id: a.id, key: a.key, slug: a.slug, api: gh.api });
+        for (const p of hub.projects()) {
+          hub.event(p, { actor: 'github', type: 'github_app', headline: `The GitHub App ${a.slug || a.id} was created${a.owner ? ` on ${a.owner}` : ''}; install it on this project's repository so workers can push` });
+          hub.changed(p);
+        }
+        return redirect(res, `${base}/#github-app=${encodeURIComponent(a.slug || a.id)}`);
+      }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
         if (file.includes('..')) return send(404, 'not found', 'text/plain');
@@ -391,6 +415,27 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
       if (req.method === 'POST' && path === '/api/me/revoke') return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
+      // The hub's GitHub App: whether it has one, and the one-click page that creates it (owners, single hub).
+      if (req.method === 'GET' && path === '/api/github/app') return send(200, { configured: !!app, slug: app?.slug || null, can_create: !spaces && personRole === 'owner' });
+      if (req.method === 'GET' && path === '/api/github/app/new') {
+        if (spaces) return deny(403, 'on a hub with workspaces, the host sets up the GitHub App', 'See docs/GITHUB.md: NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE.');
+        if (personRole !== 'owner') return deny(403, 'only an owner creates the GitHub App', 'Ask an owner of this hub.');
+        const site = publicUrl || origin(req);
+        const state = randomBytes(24).toString('base64url');
+        for (const [k, exp] of appStates) if (exp < Date.now()) appStates.delete(k);
+        appStates.set(state, Date.now() + 3600_000);
+        const org = String(url.searchParams.get('org') ?? '').replace(/[^\w.-]/g, '');
+        const action = `${gh.web}/${org ? `organizations/${org}/` : ''}settings/apps/new?state=${state}`;
+        const m = JSON.stringify(manifest(site, `nuworq ${hostname(new URL(site).host)}`));
+        const q = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        // This one page may post a form to GitHub; everything else keeps form-action 'self'.
+        res.setHeader('content-security-policy', SECURITY_HEADERS['content-security-policy'].replace("form-action 'self'", `form-action 'self' ${gh.web}`));
+        return send(200, `<!doctype html><meta charset="utf-8"><title>Create the nuworq GitHub App</title><link rel="stylesheet" href="${base}/style.css">
+<main class="narrow"><h1>Create the nuworq GitHub App</h1>
+<p>GitHub creates an app for this hub${org ? ` in <b>${q(org)}</b>` : ' on your account'}: it can push branches, open pull requests and read CI and issues, on the repositories you install it on, and nothing else. You come back here when it's made.</p>
+<form method="post" action="${q(action)}"><input type="hidden" name="manifest" value="${q(m)}"><button class="btn primary" type="submit">Create GitHub App</button></form>
+<p class="faint">For an organization, open this page with ?org=&lt;name&gt;.</p></main>`, 'text/html; charset=utf-8');
+      }
       if (path === '/api/invites' || path === '/api/invites/revoke') {
         if (personRole !== 'owner') return deny(403, 'only an owner invites people', 'Ask an owner of this workspace.');
         if (req.method === 'GET' && path === '/api/invites') return send(200, authz.listInvites());
@@ -450,7 +495,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return;
       }
       if (req.method === 'GET' && path === '/api/info') {
-        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, ...buildInfo() });
+        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: origin(req) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo() });
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
       const viewer = who.person ? by : undefined;
@@ -498,16 +543,24 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (path === '/api/agent/credential' && req.method === 'POST') {
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
-        if (!app) return deny(404, "this hub has no GitHub App, so it hands out no GitHub tokens", 'The hub host sets NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE (see docs/GITHUB.md). Until then, push with your own credentials.');
+        if (!app) return deny(404, "this hub has no GitHub App, so it hands out no GitHub tokens", 'An owner creates one in one click (Connect an agent → GitHub App), or the hub host sets NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE (see docs/GITHUB.md). Until then, push with your own credentials.');
         const held = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
           .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
           .find(({ p }) => !caller.scope || caller.scope.includes(p.slug));
         if (!held) return deny(409, `${agent || 'this agent'} holds no item to push for`, 'Tokens are for the item you hold: claim one (next), then push.');
         const { it, p } = held;
         const repo = it.repo || hub.remotesOf(p)[0] || '';
+        // git asks on every fetch and push: the same agent, item and repository reuse the token while it's good.
+        const key = `${hub.workspace ?? ''}|${agent}|${it.id}|${repo}`;
+        const have = minted.get(key);
+        if (have && Date.parse(have.expires_at) - 5 * 60_000 > Date.now()) {
+          return send(200, { ok: true, username: 'x-access-token', password: have.token, repo: have.repo, expires_at: have.expires_at });
+        }
         let t;
         try {
           t = await app.mint(repo);
+          for (const [k, v] of minted) if (Date.parse(v.expires_at) < Date.now()) minted.delete(k);
+          minted.set(key, t);
         } catch (e) {
           if (e instanceof UserError) {
             hub.event(p, { item: it, actor: agent, type: 'credential_refused', headline: `No GitHub token for ${agent} on #${it.seq}: ${e.message}`, summary: e.hint ?? '', data: { agent, repo } });
