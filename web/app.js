@@ -4,6 +4,7 @@ import { connectCommands } from './connect.js';
 import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
 import { homePage, columns } from './home.js';
+import { credit } from './credit.js';
 import { missingProject } from './missing.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
@@ -667,7 +668,7 @@ function finished(v) {
   const shown = z() >= 2 ? v.done : v.done.slice(0, 5);
   return `<section class="sec"><header><h2>Recently finished</h2><span class="count">${v.done.length}</span><span class="hint">last 3 days</span></header>
     <div class="rows">${shown.map((i) => `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
-      <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div><div class="s">built by ${who(i.implementer)}${i.accepted ? ` · verified by ${who(i.accepted)}` : ''}</div></div>
+      <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>${credit(i, who) ? `<div class="s">${credit(i, who)}</div>` : ''}</div>
       <span class="age">${esc(i.ago)} ago</span></div>`).join('')}</div></section>`;
 }
 
@@ -783,7 +784,7 @@ function renderDrawer() {
       : `<b>${who(it.holder)}</b> is on it · ${esc(it.in_stage)} so far · lease ${esc(it.lease_left)} left`,
     waiting: `<b>Waiting on you</b> for ${esc(it.in_stage)}: an agent parked it to ask a question.`,
     verifying: `<b>Verifying</b> · ${who(it.implementer)} finished it ${esc(it.in_stage)} ago${it.holder ? ` · ${who(it.holder)} is reviewing` : ''}`,
-    done: `<b>Done</b> ${esc(it.in_stage)} ago · built by ${who(it.implementer)}`,
+    done: `<b>Done</b> ${esc(it.in_stage)} ago${it.implementer ? ` · ${credit({ implementer: it.implementer }, who)}` : ''}`,
     dropped: `<b>Dropped</b> ${esc(it.in_stage)} ago`,
   }[it.stage];
 
