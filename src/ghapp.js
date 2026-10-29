@@ -39,6 +39,8 @@ export function manifest(base, name) {
     name: String(name).slice(0, 34), url: base, public: false,
     hook_attributes: { url: `${base}/api/hooks/github-app`, active: false },
     redirect_url: `${base}/api/github/app/callback`,
+    // After installing (or changing which repositories it sees), GitHub sends the person back to the hub.
+    setup_url: `${base}/#/`, setup_on_update: true,
     default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write' },
     default_events: [],
   };

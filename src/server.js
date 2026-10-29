@@ -392,7 +392,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           hub.event(p, { actor: 'github', type: 'github_app', headline: `The GitHub App ${a.slug || a.id} was created${a.owner ? ` on ${a.owner}` : ''}; install it on this project's repository so workers can push` });
           hub.changed(p);
         }
-        return redirect(res, `${base}/#github-app=${encodeURIComponent(a.slug || a.id)}`);
+        // Creating the app doesn't install it: go straight to choosing its repositories (GitHub then returns to setup_url).
+        return redirect(res, a.slug ? app.installUrl() : `${base}/#github-app=${encodeURIComponent(a.id)}`);
       }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
