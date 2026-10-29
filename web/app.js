@@ -351,7 +351,7 @@ function pulse(v) {
   ].filter(Boolean);
   const since = v.since.at
     ? bits.length ? `Since you last looked (${v.since.ago} ago): ${bits.join(' · ')}` : `No agent activity since you last looked (${v.since.ago} ago).`
-    : v.home ? 'First look.' : 'First look at this project.';
+    : v.home ? 'Everything here is new to you.' : 'Everything in this project is new to you.';
   // On the home, each finished item names its project, and its link opens it there.
   const list = z() >= 1 && v.since.finished.length
     ? `<div class="since-list">${v.since.finished.slice(0, 6).map((f) => `<div${f.project ? ` data-project="${esc(f.project.slug)}"` : ''}>✓ ${refLink(f.item)} ${esc(f.title)} <span class="age">${f.project ? `${esc(f.project.name)} · ` : ''}by ${esc(f.by === 'you' ? 'you' : f.by)}</span></div>`).join('')}</div>` : '';
@@ -360,7 +360,7 @@ function pulse(v) {
       <div class="sentence">${esc(v.pulse.sentence)}</div>
       ${v.project.parked ? `<div class="actions"><button class="btn primary small" data-action="unpark">Unpark</button></div>` : ''}
       <div class="since"><span>${since}</span><span class="spacer"></span>
-        ${c.updates || !v.since.at ? `<button class="btn small" data-action="seen" title="Reset 'since you last looked' to now">Mark all seen</button>` : ''}
+        ${c.updates || !v.since.at ? `<button class="btn small" data-action="seen" title="Count from now: what changes after this shows as new next time. Nothing that needs you goes away.">Mark all seen</button>` : ''}
         ${list}</div>
     </div>`;
 }
@@ -460,7 +460,7 @@ function cardActions(a, hasMore, open, key) {
   if (a.kind === 'no-agents') {
     return `<div class="actions"><button class="btn primary" data-action="connect">Start an agent</button><button class="btn ghost" data-action="park">Park this project</button></div>`;
   }
-  const moreBtn = hasMore ? `<button class="link" data-action="toggle" data-key="${esc(key)}">${open ? 'Less' : 'Why? (5m)'}</button>` : '';
+  const moreBtn = hasMore ? `<button class="link" data-action="toggle" data-key="${esc(key)}">${open ? 'Less' : 'Why it needs you'}</button>` : '';
   if (a.kind === 'question') {
     const q = a.question;
     return `<div class="answer">
@@ -749,8 +749,8 @@ function allWork(v) {
   const rows = [...v.all].reverse();
   if (!rows.length) return `<section class="sec"><header><h2>All work</h2></header>${zero('<b>No work yet.</b> Every item, in every stage, will be listed here.')}</section>`;
   return `<section class="sec"><header><h2>All work</h2><span class="count">${rows.length}</span></header>
-    <table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Who</th><th>In stage</th></tr></thead><tbody>
-    ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : `<span class="age">${esc(i.by)}</span>`}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
+    <table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Worked on by</th><th>In stage</th></tr></thead><tbody>
+    ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : '<span class="age" title="No agent has worked on it yet">—</span>'}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
     </tbody></table></section>`;
 }
 
