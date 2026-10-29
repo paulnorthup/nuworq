@@ -12,6 +12,7 @@ import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels } from './notify.js';
 import { receive } from './github.js';
+import { syncIssues, commentIssues } from './issues.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
 import { GitHubApp, manifest, convert } from './ghapp.js';
@@ -270,12 +271,27 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const { authz, devices, clients } = scopeOf(hub);
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+      // An item's page, as a link for GitHub: the public address when the hub has one.
+      const itemLink = (rq, slug) => (item) => `${publicUrl || origin(rq)}${base}/#/p/${encodeURIComponent(slug)}/${item.seq}`;
 
       // GitHub can't log in: the delivery's signature is its credential, so this answers under any host name
       // (e.g. through a tunnel to a loopback hub). Browsers never send these, and nothing changes without a valid signature.
       let hook;
       if (req.method === 'POST' && (hook = path.match(/^\/api\/hooks\/github\/([^/]+)$/))) {
-        return send(200, receive(hub, decodeURIComponent(hook[1]), { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) }));
+        const slug = decodeURIComponent(hook[1]);
+        const r = receive(hub, slug, { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) });
+        // Issues that came in get their one comment; an install brings every open issue in. Both need the app.
+        if (!r.ignored && (r.sync || req.headers['x-github-event'] === 'issues')) {
+          if (!app) return send(200, { ...r, sync: undefined, github: 'no GitHub App configured: issues that arrive by webhook come in, but the hub can neither list issues nor comment' });
+          const p = hub.project(slug);
+          const link = itemLink(req, p.slug);
+          try {
+            r.github = r.sync ? await syncIssues(hub, p, app, r.sync, { link }) : await commentIssues(hub, p, app, { link });
+          } catch (e) {
+            r.github = { error: e.message };
+          }
+        }
+        return send(200, r);
       }
 
       // Without login, only answer to loopback names: blocks DNS-rebinding from web pages you visit.
@@ -524,6 +540,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/items\/([^/]+)$/)) && req.method === 'GET') {
         return send(200, itemView(hub, decodeURIComponent(m[1]), decodeURIComponent(m[2])));
+      }
+      // Bring in the open issues of every GitHub repository of the project again (only new ones become items).
+      if ((m = path.match(/^\/api\/p\/([^/]+)\/github\/resync$/)) && req.method === 'POST') {
+        if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't resync issues`, 'Ask an owner or steward.');
+        if (!app) return deny(424, 'no GitHub App configured', 'Start the hub with NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY (docs/GITHUB.md).');
+        const p = hub.project(decodeURIComponent(m[1]));
+        const repos = hub.remotesOf(p).filter((r) => r.startsWith('github.com/'));
+        return send(200, { ok: true, ...(await syncIssues(hub, p, app, repos, { link: itemLink(req, p.slug) })) });
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/human\/([a-z]+)$/)) && req.method === 'POST') {
         if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404 });

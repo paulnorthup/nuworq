@@ -2,6 +2,7 @@
 // POST /api/hooks/github/<project>, signed with the project's secret (X-Hub-Signature-256).
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { UserError } from './core.js';
+import { issueEvent, installedRepos } from './issues.js';
 
 const ACTOR = 'github';
 const OK = new Set(['success', 'neutral', 'skipped']);
@@ -104,6 +105,12 @@ export function receive(hub, slug, { event, signature, raw }) {
   const result = hub.tx(() => {
     if (event === 'ping') return { pong: true };
     if (event === 'pull_request') return pullRequest(hub, p, body);
+    if (event === 'issues') return issueEvent(hub, p, body);
+    // The app was installed on (or added to) repositories: their open issues come in, after this answer.
+    if (event === 'installation' || event === 'installation_repositories') {
+      const repos = installedRepos(hub, p, body);
+      return repos.length ? { sync: repos } : { ignored: `none of ${p.name}'s repositories` };
+    }
     // Only finished results count; "queued", "in progress" and "pending" are noise here.
     if (event === 'check_suite') {
       const s = body.check_suite ?? {};

@@ -111,7 +111,7 @@ describe('GitHub webhooks', () => {
     assert.equal((await deliver('status', { sha, state: 'error', context: 'ci/jenkins', target_url: 'https://ci.test/1', repository })).body.ci, 'fail');
     assert.deepEqual(itemView(hub, 'app', '#1').prs[0].checks.map((c) => `${c.name}:${c.conclusion}`), ['CircleCI:success', 'ci/jenkins:error', 'lint:success', 'test:success']);
     assert.equal((await deliver('check_run', checkRun('test', 'failure', 'e'.repeat(40)))).body.ignored, 'no pull request for this commit');
-    assert.equal((await deliver('issues', { action: 'opened', repository })).body.ignored, 'issues');
+    assert.equal((await deliver('issues', { action: 'opened', repository })).body.ignored, 'no issue');
   });
 
   test('deliveries get through a tunnel to a loopback hub, and to a hub that requires login, with no token', async () => {

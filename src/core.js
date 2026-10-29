@@ -738,6 +738,7 @@ export class Hub extends EventEmitter {
       summary: item.summary || undefined,
       detail: item.detail || undefined,
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
+      issue: this.q('SELECT url FROM issues WHERE item_id = ?').get(item.id)?.url || undefined, // the GitHub issue it came from
       repo: this.repoOf(p, item) || undefined,
       branch: item.branch || undefined,
       git: g ? { branch: g.branch, base: g.base, commits: g.commits, missing: g.missing } : undefined,
@@ -1870,8 +1871,12 @@ const HUMAN_OPS = {
     this.q('UPDATE projects SET seen_at = ? WHERE id = ?').run(this.now(), p.id);
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, github_secret }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, github_secret, issue_label }, by) {
     const changes = [];
+    if (issue_label != null && str(issue_label) !== p.issue_label) {
+      this.q('UPDATE projects SET issue_label = ? WHERE id = ?').run(str(issue_label), p.id);
+      this.event(p, { actor: by, type: 'github', headline: str(issue_label) ? `${You(by)} set GitHub issues to come in only with the label "${str(issue_label)}"` : `${You(by)} let every open GitHub issue come in` });
+    }
     if (runner != null && !!runner !== !!p.runner) {
       this.q('UPDATE projects SET runner = ? WHERE id = ?').run(runner ? 1 : 0, p.id);
       this.event(p, { actor: by, type: 'runner', headline: runner ? `${You(by)} let \`nuworq run\` start workers here` : `${You(by)} stopped \`nuworq run\` starting workers here` });

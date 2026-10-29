@@ -213,6 +213,20 @@ CREATE TABLE IF NOT EXISTS prs (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (project_id, repo, number)
 );
+-- GitHub issues that came in as proposals (src/issues.js): one item per issue, and at most one comment back.
+CREATE TABLE IF NOT EXISTS issues (
+  project_id INTEGER NOT NULL,
+  repo       TEXT NOT NULL,                   -- normalized: github.com/acme/api
+  number     INTEGER NOT NULL,
+  item_id    INTEGER NOT NULL,
+  state      TEXT NOT NULL,                   -- open | closed
+  url        TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  commented  INTEGER NOT NULL DEFAULT 0,      -- the hub's one comment (its id on GitHub), 0 until posted
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, repo, number)
+);
+
 CREATE TABLE IF NOT EXISTS checks (
   project_id INTEGER NOT NULL,
   sha        TEXT NOT NULL,
@@ -259,7 +273,8 @@ export function openDb(file) {
     "ALTER TABLE items ADD COLUMN needs TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE items ADD COLUMN size TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE items ADD COLUMN branch TEXT NOT NULL DEFAULT ''", // the git branch the item is built on, landed from
-    "ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''", // the repository it lands in (a normalized remote); '': the project's first
+    "ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE projects ADD COLUMN issue_label TEXT NOT NULL DEFAULT ''", // only issues with this label come in ('' = all) // the repository it lands in (a normalized remote); '': the project's first
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }
