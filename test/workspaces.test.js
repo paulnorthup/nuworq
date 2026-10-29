@@ -190,7 +190,10 @@ describe('one server, two workspaces', () => {
       assert.equal(finish.status, 302);
       const error = decodeURIComponent(finish.headers.location.split('#error=')[1]);
       assert.match(error, /belongs to another organization/);
-      for (const r of [denied, start]) assert.doesNotMatch(r.text, /workspace/i);
+      const callback = await request(sso.address().port, 'GET', '/auth/github/callback?state=stale&code=x');
+      assert.equal(callback.status, 400);
+      assert.match(callback.text, /your organization's sign-in page/);
+      for (const r of [denied, start, callback]) assert.doesNotMatch(r.text, /workspace/i);
       assert.doesNotMatch(error, /workspace/i);
     } finally { sso.close(); sso.closeAllConnections(); }
   });

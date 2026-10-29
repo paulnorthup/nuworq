@@ -310,7 +310,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     try {
       flow = sso.claim(provider, url.searchParams.get('state'), jarOf(req).get(FLOW_COOKIE));
     } catch (e) {
-      return send(400, `<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
+      return send(400, `<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your ${place}'s sign-in page and start again.`, 'text/html; charset=utf-8');
     }
     // A sign-in started from a device approval page (#153) keeps its code, so it ends back on that page.
     const dev = flow.device ? `device=${flow.device}` : '';
@@ -323,7 +323,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const id = spaces?.directory.identify(email, provider);
     if (spaces && !flow.ws) return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket('', spaces.directory.createSession(id.id))}`);
     const hub = spaces ? spaces.get(flow.ws) : target;
-    if (!hub) return fail('that workspace is gone');
+    if (!hub) return fail(`that ${place} is gone`);
     const r = scopeOf(hub).authz.signInByEmail(email, provider);
     if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
     spaces?.directory.join(email, flow.ws);
