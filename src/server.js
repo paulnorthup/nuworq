@@ -99,7 +99,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   };
   freshSlug();
   // Whether the app reaches anything (Get started): installed anywhere on a single hub; on a workspaces hub,
-  // on one of the workspace's own repositories. Asked of GitHub at most once a minute per hub.
+  // on one of the workspace's own repositories, through an installation bound to it. Asked of GitHub at most
+  // once a minute per hub.
   const installs = new WeakMap(); // hub → { app, at, state }
   const appState = async (hub) => {
     if (!app) return 'none';
@@ -108,7 +109,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     let ok = false;
     try {
       if (!spaces) ok = await app.installed();
-      else for (const r of hub.projects().flatMap((p) => hub.remotesOf(p)).filter((r) => r.startsWith('github.com/')).slice(0, 10)) if ((ok = await app.installed(r))) break;
+      else for (const r of hub.projects().flatMap((p) => hub.remotesOf(p)).filter((r) => r.startsWith('github.com/')).slice(0, 10)) if ((ok = await appOf(hub).installed(r))) break;
     } catch { /* GitHub unreachable: not installed, as far as we can tell */ }
     const state = ok ? 'installed' : 'uninstalled';
     installs.set(hub, { app, at: Date.now(), state });
