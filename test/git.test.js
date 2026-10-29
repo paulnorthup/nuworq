@@ -81,6 +81,36 @@ describe('git facts on submit', () => {
     assert.equal(none.submit('w1', { evidence: [{ label: 'x' }] }).r.ok, true);
   });
 
+  test('a peer reviewer sees the git facts in next and look, and the warning in the hint', () => {
+    const { dir } = repo();
+    const { hub, submit } = world(dir);
+    hub.humanOp('p', 'settings', { autonomy: 'full' });
+    const { item } = submit('w1', { headline: 'done, committed as 9f3c2ab', evidence: [{ label: 'npm test: 5 passed' }] });
+    const n = hub.agentOp('p', 'next', 'rev', {});
+    assert.equal(n.mode, 'review');
+    assert.equal(n.git.branch, 'nuworq/w1');
+    assert.equal(n.git.base, 'main');
+    assert.deepEqual(n.git.commits.map((c) => c.subject), ['change 2', 'change 1']);
+    assert.deepEqual(n.git.missing, ['9f3c2ab']);
+    assert.match(n.git_warning, /Evidence names commit 9f3c2ab, which isn't in the repo/);
+    assert.match(n.hint, /Evidence names commit 9f3c2ab.*check it before you accept\. Review #/);
+    const l = hub.agentOp('p', 'look', 'other', { item });
+    assert.deepEqual(l.git, n.git);
+    assert.equal(l.git_warning, n.git_warning);
+  });
+
+  test('without git facts, the review context is as before', () => {
+    const { hub, submit } = world('');
+    hub.humanOp('p', 'settings', { autonomy: 'full' });
+    const { item } = submit('w1', { evidence: [{ label: 'x' }] });
+    const n = hub.agentOp('p', 'next', 'rev', {});
+    assert.equal(n.mode, 'review');
+    assert.equal(n.git, undefined);
+    assert.equal(n.git_warning, undefined);
+    assert.doesNotMatch(n.hint, /check it before you accept/);
+    assert.equal(hub.agentOp('p', 'look', 'other', { item }).git, undefined);
+  });
+
   test('only plausible commit claims are checked', () => {
     assert.deepEqual(claimedHashes({ evidence: [{ label: 'npm test: 1234567 assertions' }, { label: 'commit d58e260' }] }), ['d58e260']);
     assert.deepEqual(claimedHashes({ headline: 'acceded to the request', summary: 'committed as 5fc2e1c; deadbeef elsewhere' }), ['5fc2e1c']);

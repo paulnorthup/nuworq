@@ -529,6 +529,7 @@ export class Hub extends EventEmitter {
         n: k + 1, agent: a.agent, model: a.model, stage: a.stage,
         headline: e.headline ?? '', summary: e.summary || undefined, evidence: data.evidence ?? [],
         branch: data.git?.branch ?? null, commits: data.git?.commits ?? undefined,
+        missing: data.git?.missing?.length ? data.git.missing : undefined, git_warning: gitWarning(data.git) ?? undefined,
         took: e.at ? dur(e.at - a.at) : undefined,
       };
     });
@@ -675,6 +676,8 @@ export class Hub extends EventEmitter {
     const touching = this.touchingOf(item, agent);
     const steerers = this.steerersOf(item);
     const racers = item.race > 1 ? this.attemptsOf(item) : [];
+    // What git found at submit, for the reviewer (a race shows it per submission instead).
+    const g = item.stage === 'verifying' && item.race <= 1 ? this.submittedGit(item) : null;
     return {
       item: `#${item.seq}`,
       title: item.title,
@@ -687,6 +690,8 @@ export class Hub extends EventEmitter {
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
       repo: this.remotesOf(p)[0] || undefined,
       branch: item.branch || undefined,
+      git: g ? { branch: g.branch, base: g.base, commits: g.commits, missing: g.missing } : undefined,
+      git_warning: gitWarning(g) ?? undefined,
       lease: item.holder ? { holder: item.holder, expires_in: dur(item.lease_until - this.now()) }
         : this.racing(item) && lease ? { holder: agent, expires_in: dur(lease - this.now()) } : undefined,
       race: item.race > 1 ? (item.stage === 'verifying' ? {
@@ -1108,8 +1113,19 @@ export class Hub extends EventEmitter {
 
   // The branch git found for the latest submission, when the item has none of its own (older work).
   submittedBranch(item) {
+    return this.submittedGit(item)?.branch ?? '';
+  }
+
+  // What git found when the latest submission came in (#24), or null.
+  submittedGit(item) {
     const e = this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'submitted' ORDER BY at DESC LIMIT 1`).get(item.id);
-    return json(e?.data, {}).git?.branch ?? '';
+    return json(e?.data, {}).git ?? null;
+  }
+
+  // A reviewer's hint, led by anything git found wrong with the submission.
+  reviewHint(item, hint) {
+    const warn = item.race > 1 ? null : gitWarning(this.submittedGit(item));
+    return warn ? `${warn}: check it before you accept. ${hint}` : hint;
   }
 
   heldItem(p, agent, ref, verb) {
@@ -1261,7 +1277,7 @@ const AGENT_OPS = {
       mode: pick.mode,
       ...this.context(p, pick.item, agent),
       hint: pick.mode === 'review'
-        ? `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.${pick.item.race > 1 ? ' It was raced: compare race.submissions and accept with attempt set to the one to keep.' : ''}`
+        ? this.reviewHint(pick.item, `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.${pick.item.race > 1 ? ' It was raced: compare race.submissions and accept with attempt set to the one to keep.' : ''}`)
         : pick.mode === 'land' && args.claim !== false
           ? this.landHint(p, this.itemById(pick.item.id))
         : pick.mode === 'shape' && args.claim !== false
@@ -1279,7 +1295,7 @@ const AGENT_OPS = {
     return {
       ...this.context(p, item, agent),
       hint: item.stage === 'verifying'
-        ? `Review #${item.seq} against done_means and the evidence, then call review.`
+        ? this.reviewHint(item, `Review #${item.seq} against done_means and the evidence, then call review.`)
         : item.stage === 'proposed'
           ? SHAPE_HINT(item, p)
           : item.stage === 'landing'
