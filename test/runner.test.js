@@ -93,6 +93,40 @@ describe('trellis worker --agent opencode', () => {
   });
 });
 
+describe('workers on a hub that requires login', () => {
+  test('get the agent token, never the human one; --run refuses without one', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trellis-tok-')));
+    const bin = join(dir, 'bin');
+    execFileSync('mkdir', [bin]);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "ARGS: $*"\n', { mode: 0o755 });
+    const hub = new Hub();
+    hub.tx(() => hub.project('lock', { create: true }));
+    hub.humanOp('lock', 'settings', { path: dir });
+    const server = createServer(hub, { auth: 'required' });
+    const human = server.auth.createToken('me', 'human');
+    const agent = server.auth.createToken('box', 'agent', ['lock']);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TRELLIS_TOKEN: human, TRELLIS_AGENT_TOKEN: '' };
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'lock', '--here', '--as', 'w', ...a], { env, cwd: dir });
+    try {
+      const printed = (await cli()).stdout;
+      assert.match(printed, /"TRELLIS_TOKEN":"<agent-token>"/);
+      assert.ok(!printed.includes(human));
+
+      await assert.rejects(cli('--run'), (e) => /workers need their own agent token/.test(e.stderr) && /--agent-token/.test(e.stderr));
+      await assert.rejects(cli('--run', '--agent-token', human), (e) => /is a human token/.test(e.stderr));
+      await assert.rejects(cli('--run', '--agent-token', 'trl_not-a-real-token-at-all'), (e) => /refused the agent token/.test(e.stderr));
+
+      const ran = (await cli('--run', '--agent-token', agent)).stdout;
+      assert.match(ran, /ARGS: .*"TRELLIS_TOKEN":"trl_/);
+      assert.ok(ran.includes(agent) && !ran.includes(human), 'the agent gets the agent token only');
+    } finally {
+      server.close();
+    }
+  });
+});
+
 // A fake world: time only moves when the runner sleeps; workers are promises we resolve by hand.
 function world(routesSeq) {
   let t = 0;

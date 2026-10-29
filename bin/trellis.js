@@ -169,6 +169,20 @@ async function hubProjects(client) {
   }
 }
 
+// The token a started agent gets. Never yours: a hub that requires login needs a separate agent token.
+async function agentToken(client, flags) {
+  const me = await client.get('/api/me');
+  if (me.auth !== 'required') return null;
+  const t = flags['agent-token'] || process.env.TRELLIS_AGENT_TOKEN;
+  const how = 'Create one on the hub host: trellis token create <name> --role agent --project <project>. Pass it with --agent-token or TRELLIS_AGENT_TOKEN.';
+  if (!t || t === true) throw new HubError('This hub requires login, so workers need their own agent token', { hint: how });
+  const who = await createClient({ url: client.settings.url, token: t }).get('/api/me');
+  if (who.role !== 'agent') {
+    throw new HubError(who.role ? `--agent-token is a ${who.role} token; workers only get agent tokens` : 'The hub refused the agent token (wrong or revoked)', { hint: how });
+  }
+  return t;
+}
+
 async function worker(flags) {
   const s = resolveSettings(flags);
   const agent = agentOf(flags);
@@ -195,7 +209,8 @@ async function worker(flags) {
     target = projects.find((p) => p.slug === best.project);
     why = `the hub routed here: ${best.item} ${best.title} (${best.mode}, ${best.priority})`;
   }
-  const { name, worktree, branch, cwd, cmd } = workerSetup(target, agent, flags, s);
+  const token = flags.run ? await agentToken(client, flags) : null;
+  const { name, worktree, branch, cwd, cmd } = workerSetup(target, agent, flags, s, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Merge the branch when you accept the work, then: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
@@ -206,7 +221,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Me
       codex: `Codex runs in its workspace-write sandbox; the Trellis MCP server runs outside it, so it can reach the hub.`,
       opencode: `opencode has no sandbox: it may run any shell command except git push (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
     }[agent] + '\nAdd --run to start it now.'));
-    if (s.token) console.log(dim('Replace <agent-token> with an agent token: trellis token create <name> --role agent'));
+    if (s.token) console.log(dim('Replace <agent-token> with an agent token (trellis token create <name> --role agent --project <p>). With --run, pass it as --agent-token.'));
     return;
   }
   const { spawn } = await import('node:child_process');
@@ -217,7 +232,8 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, on branch ${branch}. Me
 const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 
 // The shell command that gives a worker its worktree and branch and starts the agent in it.
-function workerSetup(target, agent, flags, s) {
+// token: the agent token the worker gets when it runs (null: the hub needs none, or we only print).
+function workerSetup(target, agent, flags, s, token = null) {
   const home = target.path || process.cwd();
   if (!existsSync(home)) {
     throw new HubError(`${target.name} lives in ${home}, which doesn't exist on this machine`, { hint: 'Set where it lives in the UI (5m view, under the mission).' });
@@ -230,7 +246,7 @@ function workerSetup(target, agent, flags, s) {
   const cwd = worktree ?? home;
   const env = {
     TRELLIS_URL: s.url, TRELLIS_PROJECT: target.slug, TRELLIS_AGENT: name,
-    ...(s.token ? { TRELLIS_TOKEN: flags.run ? s.token : '<agent-token>' } : {}),
+    ...(token ? { TRELLIS_TOKEN: token } : s.token && !flags.run ? { TRELLIS_TOKEN: '<agent-token>' } : {}),
   };
   const task = [
     `Work on the ${target.name} project using Trellis. Do the work in this directory.`,
@@ -278,7 +294,8 @@ async function runCmd(flags) {
   const agent = agentOf(flags);
   const client = createClient(flags);
   await hubProjects(client);
-  const num = (v, d) => (v === undefined ? d : Number(v) > 0 ? Number(v) : (() => { throw new HubError(`expected a positive number, got "${v}"`, { hint: 'See: trellis help' }); })());
+  const token = await agentToken(client, flags);
+  const num =(v, d) => (v === undefined ? d : Number(v) > 0 ? Number(v) : (() => { throw new HubError(`expected a positive number, got "${v}"`, { hint: 'See: trellis help' }); })());
   const { spawn } = await import('node:child_process');
   const { createWriteStream } = await import('node:fs');
   const { run } = await import('../src/runner.js');
@@ -289,7 +306,7 @@ async function runCmd(flags) {
     const projects = await hubProjects(client);
     const target = projects.find((p) => p.slug === r.project);
     if (!target) throw new HubError(`the hub no longer has project "${r.project}"`);
-    const { name, worktree, cwd, cmd } = workerSetup(target, agent, { ...flags, as: undefined, run: true }, s);
+    const { name, worktree, cwd, cmd } = workerSetup(target, agent, { ...flags, as: undefined, run: true }, s, token);
     const log = join(logs, `${name}.log`);
     const out = createWriteStream(log);
     // Its own process group, so stopping it stops the agent too, not just the shell.
@@ -511,6 +528,8 @@ ${bold('Setup')}
                                          in its own git worktree and branch (--here: no worktree). Without
                                          --run it prints the command instead. opencode needs --model,
                                          e.g. ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is set up for you).
+                                         On a hub with login, --run needs --agent-token (or
+                                         TRELLIS_AGENT_TOKEN): workers never get your own token.
   run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--poll 30]
                                          keep up to N workers on waiting work in projects you opted in
                                          (UI: "Let trellis run staff this project"); exits when the
