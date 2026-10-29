@@ -105,6 +105,26 @@ Deliveries need no token: the HMAC-SHA256 signature (`X-Hub-Signature-256`) is t
 
 ## 30 minutes: details
 
+### Public HTTPS with a Cloudflare Tunnel (as run for nuworq.com)
+No open ports, and Cloudflare provides the certificate. The hub listens on loopback with login, and trusts the tunnel's `X-Forwarded-Proto`, so session cookies are `Secure`:
+```bash
+cloudflared tunnel login                         # once, as root: open the link, pick the zone
+cloudflared tunnel create nuworq
+cloudflared tunnel route dns nuworq nuworq.com   # an apex name works; Cloudflare flattens the CNAME
+install -d -m 700 /etc/cloudflared && install -m 600 ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/
+cat > /etc/cloudflared/config.yml <<EOF
+tunnel: <tunnel-id>
+credentials-file: /etc/cloudflared/<tunnel-id>.json
+ingress:
+  - hostname: nuworq.com
+    service: http://127.0.0.1:4747
+  - service: http_status:404
+EOF
+cloudflared service install && systemctl enable --now cloudflared
+# the hub: deploy/nuworq.service as is, plus --public-url https://nuworq.com (links in push messages)
+```
+Verified: a valid certificate, 401 without login, a `Secure` session cookie, and the live stream (`/api/stream`) arriving unbuffered through Cloudflare.
+
 ### Keeping a server up to date: it pulls, nothing pushes to it
 `serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. If the new hub doesn't come up healthy, it rolls back. No CI job reaches into your network, and the server only needs read access:
 ```bash
