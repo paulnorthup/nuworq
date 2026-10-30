@@ -8,7 +8,7 @@ export const KINDS = {
   slack: 'Slack incoming webhook URL, e.g. https://hooks.slack.com/services/…',
   webhook: 'any URL that accepts a JSON POST: { text, title, url, entries }',
 };
-const LABEL = { question: 'question', review: 'verify', proposal: 'approve', struggling: 'struggling', direction: 'pick what matters', 'no-agents': 'no agent working' };
+const LABEL = { question: 'question', review: 'verify', proposal: 'approve', struggling: 'struggling', direction: 'pick what matters', 'no-agents': 'no agent working', 'group-stalled': 'stalled on a capability' };
 const FORGET = HOUR; // an entry gone this long may be pushed again if it comes back (e.g. "What matters most?")
 
 const clip = (s, n = 100) => { const line = String(s ?? '').split('\n')[0]; return line.length > n ? line.slice(0, n - 1).trimEnd() + '…' : line; };
