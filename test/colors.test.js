@@ -109,6 +109,21 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.doesNotMatch(app + home, /<span class="dot \$\{\w+\.pulse\.state\}/, 'the rail, home and pulse draw their dots with stateDot');
   });
 
+  test('blue means agents are on it (#190): flowing and working are blue; links, focus and "new" carry no state color', () => {
+    const rule = (sel) => { const m = css.match(new RegExp(`(?:^|\\n)([^{}\\n]*${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^{}\\n]*)\\{([^}]*)\\}`)); assert.ok(m, `a rule for ${sel}`); return m[2]; };
+    assert.match(rule('.dot.flowing '), /var\(--agents\)/);
+    assert.match(rule('.state-flowing .state-chip'), /var\(--agents\)/);
+    assert.match(rule('.status.working'), /var\(--agents\)/);
+    assert.match(rule('.agent-strip .st.working'), /var\(--agents\)/);
+    const states = /var\(--(you|agents|queue|ok|warn|bad)(-tint)?\)/;
+    assert.doesNotMatch(css.match(/\na \{([^}]*)\}/)[1], states, 'a uses no state color');
+    for (const sel of ['a:not([class]), a.step-where, .link', 'input:focus', '.composer .box:focus-within', '.is-new::after', '.missing-links .link', '.zoom-more button']) {
+      assert.doesNotMatch(rule(sel), states, `${sel} uses no state color`);
+    }
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    assert.match(app, /class="st \$\{a\.status\.split\(' '\)\[0\]\}"/, 'the agent strip marks a working agent');
+  });
+
   test('a token change that brings two meanings too close fails', () => {
     assert.ok(dE('#c4520f', '#b42318') < 30, 'today\'s --bad next to --you would fail the state rule');
     assert.ok(dE('#c96442', '#c4520f') < 30, 'the old Anthropic mark next to --you would fail the provider rule');
