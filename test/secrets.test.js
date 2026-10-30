@@ -6,10 +6,13 @@ import { findSecret } from '../src/secrets.js';
 
 // Realistic fakes, assembled at runtime so this file never contains a live-looking secret.
 const r = (n, set = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789') => Array.from({ length: n }, (_, i) => set[(i * 7 + 3) % set.length]).join('');
+const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const FAKES = {
   'an AWS access key': 'AKIA' + r(16, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'),
   'a GitHub token': 'ghp_' + r(36),
   'a GitHub fine-grained token': 'github_pat_' + r(22) + '_' + r(59),
+  // A JWT (since October 2026): its first segment has - and _, which the classic shape never matched.
+  'a GitHub App installation token': 'ghs_' + r(20) + '-' + r(10) + '_' + r(13) + '.' + r(260, B64URL) + '.' + r(80, B64URL),
   'an OpenAI API key': 'sk-proj-' + r(64),
   'a legacy OpenAI API key': 'sk-' + r(48),
   'an Anthropic API key': 'sk-ant-api03-' + r(80),
@@ -42,6 +45,7 @@ describe('secret shapes', () => {
       'Set TRELLIS_TOKEN to your agent token (trl_…); send Authorization: Bearer <token>',
       'risk-assessment-for-the-new-module; ask for a token with `nuworq token create`',
       'risk-assessment-for-the-new-module; ask for a token with `trellis token create`',
+      'ghs_ tokens are JWTs now; see ghs_installation_token_handler.test.js and ghs_request_handler_for_the_installation_flow_v2',
     ];
     for (const s of fine) assert.equal(findSecret(s), null, s);
   });
