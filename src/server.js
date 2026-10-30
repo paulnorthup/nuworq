@@ -14,6 +14,7 @@ import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOw
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
+import { syncAlerts, accessOf } from './alerts.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
@@ -154,7 +155,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const adopt = (hub, req, base) => {
     if (app && hub._app !== app) { hub._app = app; hub.github = prClient(appOf(hub), { web: gh.web }); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
   };
-  // After a webhook: issues that came in get their one comment; an install brings every open issue in. Both need the app.
+  // After a webhook: issues that came in get their one comment; an install brings every open issue and
+  // Dependabot alert in, each on its own, so one failing leaves the other. Both need the app.
   const intake = async (hub, p, event, r, link) => {
     if (!app || r.ignored || !(r.sync || event === 'issues')) return r;
     try {
@@ -162,6 +164,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     } catch (e) {
       r.github = { error: e.message };
     }
+    if (r.sync) r.alerts = await syncAlerts(hub, p, appOf(hub), r.sync);
     return r;
   };
   // The app's webhook: one address for every installation, signed with the app's secret. On a shared hub it
@@ -891,7 +894,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!app) return deny(424, 'no GitHub App configured', 'Start the hub with NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY (docs/GITHUB.md).');
         const p = hub.project(decodeURIComponent(m[1]));
         const repos = hub.remotesOf(p).filter((r) => r.startsWith('github.com/'));
-        return send(200, { ok: true, ...(await syncIssues(hub, p, appOf(hub), repos,{ link: itemLink(req, p.slug) })) });
+        const alerts = await syncAlerts(hub, p, appOf(hub), repos);
+        return send(200, { ok: true, ...(await syncIssues(hub, p, appOf(hub), repos,{ link: itemLink(req, p.slug) })), alerts });
+      }
+      // The project's GitHub dialog: whether each repository's Dependabot alerts come in, with numbered steps when
+      // a person has to act. A repository not reading yet is asked again (at most every 30 seconds), so the line
+      // turns green once the steps are done.
+      if ((m = path.match(/^\/api\/p\/([^/]+)\/github$/)) && req.method === 'GET') {
+        const p = hub.project(decodeURIComponent(m[1]));
+        if (!app) return send(200, { app: false, alerts: [] });
+        const stale = accessOf(hub, p).filter((a) => a.state !== 'on' && hub.now() - (a.checked_at ?? 0) >= 30_000).map((a) => a.repo);
+        if (stale.length) await syncAlerts(hub, p, appOf(hub), stale);
+        return send(200, { app: true, alerts: accessOf(hub, p) });
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/human\/([a-z]+)$/)) && req.method === 'POST') {
         if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404 });

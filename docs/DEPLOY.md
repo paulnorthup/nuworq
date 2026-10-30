@@ -108,7 +108,8 @@ A signed webhook links pull requests to items and shows CI results on them. When
    - Payload URL: `https://<your hub>/api/hooks/github/<project>` (the dialog shows it)
    - Content type: `application/json`
    - Secret: the one from step 1
-   - Events: *Pull requests*, *Check suites*, *Check runs*, *Statuses*
+   - Events: *Pull requests*, *Check suites*, *Check runs*, *Statuses* (and *Dependabot alerts*, so alerts come in as items)
+   - With the GitHub App instead (docs/GITHUB.md), nothing here: its permissions are Contents (read & write), Pull requests (read & write), Checks (read), Issues (read & write), Dependabot alerts (read) and Metadata (read), and its webhook carries Issues, Issue comment, Pull request, Pull request review, Check suite, Check run and Dependabot alert.
 3. GitHub sends a `ping`. "Recent Deliveries" should show 200.
 
 How a PR finds its item: `#N` in the PR title first. Then the branch: on `nuworq/<agent>`, it's the item that agent holds, or the one it last submitted. Then `#N` in the PR body. A PR that matches nothing is acknowledged and ignored. Later events for a linked PR (pushes, merge, close) follow it. CI is summarised per head commit: any failed check means failing, all green means passing. Only changes of state go on the item's timeline.

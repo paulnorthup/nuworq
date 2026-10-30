@@ -1019,6 +1019,12 @@ async function backFromGitHub() {
   newProject();
 }
 
+// Whether each repository's Dependabot alerts come in as items (#180): green when they do; otherwise what
+// to do, as numbered steps with the exact place, and how to see it worked.
+function alertLines(alerts = []) {
+  return alerts.map((a) => `<div class="app-status alerts ${a.state === 'on' ? 'installed' : 'created'}"><span class="dot"></span><div><p>${esc(a.line)}</p>${a.steps ? `<ol>${a.steps.map((s) => `<li>${esc(s.do)}${s.where ? `: <a href="${esc(s.where)}" target="_blank" rel="noopener">${esc(s.where)}</a>` : ''}${s.check ? `<br><small>${esc(s.check)}.</small>` : ''}</li>`).join('')}</ol>` : ''}</div></div>`).join('');
+}
+
 async function githubSettings() {
   S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
   const P = S.view.project;
@@ -1027,7 +1033,7 @@ async function githubSettings() {
   const manual = `<p class="lead">A webhook links pull requests to items (a <code>nuworq/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
     <h4>1. In the repo on GitHub: Settings → Webhooks → Add webhook</h4>
     <p class="lead">Payload URL (GitHub must be able to reach it; see docs/DEPLOY.md):</p>${copyBlock(hook)}
-    <p class="lead">Content type <code>application/json</code>. Events: <i>Pull requests</i>, <i>Check suites</i>, <i>Check runs</i>, <i>Statuses</i>.</p>
+    <p class="lead">Content type <code>application/json</code>. Events: <i>Pull requests</i>, <i>Check suites</i>, <i>Check runs</i>, <i>Statuses</i>, <i>Dependabot alerts</i>.</p>
     <h4>2. The same secret, there and here</h4>
     <div class="inline-form"><input id="gh-secret" placeholder="${P.github ? 'A secret is set; enter a new one to replace it' : 'A long random secret'}"><button class="btn small" data-action="github-generate">Generate</button></div>`;
   const disconnect = P.github ? '<button class="btn ghost" data-action="github-disconnect">Disconnect</button>' : '';
@@ -1041,12 +1047,13 @@ async function githubSettings() {
   const lead = st.state === 'none'
     ? `<div class="app-status none"><span class="dot"></span><p>No GitHub App yet. It links pull requests and CI results to items and brings issues in as proposals, for every project at once, with no setup per repository. Workers push through it with a token for one repository, for an hour.
       ${st.can_create ? 'GitHub asks you to confirm it, then where to install it.</p><a class="btn primary small" href="api/github/app/new">Create</a>' : 'Only an owner can create it: ask whoever runs this hub.</p>'}</div>`
-    : `${appStatus(st)}<p class="lead" id="gh-covered">${st.state === 'installed' ? 'Checking whether it covers this project\'s repository…' : ''}</p>`;
+    : `${appStatus(st)}<p class="lead" id="gh-covered">${st.state === 'installed' ? 'Checking whether it covers this project\'s repository…' : ''}</p><div id="gh-alerts" data-new="dependabot-alerts"></div>`;
   modal(`<h2>GitHub</h2>${lead}
     <details ${P.github ? 'open' : ''}><summary>Without the app: a webhook for this project${P.github ? ' (connected)' : ''}</summary>${manual}
       <div class="foot">${disconnect}<button class="btn" data-action="github-save">Save the webhook</button></div></details>
     <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
   if (st.state === 'installed') appCovers(P).then((line) => { const el = $('#gh-covered'); if (el) el.innerHTML = line; });
+  if (st.state === 'installed') api(`/api/p/${encodeURIComponent(P.slug)}/github`).then((r) => { const el = $('#gh-alerts'); if (el) el.innerHTML = alertLines(r.alerts); }).catch(() => {});
 }
 
 // Whether the hub's installed GitHub App can see this project's repository, as one line for the GitHub dialog.

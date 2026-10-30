@@ -4,6 +4,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { UserError, normRemote } from './core.js';
 import { issueEvent, issueComment, installedRepos } from './issues.js';
+import { alertEvent } from './alerts.js';
 
 const ACTOR = 'github';
 const OK = new Set(['success', 'neutral', 'skipped']);
@@ -264,7 +265,8 @@ function handle(hub, p, event, body) {
     if (event === 'pull_request_review') return review(hub, p, body);
     if (event === 'issues') return issueEvent(hub, p, body);
     if (event === 'issue_comment') return issueComment(hub, p, body);
-    // The app was installed on (or added to) repositories: their open issues come in, after this answer.
+    if (event === 'dependabot_alert') return alertEvent(hub, p, body);
+    // The app was installed on (or added to) repositories: their open issues and alerts come in, after this answer.
     if (event === 'installation' || event === 'installation_repositories') {
       const repos = installedRepos(hub, p, body);
       return repos.length ? { sync: repos } : { ignored: `none of ${p.name}'s repositories` };

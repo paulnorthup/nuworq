@@ -36,7 +36,7 @@ export function appFromFile(file) {
 }
 
 // The events the app's webhook delivers (installation events always come): what per-project webhooks carried.
-export const APP_EVENTS = ['issues', 'issue_comment', 'pull_request', 'pull_request_review', 'check_suite', 'check_run'];
+export const APP_EVENTS = ['issues', 'issue_comment', 'pull_request', 'pull_request_review', 'check_suite', 'check_run', 'dependabot_alert'];
 
 // What the hub asks GitHub to create: the permissions work needs, nothing more. The webhook is on when
 // GitHub can reach the hub (not a loopback address); redirect_url brings the owner back here.
@@ -48,7 +48,7 @@ export function manifest(base, name) {
     redirect_url: `${base}/api/github/app/callback`,
     // After installing (or changing which repositories it sees), GitHub sends the person back to the hub.
     setup_url: `${base}/#/`, setup_on_update: true,
-    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write' },
+    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read' },
     default_events: reachable ? APP_EVENTS : [],
   };
 }
