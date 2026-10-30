@@ -79,7 +79,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const ref = (i) => `#${i.seq}`;
   const remotes = hub.remotesOf(p);
   const agents = hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id);
-  const openQs = hub.q(`SELECT * FROM questions WHERE project_id = ? AND status = 'open' ORDER BY at`).all(p.id);
+  // Only what can still be acted on: never a question about work that landed or was dropped (#182).
+  const openQs = hub.q(`SELECT q.* FROM questions q LEFT JOIN items i ON i.id = q.item_id
+    WHERE q.project_id = ? AND q.status = 'open' AND (i.id IS NULL OR i.stage NOT IN ('done', 'dropped')) ORDER BY q.at`).all(p.id);
   const dismissed = new Set(hub.q('SELECT key FROM dismissals WHERE project_id = ?').all(p.id).map((d) => d.key));
   const unmet = (i) => hub.unmetDeps(i);
   const lastEvent = (i, types) => hub.q(`SELECT * FROM events WHERE item_id = ? AND type IN (${types.map(() => '?').join(',')}) ORDER BY at DESC, id DESC LIMIT 1`).get(i.id, ...types);

@@ -136,6 +136,12 @@ export function layered(headline, summary = '', detail = '', what = 'headline') 
 const str = (v) => (v == null ? '' : String(v).trim());
 const clip = (v, n = 120) => { const line = str(v).split('\n')[0]; return line.length > n ? line.slice(0, n - 1).trimEnd() + '…' : line; };
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+// A question its work closed (#182) can't be answered, confirmed or overridden any more.
+const settled = (q) => {
+  if (['shipped', 'withdrawn'].includes(q.status)) {
+    throw new UserError(`Question ${q.id} is already ${q.status}${q.closed_reason ? ` (${q.closed_reason})` : ''}`, { status: 409, hint: 'To change course now, steer or propose new work.' });
+  }
+};
 
 // What an item waits on outside the hub, for agents and the UI: the condition, in words, and the last check. undefined: nothing.
 export function preconditionOut(item) {
@@ -230,6 +236,8 @@ export class Hub extends EventEmitter {
     // `nuworq serve` from NUWORQ_LLM_PROXY_URL; tests set a fake. null: reported usage only.
     this.llmProxy = null;
     this._measuring = new Map(); // item id → its measurement in flight
+    // Questions left open on work that had already landed or been dropped (before #182) close the same way.
+    for (const it of this.q(`SELECT * FROM items WHERE stage IN ('done', 'dropped') AND id IN (SELECT item_id FROM questions WHERE status = 'open')`).all()) this.settleQuestions(it, it.stage);
   }
 
   q(sql) {
@@ -686,7 +694,20 @@ export class Hub extends EventEmitter {
     // count is now: it may have been changed while the item was verifying.
     if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);    Object.assign(item, fields);
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
+    if (['done', 'dropped'].includes(stage)) this.settleQuestions(item, stage);
     if (unmet?.kind === 'ask') this.askPrecondition(item, actor);
+  }
+
+  // Work that landed or was dropped leaves nothing to decide (#182). Its open assumptions ship with it: status
+  // 'shipped', not 'confirmed' (nobody agreed; it landed on them and nobody changed them). Every other open
+  // question about it, and any escalation of one, is withdrawn. Disagreeing later is new work, not an override.
+  settleQuestions(item, stage) {
+    const reason = stage === 'done' ? `#${item.seq} landed` : `#${item.seq} was dropped`;
+    for (const q of this.q(`SELECT id, blocking, assumption FROM questions WHERE item_id = ? AND status = 'open'`).all(item.id)) {
+      const shipped = stage === 'done' && !q.blocking && !!q.assumption;
+      this.q('UPDATE questions SET status = ?, closed_reason = ? WHERE id = ?').run(shipped ? 'shipped' : 'withdrawn', reason, q.id);
+      this.q(`UPDATE questions SET status = 'withdrawn', closed_reason = ? WHERE escalates = ? AND status = 'open'`).run(reason, q.id);
+    }
   }
 
   // The item's precondition (src/precondition.js), unless none or it has passed.
@@ -2492,6 +2513,7 @@ const HUMAN_OPS = {
   answer(p, { question, answer, decide, keep_parked }, by) {
     const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
     if (!q) throw new UserError(`No question ${question}`, { status: 404 });
+    settled(q);
     const text = str(answer);
     if (!text) throw new UserError('answer is required');
     const item = this.itemById(q.item_id);
@@ -2559,6 +2581,7 @@ const HUMAN_OPS = {
   confirm(p, { question }, by) {
     const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
     if (!q) throw new UserError(`No question ${question}`, { status: 404 });
+    settled(q);
     this.q(`UPDATE questions SET status = 'confirmed', answered_by = ?, answered_at = ?, seen_by_asker = 0 WHERE id = ?`).run(by, this.now(), q.id);
     this.event(p, { item: this.itemById(q.item_id), actor: by, type: 'assumption_confirmed', headline: `${You(by)} confirmed ${q.asked_by}'s assumption: ${q.assumption}` });
   },

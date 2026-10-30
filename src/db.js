@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS questions (
   options       TEXT NOT NULL DEFAULT '[]',
   blocking      INTEGER NOT NULL,
   assumption    TEXT NOT NULL DEFAULT '',
-  status        TEXT NOT NULL DEFAULT 'open',  -- open | answered | confirmed | withdrawn
+  status        TEXT NOT NULL DEFAULT 'open',  -- open | answered | confirmed | shipped (its item landed on the assumption) | withdrawn
   answer        TEXT NOT NULL DEFAULT '',
   answered_by   TEXT,
   answered_at   INTEGER,
@@ -363,6 +363,7 @@ export function openDb(file) {
     'ALTER TABLE projects ADD COLUMN fresh INTEGER NOT NULL DEFAULT 1', // the weekly freshness sweep is on (src/freshness.js)
     'ALTER TABLE projects ADD COLUMN fresh_at INTEGER NOT NULL DEFAULT 0', // when the sweep timer last fired (or the project began)
     'ALTER TABLE items ADD COLUMN sweep INTEGER NOT NULL DEFAULT 0', // 1: a "keep <project> fresh" item the hub opened
+    "ALTER TABLE questions ADD COLUMN closed_reason TEXT NOT NULL DEFAULT ''", // why a question closed with nobody answering (shipped, withdrawn), e.g. "#112 landed"
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }
