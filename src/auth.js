@@ -258,6 +258,7 @@ export class Auth {
       const full = this.db.prepare('SELECT powers, projects FROM tokens WHERE id = ?').get(row.id);
       out.powers = full?.powers ? JSON.parse(full.powers) : [...POWERS];
       out.projects = scopeOf(full?.projects);
+      if (row.runner) out.runner = row.runner; // a runner's token: the runner it reports as (#171)
     }
     if (row.role === 'human') {
       const p = row.person_id != null ? this.db.prepare('SELECT * FROM people WHERE id = ?').get(row.person_id) : null;

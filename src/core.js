@@ -24,6 +24,7 @@ export class UserError extends Error {
 }
 
 export const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+const RUNNER_DOWN_POLLS = 3; // a runner silent for this many of its poll intervals is down (#171)
 export const LEASE_MS = 20 * MIN;
 export const HANDOFF_COOLDOWN = 30 * MIN; // work you just handed off isn't offered straight back to you
 const HEADLINE_MAX = 140;
@@ -594,6 +595,58 @@ export class Hub extends EventEmitter {
           AND type IN (${CLAIM_TYPES.map(() => '?').join(',')})`).get(p.id, agent, since, ...CLAIM_TYPES).n;
     }
     return n;
+  }
+
+  // nuworq run says how it is on every poll (#171): workers running and its limit, projects it skips and
+  // why, whether it paused itself and why, what it has spent. Bookkeeping, not an agent being present.
+  // name: its token's runner name when it has one, else what it calls itself. scope: the slugs its token
+  // reaches (null: all), so it only shows on those projects. Returns whether anything visible changed.
+  reportRunner(r = {}, { name = '', scope = null } = {}) {
+    const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : 0);
+    const when = (v) => (num(v) > 0 ? num(v) : null);
+    const machine = clip(r.machine, 80);
+    name = clip(name || r.name || machine, 80);
+    if (!name) throw new UserError('a runner needs a name', { hint: 'Send { name, machine, ... }: nuworq run sends its machine name.' });
+    const state = {
+      running: num(r.running), workers: num(r.workers),
+      skipping: (Array.isArray(r.skipping) ? r.skipping : []).slice(0, 50).filter((s) => s?.project)
+        .map((s) => ({ project: clip(s.project, 80), reason: clip(s.reason, 200), ...(when(s.until) ? { until: when(s.until) } : {}) })),
+      paused: r.paused && when(r.paused.until) ? { until: when(r.paused.until), reason: clip(r.paused.reason, 200) } : null,
+      spent: Math.round(num(r.spent) * 100) / 100,
+      stopped: r.stopped ? clip(r.stopped, 200) : null,
+    };
+    const pollMs = Math.min(Math.max(num(r.poll_seconds) || 30, 1), 3600) * 1000;
+    const was = this.q('SELECT state, seen_at, poll_ms FROM runners WHERE name = ?').get(name);
+    const body = JSON.stringify(state);
+    this.q(`INSERT INTO runners (name, machine, scope, state, poll_ms, seen_at) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (name) DO UPDATE SET machine = excluded.machine, scope = excluded.scope, state = excluded.state, poll_ms = excluded.poll_ms, seen_at = excluded.seen_at`)
+      .run(name, machine, (scope ?? []).join(','), body, pollMs, this.now());
+    // Worth redrawing for: a new runner, a change, or one that was down coming back.
+    return !was || was.state !== body || this.now() - was.seen_at > RUNNER_DOWN_POLLS * was.poll_ms;
+  }
+
+  // The runners that staff a project (it lets nuworq run in, and their token reaches it), as they last said,
+  // seen within a week. One silent for 3 of its polls is down; one that said it stopped is stopped.
+  runnersOf(p) {
+    if (!p.runner) return [];
+    const t = this.now();
+    return this.q('SELECT * FROM runners WHERE seen_at > ? ORDER BY name').all(t - 7 * DAY)
+      .filter((r) => !r.scope || r.scope.split(',').includes(p.slug))
+      .map((r) => {
+        const s = json(r.state, {});
+        const down = t - r.seen_at > RUNNER_DOWN_POLLS * r.poll_ms;
+        const skip = (s.skipping ?? []).find((x) => x.project === p.slug);
+        return {
+          name: r.name, machine: r.machine,
+          state: s.stopped ? 'stopped' : down ? 'down' : s.paused?.until > t ? 'paused' : skip ? 'skipping' : 'up',
+          last_seen: dur(t - r.seen_at), running: s.running ?? 0, workers: s.workers ?? 0, spent: s.spent ?? 0,
+          stopped: s.stopped ?? null,
+          paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t) } : null,
+          // Why it leaves this project alone, if it does; and how many others it leaves alone.
+          skipping: skip ? { reason: skip.reason, ...(skip.until > t ? { for: dur(skip.until - t) } : {}) } : null,
+          skipping_others: (s.skipping ?? []).filter((x) => x.project !== p.slug).length,
+        };
+      });
   }
 
   // ── small helpers ───────────────────────────────────────────────────────

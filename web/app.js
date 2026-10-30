@@ -337,11 +337,11 @@ function projectBody(v, empty) {
   const s = {
     pulse: pulse(v), composer: composer(v), empty: empty ? emptyProject() : '', needs: needsYou(v), motion: motion(v),
     worth: z() >= 1 ? worthKnowing(v) : '', flow: flow(v), next: z() >= 1 ? upNext(v) : '', finished: z() >= 1 ? finished(v) : '',
-    steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
+    steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', runners: z() >= 1 ? runners(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
   };
   const order = (keys) => keys.map((k) => s[k]).join('');
-  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents']));
-  return order(['pulse', 'composer', 'empty', 'needs', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'activity', 'all', 'more']);
+  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']));
+  return order(['pulse', 'composer', 'empty', 'needs', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
 }
 
 function emptyProject() {
@@ -767,6 +767,27 @@ function agents(v) {
       </div>
       <div class="model" style="margin-top:6px">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${esc(a.last_seen)} ago</div>
     </div>`).join('')}</div></section>`;
+}
+
+// The machines running `nuworq run` for this project (#171), as each last said: up, paused, skipping this
+// project, stopped, or down (silent for 3 polls). The state leads each row; one line says why.
+function runners(v) {
+  if (!v.project.runner) return '';
+  const rs = v.runners ?? [];
+  if (!rs.length) return `<section class="sec"><header><h2>Runners</h2></header>
+    ${zero('<b>No runner has reported here.</b> Nothing starts workers until one does.', 'On a machine with a checkout: <code>nuworq run</code>')}</section>`;
+  const why = (r) => r.state === 'down' ? `Silent since ${esc(r.last_seen)} ago${r.machine ? ` on ${esc(r.machine)}` : ''}.`
+    : r.state === 'stopped' ? `Stopped ${esc(r.last_seen)} ago: ${esc(r.stopped)}.`
+    : r.state === 'paused' ? `Paused for ${esc(r.paused.for)}: ${esc(r.paused.reason)}.`
+    : r.state === 'skipping' ? `Leaves this project alone${r.skipping.for ? ` for ${esc(r.skipping.for)}` : ''}: ${esc(r.skipping.reason)}.`
+    : `${r.running} of ${r.workers} worker${r.workers === 1 ? '' : 's'} running.`;
+  const up = rs.filter((r) => r.state === 'up').length;
+  return `<section class="sec"><header><h2>Runners</h2><span class="count">${up} up</span>${up < rs.length ? `<span class="hint">${rs.length - up} not starting work here</span>` : ''}</header>
+    <div class="rows">${rs.map((r) => `<div class="row-item runner"><div class="body">
+      <div class="h">${esc(r.name)}<span class="status runner-${r.state}">${esc(r.state)}</span></div>
+      <div class="s">${why(r)}</div>
+      <div class="s faint">${[r.machine && r.machine !== r.name ? `on ${esc(r.machine)}` : '', r.state !== 'down' ? `seen ${esc(r.last_seen)} ago` : '', r.spent ? `$${r.spent.toFixed(2)} spent` : '', r.skipping_others ? `skips ${r.skipping_others} other project${r.skipping_others === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}</div>
+    </div></div>`).join('')}</div></section>`;
 }
 
 function activity(v) {

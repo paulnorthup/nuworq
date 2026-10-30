@@ -610,11 +610,14 @@ async function runCmd(flags) {
   };
 
   const workers = num(flags.workers, 1);
+  const reporter = createClient({ url: s.url, token: token ?? s.token });
   console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`up to ${workers} ${agent} worker${workers > 1 ? 's' : ''} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
   await run({
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}`),
     launch, workers,
+    // How this runner is, on every poll (#171), with the workers' agent token: a runner token names the runner.
+    report: (state) => reporter.post('/api/runner', { name: hostname(), machine: hostname(), ...state }),
     // Asked of the hub, not the routes: a quick worker can claim and exit between two polls. A minute
     // of slack covers clocks that differ.
     claimed: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).claims > 0,

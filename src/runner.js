@@ -49,8 +49,10 @@ const KILL_GRACE_MS = 10_000;
 // claimed(worker): whether the hub saw it take a job since it started (absent: assume it did).
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
 // maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
+// report(state): tells the hub how this runner is, once per poll and once more when it stops (#171); a
+// report that fails is let go (the hub shows the runner down until one gets through).
 export async function run({
-  routes, launch, claimed = async () => true, log = console.log,
+  routes, launch, claimed = async () => true, log = console.log, report = async () => {},
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
@@ -77,12 +79,27 @@ export async function run({
     stop('interrupted');
   });
   // A streak that would only repeat itself: with --until-idle, stop; otherwise wait 5m, then 10m, up to 30m.
+  let pausedWhy = '';
   const pause = (reason, advice) => {
     if (untilIdle) return stop(reason);
     log(`Paused ${pauseMs / 60_000}m: ${reason}. ${advice}`);
+    pausedWhy = reason;
     pausedUntil = now() + pauseMs;
     pauseMs = Math.min(pauseMs * 2, MAX_PAUSE_MS);
   };
+  // How this runner is, for the hub: what's running against its limit, what it leaves alone and why, any pause.
+  const state = () => {
+    const t = now();
+    return {
+      running: running.length, workers, spent, poll_seconds: pollSeconds,
+      skipping: [
+        ...[...resting].filter(([, r]) => r.until > t).map(([project, r]) => ({ project, reason: cant.get(project) ?? "its checkout couldn't be updated", until: r.until })),
+        ...[...cant].filter(([project]) => !(resting.get(project)?.until > t)).map(([project, reason]) => ({ project, reason })),
+      ],
+      paused: pausedUntil > t ? { until: pausedUntil, reason: pausedWhy } : null,
+    };
+  };
+  const tell = (s) => Promise.resolve().then(() => report(s)).catch(() => {});
   const failedFast = () => {
     if (++fastFails < FAST_FAILS) return;
     fastFails = 0;
@@ -186,9 +203,11 @@ export async function run({
     }
     if (!stopping && launched >= maxRuns && !running.length) stop(`reached --max-runs ${maxRuns}`);
     if (stopping && !running.length) break;
+    if (!hubDown) await tell(state());
     await Promise.race([sleep(pollSeconds * 1000), new Promise((r) => { wake = r; })]);
   }
 
+  await tell({ ...state(), stopped: why });
   const failed = done.filter((d) => d.code !== 0).length;
   const each = done.map((d) => `${d.name}@${d.project}:${d.code}`).join(', ');
   log(`Done: ${why}. ${launched} launched, ${done.length - failed} exited cleanly, ${failed} failed${each ? ` (${each})` : ''}${spent || maxUsd !== Infinity ? `; $${spent.toFixed(2)} spent` : ''}.`);
