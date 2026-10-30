@@ -10,7 +10,7 @@ import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
-import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners } from './notify.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, setWeekly } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { freshen } from './freshness.js';
@@ -1109,7 +1109,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Agent tokens never reach these. An owner manages them all; a person manages their own.
       const own = who.person && personRole !== 'owner' ? by : null; // null: every channel
       if (req.method === 'GET' && path === '/api/notify') return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null });
-      if (req.method === 'POST' && path.startsWith('/api/notify') && personRole !== 'owner' && !(own && ['/api/notify', '/api/notify/remove'].includes(path))) {
+      if (req.method === 'POST' && path.startsWith('/api/notify') && personRole !== 'owner' && !(own && ['/api/notify', '/api/notify/remove', '/api/notify/weekly'].includes(path))) {
         return deny(403, 'only an owner manages hub-wide push channels', 'Add one for yourself instead: it gets only what needs you.');
       }
       if (req.method === 'POST' && path === '/api/notify') {
@@ -1124,6 +1124,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         removeChannel(hub.db, id);
         hub.emit('change', { project: null, at: hub.now() });
         return send(200, { ok: true });
+      }
+      // The weekly line (#178), on or off for one channel.
+      if (req.method === 'POST' && path === '/api/notify/weekly') {
+        const { id, weekly } = await body(req);
+        if (own && channelOwner(hub.db, id) !== own) return deny(403, 'that channel isn\'t yours', 'You can change only your own channels.');
+        setWeekly(hub.db, id, weekly !== false);
+        return send(200, { ok: true, weekly: weekly !== false });
       }
       if (req.method === 'POST' && path === '/api/notify/test') {
         const results = await testChannels(hub.db, { baseUrl: (!spaces && publicUrl) || origin(req) + base, now: () => hub.now() });
