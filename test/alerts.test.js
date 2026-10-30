@@ -120,6 +120,38 @@ describe('Dependabot alerts come in as work (#180)', () => {
     } finally { close(); }
   });
 
+  test('an alert reintroduced after its item landed is one new ready item that fixes it; later events follow the new item (#186)', async () => {
+    try {
+      await deliver('dependabot_alert', { action: 'created', alert: alert(3), repository });
+      const p = hub.project('app');
+      hub.tx(() => hub.move(hub.item(p, '#1'), 'done', 'you'));
+      await deliver('dependabot_alert', { action: 'fixed', alert: alert(3, { state: 'fixed' }), repository });
+      assert.equal(items().length, 1, 'fixed after it landed: nothing new');
+
+      const back = await deliver('dependabot_alert', { action: 'reintroduced', alert: alert(3), repository });
+      assert.deepEqual({ item: back.body.item, created: back.body.created, fixes: back.body.fixes }, { item: '#2', created: true, fixes: '#1' });
+      const [done, fresh, ...rest] = items();
+      assert.equal(rest.length, 0);
+      assert.equal(done.stage, 'done', 'the landed item stays landed');
+      assert.deepEqual({ ...fresh, summary: undefined }, {
+        seq: 2, stage: 'ready', priority: 'now', repo: 'github.com/acme/api', created_by: 'github', summary: undefined,
+        title: 'lodash is at 4.17.21 or later in acme/api (GHSA-3xxx-yyyy-zzzz, high)',
+        acceptance: "lodash resolves to 4.17.21 or later on main (manifest and lockfile), the project's tests pass, and GitHub shows alert #3 as fixed.",
+      });
+      assert.equal(hub.item(p, '#2').fixes, hub.item(p, '#1').id, 'it repairs the landed item');
+
+      const again = await deliver('dependabot_alert', { action: 'reintroduced', alert: alert(3), repository });
+      assert.equal(again.body.ignored, 'already in');
+      const reopened = await deliver('dependabot_alert', { action: 'reopened', alert: alert(3), repository });
+      assert.equal(reopened.body.ignored, 'already in');
+      assert.equal(items().length, 2, 'a redelivery creates nothing more');
+
+      const fixed = await deliver('dependabot_alert', { action: 'fixed', alert: alert(3, { state: 'fixed' }), repository });
+      assert.deepEqual({ item: fixed.body.item, dropped: fixed.body.dropped }, { item: '#2', dropped: true });
+      assert.deepEqual(items().map((i) => i.stage), ['done', 'dropped'], 'the new item drops, not the done one');
+    } finally { close(); }
+  });
+
   test('on install, every open alert of the project\'s repositories comes in once; other repositories are ignored', async () => {
     try {
       const r = await install();

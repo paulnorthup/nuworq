@@ -1,5 +1,6 @@
 // Dependabot alerts come in as work (#180), the way issues do (src/issues.js): on install (every open alert of
-// the project's repos), and through the dependabot_alert webhook after that. One item per alert, ever. The hub
+// the project's repos), and through the dependabot_alert webhook after that. One item per alert at a time: a new
+// one only when the alert comes back after its item landed (#186). The hub
 // writes the acceptance itself, so an alert with a patched version is ready work wherever the project lets
 // agents start shaped proposals; one without is a proposal asking for a decision. Severity sets priority.
 // GitHub marking the alert fixed or dismissed drops its item while nobody has started it.
@@ -98,6 +99,15 @@ export function takeAlert(hub, p, repo, alert) {
     return { item: `#${created.seq}`, created: true };
   }
   if (row.state === 'open') return { item: `#${item.seq}`, ignored: 'already in' };
+  // Its fix landed and the vulnerable version came back (#186): new work that repairs the landed item, and the
+  // alert follows the new item from here on.
+  if (item.stage === 'done') {
+    const shape = alertItem(repo, alertFacts(alert));
+    const created = hub.createItem(p, ACTOR, { ...shape, repo, fixes: `#${item.seq}` });
+    hub.q(`UPDATE alerts SET state = 'open', item_id = ?, updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?`).run(created.id, t, p.id, repo, alert.number);
+    hub.event(p, { item: created, actor: ACTOR, type: 'alert', headline: `#${created.seq} is new: GitHub reopened Dependabot alert #${alert.number} after #${item.seq} landed`, data: { url: row.url, state: 'open' } });
+    return { item: `#${created.seq}`, created: true, fixes: `#${item.seq}` };
+  }
   hub.q(`UPDATE alerts SET state = 'open', updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?`).run(t, p.id, repo, alert.number);
   if (item.stage === 'dropped') {
     hub.move(item, item.acceptance && p.autonomy !== 'ask' ? 'ready' : 'proposed', ACTOR);
