@@ -81,7 +81,7 @@ describe('GitHub webhooks', () => {
     const r = await deliver('pull_request', { ...pr(), number: 7, pull_request: { ...pr().pull_request, number: 7, html_url: 'https://github.com/paul/nuworq/pull/7', title: 'Fix the other thing (#2)', head: { ref: 'fix/other', sha: 'c'.repeat(40) } } });
     assert.equal(r.body.item, '#2');
     const none = await deliver('pull_request', { ...pr(), number: 8, pull_request: { ...pr().pull_request, number: 8, title: 'Unrelated', body: '', head: { ref: 'random', sha: 'd'.repeat(40) } } });
-    assert.equal(none.body.ignored, 'no matching item');
+    assert.equal(none.body.untracked, true, 'no item tracks it: on record for a tidy job (#202)');
   });
 
   test('CI results show on the item; a failure on work in Verifying needs you', async () => {

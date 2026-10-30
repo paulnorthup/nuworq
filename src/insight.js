@@ -137,6 +137,12 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     });
   }
 
+  // What a tidy job changed in the groups in the last day (#202), in one line: each change is in the groups' history.
+  for (const e of hub.q(`SELECT * FROM events WHERE project_id = ? AND type = 'tidied' AND at > ? ORDER BY at`).all(p.id, t - DAY)) {
+    const it = byId.get(e.item_id);
+    push({ key: `tidied:${e.id}`, level: 'know', kind: 'tidied', at: e.at, headline: e.headline, sub: `${dur(t - e.at)} ago`, why: e.summary, item: it ? ref(it) : null });
+  }
+
   // Unless no operator has been here for a day: then one line, so the questions don't wait forever.
   const forOperator = openQs.filter((q) => q.audience === 'operator');
   if (forOperator.length && !agents.some((a) => t - a.last_seen < DAY && json(a.has, []).includes('operator'))) {

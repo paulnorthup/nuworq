@@ -5,6 +5,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { UserError, normRemote } from './core.js';
 import { issueEvent, issueComment, installedRepos } from './issues.js';
 import { alertEvent } from './alerts.js';
+import { untrackedPr } from './tidy.js';
 
 const ACTOR = 'github';
 const OK = new Set(['success', 'neutral', 'skipped']);
@@ -58,7 +59,8 @@ function pullRequest(hub, p, body) {
   const old = hub.q('SELECT * FROM prs WHERE project_id = ? AND repo IN (?, ?) AND number = ? ORDER BY repo DESC').get(p.id, full, `github.com/${full}`.toLowerCase(), pr.number);
   const repo = old?.repo ?? full;
   const item = old ? hub.itemById(old.item_id) : itemFor(hub, p, pr);
-  if (!item) return { ignored: 'no matching item' };
+  // No item tracks it: on record for the next tidy job to attach (#202).
+  if (!item) return untrackedPr(hub, p, full, pr, state);
   hub.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (project_id, repo, number) DO UPDATE SET url = excluded.url, title = excluded.title, state = excluded.state,
         head_ref = excluded.head_ref, head_sha = excluded.head_sha, updated_at = excluded.updated_at`)

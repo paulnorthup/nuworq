@@ -1,0 +1,95 @@
+// Agents keep the groups true (#202). The hub notices drift and opens one "tidy" item per project, which next
+// offers as mode "tidy" at priority soon, one at a time. Drift is: open work in no group (once the project has
+// groups at all), two groups whose open
+// parts touch the same files, a group whose parts are all finished while it is still open, and a pull request
+// no item tracks. The agent moves items (refine parent), merges or creates groups, closes finished ones, and
+// attaches stray pull requests (refine pr); it never changes a priority a person set. Submitting the tidy job
+// finishes it. What an agent looked at and left alone isn't raised again: a new tidy job opens only for drift
+// the last one didn't already list.
+import { SYSTEM } from './core.js';
+
+const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+const OPEN = "stage NOT IN ('done', 'dropped')";
+// The hub's own work items aren't anyone's to group.
+const OWN = "sweep = 0 AND tidy = ''";
+
+// What drifted in this project now: [{ key, kind, text }], most actionable first.
+export function drift(hub, p) {
+  const items = hub.q(`SELECT * FROM items WHERE project_id = ? AND ${OWN}`).all(p.id);
+  const kids = new Map();
+  for (const i of items) if (i.parent_id) kids.set(i.parent_id, [...(kids.get(i.parent_id) ?? []), i]);
+  const open = (i) => !['done', 'dropped'].includes(i.stage);
+  const groups = items.filter((i) => open(i) && kids.has(i.id));
+  const out = [];
+
+  for (const g of groups) {
+    if (kids.get(g.id).every((k) => !open(k))) {
+      out.push({ key: `finished:${g.seq}`, kind: 'finished', text: `#${g.seq} "${g.title}" is still ${g.stage}, but all its parts are done or dropped: submit it or close it.` });
+    }
+  }
+  // Files each group's open parts are changing (what their holders said in progress touching).
+  const touched = groups.map((g) => ({ g, paths: new Set(kids.get(g.id).filter(open).flatMap((k) => json(k.touching, []))) }));
+  for (let a = 0; a < touched.length; a++) {
+    for (let b = a + 1; b < touched.length; b++) {
+      const both = [...touched[a].paths].filter((x) => touched[b].paths.has(x));
+      if (both.length) {
+        const [x, y] = [touched[a].g, touched[b].g];
+        out.push({ key: `overlap:${x.seq}:${y.seq}`, kind: 'overlap', text: `#${x.seq} "${x.title}" and #${y.seq} "${y.title}" both change ${both.slice(0, 3).join(', ')}${both.length > 3 ? ', …' : ''}: merge them, or move the shared work into one.` });
+      }
+    }
+  }
+  for (const r of hub.q(`SELECT * FROM untracked_prs WHERE project_id = ? AND state = 'open' ORDER BY number`).all(p.id)) {
+    out.push({ key: `pr:${r.repo}#${r.number}`, kind: 'pr', text: `PR ${r.repo}#${r.number} "${r.title}" (branch ${r.head_ref || '?'}) belongs to no item: attach it (refine an item with pr: "${r.repo}#${r.number}"), or propose an item for it first.` });
+  }
+  // Loose work counts only once the project steers by groups: until then nothing is out of place.
+  for (const i of groups.length ? items : []) {
+    if (['ready', 'proposed'].includes(i.stage) && !i.parent_id && !kids.has(i.id)) {
+      out.push({ key: `ungrouped:${i.seq}`, kind: 'ungrouped', text: `#${i.seq} "${i.title}" (${i.stage}) is in no group: move it into one (refine parent), or start a group for it and its kin.` });
+    }
+  }
+  return out;
+}
+
+// The project's open tidy item, if any.
+export const openTidy = (hub, p) => hub.q(`SELECT * FROM items WHERE project_id = ? AND tidy != '' AND ${OPEN} LIMIT 1`).get(p.id);
+
+const SUMMARY = (found) => `The groups drifted. Put them right:\n${found.map((d) => `- ${d.text}`).join('\n')}`;
+const ACCEPTANCE = [
+  '- Each drift listed is fixed, or left alone on purpose with the reason in your submit.',
+  '- Every change is made with refine and a one-line reason (reason), so the affected groups\' history says why.',
+  '- No priority a person set is changed, and no decision is touched.',
+].join('\n');
+
+// Opens a tidy job when there is drift the last one didn't list, or brings the waiting one up to date. Called
+// before next picks work, so a seeded drift is offered at once. Returns the open tidy item, if any.
+export function tidyUp(hub, p) {
+  if (p.parked) return null;
+  const found = drift(hub, p);
+  const keys = found.map((d) => d.key);
+  const cur = openTidy(hub, p);
+  if (cur) {
+    // Not yet claimed: it says what has drifted now. Nothing left: it isn't needed any more.
+    if (!cur.holder && cur.stage === 'ready') {
+      if (!found.length) { hub.move(cur, 'dropped', SYSTEM); return null; }
+      hub.patch(cur, { summary: SUMMARY(found), tidy: JSON.stringify(keys) });
+    }
+    return cur;
+  }
+  if (!found.length) return null;
+  const last = hub.q(`SELECT tidy FROM items WHERE project_id = ? AND tidy != '' ORDER BY id DESC LIMIT 1`).get(p.id);
+  const seen = new Set(json(last?.tidy, []));
+  if (keys.every((k) => seen.has(k))) return null;
+  const it = hub.createItem(p, SYSTEM, { title: `Keep ${p.name}'s groups true`, summary: SUMMARY(found), acceptance: ACCEPTANCE, priority: 'soon' });
+  hub.patch(it, { tidy: JSON.stringify(keys) });
+  if (it.stage !== 'ready') hub.move(it, 'ready', SYSTEM);
+  return it;
+}
+
+// A pull request no item tracks, on record for the next tidy job (or its update). In the webhook's transaction.
+export function untrackedPr(hub, p, repo, pr, state) {
+  hub.q(`INSERT INTO untracked_prs (project_id, repo, number, url, title, head_ref, head_sha, state, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (project_id, repo, number) DO UPDATE SET url = excluded.url, title = excluded.title, head_ref = excluded.head_ref,
+        head_sha = excluded.head_sha, state = excluded.state, updated_at = excluded.updated_at`)
+    .run(p.id, repo, pr.number, pr.html_url ?? '', pr.title ?? '', pr.head?.ref ?? '', pr.head?.sha ?? '', state, hub.now());
+  return { untracked: true, pr: pr.number, state };
+}
