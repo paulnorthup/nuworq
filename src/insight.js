@@ -389,10 +389,14 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const claimable = readyFree.length + shapeable.length;
   // Capacity (#173): work someone holds, a claim in the last 30 minutes, or a runner up for this project. An
   // agent that only checked in, looked, asked or commented isn't working on anything. A runner that asked where
-  // work is in the last few minutes is about to start a worker, even before its first report (#185).
+  // work is in the last few minutes is about to start a worker, even before its first report (#185). Once a runner
+  // here is reporting, its report decides: one that skips this project or paused itself still polls, but no
+  // worker is coming, and #173 says why.
   const claimedLately = !!hub.q(`SELECT 1 FROM events WHERE project_id = ? AND at > ? AND type IN (${CLAIM_TYPES.map(() => '?').join(',')}) LIMIT 1`).get(p.id, t - 30 * MIN, ...CLAIM_TYPES);
-  const onDuty = !!p.runner && t - (p.runner_polled_at ?? 0) < RUNNER_ON_DUTY;
-  const capacity = items.some((i) => i.holder) || racers.length > 0 || claimedLately || onDuty || hub.runnersOf(p).some((r) => r.state === 'up');
+  const runners = hub.runnersOf(p);
+  const reporting = runners.some((r) => ['up', 'skipping', 'paused'].includes(r.state));
+  const onDuty = !!p.runner && !reporting && t - (p.runner_polled_at ?? 0) < RUNNER_ON_DUTY;
+  const capacity = items.some((i) => i.holder) || racers.length > 0 || claimedLately || onDuty || runners.some((r) => r.state === 'up');
   // Starting an agent is no answer for work only an operator can do (#137): that waits quietly, above.
   const generic = (i) => !json(i.needs, []).some((tag) => OPERATOR_TAGS.includes(tag));
   const anyoneReady = readyFree.filter(generic).length;

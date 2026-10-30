@@ -29,4 +29,21 @@ describe('a project nuworq run staffs', () => {
     hub.humanOp('staffed', 'settings', { runner: false });
     assert.deepEqual(noAgents('staffed'), ['act'], 'no longer staffed by run: its old poll means nothing');
   });
+
+  test("once the runner reports, its report decides: one that skips the project still polls, and #173 says why", () => {
+    const hub = new Hub({ clock: () => Date.UTC(2026, 9, 30, 9) });
+    hub.tx(() => hub.project('p', { create: true }));
+    hub.humanOp('p', 'create', { title: 'Do it', acceptance: 'x' });
+    hub.humanOp('p', 'settings', { runner: true });
+    const idle = () => view(hub, 'p').attention.find((a) => a.kind === 'no-agents');
+    hub.reportRunner({ name: 'mini', machine: 'mini.local', workers: 1, skipping: [{ project: 'p', reason: "couldn't fetch origin" }] });
+    hub.route('', { runner: true });
+    assert.equal(idle()?.cause, 'skipping', 'its poll is no worker on the way');
+    hub.reportRunner({ name: 'mini', machine: 'mini.local', workers: 1, paused: { until: hub.now() + 5 * MIN, reason: '3 workers failed' } });
+    hub.route('', { runner: true });
+    assert.equal(idle()?.cause, 'paused');
+    hub.reportRunner({ name: 'mini', machine: 'mini.local', workers: 1, stopped: 'interrupted' });
+    hub.route('', { runner: true });
+    assert.equal(idle(), undefined, 'a runner polling again after it stopped, before its first report, is on duty');
+  });
 });
