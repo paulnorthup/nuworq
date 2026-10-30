@@ -744,6 +744,17 @@ export class Hub extends EventEmitter {
     return this.q(`SELECT i.* FROM deps d JOIN items i ON i.id = d.depends_on WHERE d.item_id = ? ORDER BY i.seq`).all(item.id);
   }
 
+  // The landed item a fix names (#176): only work that reached main can escape. '' or 'none' clears it (null).
+  fixesOf(p, ref, self = null) {
+    if (ref == null || ['', 'none'].includes(str(ref).toLowerCase())) return null;
+    const target = this.item(p, ref);
+    if (self && target.id === self.id) throw new UserError(`#${self.seq} can't fix itself`, { hint: 'fixes names the landed item this one repairs.' });
+    if (target.stage !== 'done') {
+      throw new UserError(`#${target.seq} is ${target.stage}, not landed`, { hint: "fixes is for repairing work that already landed on main. For work that hasn't, comment on it or send it back." });
+    }
+    return target;
+  }
+
   // What must finish first: explicit dependencies, and an umbrella item's own children.
   unmetDeps(item) {
     const deps = this.deps(item).filter((d) => !['done', 'dropped'].includes(d.stage));
@@ -1028,6 +1039,7 @@ export class Hub extends EventEmitter {
       parent: parent ? `#${parent.seq} ${parent.title}` : undefined,
       children: children.length ? children.map((c) => `#${c.seq} [${c.stage}] ${c.title}`) : undefined,
       depends_on: (() => { const d = this.deps(item); return d.length ? d.map((x) => `#${x.seq} [${x.stage}] ${x.title}`) : undefined; })(),
+      fixes: (() => { const f = item.fixes && this.itemById(item.fixes); return f ? `#${f.seq} ${f.title} (landed; this repairs it)` : undefined; })(),
       questions: questions.length ? questions.map((q) => ({
         question: q.question, status: q.status, blocking: !!q.blocking,
         assumption: q.assumption || undefined, answer: q.answer || undefined,
@@ -2202,8 +2214,9 @@ Object.assign(Hub.prototype, {
     this.q('UPDATE projects SET next_seq = next_seq + 1 WHERE id = ?').run(p.id);
     const needs = JSON.stringify(normTags(args.needs));
     const size = SIZES.includes(args.size) ? args.size : '';
-    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t);
+    const fixes = this.fixesOf(p, args.fixes);
+    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at, fixes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t, fixes?.id ?? null);
     const item = this.itemById(Number(r.lastInsertRowid));
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
     this.setDeps(p, item, args.depends_on);
@@ -2254,6 +2267,10 @@ Object.assign(Hub.prototype, {
       changed.push(`needs → ${normTags(args.needs).join(', ') || 'nothing'}`);
     }
     if (args.size != null && (SIZES.includes(args.size) || args.size === '') && args.size !== item.size) { set.size = args.size; changed.push(`size → ${args.size || 'unset'}`); }
+    if (args.fixes != null) {
+      const fixes = this.fixesOf(p, args.fixes, item);
+      if ((fixes?.id ?? null) !== item.fixes) { set.fixes = fixes?.id ?? null; changed.push(fixes ? `fixes #${fixes.seq}` : 'fixes nothing'); }
+    }
     if (args.repo != null) {
       const repo = this.checkRepo(p, args.repo);
       if (repo !== item.repo) {

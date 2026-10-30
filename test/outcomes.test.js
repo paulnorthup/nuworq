@@ -78,12 +78,12 @@ describe('GET /api/p/<project>/outcomes', () => {
       ['#4', 'dropped', 0, 0, null, null, null],
     ], 'the item finished 40 days ago is outside the window');
     const two = body.items[0];
-    assert.deepEqual(Object.keys(two).sort(), ['attempts', 'cycle_ms', 'done_at', 'implementer', 'item', 'model', 'outcome', 'repo', 'sent_back', 'size', 'stalls', 'title', 'usage']);
+    assert.deepEqual(Object.keys(two).sort(), ['attempts', 'cycle_ms', 'done_at', 'escaped', 'fixed_by', 'implementer', 'item', 'model', 'outcome', 'overturned', 'repo', 'reviewer', 'reviewer_model', 'sent_back', 'size', 'stalls', 'title', 'usage']);
     assert.deepEqual(two.usage, [{ agent: 'opus', model: 'claude-opus-5-5', source: 'agent', input_tokens: 1000, output_tokens: 100, cost_usd: 0.5 }]);
     assert.deepEqual(body.by_model, [
-      { model: 'claude-opus-5-5', landed: 1, dropped: 0, sent_back: 1, stalls: 0, median_cycle_ms: 3 * HOUR, input_tokens: 1000, output_tokens: 100, cost_usd: 0.5 },
-      { model: 'qwen3:8b', landed: 1, dropped: 0, sent_back: 0, stalls: 1, median_cycle_ms: 5 * HOUR, input_tokens: 5000, output_tokens: 500, cost_usd: null },
-      { model: null, landed: 0, dropped: 1, sent_back: 0, stalls: 0, median_cycle_ms: null, input_tokens: 0, output_tokens: 0, cost_usd: null },
+      { model: 'claude-opus-5-5', landed: 1, dropped: 0, sent_back: 1, stalls: 0, escapes: 0, median_cycle_ms: 3 * HOUR, input_tokens: 1000, output_tokens: 100, cost_usd: 0.5 },
+      { model: 'qwen3:8b', landed: 1, dropped: 0, sent_back: 0, stalls: 1, escapes: 0, median_cycle_ms: 5 * HOUR, input_tokens: 5000, output_tokens: 500, cost_usd: null },
+      { model: null, landed: 0, dropped: 1, sent_back: 0, stalls: 0, escapes: 0, median_cycle_ms: null, input_tokens: 0, output_tokens: 0, cost_usd: null },
     ]);
   });
 

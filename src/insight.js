@@ -7,6 +7,7 @@ import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, dur, providerOf, M
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
+import { verification } from './outcomes.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -605,7 +606,17 @@ function flowStats(hub, p, items, t) {
     median_cycle: median ? dur(median) : null,
     takeaway,
     cost: costStats(hub, p, from),
+    verification: verificationStats(hub, p, items, from),
   };
+}
+
+// Whether verification held up for work that landed in the window (#176): escapes (a later item fixes it) and
+// peer verdicts a person overturned, per model as builder and as reviewer. Null until something landed.
+function verificationStats(hub, p, items, from) {
+  const landed = items.filter((i) => i.stage === 'done' && i.stage_since > from);
+  if (!landed.length) return null;
+  const modelOf = (agent) => (agent ? hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model || null : null);
+  return verification(hub, landed, modelOf);
 }
 
 // What finished work cost over the window, per model: median and total per finished item, tokens too
@@ -679,6 +690,9 @@ export function itemView(hub, slug, ref) {
     parent: parent ? { item: `#${parent.seq}`, title: parent.title, stage: parent.stage } : null,
     children: hub.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(it.id).map((c) => ({ item: `#${c.seq}`, title: c.title, stage: c.stage })),
     depends_on: hub.deps(it).map((d) => ({ item: `#${d.seq}`, title: d.title, stage: d.stage })),
+    // Escapes (#176): the landed item this one repairs, and the later items that repair this one.
+    fixes: (() => { const f = it.fixes && hub.itemById(it.fixes); return f ? { item: `#${f.seq}`, title: f.title } : null; })(),
+    fixed_by: hub.q('SELECT seq, title, stage FROM items WHERE fixes = ? ORDER BY seq').all(it.id).map((f) => ({ item: `#${f.seq}`, title: f.title, stage: f.stage })),
     evidence: submit?.data?.evidence ?? [], git: submit?.data?.git ?? null, git_warning: gitWarning(submit?.data?.git), submission: submit ?? null,
     prs: prsOf(hub, p, it),
     questions, steers, lifecycle,

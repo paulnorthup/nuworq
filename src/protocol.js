@@ -6,6 +6,7 @@ const ITEM = s('Item reference, e.g. "#12" or "12".');
 const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Optional. Files or directories you are changing, e.g. ["src/db", "src/api/tags.ts"]. Other agents are warned before they collide with you, and you with them.' };
 const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Optional. What an agent\'s machine must have to do it, e.g. ["docker"], ["linux-vm"], ["browser"], ["gpu"]. Only agents that declared these tags (checkin `has`) are offered it.' };
 const SIZE = { type: 'string', enum: ['small', 'large'], description: 'Optional. "large": multi-step work; small models get it only when nothing else fits.' };
+const FIXES = s('Optional. The landed item this repairs, e.g. "#12": a bug in it or something it missed. That item counts as an escape.');
 const USAGE = {
   type: 'object',
   description: 'Optional. What this work cost so far, if your client tells you: tokens and dollars since your last report on this item. Leave it out if a runner started you; it records usage itself.',
@@ -136,6 +137,7 @@ export const OPS = [
       priority: { type: 'string', enum: ['now', 'soon', 'later'], description: 'Default "soon".' },
       parent: { ...ITEM, description: 'Optional. The item this is part of.' },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Items that must be done first.' },
+      fixes: FIXES,
       needs: NEEDS,
       size: SIZE,
       repo: REPO,
@@ -154,6 +156,7 @@ export const OPS = [
       acceptance: s('Optional. What done means.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
+      fixes: { ...FIXES, description: `${FIXES.description} "" clears it.` },
       needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
       size: SIZE,
       repo: REPO,
@@ -324,7 +327,7 @@ Hub: ${url} · project: ${project} (change with --project).
    - Does a person have to do something (not just decide)? Give \`steps\`: in order, each with what to do (exact values), \`where\` (the URL or command) and \`check\` (how they see it worked), e.g. \`[{ "do": "Open the repository's Actions secrets", "where": "https://github.com/acme/api/settings/secrets/actions" }, { "do": "Click New repository secret, name it NPM_TOKEN, paste the token", "check": "NPM_TOKEN is listed" }]\`. The hub refuses such a question without them. Escalations too.
 5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it. Every item has its own branch, cut from the latest main (the claim names it), so it can land on its own. If you're told main moved, rebase early.
 6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for.
-7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item.
+7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item. When it repairs work that already landed (a bug in it, something it missed), set \`fixes\` to that item, on ${c('propose')} or ${c('refine')}: the hub counts the landed item as an escape, so everyone can see how well verification holds up.
 8. Leaving? ${c('signoff')}.
 
 ## Operators
