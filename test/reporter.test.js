@@ -199,7 +199,7 @@ describe('on a shared hub, ask to: "reporter" uses only its own organization\'s 
       const bravo = await ask('bravo');
       assert.equal(bravo.status, 200, JSON.stringify(bravo.body));
       assert.equal(bravo.comments, 0, "nothing posted through alpha's installation");
-      assert.match(JSON.stringify(bravo.body.github), /another organization/);
+      assert.match(JSON.stringify(bravo.body.github), /another workspace/);
     } finally {
       server.close();
       gh.server.close();

@@ -70,7 +70,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 }
 .rail-version { font-size: 11px; color: var(--faint); padding: 6px 8px 0; font-variant-numeric: tabular-nums; }
 .rail-version a { color: inherit; }
-/* The organization switcher (hubs with organizations): this one, the others, and a new one. */
+/* The workspace switcher (hubs with workspaces): this one, the others, and a new one. */
 .org-switch { position: relative; margin: -6px 0 4px; }
 .org-switch summary { list-style: none; display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 7px; cursor: pointer; font-weight: 600; }
 .org-switch summary::-webkit-details-marker { display: none; }
@@ -421,7 +421,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   .rail-label, .rail-foot { display: none; }
   .rail-item { width: auto; }
   .org-switch { margin: 0; }
-  #rail { overflow: visible; } /* so the organization menu can drop over the page */
+  #rail { overflow: visible; } /* so the workspace menu can drop over the page */
   .org-menu { right: auto; }
   #main { padding: 18px 16px 60px; }
   .phead { flex-direction: column; gap: 10px; }

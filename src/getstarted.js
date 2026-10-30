@@ -20,7 +20,7 @@ export function getStarted(s) {
       ? (s.canCreateApp ? { label: 'Create the GitHub App', href: 'api/github/app/new' } : { label: askFor(s), note: true })
       : (s.installUrl ? { label: 'Install the GitHub App', href: s.installUrl } : { label: 'Install the GitHub App', ui: 'connect' });
   const steps = [
-    s.workspaces && { key: 'org', label: 'Create your organization', done: !!s.org, action: { label: 'Create your organization', href: s.root || '/' } },
+    s.workspaces && { key: 'org', label: 'Create your workspace', done: !!s.org, action: { label: 'Create your workspace', href: s.root || '/' } },
     { key: 'project', label: 'Add a project', done: !!s.project, action: { label: '+ Project', ui: 'new-project' } },
     s.project && { key: 'repo', label: 'Link a project to its repository', done: !!s.repo, action: { label: '+ repo', ui: 'link-repo', slug: s.recent } },
     s.github !== false && { key: 'github', label: 'Connect GitHub', done: s.app === 'installed', action: github },
