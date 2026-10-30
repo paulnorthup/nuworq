@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { Hub, HOUR, MIN, DAY } from '../src/core.js';
+import { Hub, HOUR, MIN, DAY, answerQuestion } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { outcomes, humanCost } from '../src/outcomes.js';
 
@@ -85,5 +85,67 @@ describe('what work costs you (#175)', () => {
     assert.equal(y.actions, 1, 'setting the autonomy is a steer, and counts');
     assert.equal(y.landed, 1);
     assert.equal(y.per_landed, 1);
+  });
+});
+
+// The wait counts each act-level Needs you entry from when it reached you to when a person resolved it.
+describe('how long what needed you waited (#175)', () => {
+  function hubAt(autonomy) {
+    let t = Date.UTC(2026, 9, 20, 9);
+    const hub = new Hub({ clock: () => t });
+    hub.tx(() => hub.project('p', { create: true }));
+    hub.humanOp('p', 'settings', { autonomy });
+    const cost = () => humanCost(hub, hub.project('p'), t - 14 * DAY);
+    return { hub, tick: (ms) => (t += ms), now: () => t, cost, human: (op, args) => hub.humanOp('p', op, args), agent: (op, name, args = {}) => hub.agentOp('p', op, name, args) };
+  }
+
+  test("under 'ask', a proposal waits from when it was shaped, not while an agent shaped it", () => {
+    const { tick, cost, human, agent } = hubAt('ask');
+    human('create', { title: 'Runner', stage: 'proposed' });
+    agent('checkin', 'w1');
+    tick(2 * HOUR);
+    agent('next', 'w1');
+    tick(15 * MIN);
+    agent('submit', 'w1', { item: '#1', headline: 'Scoped', acceptance: 'Starts workers' });
+    tick(HOUR);
+    human('update', { item: '#1', stage: 'ready' });
+    assert.deepEqual([cost().waits, cost().median_wait_ms], [1, HOUR]);
+  });
+
+  test("a blocking question that parks nothing still waited for you: one with no item", () => {
+    const { tick, cost, human, agent } = hubAt('full');
+    agent('checkin', 'w1');
+    agent('ask', 'w1', { question: 'Which region do we deploy to?', blocking: true });
+    tick(2 * HOUR);
+    human('answer', { question: 1, answer: 'eu-west' });
+    assert.deepEqual([cost().waits, cost().median_wait_ms], [1, 2 * HOUR]);
+  });
+
+  test("a reporter's question reaches you only after reporter_wait; one the reporter answered never did", () => {
+    const { hub, tick, now, cost, human } = hubAt('full');
+    const p = hub.project('p');
+    const ask = () => Number(hub.q(`INSERT INTO questions (project_id, asked_by, question, blocking, at, reporter) VALUES (?, 'w1', 'CSV or PDF?', 1, ?, 'alice')`).run(p.id, now()).lastInsertRowid);
+    const mine = ask();
+    const theirs = ask();
+    tick(2 * HOUR);
+    hub.tx(() => answerQuestion(hub, p, { question: theirs, answer: 'CSV' }, '@alice'));
+    tick(p.reporter_wait * HOUR - HOUR);
+    human('answer', { question: mine, answer: 'PDF' });
+    assert.deepEqual([cost().waits, cost().median_wait_ms], [1, HOUR]);
+  });
+
+  test("an operator's escalation waits from when it was escalated, and answering it is one action", () => {
+    const { tick, cost, human, agent } = hubAt('full');
+    human('create', { title: 'Migrate', acceptance: 'migrated' });
+    agent('checkin', 'w1');
+    agent('next', 'w1');
+    agent('ask', 'w1', { item: '#1', question: 'May I drop the old table?', to: 'operator', blocking: true });
+    agent('checkin', 'op', { has: ['operator'] });
+    tick(3 * HOUR);
+    agent('ask', 'op', { escalates: 1, question: 'Drop the old orders table?', evidence: [{ label: 'dry run: 1 table dropped' }] });
+    tick(HOUR);
+    human('answer', { question: 2, answer: 'yes' });
+    const c = cost();
+    assert.deepEqual([c.waits, c.median_wait_ms, c.actions], [1, HOUR, 2], 'the autonomy steer and the one answer');
   });
 });

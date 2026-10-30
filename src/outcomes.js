@@ -1,6 +1,6 @@
 // What finished work came to, for other tools to read (GET /api/p/<project>/outcomes; documented in
 // docs/API.md, which is the contract). Built only from what the hub already records.
-import { HUMAN, courtOf, isHuman, isSystem } from './core.js';
+import { HUMAN, HOUR, isHuman, isSystem } from './core.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 export const OUTCOMES_VERSION = 1;
@@ -57,31 +57,55 @@ export function verification(hub, landed, modelOf) {
 }
 
 // What work costs a person (#175): each answer, verdict, steer, decision, comment and confirmation they made,
-// as the events already record them. The steer an override writes beside its answer is the same action.
+// as the events already record them. The steer an override writes beside its answer is the same action, and
+// so is the answer an escalation's answer gives the operator question it carried up.
 export const HUMAN_ACTIONS = ['answered', 'accepted', 'sent_back', 'steer', 'decision', 'comment', 'assumption_confirmed'];
 const PERSON = (col = 'actor') => `(${col} = '${HUMAN}' OR ${col} LIKE '@%')`;
 const ACTIONS = `e.type IN (${HUMAN_ACTIONS.map((t) => `'${t}'`).join(', ')}) AND ${PERSON('e.actor')}
   AND NOT (e.type = 'steer' AND e.headline LIKE '%: Change of course%'
-    AND EXISTS (SELECT 1 FROM events a WHERE a.type = 'answered' AND a.actor = e.actor AND a.at = e.at AND a.project_id = e.project_id))`;
+    AND EXISTS (SELECT 1 FROM events a WHERE a.type = 'answered' AND a.actor = e.actor AND a.at = e.at AND a.project_id = e.project_id))
+  AND NOT (e.type = 'answered'
+    AND EXISTS (SELECT 1 FROM questions x WHERE x.escalates = json_extract(e.data, '$.question') AND x.answered_at = e.at))`;
 
 // A person's actions on one item, ever.
 export const humanActionsOn = (hub, item) => hub.q(`SELECT COUNT(*) AS n FROM events e WHERE e.item_id = ? AND ${ACTIONS}`).get(item.id).n;
 
-// Over (from, to]: the person actions, the items that landed, actions per landed item, and how long work sat
-// in your court (waiting on your answer, verifying by you, proposed for your approval: as Flow counts it)
-// until you moved it on. Waits ended by an agent or an operator aren't yours to count.
+// How long act-level Needs you entries (src/insight.js) waited until a person resolved them, for those resolved
+// in (from, to], each from when it reached you: a blocking question to you (a reporter's once the hub asks you
+// instead; an operator's only as its escalation), a review while agents don't review, a shaped proposal under
+// 'ask'. Entries an agent or operator resolved aren't yours to count.
+function waitsForYou(hub, p, from, to) {
+  const waits = [];
+  const qs = hub.q(`SELECT at, reporter, answered_by, answered_at FROM questions WHERE project_id = ? AND blocking = 1
+    AND audience != 'operator' AND status = 'answered' AND answered_at > ? AND answered_at <= ?`).all(p.id, from, to);
+  for (const q of qs) {
+    const start = q.reporter ? q.at + p.reporter_wait * HOUR : q.at;
+    if (isHuman(q.answered_by) && q.answered_at > start) waits.push(q.answered_at - start);
+  }
+  if (p.autonomy === 'full') return waits; // agents review, and shaped proposals go straight to ready
+  const rows = hub.q(`SELECT t.item_id, t.stage, t.actor, t.at FROM transitions t WHERE t.item_id IN (SELECT t2.item_id FROM transitions t2
+      JOIN items i ON i.id = t2.item_id WHERE i.project_id = ? AND t2.at > ? AND t2.at <= ?) AND t.at <= ?
+    ORDER BY t.item_id, t.at, t.id`).all(p.id, from, to, to);
+  for (let k = 0; k + 1 < rows.length; k++) {
+    const [a, b] = [rows[k], rows[k + 1]];
+    if (a.item_id !== b.item_id || b.at <= from || !isHuman(b.actor)) continue;
+    if (a.stage === 'verifying') waits.push(b.at - a.at);
+    if (a.stage === 'proposed' && p.autonomy === 'ask') {
+      // It reaches you once shaped; a raw idea you moved on yourself never sat in Needs you.
+      const shaped = hub.q(`SELECT MAX(at) AS at FROM events WHERE item_id = ? AND type = 'shaped' AND at >= ? AND at <= ?`).get(a.item_id, a.at, b.at).at;
+      if (shaped != null) waits.push(b.at - shaped);
+    }
+  }
+  return waits;
+}
+
+// Over (from, to]: the person actions, the items that landed, actions per landed item, and the median wait of
+// what needed you until you resolved it.
 export function humanCost(hub, p, from, to = hub.now()) {
   const actions = hub.q(`SELECT COUNT(*) AS n FROM events e WHERE e.project_id = ? AND e.at > ? AND e.at <= ? AND ${ACTIONS}`).get(p.id, from, to).n;
   const landed = hub.q(`SELECT COUNT(DISTINCT t.item_id) AS n FROM transitions t JOIN items i ON i.id = t.item_id
     WHERE i.project_id = ? AND t.stage = 'done' AND t.at > ? AND t.at <= ?`).get(p.id, from, to).n;
-  const rows = hub.q(`SELECT t.item_id, t.stage, t.actor, t.at FROM transitions t JOIN items i ON i.id = t.item_id
-    WHERE i.project_id = ? AND t.at <= ? ORDER BY t.item_id, t.at, t.id`).all(p.id, to);
-  const waits = [];
-  for (let k = 0; k + 1 < rows.length; k++) {
-    const [a, b] = [rows[k], rows[k + 1]];
-    if (a.item_id !== b.item_id || courtOf(a.stage, p.autonomy) !== 'you' || b.at <= from) continue;
-    if (isHuman(b.actor)) waits.push(b.at - a.at);
-  }
+  const waits = waitsForYou(hub, p, from, to);
   return { actions, landed, per_landed: landed ? Math.round((10 * actions) / landed) / 10 : null, median_wait_ms: median(waits), waits: waits.length };
 }
 

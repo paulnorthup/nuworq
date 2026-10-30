@@ -623,8 +623,8 @@ function verificationStats(hub, p, items, from) {
   return verification(hub, landed, modelOf);
 }
 
-// What the work cost you over the window (#175): your actions per landed item, and how long work you had to
-// act on waited for you (median). The court share above is time work waits on you; this is your effort.
+// What the work cost you over the window (#175): your actions per landed item, and how long act-level Needs you
+// entries waited until you resolved them (median). The court share above is time work waits on you; this is your effort.
 function youStats(hub, p, from, t) {
   const c = humanCost(hub, p, from, t);
   return { actions: c.actions, landed: c.landed, per_landed: c.per_landed, median_wait: c.median_wait_ms == null ? null : dur(c.median_wait_ms), waits: c.waits };
