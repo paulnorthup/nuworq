@@ -357,12 +357,16 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     });
   }
   const claimable = readyFree.length + shapeable.length;
-  if (!p.parked && !direction && claimable && !recentAgents.length) {
+  // Capacity (#173): work someone holds, a claim in the last 30 minutes, or a runner up for this project. An
+  // agent that only checked in, looked, asked or commented isn't working on anything.
+  const claimedLately = !!hub.q(`SELECT 1 FROM events WHERE project_id = ? AND at > ? AND type IN (${CLAIM_TYPES.map(() => '?').join(',')}) LIMIT 1`).get(p.id, t - 30 * MIN, ...CLAIM_TYPES);
+  const capacity = items.some((i) => i.holder) || racers.length > 0 || claimedLately || hub.runnersOf(p).some((r) => r.state === 'up');
+  if (!p.parked && !direction && claimable && !capacity) {
+    const idle = idleCause(hub, p, t);
     push({
       key: `no-agents:${Math.floor(t / (6 * HOUR))}`, level: inFlight ? 'know' : 'act', kind: 'no-agents', at: lastAgentSeen || t,
       headline: readyFree.length ? `${plural(readyFree.length, 'item')} ready, but no agent is working` : `Work is waiting to be shaped, but no agent is working`,
-      sub: lastAgentSeen ? `Last agent activity ${dur(t - lastAgentSeen)} ago` : 'No agent has checked in yet',
-      why: 'Start an agent pointed at this project. Any model works: Claude Code, Codex, or an open-weight model through any MCP client or the plain CLI. Or park the project if it should stay quiet.',
+      sub: idle.sub, why: idle.why, cause: idle.cause, how: idle.how, staff: idle.staff,
       start: true,
     });
   } else if (!p.parked && !claimable && !inFlight && recentAgents.length) {
@@ -534,6 +538,63 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
     stages: STAGES,
     all: items.map(brief),
+  };
+}
+
+// Why nothing is working on a project with claimable work (#173), from what the runners last said (#171): one
+// cause, the one fix, and the steps when a person has to act. cause: no-runner | budget | unstaffed | skipping | paused.
+function idleCause(hub, p, t) {
+  const rs = hub.runnersFor(p.slug);
+  const live = rs.filter((r) => ['up', 'skipping', 'paused'].includes(r.state));
+  const run = 'nuworq run --workers 1';
+  const check = 'Runners, on this project page at 5m, shows it as up within a minute';
+  const budget = rs.find((r) => r.state === 'stopped' && /max-usd/.test(r.stopped ?? ''));
+  if (!live.length && budget) {
+    return {
+      cause: 'budget', sub: `${budget.name} stopped ${budget.last_seen} ago: ${budget.stopped}`,
+      why: `The runner on ${budget.machine || budget.name} stopped because it spent its budget (--max-usd). Start it again with a higher budget, or wait and start it tomorrow.`,
+      how: [{ do: `On ${budget.machine || 'that machine'}, start the runner again with a higher budget`, where: `${run} --max-usd 10`, check }],
+    };
+  }
+  if (!live.length) {
+    const last = [...rs].sort((a, b) => b.seen_at - a.seen_at)[0];
+    return {
+      cause: 'no-runner',
+      sub: last ? `No runner is up: ${last.name} was last seen ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''}` : 'No runner has ever reported here',
+      why: `Nothing starts workers for this project: no \`nuworq run\` is up${last ? ` (${last.name} went quiet ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''})` : ''}. Start one, or start an agent yourself. Or park the project if it should stay quiet.`,
+      how: [
+        ...(p.runner ? [] : [{ do: 'Let nuworq run staff this project: click "Let nuworq run staff this project" at the top of this page (5m)', check: 'It reads "Auto-staffed by nuworq run"' }]),
+        { do: `On ${last?.machine || 'a machine connected to this hub'}, start a runner`, where: run, check },
+        { do: 'To keep it going after the terminal closes and across reboots, install it instead', where: `${run} --install` },
+      ],
+    };
+  }
+  if (!p.runner) {
+    return {
+      cause: 'unstaffed', sub: `${plural(live.length, 'runner')} up, but this project isn't staffed`,
+      why: `${live.map((r) => r.name).join(', ')} ${live.length === 1 ? 'is' : 'are'} up, but this project doesn't let \`nuworq run\` start workers. One click lets it.`,
+      how: [{ do: 'Click "Let nuworq run staff this project" on this card', check: 'It reads "Auto-staffed by nuworq run", and Runners shows a worker within a poll' }],
+      staff: true,
+    };
+  }
+  const skipping = live.filter((r) => r.state === 'skipping');
+  if (skipping.length === live.length) {
+    const r = skipping[0];
+    return {
+      cause: 'skipping', sub: `Every runner skips this project: ${r.skipping.reason}`,
+      why: `${skipping.map((x) => x.name).join(', ')} ${skipping.length === 1 ? 'leaves' : 'leave'} this project alone${r.skipping.for ? ` for ${r.skipping.for}` : ''}. ${r.name} said: ${r.skipping.reason}.`,
+      how: [
+        { do: `On ${r.machine || r.name}, fix what the runner said: ${r.skipping.reason}`, where: 'tail ~/.nuworq/logs/run.log', check: 'The runner no longer says it skips this project' },
+        { do: 'Wait one poll (30 seconds by default)', check },
+      ],
+    };
+  }
+  const paused = live.filter((r) => r.state === 'paused');
+  const r = paused[0] ?? live[0];
+  return {
+    cause: 'paused', sub: `Runners paused: ${r.paused?.reason ?? 'they paused themselves'}`,
+    why: `${paused.map((x) => x.name).join(', ')} paused ${paused.length === 1 ? 'itself' : 'themselves'}${r.paused ? ` for ${r.paused.for}` : ''}: ${r.paused?.reason ?? 'workers kept failing'}. ${paused.length === 1 ? 'It starts' : 'They start'} again on ${paused.length === 1 ? 'its' : 'their'} own after that; if it keeps happening, the workers' logs say why.`,
+    how: [{ do: `On ${r.machine || r.name}, read the last worker's log to see why it failed`, where: 'ls -t ~/.nuworq/logs | head', check: 'The runner shows up again after the pause' }],
   };
 }
 

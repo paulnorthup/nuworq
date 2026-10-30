@@ -62,7 +62,9 @@ describe('the home: what needs you across every project', () => {
 
   test('the pulse is the most urgent unparked state; nothing needing you has no needs at all', () => {
     const { hub, advance } = setup();
-    for (const p of ['p1', 'p2']) hub.agentOp(p, 'checkin', 'idler', {});
+    // A runner is up for both, so nobody needs to start anything (#173: checking in alone isn't capacity).
+    for (const p of ['p1', 'p2']) hub.humanOp(p, 'settings', { runner: true }, '@o');
+    hub.reportRunner({ name: 'mini', machine: 'mini.local', workers: 1 });
     let h = homeView(hub, { viewer: '@a' });
     assert.equal(h.pulse.state, 'stalled', 'ready work, nobody on it');
     assert.equal(h.pulse.sentence, 'Nothing needs you. Nothing is moving: work is waiting in 2 projects.');
