@@ -561,6 +561,7 @@ main.admin { padding-top: 24px; }
 .admin-filter { display: flex; width: 100%; margin-bottom: 14px; }
 .admin-filter button { flex: 1; min-height: 44px; font-size: 13.5px; }
 .admin-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.admin-card.focus { border-color: var(--you); box-shadow: 0 0 0 2px var(--you-tint); }
 .admin-card .h { font-weight: 560; }
 .admin-card p { margin: 4px 0; }
 .admin-card .s { color: var(--muted); }

@@ -8,6 +8,7 @@ const ago = (t) => {
 };
 const STATES = [['new', 'New'], ['approved', 'Approved'], ['declined', 'Declined'], ['', 'All']];
 let state = 'new';
+const focus = Number(new URLSearchParams(location.search).get('request')) || 0; // the request a push linked to (#167)
 const links = new Map(); // request id → the link its approval gave, shown until the page is left
 
 async function api(path, body) {
@@ -51,13 +52,19 @@ async function load() {
   const list = $('#list');
   try {
     const { requests } = await api(`/api/early-access?state=${encodeURIComponent(state)}`);
+    // The linked request was decided already: show everything, so it is still there to see.
+    if (focus && state && !requests.some((r) => r.id === focus) && !load.widened) {
+      load.widened = true;
+      return document.querySelector('.admin-filter button[data-state=""]').click();
+    }
     list.innerHTML = requests.length ? requests.map(card).join('') : `<p class="faint">${state === 'new' ? 'No new requests.' : 'Nothing here.'}</p>`;
+    document.getElementById(`request-${focus}`)?.scrollIntoView({ block: 'center' });
   } catch (e) { list.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
 }
 
 function card(r) {
   const link = links.get(r.id);
-  return `<article class="admin-card" data-email="${esc(r.email)}">
+  return `<article class="admin-card${r.id === focus ? ' focus' : ''}" id="request-${r.id}" data-email="${esc(r.email)}">
     <div class="h">${esc(r.email)}${r.github ? ` · <a href="https://github.com/${esc(r.github)}" target="_blank" rel="noopener">@${esc(r.github)}</a>` : ''}</div>
     <p class="s">${esc(r.building) || '<span class="faint">No note.</span>'}</p>
     <p class="faint">Asked ${esc(ago(r.updated_at))}${r.decided_at ? ` · ${esc(r.state)} by ${esc(r.decided_by)} ${esc(ago(r.decided_at))}` : ''}</p>
