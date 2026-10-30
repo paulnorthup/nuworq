@@ -74,9 +74,11 @@ describe('steps on a question', () => {
 });
 
 describe('needsSteps', () => {
-  for (const q of [ACT, 'Could you set up the GitHub App on the org?', 'Please sign in to fly.io and rotate the deploy token', 'Install the plugin on your laptop?', 'Would you click Approve on the PR?'])
+  for (const q of [ACT, 'Could you set up the GitHub App on the org?', 'Please sign in to fly.io and rotate the deploy token', 'Install the plugin on your laptop?', 'Would you click Approve on the PR?', 'Can you confirm the plan, and please add the NPM_TOKEN secret?'])
     test(`acts: ${q}`, () => assert.equal(needsSteps({ question: q }), true));
-  for (const q of ['Should the export be CSV or JSON?', 'Is it OK to drop the legacy table?', 'Which name do you prefer, Flow or Lifecycle?'])
+  for (const q of ['Should the export be CSV or JSON?', 'Is it OK to drop the legacy table?', 'Which name do you prefer, Flow or Lifecycle?',
+    'Could you decide whether to add a CSV export?', 'Please choose: should we merge #12 or #13?', 'Can you confirm we should create a new repo?',
+    'Would you approve adding the GitHub App?', 'Is it okay if I run the migration?'])
     test(`decides: ${q}`, () => assert.equal(needsSteps({ question: q }), false));
   test('the context counts too', () => assert.equal(needsSteps({ question: 'Ready to publish?', context: "You'll need to add the NPM_TOKEN secret first." }), true));
 });
