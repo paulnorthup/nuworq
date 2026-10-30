@@ -2326,6 +2326,24 @@ Object.assign(Hub.prototype, {
       const fixes = this.fixesOf(p, args.fixes, item);
       if ((fixes?.id ?? null) !== item.fixes) { set.fixes = fixes?.id ?? null; changed.push(fixes ? `fixes #${fixes.seq}` : 'fixes nothing'); }
     }
+    // Into another group, or out of one ("") (#199): never under itself, never into a finished group.
+    let regroup = null;
+    if (args.parent != null) {
+      const to = str(args.parent) ? this.item(p, args.parent) : null;
+      if ((to?.id ?? null) !== item.parent_id) {
+        for (let a = to; a; a = this.itemById(a.parent_id)) {
+          if (a.id === item.id) {
+            throw new UserError(to.id === item.id ? `#${item.seq} can't be part of itself` : `#${to.seq} is part of #${item.seq}, so #${item.seq} can't go under it`, { hint: `Pick a group outside #${item.seq}, or move #${to.seq} out first.` });
+          }
+        }
+        if (to && ['done', 'dropped'].includes(to.stage)) {
+          throw new UserError(`#${to.seq} is ${to.stage}`, { hint: `Pick an open group for #${item.seq}, or reopen #${to.seq} first.` });
+        }
+        regroup = { from: this.itemById(item.parent_id), to };
+        set.parent_id = to?.id ?? null;
+        changed.push(to ? `part of #${to.seq}` : 'in no group');
+      }
+    }
     if (args.repo != null) {
       const repo = this.checkRepo(p, args.repo);
       if (repo !== item.repo) {
@@ -2366,6 +2384,10 @@ Object.assign(Hub.prototype, {
         summary: set.acceptance ? `Done means: ${set.acceptance}` : '',
       });
     }
+    // Both groups' history says where it went, so a person sees why a group changed.
+    const { from, to } = regroup ?? {};
+    if (from) this.event(p, { item: from, actor, type: 'regrouped', headline: `${You(actor)} moved #${item.seq} out of #${from.seq}${to ? ` into #${to.seq}` : ''}: ${clip(item.title, 80)}` });
+    if (to) this.event(p, { item: to, actor, type: 'regrouped', headline: `${You(actor)} moved #${item.seq} into #${to.seq}${from ? ` from #${from.seq}` : ''}: ${clip(item.title, 80)}` });
     return changed;
   },
 
