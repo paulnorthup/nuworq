@@ -6,6 +6,7 @@ import { getStartedCard } from './getstarted.js';
 import { homePage, columns } from './home.js';
 import { credit } from './credit.js';
 import { checkChip } from './checks.js';
+import { dotClass } from './timeline.js';
 import { missingProject } from './missing.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
@@ -997,7 +998,7 @@ function renderDrawer() {
     ${it.detail ? `<div class="d-sec"><div class="label">Detail</div>${md(it.detail)}</div>` : ''}
     ${it.usage ? usageTable(it.usage) : ''}
     <div class="d-sec"><div class="label">Timeline <span class="count">${it.events.length} events</span></div><div class="timeline">
-      ${it.events.map((e) => `<div class="tl t-${e.type}">
+      ${it.events.map((e) => `<div class="tl t-${e.type} ${dotClass(e.type, courtOf)}">
         <div class="meta">${who(e.actor)}<span>${esc(e.type.replace('_', ' '))}</span><span>${esc(e.ago)} ago</span></div>
         <div class="h">${esc(e.headline)}</div>
         ${e.summary ? `<div class="sm">${md(e.summary)}</div>` : ''}

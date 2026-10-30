@@ -2,7 +2,7 @@
      --you      the person's move: needs you, waits on you, "You". Not for agents' work, errors or links.
      --agents   agents are on it: active, landing, shaping, working. Not for the brand, links or focus.
      --queue    waiting for an agent: ready, nobody on it yet. Not for anything that needs a person.
-     external   waiting outside the hub (a fact the hub checks): drawn in --muted. Not a state hue of its own.
+     external   waiting outside the hub (a fact the hub checks): drawn --hatch, so it never reads as Ready's grey.
      --ok       finished or passed: done, landed, acknowledged, a check that passed, a completed step. Not "in progress".
      --warn     at risk but not failed: stalled, quiet, lease expired, missing evidence, offline. Not for failures.
      --bad      failed: a failing check, an error. Not for at-risk or waiting.
@@ -31,6 +31,8 @@
   --agents-tint: #edf1ff;
   --queue: #8b9099;
   --queue-tint: #f0f1f3;
+  --hatch: repeating-linear-gradient(135deg, var(--muted) 0 4px, var(--faint) 4px 7px);
+  --hatch-tint: repeating-linear-gradient(135deg, var(--sunken) 0 5px, var(--line-strong) 5px 7px);
   --ok: #2e7d4f;
   --ok-tint: #e8f5ec;
   --warn: #866a00;
@@ -306,6 +308,9 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .stage.court-agents .n { color: var(--agents); }
 .stage.court-you { background: var(--you-tint); }
 .stage.court-you .n { color: var(--you); }
+.stage.court-queue { background: var(--queue-tint); }
+.stage.court-queue .n { color: var(--queue); }
+.stage.court-external { background: var(--hatch-tint); }
 /* Green is finished (#191): Done only. Dropped has no court either, and stays neutral. */
 .stage.stage-done .n { color: var(--ok); }
 .stage.court-backlog { background: transparent; border: 1px dashed var(--line-strong); }
@@ -316,10 +321,11 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .stage-detail .blurb { color: var(--muted); margin-bottom: 6px; }
 .courtbar { display: flex; height: 26px; border-radius: 7px; overflow: hidden; margin-top: 16px; gap: 2px; }
 .courtbar .seg-c { display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 650; color: #fff; min-width: 4px; }
-.seg-c.agents, i.agents { background: var(--agents); }
-.seg-c.queue, i.queue { background: var(--queue); }
-.seg-c.you, i.you { background: var(--you); }
-.seg-c.external, i.external, .lifebar .external { background: var(--muted); }
+/* One token per court (#194): the courtbar, its legend and the lifecycle bar share these rules. */
+.seg-c.agents, i.agents, .lifebar .agents { background: var(--agents); }
+.seg-c.queue, i.queue, .lifebar .queue { background: var(--queue); }
+.seg-c.you, i.you, .lifebar .you { background: var(--you); }
+.seg-c.external, i.external, .lifebar .external { background: var(--hatch); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
 .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
 .takeaway { margin: 12px 0 0; font-size: 14px; }
@@ -352,6 +358,8 @@ table.work tr:hover td { background: var(--sunken); cursor: pointer; }
 .stage-pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--sunken); color: var(--muted); white-space: nowrap; }
 .stage-pill.court-agents { background: var(--agents-tint); color: var(--agents); }
 .stage-pill.court-you { background: var(--you-tint); color: var(--you); }
+.stage-pill.court-queue { background: var(--queue-tint); color: var(--muted); box-shadow: inset 0 0 0 1px var(--queue); }
+.stage-pill.court-external { background: var(--hatch-tint); color: var(--muted); }
 .stage-pill.done { background: var(--ok-tint); color: var(--ok); }
 
 /* ── drawer ── */
@@ -368,10 +376,6 @@ table.work tr:hover td { background: var(--sunken); cursor: pointer; }
 .d-sec ul { margin: 0 0 8px; padding-left: 20px; }
 .lifebar { display: flex; height: 30px; gap: 2px; border-radius: 7px; overflow: hidden; }
 .lifebar span { min-width: 6px; display: flex; align-items: center; padding: 0 6px; font-size: 11px; color: #fff; font-weight: 600; overflow: hidden; white-space: nowrap; }
-.lifebar .agents { background: var(--agents); }
-.lifebar .queue { background: var(--queue); }
-.lifebar .you { background: var(--you); }
-.lifebar .none { background: var(--ok); }
 .life-steps { display: flex; flex-wrap: wrap; gap: 2px 6px; margin-top: 8px; font-size: 12px; color: var(--muted); }
 .life-steps b { color: var(--ink); font-weight: 600; }
 .handoff { background: var(--sunken); border-radius: 8px; padding: 10px 12px; font-size: 13.5px; }
@@ -383,11 +387,14 @@ table.work tr:hover td { background: var(--sunken); cursor: pointer; }
 .timeline { border-left: 2px solid var(--line); margin-left: 6px; padding-left: 16px; }
 .tl { position: relative; padding: 6px 0 8px; }
 .tl::before { content: ''; position: absolute; left: -21px; top: 12px; width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
-.tl.t-submitted::before, .tl.t-accepted::before { background: var(--ok); }
-.tl.t-question::before, .tl.t-sent_back::before, .tl.t-steer::before, .tl.t-answered::before { background: var(--you); }
-.tl.t-claimed::before, .tl.t-progress::before { background: var(--agents); }
-.tl.t-lease_expired::before { background: var(--warn); }
-.tl.t-pr_failed::before, .tl.t-pr_merge_failed::before { background: var(--bad); }
+/* A dot is whose move the item became after the event (#194, web/timeline.js), in the lifecycle bar's tokens. */
+.tl.c-agents::before { background: var(--agents); }
+.tl.c-queue::before { background: var(--queue); }
+.tl.c-you::before { background: var(--you); }
+.tl.c-external::before { background: var(--hatch); }
+.tl.c-ok::before { background: var(--ok); }
+.tl.c-warn::before { background: var(--warn); }
+.tl.c-bad::before { background: var(--bad); }
 .tl .meta { font-size: 12px; color: var(--faint); display: flex; gap: 8px; align-items: baseline; }
 .tl .h { font-weight: 520; }
 .tl .sm { font-size: 13px; color: var(--ink); margin-top: 3px; }
