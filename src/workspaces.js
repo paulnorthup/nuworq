@@ -3,6 +3,7 @@
 // server's Auth on the same db), opened on first use.
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { Hub, UserError } from './core.js';
 import { Directory } from './directory.js';
 
@@ -80,6 +81,31 @@ export class Workspaces {
     if (existsSync(this.file(s))) throw new UserError(`Workspace "${s}" already exists`, { status: 409 });
     new Hub({ file: this.file(s) }).db.close();
     return s;
+  }
+
+  // A single hub's database becomes a workspace (#204): copied whole (projects, items, history, decisions,
+  // field notes, people, tokens) with VACUUM INTO, so a running hub's WAL is included; the original stays where
+  // it is, with a dated copy beside it. Its people with an email become members, so the hub owner finds it on
+  // signing in, and it becomes the root workspace: tokens saved with the hub's root address keep working.
+  // Refuses a taken or reserved name. Returns { workspace, file, backup }.
+  adopt(slug, source) {
+    const s = Workspaces.check(slug);
+    if (existsSync(this.file(s))) throw new UserError(`Workspace "${s}" already exists`, { status: 409, hint: 'Pick another name, or remove that workspace first.' });
+    if (!source || !existsSync(source)) throw new UserError(`No hub database at ${source}`, { status: 404, hint: 'Point --db at the single hub\'s database (default ~/.nuworq/nuworq.db).' });
+    const stamp = new Date(this.clock?.() ?? Date.now()).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const backup = `${source}.before-workspaces-${stamp}`;
+    const src = new DatabaseSync(source);
+    try {
+      src.prepare('VACUUM INTO ?').run(backup);
+      src.prepare('VACUUM INTO ?').run(this.file(s));
+    } finally { src.close(); }
+    const hub = this.get(s); // brings the copy's schema up to date
+    for (const { email } of hub.db.prepare("SELECT email FROM people WHERE email IS NOT NULL AND email != ''").all()) {
+      this.directory.identify(email, 'github');
+      this.directory.join(email, s);
+    }
+    if (!this.directory.rootWorkspace()) this.directory.setRootWorkspace(s);
+    return { workspace: s, file: this.file(s), backup };
   }
 
   // ── plans (#113): Free runs one agent at a time; Pro and Team are unlimited ──

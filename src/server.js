@@ -436,6 +436,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   async function hubRoot(req, res, url, path, { send, deny }) {
     if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', workspaces: true });
     const dir = spaces.directory;
+    // Where the single hub this one grew from lives now (#204), so an old link (/#/p/<slug>/<n>) finds its project.
+    if (req.method === 'GET' && path === '/api/root') {
+      const root = dir.rootWorkspace();
+      return send(200, { workspace: root, address: root ? homeOf(req, root) : null });
+    }
     if (req.method === 'GET' && path === '/api/oauth') {
       return send(200, { providers: sso.list().map((p) => ({ ...p, start: `${authOrigin(req)}/auth/${p.name}/start` })) });
     }
@@ -605,7 +610,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const host = hostname(hostOf(req));
         const sub = baseDomain && host !== rootHost && host.endsWith(`.${baseDomain}`) ? host.slice(0, -baseDomain.length - 1) : null;
         const pre = sub == null ? path.match(/^\/w\/([^/]+)(\/.*)?$/) : null;
-        const slug = sub ?? (pre ? decodeURIComponent(pre[1]) : null);
+        let slug = sub ?? (pre ? decodeURIComponent(pre[1]) : null);
+        // A single hub that became a workspace (#204): agents, runners and the CLI saved its root address, so a
+        // token there is served in place by that workspace (never sent anywhere else). Browsers, which carry
+        // no bearer token, get the hub's own pages.
+        if (slug == null && /^bearer\s/i.test(req.headers.authorization ?? '')) slug = spaces.directory.rootWorkspace();
         if (slug == null) return await hubRoot(req, res, url, path, { send, deny });
         hub = spaces.get(slug);
         if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: nuworq workspace create <name>.');

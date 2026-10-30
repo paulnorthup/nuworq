@@ -990,6 +990,14 @@ async function workspace(pos, flags) {
       return console.log(`${green('Created')} workspace ${bold(s)} (${spaces.file(s)}).
 ${dim(`  Give someone a login: nuworq token create <name> --role human --workspace ${s}`)}`);
     }
+    // A single hub's database becomes a workspace (#204): see "From one hub to workspaces" in DEPLOY.md.
+    if (sub === 'adopt') {
+      const r = spaces.adopt(need(name, '<name>'), resolve(dbPath(flags)));
+      return console.log(`${green('Adopted')} ${dbPath(flags)} as workspace ${bold(r.workspace)} (${r.file}).
+  The original is untouched; a copy from now: ${r.backup}
+  Next: restart the hub with --workspaces (same --data-dir). Agents, runners and the CLI that saved its root
+  address keep working there; people find it at /w/${r.workspace}/${dim(' (or its subdomain with --base-domain)')}.`);
+    }
     if (sub === 'list') {
       const names = spaces.list();
       if (!names.length) return console.log(dim(`No workspaces in ${spaces.dir}. Add one: nuworq workspace create <name>`));
@@ -1010,7 +1018,7 @@ ${dim(`  Give someone a login: nuworq token create <name> --role human --workspa
   } catch (e) {
     throw e.hint || e.status ? new HubError(e.message, { hint: e.hint }) : e;
   }
-  throw new HubError('usage: nuworq workspace create <name> | list | remove <name> | plan <name> <free|unlimited>');
+  throw new HubError('usage: nuworq workspace create <name> | adopt <name> [--db file] | list | remove <name> | plan <name> <free|unlimited>');
 }
 
 // People (the humans, each with a role) are managed on the hub host too, like tokens.
@@ -1189,6 +1197,8 @@ ${bold('Human')}
                                          [--admin-host admin.example.com] (with --public-url): the owners'
                                          dashboard; early-access requests are decided only there
   workspace create|remove <name> | list  manage workspaces on the hub host
+  workspace adopt <name> [--db file]     turn a single hub's database into workspace <name> (a copy is kept);
+                                         tokens saved with the hub's root address keep working there
   notify add ntfy|slack|webhook <url> [--person bea]   push one batched message when something new needs you
                                          (--person: a channel for bea, only what bea owns)
   notify list | remove <id> | test       see, remove or test push channels (run on the hub host)

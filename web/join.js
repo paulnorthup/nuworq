@@ -8,6 +8,12 @@ if (fromLink) { localStorage.setItem(KEY, fromLink); history.replaceState(null, 
 const grant = localStorage.getItem(KEY);
 const step = $('#step');
 
+// A link from before this hub had workspaces (#/p/<slug>/<n>): its project lives in the root workspace now (#204).
+if (location.hash.startsWith('#/p/')) {
+  const { address } = await fetch('/api/root').then((r) => r.json()).catch(() => ({}));
+  if (address) location.replace(`${address}/${location.hash}`);
+}
+
 async function main() {
   const me = await fetch('/api/me').then((r) => (r.ok ? r.json() : null)).catch(() => null);
   if (!me) {
