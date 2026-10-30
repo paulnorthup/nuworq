@@ -1,3 +1,18 @@
+/* The color map (#188): each color means one thing, the same on every screen. Pick by meaning, never by feel.
+     --you      the person's move: needs you, waits on you, "You". Not for agents' work, errors or links.
+     --agents   agents are on it: active, landing, shaping, working. Not for the brand, links or focus.
+     --queue    waiting for an agent: ready, nobody on it yet. Not for anything that needs a person.
+     external   waiting outside the hub (a fact the hub checks): drawn in --muted. Not a state hue of its own.
+     --ok       finished or passed: done, landed, acknowledged, a check that passed, a completed step. Not "in progress".
+     --warn     at risk but not failed: stalled, quiet, lease expired, missing evidence, offline. Not for failures.
+     --bad      failed: a failing check, an error. Not for at-risk or waiting.
+     --ink      the main action and plain emphasis. Carries no state.
+     --p-*      which provider an agent runs on (a 7px mark beside its name), nothing else.
+     --brand    the logo only.
+   Links, focus rings and highlights such as "new" use no state color.
+   test/colors.test.js keeps them apart: the five state colors are at least ΔE76 30 from each other and 4.5:1 on
+   --panel (white text on them too); each provider color is at least ΔE76 30 from every state color and the other
+   providers, and 3:1 on --panel. */
 :root {
   --bg: #f6f5f1;
   --panel: #ffffff;
@@ -17,14 +32,16 @@
   --queue-tint: #f0f1f3;
   --ok: #2e7d4f;
   --ok-tint: #e8f5ec;
-  --warn: #a8670b;
-  --bad: #b42318;
-  --bad-tint: #fdecea;
+  --warn: #866a00;
+  --bad: #c01048;
+  --bad-tint: #fde8ef;
 
-  --p-anthropic: #c96442;
-  --p-openai: #10a37f;
-  --p-open: #7c4dcc;
-  --p-google: #4285f4;
+  --p-anthropic: #bb6655;
+  --p-openai: #669999;
+  --p-open: #9933bb;
+  --p-google: #5588dd;
+
+  --brand: #3b5bdb;
 
   --radius: 10px;
   --shadow: 0 1px 2px rgba(20, 20, 18, .05), 0 2px 8px rgba(20, 20, 18, .04);

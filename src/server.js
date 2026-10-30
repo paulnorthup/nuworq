@@ -70,7 +70,7 @@ const siteCsp = (html) => {
 // login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
 const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>nuworq · ${title}</title><link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/login.css"></head>
-<body><main class="login"><div class="login-card flow-card"><div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--agents)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg><span>nuworq</span></div>
+<body><main class="login"><div class="login-card flow-card"><div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--brand)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg><span>nuworq</span></div>
 <h1>${title}</h1>${body}</div></main></body></html>`;
 const COOKIE = 'nuworq_session';
 const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
