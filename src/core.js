@@ -1461,8 +1461,11 @@ export class Hub extends EventEmitter {
     const large = (x) => (fit.weak && x.item.size === 'large' ? 1 : 0);
     // Work that needs what this agent's machine has goes to it first: few agents can do it, anyone can do the rest.
     const own = (x) => (fit.has && json(x.item.needs, []).length ? 0 : 1);
+    // An operator session takes what only it can do before anything else (#137): anyone can do the rest.
+    const operator = !!fit.has?.includes('operator');
     const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].map(ranked).sort((a, b) =>
       large(a) - large(b) ||
+      (operator ? own(a) - own(b) : 0) ||
       PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       own(a) - own(b) ||
       !!a.sameModel - !!b.sameModel ||
