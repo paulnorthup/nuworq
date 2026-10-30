@@ -155,14 +155,14 @@ describe('the pitch, end to end', () => {
     const routes = async () => {
       assert.ok(polls.length < 200, `${CAPACITY}: the work keeps moving (stuck at ${item().stage})`);
       polls.push(item().stage);
-      // Until #185, the hub can't tell a runner is on duty, so before its first worker checks in Needs you
-      // says no agent is working. From the first launch on, it must hold nothing.
-      if (!n) return hub.route('', { runner: true });
+      // The runner asking is what tells the hub it's on duty (#185), so even before its first worker checks in,
+      // Needs you holds nothing.
+      const r = hub.route('', { runner: true });
       const acts = needs();
-      assert.deepEqual(acts.map((a) => a.kind), [], `${DIRECT}: while work flows, Needs you is empty (stage ${item().stage})`);
+      assert.deepEqual(acts.map((a) => a.kind), [], `${DIRECT}: while work flows, Needs you is empty (stage ${item().stage}, poll ${polls.length})`);
       await w.push();
       assert.deepEqual(w.pushed, [], `${DIRECT}: while work flows, nothing is pushed (stage ${item().stage})`);
-      return hub.route('', { runner: true });
+      return r;
     };
     let n = 0;
     const launch = async (r) => {

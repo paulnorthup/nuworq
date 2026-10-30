@@ -12,6 +12,7 @@ import { OPERATOR_TAGS } from './protocol.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
+const RUNNER_ON_DUTY = 5 * MIN; // a runner that polled this recently is on duty (#185): ten of its default 30s polls
 const CHURN_AGENTS = 3;
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
@@ -387,9 +388,15 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   }
   const claimable = readyFree.length + shapeable.length;
   // Capacity (#173): work someone holds, a claim in the last 30 minutes, or a runner up for this project. An
-  // agent that only checked in, looked, asked or commented isn't working on anything.
+  // agent that only checked in, looked, asked or commented isn't working on anything. A runner that asked where
+  // work is in the last few minutes is about to start a worker, even before its first report (#185). Once a runner
+  // here is reporting, its report decides: one that skips this project or paused itself still polls, but no
+  // worker is coming, and #173 says why.
   const claimedLately = !!hub.q(`SELECT 1 FROM events WHERE project_id = ? AND at > ? AND type IN (${CLAIM_TYPES.map(() => '?').join(',')}) LIMIT 1`).get(p.id, t - 30 * MIN, ...CLAIM_TYPES);
-  const capacity = items.some((i) => i.holder) || racers.length > 0 || claimedLately || hub.runnersOf(p).some((r) => r.state === 'up');
+  const runners = hub.runnersOf(p);
+  const reporting = runners.some((r) => ['up', 'skipping', 'paused'].includes(r.state));
+  const onDuty = !!p.runner && !reporting && t - (p.runner_polled_at ?? 0) < RUNNER_ON_DUTY;
+  const capacity = items.some((i) => i.holder) || racers.length > 0 || claimedLately || onDuty || runners.some((r) => r.state === 'up');
   // Starting an agent is no answer for work only an operator can do (#137): that waits quietly, above.
   const generic = (i) => !json(i.needs, []).some((tag) => OPERATOR_TAGS.includes(tag));
   const anyoneReady = readyFree.filter(generic).length;
