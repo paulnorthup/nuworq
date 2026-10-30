@@ -681,7 +681,7 @@ export function itemView(hub, slug, ref) {
   return {
     item: `#${it.seq}`, title: it.title, summary: it.summary, detail: it.detail, acceptance: it.acceptance,
     stage: it.stage, stage_label: STAGES[it.stage].label, stage_blurb: STAGES[it.stage].blurb, court: courtOf(it.stage, p.autonomy),
-    priority: it.priority, needs: json(it.needs, []), size: it.size || null, repo: repoTag(hub.remotesOf(p), it),
+    priority: it.priority, effective_priority: hub.effectiveLabel(p, it) ?? null, needs: json(it.needs, []), size: it.size || null, repo: repoTag(hub.remotesOf(p), it),
     created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
     holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
     race: it.race,

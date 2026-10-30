@@ -556,7 +556,8 @@ export class Hub extends EventEmitter {
   }
 
   // Where the most valuable claimable work is, across every project that isn't parked:
-  // your picks and "now" work first, then building before shaping, then whatever has waited longest.
+  // your picks and "now" work first (by effective priority: a group's or a dependent's counts), then building
+  // before shaping, then whatever has waited longest.
   // With runner, only projects the human lets `nuworq run` staff. scope: the slugs a token may reach;
   // powers: what it may do (null: everything); has: the agent's tags when it is declaring them right
   // now (else what it declared last).
@@ -570,12 +571,12 @@ export class Hub extends EventEmitter {
       if (all.length) options.push({ p, ...all[0], claimable: all.reduce((n, o) => n + (this.racing(o.item) ? this.openSlots(o.item) : 1), 0) });
     }
     options.sort((a, b) =>
-      PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
+      PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
       a.item.stage_since - b.item.stage_since);
     return options.map((o) => ({
       project: o.p.slug, name: o.p.name, path: o.p.path || null, repo: this.repoOf(o.p, o.item) || null,
-      mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.item.priority,
+      mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.priority,
       waiting: dur(this.now() - o.item.stage_since), claimable: o.claimable,
       slots: this.racing(o.item) ? this.openSlots(o.item) : undefined, // a race with open slots can take that many workers
       // Who is on work here: holders, and racers (whose leases live in attempts).
@@ -813,6 +814,37 @@ export class Hub extends EventEmitter {
     const deps = this.deps(item).filter((d) => !['done', 'dropped'].includes(d.stage));
     const kids = this.q(`SELECT * FROM items WHERE parent_id = ? AND stage NOT IN ('done', 'dropped') ORDER BY seq`).all(item.id);
     return [...deps, ...kids.filter((k) => !deps.some((d) => d.id === k.id))];
+  }
+
+  // The priority each open item ranks by (#198): the highest of its own, its open parent's, and that of every
+  // open item that depends on it, all the way up and back. Map id → { priority, from }: from is the seq whose
+  // own priority it is, null when it's the item's own. Only ranking uses it; an item's own priority stays.
+  effectivePriorities(p) {
+    const open = this.q(`SELECT id, seq, priority, parent_id FROM items WHERE project_id = ? AND stage NOT IN ('done', 'dropped')`).all(p.id);
+    const eff = new Map(open.map((i) => [i.id, { priority: i.priority, from: null }]));
+    const seq = new Map(open.map((i) => [i.id, i.seq]));
+    // Who hands their priority to each item: its parent, and everything waiting on it.
+    const givers = new Map(open.map((i) => [i.id, eff.has(i.parent_id) ? [i.parent_id] : []]));
+    for (const d of this.q('SELECT d.item_id, d.depends_on FROM deps d JOIN items i ON i.id = d.item_id WHERE i.project_id = ?').all(p.id)) {
+      if (eff.has(d.item_id) && eff.has(d.depends_on)) givers.get(d.depends_on).push(d.item_id);
+    }
+    // Ranks only rise, and there are three, so this settles in a few passes, cycles or not.
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const [id, from] of givers) {
+        for (const g of from) {
+          const e = eff.get(g);
+          if (PRIORITY_RANK[e.priority] < PRIORITY_RANK[eff.get(id).priority]) { eff.set(id, { priority: e.priority, from: e.from ?? seq.get(g) }); changed = true; }
+        }
+      }
+    }
+    return eff;
+  }
+
+  // "now (from #110)" when an item ranks above its own priority, else undefined.
+  effectiveLabel(p, item, eff = this.effectivePriorities(p)) {
+    const e = eff.get(item.id);
+    return e?.from ? `${e.priority} (from #${e.from})` : undefined;
   }
 
   // Proposals an agent could claim to shape right now.
@@ -1064,6 +1096,7 @@ export class Hub extends EventEmitter {
       title: item.title,
       stage: item.stage,
       priority: item.priority,
+      effective_priority: this.effectiveLabel(p, item), // "now (from #110)" when its group or a dependent ranks it higher
       needs: json(item.needs, []).length ? json(item.needs, []) : undefined,
       size: item.size || undefined,
       summary: item.summary || undefined,
@@ -1364,6 +1397,9 @@ export class Hub extends EventEmitter {
     const ok = (i) => (!fit.has || json(i.needs, []).every((t) => fit.has.includes(t))) && inRepo(i);
     const gave = this.handedOff(p, agent);
     const fresh = (i) => !gave.has(i.id) && ok(i); // not just handed off, doable on this machine, in this clone
+    // Each option carries the priority it ranks by: its group's or a dependent's when that is higher (#198).
+    const eff = this.effectivePriorities(p);
+    const ranked = (x) => ({ ...x, priority: eff.get(x.item.id)?.priority ?? x.item.priority });
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
         AND COALESCE(implementer, '') != ?
         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
@@ -1376,10 +1412,10 @@ export class Hub extends EventEmitter {
         AND NOT EXISTS (SELECT 1 FROM prs WHERE prs.item_id = items.id AND prs.state = 'open' AND prs.blocked != 'conflict') ORDER BY stage_since`).all(p.id)
       .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
       .map((item) => ({ mode: 'land', item }));
-    if (p.parked) return [...lands, ...reviews];
+    if (p.parked) return [...lands.map(ranked), ...reviews.map(ranked)];
     const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id);
     // The freshness sweep (src/freshness.js) waits while now or soon work is ready, whoever can take it.
-    const urgent = open.some((i) => !i.sweep && i.priority !== 'later' && !this.unmetDeps(i).length);
+    const urgent = open.some((i) => !i.sweep && ranked({ item: i }).priority !== 'later' && !this.unmetDeps(i).length);
     const ready = open.filter((i) => fresh(i) && !this.unmetDeps(i).length && !(i.sweep && urgent))
       .map((item) => ({ mode: 'work', item }));
     // Races with an open slot this agent hasn't taken a turn in. A slot goes to a different model first:
@@ -1394,15 +1430,15 @@ export class Hub extends EventEmitter {
     const large = (x) => (fit.weak && x.item.size === 'large' ? 1 : 0);
     // Work that needs what this agent's machine has goes to it first: few agents can do it, anyone can do the rest.
     const own = (x) => (fit.has && json(x.item.needs, []).length ? 0 : 1);
-    const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].sort((a, b) =>
+    const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].map(ranked).sort((a, b) =>
       large(a) - large(b) ||
-      PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
+      PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       own(a) - own(b) ||
       !!a.sameModel - !!b.sameModel ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
       (b.item.last_worker === agent) - (a.item.last_worker === agent) ||
       a.item.seq - b.item.seq);
-    return [...lands, ...reviews, ...all];
+    return [...lands.map(ranked), ...reviews.map(ranked), ...all];
   }
 
   // What fits this agent: the tags its machine has (declared at checkin, here or in its latest project),
@@ -2190,9 +2226,10 @@ const AGENT_OPS = {
     if (args.item) return this.context(p, this.item(p, args.item), agent);
     const stages = args.stage ? [str(args.stage)] : OPEN_STAGES;
     const out = {};
+    const eff = this.effectivePriorities(p);
     for (const s of stages) {
       const rows = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = ? ORDER BY seq`).all(p.id, s);
-      if (rows.length) out[s] = rows.map((i) => `#${i.seq} [${i.priority}] ${i.title}${i.holder ? ` (${i.holder})` : ''}`);
+      if (rows.length) out[s] = rows.map((i) => `#${i.seq} [${this.effectiveLabel(p, i, eff) ?? i.priority}] ${i.title}${i.holder ? ` (${i.holder})` : ''}`);
     }
     const recent = this.q(`SELECT seq, title FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? ORDER BY stage_since DESC LIMIT 10`)
       .all(p.id, this.now() - 3 * DAY);
