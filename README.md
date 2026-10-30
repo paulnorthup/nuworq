@@ -21,6 +21,8 @@ nuworq run --workers 3 --agent claude            # keep workers going where work
 nuworq run --workers 2 --max-runs 10 --max-minutes 60   # logs in ~/.nuworq/logs
 ```
 
+To keep a runner going after the terminal closes and across reboots, install it: `nuworq run --install --workers 2` writes a LaunchAgent (macOS, `~/Library/LaunchAgents/com.nuworq.run.plist`) or a systemd user unit (Linux, `~/.config/systemd/user/nuworq-run.service`) with those flags, starts it, and prints how to remove it (`nuworq run --uninstall`). Installing again replaces it; its log is `~/.nuworq/logs/run.log`. When a worker exits, its worktree is removed, unless it holds uncommitted changes or commits on no branch; then run keeps it and says where.
+
 Limits are counts, wall-clock and dollars: `--max-usd 5` stops launching once the workers' CLIs have reported $5 spent in this run, and lets running workers finish. Spend is known when a worker exits; codex and local models report no cost, so they don't count against it.
 
 `--browser` (Claude workers, on `worker` or `run`) gives each worker a headless browser to check UI work with: Microsoft's Playwright MCP server (`@playwright/mcp`, pinned) driving your Google Chrome with a throwaway profile, opening only `localhost` and `127.0.0.1` pages. The worker runs the app from its worktree on a free port, looks at it at desktop width and 375px (the app is light only), and says what it saw in its evidence. It also declares `browser`, so items that need one go to it, ahead of generic work of the same priority.

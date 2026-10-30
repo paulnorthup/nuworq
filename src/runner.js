@@ -19,6 +19,18 @@ export function plan(routes, running, { workers = 1, maxRuns = Infinity, launche
   return out;
 }
 
+// After a worker exits, its worktree goes (#172), unless something in it would be lost: uncommitted changes, or
+// commits no branch holds. git(args) runs git and resolves to its output. Returns { kept, why? }.
+export async function cleanWorktree(worktree, git) {
+  if ((await git(['-C', worktree, 'status', '--porcelain'])).trim()) return { kept: true, why: 'it has uncommitted changes' };
+  if (!(await git(['-C', worktree, 'for-each-ref', '--contains', 'HEAD', '--count=1', 'refs/heads', 'refs/remotes'])).trim()) {
+    return { kept: true, why: 'it has commits that are on no branch' };
+  }
+  const common = (await git(['-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+  await git(['--git-dir', common, 'worktree', 'remove', worktree]);
+  return { kept: false };
+}
+
 const FAST_FAIL_MS = 15_000;
 const FAST_FAILS = 3;
 // Clean exits this soon without claiming anything: the hub routed a worker to work it couldn't take.
