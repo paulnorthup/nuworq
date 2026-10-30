@@ -906,13 +906,16 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
     ? { owners, verify: secret ? turnstile(secret) : null, sitekey: envVar('TURNSTILE_SITEKEY') ?? '', gate: !!flags['early-access'] }
     : null;
   const siteHost = String(flags['site-host'] || envVar('SITE_HOST') || '');
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, siteHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess });
+  // The admin host (e.g. admin.nuworq.com): the owners' dashboard, signed in on its own address.
+  const adminHost = String(flags['admin-host'] || envVar('ADMIN_HOST') || '');
+  if (adminHost && !owners.length) console.warn(amber(`--admin-host ${adminHost} has no owners, so nobody can get in: set --owners or NUWORQ_HUB_OWNERS.`));
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, siteHost, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();
     console.log(`${green('●')} ${bold('nuworq')} is serving workspaces at ${bold(url)}  ${dim(`(${dir})`)}
   Auth: ${green('locked')}: every workspace has its own tokens${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}
-  Workspaces: ${names.length ? names.join(', ') : dim('none yet')}
+  Workspaces: ${names.length ? names.join(', ') : dim('none yet')}${adminHost ? `\n  Admin: ${adminHost}, owners ${owners.join(', ') || 'none'}` : ''}
 ${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w/<workspace>/
   Add one:   node ${JSON.stringify(BIN)} workspace create <name>
   Then:      node ${JSON.stringify(BIN)} token create <you> --role human --workspace <name>`)}`);
@@ -1128,6 +1131,8 @@ ${bold('Human')}
                                          [--early-access]: making an organization takes an approved request
                                          (owners: --owners or NUWORQ_HUB_OWNERS emails; form at /early-access with
                                          NUWORQ_TURNSTILE_SITEKEY, checked with NUWORQ_TURNSTILE_SECRET)
+                                         [--admin-host admin.example.com] (with --public-url): the owners'
+                                         dashboard; early-access requests are decided only there
   workspace create|remove <name> | list  manage workspaces on the hub host
   notify add ntfy|slack|webhook <url> [--person bea]   push one batched message when something new needs you
                                          (--person: a channel for bea, only what bea owns)

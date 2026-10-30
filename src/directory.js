@@ -15,6 +15,7 @@ import { SESSION_MS } from './auth.js';
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 export const ORG_CAP = 5; // organizations one person may create, unless the host says otherwise
 export const GRANT_MS = 14 * 24 * 60 * 60 * 1000; // how long an early-access grant is good for
+export const ADMIN_SESSION_MS = 12 * 60 * 60 * 1000; // a sign-in to the admin host lasts a working day
 
 // Cloudflare Turnstile, checked on the hub (the secret never reaches a browser): resolves true when the
 // token a request form got from the widget is good. The only call early access makes to anyone else.
@@ -92,6 +93,8 @@ export class Directory {
         used_by    INTEGER,                       -- the identity that created its organization
         used_at    INTEGER
       );`);
+    // A session's kind: 'hub' (the app's own address) or 'admin' (the admin host). Neither opens the other.
+    try { this.db.exec("ALTER TABLE hub_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'hub'"); } catch { /* already there */ }
   }
 
   // Which organization a GitHub App installation belongs to, or null.
@@ -152,7 +155,7 @@ export class Directory {
 
   requests({ state = '' } = {}) {
     return this.db.prepare(`SELECT id, email, github, building, state, created_at, updated_at, decided_by, decided_at FROM access_requests
-      ${state ? 'WHERE state = ?' : ''} ORDER BY created_at DESC`).all(...(state ? [state] : []));
+      ${state ? 'WHERE state = ?' : ''} ORDER BY state = 'new' DESC, created_at DESC`).all(...(state ? [state] : []));
   }
 
   // Approve (returns { code }: the grant, shown once, for the link) or decline (mints nothing). Only a new
@@ -196,18 +199,21 @@ export class Directory {
     return this.db.prepare('SELECT * FROM identities WHERE email = ?').get(String(email ?? '').trim().toLowerCase()) ?? null;
   }
 
-  createSession(identityId) {
+  // kind: 'hub', or 'admin' for the admin host (shorter-lived: ADMIN_SESSION_MS).
+  createSession(identityId, kind = 'hub') {
     const sid = randomBytes(32).toString('base64url');
     const t = this.now();
     this.db.prepare('DELETE FROM hub_sessions WHERE expires_at < ?').run(t);
-    this.db.prepare('INSERT INTO hub_sessions (hash, identity_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha(sid), identityId, t, t + SESSION_MS);
+    this.db.prepare('INSERT INTO hub_sessions (hash, identity_id, created_at, expires_at, kind) VALUES (?, ?, ?, ?, ?)')
+      .run(sha(sid), identityId, t, t + (kind === 'admin' ? ADMIN_SESSION_MS : SESSION_MS), kind);
     return sid;
   }
 
-  verifySession(sid) {
+  // A session of this kind only: an app session never opens the admin host, nor an admin session the app.
+  verifySession(sid, kind = 'hub') {
     if (!sid || sid.length < 20) return null;
     return this.db.prepare(`SELECT i.* FROM hub_sessions s JOIN identities i ON i.id = s.identity_id
-      WHERE s.hash = ? AND s.expires_at > ?`).get(sha(sid), this.now()) ?? null;
+      WHERE s.hash = ? AND s.expires_at > ? AND s.kind = ?`).get(sha(sid), this.now(), kind) ?? null;
   }
 
   deleteSession(sid) {

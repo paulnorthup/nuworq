@@ -536,3 +536,22 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 .is-new::after { content: 'new'; position: absolute; bottom: calc(100% - 3px); right: -6px; z-index: 1; pointer-events: none;
   font: 650 10px/1 var(--font); letter-spacing: .02em; text-transform: lowercase; padding: 2px 5px; border-radius: 999px;
   color: var(--agents); background: var(--agents-tint); box-shadow: 0 0 0 1.5px var(--panel); }
+
+/* The admin host (#166, web/admin.js): one column on every screen, every target at least 44px tall. */
+main.admin { padding-top: 24px; }
+.admin-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.admin-top h1 { margin: 0; font-size: 18px; }
+.admin .btn { min-height: 44px; padding: 10px 16px; font-size: 14px; }
+.admin h2 { font-size: 16px; margin-bottom: 6px; }
+.admin-signin { display: flex; flex-direction: column; gap: 10px; }
+.admin-signin .btn { display: flex; align-items: center; justify-content: center; }
+.admin-filter { display: flex; width: 100%; margin-bottom: 14px; }
+.admin-filter button { flex: 1; min-height: 44px; font-size: 13.5px; }
+.admin-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.admin-card .h { font-weight: 560; }
+.admin-card p { margin: 4px 0; }
+.admin-card .s { color: var(--muted); }
+.admin-acts { display: flex; gap: 10px; margin-top: 10px; }
+.admin-acts .btn { flex: 1; }
+.admin-link { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.admin-link code { display: block; padding: 8px; word-break: break-all; user-select: all; }
