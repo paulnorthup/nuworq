@@ -339,13 +339,13 @@ function projectBody(v, empty) {
     ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, what's next, what finished, and how agents are doing.`
     : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : '';
   const s = {
-    pulse: pulse(v), composer: composer(v), empty: empty ? emptyProject() : '', needs: needsYou(v), motion: motion(v),
+    pulse: pulse(v), composer: composer(v), empty: empty ? emptyProject() : '', needs: needsYou(v), groups: groups(v), motion: motion(v),
     worth: z() >= 1 ? worthKnowing(v) : '', flow: flow(v), next: z() >= 1 ? upNext(v) : '', finished: z() >= 1 ? finished(v) : '',
     steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', runners: z() >= 1 ? runners(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
   };
   const order = (keys) => keys.map((k) => s[k]).join('');
-  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']));
-  return order(['pulse', 'composer', 'empty', 'needs', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
+  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'groups', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']));
+  return order(['pulse', 'composer', 'empty', 'needs', 'groups', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
 }
 
 function emptyProject() {
@@ -417,6 +417,36 @@ function needsYou(v) {
     : `<div class="zero"><span class="check">✓</span><div><b>Nothing needs you.</b> ${v.pulse.active ? 'Agents are working; you\'ll see things here when they need a decision, an answer or a verification.' : 'When agents need a decision, an answer or a verification, it shows up here.'}</div></div>`;
   return `<section class="sec"><header><h2>Needs you</h2>${act.length ? `<span class="count">${act.length}</span>` : ''}
     ${act.length ? '<span class="hint">oldest first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
+}
+
+// ── 30s: the groups (#200): is what I care about moving, and is anything stuck? One line each; a tap opens its map. ──
+const GROUP_STATE = { you: 'Waits on you', stuck: 'Stuck', moving: 'Moving', queued: 'Queued' };
+function groups(v) {
+  if (!v.groups?.length) return '';
+  return `<section class="sec"><header><h2>Groups</h2><span class="count">${v.groups.length}</span><span class="hint">tap one for its map</span></header>
+    <div class="groups">${v.groups.map((g) => `<div class="group g-${g.state}">
+      <button class="g-main" data-action="open" data-item="${esc(g.item)}">
+        <span class="g-head"><span class="g-state">${GROUP_STATE[g.state]}</span><span class="g-title">${esc(g.title)}</span></span>
+        <span class="g-meta">${g.done} of ${g.total} done · ${esc(g.reason)}${g.from ? ` · ranks ${esc(g.effective)} (from ${esc(g.from)})` : ''}</span>
+      </button>
+      ${prioritySeg(g.item, g.priority)}</div>`).join('')}
+    ${v.ungrouped ? `<div class="group-none">Not in a group (${v.ungrouped})</div>` : ''}</div></section>`;
+}
+
+// A group's own priority, set in one tap (#198 carries it to everything in it). Reversible, so no dialog.
+const prioritySeg = (item, priority) => `<div class="seg g-prio" role="group" aria-label="Priority of ${esc(item)}">${['now', 'soon', 'later'].map((p) =>
+  `<button class="${priority === p ? 'on' : ''}" aria-pressed="${priority === p}" data-action="group-priority" data-item="${esc(item)}" data-p="${p}">${p}</button>`).join('')}</div>`;
+
+// A group's map in the drawer: the nested tree, each item with its stage, who holds it, what it waits on,
+// its pull requests and open questions, and a mark on what needs you.
+function groupMap(n) {
+  const kids = (x) => (x.children.length ? `<ul>${x.children.map((c) => `<li>${mapLine(c)}${kids(c)}</li>`).join('')}</ul>` : '');
+  return `<div class="map">${kids(n)}</div>`;
+}
+function mapLine(n) {
+  return `<div class="m-line${n.needs_you ? ' you' : ''}">${refLink(n.item)} <span class="m-title">${esc(n.title)}</span> ${stagePill(n.stage, courtOf(n.stage))}${n.holder ? ` ${who(n.holder)}` : ''}${n.needs_you ? ' <span class="tag now">needs you</span>' : ''}
+    ${n.depends_on.length ? `<span class="age">waits on ${n.depends_on.map(refLink).join(', ')}</span>` : ''}${n.prs.map((pr) => ` <a href="${esc(pr.url)}" target="_blank" rel="noopener">PR #${pr.number}${pr.ci === 'fail' ? ' ✗' : pr.ci === 'pass' ? ' ✓' : ''}</a>`).join('')}</div>
+    ${n.questions.map((q) => `<div class="m-q">${q.to === 'operator' ? 'To the operator' : q.blocking ? 'Asks you' : 'Assumed'}: ${esc(q.question)}</div>`).join('')}`;
 }
 
 function card(a) {
@@ -953,6 +983,7 @@ function renderDrawer() {
     <h2 class="title">${esc(it.title)}</h2>
     <div class="d-now">${holderLine}</div>
     <div class="actions">${actions.join('')}</div>
+    ${it.map ? `<div class="d-sec"><div class="label">Map</div>${prioritySeg(it.item, it.priority)}${groupMap(it.map)}</div>` : ''}
     ${edit}
     ${lifebar ? `<div class="d-sec"><div class="label">Lifecycle <span class="count">agents ${esc(it.court_totals.agents)} · queue ${esc(it.court_totals.queue)} · you ${esc(it.court_totals.you)}${it.court_ms.external ? ` · outside ${esc(it.court_totals.external)}` : ''}</span></div>
       <div class="lifebar">${lifebar}</div>
@@ -1305,6 +1336,7 @@ const ACTIONS = {
   'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) human('settings', { fresh: false }, 'The weekly freshness sweep is off'); },
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
+  'group-priority': (el) => human('update', { item: el.dataset.item, priority: el.dataset.p }, `${el.dataset.item} is ${el.dataset.p}: everything in it ranks at least ${el.dataset.p}`),
   clarify: (el) => {
     const k = `cl:${el.dataset.item}`;
     const body = val(k);

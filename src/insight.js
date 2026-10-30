@@ -534,6 +534,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   return {
     project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, fresh: !!p.fresh, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
     pulse, since, attention, motion, flow,
+    ...groupsOf(hub, p, items, { agents, openQs, t }),
     queue, proposed, waiting, verifying, done,
     agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
     stages: STAGES,
@@ -596,6 +597,87 @@ function idleCause(hub, p, t) {
     why: `${paused.map((x) => x.name).join(', ')} paused ${paused.length === 1 ? 'itself' : 'themselves'}${r.paused ? ` for ${r.paused.for}` : ''}: ${r.paused?.reason ?? 'workers kept failing'}. ${paused.length === 1 ? 'It starts' : 'They start'} again on ${paused.length === 1 ? 'its' : 'their'} own after that; if it keeps happening, the workers' logs say why.`,
     how: [{ do: `On ${r.machine || r.name}, read the last worker's log to see why it failed`, where: 'ls -t ~/.nuworq/logs | head', check: 'The runner shows up again after the pause' }],
   };
+}
+
+// Whether an item waits on the person (#200): a blocking question only they can answer, work they kept parked,
+// a shaped proposal to approve, or (unless agents verify each other) work to verify. Work parked on an
+// operator's question isn't theirs.
+function waitsOnYou(p, i, openQs) {
+  return !!i.parked_by || openQs.some((q) => q.item_id === i.id && q.blocking && q.audience !== 'operator')
+    || (i.stage === 'proposed' && !i.holder && !!i.acceptance && p.autonomy === 'ask')
+    || (i.stage === 'verifying' && !i.holder && p.autonomy !== 'full');
+}
+
+const GROUP_STATE = { you: 0, stuck: 1, moving: 2, queued: 3 };
+
+// The project's groups (#200), for the 30-second view: each top-level item with children and open work, as
+// one line: how far along it is, the priority it ranks at (#198), and whether it is moving, waiting on you,
+// stuck (with the one reason) or queued for the next agent. Plus how many open items are in no group.
+export function groupsOf(hub, p, items, { agents, openQs, t }) {
+  const kids = new Map();
+  for (const i of items) if (i.parent_id) kids.set(i.parent_id, [...(kids.get(i.parent_id) ?? []), i]);
+  const under = (i, seen = new Set([i.id])) => (kids.get(i.id) ?? []).filter((c) => !seen.has(c.id) && seen.add(c.id))
+    .flatMap((c) => [c, ...under(c, seen)]);
+  const open = (i) => !['done', 'dropped'].includes(i.stage);
+  const ref = (i) => `#${i.seq}`;
+  const eff = hub.effectivePriorities(p);
+  const fitAgents = agents.filter((a) => t - a.last_seen < DAY).map((a) => json(a.has, []));
+  const missingOf = (i) => json(i.needs, []).filter((tag) => !fitAgents.some((has) => has.includes(tag)));
+  const shapeable = new Set(p.parked ? [] : hub.shapeable(p).map((i) => i.id));
+  const groups = items.filter((g) => !g.parent_id && kids.has(g.id)).map((g) => {
+    const all = under(g);
+    const members = [g, ...all].filter(open);
+    if (!members.length) return null;
+    const e = eff.get(g.id) ?? { priority: g.priority, from: null };
+    const line = { item: ref(g), title: g.title, priority: g.priority, effective: e.priority, from: e.from ? `#${e.from}` : null,
+      done: all.filter((i) => i.stage === 'done').length, total: all.filter((i) => i.stage !== 'dropped').length };
+    const yours = members.filter((i) => waitsOnYou(p, i, openQs));
+    if (yours.length) return { ...line, state: 'you', reason: `${yours.map(ref).join(', ')} ${yours.length === 1 ? 'waits' : 'wait'} on you` };
+    const busy = members.filter((i) => i.holder || ['active', 'landing', 'verifying'].includes(i.stage));
+    if (busy.length) {
+      const who = [...new Set(busy.map((i) => i.holder).filter(Boolean))];
+      return { ...line, state: 'moving', holders: who, reason: who.length ? `${who.join(', ')} on ${busy.filter((i) => i.holder).map(ref).join(', ')}` : `${busy.map(ref).join(', ')} being verified or landed` };
+    }
+    const ready = members.filter((i) => (i.stage === 'ready' && !i.holder && !hub.unmetDeps(i).length) || shapeable.has(i.id));
+    const fit = ready.filter((i) => !missingOf(i).length);
+    if (fit.length) return { ...line, state: 'queued', reason: `${fit.map(ref).join(', ')} ready for the next agent` };
+    if (ready.length) {
+      const it = ready[0], missing = missingOf(it);
+      return { ...line, state: 'stuck', reason: missing.some((tag) => OPERATOR_TAGS.includes(tag))
+        ? `${ref(it)} needs an operator (${missing.join(', ')}); none has checked in today`
+        : `${ref(it)} needs ${missing.join(', ')}; no agent connected in the last day has it` };
+    }
+    const blocked = members.find((i) => i.stage === 'ready' && i.id !== g.id && hub.unmetDeps(i).length);
+    if (blocked) return { ...line, state: 'stuck', reason: `${ref(blocked)} waits on ${hub.unmetDeps(blocked).map(ref).join(', ')}` };
+    const operator = members.find((i) => i.stage === 'waiting' && openQs.some((q) => q.item_id === i.id && q.blocking && q.audience === 'operator'));
+    if (operator) return { ...line, state: 'stuck', reason: `${ref(operator)} waits on an operator` };
+    const outside = members.find((i) => i.stage === 'outside');
+    return { ...line, state: 'stuck', reason: outside ? `${ref(outside)} waits on an outside fact` : 'nothing in it can start' };
+  }).filter(Boolean);
+  groups.sort((a, b) => PRIORITY_ORDER[a.effective] - PRIORITY_ORDER[b.effective] || GROUP_STATE[a.state] - GROUP_STATE[b.state] || a.item.slice(1) - b.item.slice(1));
+  const ungrouped = items.filter((i) => open(i) && !i.parent_id && !kids.has(i.id)).length;
+  return { groups, ungrouped };
+}
+const PRIORITY_ORDER = { now: 0, soon: 1, later: 2 };
+
+// A group's map (#200): the whole tree under an item, any depth, with what each item is doing, who holds it,
+// what it waits on, its pull requests and open questions, and whether it waits on you.
+function mapOf(hub, p, root) {
+  const openQs = hub.q(`SELECT * FROM questions WHERE project_id = ? AND status = 'open' ORDER BY at`).all(p.id);
+  const seen = new Set();
+  const node = (i) => {
+    seen.add(i.id);
+    const kids = hub.q('SELECT * FROM items WHERE parent_id = ? ORDER BY seq').all(i.id).filter((c) => !seen.has(c.id));
+    return {
+      item: `#${i.seq}`, title: i.title, stage: i.stage, priority: i.priority, holder: i.holder || null,
+      depends_on: hub.deps(i).map((d) => `#${d.seq}`),
+      prs: prsOf(hub, p, i).map((pr) => ({ url: pr.url, number: pr.number, repo: pr.repo, state: pr.state, ci: pr.ci })),
+      questions: openQs.filter((q) => q.item_id === i.id).map((q) => ({ id: q.id, question: q.question, blocking: !!q.blocking, to: q.audience || 'human' })),
+      needs_you: waitsOnYou(p, i, openQs),
+      children: kids.map(node),
+    };
+  };
+  return node(root);
 }
 
 export function eventOut(e, t) {
@@ -763,6 +845,7 @@ export function itemView(hub, slug, ref) {
     handoff: json(it.handoff, null),
     parent: parent ? { item: `#${parent.seq}`, title: parent.title, stage: parent.stage } : null,
     children: hub.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(it.id).map((c) => ({ item: `#${c.seq}`, title: c.title, stage: c.stage })),
+    map: hub.q('SELECT 1 FROM items WHERE parent_id = ? LIMIT 1').get(it.id) ? mapOf(hub, p, it) : null, // a group's whole tree (#200)
     depends_on: hub.deps(it).map((d) => ({ item: `#${d.seq}`, title: d.title, stage: d.stage })),
     // Escapes (#176): the landed item this one repairs, and the later items that repair this one.
     fixes: (() => { const f = it.fixes && hub.itemById(it.fixes); return f ? { item: `#${f.seq}`, title: f.title } : null; })(),
