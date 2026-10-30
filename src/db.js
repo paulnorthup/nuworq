@@ -168,6 +168,16 @@ CREATE TABLE IF NOT EXISTS project_stewards (
   PRIMARY KEY (project_id, handle)
 );
 
+-- A question's steps a person has ticked off (#162), each person's own; step counts from 1.
+CREATE TABLE IF NOT EXISTS step_ticks (
+  project_id  INTEGER NOT NULL,
+  question_id INTEGER NOT NULL,
+  person      TEXT NOT NULL,
+  step        INTEGER NOT NULL,
+  at          INTEGER NOT NULL,
+  PRIMARY KEY (question_id, person, step)
+);
+
 CREATE TABLE IF NOT EXISTS dismissals (
   project_id INTEGER NOT NULL,
   key        TEXT NOT NULL,

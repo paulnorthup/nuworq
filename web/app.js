@@ -431,10 +431,33 @@ function card(a) {
     ${a.attempts?.length > 1 ? attemptsGrid(a.item, a.attempts) : `${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
     ${commits(a.git)}`}
     ${a.warn ? `<div class="warn">⚠ ${esc(a.warn)}</div>` : ''}
+    ${a.steps?.length ? stepList(a) : ''}
     ${a.kind === 'proposal' && a.acceptance && !open ? `<div class="more"><div class="label" style="margin-top:0">Done means</div>${md(a.acceptance)}</div>` : ''}
     ${more}
     ${cardActions(a, hasMore, open, key)}
   </article>`;
+}
+
+// A question's steps as a checklist the person ticks off (#162), shown at every depth. The row is the tick target;
+// a URL opens in a new tab, a command gets a Copy button. Ticks are the viewer's own and survive a reload.
+function stepList(a) {
+  const done = new Set(a.ticked ?? []);
+  const q = a.question.id;
+  return `<div class="steps" data-new="step-checklist">
+    <div class="steps-head"><span class="label">Steps</span><span class="steps-count">${[...done].filter((n) => n <= a.steps.length).length} of ${a.steps.length} done</span></div>
+    <ol>${a.steps.map((s, i) => {
+      const n = i + 1;
+      const on = done.has(n);
+      const where = !s.where ? '' : /^https?:\/\//i.test(s.where)
+        ? `<a class="step-where" href="${esc(s.where)}" target="_blank" rel="noopener">${esc(s.where)}</a>`
+        : copyBlock(s.where);
+      return `<li class="${on ? 'on' : ''}">
+        <button class="step-tick" data-action="step" data-q="${q}" data-step="${n}" data-done="${on ? '' : '1'}" aria-pressed="${on}">
+          <span class="box" aria-hidden="true">${on ? '✓' : n}</span><span class="do">${esc(s.do)}</span></button>
+        ${where || s.check ? `<div class="step-more">${where}${s.check ? `<div class="step-check">${esc(s.check)}</div>` : ''}</div>` : ''}
+      </li>`;
+    }).join('')}</ol>
+  </div>`;
 }
 
 // A raced item's submissions side by side, each with its own "Keep this one".
@@ -1145,6 +1168,11 @@ const ACTIONS = {
     const keep_parked = document.getElementById(`keep-${q}`)?.checked;
     clearDraft(`ans-${q}`, `dec-${q}`, `keep-${q}`);
     return human('answer', { question: Number(q), answer, decide, keep_parked }, keep_parked ? 'Answered; it stays parked until you unpark it' : 'Answered; the work is moving again');
+  },
+  // The last tick answers a question without options: say so, since its card leaves Needs you.
+  step: async (el) => {
+    const r = await human('step', { question: Number(el.dataset.q), step: Number(el.dataset.step), done: !!el.dataset.done });
+    if (r?.answered) toast(`Done: all ${r.of} steps completed; the work is moving again`);
   },
   unpark: (el) => human('unpark', { item: el.dataset.item }, 'Unparked: agents can pick it up'),
   confirm: (el) => human('confirm', { question: Number(el.dataset.q) }, 'Assumption confirmed'),

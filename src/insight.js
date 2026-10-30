@@ -114,6 +114,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
       steps: json(q.steps, []),
+      // The steps this viewer has ticked (#162), counting from 1; each person ticks their own.
+      ticked: hub.q('SELECT step FROM step_ticks WHERE question_id = ? AND person = ? ORDER BY step').all(q.id, viewer ?? HUMAN).map((r) => r.step),
       ...(orig ? { escalation: { question: orig.question, asked_by: orig.asked_by }, evidence: json(q.evidence, []) } : {}),
     });
   }
