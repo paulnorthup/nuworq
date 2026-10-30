@@ -182,7 +182,7 @@ Design choices:
 | CI failing on a PR for work in Verifying (GitHub webhook) | act |
 | Proposal, when autonomy is *Check with me* | act |
 | An item that keeps bouncing (send-backs + stalls ≥ 2) | act: clarify, split or drop |
-| An agent's assumption | know: Fine / Override (an override becomes steering) |
+| An agent's assumption | know: Confirm / Override (an override becomes steering) |
 | New agent proposals | know |
 | Steering nobody acknowledged | know |
 | Agents out of work (everything left waits on you) | know |
