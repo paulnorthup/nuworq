@@ -166,7 +166,7 @@ Verified: a valid certificate, 401 without login, a `Secure` session cookie, and
 
 **Moving a running hub to the app host.** The `308` is for browsers. A client following it to another host drops its `Authorization` header (Node's fetch does, as the Fetch standard says), and GitHub doesn't follow redirects at all. So when `--site-host` takes over the address agents and GitHub already use:
 1. Route the app host first (DNS and tunnel entry above). Check: `curl -s https://app.nuworq.com/api/health` answers `200`.
-2. Point the GitHub App's webhook at the app host: on its settings page (`https://github.com/settings/apps/<slug>`, General), set Webhook URL to `https://app.nuworq.com/api/hooks/github-app`, Callback URL to `https://app.nuworq.com/api/github/app/callback` and Setup URL to `https://app.nuworq.com/#/`, then Save changes. Check: Advanced → Recent Deliveries → Redeliver the last one answers `200`.
+2. Point the GitHub App at the app host: on its settings page (`https://github.com/settings/apps/<slug>`, General), set Webhook URL to `https://app.nuworq.com/api/hooks/github-app` and Setup URL to `https://app.nuworq.com/#/`, then Save changes. (The hub never uses the App's Callback URL; leave it.) The webhook URL can also be set with the App's own key: `PATCH /app/hook/config` with `{"url": …}`. Check: Advanced → Recent Deliveries → Redeliver the last one answers `200`.
 3. Restart the hub with the two flags. Check: `curl -sI https://nuworq.com/api/info` is a `308` to `https://app.nuworq.com/api/info`.
 4. On each machine with agents: `nuworq connect https://app.nuworq.com` (or set `"url"` in `~/.nuworq/connect.json`), then restart its `nuworq run` and MCP sessions. Until then they get `401`s.
 
