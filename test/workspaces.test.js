@@ -178,10 +178,10 @@ describe('the CLI manages workspaces on the host', () => {
     const run = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--data-dir', data], { env: { ...process.env, HOME: data, NO_COLOR: '1' } });
     assert.match((await run('workspace', 'create', 'acme')).stdout, /Created workspace/);
     assert.ok(existsSync(join(data, 'workspaces', 'acme.db')));
-    assert.equal((await run('workspace', 'list')).stdout.trim(), 'acme');
+    assert.equal((await run('workspace', 'list')).stdout.trim(), 'acme  unlimited (default)', 'made by the host, so unlimited');
     assert.match((await run('token', 'create', 'boss', '--role', 'human', '--workspace', 'acme')).stdout, /nwq_/);
     await run('workspace', 'remove', 'acme');
-    assert.deepEqual(readdirSync(join(data, 'workspaces')), []);
+    assert.deepEqual(readdirSync(join(data, 'workspaces')).filter((f) => f.startsWith('acme')), [], 'its database and WAL files are gone');
     await assert.rejects(run('token', 'list', '--workspace', 'acme'), /no workspace "acme"/);
   });
 });

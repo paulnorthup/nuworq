@@ -403,7 +403,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (req.method === 'GET' && path === '/api/oauth') return send(200, { providers: sso.list().map((p) => ({ ...p, start: `/auth/${p.name}/start` })) });
     const page = path === '/' ? '/admin.html' : path;
     if (req.method === 'GET' && ['/admin.html', '/admin.js', '/style.css'].includes(page)) return send(200, readFileSync(join(WEB, page.slice(1)), 'utf8'), TYPES[extname(page)]);
-    if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'POST /api/early-access/decide'].includes(`${req.method} ${path}`)) {
+    if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'POST /api/early-access/decide', 'GET /api/workspaces', 'POST /api/workspaces/plan'].includes(`${req.method} ${path}`)) {
       return deny(404, 'the admin host serves only the admin dashboard', `Workspaces live at ${publicUrl || 'the hub\'s own address'}.`);
     }
     const dir = spaces.directory;
@@ -419,6 +419,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const owner = !!earlyAccess?.owners?.includes(me.email);
     if (req.method === 'GET' && path === '/api/me') return send(200, { email: me.email, owner });
     if (!owner) return deny(403, `${me.email} isn't one of this hub's owners`, "Only the emails the hub host lists in NUWORQ_HUB_OWNERS (--owners) get in. Sign out, then sign in with an owner's account.");
+    // Workspaces and their plans (#169). Plans are stored either way; only --plans enforces them.
+    if (path === '/api/workspaces') return send(200, { enforced: spaces.plans, workspaces: spaces.overview() });
+    if (path === '/api/workspaces/plan') {
+      const b = await body(req);
+      if (!b.workspace) return deny(400, 'workspace is required', 'e.g. { "workspace": "acme", "plan": "unlimited" }');
+      if (!spaces.has(b.workspace)) return deny(404, `no workspace "${b.workspace}"`, 'GET /api/workspaces lists them, by name.');
+      try { spaces.setPlan(b.workspace, b.plan, me.email); } catch (e) { return deny(400, e.message, e.hint); }
+      return send(200, { ok: true, enforced: spaces.plans, workspace: spaces.overview().find((w) => w.name === Workspaces.check(b.workspace)) });
+    }
     await decideRequests(req, url, path, me, { send, deny });
   }
 
@@ -484,6 +493,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (adminHost && req.method === 'GET' && (path === '/requests.html' || path === '/requests.js')) return toAdmin(req, res);
     if (adminHost && (path === '/api/early-access' || path === '/api/early-access/decide')) {
       return deny(403, 'early-access requests are decided on the admin host', `Open ${adminOrigin(req)}/ and sign in there with an owner's account.`);
+    }
+    if (path === '/api/workspaces' || path === '/api/workspaces/plan') {
+      return deny(403, "workspaces and their plans are managed on the admin host", adminHost
+        ? `Open ${adminOrigin(req)}/ and sign in there with an owner's account.`
+        : 'This hub has no admin host: start it with --admin-host (NUWORQ_ADMIN_HOST), or use `nuworq workspace list` and `nuworq workspace plan` on the hub host.');
     }
     // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
     const page = path === '/' ? '/join.html' : path;
