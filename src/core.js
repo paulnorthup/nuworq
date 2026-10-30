@@ -751,8 +751,9 @@ export class Hub extends EventEmitter {
     if (!q) throw new UserError(`No question ${question}`, { status: 404, hint: how });
     if (q.status !== 'answered' || !isHuman(q.answered_by)) throw new UserError(`Question ${q.id} wasn't answered by a person`, { status: 403, hint: `Only a person decides to drop work. ${how}` });
     // The clauses that say drop ("Drop #136-#139; move #140 under #131" has one). Those that name items drop
-    // those items; one that names none ("Drop it") drops the item the question was asked on.
-    const drops = q.answer.split(/[;.\n]|,\s+/).filter((c) => /\bdrop/i.test(c));
+    // those items; one that names none ("Drop it") drops the item the question was asked on. A clause must
+    // start with drop, so "Don't drop it", "Never drop #2" or "dropping would lose the tests" never count.
+    const drops = q.answer.split(/[;.\n]|,\s+/).filter((c) => /^\s*(?:(?:yes|yep|ok|okay|sure|please)\b[\s,:!-]*)*drop\b/i.test(c));
     if (!drops.length) throw new UserError(`The answer to question ${q.id} doesn't say to drop anything ("${clip(q.answer, 60)}")`, { status: 403, hint: how });
     const refs = drops.flatMap((c) => [...c.matchAll(/#(\d+)(?:\s*[-–]\s*#?(\d+))?/g)].map((m) => [Number(m[1]), Number(m[2] ?? m[1])]));
     const named = refs.some(([a, b]) => item.seq >= a && item.seq <= b) || (q.item_id === item.id && drops.some((c) => !/#\d/.test(c)));

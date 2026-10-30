@@ -60,6 +60,19 @@ describe('dropping on a person\'s answer', () => {
     assert.deepEqual(['#1', '#2', '#3'].map(stage).map((s) => s === 'dropped'), [false, false, false]);
   });
 
+  test('an answer that says not to drop it is refused, however it mentions drop', () => {
+    const { hub, op, stage } = world();
+    for (const answer of ["Don't drop it, build it", 'No, do not drop it', 'Never drop #2', 'Keep it; dropping would lose the tests']) {
+      const { question } = op('w1', 'ask', { item: '#2', question: 'Drop it?', blocking: true });
+      hub.humanOp('p', 'answer', { question, answer });
+      assert.throws(() => op('w1', 'refine', { item: '#2', drop: question }), (e) => e.status === 403, answer);
+    }
+    assert.equal(stage('#2'), 'ready');
+    const { question } = op('w1', 'ask', { item: '#2', question: 'Drop it?', blocking: true });
+    hub.humanOp('p', 'answer', { question, answer: 'Yes, drop it' });
+    assert.equal(op('w1', 'refine', { item: '#2', drop: question }).stage, 'dropped');
+  });
+
   test('the guide tells agents to drop on the answer instead of handing the item back', async () => {
     const { guide, tools } = await import('../src/protocol.js');
     assert.match(guide(), /`drop` set to that question/);
