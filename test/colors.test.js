@@ -47,8 +47,9 @@ describe('the color map keeps meanings apart (#188)', () => {
   });
 
   test('the logo is the brand, not a state', () => {
-    for (const f of ['app.js', 'login.html', 'device.html', 'invite.html', 'early-access.html']) {
-      const src = readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8');
+    // Every logo the hub draws, including the flow pages the server renders itself (src/server.js flowPage).
+    for (const f of ['web/app.js', 'web/login.html', 'web/device.html', 'web/invite.html', 'web/early-access.html', 'src/server.js']) {
+      const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
       assert.match(src, /rx="8" fill="var\(--brand\)"/, f);
       assert.doesNotMatch(src, /rx="8" fill="var\(--agents\)"/, f);
     }
