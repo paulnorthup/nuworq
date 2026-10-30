@@ -30,7 +30,7 @@ describe('the hub knows which runners are up (#171)', () => {
       }) });
       assert.equal(r.status, 200, await r.text());
       const [mini] = view(h, 'on').runners;
-      assert.deepEqual(mini, { name: 'mini', machine: 'mini.local', state: 'up', last_seen: dur(0), running: 1, workers: 3, spent: 1.23, stopped: null, paused: null, skipping: null, skipping_others: 2 });
+      assert.deepEqual(mini, { name: 'mini', machine: 'mini.local', seen_at: h.now(), state: 'up', last_seen: dur(0), running: 1, workers: 3, spent: 1.23, stopped: null, paused: null, skipping: null, skipping_others: 2 });
       // Where it skips: the project says so, with why.
       const [there] = view(h, 'also').runners;
       assert.equal(there.state, 'skipping');

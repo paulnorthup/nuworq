@@ -435,10 +435,20 @@ function card(a) {
     ${commits(a.git)}`}
     ${a.warn ? `<div class="warn">⚠ ${esc(a.warn)}</div>` : ''}
     ${a.steps?.length ? stepList(a) : ''}
+    ${a.how?.length ? howList(a.how) : ''}
     ${a.kind === 'proposal' && a.acceptance && !open ? `<div class="more"><div class="label" style="margin-top:0">Done means</div>${md(a.acceptance)}</div>` : ''}
     ${more}
     ${cardActions(a, hasMore, open, key)}
   </article>`;
+}
+
+// What the hub says to do about something it noticed (#173: why nobody is working), as numbered steps with the
+// exact place and how to see it worked. Not a question, so nothing to tick.
+function howList(how) {
+  return `<div class="steps"><ol>${how.map((s, i) => `<li>
+      <div class="step-tick" style="cursor:default"><span class="box" aria-hidden="true">${i + 1}</span><span class="do">${esc(s.do)}</span></div>
+      ${s.where || s.check ? `<div class="step-more">${s.where ? (/^https?:\/\//i.test(s.where) ? `<a class="step-where" href="${esc(s.where)}" target="_blank" rel="noopener">${esc(s.where)}</a>` : copyBlock(s.where)) : ''}${s.check ? `<div class="step-check">${esc(s.check)}</div>` : ''}</div>` : ''}
+    </li>`).join('')}</ol></div>`;
 }
 
 // A question's steps as a checklist the person ticks off (#162), shown at every depth. The row is the tick target;
@@ -495,7 +505,10 @@ function cardActions(a, hasMore, open, key) {
     </div>`;
   }
   if (a.kind === 'no-agents') {
-    return `<div class="actions"><button class="btn primary" data-action="connect">Start an agent</button><button class="btn ghost" data-action="park">Park this project</button></div>`;
+    // The one fix first: let nuworq run staff it when that's all it takes; otherwise start an agent.
+    return `<div class="actions">${a.staff
+      ? '<button class="btn primary" data-action="runner-on">Let nuworq run staff this project</button><button class="btn" data-action="connect">Start an agent</button>'
+      : '<button class="btn primary" data-action="connect">Start an agent</button>'}<button class="btn ghost" data-action="park">Park this project</button></div>`;
   }
   const moreBtn = hasMore ? `<button class="link" data-action="toggle" data-key="${esc(key)}">${open ? 'Less' : 'Why it needs you'}</button>` : '';
   if (a.kind === 'question') {

@@ -628,23 +628,28 @@ export class Hub extends EventEmitter {
   // The runners that staff a project (it lets nuworq run in, and their token reaches it), as they last said,
   // seen within a week. One silent for 3 of its polls is down; one that said it stopped is stopped.
   runnersOf(p) {
-    if (!p.runner) return [];
+    return p.runner ? this.runnersFor(p.slug) : [];
+  }
+
+  // Every runner whose token reaches this project, staffing it or not, as it would be for this project (#173:
+  // Needs you says why nothing works here). seen_at: when it last reported (ms).
+  runnersFor(slug) {
     const t = this.now();
     return this.q('SELECT * FROM runners WHERE seen_at > ? ORDER BY name').all(t - 7 * DAY)
-      .filter((r) => !r.scope || r.scope.split(',').includes(p.slug))
+      .filter((r) => !r.scope || r.scope.split(',').includes(slug))
       .map((r) => {
         const s = json(r.state, {});
         const down = t - r.seen_at > RUNNER_DOWN_POLLS * r.poll_ms;
-        const skip = (s.skipping ?? []).find((x) => x.project === p.slug);
+        const skip = (s.skipping ?? []).find((x) => x.project === slug);
         return {
-          name: r.name, machine: r.machine,
+          name: r.name, machine: r.machine, seen_at: r.seen_at,
           state: s.stopped ? 'stopped' : down ? 'down' : s.paused?.until > t ? 'paused' : skip ? 'skipping' : 'up',
           last_seen: dur(t - r.seen_at), running: s.running ?? 0, workers: s.workers ?? 0, spent: s.spent ?? 0,
           stopped: s.stopped ?? null,
           paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t) } : null,
           // Why it leaves this project alone, if it does; and how many others it leaves alone.
           skipping: skip ? { reason: skip.reason, ...(skip.until > t ? { for: dur(skip.until - t) } : {}) } : null,
-          skipping_others: (s.skipping ?? []).filter((x) => x.project !== p.slug).length,
+          skipping_others: (s.skipping ?? []).filter((x) => x.project !== slug).length,
         };
       });
   }
