@@ -4,7 +4,8 @@
 // What to launch now. routes: the hub's /api/route?runner=1 (value order, one entry per project, with
 // how much is claimable and who holds work there). running: live workers this runner started.
 // A worker that hasn't claimed anything yet still counts against its project's claimable work,
-// so one waiting item never draws a herd.
+// so one waiting item never draws a herd. r.limit: the most agents working in that project at once, set on
+// the hub (#174): everyone holding work there, and this runner's workers that haven't claimed yet, count.
 export function plan(routes, running, { workers = 1, maxRuns = Infinity, launched = 0 } = {}) {
   let slots = Math.min(workers - running.length, maxRuns - launched);
   const out = [];
@@ -12,7 +13,8 @@ export function plan(routes, running, { workers = 1, maxRuns = Infinity, launche
     if (slots <= 0) break;
     const held = new Set(r.holders ?? []);
     const idle = running.filter((w) => w.project === r.project && !held.has(w.name)).length;
-    const n = Math.min(slots, (r.claimable ?? 1) - idle);
+    const room = r.limit == null ? Infinity : r.limit - held.size - idle;
+    const n = Math.min(slots, (r.claimable ?? 1) - idle, room);
     for (let i = 0; i < n; i++) out.push(r);
     slots -= Math.max(n, 0);
   }

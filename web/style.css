@@ -580,6 +580,10 @@ main.admin { padding-top: 24px; }
 .admin-link { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .admin-link code { display: block; padding: 8px; word-break: break-all; user-select: all; }
 .admin-h2 { margin-top: 28px; }
+/* Asked once per new project (#174): may nuworq run staff it? */
+.staff-ask { background: var(--you-tint); border: 1px solid var(--you-line); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 14px; }
+.staff-ask .actions { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.staff-ask .btn { min-height: 44px; }
 .admin-space summary { min-height: 44px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; cursor: pointer; list-style: none; }
 .admin-space summary::-webkit-details-marker { display: none; }
 .admin-space summary .faint { flex-basis: 100%; font-size: 13px; }

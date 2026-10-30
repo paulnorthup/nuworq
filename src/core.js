@@ -281,7 +281,7 @@ export class Hub extends EventEmitter {
     let p = this.q('SELECT * FROM projects WHERE slug = ?').get(s)
       ?? this.q('SELECT * FROM projects WHERE lower(name) = lower(?) ORDER BY id LIMIT 1').get(String(slug).trim());
     if (!p && create) {
-      this.q('INSERT INTO projects (slug, name, created_at, fresh_at) VALUES (?, ?, ?, ?)').run(s, str(name) || s, this.now(), this.now());
+      this.q('INSERT INTO projects (slug, name, created_at, fresh_at, staff_asked) VALUES (?, ?, ?, ?, 0)').run(s, str(name) || s, this.now(), this.now());
       p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);
       this.event(p, { actor: SYSTEM, type: 'project', headline: `Project ${p.name} created` });
     }
@@ -579,6 +579,8 @@ export class Hub extends EventEmitter {
     const options = [];
     for (const p of this.projects()) {
       if (p.parked || (runner && !p.runner) || (scope && !scope.includes(p.slug))) continue;
+      // Runners follow the project's staffing (#174): paused, or today's budget spent, starts no one new.
+      if (runner && this.staffing(p).stopped) continue;
       const all = this.claimable(p, agent, { powers, has });
       // A race with open slots can take that many workers at once.
       if (all.length) options.push({ p, ...all[0], claimable: all.reduce((n, o) => n + (this.racing(o.item) ? this.openSlots(o.item) : 1), 0) });
@@ -592,11 +594,26 @@ export class Hub extends EventEmitter {
       mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.priority,
       waiting: dur(this.now() - o.item.stage_since), claimable: o.claimable,
       slots: this.racing(o.item) ? this.openSlots(o.item) : undefined, // a race with open slots can take that many workers
-      // Who is on work here: holders, and racers (whose leases live in attempts).
+      // Who is on work here: holders, and racers (whose leases live in attempts). limit: the most agents working
+      // here at once, from the project's staffing (null: the runner's own --workers).
       ...(runner ? { holders: this.q(`SELECT holder FROM items WHERE project_id = ? AND holder IS NOT NULL
           UNION SELECT a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND a.stage = 'active' AND a.closed = 0`)
-        .all(o.p.id, o.p.id).map((h) => h.holder) } : {}),
+        .all(o.p.id, o.p.id).map((h) => h.holder), limit: o.p.run_workers ?? null } : {}),
     }));
+  }
+
+  // A project's staffing (#174), as runners follow it: the worker limit (null: each runner's own), paused, the
+  // daily budget and what was recorded spent there today (UTC, every agent and source), and whether runners
+  // start no one new now (stopped: 'paused' | 'budget' | null).
+  staffing(p) {
+    const day = Math.floor(this.now() / DAY) * DAY;
+    const spent = this.q('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage WHERE project_id = ? AND at >= ?').get(p.id, day).s;
+    const budget = p.run_budget ?? null;
+    return {
+      workers: p.run_workers ?? null, paused: !!p.run_paused, budget, spent_today: Math.round(spent * 100) / 100,
+      stopped: p.run_paused ? 'paused' : budget != null && spent >= budget ? 'budget' : null,
+      asked: !!p.staff_asked,
+    };
   }
 
   // How many jobs an agent took since a moment, across the projects a token may reach: tells
@@ -2773,8 +2790,29 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget }, by) {
     const changes = [];
+    // Staffing (#174): blank clears the limit or the budget.
+    if (run_workers !== undefined) {
+      const n = run_workers === null || run_workers === '' ? null : Number(run_workers);
+      if (n !== null && (!Number.isInteger(n) || n < 1 || n > 100)) throw new UserError('run_workers is a whole number of workers from 1 to 100', { hint: 'Leave it blank to let each runner use its own --workers.' });
+      if (n !== (p.run_workers ?? null)) {
+        this.q('UPDATE projects SET run_workers = ? WHERE id = ?').run(n, p.id);
+        this.event(p, { actor: by, type: 'runner', headline: n ? `${You(by)} let at most ${n} worker${n === 1 ? '' : 's'} work here at once` : `${You(by)} let each runner decide how many workers it starts here` });
+      }
+    }
+    if (run_budget !== undefined) {
+      const usd = run_budget === null || run_budget === '' ? null : Math.round(Number(run_budget) * 100) / 100;
+      if (usd !== null && !(usd > 0)) throw new UserError('run_budget is dollars per day, more than 0', { hint: 'e.g. 20, or leave it blank for no daily budget.' });
+      if (usd !== (p.run_budget ?? null)) {
+        this.q('UPDATE projects SET run_budget = ? WHERE id = ?').run(usd, p.id);
+        this.event(p, { actor: by, type: 'runner', headline: usd ? `${You(by)} set a daily budget of $${usd.toFixed(2)} for workers here` : `${You(by)} removed the daily budget for workers here` });
+      }
+    }
+    if (run_paused != null && !!run_paused !== !!p.run_paused) {
+      this.q('UPDATE projects SET run_paused = ? WHERE id = ?').run(run_paused ? 1 : 0, p.id);
+      this.event(p, { actor: by, type: 'runner', headline: run_paused ? `${You(by)} paused staffing: runners start no new workers here; running ones finish` : `${You(by)} resumed staffing here` });
+    }
     // The weekly freshness sweep (src/freshness.js). Back on, one opens once a week has passed since the last.
     if (fresh != null && !!fresh !== !!p.fresh) {
       this.q('UPDATE projects SET fresh = ? WHERE id = ?').run(fresh ? 1 : 0, p.id);
@@ -2798,6 +2836,8 @@ const HUMAN_OPS = {
       this.q('UPDATE projects SET issue_label = ? WHERE id = ?').run(str(issue_label), p.id);
       this.event(p, { actor: by, type: 'github', headline: str(issue_label) ? `${You(by)} set GitHub issues to come in only with the label "${str(issue_label)}"` : `${You(by)} let every open GitHub issue come in` });
     }
+    // Either answer to "may nuworq run staff it?" is the answer: the project doesn't ask again.
+    if (runner != null && !p.staff_asked) this.q('UPDATE projects SET staff_asked = 1 WHERE id = ?').run(p.id);
     if (runner != null && !!runner !== !!p.runner) {
       this.q('UPDATE projects SET runner = ? WHERE id = ?').run(runner ? 1 : 0, p.id);
       this.event(p, { actor: by, type: 'runner', headline: runner ? `${You(by)} let \`nuworq run\` start workers here` : `${You(by)} stopped \`nuworq run\` starting workers here` });
