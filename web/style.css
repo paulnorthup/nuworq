@@ -397,6 +397,11 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 .app-status.created .dot { background: var(--warn); }
 .app-status.installed .dot { background: var(--ok); }
 .app-status .btn { flex: none; text-decoration: none; }
+.app-status.alerts { align-items: flex-start; }
+.app-status.alerts .dot { margin-top: 7px; }
+.app-status.alerts > div { flex: 1 1 0; min-width: 0; }
+.app-status ol { margin: 6px 0 0; padding-left: 20px; color: var(--muted); }
+.app-status li { margin: 4px 0; overflow-wrap: anywhere; }
 .flow-card h1 { font-size: 18px; margin: 0; }
 .flow-card .btn { text-align: center; text-decoration: none; }
 .flow-form { display: flex; flex-direction: column; }

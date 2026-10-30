@@ -4,6 +4,7 @@ export const NEW = {
   home: '2026-10-29', // #126: the home, everything that needs you across projects (the rail's Projects link)
   'github-app-status': '2026-10-29', // #94: where the hub's GitHub App stands, in Connect an agent
   'step-checklist': '2026-10-30', // #162: a question's steps as a checklist on its Needs you card
+  'dependabot-alerts': '2026-10-30', // #180: whether Dependabot alerts come in, in a project's GitHub dialog
 };
 
 const DAYS = 7;

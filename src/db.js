@@ -238,6 +238,28 @@ CREATE TABLE IF NOT EXISTS issues (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (project_id, repo, number)
 );
+-- Dependabot alerts that came in as items (src/alerts.js): one item per alert, ever.
+CREATE TABLE IF NOT EXISTS alerts (
+  project_id INTEGER NOT NULL,
+  repo       TEXT NOT NULL,                   -- normalized: github.com/acme/api
+  number     INTEGER NOT NULL,
+  item_id    INTEGER NOT NULL,
+  state      TEXT NOT NULL,                   -- open | fixed | dismissed
+  url        TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, repo, number)
+);
+-- Whether the hub can read a repository's Dependabot alerts: '' yes, 'off' (alerts are off for the repo),
+-- 'permission' (the app's installation hasn't accepted "Dependabot alerts: read"), 'error' (anything else).
+CREATE TABLE IF NOT EXISTS alert_access (
+  project_id INTEGER NOT NULL,
+  repo       TEXT NOT NULL,
+  problem    TEXT NOT NULL DEFAULT '',
+  url        TEXT NOT NULL DEFAULT '',        -- where a person fixes it
+  detail     TEXT NOT NULL DEFAULT '',        -- what GitHub said
+  at         INTEGER NOT NULL,
+  PRIMARY KEY (project_id, repo)
+);
 
 CREATE TABLE IF NOT EXISTS checks (
   project_id INTEGER NOT NULL,

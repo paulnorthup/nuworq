@@ -84,7 +84,9 @@ describe('GitHub issues come in as proposals', () => {
 
       await install();
       const re = await fetch(`${base}/api/p/app/github/resync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-      assert.deepEqual(await re.json(), { ok: true, issues: 3, commented: 0 });
+      const { alerts, ...issues } = await re.json();
+      assert.deepEqual(issues, { ok: true, issues: 3, commented: 0 });
+      assert.equal(alerts.alerts, 0, 'this fake GitHub has no alerts to give');
       assert.equal(items().length, 3, 'no new items');
       assert.equal(gh.state.comments.length, 3, 'no new comments');
     } finally { close(); }
