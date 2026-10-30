@@ -16,7 +16,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'early-access']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'early-access', 'install', 'uninstall']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -518,8 +518,33 @@ function workerSetup(target, agent, flags, s, token = null) {
   };
 }
 
+// `nuworq run --install [run flags]`: the same runner as a LaunchAgent (macOS) or systemd user unit (Linux), so
+// it outlives the terminal and comes back after a reboot. --uninstall stops and removes it (#172).
+async function runService(flags) {
+  const svc = await import('../src/service.js');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const { userInfo } = await import('node:os');
+  const exec = (cmd, args) => promisify(execFile)(cmd, args);
+  const where = { platform: process.platform, home: homedir(), uid: userInfo().uid, exec };
+  if (flags.uninstall) {
+    const r = await svc.uninstall(where).catch((e) => { throw new HubError(e.message, { hint: e.hint }); });
+    return console.log(r.removed ? `${green('Removed')} the ${r.kind} ${dim(r.file)}: the runner has stopped.` : dim(`No runner was installed (${r.file}).`));
+  }
+  let args;
+  try { args = svc.serviceArgs(process.argv.slice(3)); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+  const log = join(dirname(HUB_FILE), 'logs', 'run.log');
+  const r = await svc.install({ ...where, command: [process.execPath, BIN, 'run', ...args], env: svc.serviceEnv(), log })
+    .catch((e) => { throw new HubError(e.message, { hint: e.hint ?? 'Run it without --install to see what goes wrong.' }); });
+  console.log(`${green('●')} Installed ${bold('nuworq run')} as a ${r.kind}: it starts now, after every reboot, and again if it stops.
+  Wrote:   ${r.file}
+  Log:     ${r.log}
+  Remove:  ${r.uninstall}${process.platform === 'linux' ? `\n  ${dim('To keep it running while you are logged out: loginctl enable-linger')}` : ''}`);
+}
+
 // Keep up to --workers headless workers on waiting work in the projects the human opted in.
 async function runCmd(flags) {
+  if (flags.install || flags.uninstall) return runService(flags);
   const s = resolveSettings(flags);
   const agent = agentOf(flags);
   const client = createClient(flags);
@@ -529,7 +554,7 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run } = await import('../src/runner.js');
+  const { run, cleanWorktree } = await import('../src/runner.js');
   const logs = join(dirname(HUB_FILE), 'logs');
   mkdirSync(logs, { recursive: true });
 
@@ -572,6 +597,12 @@ async function runCmd(flags) {
       exited: new Promise((done) => child.on('close', async (code, sig) => {
         out.end();
         await reportUsage(s, token, target.slug, name, usage());
+        // Its worktree goes with it, unless something there would be lost.
+        if (worktree) {
+          const git = async (args) => (await promisify(execFile)('git', args, { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout;
+          const r = await cleanWorktree(worktree, git).catch((e) => ({ kept: true, why: `git couldn't remove it (${String(e.stderr || e.message).trim().split('\n')[0]})` }));
+          if (r.kept) console.log(dim(`  kept ${name}'s worktree, ${worktree}: ${r.why}`));
+        }
         done(code ?? (sig ? `${sig}` : 1));
       })),
       spent: () => usage()?.cost_usd ?? 0, // what its CLI said it cost, for --max-usd
@@ -1196,7 +1227,13 @@ ${bold('Setup')}
                                          once workers' reported spend reaches X (codex and local models
                                          report no cost, so they don't count against it).
                                          --browser: each worker gets a browser, as with worker --browser.
-  update                                 install the hub's newer nuworq now, if it is signed by the release key
+                                         A worker's worktree is removed when it exits, unless it holds
+                                         uncommitted changes or commits on no branch (then it says where).
+  run --install [run flags] | run --uninstall
+                                         the same runner as a service: a LaunchAgent (macOS) or systemd
+                                         user unit (Linux) that survives closed terminals and reboots;
+                                         installing again replaces it. Log: ~/.nuworq/logs/run.log
+  update                               install the hub's newer nuworq now, if it is signed by the release key
                                          this install pinned (otherwise, or offline, it keeps this version and
                                          says why). Every command checks by itself at most every 10 minutes;
                                          NUWORQ_NO_UPDATE=1 turns that off.
