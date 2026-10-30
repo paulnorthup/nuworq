@@ -316,6 +316,7 @@ export function openDb(file) {
     "ALTER TABLE questions ADD COLUMN audience TEXT NOT NULL DEFAULT ''", // 'operator' (ask to: "operator"): an operator session answers, not the human; '' otherwise
     'ALTER TABLE questions ADD COLUMN escalates INTEGER', // an operator's escalation to the human: the operator question it carries up
     "ALTER TABLE questions ADD COLUMN evidence TEXT NOT NULL DEFAULT '[]'", // an escalation's evidence: [{ label, url? }]
+    "ALTER TABLE questions ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'", // what the person must do, in order: [{ do, where?, check? }]
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

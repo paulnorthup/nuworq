@@ -74,6 +74,11 @@ export const OPS = [
       context: s('Why it matters and what you already know (the 5-minute version).'),
       detail: s('Optional. Everything else: findings, trade-offs, links.'),
       options: { type: 'array', items: { type: 'string' }, description: 'Optional. Likely answers the human can pick with one click.' },
+      steps: {
+        type: 'array', maxItems: 12,
+        items: { type: 'object', properties: { do: s('What to do, with exact values.'), where: s('Optional. The exact place: a URL, or a command in backticks.'), check: s('Optional. How the person sees it worked.') }, required: ['do'] },
+        description: 'Required when a person must do something (not just decide); the hub refuses such a question without them. What to do, in order, e.g. [{ "do": "Open the repository\'s Actions secrets", "where": "https://github.com/acme/api/settings/secrets/actions" }, { "do": "Click New repository secret, name it NPM_TOKEN, paste the token", "check": "NPM_TOKEN is listed" }].',
+      },
       assumption: s('What you will assume and proceed with unless told otherwise.'),
       blocking: { type: 'boolean', description: 'True only if you cannot make progress without an answer. Defaults to false when you give an assumption.' },
       to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: 'Optional. "operator": something you can\'t settle alone but a trusted, attended session can (running things, permissions, verifying on real infra); an operator answers, not the human. "reporter": for an item that came from a GitHub issue, ask the person who opened it, on the issue. The item parks until they reply; after a wait, the human can answer instead. Left out, the hub picks: running a command, permissions, credentials or infra go to an operator (e.g. "can\'t run `claude` without approval"); direction, scope, money, publishing, deleting or anything unclear goes to the human (e.g. "approve browser workers?"). The response says which it picked; pass `to` to choose yourself.' },
@@ -316,6 +321,7 @@ Hub: ${url} · project: ${project} (change with --project).
    - Can you make a reasonable call? ${c('ask')} with an \`assumption\` and keep going.
    - Truly blocked? ${c('ask')} with \`blocking\`. The item parks; take other work with ${c('next')}.
    - About running things, permissions, or verifying on real infra? Ask \`to: "operator"\`, not the human. Leave out \`to\` and the hub picks: "can't run \`claude\` without approval" goes to an operator, "approve browser workers?" to the human, and anything unclear to the human. The response's \`routed\` says which; pass \`to\` to override.
+   - Does a person have to do something (not just decide)? Give \`steps\`: in order, each with what to do (exact values), \`where\` (the URL or command) and \`check\` (how they see it worked), e.g. \`[{ "do": "Open the repository's Actions secrets", "where": "https://github.com/acme/api/settings/secrets/actions" }, { "do": "Click New repository secret, name it NPM_TOKEN, paste the token", "check": "NPM_TOKEN is listed" }]\`. The hub refuses such a question without them. Escalations too.
 5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it. Every item has its own branch, cut from the latest main (the claim names it), so it can land on its own. If you're told main moved, rebase early.
 6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for.
 7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item.
