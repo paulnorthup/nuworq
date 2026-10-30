@@ -253,15 +253,15 @@ function renderRail() {
     </div>`;
 }
 
-// On a hub with organizations: which one this is, the others you belong to (one click signs you in there),
+// On a hub with workspaces: which one this is, the others you belong to (one click signs you in there),
 // and making a new one.
 function orgSwitcher() {
   if (!S.me?.org) return '';
   const orgs = S.me.orgs ?? [];
   const row = (o) => `<span class="org-name">${esc(o.workspace)}</span><span class="org-role">${esc(o.role)}</span>`;
-  return `<details class="org-switch" ${S.orgOpen ? 'open' : ''}><summary title="Switch organization"><span class="org-name">${esc(S.me.org)}</span><span class="org-caret">▾</span></summary>
+  return `<details class="org-switch" ${S.orgOpen ? 'open' : ''}><summary title="Switch workspace"><span class="org-name">${esc(S.me.org)}</span><span class="org-caret">▾</span></summary>
     <div class="org-menu">${orgs.length > 1 ? orgs.map((o) => o.current ? `<span class="org-item on">${row(o)}</span>` : `<a class="org-item" href="${esc(o.enter)}">${row(o)}</a>`).join('') : ''}
-    <a class="org-item" href="${esc(S.me.new_org)}">+ New organization</a></div></details>`;
+    <a class="org-item" href="${esc(S.me.new_org)}">+ New workspace</a></div></details>`;
 }
 
 // What is live, e.g. "v0.2.0 · c3a3008", the commit linked to GitHub when the hub's code came from there.
@@ -892,8 +892,8 @@ function renderDrawer() {
     ${deep}`;
 }
 
-// ── a new organization: step 2 (its first project, with its repositories) and step 3 (connect a machine) ──
-// Step 1, naming the organization, is on the hub's own address (web/join.js).
+// ── a new workspace: step 2 (its first project, with its repositories) and step 3 (connect a machine) ──
+// Step 1, naming the workspace, is on the hub's own address (web/join.js).
 function firstProject() {
   return `<div class="phead"><div class="titles"><h1>${esc(S.me.org)}</h1></div></div>
     <div class="setup">
@@ -913,7 +913,7 @@ function connectStep(r) {
     <h2>${esc(r.name)} is ready</h2>
     ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
     ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${copyBlock(c.clone)}` : ''}
-    <h4>Connect it to ${esc(S.me.org)}</h4><p class="lead">It signs you in through the browser, saves a fresh agent token for this organization, and registers nuworq with Claude Code and Codex if they're installed.</p>${copyBlock(c.connect ?? c.guide)}
+    <h4>Connect it to ${esc(S.me.org)}</h4><p class="lead">It signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code and Codex if they're installed.</p>${copyBlock(c.connect ?? c.guide)}
     <h4>Start a worker in a clone of the repository</h4>${copyBlock(c.worker)}
     <div class="foot"><button class="btn primary" data-action="goto-new" data-slug="${esc(r.slug)}">Open the board</button></div>`);
 }
@@ -1045,7 +1045,7 @@ async function appCovers(P) {
 function newProject() {
   const gh = S.info?.github_app;
   const picker = gh && gh !== 'create' && !S.info?.workspace;
-  const why = S.info?.workspace ? 'On a hub with workspaces, add a project by name for now: the shared GitHub App would list other organizations\' repositories.'
+  const why = S.info?.workspace ? 'On a hub with workspaces, add a project by name for now: the shared GitHub App would list other workspaces\' repositories.'
     : gh === 'create' ? 'To pick a repository instead, <a href="api/github/app/new">create the GitHub App</a> (one click) and install it on your repositories.'
     : !gh ? 'With the hub\'s GitHub App, you could pick a repository here instead; an owner creates it from Connect an agent.' : '';
   modal(`<h2>New project</h2>
@@ -1385,7 +1385,7 @@ for (const type of ['click', 'focusin']) {
     if (el) { markSeen(el.dataset.new); markNew(document); }
   }, true);
 }
-// The rail re-renders on every update: the organization menu stays as the person left it.
+// The rail re-renders on every update: the workspace menu stays as the person left it.
 document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) S.orgOpen = e.target.open; }, true);
 
 // ── live updates ──

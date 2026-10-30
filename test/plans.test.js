@@ -88,7 +88,7 @@ describe('plan limits', () => {
       const { hub: a } = org(spaces, 'acme', 0);
       const { hub: b, op } = org(spaces, 'beta', 0);
       a.addRemote(a.project('app'), 'github.com/acme/api', 'you');
-      assert.throws(() => b.addRemote(b.project('app'), 'git@github.com:acme/api.git', 'you'), (e) => e.status === 402 && /already in the free organization acme/.test(e.message));
+      assert.throws(() => b.addRemote(b.project('app'), 'git@github.com:acme/api.git', 'you'), (e) => e.status === 402 && /already in the free workspace acme/.test(e.message));
       // An agent checking in from a clone of it: the checkin goes on, the repository stays unlinked in beta.
       assert.ok(b.agentOp('app', 'checkin', 'x', {}, { remote: 'github.com/acme/api' }));
       assert.deepEqual(b.remotesOf(b.project('app')), []);
@@ -111,7 +111,7 @@ describe('plan limits', () => {
       assert.equal((await create(bob, 'bobs')).status, 200);
       const second = await create(bob, 'bobs-two');
       assert.equal(second.status, 402);
-      assert.match((await second.json()).error, /already have a free organization \(bobs\)/);
+      assert.match((await second.json()).error, /already have a free workspace \(bobs\)/);
       spaces.setPlan('bobs', 'unlimited');
       assert.equal((await create(bob, 'bobs-two')).status, 200, 'with the first one upgraded, one free one is allowed again');
       const paul = signIn(PAUL);

@@ -89,14 +89,14 @@ export class GitHubApp {
       throw new UserError("this hub can't check who installed the app: it has no client id and secret for it", { status: 424, hint: 'Set NUWORQ_GITHUB_APP_CLIENT_ID and NUWORQ_GITHUB_APP_CLIENT_SECRET from the app\'s settings page (docs/GITHUB.md), then install again.' });
     }
     if (!code) {
-      throw new UserError("GitHub didn't say who installed the app", { hint: 'In the app\'s settings, tick "Request user authorization (OAuth) during installation", then install again from your organization.' });
+      throw new UserError("GitHub didn't say who installed the app", { hint: 'In the app\'s settings, tick "Request user authorization (OAuth) during installation", then install again from your workspace.' });
     }
     const t = await fetch(`${this.web}/login/oauth/access_token`, {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'nuworq' },
       body: JSON.stringify({ client_id: this.clientId, client_secret: this.clientSecret, code }), signal: AbortSignal.timeout(10_000),
     });
     const tok = (await t.json().catch(() => ({}))).access_token;
-    if (!tok) throw new UserError("GitHub didn't accept the install's authorization code (it works once, for 10 minutes)", { hint: 'Install again from your organization.' });
+    if (!tok) throw new UserError("GitHub didn't accept the install's authorization code (it works once, for 10 minutes)", { hint: 'Install again from your workspace.' });
     for (let page = 1; page <= 10; page++) {
       const r = await this.call('GET', `/user/installations?per_page=100&page=${page}`, null, tok);
       if (r.status !== 200) throw new UserError(`GitHub didn't list your installations (${r.status})`, { status: 502, hint: 'Try the install again in a minute.' });
@@ -204,8 +204,8 @@ export class GitHubApp {
     if (inst.status !== 200 || !inst.json.id) throw new UserError(`GitHub didn't say whether the app can reach ${owner}/${name} (${inst.status})`, { status: 502, hint: 'Check the app id and private key the hub was started with; try again in a minute.' });
     // On a shared hub, one organization's view of the app reaches only installations bound to it (scoped).
     if (this.allows && !this.allows(inst.json.id)) {
-      throw new UserError(`The nuworq GitHub App on ${owner}/${name} was installed for another organization, not this one`, {
-        status: 403, hint: `An owner of ${owner} installs the app for this organization, starting from its Connect page, so the hub knows the installation is yours.`,
+      throw new UserError(`The nuworq GitHub App on ${owner}/${name} was installed for another workspace, not this one`, {
+        status: 403, hint: `An owner of ${owner} installs the app for this workspace, starting from its Connect page, so the hub knows the installation is yours.`,
       });
     }
     const tok = await this.call('POST', `/app/installations/${inst.json.id}/access_tokens`, { repositories: [name], permissions });

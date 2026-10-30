@@ -173,9 +173,9 @@ const refsOf = (path) => git(path, 'for-each-ref', '--format=%(objectname) %(ref
 function fetchPlan(dir, remote, { keys = null, https = null, hosted = false } = {}) {
   const path = mirrorPath(dir, remote), source = mirrorSource(remote);
   if (!path || !source) return { error: `${remote} isn't a repository address the hub can fetch` };
-  if (hosted && source.startsWith('/')) return { error: `${remote} is a path on the hub's machine, which an organization on a shared hub can't read` };
+  if (hosted && source.startsWith('/')) return { error: `${remote} is a path on the hub's machine, which a workspace on a shared hub can't read` };
   const ssh = https ? null : sshCommandFor(keys, remote) || null;
-  if (hosted && !https && !ssh) return { error: `this organization has no access to ${remote} yet: install the nuworq GitHub App for it, or add a deploy key` };
+  if (hosted && !https && !ssh) return { error: `this workspace has no access to ${remote} yet: install the nuworq GitHub App for it, or add a deploy key` };
   const env = https ? tokenEnv(https.url, https.token) : {};
   const from = https?.url ?? source;
   const disk = !https && source.startsWith('/');

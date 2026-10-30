@@ -361,11 +361,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (!app) return deny(404, 'this hub has no GitHub App');
       const ws = readInstallState(app, url.searchParams.get('state'));
       const id = Number(url.searchParams.get('installation_id'));
-      if (!ws || !spaces.has(ws) || !id) return deny(400, "this install didn't start from an organization on this hub, or its link expired", 'Open your organization, then Connect → Install the GitHub App, and finish the install within the hour.');
+      if (!ws || !spaces.has(ws) || !id) return deny(400, "this install didn't start from a workspace on this hub, or its link expired", 'Open your workspace, then Connect → Install the GitHub App, and finish the install within the hour.');
       if (!(await app.installedBy(url.searchParams.get('code'), id))) {
-        return deny(403, `GitHub says you can't see installation ${id}, so it isn't bound to ${ws}`, 'Install the app from your organization on an account or repositories you manage, and let GitHub send you back here.');
+        return deny(403, `GitHub says you can't see installation ${id}, so it isn't bound to ${ws}`, 'Install the app from your workspace on an account or repositories you manage, and let GitHub send you back here.');
       }
-      if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another organization on this hub', 'Install the app for this organization on its own account or repositories.');
+      if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another workspace on this hub', 'Install the app for this workspace on its own account or repositories.');
       return redirect(res, `/w/${encodeURIComponent(ws)}/#github-installed`);
     }
     // Early access: anyone may ask to come in (a Turnstile token and a per-address limit keep bots out).
@@ -436,13 +436,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const b = await body(req);
       const slug = Workspaces.check(b.slug || slugify(b.name ?? ''));
       if (spaces.has(slug)) throw new UserError(`"${slug}" is taken`, { status: 409, hint: 'Pick another name for the address.' });
-      if (dir.createdBy(me, spaces) >= orgCap) return deny(429, `you have created ${orgCap} organizations, the most this hub allows`, 'Ask the hub host to raise --org-cap, or use one you have.');
+      if (dir.createdBy(me, spaces) >= orgCap) return deny(429, `you have created ${orgCap} workspaces, the most this hub allows`, 'Ask the hub host to raise --org-cap, or use one you have.');
       // Plans on: one free organization per signed-in account (organizations the hub owner is in are never free).
       const free = spaces.plans ? spaces.freeCreatedBy(me) : [];
-      if (free.length) return deny(402, `you already have a free organization (${free[0]}); an account gets one`, `Use ${free[0]}, or upgrade it to Pro and then create more.`);
+      if (free.length) return deny(402, `you already have a free workspace (${free[0]}); an account gets one`, `Use ${free[0]}, or upgrade it to Pro and then create more.`);
       // In early access, an organization takes an approved request's grant (its owners need none).
       if (earlyAccess?.gate && !owner && !dir.useGrant(b.grant, me)) {
-        return deny(403, 'nuworq is in early access: making an organization takes an invitation', 'Request access on nuworq.com; the link you get when you are let in makes your organization.');
+        return deny(403, 'nuworq is in early access: making a workspace takes an invitation', 'Request access on nuworq.com; the link you get when you are let in makes your workspace.');
       }
       try { spaces.create(slug); } catch (e) { if (earlyAccess?.gate && !owner) dir.returnGrant(b.grant); throw e; }
       const hub = spaces.get(slug);
@@ -696,7 +696,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Install the app for this organization: on a shared hub, the installation is bound to it on the way back.
       if (req.method === 'GET' && path === '/api/github/install') {
         if (!app?.slug) return deny(404, 'this hub has no GitHub App to install', 'The hub host sets one up (docs/GITHUB.md).');
-        if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't install the app for this organization`, 'Ask an owner.');
+        if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't install the app for this workspace`, 'Ask an owner.');
         return redirect(res, spaces ? `${app.installUrl()}?state=${encodeURIComponent(installState(app, hub.workspace))}` : app.installUrl());
       }
       if (req.method === 'GET' && path === '/api/github/app/new') {
@@ -716,7 +716,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 <p class="lead">Workers push through this app: a token for one repository, for an hour, so nobody holds a lasting GitHub credential. It can push branches, open pull requests, and read CI and issues on the repositories you install it on, and nothing else.</p>
 <p class="lead">Next, GitHub shows the app${org ? ` for <b>${q(org)}</b>` : ' on your account'} with its name and permissions filled in, and asks you to confirm. Then it asks which repositories it may use, and you come back here with <b>+ Project</b> open on them.</p>
 <form method="post" action="${q(action)}" class="flow-form"><input type="hidden" name="manifest" value="${q(m)}"><button class="btn primary" type="submit">Create GitHub App</button></form>
-<p class="hint">${org ? `For your account instead, open this page without ?org.` : 'For an organization, open this page with ?org=&lt;name&gt;.'} <a href="${base}/#/">Back to nuworq</a></p>`), 'text/html; charset=utf-8');
+<p class="hint">${org ? `For your account instead, open this page without ?org.` : 'For a GitHub organization, open this page with ?org=&lt;name&gt;.'} <a href="${base}/#/">Back to nuworq</a></p>`), 'text/html; charset=utf-8');
       }
       if (path === '/api/invites' || path === '/api/invites/revoke') {
         if (personRole !== 'owner') return deny(403, 'only an owner invites people', 'Ask an owner of this workspace.');
@@ -817,7 +817,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // The repositories the GitHub App can see, to make a project from one. Single hub only: on a workspaces hub
       // the app is shared, and its installations would show other organizations' repository names.
       if (req.method === 'GET' && path === '/api/github/repos') {
-        if (spaces) return deny(403, 'on a hub with workspaces, projects are added by name and remote for now', 'The shared GitHub App would list other organizations\' repositories.');
+        if (spaces) return deny(403, 'on a hub with workspaces, projects are added by name and remote for now', 'The shared GitHub App would list other workspaces\' repositories.');
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't add projects`, 'Ask an owner or steward.');
         if (!app) return deny(404, 'this hub has no GitHub App, so it can\'t list repositories', 'An owner creates one in one click: /api/github/app/new (Connect an agent → GitHub App). Or add the project by name and remote.');
         const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase();

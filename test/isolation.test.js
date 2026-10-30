@@ -114,7 +114,7 @@ describe('a shared hub keeps organizations apart', () => {
     const as = (ws) => app.scoped((id) => spaces.directory.installation(id) === ws);
     try {
       // Before anyone installed from inside an organization, neither gets a token.
-      await assert.rejects(as('bravo').mint('github.com/acme/api'), (e) => e.status === 403 && /installed for another organization/.test(e.message));
+      await assert.rejects(as('bravo').mint('github.com/acme/api'), (e) => e.status === 403 && /installed for another workspace/.test(e.message));
 
       assert.equal((await installed('alpha.9999999999999.forged')).status, 400, 'a forged state binds nothing');
       // A real state from bravo, but an installation_id its installer can't see: alpha's, forged into the redirect.

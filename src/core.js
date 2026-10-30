@@ -467,7 +467,7 @@ export class Hub extends EventEmitter {
     if (working.has(agent) || working.size < limit) return;
     throw new UserError(`The Free plan runs ${limit} agent at a time, and ${[...working].join(', ')} is working now`, {
       status: 402,
-      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. To run agents side by side, upgrade the organization to Pro.`,
+      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. To run agents side by side, upgrade the workspace to Pro.`,
     });
   }
 
@@ -529,7 +529,7 @@ export class Hub extends EventEmitter {
     const r = normRemote(remote);
     if (!r) throw new UserError('a remote is required', { hint: 'e.g. github.com/acme/api, or any form git accepts (git@github.com:acme/api.git).' });
     if (this.hosted && r.startsWith('/')) {
-      throw new UserError(`${r} is a path on the hub's machine; an organization on a shared hub links repositories by address`, { hint: 'Use the repository\'s address, e.g. github.com/acme/api.' });
+      throw new UserError(`${r} is a path on the hub's machine; a workspace on a shared hub links repositories by address`, { hint: 'Use the repository\'s address, e.g. github.com/acme/api.' });
     }
     const owner = this.projectByRemote(r, null, { archived: true });
     if (owner?.id === p.id) return r;
@@ -541,8 +541,8 @@ export class Hub extends EventEmitter {
     // On the Free plan, a repository belongs to one free organization (repoGuard, set by Workspaces).
     const other = this.repoGuard?.(r);
     if (other) {
-      throw new UserError(`${r} is already in the free organization ${other}; a repository can be in one free organization`, {
-        status: 402, hint: `Work on it in ${other}, or upgrade this organization to Pro to use it here too.`,
+      throw new UserError(`${r} is already in the free workspace ${other}; a repository can be in one free workspace`, {
+        status: 402, hint: `Work on it in ${other}, or upgrade this workspace to Pro to use it here too.`,
       });
     }
     this.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(p.id, r, this.now());
