@@ -90,6 +90,25 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.match(css, /\.seg-c\.queue, \.lifebar \.queue \{ color: var\(--ink\); \}/);
   });
 
+  test('Outside\'s labels are at least 4.5:1 on every stripe of its hatch, and it still looks unlike Ready (#209)', () => {
+    const stripes = (token) => [...css.match(new RegExp(`${token}: repeating-linear-gradient\\(([^;]*)\\);`))[1].matchAll(/var\((--[\w-]+)\)/g)].map((m) => m[1]);
+    const bar = stripes('--hatch'), tint = stripes('--hatch-tint');
+    assert.ok(bar.length >= 2 && tint.length >= 2, 'both hatches are stripes of :root tokens');
+    // Courtbar and lifecycle bar segments: white labels (no color override on .external).
+    assert.doesNotMatch(css, /(\.seg-c\.external|\.lifebar \.external)[^{]*\{[^}]*(^|[^-])color:/);
+    for (const s of bar) assert.ok(contrast('#ffffff', root[s]) >= 4.5, `white on --hatch stripe ${s}: ${contrast('#ffffff', root[s]).toFixed(2)}`);
+    // The Outside pill and Flow tile label: ink on --hatch-tint.
+    assert.match(css, /\.stage-pill\.court-external \{ background: var\(--hatch-tint\); color: var\(--ink\); \}/);
+    assert.match(css, /\.stage\.court-external \.l \{ color: var\(--ink\); \}/);
+    // Its count stays ink at 0 too: the tile is always shown, and zero-count would draw it --muted.
+    assert.match(css, /\.stage\.court-external\.zero-count \.n \{ color: var\(--ink\); \}/);
+    for (const s of tint) assert.ok(contrast(root['--ink'], root[s]) >= 4.5, `ink on --hatch-tint stripe ${s}: ${contrast(root['--ink'], root[s]).toFixed(2)}`);
+    // Stripes, not a solid fill, so Outside never reads as Ready's grey.
+    assert.ok(!bar.includes('--queue') && new Set(bar).size >= 2, '--hatch is two-tone and not --queue');
+    assert.ok(!tint.includes('--queue-tint') && new Set(tint).size >= 2, '--hatch-tint is two-tone and not --queue-tint');
+    assert.ok(contrast('#ffffff', root['--faint']) < 4.5, 'the old --faint stripe would fail this rule');
+  });
+
   test('--faint is decoration only: no text anywhere in web/ is drawn in it (#195)', () => {
     for (const f of readdirSync(new URL('../web/', import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n))) {
       const src = readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8');
