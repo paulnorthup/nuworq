@@ -152,8 +152,6 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .btn:hover { border-color: var(--faint); }
 .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .btn.primary:hover { opacity: .88; }
-.btn.go { background: var(--ok); border-color: var(--ok); color: #fff; }
-.btn.you { background: var(--you); border-color: var(--you); color: #fff; }
 .btn.small { padding: 3px 9px; font-size: 12px; }
 .btn.ghost { border-color: transparent; background: none; color: var(--muted); }
 .btn.ghost:hover { color: var(--ink); background: var(--sunken); }
@@ -225,8 +223,9 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .step-check { font-size: 12.5px; color: var(--muted); }
 .answer { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .opts { display: flex; flex-wrap: wrap; gap: 6px; }
-.opt { border: 1px solid var(--you-line); background: var(--you-tint); color: var(--ink); border-radius: 8px; padding: 5px 12px; font-size: 13px; }
-.opt:hover { border-color: var(--you); }
+/* Peer choices look alike and carry no state color (#193). */
+.opt { border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 5px 12px; font-size: 13px; }
+.opt:hover { border-color: var(--faint); background: var(--sunken); }
 .answer-row { display: flex; gap: 6px; }
 .check-label { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--muted); }
 .inline-form { display: flex; gap: 6px; width: 100%; margin-top: 4px; }
@@ -558,7 +557,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 
 .picks { display: flex; flex-direction: column; gap: 6px; }
 .pick { display: flex; align-items: baseline; gap: 8px; text-align: left; border: 1px solid var(--line-strong); background: var(--panel); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
-.pick:hover { border-color: var(--you); background: var(--you-tint); }
+.pick:hover { border-color: var(--faint); background: var(--sunken); }
 .pick .ref { flex: none; }
 .tag.shaping { background: var(--agents-tint); color: var(--agents); }
 .dot.parked { background: transparent; border: 1.5px solid var(--faint); }

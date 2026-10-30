@@ -67,6 +67,16 @@ describe('the color map keeps meanings apart (#188)', () => {
     for (const r of now) for (const t of STATE) assert.doesNotMatch(r.body, new RegExp(`var\\(${t}(-tint)?\\)`), `${r.sel} uses ${t}`);
   });
 
+  test('buttons show emphasis, not state, and peer choices look alike (#193)', () => {
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    for (const [f, src] of [['web/style.css', css], ['web/app.js', app]]) assert.doesNotMatch(src, /btn[ .](go|you)\b/, `${f} has no .btn.go or .btn.you`);
+    for (const sel of ['.opt', '.opt:hover', '.pick', '.pick:hover']) {
+      const body = css.match(new RegExp(`(?:^|\\n)${sel.replace('.', '\\.')} \\{([^}]*)\\}`))[1];
+      for (const t of STATE) assert.doesNotMatch(body, new RegExp(`var\\(${t}(-tint|-line)?\\)`), `${sel} uses ${t}`);
+    }
+    assert.match(app, /class="btn small" data-action="keep"/, 'race "Keep this one" buttons are peers');
+  });
+
   test('a token change that brings two meanings too close fails', () => {
     assert.ok(dE('#c4520f', '#b42318') < 30, 'today\'s --bad next to --you would fail the state rule');
     assert.ok(dE('#c96442', '#c4520f') < 30, 'the old Anthropic mark next to --you would fail the provider rule');
