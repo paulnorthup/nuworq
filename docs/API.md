@@ -25,7 +25,8 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
   "until": 1761901200000,
   "items": [ … ],
   "by_model": [ … ],
-  "by_reviewer": [ … ]
+  "by_reviewer": [ … ],
+  "human_actions": { "total": 9, "landed": 6, "per_landed": 1.5, "median_wait_ms": 5400000 }
 }
 ```
 
@@ -50,6 +51,7 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `escaped` | boolean | landed, and a later item names it in `fixes` (it repairs this one) |
 | `fixed_by` | string[] | those later items, `#<n>` |
 | `overturned` | boolean | an agent accepted it and a person later sent it back, or it landed on an agent's verdict and escaped |
+| `human_actions` | number | what it took from people, ever: their answers, accepts, send-backs, steers, decisions, comments and confirmed assumptions on this item (an override's answer and its steer count once, as does answering an escalation and the operator question it carried) |
 | `usage` | array | what it cost, per agent, model and source: `{ agent, model, source, input_tokens, output_tokens, cost_usd }`. `source` is `agent` (reported), `runner` (read from the worker's CLI) or `llm-proxy` (measured). Where llm-proxy measured an agent, that agent's reported rows are left out, so nothing counts twice. `cost_usd` is null when unknown (a local model). |
 
 `by_model`: one row per implementer model (`model: null` for items nobody implemented, such as ones dropped unstarted).
@@ -74,6 +76,15 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `overturned` | number | its accepts a person overturned: sent back afterwards, or escaped |
 
 An item names the landed work it repairs with `fixes` (on `propose` and `refine`, or in the item's Edit for people); only an item that reached done can be named.
+
+`human_actions`: what the work cost people over the same window, on any item or none.
+
+| field | type | meaning |
+|---|---|---|
+| `total` | number | people's actions (as for an item's `human_actions`) in the window |
+| `landed` | number | items that reached done in the window |
+| `per_landed` | number \| null | `total / landed`, one decimal; null when nothing landed |
+| `median_wait_ms` | number \| null | how long what needed a person (an act-level Needs you entry) waited until a person resolved it, median over those resolved in the window. Each counts from when it reached them: a blocking question from when it was asked (a reporter's once `reporter_wait` passed; an operator's only as its escalation, from when it was escalated), a review from submission (unless agents review), a proposal under autonomy `ask` from when it was shaped. Entries an agent or operator resolved don't count |
 
 **Versioning.** Fields may be added within `version: 1`; read what you know and ignore the rest. Removing or changing the meaning of a field bumps `version`, and the old version stays served for a while, announced in this file.
 

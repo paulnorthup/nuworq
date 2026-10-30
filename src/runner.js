@@ -56,8 +56,10 @@ const napping = (ms, signal) => new Promise((r) => {
 // still up 10s later; the next kills them at once.
 // maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
 // sleep(ms, signal): the wait between polls; it ends early when signal aborts, so no timer outlives the loop.
+// report(state): tells the hub how this runner is, once per poll and once more when it stops (#171); a
+// report that fails is let go (the hub shows the runner down until one gets through).
 export async function run({
-  routes, launch, claimed = async () => true, log = console.log,
+  routes, launch, claimed = async () => true, log = console.log, report = async () => {},
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = napping, onInterrupt,
 }) {
@@ -89,12 +91,27 @@ export async function run({
     stop('interrupted');
   });
   // A streak that would only repeat itself: with --until-idle, stop; otherwise wait 5m, then 10m, up to 30m.
+  let pausedWhy = '';
   const pause = (reason, advice) => {
     if (untilIdle) return stop(reason);
     log(`Paused ${pauseMs / 60_000}m: ${reason}. ${advice}`);
+    pausedWhy = reason;
     pausedUntil = now() + pauseMs;
     pauseMs = Math.min(pauseMs * 2, MAX_PAUSE_MS);
   };
+  // How this runner is, for the hub: what's running against its limit, what it leaves alone and why, any pause.
+  const state = () => {
+    const t = now();
+    return {
+      running: running.length, workers, spent, poll_seconds: pollSeconds,
+      skipping: [
+        ...[...resting].filter(([, r]) => r.until > t).map(([project, r]) => ({ project, reason: cant.get(project) ?? "its checkout couldn't be updated", until: r.until })),
+        ...[...cant].filter(([project]) => !(resting.get(project)?.until > t)).map(([project, reason]) => ({ project, reason })),
+      ],
+      paused: pausedUntil > t ? { until: pausedUntil, reason: pausedWhy } : null,
+    };
+  };
+  const tell = (s) => Promise.resolve().then(() => report(s)).catch(() => {});
   const failedFast = () => {
     if (++fastFails < FAST_FAILS) return;
     fastFails = 0;
@@ -199,6 +216,7 @@ export async function run({
     }
     if (!stopping && launched >= maxRuns && !running.length) stop(`reached --max-runs ${maxRuns}`);
     if (stopping && !running.length) break;
+    if (!hubDown) await tell(state());
     // While a worker is being stopped, look again within a second, so SIGKILL follows its grace on time.
     const ms = running.some((w) => w.killedAt) ? Math.min(pollSeconds * 1000, 1000) : pollSeconds * 1000;
     const nap = new AbortController();
@@ -206,6 +224,7 @@ export async function run({
     nap.abort(); // a wake ends the nap too: a pending timer would keep the process up after Done
   }
 
+  await tell({ ...state(), stopped: why });
   const failed = done.filter((d) => d.code !== 0).length;
   const each = done.map((d) => `${d.name}@${d.project}:${d.code}`).join(', ');
   log(`Done: ${why}. ${launched} launched, ${done.length - failed} exited cleanly, ${failed} failed${each ? ` (${each})` : ''}${spent || maxUsd !== Infinity ? `; $${spent.toFixed(2)} spent` : ''}.`);

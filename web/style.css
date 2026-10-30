@@ -19,6 +19,7 @@
   --ok-tint: #e8f5ec;
   --warn: #a8670b;
   --bad: #b42318;
+  --bad-tint: #fdecea;
 
   --p-anthropic: #c96442;
   --p-openai: #10a37f;
@@ -181,6 +182,10 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .ev { font-size: 12px; background: var(--ok-tint); color: var(--ok); border-radius: 6px; padding: 2px 8px; }
 .ev a { color: inherit; }
 .ev::before { content: '✓ '; }
+/* CI checks (#192, web/checks.js) carry their own mark: red means failed, never inside a green ✓. */
+.ev.check::before { content: none; }
+.ev.check.fail { background: var(--bad-tint); color: var(--bad); }
+.ev.check.other { background: var(--sunken); color: var(--muted); }
 .attempts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 8px; }
 .attempt { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
 .attempt .h { font-weight: 600; }
@@ -266,6 +271,12 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .status.working { color: var(--ok); }
 .status.quiet { color: var(--warn); }
 .status.idle, .status.away, .status.signed { color: var(--faint); }
+/* Runners (#171): their state leads the row, coloured by whether work can start. */
+.row-item.runner .h { display: flex; align-items: baseline; gap: 8px; }
+.status.runner-up { color: var(--ok); }
+.status.runner-paused, .status.runner-skipping { color: var(--warn); }
+.status.runner-down { color: var(--bad); }
+.status.runner-stopped { color: var(--faint); }
 .agent-strip { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .agent-strip .a { display: inline-flex; gap: 6px; align-items: baseline; }
 .agent-strip .st { font-size: 12px; color: var(--faint); }
@@ -298,6 +309,8 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .takeaway { margin: 12px 0 0; font-size: 14px; }
 .takeaway::before { content: '→ '; color: var(--faint); }
 .flow-held { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.flow-you { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.flow-you b { color: var(--ink); font-weight: 600; }
 .throughput { display: flex; align-items: flex-end; gap: 14px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 12.5px; }
 .flow .cost { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 28px; }
@@ -358,6 +371,7 @@ table.work tr:hover td { background: var(--sunken); cursor: pointer; }
 .tl.t-question::before, .tl.t-sent_back::before, .tl.t-steer::before, .tl.t-answered::before { background: var(--you); }
 .tl.t-claimed::before, .tl.t-progress::before { background: var(--agents); }
 .tl.t-lease_expired::before { background: var(--warn); }
+.tl.t-pr_failed::before, .tl.t-pr_merge_failed::before { background: var(--bad); }
 .tl .meta { font-size: 12px; color: var(--faint); display: flex; gap: 8px; align-items: baseline; }
 .tl .h { font-weight: 520; }
 .tl .sm { font-size: 13px; color: var(--ink); margin-top: 3px; }
@@ -411,6 +425,8 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 .setup { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; max-width: 640px; }
 .setup .lead, .narrow .lead { color: var(--muted); margin: 0 0 14px; }
 .ok { color: var(--ok); font-size: 12.5px; margin-top: 4px; }
+/* Failed, not just at risk (#192): red. Amber (.warn) is for what might still go wrong. */
+.bad { color: var(--bad); font-size: 12.5px; margin-top: 4px; }
 /* The hub's own pages (join, early access, requests): one narrow column. */
 main.narrow { max-width: 560px; margin: 0 auto; padding: 48px 20px 80px; }
 main.narrow h1 { margin-bottom: 14px; }
@@ -543,3 +559,23 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 .is-new::after { content: 'new'; position: absolute; bottom: calc(100% - 3px); right: -6px; z-index: 1; pointer-events: none;
   font: 650 10px/1 var(--font); letter-spacing: .02em; text-transform: lowercase; padding: 2px 5px; border-radius: 999px;
   color: var(--agents); background: var(--agents-tint); box-shadow: 0 0 0 1.5px var(--panel); }
+
+/* The admin host (#166, web/admin.js): one column on every screen, every target at least 44px tall. */
+main.admin { padding-top: 24px; }
+.admin-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.admin-top h1 { margin: 0; font-size: 18px; }
+.admin .btn { min-height: 44px; padding: 10px 16px; font-size: 14px; }
+.admin h2 { font-size: 16px; margin-bottom: 6px; }
+.admin-signin { display: flex; flex-direction: column; gap: 10px; }
+.admin-signin .btn { display: flex; align-items: center; justify-content: center; }
+.admin-filter { display: flex; width: 100%; margin-bottom: 14px; }
+.admin-filter button { flex: 1; min-height: 44px; font-size: 13.5px; }
+.admin-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.admin-card.focus { border-color: var(--you); box-shadow: 0 0 0 2px var(--you-tint); }
+.admin-card .h { font-weight: 560; }
+.admin-card p { margin: 4px 0; }
+.admin-card .s { color: var(--muted); }
+.admin-acts { display: flex; gap: 10px; margin-top: 10px; }
+.admin-acts .btn { flex: 1; }
+.admin-link { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.admin-link code { display: block; padding: 8px; word-break: break-all; user-select: all; }

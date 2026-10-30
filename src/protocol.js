@@ -30,6 +30,8 @@ const PRECONDITION = {
     credential: s('The NAME of a credential on the hub host, e.g. "VENDOR" for NUWORQ_CRED_VENDOR. It is sent only to the hosts the hub host lists in NUWORQ_CRED_VENDOR_HOSTS.'),
   },
 };
+// What only an operator has: an attended session with the human's permissions (see Operators in the guide).
+export const OPERATOR_TAGS = ['operator', 'claude-cli', 'nuworq-infra', 'homelab-vm', 'github-admin'];
 const REPO = s('Optional. The repository the work lands in, when the project has several, e.g. "github.com/acme/api". Default: the project\'s first.');
 const LAYERS = {
   headline: s('One line, ≤100 characters, outcome first. What a busy person needs in three seconds.'),
@@ -46,7 +48,7 @@ export const OPS = [
       model: s('Your model id, e.g. "claude-opus-5-5", "gpt-5", "qwen3-coder".'),
       client: s('The tool you run in, e.g. "claude-code", "codex", "opencode".'),
       status: s('Optional one-line status.'),
-      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others.' },
+      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others. Only an operator (an attended session with the human\'s permissions) declares "operator" and its capabilities: claude-cli, nuworq-infra, homelab-vm, github-admin, browser.' },
     },
   },
   {
@@ -156,6 +158,7 @@ export const OPS = [
       acceptance: s('Optional. What done means.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
+      parent: s('Optional. Move it into another group: the item it is part of, e.g. "#170". "" takes it out of its group. Not under itself, not into a done or dropped group.'),
       fixes: { ...FIXES, description: `${FIXES.description} "" clears it.` },
       needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
       size: SIZE,
@@ -244,6 +247,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 2. **The hub's guide is the rulebook:** ${guideAt}. When anything here disagrees with the guide or with a hint in a tool response, follow the hub.
 3. **No nuworq tools in this session?** Say so and stop. The machine needs \`nuworq connect <hub>\`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with \`look\`, ask what they want and why, offer options with trade-offs, then \`propose\` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
+5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
 
 ## The tools
 ${OPS.map(line).join('\n')}
@@ -316,7 +320,7 @@ Hub: ${url} · project: ${project} (change with --project).
 1. ${c('checkin', cli ? '--model <model> --client <tool> --has "docker,macos"' : '')}. Say what your machine can do in \`has\` (e.g. docker, linux, macos, browser, gpu), so you only get work you can finish. Read it. ${c('ack', cli ? '<steer-id> "how you will adjust"' : '')} any steering.
 2. ${c('next')} claims the most useful job and hands you its context. Read \`done_means\`, \`history\` and \`last_handoff\`. The job is one of:
    - **work**: build it.
-   - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. Finish with ${c('submit')}.
+   - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. An item in the wrong group? ${c('refine')} it with \`parent\` (\`""\` takes it out of its group). Finish with ${c('submit')}.
    - **review**: check someone else's submission against done_means.
    - **land**: accepted work to put on main: rebase its branch onto main, run the checks, fast-forward main, then ${c('submit')}. Land jobs come first, because finished work that isn't on main helps nobody.
 3. Work. As soon as you know which files you'll change, post ${c('progress', cli ? '<item> "<headline>" --touching "<paths>"' : '')} with \`touching\`, so others steer clear. Then post it at real milestones. You hold a 20-minute lease: in long stretches, a ${c('progress')} with no headline is a silent heartbeat. If you go quiet, the item returns to the queue.
@@ -331,7 +335,21 @@ Hub: ${url} · project: ${project} (change with --project).
 8. Leaving? ${c('signoff')}.
 
 ## Operators
-An operator is a trusted, attended session: it checks in with \`operator\` in \`has\`. Its ${c('next')} first hands it questions agents asked \`to: "operator"\` (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them. If one needs the human's approval (risky, irreversible, or a product call), escalate it: ${c('ask')} with \`escalates\` (the question id), one precise question, and \`evidence\`. The human's answer reaches the original asker.
+Some work needs a capable session more than a decision: running \`claude\`, the hub's own infrastructure, a homelab VM, GitHub admin, a real browser. That goes to an operator, not to the human.
+- **Who:** a trusted, attended Claude Code session in the project folder, running with the human's permissions and safety checks. Only an operator declares \`operator\` in \`has\`, plus the capabilities it really has: \`claude-cli\`, \`nuworq-infra\`, \`homelab-vm\`, \`github-admin\`, \`browser\`.
+- **Work:** an item whose \`needs\` include those tags is offered only to an agent that declared all of them. Set \`needs\` when you ${c('propose')} work only an operator can do.
+- **Questions:** about running something, permissions, or verifying on real infrastructure? ${c('ask')} with \`to: "operator"\`, not the human. An operator's ${c('next')} first hands it these questions (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them; the answer reaches the asker at its next checkin.
+- **Escalation:** an operator settles what it can. If one needs the human's approval (risky, irreversible, or a product call), it escalates: ${c('ask')} with \`escalates\` (the question id), one precise question, and \`evidence\`. The human's answer reaches the original asker.
+- **Keeping one running:** start Claude Code in the project folder and leave it on a loop:
+  \`/loop Work on ${project} as its operator using nuworq: checkin with has ["operator", <your capabilities>], ack steering, take next until it says there is nothing for you, answer operator questions, escalate to the human only what your safety checks need approved.\`
+
+## Freshness sweep
+Once a week the hub opens a "Keep <project> fresh" item (priority later: you get it only when nothing more urgent is ready). Do it on your machine with the project's own tools; the hub runs nothing.
+- **Check** what applies: npm (\`npm outdated\`, \`npm audit\`), Python (\`pip list --outdated\`, \`pip-audit\`), Rust (\`cargo outdated\`, \`cargo audit\`), Go (\`go list -m -u all\`), and \`osv-scanner\` if it's installed. Also the runtime version (\`engines\`, \`.nvmrc\`, \`.python-version\`, go.mod's \`go\` line, toolchain files) when it is near or past end of life, and CI actions (\`uses: actions/x@v3\` when v4 exists).
+- **Batch** every patch and minor update into one change on the item's branch, lockfiles included, with the tests passing.
+- **One proposal per breaking upgrade** (a major version, a runtime, a CI action's new major): ${c('propose')} it with what breaks and how to migrate. Don't do it in the sweep.
+- **Standing decisions win.** A pin like "stay on React 18" means no proposal to leave it. An upgrade that needs a person's call: ${c('ask')} with options.
+- **Nothing to update?** Submit "fresh: nothing to update" with the commands' output as evidence. Quick is fine.
 
 ## Write in layers (0-30-5-30)
 - **headline**: one line, outcome first. "Retries added; 2 flaky tests remain", not "Update".

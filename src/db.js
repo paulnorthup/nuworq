@@ -286,6 +286,16 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 CREATE INDEX IF NOT EXISTS usage_item ON usage (item_id);
 
+-- nuworq run, as each runner last said on its poll (POST /api/runner, #171). Bookkeeping: no agent is touched.
+CREATE TABLE IF NOT EXISTS runners (
+  name     TEXT PRIMARY KEY,                  -- its token's runner name, else what it calls itself (the machine)
+  machine  TEXT NOT NULL DEFAULT '',
+  scope    TEXT NOT NULL DEFAULT '',          -- the projects its token reaches, comma-separated; '' = all
+  state    TEXT NOT NULL DEFAULT '{}',        -- { running, workers, skipping: [{ project, reason, until? }], paused: { until, reason } | null, spent, stopped }
+  poll_ms  INTEGER NOT NULL,                  -- how often it polls: silent for 3 of these, it is down
+  seen_at  INTEGER NOT NULL
+);
+
 -- Get started (src/getstarted.js): who finished the checklist or hid it, so it never shows for them again.
 CREATE TABLE IF NOT EXISTS get_started (
   who TEXT PRIMARY KEY,                       -- "@handle", or "you" on a hub without logins
@@ -350,6 +360,9 @@ export function openDb(file) {
     "ALTER TABLE questions ADD COLUMN evidence TEXT NOT NULL DEFAULT '[]'", // an escalation's evidence: [{ label, url? }]
     "ALTER TABLE questions ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'", // what the person must do, in order: [{ do, where?, check? }]
     'ALTER TABLE items ADD COLUMN fixes INTEGER', // the landed item this one repairs (its id): that one counts as an escape (#176)
+    'ALTER TABLE projects ADD COLUMN fresh INTEGER NOT NULL DEFAULT 1', // the weekly freshness sweep is on (src/freshness.js)
+    'ALTER TABLE projects ADD COLUMN fresh_at INTEGER NOT NULL DEFAULT 0', // when the sweep timer last fired (or the project began)
+    'ALTER TABLE items ADD COLUMN sweep INTEGER NOT NULL DEFAULT 0', // 1: a "keep <project> fresh" item the hub opened
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

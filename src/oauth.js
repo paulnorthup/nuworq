@@ -68,14 +68,15 @@ export class OAuth {
   // Begin: remember the PKCE verifier server-side, and send the browser to the provider.
   // ws: the workspace slug ('' for a single hub). back: where the workspace lives (origin + base path).
   // device: a device-login code to come back to after signing in (#153), already checked by the caller.
-  start(provider, { ws = '', back, callback, device = '' }) {
+  // admin: a sign-in to the admin host, which only that host's callback finishes.
+  start(provider, { ws = '', back, callback, device = '', admin = false }) {
     const p = this.providers[provider];
     if (!p) return null;
     this.sweep();
     const nonce = b64(randomBytes(24));
     const verifier = b64(randomBytes(32));
     const exp = this.now() + FLOW_MS;
-    this.flows.set(nonce, { provider, ws, verifier, back, callback, exp, device });
+    this.flows.set(nonce, { provider, ws, verifier, back, callback, exp, device, admin });
     const body = `${nonce}.${exp}.${ws}`;
     const state = `${body}.${this.sign(body)}`;
     const u = new URL(p.authorize);

@@ -10,13 +10,14 @@ import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
-import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner } from './notify.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
+import { freshen } from './freshness.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
 import { syncAlerts, accessOf } from './alerts.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
-import { ORG_CAP } from './directory.js';
+import { ORG_CAP, ADMIN_SESSION_MS } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
@@ -74,12 +75,13 @@ const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><m
 const COOKIE = 'nuworq_session';
 const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
 const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode): who you are, not any one workspace
+const ADMIN_COOKIE = 'nuworq_admin'; // signed in to the admin host: host-only, and only an admin session opens it
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
 const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 const REPO_PAGE = 30; // repositories per page in "+ Project"
 
@@ -98,10 +100,18 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // organization takes an approved request's grant. null: no early access.
 // siteHost: the marketing host (e.g. nuworq.com), when the app lives at publicUrl (app.nuworq.com): it serves
 // the landing page (site/) and sends every other path to the same path on publicUrl.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null } = {}) {
+// adminHost (workspaces mode): the admin host (e.g. admin.nuworq.com). It serves the admin dashboard, its own
+// sign-in and the admin APIs, and nothing else; only earlyAccess.owners get past sign-in. With it set, the
+// early-access request list and its APIs are no longer served anywhere else.
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   siteHost = String(siteHost).toLowerCase();
   if (siteHost && !publicUrl) throw new Error('a site host needs the public URL the app lives at (--public-url)');
+  adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
+  // The links it hands out (an approved request's grant) go to the app, so it must know the app's address.
+  if (adminHost && !publicUrl) throw new Error('an admin host needs the public URL the app lives at (--public-url)');
+  if (adminHost && [new URL(publicUrl).hostname, siteHost].includes(hostname(adminHost))) throw new Error('the admin host must be a host of its own, not the app\'s or the site\'s');
   // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
   let built = null;
   const pkg = buildPackage(source, packageDir).then((b) => (built = b));
@@ -211,7 +221,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const hubs = () => (spaces ? spaces.hubs() : [target]);
   const sweeper = setInterval(() => {
     for (const hub of hubs()) {
-      try { hub.sweep(); hub.refreshMirrorTokens(); } catch (e) { console.error('sweep failed', e); }
+      try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); } catch (e) { console.error('sweep failed', e); }
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
       // Release preconditions read GitHub through the app where it's installed.
       runChecks(hub, { shared: !!spaces, github: { api: gh.api, app } }).catch((e) => console.error('checking preconditions failed', e));
@@ -231,6 +241,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const hostOf = (req) => (trustProxy && first(req.headers['x-forwarded-host'])) || req.headers.host || '';
   const https = (req) => req.socket.encrypted || (trustProxy && first(req.headers['x-forwarded-proto']) === 'https');
   const origin = (req) => `${https(req) ? 'https' : 'http'}://${hostOf(req)}`;
+  const onAdmin = (req) => !!adminHost && hostname(hostOf(req)) === hostname(adminHost);
+  const adminOrigin = (req) => `${https(req) ? 'https' : 'http'}://${adminHost}`;
   const jarOf = (req) => {
     const jar = new Map();
     for (const part of String(req.headers.cookie ?? '').split(';')) {
@@ -297,7 +309,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   async function signIn(req, res, url, provider, step, { send, deny }) {
     if (!required) return deny(400, 'this hub has no logins', 'Sign-in is for hubs that require login (--auth or --workspaces).');
     if (!sso.providers[provider]) return deny(404, `sign-in with ${provider} isn't set up on this hub`, `The hub host sets NUWORQ_${provider.toUpperCase()}_CLIENT_ID and _SECRET (see DEPLOY.md).`);
-    const callback = `${authOrigin(req)}/auth/${provider}/callback`;
+    // The admin host signs in on its own address, start to finish: its callback, its own host-only cookie.
+    const admin = onAdmin(req);
+    const callback = `${admin ? origin(req) : authOrigin(req)}/auth/${provider}/callback`;
+    if (admin && step === 'start') {
+      const go = sso.start(provider, { back: origin(req), callback, admin: true });
+      res.setHeader('set-cookie', `${FLOW_COOKIE}=${go.nonce}; HttpOnly; SameSite=Lax; Path=/auth/; Max-Age=600${https(req) ? '; Secure' : ''}`);
+      return redirect(res, go.url);
+    }
     if (step === 'start') {
       // No workspace: sign in to the hub itself, to see and create organizations.
       const ws = spaces ? String(url.searchParams.get('ws') ?? '').toLowerCase() : '';
@@ -312,6 +331,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       flow = sso.claim(provider, url.searchParams.get('state'), jarOf(req).get(FLOW_COOKIE));
     } catch (e) {
       return send(400, `<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
+    }
+    if (!!flow.admin !== admin) return send(400, '<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: it was started on another address. Start again where you want to sign in.', 'text/html; charset=utf-8');
+    if (admin) {
+      const back = (msg) => redirect(res, `/#error=${encodeURIComponent(msg)}`);
+      if (url.searchParams.get('error')) return back(`${sso.providers[provider].label} sign-in was cancelled`);
+      let email;
+      try { email = await sso.email(provider, url.searchParams.get('code'), flow); } catch (e) { return back(e.message); }
+      if (!email) return back(`${sso.providers[provider].label} has no verified email for you. Verify one there, then try again`);
+      // Anyone with a verified email gets a session; only the owners' sessions open anything (adminRoot).
+      const sid = spaces.directory.createSession(spaces.directory.identify(email, provider).id, 'admin');
+      res.setHeader('set-cookie', `${ADMIN_COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${ADMIN_SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
+      return redirect(res, '/');
     }
     // A sign-in started from a device approval page (#153) keeps its code, so it ends back on that page.
     const dev = flow.device ? `device=${flow.device}` : '';
@@ -342,6 +373,54 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return list;
   };
   const recentFailures = (ip) => recent(failures, ip);
+
+  // The owners' early-access requests: the list, and approving or declining one. The caller has checked
+  // that me is an owner. Returns whether it answered.
+  async function decideRequests(req, url, path, me, { send, deny }) {
+    const dir = spaces.directory;
+    if (req.method === 'GET' && path === '/api/early-access') {
+      send(200, { requests: dir.requests({ state: url.searchParams.get('state') ?? '' }) });
+      return true;
+    }
+    if (req.method === 'POST' && path === '/api/early-access/decide') {
+      const b = await body(req);
+      const r = dir.decide(b.id, b.approve === true, me.email);
+      if (!r) deny(404, `no request ${b.id}`);
+      else if (r.already) deny(409, `that request was already ${r.already}`, 'Each request is decided once; its link was shown when it was approved.');
+      else send(200, { ok: true, state: r.state, ...(r.code ? { link: `${authOrigin(req)}/?grant=${r.code}` } : {}) });
+      return true;
+    }
+    return false;
+  }
+  const toAdmin = (req, res) => { res.writeHead(308, { location: `${adminOrigin(req)}/`, 'cache-control': 'no-store' }); res.end(); };
+
+  // The admin host: the dashboard, its sign-in, and the admin APIs, nothing else. Only an admin session
+  // (signed in here) counts, and only the hub's owners get past it.
+  async function adminRoot(req, res, url, path, { send, deny }) {
+    let am;
+    if (req.method === 'GET' && (am = path.match(/^\/auth\/([a-z]+)\/(start|callback)$/))) return signIn(req, res, url, am[1], am[2], { send, deny });
+    if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', admin: true });
+    if (req.method === 'GET' && path === '/api/oauth') return send(200, { providers: sso.list().map((p) => ({ ...p, start: `/auth/${p.name}/start` })) });
+    const page = path === '/' ? '/admin.html' : path;
+    if (req.method === 'GET' && ['/admin.html', '/admin.js', '/style.css'].includes(page)) return send(200, readFileSync(join(WEB, page.slice(1)), 'utf8'), TYPES[extname(page)]);
+    if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'POST /api/early-access/decide'].includes(`${req.method} ${path}`)) {
+      return deny(404, 'the admin host serves only the admin dashboard', `Workspaces live at ${publicUrl || 'the hub\'s own address'}.`);
+    }
+    const dir = spaces.directory;
+    const sid = jarOf(req).get(ADMIN_COOKIE);
+    const me = dir.verifySession(sid, 'admin');
+    if (!me) return deny(401, 'sign in required', 'Sign in with GitHub or Google on this page: GET /api/oauth says where to start.');
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
+    if (req.method === 'POST' && path === '/api/logout') {
+      dir.deleteSession(sid);
+      res.setHeader('set-cookie', `${ADMIN_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+      return send(200, { ok: true });
+    }
+    const owner = !!earlyAccess?.owners?.includes(me.email);
+    if (req.method === 'GET' && path === '/api/me') return send(200, { email: me.email, owner });
+    if (!owner) return deny(403, `${me.email} isn't one of this hub's owners`, "Only the emails the hub host lists in NUWORQ_HUB_OWNERS (--owners) get in. Sign out, then sign in with an owner's account.");
+    await decideRequests(req, url, path, me, { send, deny });
+  }
 
   // The hub's own address (workspaces mode): who you are, your organizations, and making a new one.
   // Only GitHub/Google sign-in reaches it; tokens belong to one workspace.
@@ -382,7 +461,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (!(await earlyAccess.verify(b.turnstile, ip))) return deny(400, "the form's check didn't pass", 'Reload the page and try again.');
       let r;
       try { r = dir.request({ email: b.email, github: b.github, building: b.building, ip }); } catch (e) { return deny(400, e.message, 'e.g. you@example.com'); }
-      return send(200, { ok: true, state: r.state, created: r.created_at === r.updated_at });
+      const created = r.created_at === r.updated_at;
+      // A new request (not a repeat) reaches the owners, linking to it where they decide it. Not awaited.
+      if (created && earlyAccess?.owners?.length) {
+        const link = adminHost ? `${adminOrigin(req)}/?request=${r.id}` : `${authOrigin(req)}/requests.html`;
+        const asked = { email: r.email, github: String(b.github ?? '').trim().replace(/^@/, '').slice(0, 60), building: String(b.building ?? '') };
+        notifyOwners(spaces, earlyAccess.owners, asked, link).catch((e) => console.error('notifying the owners failed', e));
+      }
+      return send(200, { ok: true, state: r.state, created });
     }
     // What the request form needs to show Turnstile's widget: the site key, which is public (never the secret).
     if (req.method === 'GET' && path === '/api/early-access/config') return send(200, { sitekey: earlyAccess?.sitekey || null, open: !!earlyAccess?.verify });
@@ -393,6 +479,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           .replace("script-src 'self'", `script-src 'self' ${TURNSTILE}`).replace("default-src 'self'", `default-src 'self'; frame-src ${TURNSTILE}`).replace("connect-src 'self'", `connect-src 'self' ${TURNSTILE}`));
       }
       return send(200, readFileSync(join(WEB, path === '/early-access' ? 'early-access.html' : 'early-access.js'), 'utf8'), path === '/early-access' ? TYPES['.html'] : TYPES['.js']);
+    }
+    // With an admin host, the owners' request list and its APIs live there only.
+    if (adminHost && req.method === 'GET' && (path === '/requests.html' || path === '/requests.js')) return toAdmin(req, res);
+    if (adminHost && (path === '/api/early-access' || path === '/api/early-access/decide')) {
+      return deny(403, 'early-access requests are decided on the admin host', `Open ${adminOrigin(req)}/ and sign in there with an owner's account.`);
     }
     // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
     const page = path === '/' ? '/join.html' : path;
@@ -419,14 +510,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const owner = !!earlyAccess?.owners?.includes(me.email);
     if (path === '/api/early-access' || path === '/api/early-access/decide') {
       if (!owner) return deny(403, 'only the hub\'s owners see early-access requests', 'The hub host lists them in NUWORQ_HUB_OWNERS.');
-      if (req.method === 'GET' && path === '/api/early-access') return send(200, { requests: dir.requests({ state: url.searchParams.get('state') ?? '' }) });
-      if (req.method === 'POST' && path === '/api/early-access/decide') {
-        const b = await body(req);
-        const r = dir.decide(b.id, b.approve === true, me.email);
-        if (!r) return deny(404, `no request ${b.id}`);
-        if (r.already) return deny(409, `that request was already ${r.already}`, 'Each request is decided once; its link was shown when it was approved.');
-        return send(200, { ok: true, state: r.state, ...(r.code ? { link: `${authOrigin(req)}/?grant=${r.code}` } : {}) });
-      }
+      if (await decideRequests(req, url, path, me, { send, deny })) return;
     }
     // While the person types: the address a name (or slug) would get, and whether it's free, before they submit.
     if (req.method === 'GET' && path === '/api/orgs/check') {
@@ -481,6 +565,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
+      if (onAdmin(req)) return await adminRoot(req, res, url, path, { send, deny });
       if (siteHost && hostname(hostOf(req)) === siteHost) return await sitePage(req, res, url);
       let am;
       if (req.method === 'GET' && (am = path.match(/^\/auth\/([a-z]+)\/(start|callback)$/))) return await signIn(req, res, url, am[1], am[2], { send, deny });
@@ -649,6 +734,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
         if (file.includes('..')) return send(404, 'not found', 'text/plain');
+        if (adminHost && ['requests.html', 'requests.js', 'admin.html', 'admin.js'].includes(file)) return toAdmin(req, res);
         try {
           return send(200, await readFile(join(WEB, file)), TYPES[extname(file)] ?? 'application/octet-stream');
         } catch {
@@ -1025,6 +1111,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null,
         has: url.searchParams.has('has') ? url.searchParams.get('has').split(',').filter(Boolean) : undefined,
       }));
+      // nuworq run's state, on every poll (#171): who it is comes from its token when it has a runner name.
+      if (req.method === 'POST' && path === '/api/runner') {
+        const changed = hub.reportRunner(await body(req), { name: caller.token?.runner ?? '', scope: caller.scope });
+        if (changed) hub.emit('change', { project: null, at: hub.now() });
+        return send(200, { ok: true });
+      }
       if (req.method === 'GET' && path === '/api/claims') {
         return send(200, { claims: hub.claimsSince(url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0, { scope: caller.scope }) });
       }

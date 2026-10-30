@@ -24,6 +24,7 @@ export class UserError extends Error {
 }
 
 export const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+const RUNNER_DOWN_POLLS = 3; // a runner silent for this many of its poll intervals is down (#171)
 export const LEASE_MS = 20 * MIN;
 export const HANDOFF_COOLDOWN = 30 * MIN; // work you just handed off isn't offered straight back to you
 const HEADLINE_MAX = 140;
@@ -272,7 +273,7 @@ export class Hub extends EventEmitter {
     let p = this.q('SELECT * FROM projects WHERE slug = ?').get(s)
       ?? this.q('SELECT * FROM projects WHERE lower(name) = lower(?) ORDER BY id LIMIT 1').get(String(slug).trim());
     if (!p && create) {
-      this.q('INSERT INTO projects (slug, name, created_at) VALUES (?, ?, ?)').run(s, str(name) || s, this.now());
+      this.q('INSERT INTO projects (slug, name, created_at, fresh_at) VALUES (?, ?, ?, ?)').run(s, str(name) || s, this.now(), this.now());
       p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);
       this.event(p, { actor: SYSTEM, type: 'project', headline: `Project ${p.name} created` });
     }
@@ -555,7 +556,8 @@ export class Hub extends EventEmitter {
   }
 
   // Where the most valuable claimable work is, across every project that isn't parked:
-  // your picks and "now" work first, then building before shaping, then whatever has waited longest.
+  // your picks and "now" work first (by effective priority: a group's or a dependent's counts), then building
+  // before shaping, then whatever has waited longest.
   // With runner, only projects the human lets `nuworq run` staff. scope: the slugs a token may reach;
   // powers: what it may do (null: everything); has: the agent's tags when it is declaring them right
   // now (else what it declared last).
@@ -569,12 +571,12 @@ export class Hub extends EventEmitter {
       if (all.length) options.push({ p, ...all[0], claimable: all.reduce((n, o) => n + (this.racing(o.item) ? this.openSlots(o.item) : 1), 0) });
     }
     options.sort((a, b) =>
-      PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
+      PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
       a.item.stage_since - b.item.stage_since);
     return options.map((o) => ({
       project: o.p.slug, name: o.p.name, path: o.p.path || null, repo: this.repoOf(o.p, o.item) || null,
-      mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.item.priority,
+      mode: o.mode, item: `#${o.item.seq}`, title: o.item.title, priority: o.priority,
       waiting: dur(this.now() - o.item.stage_since), claimable: o.claimable,
       slots: this.racing(o.item) ? this.openSlots(o.item) : undefined, // a race with open slots can take that many workers
       // Who is on work here: holders, and racers (whose leases live in attempts).
@@ -594,6 +596,58 @@ export class Hub extends EventEmitter {
           AND type IN (${CLAIM_TYPES.map(() => '?').join(',')})`).get(p.id, agent, since, ...CLAIM_TYPES).n;
     }
     return n;
+  }
+
+  // nuworq run says how it is on every poll (#171): workers running and its limit, projects it skips and
+  // why, whether it paused itself and why, what it has spent. Bookkeeping, not an agent being present.
+  // name: its token's runner name when it has one, else what it calls itself. scope: the slugs its token
+  // reaches (null: all), so it only shows on those projects. Returns whether anything visible changed.
+  reportRunner(r = {}, { name = '', scope = null } = {}) {
+    const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : 0);
+    const when = (v) => (num(v) > 0 ? num(v) : null);
+    const machine = clip(r.machine, 80);
+    name = clip(name || r.name || machine, 80);
+    if (!name) throw new UserError('a runner needs a name', { hint: 'Send { name, machine, ... }: nuworq run sends its machine name.' });
+    const state = {
+      running: num(r.running), workers: num(r.workers),
+      skipping: (Array.isArray(r.skipping) ? r.skipping : []).slice(0, 50).filter((s) => s?.project)
+        .map((s) => ({ project: clip(s.project, 80), reason: clip(s.reason, 200), ...(when(s.until) ? { until: when(s.until) } : {}) })),
+      paused: r.paused && when(r.paused.until) ? { until: when(r.paused.until), reason: clip(r.paused.reason, 200) } : null,
+      spent: Math.round(num(r.spent) * 100) / 100,
+      stopped: r.stopped ? clip(r.stopped, 200) : null,
+    };
+    const pollMs = Math.min(Math.max(num(r.poll_seconds) || 30, 1), 3600) * 1000;
+    const was = this.q('SELECT state, seen_at, poll_ms FROM runners WHERE name = ?').get(name);
+    const body = JSON.stringify(state);
+    this.q(`INSERT INTO runners (name, machine, scope, state, poll_ms, seen_at) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (name) DO UPDATE SET machine = excluded.machine, scope = excluded.scope, state = excluded.state, poll_ms = excluded.poll_ms, seen_at = excluded.seen_at`)
+      .run(name, machine, (scope ?? []).join(','), body, pollMs, this.now());
+    // Worth redrawing for: a new runner, a change, or one that was down coming back.
+    return !was || was.state !== body || this.now() - was.seen_at > RUNNER_DOWN_POLLS * was.poll_ms;
+  }
+
+  // The runners that staff a project (it lets nuworq run in, and their token reaches it), as they last said,
+  // seen within a week. One silent for 3 of its polls is down; one that said it stopped is stopped.
+  runnersOf(p) {
+    if (!p.runner) return [];
+    const t = this.now();
+    return this.q('SELECT * FROM runners WHERE seen_at > ? ORDER BY name').all(t - 7 * DAY)
+      .filter((r) => !r.scope || r.scope.split(',').includes(p.slug))
+      .map((r) => {
+        const s = json(r.state, {});
+        const down = t - r.seen_at > RUNNER_DOWN_POLLS * r.poll_ms;
+        const skip = (s.skipping ?? []).find((x) => x.project === p.slug);
+        return {
+          name: r.name, machine: r.machine,
+          state: s.stopped ? 'stopped' : down ? 'down' : s.paused?.until > t ? 'paused' : skip ? 'skipping' : 'up',
+          last_seen: dur(t - r.seen_at), running: s.running ?? 0, workers: s.workers ?? 0, spent: s.spent ?? 0,
+          stopped: s.stopped ?? null,
+          paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t) } : null,
+          // Why it leaves this project alone, if it does; and how many others it leaves alone.
+          skipping: skip ? { reason: skip.reason, ...(skip.until > t ? { for: dur(skip.until - t) } : {}) } : null,
+          skipping_others: (s.skipping ?? []).filter((x) => x.project !== p.slug).length,
+        };
+      });
   }
 
   // ── small helpers ───────────────────────────────────────────────────────
@@ -760,6 +814,37 @@ export class Hub extends EventEmitter {
     const deps = this.deps(item).filter((d) => !['done', 'dropped'].includes(d.stage));
     const kids = this.q(`SELECT * FROM items WHERE parent_id = ? AND stage NOT IN ('done', 'dropped') ORDER BY seq`).all(item.id);
     return [...deps, ...kids.filter((k) => !deps.some((d) => d.id === k.id))];
+  }
+
+  // The priority each open item ranks by (#198): the highest of its own, its open parent's, and that of every
+  // open item that depends on it, all the way up and back. Map id → { priority, from }: from is the seq whose
+  // own priority it is, null when it's the item's own. Only ranking uses it; an item's own priority stays.
+  effectivePriorities(p) {
+    const open = this.q(`SELECT id, seq, priority, parent_id FROM items WHERE project_id = ? AND stage NOT IN ('done', 'dropped')`).all(p.id);
+    const eff = new Map(open.map((i) => [i.id, { priority: i.priority, from: null }]));
+    const seq = new Map(open.map((i) => [i.id, i.seq]));
+    // Who hands their priority to each item: its parent, and everything waiting on it.
+    const givers = new Map(open.map((i) => [i.id, eff.has(i.parent_id) ? [i.parent_id] : []]));
+    for (const d of this.q('SELECT d.item_id, d.depends_on FROM deps d JOIN items i ON i.id = d.item_id WHERE i.project_id = ?').all(p.id)) {
+      if (eff.has(d.item_id) && eff.has(d.depends_on)) givers.get(d.depends_on).push(d.item_id);
+    }
+    // Ranks only rise, and there are three, so this settles in a few passes, cycles or not.
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const [id, from] of givers) {
+        for (const g of from) {
+          const e = eff.get(g);
+          if (PRIORITY_RANK[e.priority] < PRIORITY_RANK[eff.get(id).priority]) { eff.set(id, { priority: e.priority, from: e.from ?? seq.get(g) }); changed = true; }
+        }
+      }
+    }
+    return eff;
+  }
+
+  // "now (from #110)" when an item ranks above its own priority, else undefined.
+  effectiveLabel(p, item, eff = this.effectivePriorities(p)) {
+    const e = eff.get(item.id);
+    return e?.from ? `${e.priority} (from #${e.from})` : undefined;
   }
 
   // Proposals an agent could claim to shape right now.
@@ -1011,6 +1096,7 @@ export class Hub extends EventEmitter {
       title: item.title,
       stage: item.stage,
       priority: item.priority,
+      effective_priority: this.effectiveLabel(p, item), // "now (from #110)" when its group or a dependent ranks it higher
       needs: json(item.needs, []).length ? json(item.needs, []) : undefined,
       size: item.size || undefined,
       summary: item.summary || undefined,
@@ -1311,6 +1397,9 @@ export class Hub extends EventEmitter {
     const ok = (i) => (!fit.has || json(i.needs, []).every((t) => fit.has.includes(t))) && inRepo(i);
     const gave = this.handedOff(p, agent);
     const fresh = (i) => !gave.has(i.id) && ok(i); // not just handed off, doable on this machine, in this clone
+    // Each option carries the priority it ranks by: its group's or a dependent's when that is higher (#198).
+    const eff = this.effectivePriorities(p);
+    const ranked = (x) => ({ ...x, priority: eff.get(x.item.id)?.priority ?? x.item.priority });
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
         AND COALESCE(implementer, '') != ?
         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
@@ -1323,9 +1412,11 @@ export class Hub extends EventEmitter {
         AND NOT EXISTS (SELECT 1 FROM prs WHERE prs.item_id = items.id AND prs.state = 'open' AND prs.blocked != 'conflict') ORDER BY stage_since`).all(p.id)
       .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
       .map((item) => ({ mode: 'land', item }));
-    if (p.parked) return [...lands, ...reviews];
-    const ready = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
-      .filter((i) => fresh(i) && !this.unmetDeps(i).length)
+    if (p.parked) return [...lands.map(ranked), ...reviews.map(ranked)];
+    const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id);
+    // The freshness sweep (src/freshness.js) waits while now or soon work is ready, whoever can take it.
+    const urgent = open.some((i) => !i.sweep && ranked({ item: i }).priority !== 'later' && !this.unmetDeps(i).length);
+    const ready = open.filter((i) => fresh(i) && !this.unmetDeps(i).length && !(i.sweep && urgent))
       .map((item) => ({ mode: 'work', item }));
     // Races with an open slot this agent hasn't taken a turn in. A slot goes to a different model first:
     // an agent on a model already in the race sees it after other work of the same priority.
@@ -1339,15 +1430,15 @@ export class Hub extends EventEmitter {
     const large = (x) => (fit.weak && x.item.size === 'large' ? 1 : 0);
     // Work that needs what this agent's machine has goes to it first: few agents can do it, anyone can do the rest.
     const own = (x) => (fit.has && json(x.item.needs, []).length ? 0 : 1);
-    const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].sort((a, b) =>
+    const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].map(ranked).sort((a, b) =>
       large(a) - large(b) ||
-      PRIORITY_RANK[a.item.priority] - PRIORITY_RANK[b.item.priority] ||
+      PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       own(a) - own(b) ||
       !!a.sameModel - !!b.sameModel ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
       (b.item.last_worker === agent) - (a.item.last_worker === agent) ||
       a.item.seq - b.item.seq);
-    return [...lands, ...reviews, ...all];
+    return [...lands.map(ranked), ...reviews.map(ranked), ...all];
   }
 
   // What fits this agent: the tags its machine has (declared at checkin, here or in its latest project),
@@ -2135,9 +2226,10 @@ const AGENT_OPS = {
     if (args.item) return this.context(p, this.item(p, args.item), agent);
     const stages = args.stage ? [str(args.stage)] : OPEN_STAGES;
     const out = {};
+    const eff = this.effectivePriorities(p);
     for (const s of stages) {
       const rows = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = ? ORDER BY seq`).all(p.id, s);
-      if (rows.length) out[s] = rows.map((i) => `#${i.seq} [${i.priority}] ${i.title}${i.holder ? ` (${i.holder})` : ''}`);
+      if (rows.length) out[s] = rows.map((i) => `#${i.seq} [${this.effectiveLabel(p, i, eff) ?? i.priority}] ${i.title}${i.holder ? ` (${i.holder})` : ''}`);
     }
     const recent = this.q(`SELECT seq, title FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? ORDER BY stage_since DESC LIMIT 10`)
       .all(p.id, this.now() - 3 * DAY);
@@ -2271,6 +2363,24 @@ Object.assign(Hub.prototype, {
       const fixes = this.fixesOf(p, args.fixes, item);
       if ((fixes?.id ?? null) !== item.fixes) { set.fixes = fixes?.id ?? null; changed.push(fixes ? `fixes #${fixes.seq}` : 'fixes nothing'); }
     }
+    // Into another group, or out of one ("") (#199): never under itself, never into a finished group.
+    let regroup = null;
+    if (args.parent != null) {
+      const to = str(args.parent) ? this.item(p, args.parent) : null;
+      if ((to?.id ?? null) !== item.parent_id) {
+        for (let a = to; a; a = this.itemById(a.parent_id)) {
+          if (a.id === item.id) {
+            throw new UserError(to.id === item.id ? `#${item.seq} can't be part of itself` : `#${to.seq} is part of #${item.seq}, so #${item.seq} can't go under it`, { hint: `Pick a group outside #${item.seq}, or move #${to.seq} out first.` });
+          }
+        }
+        if (to && ['done', 'dropped'].includes(to.stage)) {
+          throw new UserError(`#${to.seq} is ${to.stage}`, { hint: `Pick an open group for #${item.seq}, or reopen #${to.seq} first.` });
+        }
+        regroup = { from: this.itemById(item.parent_id), to };
+        set.parent_id = to?.id ?? null;
+        changed.push(to ? `part of #${to.seq}` : 'in no group');
+      }
+    }
     if (args.repo != null) {
       const repo = this.checkRepo(p, args.repo);
       if (repo !== item.repo) {
@@ -2311,6 +2421,10 @@ Object.assign(Hub.prototype, {
         summary: set.acceptance ? `Done means: ${set.acceptance}` : '',
       });
     }
+    // Both groups' history says where it went, so a person sees why a group changed.
+    const { from, to } = regroup ?? {};
+    if (from) this.event(p, { item: from, actor, type: 'regrouped', headline: `${You(actor)} moved #${item.seq} out of #${from.seq}${to ? ` into #${to.seq}` : ''}: ${clip(item.title, 80)}` });
+    if (to) this.event(p, { item: to, actor, type: 'regrouped', headline: `${You(actor)} moved #${item.seq} into #${to.seq}${from ? ` from #${from.seq}` : ''}: ${clip(item.title, 80)}` });
     return changed;
   },
 
@@ -2604,8 +2718,13 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, github_secret, issue_label, reporter_wait, wait_days }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days }, by) {
     const changes = [];
+    // The weekly freshness sweep (src/freshness.js). Back on, one opens once a week has passed since the last.
+    if (fresh != null && !!fresh !== !!p.fresh) {
+      this.q('UPDATE projects SET fresh = ? WHERE id = ?').run(fresh ? 1 : 0, p.id);
+      this.event(p, { actor: by, type: 'settings', headline: fresh ? `${You(by)} turned the weekly freshness sweep back on` : `${You(by)} turned off the weekly freshness sweep: ${p.name} is no longer kept current` });
+    }
     if (reporter_wait != null && Number(reporter_wait) !== p.reporter_wait) {
       const hours = Number(reporter_wait);
       if (!Number.isInteger(hours) || hours < 1) throw new UserError('reporter_wait is a whole number of hours, at least 1');

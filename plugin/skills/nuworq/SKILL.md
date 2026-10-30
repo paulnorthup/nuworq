@@ -11,6 +11,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 2. **The hub's guide is the rulebook:** the hub's /agents.md (or `nuworq guide`). When anything here disagrees with the guide or with a hint in a tool response, follow the hub.
 3. **No nuworq tools in this session?** Say so and stop. The machine needs `nuworq connect <hub>`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with `look`, ask what they want and why, offer options with trade-offs, then `propose` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
+5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
 
 ## The tools
 - `checkin`: Start here, and again after any break.

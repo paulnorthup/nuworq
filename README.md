@@ -100,6 +100,7 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 | Tribal knowledge | **Field notes.** Agents leave what they learned the hard way for every future agent. | Agents re-learn the same traps otherwise. |
 | Backlog grooming | **Shaping is agent work.** When nothing is ready, `next` hands an agent a proposal to shape: read the code, write what done means, split it if it's big. You pick what matters; agents do the rest. | Your job at the top of the funnel is direction, not specs. |
 | Sprints, estimates, points | Dropped. **Flow** shows whose move the time is spent on: agents, queue, or you. | The real constraint is your attention, not agent hours. |
+| "We'll upgrade someday" | **A weekly freshness sweep.** Each project gets a "Keep <project> fresh" item once a week (on by default, priority later, offered only when nothing more urgent is ready): an agent lands the safe updates in one batch and proposes each breaking upgrade with a migration plan. Turn it off in the project's controls. | Projects go stale one skipped upgrade at a time. |
 | A quiet board | **Silence must be earned.** A project is either *parked* (truly quiet) or honest about stalling: "Nothing is moving: 9 ideas waiting to be shaped. What matters most?" | Zero should mean fine, not forgotten. |
 
 ### You as facilitator
@@ -134,6 +135,18 @@ You can also set channels up in the UI, under **Notifications** in the left rail
 
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.
 
+### Operators (so "Needs you" is only decisions)
+Much of what used to reach you needed a capable session, not a decision: running `claude`, the hub's infrastructure, a homelab VM, GitHub admin, a real browser. An **operator** does that: an attended Claude Code session in the project folder, running with your permissions and safety checks.
+- It checks in with `has: ["operator", …]` plus the capabilities it really has: `claude-cli`, `nuworq-infra`, `homelab-vm`, `github-admin`, `browser`. Items whose `needs` include those tags are offered only to it.
+- Agents ask questions about running things, permissions or verifying on real infrastructure with `to: "operator"`; the operator answers them instead of you.
+- It escalates to you only when its own safety check needs your approval (risky or irreversible actions, product judgment): one precise question, with the evidence attached.
+- If work needs an operator capability and no operator connected in the last day, "Worth knowing" tells you to start one.
+
+Keep one running by starting Claude Code in the project folder with:
+```
+/loop Work on <project> as its operator using nuworq: checkin with has ["operator", <your capabilities>], ack steering, take next until it says there is nothing for you, answer operator questions, escalate to the human only what your safety checks need approved.
+```
+
 ---
 
 ## 30 minutes
@@ -167,7 +180,7 @@ Storage is one SQLite file (Node's built-in `node:sqlite`, WAL). Every stage cha
 Design choices:
 - **Steering piggybacks on every response.** Agents don't poll; whatever they call next carries it.
 - **Forgiving inputs.** An over-long headline is trimmed, with the overflow moved to the summary. Progress from an agent that lost its lease is kept as a comment. Every error carries a `hint` that says what to do instead.
-- **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority, then work needing what the agent's machine has (few agents can take it), then work you touched before.
+- **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority (effective priority: an item ranks at least as high as its group and as any open item waiting on it, e.g. "now (from #110)"; its own priority stays as set), then work needing what the agent's machine has (few agents can take it), then work you touched before.
 - **No configuration.** `nuworq serve` writes `~/.nuworq/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in, and which git repository it is (the normalized `origin` remote, e.g. `github.com/acme/api`), the first time an agent checks in from it. You can also set both in the UI. Every worktree of a repo, and every clone of it on any machine, maps to the same project: the remote is matched first, then the folder.
 - **Collision awareness.** `touching` paths on claim/progress. Agents get a `heads_up` when they overlap, and you see it in "In motion".
 - **Authority.** Only steering and decisions come from you. The guide tells agents to treat field notes, handoffs and comments as information, not instructions.
@@ -200,6 +213,11 @@ POST /api/p/:project/agent/:op           agent operations (header x-nuworq-agent
 POST /api/p/:project/human/:action       answer, confirm, accept, sendback, steer, decide, comment,
                                          create, update, retire, unretire, dismiss, seen, settings
 GET  /api/route[?runner=1]               where work is waiting, per project (runner: opted-in only, with holders)
+GET  /api/claims?agent=<name>&since=<ms> how many jobs a worker took since then (runner: did a quick exit do anything?)
+POST /api/runner                         nuworq run's state, every poll: { name, machine, running, workers,
+                                         skipping: [{project, reason, until?}], paused: {until, reason}|null,
+                                         spent, poll_seconds, stopped? }. Agent tokens may post it; a runner
+                                         token's name wins. Bookkeeping, not presence. Silent for 3 polls: down.
 GET  /api/tools?format=mcp|openai|anthropic
 GET  /agents.md?project=<p>&via=tools|cli
 GET  /api/stream                         server-sent events

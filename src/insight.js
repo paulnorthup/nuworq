@@ -7,7 +7,8 @@ import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, dur, providerOf, M
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
-import { verification } from './outcomes.js';
+import { humanCost, verification } from './outcomes.js';
+import { OPERATOR_TAGS } from './protocol.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -331,7 +332,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       key: `unfit:${it.id}:${missing.join(',')}`, level: 'know', kind: 'unfit', at: it.stage_since,
       headline: `${ref(it)} needs ${missing.join(', ')}; no agent connected in the last day has it`,
       sub: it.title,
-      why: `Only agents that declare ${missing.join(', ')} at checkin (has) are offered it. Start one on a machine that has it, or change what the item needs.`,
+      why: missing.some((tag) => OPERATOR_TAGS.includes(tag))
+        ? `Only an operator that declares ${missing.join(', ')} at checkin (has) is offered it. Start an operator session (see Operators in the guide, /agents.md), or change what the item needs.`
+        : `Only agents that declare ${missing.join(', ')} at checkin (has) are offered it. Start one on a machine that has it, or change what the item needs.`,
       item: ref(it), missing, keep: json(it.needs, []).filter((t) => !missing.includes(t)),
     });
   }
@@ -523,10 +526,10 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
   return {
-    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
+    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, fresh: !!p.fresh, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
     pulse, since, attention, motion, flow,
     queue, proposed, waiting, verifying, done,
-    agents: agentRows, decisions, notes, steers, activity,
+    agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
     stages: STAGES,
     all: items.map(brief),
   };
@@ -607,6 +610,7 @@ function flowStats(hub, p, items, t) {
     takeaway,
     cost: costStats(hub, p, from),
     verification: verificationStats(hub, p, items, from),
+    you: youStats(hub, p, from, t),
   };
 }
 
@@ -617,6 +621,13 @@ function verificationStats(hub, p, items, from) {
   if (!landed.length) return null;
   const modelOf = (agent) => (agent ? hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model || null : null);
   return verification(hub, landed, modelOf);
+}
+
+// What the work cost you over the window (#175): your actions per landed item, and how long act-level Needs you
+// entries waited until you resolved them (median). The court share above is time work waits on you; this is your effort.
+function youStats(hub, p, from, t) {
+  const c = humanCost(hub, p, from, t);
+  return { actions: c.actions, landed: c.landed, per_landed: c.per_landed, median_wait: c.median_wait_ms == null ? null : dur(c.median_wait_ms), waits: c.waits };
 }
 
 // What finished work cost over the window, per model: median and total per finished item, tokens too
@@ -678,7 +689,7 @@ export function itemView(hub, slug, ref) {
   return {
     item: `#${it.seq}`, title: it.title, summary: it.summary, detail: it.detail, acceptance: it.acceptance,
     stage: it.stage, stage_label: STAGES[it.stage].label, stage_blurb: STAGES[it.stage].blurb, court: courtOf(it.stage, p.autonomy),
-    priority: it.priority, needs: json(it.needs, []), size: it.size || null, repo: repoTag(hub.remotesOf(p), it),
+    priority: it.priority, effective_priority: hub.effectiveLabel(p, it) ?? null, needs: json(it.needs, []), size: it.size || null, repo: repoTag(hub.remotesOf(p), it),
     created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
     holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
     race: it.race,

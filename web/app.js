@@ -5,6 +5,7 @@ import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
 import { homePage, columns } from './home.js';
 import { credit } from './credit.js';
+import { checkChip } from './checks.js';
 import { missingProject } from './missing.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
@@ -323,6 +324,9 @@ function project(v) {
         ${z() >= 1 ? (P.runner
           ? `<button class="link" data-action="runner-off" title="nuworq run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by nuworq run · stop</button>`
           : `<button class="link" data-action="runner-on" title="Let nuworq run start headless workers here whenever work is waiting">Let nuworq run staff this project</button>`) : ''}
+        ${z() >= 1 ? (P.fresh
+          ? `<button class="link" data-action="fresh-off" title="Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade. Click to stop it.">Kept fresh weekly · stop</button>`
+          : `<button class="link" data-action="fresh-on" title="Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade">Keep this project fresh weekly</button>`) : ''}
       </div>
     </div>
     ${projectBody(v, empty)}`;
@@ -337,11 +341,11 @@ function projectBody(v, empty) {
   const s = {
     pulse: pulse(v), composer: composer(v), empty: empty ? emptyProject() : '', needs: needsYou(v), motion: motion(v),
     worth: z() >= 1 ? worthKnowing(v) : '', flow: flow(v), next: z() >= 1 ? upNext(v) : '', finished: z() >= 1 ? finished(v) : '',
-    steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
+    steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', runners: z() >= 1 ? runners(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
   };
   const order = (keys) => keys.map((k) => s[k]).join('');
-  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents']));
-  return order(['pulse', 'composer', 'empty', 'needs', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'activity', 'all', 'more']);
+  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']));
+  return order(['pulse', 'composer', 'empty', 'needs', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
 }
 
 function emptyProject() {
@@ -535,7 +539,7 @@ function cardActions(a, hasMore, open, key) {
   }
   if (a.kind === 'ci-failing') {
     const r = `sb:${a.item}`;
-    return `<div class="evidence">${a.pr.checks.map((c) => `<span class="ev">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">✗ ${esc(c.name)}</a>` : `✗ ${esc(c.name)}`}</span>`).join('')}</div>
+    return `<div class="evidence">${a.pr.checks.map((c) => checkChip(c, esc)).join('')}</div>
       <div class="actions">
       ${S.reveal.has(r)
         ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What failed? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
@@ -634,6 +638,7 @@ function flow(v) {
         <div class="spark" title="Finished per day, last 14 days">${f.throughput.map((n) => `<span class="${n ? '' : 'z'}" style="height:${Math.max(2, Math.round((n / max) * 28))}px" title="${n}"></span>`).join('')}</div>
         <span>${plural(f.finished, 'item')} finished in 14 days${f.median_cycle ? ` · median ${esc(f.median_cycle)} from ready to done` : ''}</span>
       </div>
+      ${flowYou(f.you)}
       ${flowHeld(f.verification)}
       ${f.cost ? flowCost(f.cost) : ''}
     </div></section>`;
@@ -646,6 +651,14 @@ function flowHeld(v) {
   const who = v.by_model.filter((m) => m.built_escaped || m.reviewed_escaped || m.overturned)
     .map((m) => `${esc(m.model ?? 'unknown model')}: ${[m.built_escaped && `built ${m.built_escaped}`, m.reviewed_escaped && `reviewed ${m.reviewed_escaped}`, m.overturned && `${m.overturned} verdict${m.overturned === 1 ? '' : 's'} overturned`].filter(Boolean).join(', ')}`);
   return `<p class="flow-held" title="An escape is landed work that a later item names in fixes">${plural(v.escaped, 'escape')} in ${v.landed} landed${v.peer_accepted ? ` · ${v.overturned} of ${plural(v.peer_accepted, 'peer verdict')} overturned` : ''}${who.length ? ` · ${who.join(' · ')}` : ''}</p>`;
+}
+
+// What the work cost you (#175): your actions (answers, verdicts, steers, decisions, comments) per landed item,
+// and how long work you had to move waited for you. Nothing to say until you've acted or something landed.
+function flowYou(y) {
+  if (!y || (!y.actions && !y.landed && !y.waits)) return '';
+  const per = y.per_landed != null ? `<b>${y.per_landed}</b> of your actions per landed item` : `${plural(y.actions, 'action')} of yours, nothing landed yet`;
+  return `<p class="flow-you" title="Your answers, verdicts, steers, decisions, comments and confirmations over 14 days, against the items that landed">${per}${y.median_wait ? ` · work waited a median <b>${esc(y.median_wait)}</b> for you (${plural(y.waits, 'time')})` : ''}</p>`;
 }
 
 // Why a stage is empty, and the one thing to do about it where there is one.
@@ -769,6 +782,27 @@ function agents(v) {
     </div>`).join('')}</div></section>`;
 }
 
+// The machines running `nuworq run` for this project (#171), as each last said: up, paused, skipping this
+// project, stopped, or down (silent for 3 polls). The state leads each row; one line says why.
+function runners(v) {
+  if (!v.project.runner) return '';
+  const rs = v.runners ?? [];
+  if (!rs.length) return `<section class="sec"><header><h2>Runners</h2></header>
+    ${zero('<b>No runner has reported here.</b> Nothing starts workers until one does.', 'On a machine with a checkout: <code>nuworq run</code>')}</section>`;
+  const why = (r) => r.state === 'down' ? `Silent since ${esc(r.last_seen)} ago${r.machine ? ` on ${esc(r.machine)}` : ''}.`
+    : r.state === 'stopped' ? `Stopped ${esc(r.last_seen)} ago: ${esc(r.stopped)}.`
+    : r.state === 'paused' ? `Paused for ${esc(r.paused.for)}: ${esc(r.paused.reason)}.`
+    : r.state === 'skipping' ? `Leaves this project alone${r.skipping.for ? ` for ${esc(r.skipping.for)}` : ''}: ${esc(r.skipping.reason)}.`
+    : `${r.running} of ${r.workers} worker${r.workers === 1 ? '' : 's'} running.`;
+  const up = rs.filter((r) => r.state === 'up').length;
+  return `<section class="sec"><header><h2>Runners</h2><span class="count">${up} up</span>${up < rs.length ? `<span class="hint">${rs.length - up} not starting work here</span>` : ''}</header>
+    <div class="rows">${rs.map((r) => `<div class="row-item runner"><div class="body">
+      <div class="h">${esc(r.name)}<span class="status runner-${r.state}">${esc(r.state)}</span></div>
+      <div class="s">${why(r)}</div>
+      <div class="s faint">${[r.machine && r.machine !== r.name ? `on ${esc(r.machine)}` : '', r.state !== 'down' ? `seen ${esc(r.last_seen)} ago` : '', r.spent ? `$${r.spent.toFixed(2)} spent` : '', r.skipping_others ? `skips ${r.skipping_others} other project${r.skipping_others === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}</div>
+    </div></div>`).join('')}</div></section>`;
+}
+
 function activity(v) {
   const quiet = new Set(['progress', 'checkin', 'review_started']);
   const events = S.feedAll ? v.activity : v.activity.filter((e) => !quiet.has(e.type));
@@ -868,6 +902,7 @@ function renderDrawer() {
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
       <textarea data-draft="ei-summary" id="ei-summary" placeholder="Summary">${esc(it.summary)}</textarea>
       <textarea data-draft="ei-acceptance" id="ei-acceptance" placeholder="Done means…">${esc(it.acceptance)}</textarea>
+      <label class="field-label">Part of <input data-draft="ei-parent" id="ei-parent" value="${esc(it.parent?.item ?? '')}" placeholder="e.g. #12: the group it belongs to; empty for none" inputmode="numeric"></label>
       <label class="field-label">Fixes a landed item <input data-draft="ei-fixes" id="ei-fixes" value="${esc(it.fixes?.item ?? '')}" placeholder="e.g. #12: the landed item this repairs (counts as an escape)" inputmode="numeric"></label>
       <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['ei-priority'] ?? it.priority) === p ? 'on' : ''}" data-action="ei-priority" data-p="${p}">${p}</button>`).join('')}</div>
       ${it.stage !== 'active' ? `<div class="seg" title="Race: how many agents attempt it at once, each on its own; you keep the best">${[1, 2, 3].map((n) => `<button class="${+(S.drafts['ei-race'] ?? it.race) === n ? 'on' : ''}" data-action="ei-race" data-n="${n}">${n === 1 ? '1 agent' : `race ${n}`}</button>`).join('')}</div>` : ''}
@@ -898,7 +933,7 @@ function renderDrawer() {
     </div></div>` : '';
 
   d.innerHTML = `
-    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${repoTag(it)}${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
+    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${it.effective_priority ? ` <span class="tag ${esc(it.effective_priority.split(' ')[0])}" title="Agents take it at this priority: its group, or work waiting on it, ranks higher">ranks ${esc(it.effective_priority)}</span>` : ''}${repoTag(it)}${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
       <button class="btn ghost small x" data-action="close" title="Close (Esc)">✕</button></div>
     <h2 class="title">${esc(it.title)}</h2>
     <div class="d-now">${holderLine}</div>
@@ -916,8 +951,8 @@ function renderDrawer() {
       ${commits(it.git)}${it.git_warning ? `<div class="warn">⚠ ${esc(it.git_warning)}</div>` : ''}</div>` : ''}
     ${handoff}
     ${it.prs?.length ? `<div class="d-sec"><div class="label">Pull requests</div>${it.prs.map((pr) => `<p><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a> <b>${esc(pr.state)}</b> · ${esc(pr.title)}
-      ${pr.ci ? ` · CI <b class="${pr.ci === 'fail' ? 'warn' : ''}">${pr.ci === 'pass' ? '✓ passing' : pr.ci === 'fail' ? '✗ failing' : '… running'}</b>` : ''}</p>
-      ${pr.checks.length ? `<div class="evidence">${pr.checks.map((c) => `<span class="ev">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}: ${esc(c.conclusion)}</a>` : `${esc(c.name)}: ${esc(c.conclusion)}`}</span>`).join('')}</div>` : ''}`).join('')}</div>` : ''}
+      ${pr.ci ? ` · CI <b class="${pr.ci === 'fail' ? 'bad' : pr.ci === 'pass' ? 'ok' : ''}">${pr.ci === 'pass' ? '✓ passing' : pr.ci === 'fail' ? '✗ failing' : '… running'}</b>` : ''}</p>
+      ${pr.checks.length ? `<div class="evidence">${pr.checks.map((c) => checkChip(c, esc)).join('')}</div>` : ''}`).join('')}</div>` : ''}
     ${questions}
     ${steers}
     <div class="d-sec"><div class="label">Say something about this item</div>
@@ -944,7 +979,7 @@ function firstProject() {
 
 function connectStep(r) {
   const c = connectCommands(S.info ?? { url: location.origin }, location, r.slug);
-  const refused = r.refused?.length ? `<div class="warn">${r.refused.map((x) => `<p>⚠ Not linked: ${esc(x.error)}.${x.hint ? ` ${esc(x.hint)}` : ''}</p>`).join('')}</div>` : '';
+  const refused = r.refused?.length ? `<div class="bad">${r.refused.map((x) => `<p>✗ Not linked: ${esc(x.error)}.${x.hint ? ` ${esc(x.hint)}` : ''}</p>`).join('')}</div>` : '';
   modal(`<p class="faint">Step 3 of 3 · connect a machine</p>
     <h2>${esc(r.name)} is ready</h2>
     ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
@@ -1251,6 +1286,8 @@ const ACTIONS = {
   },
   'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
   'runner-off': () => human('settings', { runner: false }, '`nuworq run` will no longer start workers here'),
+  'fresh-on': () => human('settings', { fresh: true }, 'The weekly freshness sweep is on'),
+  'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) human('settings', { fresh: false }, 'The weekly freshness sweep is off'); },
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
   clarify: (el) => {
@@ -1263,15 +1300,15 @@ const ACTIONS = {
   },
   'item-steer': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('steer', { item: el.dataset.item, body }, 'Steer attached: whoever works on it must acknowledge'); },
   'item-note': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('comment', { item: el.dataset.item, body }, 'Noted'); },
-  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes'); render({ force: true }); },
+  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes', 'ei-parent'); render({ force: true }); },
   'ei-priority': (el) => { S.drafts['ei-priority'] = el.dataset.p; render({ force: true }); },
   'ei-race': (el) => { S.drafts['ei-race'] = el.dataset.n; render({ force: true }); },
   'save-item': async (el) => {
-    const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance'), fixes: val('ei-fixes') };
+    const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance'), fixes: val('ei-fixes'), parent: val('ei-parent') };
     if (S.drafts['ei-priority']) args.priority = S.drafts['ei-priority'];
     if (S.drafts['ei-race']) args.race = Number(S.drafts['ei-race']);
     S.editItem = false;
-    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes');
+    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes', 'ei-parent');
     await human('update', args, 'Saved');
   },
   'edit-pre': () => { S.editPre = !S.editPre; render({ force: true }); },

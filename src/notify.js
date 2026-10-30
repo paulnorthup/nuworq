@@ -227,6 +227,36 @@ export function notifyWorkspaces(spaces, baseUrlFor, { every = 30_000, ...opts }
   return { notifiers, sweep, stop: () => { clearInterval(timer); for (const n of notifiers.values()) n.stop(); } };
 }
 
+// ── the hub's owners (workspaces mode) ──
+
+// A new early-access request, as its push: who asked and the link that opens it, nothing else (#167).
+export function composeRequest({ email, github = '', building = '' }, url = '') {
+  const title = 'nuworq: early-access request';
+  const note = clip(building, 140);
+  const who = `${email}${github ? ` (@${github})` : ''}`;
+  return { title, url, text: [title, `${who} asked to come in${note ? `: ${note}` : ''}`, url && `→ ${url}`].filter(Boolean).join('\n'), entries: [] };
+}
+
+// The owners' own channels: in each workspace where a person has an owner's verified email, that person's
+// personal channels. Never a workspace's hub-wide channels, which others there read. Each URL once.
+export function ownerChannels(spaces, owners) {
+  const dir = spaces.directory, out = new Map();
+  for (const email of owners) {
+    const id = dir.identity(email);
+    for (const m of id ? dir.orgsOf(id, spaces) : []) {
+      const db = spaces.get(m.workspace)?.db;
+      for (const c of db?.prepare('SELECT * FROM channels WHERE person = ? ORDER BY id').all(`@${m.handle}`) ?? []) if (!out.has(c.url)) out.set(c.url, { db, c });
+    }
+  }
+  return [...out.values()];
+}
+
+// Push one new request to the owners. Never throws: a channel that fails is recorded on it, as for any push.
+export async function notifyOwners(spaces, owners, request, url, opts = {}) {
+  const msg = composeRequest(request, url);
+  return Promise.all(ownerChannels(spaces, owners).map(({ db, c }) => deliver(db, c, msg, opts)));
+}
+
 // A workspace's address, for links in pushes: its subdomain of baseDomain, else /w/<name>/ under the hub.
 export function workspaceUrl(name, { baseDomain = '', publicUrl = '', url = '' } = {}) {
   const base = (publicUrl || url).replace(/\/+$/, '');
