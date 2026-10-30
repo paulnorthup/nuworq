@@ -348,10 +348,15 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .spark span.z { background: var(--line-strong); }
 
 /* ── steering ── */
-.steer-item .acks { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; font-size: 12px; }
+.acks { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; font-size: 12px; min-width: 0; }
 .ack { color: var(--ok); }
 .ack::before { content: '✓ '; }
 .unacked { color: var(--muted); }
+/* Many acks (#211): one summary line, the full list behind a tap, dense columns when open. */
+.ack-sum { color: var(--muted); overflow-wrap: anywhere; }
+.more-acks { font-size: 12px; padding: 6px 8px; margin: -6px 0; color: var(--ink); text-decoration: underline; }
+.ack-all { flex-basis: 100%; list-style: none; margin: 4px 0 0; padding: 0; columns: 9em; column-gap: 12px; }
+.ack-all li { break-inside: avoid; overflow-wrap: anywhere; padding: 1px 0; }
 
 /* ── activity ── */
 .feed .row-item { padding: 8px 14px; }
