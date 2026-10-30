@@ -42,9 +42,9 @@ export class Workspaces {
 
   static check(slug) {
     const s = String(slug ?? '').trim().toLowerCase();
-    // People see these as they name an organization (#155): say organization, as sign-up does.
-    if (!SLUG.test(s) || s.length < 2) throw new UserError(`"${slug}" can't be an organization's address`, { hint: '2–40 characters: lowercase letters, digits and dashes, e.g. "acme".' });
-    if (RESERVED.has(s)) throw new UserError(`"${s}" is reserved; pick another address for your organization`, { hint: `Reserved for the hub itself: ${[...RESERVED].join(', ')}.` });
+    // People see these as they name a workspace (#155, #159).
+    if (!SLUG.test(s) || s.length < 2) throw new UserError(`"${slug}" can't be a workspace's address`, { hint: '2–40 characters: lowercase letters, digits and dashes, e.g. "acme".' });
+    if (RESERVED.has(s)) throw new UserError(`"${s}" is reserved; pick another address for your workspace`, { hint: `Reserved for the hub itself: ${[...RESERVED].join(', ')}.` });
     return s;
   }
 

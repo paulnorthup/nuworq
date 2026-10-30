@@ -15,11 +15,11 @@ const back = new URLSearchParams(location.hash.slice(1)).get('error');
 if (back) { show(back.endsWith('.') ? back : `${back}.`); history.replaceState(null, '', location.pathname + location.search); }
 
 // The providers this hub offers, if any, above the token box.
-// An organization on a shared hub (#155) names itself and leads with sign-in: its people have no access to the
+// A workspace on a shared hub (#155) names itself and leads with sign-in: its people have no access to the
 // hub's host, so the token path is tucked away behind a link, and nothing grabs focus over the sign-in buttons.
-fetch('api/oauth').then((r) => r.json()).then(({ providers = [], organization = null }) => {
-  if (organization && providers.length) {
-    document.getElementById('lead').textContent = `Sign in to ${organization}.`;
+fetch('api/oauth').then((r) => r.json()).then(({ providers = [], workspace = null }) => {
+  if (workspace && providers.length) {
+    document.getElementById('lead').textContent = `Sign in to ${workspace}.`;
     document.querySelector('.hint').hidden = true;
     for (const el of [input, go]) el.hidden = true;
     const reveal = document.createElement('button');
@@ -33,13 +33,13 @@ fetch('api/oauth').then((r) => r.json()).then(({ providers = [], organization = 
   const box = document.getElementById('providers');
   for (const p of providers) {
     const a = document.createElement('a');
-    a.className = organization ? 'btn primary' : 'btn';
+    a.className = workspace ? 'btn primary' : 'btn';
     a.href = code ? `${p.start}${p.start.includes('?') ? '&' : '?'}device=${code}` : p.start;
     a.textContent = `Sign in with ${p.label}`;
     box.append(a);
   }
   box.hidden = false;
-  if (!organization) document.getElementById('lead').textContent = 'This nuworq hub is private. Sign in, or paste your human token.';
+  if (!workspace) document.getElementById('lead').textContent = 'This nuworq hub is private. Sign in, or paste your human token.';
 }).catch(() => input.focus());
 
 // Already logged in (or the hub needs no login)? Go straight to the app.
