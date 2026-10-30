@@ -942,6 +942,7 @@ async function connect() {
     <h4>2. Connect this machine (once)</h4><p class="lead">It logs you in through the browser, saves this machine's token, and registers nuworq with Claude Code, Codex and opencode if they're installed. <code>nuworq disconnect</code> undoes it all.</p>${copyBlock(c.connect)}
     <h4>3. Keep workers going</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${copyBlock(c.run)}
     <p class="lead">One worker on its own, wherever work is waiting:</p>${copyBlock(c.worker)}
+    <h4>Optional: the Claude Code plugin</h4><p class="lead">The MCP server and both nuworq skills in one install, instead of <code>claude mcp add</code> and copying the skills by hand. Connect this machine (step 2) all the same: the plugin holds no token.</p>${copyBlock(c.plugin)}
     ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
     ${z() >= 2 ? `<h3>Setting up by hand</h3><p class="lead">What <code>nuworq connect</code> does for you. No token or address goes in these: connect saved both, and <code>nuworq mcp</code> reads them.</p>

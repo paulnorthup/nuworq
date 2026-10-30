@@ -1,12 +1,13 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { connectCommands, shellCommands } from '../web/connect.js';
+import { copyBlock } from '../web/copy.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const REMOTE = { bin: '/var/lib/nuworq/hub-src/bin/nuworq.js', url: 'http://nuworq.com', auth: 'required', source: 'github.com/paulnorthup/nuworq' };
@@ -46,6 +47,16 @@ describe('connect an agent: commands that paste and run', () => {
     assert.equal(here.install, 'npm install -g http://127.0.0.1:4747/nuworq.tgz', 'a hub on this machine installs the same way');
     assert.equal(here.connect, 'nuworq connect http://127.0.0.1:4747');
     assert.equal(connectCommands({ ...REMOTE, package: null }).install, null, 'a hub with no package: the dialog says to install nuworq the way the hub was');
+  });
+
+  test('the optional Claude Code plugin step copies the README\'s commands, exactly as shown (#132)', () => {
+    const c = connectCommands({ ...REMOTE, package: { url: 'https://nuworq.com/nuworq.tgz' } }, null, 'demo');
+    assert.equal(c.plugin, 'claude plugin marketplace add paulnorthup/nuworq\nclaude plugin install nuworq@nuworq');
+    assert.ok(readFileSync(new URL('../README.md', import.meta.url), 'utf8').includes(c.plugin), 'the same lines as the README');
+    const html = copyBlock(c.plugin);
+    const text = (s) => s.replace(/&(lt|gt|quot|#39|amp);/g, (_, e) => ({ lt: '<', gt: '>', quot: '"', '#39': "'", amp: '&' })[e]);
+    assert.equal(text(html.match(/<pre>([^]*)<\/pre>/)[1]), c.plugin, 'shown');
+    assert.equal(text(html.match(/data-text="([^"]*)"/)[1]), c.plugin, 'copied');
   });
 
   test('setting up by hand: no token, no address, no path, no clone, in any command or config', () => {
