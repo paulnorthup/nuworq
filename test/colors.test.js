@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 // Every color means one thing (#188): the state colors and the provider marks stay clearly apart.
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
@@ -75,6 +75,38 @@ describe('the color map keeps meanings apart (#188)', () => {
       for (const t of STATE) assert.doesNotMatch(body, new RegExp(`var\\(${t}(-tint|-line)?\\)`), `${sel} uses ${t}`);
     }
     assert.match(app, /class="btn small" data-action="keep"/, 'race "Keep this one" buttons are peers');
+  });
+
+  test('text that carries information is at least 4.5:1 on the backgrounds it sits on (#195)', () => {
+    const pairs = [
+      ['--muted', '--bg'], ['--muted', '--panel'], ['--muted', '--sunken'], ['--muted', '--queue-tint'],
+      ['--muted', '--you-tint'], ['--muted', '--agents-tint'], // a Flow stage's label on its court's tint
+      ['--you', '--you-tint'], ['--agents', '--agents-tint'], ['--ok', '--ok-tint'], ['--bad', '--bad-tint'],
+    ];
+    for (const [fg, bg] of pairs) assert.ok(contrast(root[fg], root[bg]) >= 4.5, `${fg} on ${bg}: ${contrast(root[fg], root[bg]).toFixed(2)}`);
+    // Labels inside the courtbar and lifecycle bar segments: white on the colored ones, ink on the grey queue.
+    for (const bg of ['--agents', '--you', '--ok', '--muted']) assert.ok(contrast('#ffffff', root[bg]) >= 4.5, `white on ${bg}`);
+    assert.ok(contrast(root['--ink'], root['--queue']) >= 4.5, `ink on --queue: ${contrast(root['--ink'], root['--queue']).toFixed(2)}`);
+    assert.match(css, /\.seg-c\.queue, \.lifebar \.queue \{ color: var\(--ink\); \}/);
+  });
+
+  test('--faint is decoration only: no text anywhere in web/ is drawn in it (#195)', () => {
+    for (const f of readdirSync(new URL('../web/', import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n))) {
+      const src = readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8');
+      assert.doesNotMatch(src, /(^|[^-])color:\s*var\(--faint\)/, `${f} draws text in --faint`);
+    }
+  });
+
+  test('a project state dot says its state in words, not by color alone (#195)', async () => {
+    const { stateDot } = await import('../web/home.js');
+    for (const [state, label] of [['needs-you', 'Needs you'], ['flowing', 'Flowing'], ['stalled', 'Stalled'], ['idle', 'Idle'], ['parked', 'Parked']]) {
+      const dot = stateDot(state);
+      assert.match(dot, new RegExp(`class="dot ${state}"`));
+      assert.match(dot, new RegExp(`role="img" aria-label="${label}" title="${label}"`));
+    }
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const home = readFileSync(new URL('../web/home.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(app + home, /<span class="dot \$\{\w+\.pulse\.state\}/, 'the rail, home and pulse draw their dots with stateDot');
   });
 
   test('a token change that brings two meanings too close fails', () => {
