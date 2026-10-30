@@ -304,6 +304,8 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .takeaway { margin: 12px 0 0; font-size: 14px; }
 .takeaway::before { content: '→ '; color: var(--faint); }
 .flow-held { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.flow-you { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.flow-you b { color: var(--ink); font-weight: 600; }
 .throughput { display: flex; align-items: flex-end; gap: 14px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 12.5px; }
 .flow .cost { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 28px; }
