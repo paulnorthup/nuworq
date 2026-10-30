@@ -582,6 +582,8 @@ export class Hub extends EventEmitter {
       if (p.parked || (runner && !p.runner) || (scope && !scope.includes(p.slug))) continue;
       // Runners follow the project's staffing (#174): paused, or today's budget spent, starts no one new.
       if (runner && this.staffing(p).stopped) continue;
+      // A runner on duty here (#185): the project page knows a worker is coming before one checks in.
+      if (runner) this.q('UPDATE projects SET runner_polled_at = ? WHERE id = ?').run(this.now(), p.id);
       const all = this.claimable(p, agent, { powers, has });
       // A race with open slots can take that many workers at once.
       if (all.length) options.push({ p, ...all[0], claimable: all.reduce((n, o) => n + (this.racing(o.item) ? this.openSlots(o.item) : 1), 0) });
