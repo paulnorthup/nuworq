@@ -323,6 +323,9 @@ function project(v) {
         ${z() >= 1 ? (P.runner
           ? `<button class="link" data-action="runner-off" title="nuworq run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by nuworq run · stop</button>`
           : `<button class="link" data-action="runner-on" title="Let nuworq run start headless workers here whenever work is waiting">Let nuworq run staff this project</button>`) : ''}
+        ${z() >= 1 ? (P.fresh
+          ? `<button class="link" data-action="fresh-off" title="Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade. Click to stop it.">Kept fresh weekly · stop</button>`
+          : `<button class="link" data-action="fresh-on" title="Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade">Keep this project fresh weekly</button>`) : ''}
       </div>
     </div>
     ${projectBody(v, empty)}`;
@@ -1272,6 +1275,8 @@ const ACTIONS = {
   },
   'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
   'runner-off': () => human('settings', { runner: false }, '`nuworq run` will no longer start workers here'),
+  'fresh-on': () => human('settings', { fresh: true }, 'The weekly freshness sweep is on'),
+  'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) human('settings', { fresh: false }, 'The weekly freshness sweep is off'); },
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
   clarify: (el) => {

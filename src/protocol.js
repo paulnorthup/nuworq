@@ -244,6 +244,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 2. **The hub's guide is the rulebook:** ${guideAt}. When anything here disagrees with the guide or with a hint in a tool response, follow the hub.
 3. **No nuworq tools in this session?** Say so and stop. The machine needs \`nuworq connect <hub>\`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with \`look\`, ask what they want and why, offer options with trade-offs, then \`propose\` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
+5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
 
 ## The tools
 ${OPS.map(line).join('\n')}
@@ -332,6 +333,14 @@ Hub: ${url} · project: ${project} (change with --project).
 
 ## Operators
 An operator is a trusted, attended session: it checks in with \`operator\` in \`has\`. Its ${c('next')} first hands it questions agents asked \`to: "operator"\` (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them. If one needs the human's approval (risky, irreversible, or a product call), escalate it: ${c('ask')} with \`escalates\` (the question id), one precise question, and \`evidence\`. The human's answer reaches the original asker.
+
+## Freshness sweep
+Once a week the hub opens a "Keep <project> fresh" item (priority later: you get it only when nothing more urgent is ready). Do it on your machine with the project's own tools; the hub runs nothing.
+- **Check** what applies: npm (\`npm outdated\`, \`npm audit\`), Python (\`pip list --outdated\`, \`pip-audit\`), Rust (\`cargo outdated\`, \`cargo audit\`), Go (\`go list -m -u all\`), and \`osv-scanner\` if it's installed. Also the runtime version (\`engines\`, \`.nvmrc\`, \`.python-version\`, go.mod's \`go\` line, toolchain files) when it is near or past end of life, and CI actions (\`uses: actions/x@v3\` when v4 exists).
+- **Batch** every patch and minor update into one change on the item's branch, lockfiles included, with the tests passing.
+- **One proposal per breaking upgrade** (a major version, a runtime, a CI action's new major): ${c('propose')} it with what breaks and how to migrate. Don't do it in the sweep.
+- **Standing decisions win.** A pin like "stay on React 18" means no proposal to leave it. An upgrade that needs a person's call: ${c('ask')} with options.
+- **Nothing to update?** Submit "fresh: nothing to update" with the commands' output as evidence. Quick is fine.
 
 ## Write in layers (0-30-5-30)
 - **headline**: one line, outcome first. "Retries added; 2 flaky tests remain", not "Update".

@@ -100,6 +100,7 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 | Tribal knowledge | **Field notes.** Agents leave what they learned the hard way for every future agent. | Agents re-learn the same traps otherwise. |
 | Backlog grooming | **Shaping is agent work.** When nothing is ready, `next` hands an agent a proposal to shape: read the code, write what done means, split it if it's big. You pick what matters; agents do the rest. | Your job at the top of the funnel is direction, not specs. |
 | Sprints, estimates, points | Dropped. **Flow** shows whose move the time is spent on: agents, queue, or you. | The real constraint is your attention, not agent hours. |
+| "We'll upgrade someday" | **A weekly freshness sweep.** Each project gets a "Keep <project> fresh" item once a week (on by default, priority later, offered only when nothing more urgent is ready): an agent lands the safe updates in one batch and proposes each breaking upgrade with a migration plan. Turn it off in the project's controls. | Projects go stale one skipped upgrade at a time. |
 | A quiet board | **Silence must be earned.** A project is either *parked* (truly quiet) or honest about stalling: "Nothing is moving: 9 ideas waiting to be shaped. What matters most?" | Zero should mean fine, not forgotten. |
 
 ### You as facilitator

@@ -273,7 +273,7 @@ export class Hub extends EventEmitter {
     let p = this.q('SELECT * FROM projects WHERE slug = ?').get(s)
       ?? this.q('SELECT * FROM projects WHERE lower(name) = lower(?) ORDER BY id LIMIT 1').get(String(slug).trim());
     if (!p && create) {
-      this.q('INSERT INTO projects (slug, name, created_at) VALUES (?, ?, ?)').run(s, str(name) || s, this.now());
+      this.q('INSERT INTO projects (slug, name, created_at, fresh_at) VALUES (?, ?, ?, ?)').run(s, str(name) || s, this.now(), this.now());
       p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);
       this.event(p, { actor: SYSTEM, type: 'project', headline: `Project ${p.name} created` });
     }
@@ -1377,8 +1377,10 @@ export class Hub extends EventEmitter {
       .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
       .map((item) => ({ mode: 'land', item }));
     if (p.parked) return [...lands, ...reviews];
-    const ready = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id)
-      .filter((i) => fresh(i) && !this.unmetDeps(i).length)
+    const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id);
+    // The freshness sweep (src/freshness.js) waits while now or soon work is ready, whoever can take it.
+    const urgent = open.some((i) => !i.sweep && i.priority !== 'later' && !this.unmetDeps(i).length);
+    const ready = open.filter((i) => fresh(i) && !this.unmetDeps(i).length && !(i.sweep && urgent))
       .map((item) => ({ mode: 'work', item }));
     // Races with an open slot this agent hasn't taken a turn in. A slot goes to a different model first:
     // an agent on a model already in the race sees it after other work of the same priority.
@@ -2657,8 +2659,13 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, github_secret, issue_label, reporter_wait, wait_days }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days }, by) {
     const changes = [];
+    // The weekly freshness sweep (src/freshness.js). Back on, one opens once a week has passed since the last.
+    if (fresh != null && !!fresh !== !!p.fresh) {
+      this.q('UPDATE projects SET fresh = ? WHERE id = ?').run(fresh ? 1 : 0, p.id);
+      this.event(p, { actor: by, type: 'settings', headline: fresh ? `${You(by)} turned the weekly freshness sweep back on` : `${You(by)} turned off the weekly freshness sweep: ${p.name} is no longer kept current` });
+    }
     if (reporter_wait != null && Number(reporter_wait) !== p.reporter_wait) {
       const hours = Number(reporter_wait);
       if (!Number.isInteger(hours) || hours < 1) throw new UserError('reporter_wait is a whole number of hours, at least 1');

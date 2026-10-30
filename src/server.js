@@ -13,6 +13,7 @@ import { Workspaces } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
+import { freshen } from './freshness.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
 import { syncAlerts, accessOf } from './alerts.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
@@ -220,7 +221,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const hubs = () => (spaces ? spaces.hubs() : [target]);
   const sweeper = setInterval(() => {
     for (const hub of hubs()) {
-      try { hub.sweep(); hub.refreshMirrorTokens(); } catch (e) { console.error('sweep failed', e); }
+      try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); } catch (e) { console.error('sweep failed', e); }
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
       // Release preconditions read GitHub through the app where it's installed.
       runChecks(hub, { shared: !!spaces, github: { api: gh.api, app } }).catch((e) => console.error('checking preconditions failed', e));
