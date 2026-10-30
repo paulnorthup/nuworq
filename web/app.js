@@ -5,6 +5,7 @@ import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
 import { homePage, columns } from './home.js';
 import { credit } from './credit.js';
+import { checkChip } from './checks.js';
 import { missingProject } from './missing.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
@@ -535,7 +536,7 @@ function cardActions(a, hasMore, open, key) {
   }
   if (a.kind === 'ci-failing') {
     const r = `sb:${a.item}`;
-    return `<div class="evidence">${a.pr.checks.map((c) => `<span class="ev">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">✗ ${esc(c.name)}</a>` : `✗ ${esc(c.name)}`}</span>`).join('')}</div>
+    return `<div class="evidence">${a.pr.checks.map((c) => checkChip(c, esc)).join('')}</div>
       <div class="actions">
       ${S.reveal.has(r)
         ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What failed? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
@@ -916,8 +917,8 @@ function renderDrawer() {
       ${commits(it.git)}${it.git_warning ? `<div class="warn">⚠ ${esc(it.git_warning)}</div>` : ''}</div>` : ''}
     ${handoff}
     ${it.prs?.length ? `<div class="d-sec"><div class="label">Pull requests</div>${it.prs.map((pr) => `<p><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a> <b>${esc(pr.state)}</b> · ${esc(pr.title)}
-      ${pr.ci ? ` · CI <b class="${pr.ci === 'fail' ? 'warn' : ''}">${pr.ci === 'pass' ? '✓ passing' : pr.ci === 'fail' ? '✗ failing' : '… running'}</b>` : ''}</p>
-      ${pr.checks.length ? `<div class="evidence">${pr.checks.map((c) => `<span class="ev">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}: ${esc(c.conclusion)}</a>` : `${esc(c.name)}: ${esc(c.conclusion)}`}</span>`).join('')}</div>` : ''}`).join('')}</div>` : ''}
+      ${pr.ci ? ` · CI <b class="${pr.ci === 'fail' ? 'bad' : pr.ci === 'pass' ? 'ok' : ''}">${pr.ci === 'pass' ? '✓ passing' : pr.ci === 'fail' ? '✗ failing' : '… running'}</b>` : ''}</p>
+      ${pr.checks.length ? `<div class="evidence">${pr.checks.map((c) => checkChip(c, esc)).join('')}</div>` : ''}`).join('')}</div>` : ''}
     ${questions}
     ${steers}
     <div class="d-sec"><div class="label">Say something about this item</div>
@@ -944,7 +945,7 @@ function firstProject() {
 
 function connectStep(r) {
   const c = connectCommands(S.info ?? { url: location.origin }, location, r.slug);
-  const refused = r.refused?.length ? `<div class="warn">${r.refused.map((x) => `<p>⚠ Not linked: ${esc(x.error)}.${x.hint ? ` ${esc(x.hint)}` : ''}</p>`).join('')}</div>` : '';
+  const refused = r.refused?.length ? `<div class="bad">${r.refused.map((x) => `<p>✗ Not linked: ${esc(x.error)}.${x.hint ? ` ${esc(x.hint)}` : ''}</p>`).join('')}</div>` : '';
   modal(`<p class="faint">Step 3 of 3 · connect a machine</p>
     <h2>${esc(r.name)} is ready</h2>
     ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
