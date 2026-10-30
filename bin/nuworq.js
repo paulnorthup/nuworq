@@ -459,10 +459,17 @@ function workerSetup(target, agent, flags, s, token = null) {
     ...(browser ? ['mcp__playwright'] : [])].join(',');
   const mcp = JSON.stringify({ mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env }, ...(browser ? { playwright: browserServer(name) } : {}) } });
 
-  const lines = [];
-  if (worktree && origin) lines.push(`git -C ${sq(home)} fetch -q origin`, `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
-  else if (worktree) lines.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
-  lines.push(`cd ${sq(cwd)}`);
+  // The worktree first. `nuworq run` runs this part on its own, so a checkout that can't be updated is told
+  // apart from an agent that fails.
+  const setup = [];
+  if (worktree && origin) {
+    // A fetch over HTTPS from GitHub gets a read-only token for the project's repository from the hub's
+    // GitHub App: the worker holds no item yet. git asks its own helpers first, and SSH needs none.
+    const reader = `!NUWORQ_URL=${s.url}${token ? ` NUWORQ_TOKEN=${token}` : ''} node ${JSON.stringify(BIN)} git-credential --project ${target.slug} --as ${name}`;
+    setup.push(`git -C ${sq(home)} -c ${sq(`credential.https://github.com.helper=${reader}`)} -c credential.https://github.com.useHttpPath=true fetch -q origin`,
+      `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
+  } else if (worktree) setup.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
+  const lines = [`cd ${sq(cwd)}`];
   // Pushes over HTTPS to GitHub get a one-repo, one-hour token from the hub's GitHub App, asked for by git
   // itself: this worker's processes only (no config file changes), and the agent never sees the token.
   if (origin) {
@@ -505,7 +512,10 @@ function workerSetup(target, agent, flags, s, token = null) {
     const named = provider ? ` \\\n  -c ${sq(`model_providers.${provider}.http_headers={"x-client-name"=${JSON.stringify(label)}}`)}` : '';
     lines.push(`codex exec${json} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
   }
-  return { name, worktree, main: origin ? `origin/${main}` : main, origin, cwd, cmd: lines.join(' && \\\n') };
+  return {
+    name, worktree, main: origin ? `origin/${main}` : main, origin, cwd,
+    checkout: setup.join(' && '), start: lines.join(' && \\\n'), cmd: [...setup, ...lines].join(' && \\\n'),
+  };
 }
 
 // Keep up to --workers headless workers on waiting work in the projects the human opted in.
@@ -516,7 +526,8 @@ async function runCmd(flags) {
   await hubProjects(client);
   const token = await agentToken(client, flags);
   const num =(v, d) => (v === undefined ? d : Number(v) > 0 ? Number(v) : (() => { throw new HubError(`expected a positive number, got "${v}"`, { hint: 'See: nuworq help' }); })());
-  const { spawn } = await import('node:child_process');
+  const { spawn, execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
   const { run } = await import('../src/runner.js');
   const logs = join(dirname(HUB_FILE), 'logs');
@@ -536,11 +547,23 @@ async function runCmd(flags) {
       if (e instanceof HubError) e.skip = true;
       throw e;
     }
-    const { name, worktree, cwd, cmd } = setup;
+    const { name, worktree, cwd, checkout, start } = setup;
     const log = join(logs, `${name}.log`);
+    // Its worktree, at the latest main. When git can't do that (e.g. it can't reach origin), the agent never
+    // starts: the runner leaves the project alone for a while and the others go on.
+    if (checkout) {
+      try {
+        await promisify(execFile)('/bin/sh', ['-c', checkout], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout: 5 * 60_000 });
+      } catch (e) {
+        const err = String(e.stderr || e.message).trim();
+        writeFileSync(log, `${err}\n`);
+        const said = err.split('\n').find((l) => /^(fatal|error):/.test(l)) ?? err.split('\n').pop();
+        throw Object.assign(new HubError(`couldn't update its checkout: ${said}`, { hint: `log: ${log}` }), { skip: true, pause: true });
+      }
+    }
     const out = createWriteStream(log);
     // Its own process group, so stopping it stops the agent too, not just the shell.
-    const child = spawn('/bin/sh', ['-c', cmd], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const usage = await tapUsage(child, agent, flags, (l) => out.write(`${l}\n`));
     child.stderr.pipe(out, { end: false });
     return {
@@ -1165,8 +1188,11 @@ ${bold('Setup')}
                                          work with, and has "browser".
   run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--max-usd X] [--poll 30] [--has tags] [--browser] [--until-idle]
                                          keep up to N workers on waiting work in projects you opted in
-                                         (UI: "Let nuworq run staff this project"); exits when the
-                                         queue is empty. Logs: ~/.nuworq/logs. --max-usd stops launching
+                                         (UI: "Let nuworq run staff this project"); waits for work, or
+                                         with --until-idle exits when the queue is empty. Workers that
+                                         keep failing pause it (5m, then longer, up to 30m), and a project
+                                         whose checkout can't be updated waits the same way while the
+                                         others go on. Logs: ~/.nuworq/logs. --max-usd stops launching
                                          once workers' reported spend reaches X (codex and local models
                                          report no cost, so they don't count against it).
                                          --browser: each worker gets a browser, as with worker --browser.
@@ -1193,10 +1219,16 @@ async function gitCredential(pos, flags) {
   for await (const c of process.stdin) input += c;
   const ask = Object.fromEntries(input.split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
   if (ask.host !== 'github.com') return;
-  // --project: a read-only token to clone that project's repository (nuworq run, before it holds an item).
+  // --project: a read-only token to clone or fetch that project's repository (a worker before it holds an item).
   if (flags.project) {
     const repo = `github.com/${String(ask.path ?? '').replace(/\.git$/, '').replace(/\/+$/, '')}`;
-    const r = await createClient(flags).post('/api/agent/credential', { purpose: 'clone', project: String(flags.project), repo, agent: flags.as || envVar('AGENT') || undefined });
+    let r;
+    try {
+      r = await createClient(flags).post('/api/agent/credential', { purpose: 'clone', project: String(flags.project), repo, agent: flags.as || envVar('AGENT') || undefined });
+    } catch (e) {
+      if (e.status === 404) return; // no GitHub App: git uses whatever else is set up, quietly
+      throw e;
+    }
     return process.stdout.write(`username=${r.username}\npassword=${r.password}\n`);
   }
   const agent = flags.as || envVar('AGENT');

@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
@@ -171,8 +171,10 @@ describe('nuworq worker --agent claude', () => {
       assert.equal(val({ NUWORQ_TEST_CONCURRENCY: '4' }), '4');
       assert.doesNotMatch(stdout, /NODE_OPTIONS/, 'Node refuses --test-concurrency there');
 
-      const setup = stdout.match(/^git -C '[^']*' fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
+      const setup = stdout.match(/^git -C '[^']*' -c '[^']*' -c \S+ fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
       assert.ok(setup, 'fetch first, then the worktree detached at origin/main');
+      // It holds no item yet, so over HTTPS the fetch gets the project's read-only token, not the item one.
+      assert.match(setup, /-c 'credential\.https:\/\/github\.com\.helper=!NUWORQ_URL=http:\/\/127\.0\.0\.1:\d+ node "[^"]+" git-credential --project gh --as c-2' -c credential\.https:\/\/github\.com\.useHttpPath=true fetch/);
       execFileSync('/bin/sh', ['-c', setup.replace(/ \\\n/g, ' ')]);
       const wt = `${repo}.worktrees/c-2`;
       assert.equal(g(wt, 'rev-parse', 'HEAD'), g(origin, 'rev-parse', 'main'), 'at the latest main on GitHub');
@@ -309,7 +311,7 @@ describe('a worker for a project the hub knows only by remote (a hub on a server
       { env: { ...process.env, HOME: dir, NUWORQ_TOKEN: '', NUWORQ_REPOS: '' }, cwd: a });
     try {
       const bee = (await cli('bee')).stdout;
-      assert.ok(bee.includes(`git -C '${b}' fetch -q origin`) && bee.includes(`cd '${b}.worktrees/w'`), bee);
+      assert.ok(new RegExp(`^git -C '${b}' -c .* fetch -q origin && `, 'm').test(bee) && bee.includes(`cd '${b}.worktrees/w'`), bee);
       assert.ok(!bee.includes(`'${a}`), 'nothing in the repo it started in');
       await assert.rejects(cli('gone'), (e) => e.stderr.includes('No checkout of github.com/acme/nope on this machine')
         && e.stderr.includes(`git clone git@github.com:acme/nope.git ${join(dir, 'nope')}`));
@@ -398,6 +400,26 @@ describe('a worker for a project with no checkout on this machine', () => {
       const log = readdirSync(logs).map((f) => readFileSync(join(logs, f), 'utf8')).join('');
       assert.match(log, /^ARG \{"mcpServers":.*"playwright":\{"command":"npx","args":\["-y","@playwright\/mcp@0\.0\.83","--headless"/m, log);
       assert.match(log, /^ARG mcp__nuworq,.*,mcp__playwright\nARG --disallowedTools\nARG mcp__playwright__browser_run_code_unsafe$/m);
+    } finally {
+      server.close();
+    }
+  });
+
+  test("run leaves a project whose checkout can't be updated for later, and never starts its agent", async () => {
+    const w = far();
+    execFileSync('git', ['clone', '-q', w.origin, join(w.repos, 'api')]);
+    rmSync(w.origin, { recursive: true }); // origin can't be reached any more
+    const server = createServer(w.hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--until-idle', '--poll', '1'], { env: w.env, cwd: w.home });
+      const said = stdout.match(/^Skipping far for 5m: couldn't update its checkout: fatal: '[^']*' does not appear to be a git repository\n {2}log: (\S+)$/m);
+      assert.ok(said, stdout);
+      assert.match(readFileSync(said[1], 'utf8'), /does not appear to be a git repository/, "git's own words are in the log");
+      assert.match(stdout, /Done: no work this machine can take is waiting\. 0 launched/);
+      assert.doesNotMatch(stdout, /▶|failed within seconds/);
+      assert.ok(!existsSync(join(w.repos, 'api.worktrees')), 'no worktree, no agent');
     } finally {
       server.close();
     }
@@ -544,10 +566,66 @@ describe('run: the supervising loop', () => {
     assert.match(w.lines.at(-1), /1 launched, 1 exited cleanly, 0 failed/);
   });
 
-  test('gives up after workers keep failing within seconds', async () => {
+  test("a project whose checkout can't be updated waits 5m, then 10m, while the others go on; it isn't a failure", async () => {
+    const w = world([[route('far', 1), route('a', 1)]]);
+    const start = w.opts.launch;
+    const tried = [];
+    w.opts.launch = async (r) => {
+      if (r.project !== 'far') return start(r);
+      tried.push(w.opts.now());
+      throw Object.assign(new Error("couldn't update its checkout: fatal: could not read Username for 'https://github.com'"), { skip: true, pause: true, hint: 'log: /logs/w.log' });
+    };
+    let interrupt;
+    const p = run({ ...w.opts, workers: 2, onInterrupt: (fn) => { interrupt = fn; } });
+    for (let i = 0; i < 1e5 && tried.length < 2; i++) await new Promise((r) => setImmediate(r));
+    interrupt();
+    w.workers[0].finish(0);
+    const res = await p;
+    assert.deepEqual(w.workers.map((x) => x.project), ['a'], "far's slot went to a, and a kept going");
+    assert.equal(res.launched, 1, 'skips are not launches');
+    const skipped = w.lines.filter((l) => /^Skipping far/.test(l));
+    assert.deepEqual(skipped, [
+      "Skipping far for 5m: couldn't update its checkout: fatal: could not read Username for 'https://github.com'\n  log: /logs/w.log",
+      "Skipping far for 10m: couldn't update its checkout: fatal: could not read Username for 'https://github.com'\n  log: /logs/w.log",
+    ]);
+    const gap = tried[1] - tried[0];
+    assert.ok(gap >= 5 * 60_000 && gap < 5 * 60_000 + 2_000, `tried again after 5 minutes (gap ${gap}ms)`);
+    assert.ok(!w.lines.some((l) => /Couldn't start|failed within seconds|^Paused/.test(l)));
+  });
+
+  test('pauses 5m after 3 workers in a row fail within seconds, then 10m on the next streak, instead of quitting', async () => {
+    const w = world([[route('a', 5)]]);
+    const at = [];
+    w.opts.launch = async () => { at.push(w.opts.now()); throw new Error('claude: command not found'); };
+    const res = await run({ ...w.opts, workers: 1, maxRuns: 6 });
+    assert.match(res.why, /max-runs 6/);
+    const paused = w.lines.filter((l) => /^Paused/.test(l));
+    assert.equal(paused.length, 2);
+    assert.match(paused[0], /^Paused 5m: 3 workers in a row failed within seconds\. Check the agent runs on its own \(see its log\)\.$/);
+    assert.match(paused[1], /^Paused 10m: /, 'the next streak pauses longer');
+    const gap = at[3] - at[2];
+    assert.ok(gap >= 5 * 60_000 && gap < 5 * 60_000 + 10_000, `no 4th worker for 5 minutes, then it resumes (gap ${gap}ms)`);
+  });
+
+  test('a worker that worked resets the pause: the next streak waits 5m again', async () => {
+    const w = world([[route('a', 5)]]);
+    const codes = [1, 1, 1, 0, 1, 1, 1];
+    const launch = w.opts.launch;
+    w.opts.launch = async (r) => {
+      const x = await launch(r);
+      const code = codes[w.workers.length - 1];
+      setImmediate(() => x.finish(code));
+      return x;
+    };
+    w.opts.claimed = async () => true;
+    await run({ ...w.opts, workers: 1, maxRuns: codes.length });
+    assert.deepEqual(w.lines.filter((l) => /^Paused/.test(l)).map((l) => l.slice(0, 10)), ['Paused 5m:', 'Paused 5m:']);
+  });
+
+  test('with --until-idle, workers that keep failing within seconds stop run', async () => {
     const w = world([[route('a', 5)]]);
     w.opts.launch = async () => { throw new Error('claude: command not found'); };
-    const res = await run({ ...w.opts, workers: 1 });
+    const res = await run({ ...w.opts, workers: 1, untilIdle: true });
     assert.match(res.why, /failed within seconds/);
     assert.equal(res.launched, 3);
   });

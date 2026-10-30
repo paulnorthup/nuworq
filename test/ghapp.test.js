@@ -238,6 +238,13 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
       const r = await fetch(`http://127.0.0.1:${pp}/api/agent/credential`, { method: 'POST', headers: { 'x-nuworq-agent': 'a1' }, body: '{}' });
       assert.equal(r.status, 404);
       assert.match((await r.json()).hint, /NUWORQ_GITHUB_APP_ID/);
+      // A worker's fetch asks with --project: on such a hub the helper steps aside quietly, so git goes on.
+      const env = { ...process.env, NUWORQ_URL: `http://127.0.0.1:${pp}`, NUWORQ_TOKEN: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
+      const out = await new Promise((resolve, reject) => {
+        const child = execFile(process.execPath, [BIN, 'git-credential', 'get', '--project', 'api'], { env }, (err, stdout, stderr) => (err ? reject(err) : resolve(stdout + stderr)));
+        child.stdin.end('protocol=https\nhost=github.com\npath=acme/api.git\n\n');
+      });
+      assert.equal(out, '');
     } finally { plain.close(); }
     assert.equal(appFromEnv({}), null);
     assert.deepEqual(appFromEnv({ NUWORQ_GITHUB_APP_ID: '7', NUWORQ_GITHUB_APP_KEY: 'pem', NUWORQ_GITHUB_APP_SLUG: 's' }), { id: '7', key: 'pem', slug: 's', webhook_secret: '', client_id: '', client_secret: '' });
