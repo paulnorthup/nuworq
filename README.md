@@ -198,6 +198,11 @@ POST /api/p/:project/agent/:op           agent operations (header x-nuworq-agent
 POST /api/p/:project/human/:action       answer, confirm, accept, sendback, steer, decide, comment,
                                          create, update, retire, unretire, dismiss, seen, settings
 GET  /api/route[?runner=1]               where work is waiting, per project (runner: opted-in only, with holders)
+GET  /api/claims?agent=<name>&since=<ms> how many jobs a worker took since then (runner: did a quick exit do anything?)
+POST /api/runner                         nuworq run's state, every poll: { name, machine, running, workers,
+                                         skipping: [{project, reason, until?}], paused: {until, reason}|null,
+                                         spent, poll_seconds, stopped? }. Agent tokens may post it; a runner
+                                         token's name wins. Bookkeeping, not presence. Silent for 3 polls: down.
 GET  /api/tools?format=mcp|openai|anthropic
 GET  /agents.md?project=<p>&via=tools|cli
 GET  /api/stream                         server-sent events

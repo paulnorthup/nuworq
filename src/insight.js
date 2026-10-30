@@ -525,7 +525,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
     pulse, since, attention, motion, flow,
     queue, proposed, waiting, verifying, done,
-    agents: agentRows, decisions, notes, steers, activity,
+    agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
     stages: STAGES,
     all: items.map(brief),
   };

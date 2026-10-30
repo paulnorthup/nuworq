@@ -266,6 +266,12 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .status.working { color: var(--ok); }
 .status.quiet { color: var(--warn); }
 .status.idle, .status.away, .status.signed { color: var(--faint); }
+/* Runners (#171): their state leads the row, coloured by whether work can start. */
+.row-item.runner .h { display: flex; align-items: baseline; gap: 8px; }
+.status.runner-up { color: var(--ok); }
+.status.runner-paused, .status.runner-skipping { color: var(--warn); }
+.status.runner-down { color: var(--bad); }
+.status.runner-stopped { color: var(--faint); }
 .agent-strip { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .agent-strip .a { display: inline-flex; gap: 6px; align-items: baseline; }
 .agent-strip .st { font-size: 12px; color: var(--faint); }

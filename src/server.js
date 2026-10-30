@@ -78,7 +78,7 @@ const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 const REPO_PAGE = 30; // repositories per page in "+ Project"
 
@@ -1011,6 +1011,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null,
         has: url.searchParams.has('has') ? url.searchParams.get('has').split(',').filter(Boolean) : undefined,
       }));
+      // nuworq run's state, on every poll (#171): who it is comes from its token when it has a runner name.
+      if (req.method === 'POST' && path === '/api/runner') {
+        const changed = hub.reportRunner(await body(req), { name: caller.token?.runner ?? '', scope: caller.scope });
+        if (changed) hub.emit('change', { project: null, at: hub.now() });
+        return send(200, { ok: true });
+      }
       if (req.method === 'GET' && path === '/api/claims') {
         return send(200, { claims: hub.claimsSince(url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0, { scope: caller.scope }) });
       }
