@@ -61,6 +61,12 @@ function need(v, what) {
 }
 
 // positional + flag shapes for each agent operation
+// --evidence "label|url", repeatable.
+const evidenceFlags = (list) => list?.map((e) => {
+  const [label, ...url] = String(e).split('|');
+  return clean({ label: label.trim(), url: url.join('|').trim() || undefined });
+});
+
 const AGENT_CMDS = {
   checkin: (p, f) => ({ model: f.model, client: f.client, status: text(f.status), has: refs(f.has ?? envVar('HAS')) }),
   next: (p, f) => ({ claim: f.peek ? false : undefined }),
@@ -74,15 +80,13 @@ const AGENT_CMDS = {
       context: text(f.context), detail: text(f.detail),
       options: f.option, assumption: text(f.assume ?? f.assumption),
       blocking: f.blocking ? true : undefined, to: f.to,
+      escalates: f.escalates, evidence: evidenceFlags(f.evidence),
     };
   },
   answer: (p) => ({ question: need(p[0], '<question-id>'), answer: need(rest(p, 1), '<answer>') }),
   submit: (p, f) => ({
     item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f), acceptance: text(f.acceptance),
-    evidence: f.evidence?.map((e) => {
-      const [label, ...url] = String(e).split('|');
-      return clean({ label: label.trim(), url: url.join('|').trim() || undefined });
-    }),
+    evidence: evidenceFlags(f.evidence),
   }),
   handoff: (p, f) => ({ item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f) }),
   propose: (p, f) => ({
@@ -431,9 +435,9 @@ function workerSetup(target, agent, flags, s, token = null) {
     worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. To land accepted work, follow the hub's steps: rebase onto origin/${main}, run the checks, then \`git push origin <branch>:${main}\`. Never work in the main checkout, ${home}.`
       : worktree ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} with \`git switch -c <branch> ${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, and include the branch and commit in your evidence when you submit. Never work in the main checkout, ${home}.` : '',
     browser && (has('bin/nuworq.js')
-      ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login.'
+      ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login. When you ship a visible UI feature, add its key with today\'s date to web/new.js and data-new="<key>" to its element, so people see it\'s new.'
       : 'To check UI work, start the app from this worktree on a free local port, in the background.'),
-    browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide, each in light and in dark mode (browser_resize, browser_emulate_media). Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
+    browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide (browser_resize); the app is light only, so there is no dark mode to check. Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
     'While you work, run only the tests that cover what you change; run the full test suite once, just before you submit.',
     'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
@@ -783,7 +787,8 @@ async function serve(flags) {
   hub.llmProxy = (await import('../src/llmproxy.js')).proxyFromEnv();
   // The GitHub App: from the environment, else the one the hub created for itself (Create GitHub App).
   const appFile = join(dataHome(flags), 'github-app.json');
-  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package') });
+  const siteHost = String(flags['site-host'] || envVar('SITE_HOST') || '');
+  const server = createServer(hub, { auth, trustProxy, publicUrl, siteHost, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package') });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -793,7 +798,7 @@ hint: Create one, then start again:
       node ${JSON.stringify(BIN)} token create <your-name> --role human --db ${JSON.stringify(db)}`);
     process.exit(1);
   }
-  server.listen(port, host, () => {
+  server.listen(port, host, async () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     if (!flags.demo) {
       // Let agents and the CLI on this machine find the hub without configuration.
@@ -804,15 +809,17 @@ hint: Create one, then start again:
     const authLine = auth === 'required'
       ? `${green('locked')}: browsers log in with a human token; agents send NUWORQ_TOKEN (an agent token)${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}`
       : `${amber('open')} on loopback: no login (only this machine can reach it)`;
+    // The same commands as the Connect dialog: the installed `nuworq`, never a path into this checkout (#157).
+    const base = publicUrl || url;
+    const pkg = await server.package;
     console.log(`${green('●')} ${bold('nuworq')} is running at ${bold(url)}${flags.demo ? dim('  (demo data, in memory)') : dim(`  (${db})`)}
   Auth: ${authLine}
 ${dim(`
-  Connect an agent:
-    MCP (Claude Code):  claude mcp add --scope user nuworq${auth === 'required' ? ' -e NUWORQ_TOKEN=<agent-token>' : ''} -- node ${JSON.stringify(BIN)} mcp   (once, for every project)
-    Shell:              node ${JSON.stringify(BIN)} guide
-    Setup for others:   node ${JSON.stringify(BIN)} init     (run in a project folder)
-    Headless worker:    node ${JSON.stringify(BIN)} worker --agent claude|codex --run   (goes wherever work is waiting)
-    Tool schemas:       ${url}/api/tools?format=openai`)}`);
+  Connect an agent (on any machine):
+${pkg ? `    Install (once):     npm install -g ${base}/nuworq.tgz\n` : ''}    Connect (once):     nuworq connect ${base}   (logs in, registers nuworq with Claude Code, Codex and opencode)
+    Keep workers going: nuworq run --workers 3 --agent claude   (add --browser for UI checks; Ctrl-C stops)
+    Shell:              nuworq guide
+    Tool schemas:       ${base}/api/tools?format=openai`)}`);
   });
   const stop = () => { server.close(); process.exit(0); };
   process.on('SIGINT', stop);
@@ -875,7 +882,8 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const earlyAccess = flags['early-access'] || secret || owners.length
     ? { owners, verify: secret ? turnstile(secret) : null, sitekey: envVar('TURNSTILE_SITEKEY') ?? '', gate: !!flags['early-access'] }
     : null;
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess });
+  const siteHost = String(flags['site-host'] || envVar('SITE_HOST') || '');
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, siteHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();
@@ -1073,6 +1081,8 @@ ${bold('Human')}
                                          run the hub and web UI. Loopback: no login.
                                          Any other host (or --auth): tokens required.
                                          --follow: keep the hub on the latest main that passes its tests
+                                         --site-host nuworq.com (with --public-url): that host serves the
+                                         landing page (site/) and sends app paths on to the public URL
   token create <name> --role human|agent [--project a,b]
                                          create a token (shown once); run on the hub host.
                                          --project limits an agent token to those projects
@@ -1110,6 +1120,8 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   progress <item> [headline] [--touching "src/db,src/api.js"]
                                          milestone update (no headline = silent heartbeat); renews your lease
   ask [<item>] <question> [--assume a] [--option x]... [--blocking] [--to human|reporter|operator]
+  ask <question> --escalates <question-id> --evidence "label|url"...
+                                         operators only: carry a question up to the human, with evidence
   answer <question-id> <answer>          operators only: answer a question asked to: operator
   submit <item> <headline> [--evidence "label|url"]...
   handoff <item> <headline>              release with where you left off

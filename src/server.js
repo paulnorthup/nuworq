@@ -19,7 +19,7 @@ import { ORG_CAP } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { outcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf } from './package.js';
@@ -56,6 +56,14 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
   'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
+// The landing page (site/), for the site host. Its one inline script sends old app links (nuworq.com/#/p/…) on
+// to the app; CSP allows exactly that script, by hash. Nothing else runs, and nothing is fetched from elsewhere.
+const SITE = join(ROOT, 'site');
+const SITE_APP = 'https://app.nuworq.com'; // the app's address as site/ is written; served as the hub's public URL
+const siteCsp = (html) => {
+  const hashes = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`);
+  return `default-src 'self'; img-src 'self' data:; style-src 'self'; script-src ${hashes.join(' ') || "'none'"}; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`;
+};
 // A page of the Connect GitHub flow that the hub serves itself: the sign-in card's look (style.css,
 // login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
 const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -87,8 +95,12 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // earlyAccess (workspaces mode): { owners: [emails], verify: async (token, ip) => bool, gate: bool }. owners
 // decide requests; verify checks the form's Turnstile token (src/directory.js turnstile); gate: making an
 // organization takes an approved request's grant. null: no early access.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null } = {}) {
+// siteHost: the marketing host (e.g. nuworq.com), when the app lives at publicUrl (app.nuworq.com): it serves
+// the landing page (site/) and sends every other path to the same path on publicUrl.
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
+  siteHost = String(siteHost).toLowerCase();
+  if (siteHost && !publicUrl) throw new Error('a site host needs the public URL the app lives at (--public-url)');
   // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
   let built = null;
   const pkg = buildPackage(source, packageDir).then((b) => (built = b));
@@ -255,7 +267,28 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       new_org: `${authOrigin(req)}/?new`,
     };
   };
+  // A device-login code as the CLI shows it (ABCD-EFGH), or '' for anything else.
+  const deviceCode = (s) => (/^[A-Z]{4}-[A-Z]{4}$/i.test(String(s ?? '')) ? String(s).toUpperCase() : '');
   const redirect = (res, location) => { res.writeHead(302, { location, 'cache-control': 'no-store' }); res.end(); };
+
+  // The site host: its own files from site/, and every app path (/api, /login.html, /w/…, /agents.md) on to the app.
+  const sitePage = async (req, res, url) => {
+    const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+    let body = null;
+    if (['GET', 'HEAD'].includes(req.method) && /^[a-z0-9-]+\.(html|css)$/.test(file)) {
+      try { body = await readFile(join(SITE, file), 'utf8'); } catch { /* not the site's: the app's */ }
+    }
+    if (body == null) {
+      res.writeHead(308, { location: `${publicUrl}${url.pathname}${url.search}`, 'cache-control': 'no-store' });
+      return res.end();
+    }
+    body = body.replaceAll(SITE_APP, publicUrl.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`));
+    res.writeHead(200, {
+      'content-type': TYPES[extname(file)], 'cache-control': 'no-cache',
+      ...(file.endsWith('.html') ? { 'content-security-policy': siteCsp(body) } : {}),
+    });
+    res.end(req.method === 'HEAD' ? undefined : body);
+  };
 
   // GET /auth/<provider>/start?ws=<workspace> and /auth/<provider>/callback: hub-wide, whatever the host.
   async function signIn(req, res, url, provider, step, { send, deny }) {
@@ -266,7 +299,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // No workspace: sign in to the hub itself, to see and create organizations.
       const ws = spaces ? String(url.searchParams.get('ws') ?? '').toLowerCase() : '';
       if (spaces && ws && !spaces.get(ws)) return deny(404, `no workspace "${ws}"`, 'Start from your workspace\'s login page.');
-      const go = sso.start(provider, { ws, back: spaces && !ws ? authOrigin(req) : homeOf(req, ws), callback });
+      const go = sso.start(provider, { ws, back: spaces && !ws ? authOrigin(req) : homeOf(req, ws), callback, device: deviceCode(url.searchParams.get('device')) });
       res.setHeader('set-cookie', `${FLOW_COOKIE}=${go.nonce}; HttpOnly; SameSite=Lax; Path=/auth/; Max-Age=600${https(req) ? '; Secure' : ''}`);
       return redirect(res, go.url);
     }
@@ -277,7 +310,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     } catch (e) {
       return send(400, `<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
     }
-    const fail = (msg) => redirect(res, `${flow.back}/login.html#error=${encodeURIComponent(msg)}`);
+    // A sign-in started from a device approval page (#153) keeps its code, so it ends back on that page.
+    const dev = flow.device ? `device=${flow.device}` : '';
+    const fail = (msg) => redirect(res, `${flow.back}/login.html${dev ? `?${dev}` : ''}#error=${encodeURIComponent(msg)}`);
     if (url.searchParams.get('error')) return fail(`${sso.providers[provider].label} sign-in was cancelled`);
     let email;
     try { email = await sso.email(provider, url.searchParams.get('code'), flow); } catch (e) { return fail(e.message); }
@@ -291,7 +326,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
     spaces?.directory.join(email, flow.ws);
     if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
-    return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}`);
+    return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}${dev ? `&${dev}` : ''}`);
   }
   const sameOrigin = (req) => {
     try { return new URL(req.headers.origin).host === hostOf(req); } catch { return false; }
@@ -358,7 +393,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
     const page = path === '/' ? '/join.html' : path;
-    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css'].includes(page) && req.method === 'GET') {
+    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css', '/login.css'].includes(page) && req.method === 'GET') {
       return send(200, readFileSync(join(WEB, page.slice(1)), 'utf8'), TYPES[extname(page)]);
     }
     const sid = jarOf(req).get(HUB_COOKIE);
@@ -443,6 +478,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
+      if (siteHost && hostname(hostOf(req)) === siteHost) return await sitePage(req, res, url);
       let am;
       if (req.method === 'GET' && (am = path.match(/^\/auth\/([a-z]+)\/(start|callback)$/))) return await signIn(req, res, url, am[1], am[2], { send, deny });
       // nuworq itself, as an npm package of the commit this hub runs: public, the same for every workspace.
@@ -540,7 +576,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const sid = required ? sso.redeem(url.searchParams.get('ticket'), ws) : null;
         if (!sid) return redirect(res, `${base}/login.html#error=${encodeURIComponent('That sign-in link was already used, expired, or belongs to another workspace. Sign in again')}`);
         res.setHeader('set-cookie', sessionCookie(req, sid, cookiePath));
-        return redirect(res, `${base}/`);
+        // Only ever this hub's own device page, with a code of the right shape: never an address from the link.
+        const dev = deviceCode(url.searchParams.get('device'));
+        return redirect(res, `${base}/${dev ? `device.html?code=${dev}` : ''}`);
       }
       // An invite link: peek at what it offers, or accept it with a handle (creates the person, signs them in).
       if (req.method === 'POST' && (path === '/api/invite/peek' || path === '/api/invite/accept')) {
@@ -988,6 +1026,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
   });
   if (!spaces) server.auth = scopeOf(target).authz;
+  server.package = pkg; // resolves to the built package, or null when this hub serves none
+
   server.on('close', () => { clearInterval(sweeper); clearInterval(keepalive); });
   return server;
 }

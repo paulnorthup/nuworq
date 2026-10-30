@@ -5,9 +5,14 @@ const go = document.getElementById('go');
 
 const show = (msg) => { error.textContent = msg; error.hidden = !msg; };
 
+// Sent here to approve a machine (device.html, #153): after signing in, go back there with the same code.
+const device = new URLSearchParams(location.search).get('device');
+const code = /^[A-Z]{4}-[A-Z]{4}$/i.test(device ?? '') ? device.toUpperCase() : '';
+const next = code ? `device.html?code=${code}` : './';
+
 // A sign-in with GitHub or Google that didn't work comes back here as #error=<why>.
 const back = new URLSearchParams(location.hash.slice(1)).get('error');
-if (back) { show(back.endsWith('.') ? back : `${back}.`); history.replaceState(null, '', location.pathname); }
+if (back) { show(back.endsWith('.') ? back : `${back}.`); history.replaceState(null, '', location.pathname + location.search); }
 
 // The providers this hub offers, if any, above the token box.
 fetch('api/oauth').then((r) => r.json()).then(({ providers = [] }) => {
@@ -16,7 +21,7 @@ fetch('api/oauth').then((r) => r.json()).then(({ providers = [] }) => {
   for (const p of providers) {
     const a = document.createElement('a');
     a.className = 'btn';
-    a.href = p.start;
+    a.href = code ? `${p.start}${p.start.includes('?') ? '&' : '?'}device=${code}` : p.start;
     a.textContent = `Sign in with ${p.label}`;
     box.append(a);
   }
@@ -27,7 +32,7 @@ fetch('api/oauth').then((r) => r.json()).then(({ providers = [] }) => {
 // Already logged in (or the hub needs no login)? Go straight to the app.
 // Paths are relative so login also works under a workspace path prefix (/w/<slug>/).
 fetch('api/me').then((r) => r.json()).then((me) => {
-  if (me.auth === 'local' || me.role === 'human') location.replace('./');
+  if (me.auth === 'local' || me.role === 'human') location.replace(next);
 }).catch(() => {});
 
 form.addEventListener('submit', async (e) => {
@@ -41,7 +46,7 @@ form.addEventListener('submit', async (e) => {
       body: JSON.stringify({ token: input.value.trim() }),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) return location.replace('./');
+    if (r.ok) return location.replace(next);
     if (r.status === 429) show('Too many failed attempts. Wait 10 minutes, then try again.');
     else show([j.error || 'Login failed', j.hint].filter(Boolean).join('. '));
   } catch {

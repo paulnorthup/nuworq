@@ -8,7 +8,8 @@
 // A project's sentence without its "needs you" part: the badge says that.
 const short = (s) => String(s ?? '').replace(/^(Nothing needs you\.|\d+ things? needs? you\.)\s*/, '');
 
-export function homePage(h, { z, pulse, card, esc, plural }) {
+// wide: lay it out in two columns; gs: the Get started card, if any.
+export function homePage(h, { z, pulse, card, esc, plural, wide = false, gs = '' }) {
   const tag = (p) => `<a class="proj-tag" href="#/p/${encodeURIComponent(p.slug)}">${esc(p.name)}</a>`;
   const needs = h.needs.length ? `<section class="sec home-needs"><header><h2>Needs you</h2><span class="count">${h.needs.length}</span>
       <span class="hint">oldest first, across projects</span></header>
@@ -34,5 +35,12 @@ export function homePage(h, { z, pulse, card, esc, plural }) {
       ${h.motion.map((m) => `<div class="ov-line" data-project="${esc(m.project.slug)}" data-action="open" data-item="${esc(m.item)}"><div class="body"><b>${esc(m.agent)}</b> <span class="s">${esc(m.item)} ${esc(m.title)}</span></div>${tag(m.project)}</div>`).join('')}
     </div></section>` : '';
 
-  return `${pulse({ pulse: h.pulse, since: h.pulse.since, project: { parked: false }, home: true })}${needs}${projects}${worth}${motion}`;
+  const head = pulse({ pulse: h.pulse, since: h.pulse.since, project: { parked: false }, home: true });
+  // Wide (#141): the work in the main column, the 30-second answer (pulse, Get started, projects) beside it.
+  // The same sections either way; with nothing to act on, one column, so no empty band.
+  if (wide && (needs || worth || motion)) return columns(`${needs}${worth}${motion}`, `${head}${gs}${projects}`);
+  return `${gs}${head}${needs}${projects}${worth}${motion}`;
 }
+
+// Two columns: the work, and beside it what stays in view while you act on it.
+export const columns = (main, side) => `<div class="cols"><div class="col-main">${main}</div><aside class="col-side">${side}</aside></div>`;

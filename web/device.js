@@ -16,7 +16,10 @@ async function check() {
   show('');
   const { ok, status, j } = await post('api/device/peek', { user_code: code.value });
   if (status === 401) {
-    lead.innerHTML = 'Log in first, then open this link again. <a href="login.html">Log in</a>';
+    // Signing in brings you back here with the same code (#153); until then there's nothing to continue.
+    const back = /^[A-Z]{4}-[A-Z]{4}$/i.test(code.value.trim()) ? `?device=${encodeURIComponent(code.value.trim().toUpperCase())}` : '';
+    lead.innerHTML = `To approve this machine, sign in first. You'll come back here with the code. <a href="login.html${back}">Sign in</a>`;
+    go.hidden = true;
     return;
   }
   if (!ok) return show([j.error, j.hint].filter(Boolean).join('. '));

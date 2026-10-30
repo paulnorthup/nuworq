@@ -88,15 +88,18 @@ Who gets in: the hub asks the provider for a **verified** email (GitHub: the pri
 **Organizations (with `--workspaces`).** People can also sign in to the hub itself, at the address that names no workspace (the base domain, the `--public-url` host, or `/` without subdomains): `/auth/<provider>/start` with no `ws`. There, `GET /api/me` lists their organizations (workspaces where a person has their verified email) with role, address and an `enter` link that signs them in there in one click. `POST /api/orgs {name, slug}` creates a workspace with them as its owner. Each person may create up to 5 (`--org-cap`, `NUWORQ_ORG_CAP`). The hub keeps who-belongs-where in `<data-dir>/workspaces/directory.sqlite` and checks it against each workspace's people on every read, so role changes and removals show at once. Reserved names: www, api, app, admin, w, static, login, auth, hub.
 
 ### Connecting agents to a remote hub
-Create one agent token per machine or agent, so you can revoke them one at a time:
+On the agent's machine, two lines with the hub's public address (the hub's "Connect an agent" dialog gives them ready to copy):
 ```bash
-node bin/nuworq.js token create claude-laptop          # role defaults to agent
+npm install -g https://nuworq.example.com/nuworq.tgz   # the package of the commit the hub runs
+nuworq connect https://nuworq.example.com              # a workspace: its /w/<slug> address
 ```
-On the agent's machine:
+`connect` logs in through the browser, gives the machine its own agent token, and registers `nuworq mcp` with Claude Code, Codex and opencode. A hub that serves no package (`/api/info` has `package: null`, e.g. an older version) still works from a checkout of nuworq: `node bin/nuworq.js connect <url>`.
+
+By hand instead, create one agent token per machine or agent, so you can revoke them one at a time:
 ```bash
-claude mcp add nuworq -e NUWORQ_URL=https://nuworq.example.com -e NUWORQ_TOKEN=nwq_… -- node /path/to/nuworq/bin/nuworq.js mcp
+node bin/nuworq.js token create claude-laptop          # on the hub's host; role defaults to agent
 ```
-Codex, opencode and the plain CLI read the same two variables.
+Then give the agent `NUWORQ_URL` and `NUWORQ_TOKEN`, e.g. `claude mcp add nuworq -e NUWORQ_URL=https://nuworq.example.com -e NUWORQ_TOKEN=nwq_… -- nuworq mcp`. Codex, opencode and the plain CLI read the same two variables.
 
 ### GitHub: pull requests and CI on items
 A signed webhook links pull requests to items and shows CI results on them. When CI fails on work in Verifying, it lands under "Needs you" (and gets pushed, if you set up [notifications](../README.md#getting-pinged-ntfy-slack-or-any-webhook)).
@@ -140,6 +143,8 @@ cloudflared service install && systemctl enable --now cloudflared
 # the hub: deploy/nuworq.service as is, plus --public-url https://nuworq.com (links in push messages)
 ```
 Verified: a valid certificate, 401 without login, a `Secure` session cookie, and the live stream (`/api/stream`) arriving unbuffered through Cloudflare.
+
+**The app on its own host, the landing page on the apex.** Start the hub with `--public-url https://app.nuworq.com --site-host nuworq.com` (`NUWORQ_SITE_HOST`), and route both hostnames to it. On the site host, `/` and `site/`'s files serve the landing page. Every other path (`/api/…`, `/login.html`, `/auth/…`, `/w/…`, `/agents.md`) gets a `308` to the same path and query on the public URL. Old links like `nuworq.com/#/p/<slug>/12` keep working: the fragment never reaches the server, so the landing page's one inline script (allowed by its hash in the CSP) sends them on to the public URL. Every link the hub builds uses the public URL.
 
 ### Keeping a server up to date: it pulls, nothing pushes to it
 `serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. If the new hub doesn't come up healthy, it rolls back. No CI job reaches into your network, and the server only needs read access:

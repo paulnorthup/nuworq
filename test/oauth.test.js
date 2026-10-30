@@ -189,9 +189,11 @@ describe('one provider app serves every workspace', () => {
   });
   after(() => { for (const s of [server, p.server]) { s.close(); s.closeAllConnections(); } });
 
-  const begin = async (ws, email) => {
+  // device: the device code login.html adds to the start link when it was opened from device.html (#153).
+  const begin = async (ws, email, device = null) => {
     const opts = (await request(port, 'GET', '/api/oauth', { headers: { host: `${ws}.${BASE}` } })).json.providers;
     const start = new URL(opts[0].start);
+    if (device != null) start.searchParams.set('device', device);
     assert.equal(start.host, `auth.${BASE}`, 'the flow starts at the hub-wide address');
     const s = await request(port, 'GET', start.pathname + start.search, { headers: { host: start.host } });
     const a = p.approve(s.headers.location, email);
@@ -214,6 +216,18 @@ describe('one provider app serves every workspace', () => {
     assert.deepEqual(me.json, { person: '@ann', role: 'owner' });
     const there = await request(port, 'GET', '/api/people/me', { headers: { host: `globex.${BASE}`, cookie: cookie(done) } });
     assert.equal(there.status, 401, "acme's session means nothing in globex");
+  });
+
+  test('signing in from a device approval page ends back on it with the same code; anything else is ignored (#153)', async () => {
+    const finish = async (device) => {
+      const fin = new URL((await begin('acme', 'ann@acme.com', device)).headers.location);
+      return (await request(port, 'GET', fin.pathname + fin.search, { headers: { host: fin.host } })).headers.location;
+    };
+    assert.equal(await finish('abcd-efgh'), '/device.html?code=ABCD-EFGH');
+    for (const bad of ['//evil.example', 'ABCD-EFGH&x=1', '../admin', 'ABCDEFGH1']) assert.equal(await finish(bad), '/', `${bad} is not a code`);
+    assert.equal(await finish(), '/', 'no code: the board, as before');
+    const fail = await begin('globex', 'ann@acme.com', 'ABCD-EFGH');
+    assert.match(fail.headers.location, /^http:\/\/globex\.nuworq\.test\/login\.html\?device=ABCD-EFGH#error=/, 'a failed sign-in keeps the code too');
   });
 
   test("a person of acme can't sign in to globex", async () => {

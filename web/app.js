@@ -3,10 +3,17 @@
 import { connectCommands } from './connect.js';
 import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
-import { homePage } from './home.js';
+import { homePage, columns } from './home.js';
+import { credit } from './credit.js';
+import { missingProject } from './missing.js';
+import { errorText, errorHtml } from './errors.js';
+import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
+// Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
+const WIDE = matchMedia('(min-width: 1024px)');
+WIDE.addEventListener('change', () => render());
 // Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
 const store = {
   get: (k, d) => { try { return localStorage.getItem('nuworq:' + k) ?? localStorage.getItem('trellis:' + k) ?? d; } catch { return d; } },
@@ -70,13 +77,22 @@ const stagePill = (stage, court) => `<span class="stage-pill ${stage === 'done' 
 const courtOf = (stage) => S.view?.flow.stages.find((s) => s.stage === stage)?.court;
 const LOGO = `<svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="var(--agents)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>`;
 
-function toast(msg, err = false) {
+// undo: { action, note } for a button that reverses what just happened; the toast then stays 8s to give time to use it.
+function toast(msg, err = false, undo = null) {
   const t = $('#toast');
   t.textContent = msg;
+  if (undo) t.insertAdjacentHTML('beforeend', ` <button class="toast-undo" data-action="${esc(undo.action)}" data-note="${esc(undo.note)}">Undo</button>`);
   t.className = err ? 'err' : '';
   t.hidden = false;
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => (t.hidden = true), err ? 5000 : 2200);
+  toast.t = setTimeout(() => (t.hidden = true), undo ? 8000 : err ? 5000 : 2200);
+}
+// A failed request, as a person reads it: the error and what to do about it, with any place it names linked (#151).
+function toastError(e) {
+  toast(errorText(e), true);
+  $('#toast').innerHTML = errorHtml(e, esc);
+  // Following the place it names leaves the dialog the error came from.
+  for (const a of $('#toast').querySelectorAll('a')) a.addEventListener('click', () => { closeModal(); $('#toast').hidden = true; });
 }
 
 // The hub out of reach (#142): say so in a bar that stays, mark what's on screen as possibly out of date, and
@@ -131,7 +147,7 @@ async function human(action, body = {}, msg) {
     await refresh();
     return r;
   } catch (e) {
-    toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true);
+    toastError(e);
   }
 }
 
@@ -144,7 +160,7 @@ async function removeProject(action, body, msg) {
     go('');
     toast(msg);
   } catch (e) {
-    toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true);
+    toastError(e);
   }
 }
 
@@ -155,7 +171,13 @@ async function loadProjects() {
 async function refresh({ force = false } = {}) {
   try {
     if (S.slug) await loadProjects();
-    if (S.slug && S.projects.some((p) => p.slug === S.slug)) {
+    S.missing = null;
+    if (S.slug && !S.projects.some((p) => p.slug === S.slug)) {
+      // A stale link, or a renamed or archived project: say so, rather than quietly showing the home (#143).
+      const archived = await api('/api/projects?archived=1').catch(() => []);
+      S.view = null;
+      S.missing = { slug: S.slug, archived: archived.find((p) => p.slug === S.slug) ?? null };
+    } else if (S.slug) {
       S.view = await api(`/api/p/${encodeURIComponent(S.slug)}/view`);
       if (S.itemRef) S.item = await api(`/api/p/${encodeURIComponent(S.slug)}/items/${encodeURIComponent(S.itemRef.replace('#', ''))}`).catch(() => null);
     } else {
@@ -182,7 +204,7 @@ function render({ force = false } = {}) {
   S.pending = false;
   const drawerScroll = $('#drawer').scrollTop;
   renderRail();
-  $('#main').innerHTML = S.slug && S.view ? project(S.view) : overview();
+  $('#main').innerHTML = S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
   renderDrawer();
   $('#drawer').scrollTop = drawerScroll;
   for (const el of document.querySelectorAll('[data-draft]')) {
@@ -190,6 +212,7 @@ function render({ force = false } = {}) {
     if (v == null) continue;
     if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
   }
+  markNew(document); // what just shipped (#130), redrawn with everything else
 }
 
 // ── routing ──
@@ -197,10 +220,13 @@ function route() {
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
   const ref = m?.[2] ? `#${m[2]}` : null;
-  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = false; }
+  // Arriving from Get started's "+ repo" opens this project's repository form, focused.
+  const linking = !!slug && S.linkRepo === slug;
+  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = linking; }
+  S.linkRepo = null;
   S.slug = slug;
   if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; S.editPre = false; }
-  refresh({ force: true });
+  refresh({ force: true }).then(() => linking && $('#remote-in')?.focus());
 }
 const go = (slug, ref) => { location.hash = slug ? `#/p/${encodeURIComponent(slug)}${ref ? '/' + ref.replace('#', '') : ''}` : '#/'; };
 
@@ -215,13 +241,13 @@ function renderRail() {
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
-    <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects">Projects${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
+    <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--faint)">No projects yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
       <button class="rail-item" data-action="archived">Archived projects</button>
-      <button class="rail-item" data-action="connect">⌁ Connect an agent</button>
-      <button class="rail-item" data-action="notify">◔ Notifications</button>
+      <button class="rail-item" data-action="connect">Connect an agent</button>
+      <button class="rail-item" data-action="notify">Notifications</button>
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
     </div>`;
@@ -257,16 +283,16 @@ const getStarted = () => getStartedCard(S.gs, { worker: S.info ? connectCommands
 function overview() {
   if (!S.projects.length && S.me?.org) return firstProject();
   if (!S.projects.length || !S.home) {
+    // One next step: Get started while it shows, the fallback only once it's finished or hidden (#149).
+    const gs = getStarted();
     return `<div class="phead"><div class="titles"><h1>Welcome to nuworq</h1>
       <div class="mission">A hub where you facilitate and AI agents (Claude, OpenAI, open-weight) find, do and verify the work.</div></div></div>
-      ${getStarted()}
-      <div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" data-action="new-project">create one now</button>.
-      <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`;
+      ${gs || `<div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" style="padding:0;font-size:inherit;text-decoration:underline" data-action="new-project">create one now</button>.
+      <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`}`;
   }
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div></div></div>
-    ${getStarted()}
-    ${homePage(S.home, { z: z(), pulse, card, esc, plural })}`;
+    ${homePage(S.home, { z: z(), pulse, card, esc, plural, wide: WIDE.matches, gs: getStarted() })}`;
 }
 
 // ── project ──
@@ -287,11 +313,11 @@ function project(v) {
   const empty = !v.all.length && !v.agents.length;
   return `
     <div class="phead">
-      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 ? remotes : ''}</div>
+      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
-        ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items with a GitHub webhook">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
+        ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items through GitHub">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
         ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
         ${z() >= 2 ? `<button class="link" data-action="remove-project" title="Archive it (history kept) or delete it for good">Remove project</button>` : ''}
         ${z() >= 1 ? (P.runner
@@ -299,22 +325,23 @@ function project(v) {
           : `<button class="link" data-action="runner-on" title="Let nuworq run start headless workers here whenever work is waiting">Let nuworq run staff this project</button>`) : ''}
       </div>
     </div>
-    ${pulse(v)}
-    ${composer(v)}
-    ${empty ? emptyProject() : ''}
-    ${needsYou(v)}
-    ${motion(v)}
-    ${z() >= 1 ? worthKnowing(v) : ''}
-    ${flow(v)}
-    ${z() >= 1 ? upNext(v) : ''}
-    ${z() >= 1 ? finished(v) : ''}
-    ${z() >= 1 ? steering(v) : ''}
-    ${z() >= 1 ? agents(v) : ''}
-    ${z() >= 2 ? activity(v) : ''}
-    ${z() >= 2 ? allWork(v) : ''}
-    ${z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
-      ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for flow, what's next, and how agents are doing.`
-      : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : ''}`;
+    ${projectBody(v, empty)}`;
+}
+
+// The project's sections: one column on a phone; wide (#141), the work in the main column and the pulse,
+// flow and agents beside it, the same sections either way. Each starts at its own depth (#144: Flow at 5m).
+function projectBody(v, empty) {
+  const more = z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
+    ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, flow, what's next, what finished, and how agents are doing.`
+    : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : '';
+  const s = {
+    pulse: pulse(v), composer: composer(v), empty: empty ? emptyProject() : '', needs: needsYou(v), motion: motion(v),
+    worth: z() >= 1 ? worthKnowing(v) : '', flow: z() >= 1 ? flow(v) : '', next: z() >= 1 ? upNext(v) : '', finished: z() >= 1 ? finished(v) : '',
+    steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
+  };
+  const order = (keys) => keys.map((k) => s[k]).join('');
+  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents']));
+  return order(['pulse', 'composer', 'empty', 'needs', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'activity', 'all', 'more']);
 }
 
 function emptyProject() {
@@ -335,7 +362,7 @@ function pulse(v) {
   ].filter(Boolean);
   const since = v.since.at
     ? bits.length ? `Since you last looked (${v.since.ago} ago): ${bits.join(' · ')}` : `No agent activity since you last looked (${v.since.ago} ago).`
-    : v.home ? 'First look.' : 'First look at this project.';
+    : v.home ? 'Everything here is new to you.' : 'Everything in this project is new to you.';
   // On the home, each finished item names its project, and its link opens it there.
   const list = z() >= 1 && v.since.finished.length
     ? `<div class="since-list">${v.since.finished.slice(0, 6).map((f) => `<div${f.project ? ` data-project="${esc(f.project.slug)}"` : ''}>✓ ${refLink(f.item)} ${esc(f.title)} <span class="age">${f.project ? `${esc(f.project.name)} · ` : ''}by ${esc(f.by === 'you' ? 'you' : f.by)}</span></div>`).join('')}</div>` : '';
@@ -344,7 +371,7 @@ function pulse(v) {
       <div class="sentence">${esc(v.pulse.sentence)}</div>
       ${v.project.parked ? `<div class="actions"><button class="btn primary small" data-action="unpark">Unpark</button></div>` : ''}
       <div class="since"><span>${since}</span><span class="spacer"></span>
-        ${c.updates || !v.since.at ? `<button class="btn small" data-action="seen" title="Reset 'since you last looked' to now">Mark all seen</button>` : ''}
+        ${c.updates || !v.since.at ? `<button class="btn small" data-action="seen" title="Count from now: what changes after this shows as new next time. Nothing that needs you goes away.">Mark all seen</button>` : ''}
         ${list}</div>
     </div>`;
 }
@@ -389,7 +416,7 @@ function needsYou(v) {
 }
 
 function card(a) {
-  const label = { question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub' }[a.kind] ?? a.kind;
+  const label = { question: a.escalation ? 'Escalated by an operator' : 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub' }[a.kind] ?? a.kind;
   const key = 'a:' + a.key;
   const open = S.open.has(key) || z() >= 2;
   const hasMore = a.why || a.detail || a.acceptance;
@@ -444,7 +471,7 @@ function cardActions(a, hasMore, open, key) {
   if (a.kind === 'no-agents') {
     return `<div class="actions"><button class="btn primary" data-action="connect">Start an agent</button><button class="btn ghost" data-action="park">Park this project</button></div>`;
   }
-  const moreBtn = hasMore ? `<button class="link" data-action="toggle" data-key="${esc(key)}">${open ? 'Less' : 'Why? (5m)'}</button>` : '';
+  const moreBtn = hasMore ? `<button class="link" data-action="toggle" data-key="${esc(key)}">${open ? 'Less' : 'Why it needs you'}</button>` : '';
   if (a.kind === 'question') {
     const q = a.question;
     return `<div class="answer">
@@ -641,7 +668,7 @@ function finished(v) {
   const shown = z() >= 2 ? v.done : v.done.slice(0, 5);
   return `<section class="sec"><header><h2>Recently finished</h2><span class="count">${v.done.length}</span><span class="hint">last 3 days</span></header>
     <div class="rows">${shown.map((i) => `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
-      <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div><div class="s">built by ${who(i.implementer)}${i.accepted ? ` · verified by ${who(i.accepted)}` : ''}</div></div>
+      <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>${credit(i, who) ? `<div class="s">${credit(i, who)}</div>` : ''}</div>
       <span class="age">${esc(i.ago)} ago</span></div>`).join('')}</div></section>`;
 }
 
@@ -733,8 +760,8 @@ function allWork(v) {
   const rows = [...v.all].reverse();
   if (!rows.length) return `<section class="sec"><header><h2>All work</h2></header>${zero('<b>No work yet.</b> Every item, in every stage, will be listed here.')}</section>`;
   return `<section class="sec"><header><h2>All work</h2><span class="count">${rows.length}</span></header>
-    <table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Who</th><th>In stage</th></tr></thead><tbody>
-    ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : `<span class="age">${esc(i.by)}</span>`}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
+    <table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Worked on by</th><th>In stage</th></tr></thead><tbody>
+    ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : '<span class="age" title="No agent has worked on it yet">—</span>'}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
     </tbody></table></section>`;
 }
 
@@ -757,7 +784,7 @@ function renderDrawer() {
       : `<b>${who(it.holder)}</b> is on it · ${esc(it.in_stage)} so far · lease ${esc(it.lease_left)} left`,
     waiting: `<b>Waiting on you</b> for ${esc(it.in_stage)}: an agent parked it to ask a question.`,
     verifying: `<b>Verifying</b> · ${who(it.implementer)} finished it ${esc(it.in_stage)} ago${it.holder ? ` · ${who(it.holder)} is reviewing` : ''}`,
-    done: `<b>Done</b> ${esc(it.in_stage)} ago · built by ${who(it.implementer)}`,
+    done: `<b>Done</b> ${esc(it.in_stage)} ago${it.implementer ? ` · ${credit({ implementer: it.implementer }, who)}` : ''}`,
     dropped: `<b>Dropped</b> ${esc(it.in_stage)} ago`,
   }[it.stage];
 
@@ -791,8 +818,9 @@ function renderDrawer() {
 
   const questions = it.questions.length ? `<div class="d-sec"><div class="label">Questions <span class="count">${it.questions.length}</span></div>
     ${it.questions.map((q) => `<div class="q ${q.status} ${q.blocking ? 'blocking' : ''}">
-      <div class="meta">${who(q.asked_by)} · ${q.blocking ? 'blocking' : 'non-blocking'} · ${esc(q.ago)} ago · ${esc(q.status)}</div>
-      <div><b>${esc(q.question)}</b></div>${q.context ? md(q.context) : ''}
+      <div class="meta">${who(q.asked_by)} · ${q.escalation ? `escalated ${esc(q.escalation.asked_by)}'s question` : q.blocking ? 'blocking' : 'non-blocking'} · ${esc(q.ago)} ago · ${esc(q.status)}</div>
+      <div><b>${esc(q.question)}</b></div>${q.escalation ? `<div class="a">${esc(q.escalation.asked_by)} asked an operator: <i>${esc(q.escalation.question)}</i></div>` : ''}${q.context ? md(q.context) : ''}
+      ${q.evidence?.length ? `<div class="evidence">${q.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
       ${q.assumption ? `<div class="a">Assumed: <i>${esc(q.assumption)}</i></div>` : ''}
       ${q.answer ? `<div class="a">Answer: <b>${esc(q.answer)}</b></div>` : q.status === 'confirmed' ? '<div class="a">You confirmed the assumption.</div>' : ''}
       ${q.status === 'open' ? `<div class="answer">${q.options.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
@@ -895,37 +923,41 @@ function modal(html) {
   const m = $('#modal');
   m.innerHTML = `<div class="dialog">${html}</div>`;
   m.hidden = false;
+  markNew(m);
 }
 const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''; };
 
 async function connect() {
-  S.info ??= await api('/api/info').catch(() => ({ bin: '/path/to/nuworq/bin/nuworq.js', url: location.origin }));
+  S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
   const slug = S.slug ?? 'my-project';
   const c = connectCommands(S.info, location, slug);
   const url = c.url;
   const gh = await api('/api/github/app').catch(() => null);
   const where = S.view?.project.path;
   modal(`<h2>Connect an agent</h2>
-    <p class="lead">Any model can work here, and many agents at once. Set an agent tool up once: it needs no project. An agent working in a folder the hub knows finds its project; anywhere else, the hub routes it to the work that matters most.</p>
-    ${c.local ? '' : `<h4>Get nuworq on your machine (once)</h4><p class="lead">It has no dependencies beyond Node 22.13+${c.clone ? ', so a clone is the install' : ': clone its repository into ~/nuworq'}.</p>${c.clone ? copyBlock(c.clone) : ''}`}
-    ${c.connect ? `<h4>Connect this machine (once)</h4><p class="lead">It checks the hub answers, logs you in through the browser for this machine's token, and registers nuworq with Claude Code and Codex if they're installed. Undo it all with <code>disconnect</code>.</p>${copyBlock(c.connect)}` : ''}
-    <h4>Start a worker (it goes wherever work is waiting)</h4><p class="lead">Each worker gets its own git worktree and branch, so many can run at once. Run it again for more workers.</p>${copyBlock(c.worker)}
+    <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
+    <h4>1. Install nuworq (once)</h4>
+    ${c.install ? `<p class="lead">From this hub: Node 22.13+, no other dependencies, and it keeps itself up to date.</p>${copyBlock(c.install)}`
+      : '<p class="lead">This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed.</p>'}
+    <h4>2. Connect this machine (once)</h4><p class="lead">It logs you in through the browser, saves this machine's token, and registers nuworq with Claude Code, Codex and opencode if they're installed. <code>nuworq disconnect</code> undoes it all.</p>${copyBlock(c.connect)}
+    <h4>3. Keep workers going</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${copyBlock(c.run)}
+    <p class="lead">One worker on its own, wherever work is waiting:</p>${copyBlock(c.worker)}
     ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
-    ${c.claude ? `<h4>Claude Code (once, for every project)</h4>${copyBlock(c.claude)}` : ''}
-    <h4>OpenAI Codex (~/.codex/config.toml)${c.connect ? ', if you set it up by hand' : ''}</h4>${copyBlock(c.codex)}
+    ${z() >= 2 ? `<h3>Setting up by hand</h3><p class="lead">What <code>nuworq connect</code> does for you. No token or address goes in these: connect saved both, and <code>nuworq mcp</code> reads them.</p>
+    <h4>Claude Code</h4>${copyBlock(c.claude)}
+    <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}
-    ${c.token ? `<p class="lead">By hand, each agent needs its own token, so you can revoke one without the others. Make one on the hub's host, and put it where the config says <code>paste-an-agent-token-here</code>:</p>${copyBlock(c.token)}` : ''}
     <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(c.guide)}
     <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>
-
-    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>x-nuworq-agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>
+    <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>x-nuworq-agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>`
+      : '<p class="lead">Setting an agent tool up by hand, or your own agent loop? It\'s at <button class="link" data-action="connect-deep">depth 30m</button>.</p>'}
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
 
 async function notifySettings() {
   let n;
-  try { n = await api('/api/notify'); } catch (e) { return toast(e.message, true); }
+  try { n = await api('/api/notify'); } catch (e) { return toastError(e); }
   S.notifyPerson = n.person; // who "only what needs me" means
   const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> <span class="faint">${c.person ? `${c.person === n.person ? 'you' : esc(c.person)}: only what they own` : 'everyone'}</span> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
     <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
@@ -950,7 +982,7 @@ function appStatus(st) {
     : st.state === 'created'
       ? [`Created${st.slug ? ` as <code>${esc(st.slug)}</code>` : ''}, not installed: it can't reach any repository yet. GitHub asks which ones it may use.`, '<a class="btn primary small" href="api/github/install">Install</a>']
       : ['No GitHub App yet. Workers push through it: a token for one repository, for an hour, and nobody holds a lasting GitHub credential. GitHub asks you to confirm it, then where to install it.', '<a class="btn primary small" href="api/github/app/new">Create</a>'];
-  return `<div class="app-status ${st.state}"><span class="dot"></span><p>${line}</p>${act}</div>`;
+  return `<div class="app-status ${st.state}" data-new="github-app-status"><span class="dot"></span><p>${line}</p>${act}</div>`;
 }
 
 // Back from installing the app (GitHub sends the person to the app's setup_url with setup_action): say where
@@ -968,15 +1000,44 @@ async function githubSettings() {
   const P = S.view.project;
   const hook = `${S.info.url}/api/hooks/github/${encodeURIComponent(P.slug)}`;
   const st = S.info.workspace ? null : await api('/api/github/app').catch(() => null);
-  modal(`<h2>GitHub</h2>
-    ${st && st.state !== 'none' ? `<h4>The hub's GitHub App</h4>${appStatus(st)}<h4>This project's webhook</h4>` : ''}
-    <p class="lead">A webhook links pull requests to items (a <code>nuworq/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
+  const manual = `<p class="lead">A webhook links pull requests to items (a <code>nuworq/&lt;agent&gt;</code> branch, or <code>#N</code> in the PR title) and shows CI results on them. Failing CI on work you're verifying shows up under "Needs you".</p>
     <h4>1. In the repo on GitHub: Settings → Webhooks → Add webhook</h4>
     <p class="lead">Payload URL (GitHub must be able to reach it; see docs/DEPLOY.md):</p>${copyBlock(hook)}
     <p class="lead">Content type <code>application/json</code>. Events: <i>Pull requests</i>, <i>Check suites</i>, <i>Check runs</i>, <i>Statuses</i>.</p>
     <h4>2. The same secret, there and here</h4>
-    <div class="inline-form"><input id="gh-secret" placeholder="${P.github ? 'A secret is set; enter a new one to replace it' : 'A long random secret'}"><button class="btn small" data-action="github-generate">Generate</button></div>
-    <div class="foot">${P.github ? '<button class="btn ghost" data-action="github-disconnect">Disconnect</button>' : ''}<button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="github-save">Save</button></div>`);
+    <div class="inline-form"><input id="gh-secret" placeholder="${P.github ? 'A secret is set; enter a new one to replace it' : 'A long random secret'}"><button class="btn small" data-action="github-generate">Generate</button></div>`;
+  const disconnect = P.github ? '<button class="btn ghost" data-action="github-disconnect">Disconnect</button>' : '';
+  // No app to offer (a workspaces hub): the webhook is the only way, as before.
+  if (!st) {
+    return modal(`<h2>GitHub</h2>${manual}
+      <div class="foot">${disconnect}<button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="github-save">Save</button></div>`);
+  }
+  // The recommended path first (#154): the hub's GitHub App serves every project with no per-repository setup;
+  // the per-project webhook is the fallback, folded away unless this project already uses it.
+  const lead = st.state === 'none'
+    ? `<div class="app-status none"><span class="dot"></span><p>No GitHub App yet. It links pull requests and CI results to items and brings issues in as proposals, for every project at once, with no setup per repository. Workers push through it with a token for one repository, for an hour.
+      ${st.can_create ? 'GitHub asks you to confirm it, then where to install it.</p><a class="btn primary small" href="api/github/app/new">Create</a>' : 'Only an owner can create it: ask whoever runs this hub.</p>'}</div>`
+    : `${appStatus(st)}<p class="lead" id="gh-covered">${st.state === 'installed' ? 'Checking whether it covers this project\'s repository…' : ''}</p>`;
+  modal(`<h2>GitHub</h2>${lead}
+    <details ${P.github ? 'open' : ''}><summary>Without the app: a webhook for this project${P.github ? ' (connected)' : ''}</summary>${manual}
+      <div class="foot">${disconnect}<button class="btn" data-action="github-save">Save the webhook</button></div></details>
+    <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
+  if (st.state === 'installed') appCovers(P).then((line) => { const el = $('#gh-covered'); if (el) el.innerHTML = line; });
+}
+
+// Whether the hub's installed GitHub App can see this project's repository, as one line for the GitHub dialog.
+async function appCovers(P) {
+  const repos = P.remotes.filter((r) => r.startsWith('github.com/'));
+  if (!repos.length) return 'This project has no GitHub repository linked yet: link one in the project header and the app covers it once it is installed there.';
+  try {
+    for (const r of repos) {
+      const { repos: seen } = await api(`/api/github/repos?q=${encodeURIComponent(r.slice('github.com/'.length).toLowerCase())}`);
+      if (seen.some((x) => x.repo === r)) return `✓ It covers <code>${esc(r)}</code>: nothing else to set up for this project.`;
+    }
+    return `It isn't installed on ${repos.map((r) => `<code>${esc(r)}</code>`).join(', ')} yet. ${installLink('Install it there')}, and this project is covered.`;
+  } catch {
+    return ''; // can't tell (only owners and stewards may list repositories): say nothing rather than guess
+  }
 }
 
 // "+ Project": pick one of the repositories the GitHub App can see, or (no app, or a workspaces hub) by name.
@@ -1021,7 +1082,7 @@ async function loadRepos(q, page) {
       + (rows && page === 1 && !q ? `<p class="faint" style="margin-top:8px">Not listed? ${installLink('Install the app on more repositories')}.</p>` : '');
     box.dataset.html = box.innerHTML;
     if (r.next_page) box.insertAdjacentHTML('beforeend', `<button class="btn ghost small" data-action="more-repos" data-q="${esc(q)}" data-page="${r.next_page}">More</button>`);
-  } catch (e) { box.innerHTML = `<p class="faint">${esc(e.message)}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="faint">${errorHtml(e, esc)}</p>`; }
 }
 
 // ── events ──
@@ -1128,7 +1189,7 @@ const ACTIONS = {
       const list = await api('/api/projects?archived=1');
       modal(`<h2>Archived projects</h2>${list.length ? list.map((p) => `<div class="row-item"><div class="body"><div class="h">${esc(p.name)}</div>${p.remotes.length ? `<div class="s">${esc(p.remotes.join(', '))}</div>` : ''}</div><button class="btn small" data-action="restore-project" data-slug="${esc(p.slug)}">Restore</button></div>`).join('') : '<p class="lead faint">No archived projects. Removing a project archives it: its history is kept, and you can restore it here.</p>'}
         <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'restore-project': async (el) => {
     try {
@@ -1136,7 +1197,8 @@ const ACTIONS = {
       closeModal();
       await loadProjects();
       go(el.dataset.slug);
-    } catch (e) { toast(e.message, true); }
+      refresh({ force: true }); // restored from its own (missing) page, the address doesn't change
+    } catch (e) { toastError(e); }
   },
   'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
   'runner-off': () => human('settings', { runner: false }, '`nuworq run` will no longer start workers here'),
@@ -1174,9 +1236,16 @@ const ACTIONS = {
   'remove-pre': (el) => human('update', { item: el.dataset.item, precondition: {} }, 'Removed: it no longer waits'),
   'check-now': (el) => human('check', { item: el.dataset.item }, 'The hub checks it on its next sweep'),
   dismiss: (el) => human('dismiss', { key: el.dataset.key }),
-  retire: (el) => human('retire', { note: Number(el.dataset.note) }, 'Retired'),
+  // One click retires; the toast's Undo brings the same note back (#146).
+  retire: async (el) => {
+    const note = Number(el.dataset.note);
+    const words = el.closest('.row-item')?.querySelector('.h')?.textContent.trim() ?? '';
+    if (await human('retire', { note })) toast(`Retired${words ? `: ${words.length > 50 ? `${words.slice(0, 50)}…` : words}` : ''}`, false, { action: 'unretire', note });
+  },
+  unretire: async (el) => { $('#toast').hidden = true; await human('unretire', { note: Number(el.dataset.note) }, 'Brought back: agents get it again'); },
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
   connect: () => connect(),
+  'connect-deep': () => { S.zoom = '30m'; store.set('zoom', S.zoom); render({ force: true }); connect(); },
   notify: () => notifySettings(),
   github: () => githubSettings(),
   'github-generate': () => {
@@ -1198,21 +1267,27 @@ const ACTIONS = {
       await api('/api/notify', { method: 'POST', body: JSON.stringify({ kind: val('nt-kind'), url: val('nt-url'), ...(mine?.checked ? { person: S.notifyPerson } : {}) }) });
       toast('Channel added: send a test to check it');
       notifySettings();
-    } catch (e) { toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true); }
+    } catch (e) { toastError(e); }
   },
   'notify-remove': async (el) => {
-    try { await api('/api/notify/remove', { method: 'POST', body: JSON.stringify({ id: Number(el.dataset.id) }) }); notifySettings(); } catch (e) { toast(e.message, true); }
+    try { await api('/api/notify/remove', { method: 'POST', body: JSON.stringify({ id: Number(el.dataset.id) }) }); notifySettings(); } catch (e) { toastError(e); }
   },
   'notify-test': async () => {
     try {
       const r = await api('/api/notify/test', { method: 'POST' });
       toast(r.ok ? 'Test sent to every channel' : `Failed: ${r.results.filter((x) => !x.ok).map((x) => `${x.kind} (${x.error})`).join(', ')}`, !r.ok);
       notifySettings();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'new-project': () => newProject(),
+  // Get started's "Link a project to its repository": that project, with its + repo form open.
+  'link-repo': (el) => {
+    if (el.dataset.slug === S.slug) return ACTIONS['remote-new']();
+    S.linkRepo = el.dataset.slug;
+    go(el.dataset.slug);
+  },
   'get-started-hide': async () => {
-    try { S.gs = await api('/api/get-started/hide', { method: 'POST' }); render({ force: true }); } catch (e) { toast(e.message, true); }
+    try { S.gs = await api('/api/get-started/hide', { method: 'POST' }); render({ force: true }); } catch (e) { toastError(e); }
   },
   'more-repos': (el) => { el.remove(); loadRepos(el.dataset.q, Number(el.dataset.page)); },
   'pick-repo': async (el) => {
@@ -1221,7 +1296,7 @@ const ACTIONS = {
       modal(`<h2>${esc(r.repo.replace('github.com/', ''))} is a project</h2>
         <p class="lead">Let <code>nuworq run</code> staff this project? It starts workers whenever there is work nobody is on, up to the limits it was started with. You can change this later in the project's settings.</p>
         <div class="foot"><button class="btn ghost" data-action="goto-new" data-slug="${esc(r.slug)}">Not now</button><button class="btn primary" data-action="staff-new" data-slug="${esc(r.slug)}">Let run staff it</button></div>`);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'goto-new': (el) => { closeModal(); go(el.dataset.slug); },
   'staff-new': async (el) => {
@@ -1229,7 +1304,7 @@ const ACTIONS = {
       await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/settings`, { method: 'POST', body: JSON.stringify({ runner: true }) });
       closeModal();
       go(el.dataset.slug);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'close-modal': () => closeModal(),
   logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },
@@ -1242,7 +1317,7 @@ const ACTIONS = {
       clearDraft('fp-name', 'fp-mission', 'fp-remotes');
       await loadProjects();
       connectStep({ ...r, name });
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   'create-project': async () => {
     const name = val('np-name');
@@ -1251,7 +1326,7 @@ const ACTIONS = {
       const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('np-mission'), remote: val('np-remote') || undefined }) });
       closeModal();
       go(r.slug);
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toastError(e); }
   },
   copy: async (el) => {
     if (await copyText(el.dataset.text)) return toast('Copied');
@@ -1302,6 +1377,13 @@ document.addEventListener('keydown', (e) => {
   }
 });
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+// Using a feature tagged "new" (#130) retires its tag for this viewer.
+for (const type of ['click', 'focusin']) {
+  document.addEventListener(type, (e) => {
+    const el = e.target.closest?.('.is-new');
+    if (el) { markSeen(el.dataset.new); markNew(document); }
+  }, true);
+}
 // The rail re-renders on every update: the organization menu stays as the person left it.
 document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) S.orgOpen = e.target.open; }, true);
 

@@ -23,15 +23,16 @@ const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mis
 
 // The home: does anything need you, anywhere? One aggregate pulse, every act entry of the viewer's across
 // projects (tagged with its project, oldest first as on a project page), then one line per project. 5m adds
-// worth knowing per project and what's in motion. Parked projects are listed (with their own needs count)
-// but never set the pulse: what they need waits until they're unparked.
+// worth knowing per project and what's in motion. A parked project's state and agents never set the pulse,
+// but what it already asked of you (a blocking question, work to verify) still needs you, so it counts here as
+// it does on its own line and badge (#152). Parking only stops new asks: direction and staffing.
 const URGENCY = ['needs-you', 'stalled', 'flowing', 'idle'];
 export function homeView(hub, { viewer } = {}) {
   const t = hub.now();
   const rows = hub.projects().map((p) => ({ p, v: view(hub, p.slug, { light: true, viewer }) }));
   const tag = (p) => ({ slug: p.slug, name: p.name });
   const live = rows.filter(({ p }) => !p.parked);
-  const needs = live.flatMap(({ p, v }) => v.attention.filter((a) => a.level === 'act').map((a) => ({ ...a, project: tag(p) })))
+  const needs = rows.flatMap(({ p, v }) => v.attention.filter((a) => a.level === 'act').map((a) => ({ ...a, project: tag(p) })))
     .sort((a, b) => a.at - b.at);
   const state = needs.length ? 'needs-you' : URGENCY.find((s) => live.some(({ v }) => v.pulse.state === s)) ?? 'idle';
   const across = (n) => (n > 1 ? ` across ${plural(n, 'project')}` : '');
@@ -102,14 +103,30 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   // A question to an operator is an operator session's to answer (next mode "answer"), never yours.
   for (const q of openQs.filter((q) => q.blocking && q.audience !== 'operator' && !(q.reporter && t - q.at < wait))) {
     const it = byId.get(q.item_id);
+    // An operator's escalation carries the question it was asked, who asked it, and what the operator found.
+    const orig = q.escalates ? hub.q('SELECT question, asked_by FROM questions WHERE id = ?').get(q.escalates) : null;
     push({
       key: `q:${q.id}`, level: 'act', kind: 'question', at: q.reporter ? q.at + wait : q.at,
       headline: q.question,
-      sub: [it?.title, `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${dur(t - q.at)} ago`, q.reporter && 'no reply yet',
-        it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
-      why: q.context, detail: q.detail,
+      sub: [it?.title, orig ? `${q.asked_by} (operator) escalated ${orig.asked_by}'s question ${dur(t - q.at)} ago` : `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${dur(t - q.at)} ago`,
+        q.reporter && 'no reply yet', it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
+      why: [orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
+      ...(orig ? { escalation: { question: orig.question, asked_by: orig.asked_by }, evidence: json(q.evidence, []) } : {}),
+    });
+  }
+
+  // What an operator settled on its own in the last day, so you can glance at it.
+  const settled = hub.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'answered' AND answered_at > ?
+    AND NOT EXISTS (SELECT 1 FROM questions e WHERE e.escalates = q.id AND e.status = 'answered') ORDER BY answered_at`).all(p.id, t - DAY);
+  for (const q of settled) {
+    const it = byId.get(q.item_id);
+    push({
+      key: `opanswer:${q.id}`, level: 'know', kind: 'operator-answered', at: q.answered_at,
+      headline: `Operator answered ${q.asked_by}: ${q.answer}`,
+      sub: [`Q: ${q.question}`, `${q.answered_by} · ${dur(t - q.answered_at)} ago`].join(' · '),
+      why: q.context, item: it ? ref(it) : null,
     });
   }
 
@@ -632,7 +649,13 @@ export function itemView(hub, slug, ref) {
   const events = hub.q(`SELECT e.*, i.seq AS item_seq FROM events e LEFT JOIN items i ON i.id = e.item_id WHERE e.item_id = ? ORDER BY e.at, e.id`).all(it.id).map((e) => eventOut(e, t));
   const submit = [...events].reverse().find((e) => e.type === 'submitted');
   const questions = hub.q('SELECT * FROM questions WHERE item_id = ? ORDER BY at').all(it.id)
-    .map((q) => ({ ...q, options: json(q.options, []), blocking: !!q.blocking, ago: dur(t - q.at) }));
+    .map((q, _, all) => {
+      const orig = q.escalates ? all.find((o) => o.id === q.escalates) : null;
+      return {
+        ...q, options: json(q.options, []), blocking: !!q.blocking, ago: dur(t - q.at), evidence: json(q.evidence, []),
+        escalation: orig ? { question: orig.question, asked_by: orig.asked_by } : undefined,
+      };
+    });
   const steers = hub.q(`SELECT * FROM notes WHERE item_id = ? AND kind = 'steer' ORDER BY at`).all(it.id)
     .map((n) => ({ id: n.id, body: n.body, active: !!n.active, ago: dur(t - n.at), acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
   const agentNames = [...new Set(events.filter((e) => !isHuman(e.actor) && !isSystem(e.actor)).map((e) => e.actor))];

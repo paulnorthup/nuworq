@@ -4,19 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Request early access · nuworq</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b5bdb'/%3E%3Cpath d='M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/login.css">
 </head>
 <body>
-<main class="narrow">
-  <h1>Request early access</h1>
-  <p class="lead">nuworq is letting people in by hand for now. Tell us who you are and what you'd build; we'll send you a link to set up your organization.</p>
-  <form id="ask" class="form">
+<main class="login">
+  <form id="ask" class="login-card ask-card">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--agents)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>nuworq</span>
+    </div>
+    <h1>Request early access</h1>
+    <p class="lead">nuworq is letting people in by hand for now. Tell us who you are and what you'd build; we'll send you a link to set up your organization.</p>
     <label>Email<input id="email" type="email" required autocomplete="email" placeholder="you@example.com"></label>
     <label>GitHub handle (optional)<input id="github" autocomplete="username" placeholder="@you"></label>
     <label>What would you build with it?<textarea id="building" maxlength="2000" placeholder="A few words are plenty."></textarea></label>
     <div id="check"></div>
     <button class="btn primary" type="submit">Request access</button>
-    <p id="said" class="lead"></p>
+    <p id="said" class="login-error" role="alert"></p>
   </form>
 </main>
 <script type="module" src="/early-access.js"></script>

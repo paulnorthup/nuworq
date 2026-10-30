@@ -56,11 +56,27 @@ describe('the home page', () => {
     assert.match(homePage(h, deps(2)), /Rockets[\s\S]*nuworq run leaves it alone/);
   });
 
+  test('wide (#141): the work in the main column, pulse, Get started and projects beside it; nothing to act on, one column', () => {
+    const hub = setup();
+    const gs = '<section class="get-started"></section>';
+    let html = homePage(homeView(hub), { ...deps(), wide: true, gs });
+    assert.ok(!html.includes('class="cols"'), 'nothing needs you: one column, no empty band');
+    assert.ok(html.indexOf(gs) < html.indexOf('<!--pulse:'), 'Get started first, as on the phone');
+    hub.agentOp('p2', 'claim', 'bot2', { item: '#1' });
+    hub.agentOp('p2', 'ask', 'bot2', { item: '#1', question: 'Which region?', blocking: true });
+    html = homePage(homeView(hub), { ...deps(), wide: true, gs });
+    const [main, side] = html.split('<aside class="col-side">');
+    assert.ok(main.startsWith('<div class="cols"><div class="col-main">') && main.includes('home-needs'));
+    assert.ok(side.indexOf('<!--pulse:') < side.indexOf(gs) && side.indexOf(gs) < side.indexOf('home-projects'), 'pulse, Get started, projects');
+    const narrow = homePage(homeView(hub), { ...deps(), gs });
+    assert.ok(!narrow.includes('class="cols"') && narrow.indexOf(gs) < narrow.indexOf('<!--pulse:') && narrow.indexOf('home-needs') < narrow.indexOf('home-projects'), 'the phone: one column, as before');
+  });
+
   test('pulse() and card() are the project page\'s own: one definition each, handed to the home', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.equal(app.match(/^function pulse\(/gm)?.length, 1);
     assert.equal(app.match(/^function card\(/gm)?.length, 1);
-    assert.match(app, /homePage\(S\.home, \{ z: z\(\), pulse, card, esc, plural \}\)/);
+    assert.match(app, /homePage\(S\.home, \{ z: z\(\), pulse, card, esc, plural, /);
     assert.ok(!/function (pulse|card)\(/.test(readFileSync(new URL('../web/home.js', import.meta.url), 'utf8')), 'home.js forks neither');
   });
 
