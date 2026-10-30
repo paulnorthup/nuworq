@@ -117,6 +117,8 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 
 ### Getting pinged (ntfy, Slack, or any webhook)
 The 30-second view only helps if you look. Add a channel and the hub pushes to it when a new *act*-level entry appears in a project that isn't parked: a blocking question, work to verify, "What matters most?". The first new entry opens a 2-minute window, so a burst arrives as one message with one line per entry and a link to the project. Each entry is pushed once. Entries you dismiss or resolve inside the window are dropped. Progress, claims and *know*-level entries send nothing.
+
+Once a week, each channel also gets one line per unparked project where anything happened, e.g. `app: 23 landed, 31 of your actions, $38, 1 escape → <link>`. The numbers match `GET /api/p/<project>/outcomes` for that week. A quiet week sends nothing. Turn it off per channel under **Notifications** (or `POST /api/notify/weekly {id, weekly: false}`).
 ```
 nuworq notify add ntfy https://ntfy.sh/<a-long-secret-topic>   # phone push (a bare topic means ntfy.sh)
 nuworq notify add slack https://hooks.slack.com/services/…      # Slack incoming webhook
@@ -224,7 +226,7 @@ POST /api/runner                         nuworq run's state, every poll: { name,
 GET  /api/tools?format=mcp|openai|anthropic
 GET  /agents.md?project=<p>&via=tools|cli
 GET  /api/stream                         server-sent events
-GET  /api/notify | POST /api/notify {kind,url} | POST /api/notify/remove {id} | POST /api/notify/test
+GET  /api/notify | POST /api/notify {kind,url} | POST /api/notify/remove {id} | POST /api/notify/weekly {id,weekly} | POST /api/notify/test
                                          push channels (human only; URLs come back masked)
 POST /api/hooks/github/:project          GitHub webhook (signed with the project's secret; see docs/DEPLOY.md)
 ```

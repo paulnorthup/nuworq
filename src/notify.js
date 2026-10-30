@@ -1,7 +1,10 @@
 // Push: when something new needs the human, send one batched message over plain HTTP
 // (ntfy, a Slack incoming webhook, or any JSON webhook). Healthy work sends nothing.
 import { view } from './insight.js';
-import { MIN, HOUR, UserError } from './core.js';
+import { outcomes } from './outcomes.js';
+import { MIN, HOUR, DAY, SYSTEM, UserError } from './core.js';
+
+const WEEK = 7 * DAY;
 
 export const KINDS = {
   ntfy: 'ntfy topic URL (phone push), e.g. https://ntfy.sh/my-secret-topic',
@@ -52,7 +55,14 @@ const personExists = (db, who) => {
 export function listChannels(db, { person = null } = {}) {
   return db.prepare('SELECT * FROM channels ORDER BY id').all().filter((c) => person == null || c.person === person).map((c) => ({
     id: c.id, kind: c.kind, url: mask(c.url), person: c.person || null, failing: !!c.failing_since, last_error: c.last_error || null,
+    weekly: !!c.weekly,
   }));
+}
+
+// The weekly line (#178), on or off for one channel.
+export function setWeekly(db, id, on) {
+  const r = db.prepare('UPDATE channels SET weekly = ? WHERE id = ?').run(on ? 1 : 0, Number(id));
+  if (!r.changes) throw new UserError(`no channel ${id}`, { status: 404, hint: 'See: nuworq notify list' });
 }
 
 export const channelOwner = (db, id) => db.prepare('SELECT person FROM channels WHERE id = ?').get(Number(id))?.person ?? null;
@@ -111,6 +121,28 @@ export function compose(entries, baseUrl = '') {
   };
 }
 
+// What the week got you (#178), one line per unparked project where anything happened in (from, to]: items
+// landed, your actions, recorded cost and escapes, the same numbers as the outcomes API for that window, with a
+// link to the project. null when nothing happened anywhere: a quiet week sends nothing.
+export function composeWeekly(hub, baseUrl, from, to) {
+  const link = (slug) => (baseUrl ? `${baseUrl}/#/p/${encodeURIComponent(slug)}` : '');
+  const money = (usd) => `$${usd < 10 ? usd.toFixed(2) : Math.round(usd)}`;
+  const lines = [], links = [];
+  for (const p of hub.projects()) {
+    if (p.parked) continue;
+    if (!hub.q('SELECT 1 FROM events WHERE project_id = ? AND at > ? AND at <= ? AND actor != ? LIMIT 1').get(p.id, from, to, SYSTEM)) continue;
+    const o = outcomes(hub, p.slug, { since: from, until: to });
+    const landed = o.items.filter((i) => i.outcome === 'landed').length;
+    const costs = o.by_model.map((m) => m.cost_usd).filter((c) => c != null);
+    const cost = costs.length ? money(costs.reduce((a, c) => a + c, 0)) : 'no cost recorded';
+    lines.push(`${p.name}: ${landed} landed, ${o.human_actions.total} of your actions, ${cost}, ${plural(o.items.filter((i) => i.escaped).length, 'escape')}${link(p.slug) ? ` → ${link(p.slug)}` : ''}`);
+    links.push(link(p.slug));
+  }
+  if (!lines.length) return null;
+  const title = 'nuworq: this week';
+  return { title, url: (links.length === 1 ? links[0] : baseUrl ? `${baseUrl}/#/` : '') || undefined, text: [title, ...lines].join('\n'), entries: [] };
+}
+
 // Watches every unparked project for new act-level attention entries and pushes each one once,
 // batched: the first new entry opens a window, and everything new within it goes out as one message.
 export class Notifier {
@@ -157,9 +189,24 @@ export class Notifier {
     return this.hub.db.prepare('SELECT * FROM channels ORDER BY id').all();
   }
 
+  // Once a week per channel that has it on (#178): the week since it last went (or since the channel was
+  // added) as one line per project. Due either way, so a quiet week starts the next one; it just sends nothing.
+  async weekly() {
+    const db = this.hub.db, t = this.hub.now();
+    const due = db.prepare('SELECT * FROM channels WHERE weekly = 1 ORDER BY id').all().filter((c) => t - (c.weekly_at || c.created_at) >= WEEK);
+    const sends = [];
+    for (const c of due) {
+      const msg = composeWeekly(this.hub, this.baseUrl, c.weekly_at || c.created_at, t);
+      db.prepare('UPDATE channels SET weekly_at = ? WHERE id = ?').run(t, c.id);
+      if (msg) sends.push(deliver(db, c, msg, this.sendOpts));
+    }
+    return Promise.all(sends);
+  }
+
   scan() {
     try {
       if (!this.channels().length) { this.pending.clear(); return; }
+      this.weekly().catch((e) => console.error('weekly push failed', e));
       const db = this.hub.db, t = this.hub.now();
       const { entries, looked } = this.current();
       const seen = db.prepare('UPDATE notified SET seen_at = ? WHERE project_id = ? AND key = ?');
