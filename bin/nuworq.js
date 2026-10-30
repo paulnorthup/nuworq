@@ -97,6 +97,7 @@ const AGENT_CMDS = {
   refine: (p, f) => ({
     item: need(p[0], '<item>'), title: text(f.title), ...layers(f), acceptance: text(f.acceptance),
     priority: f.priority, depends_on: refs(f['depends-on']), needs: f.needs === undefined ? undefined : refs(f.needs) ?? [], size: f.size, repo: f.repo,
+    drop: f.drop, // a person's answer that says to drop it (#207)
   }),
   review: (p, f) => ({ item: need(p[0], '<item>'), verdict: need(p[1], '<accept|reject>'), headline: need(rest(p, 2), '<headline>'), attempt: f.attempt, ...layers(f) }),
   comment: (p, f) => {

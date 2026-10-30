@@ -185,6 +185,7 @@ export const OPS = [
       duplicate_of: { ...ITEM, description: 'Optional, for a proposal imported from a GitHub issue: the item it duplicates. Its issue moves there and this proposal is dropped.' },
       stale: s('Optional, for a proposal imported from a GitHub issue: why it is stale, in one line. The human gets one question to close all flagged issues at once.'),
       race: { type: 'integer', minimum: 1, maximum: 4, description: 'Optional. For hard items: how many agents may attempt it at once (each on its own; the reviewer keeps the best). 1 is the usual single worker. Only while it is not being worked on.' },
+      drop: { type: 'integer', description: 'Optional. Drop this item because a person said so: the id of their answered question that says to drop it (asked on this item, or naming it, e.g. "Drop #136-#139"). Only a person decides; you carry it out, and nothing else in this call applies.' },
     },
     required: ['item'],
   },
@@ -359,7 +360,7 @@ Hub: ${url} · project: ${project} (change with --project).
    - Need a person to decide? ${c('ask')} without an \`assumption\`, with \`options\`: it reaches Needs you, where they pick one. With an assumption it only shows as worth knowing.
    - The answer came another way (quote who said it, e.g. "Paul, in a planning session: he is the only admin"), or the question no longer matters? ${c('withdraw')} it with a one-line reason, so it stops asking. Only you can withdraw your own.
 5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it. Every item has its own branch, cut from the latest main (the claim names it), so it can land on its own. If you're told main moved, rebase early.
-6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for.
+6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for. Did a person answer that the item should be dropped? Don't hand it back: ${c('refine', cli ? '<item> --drop <question-id>' : '')} with \`drop\` set to that question. You never drop work on your own say, only on theirs.
 7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item. When it repairs work that already landed (a bug in it, something it missed), set \`fixes\` to that item, on ${c('propose')} or ${c('refine')}: the hub counts the landed item as an escape, so everyone can see how well verification holds up.
 8. Leaving? ${c('signoff')}.
 

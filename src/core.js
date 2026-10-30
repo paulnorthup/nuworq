@@ -740,6 +740,35 @@ export class Hub extends EventEmitter {
     }
   }
 
+  // Drop an item because a person said so in an answer (#207: refine with drop). Agents never drop work on
+  // their own say: the question must have been answered by a person, the answer must say drop, and it must be
+  // about this item (asked on it, or naming it: "#139", or a range like "#136-#139"). The person decided; the
+  // agent carries it out, and the record says both.
+  dropAsAnswered(p, agent, item, question) {
+    const id = Number(String(question).replace(/^#/, ''));
+    const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(id, p.id);
+    const how = 'drop takes the id of a question a person answered with "drop" about this item, as checkin or next shows it.';
+    if (!q) throw new UserError(`No question ${question}`, { status: 404, hint: how });
+    if (q.status !== 'answered' || !isHuman(q.answered_by)) throw new UserError(`Question ${q.id} wasn't answered by a person`, { status: 403, hint: `Only a person decides to drop work. ${how}` });
+    // The clauses that say drop ("Drop #136-#139; move #140 under #131" has one). Those that name items drop
+    // those items; one that names none ("Drop it") drops the item the question was asked on. A clause must
+    // start with drop, so "Don't drop it", "Never drop #2" or "dropping would lose the tests" never count.
+    const drops = q.answer.split(/[;.\n]|,\s+/).filter((c) => /^\s*(?:(?:yes|yep|ok|okay|sure|please)\b[\s,:!-]*)*drop\b/i.test(c));
+    if (!drops.length) throw new UserError(`The answer to question ${q.id} doesn't say to drop anything ("${clip(q.answer, 60)}")`, { status: 403, hint: how });
+    const refs = drops.flatMap((c) => [...c.matchAll(/#(\d+)(?:\s*[-–]\s*#?(\d+))?/g)].map((m) => [Number(m[1]), Number(m[2] ?? m[1])]));
+    const named = refs.some(([a, b]) => item.seq >= a && item.seq <= b) || (q.item_id === item.id && drops.some((c) => !/#\d/.test(c)));
+    if (!named) throw new UserError(`The answer to question ${q.id} doesn't say to drop #${item.seq}`, { status: 403, hint: 'It must be asked on this item ("Drop it"), or name it beside the drop (e.g. "Drop #12" or "Drop #10-#14").' });
+    if (['done', 'dropped'].includes(item.stage)) throw new UserError(`#${item.seq} is already ${item.stage}`, { status: 409, hint: 'Nothing to drop. Call next.' });
+    const others = [item.holder, ...(this.racing(item) ? this.attemptsOf(item).filter((a) => a.stage === 'active').map((a) => a.agent) : [])].filter((h) => h && h !== agent);
+    const by = q.answered_by;
+    this.tx(() => {
+      this.move(item, 'dropped', agent, { holder: null, lease_until: null });
+      this.event(p, { item, actor: agent, type: 'staged', headline: `${agent} dropped #${item.seq}, as ${by === HUMAN ? 'you' : by} answered: "${clip(q.answer, 80)}"`, data: { decided_by: by, question: q.id } });
+      for (const holder of others) this.addNote(p, 'steer', `#${item.seq} was dropped (${by === HUMAN ? 'the human' : by} said so); stop working on it.`, null, holder, by);
+    });
+    return { ok: true, item: `#${item.seq}`, stage: 'dropped', decided_by: by, hint: 'Dropped. Call next.' };
+  }
+
   // The item's precondition (src/precondition.js), unless none or it has passed.
   unmetPrecondition(item) {
     return item.precondition && !json(item.last_check, {}).ok ? JSON.parse(item.precondition) : null;
@@ -2265,6 +2294,7 @@ const AGENT_OPS = {
 
   refine(p, agent, args) {
     const item = this.item(p, args.item);
+    if (args.drop != null && args.drop !== '') return this.dropAsAnswered(p, agent, item, args.drop);
     const changed = this.refineItem(p, agent, item, args);
     return { ok: true, item: `#${item.seq}`, stage: item.stage, changed };
   },
