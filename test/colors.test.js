@@ -100,6 +100,8 @@ describe('the color map keeps meanings apart (#188)', () => {
     // The Outside pill and Flow tile label: ink on --hatch-tint.
     assert.match(css, /\.stage-pill\.court-external \{ background: var\(--hatch-tint\); color: var\(--ink\); \}/);
     assert.match(css, /\.stage\.court-external \.l \{ color: var\(--ink\); \}/);
+    // Its count stays ink at 0 too: the tile is always shown, and zero-count would draw it --muted.
+    assert.match(css, /\.stage\.court-external\.zero-count \.n \{ color: var\(--ink\); \}/);
     for (const s of tint) assert.ok(contrast(root['--ink'], root[s]) >= 4.5, `ink on --hatch-tint stripe ${s}: ${contrast(root['--ink'], root[s]).toFixed(2)}`);
     // Stripes, not a solid fill, so Outside never reads as Ready's grey.
     assert.ok(!bar.includes('--queue') && new Set(bar).size >= 2, '--hatch is two-tone and not --queue');

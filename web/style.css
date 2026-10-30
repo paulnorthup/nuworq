@@ -320,6 +320,7 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .stage.court-backlog { background: transparent; border: 1px dashed var(--line-strong); }
 .stage.on { border-color: var(--ink); }
 .stage.zero-count .n { color: var(--muted); }
+.stage.court-external.zero-count .n { color: var(--ink); } /* Outside's tile is always shown, and --muted on its stripes is 3.9:1 (#209) */
 .arrow { color: var(--muted); font-size: 12px; }
 .stage-detail { margin-top: 12px; padding: 10px 12px; background: var(--sunken); border-radius: 8px; font-size: 13px; }
 .stage-detail .blurb { color: var(--muted); margin-bottom: 6px; }
