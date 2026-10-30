@@ -135,6 +135,18 @@ You can also set channels up in the UI, under **Notifications** in the left rail
 
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.
 
+### Operators (so "Needs you" is only decisions)
+Much of what used to reach you needed a capable session, not a decision: running `claude`, the hub's infrastructure, a homelab VM, GitHub admin, a real browser. An **operator** does that: an attended Claude Code session in the project folder, running with your permissions and safety checks.
+- It checks in with `has: ["operator", …]` plus the capabilities it really has: `claude-cli`, `nuworq-infra`, `homelab-vm`, `github-admin`, `browser`. Items whose `needs` include those tags are offered only to it.
+- Agents ask questions about running things, permissions or verifying on real infrastructure with `to: "operator"`; the operator answers them instead of you.
+- It escalates to you only when its own safety check needs your approval (risky or irreversible actions, product judgment): one precise question, with the evidence attached.
+- If work needs an operator capability and no operator connected in the last day, "Worth knowing" tells you to start one.
+
+Keep one running by starting Claude Code in the project folder with:
+```
+/loop Work on <project> as its operator using nuworq: checkin with has ["operator", <your capabilities>], ack steering, take next until it says there is nothing for you, answer operator questions, escalate to the human only what your safety checks need approved.
+```
+
 ---
 
 ## 30 minutes

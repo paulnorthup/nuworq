@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -87,6 +87,23 @@ describe('fit hints: what items need and what agents have', () => {
     assert.ok(entry(), 'an agent last seen over a day ago no longer counts');
   });
 
+  test('operator work: offered only to an operator with that capability; nobody fitting says to start an operator session', () => {
+    const { hub, op, create } = world();
+    const it = create({ title: 'Rotate the app key', needs: ['github-admin'] });
+    op('plain', 'checkin', { has: [] });
+    op('op', 'checkin', { has: ['operator'] });
+    const entry = () => view(hub, 'p').attention.find((a) => a.kind === 'unfit');
+    assert.match(entry().why, /Start an operator session \(see Operators in the guide/);
+    assert.equal(op('plain', 'next').mode, 'idle');
+    assert.equal(op('op', 'next').mode, 'idle', 'operator alone is not enough');
+    op('admin', 'checkin', { has: ['operator', 'github-admin'] });
+    assert.equal(entry(), undefined);
+    assert.equal(op('admin', 'next').item, it);
+
+    create({ title: 'Needs a VM', needs: ['linux-vm'] });
+    assert.match(entry().why, /Start one on a machine that has it/, 'other tags keep the plain wording');
+  });
+
   test('large work waits for small models, but they still get it when nothing else fits', () => {
     const { op, create } = world();
     create({ title: 'Big', size: 'large', priority: 'now' });
@@ -150,6 +167,18 @@ describe('fit hints: what items need and what agents have', () => {
     assert.ok(tools().find((t) => t.name === 'propose').inputSchema.properties.needs);
     assert.ok(tools().find((t) => t.name === 'refine').inputSchema.properties.size);
     assert.match(guide(), /`has`/);
+    const ops = guide({ project: 'acme' });
+    assert.match(ops, /## Operators/);
+    for (const tag of ['operator', 'claude-cli', 'nuworq-infra', 'homelab-vm', 'github-admin', 'browser']) {
+      assert.ok(ops.split('## Operators')[1].includes(`\`${tag}\``), tag);
+      assert.match(tools().find((t) => t.name === 'checkin').inputSchema.properties.has.description, new RegExp(tag));
+    }
+    assert.match(ops, /to: "operator"/);
+    assert.match(ops, /\/loop Work on acme as its operator using nuworq/);
+    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+    assert.match(readme, /### Operators/);
+    assert.match(readme, /\/loop Work on <project> as its operator/);
+    for (const tag of ['claude-cli', 'nuworq-infra', 'homelab-vm', 'github-admin']) assert.ok(readme.includes(`\`${tag}\``), tag);
     const { hub, op } = world();
     op('box', 'checkin', { has: 'Docker, linux' });
     assert.deepEqual(view(hub, 'p').agents.find((a) => a.name === 'box').has, ['docker', 'linux']);
