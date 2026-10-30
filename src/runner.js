@@ -40,6 +40,11 @@ const PAUSE_MS = 5 * 60_000;
 const MAX_PAUSE_MS = 30 * 60_000;
 const KILL_GRACE_MS = 10_000;
 
+const napping = (ms, signal) => new Promise((r) => {
+  const t = setTimeout(r, ms);
+  signal?.addEventListener('abort', () => { clearTimeout(t); r(); }, { once: true });
+});
+
 // routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal),
 // exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited }.
 // launch throws an error with skip: true when this machine can't work on the route's project (no
@@ -47,12 +52,14 @@ const KILL_GRACE_MS = 10_000;
 // With pause: true too (its checkout couldn't be updated, e.g. git can't reach origin), the project is left
 // alone for 5 minutes, then 10, up to 30, and said each time; the others go on.
 // claimed(worker): whether the hub saw it take a job since it started (absent: assume it did).
-// onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
+// onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop, and kills those
+// still up 10s later; the next kills them at once.
 // maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
+// sleep(ms, signal): the wait between polls; it ends early when signal aborts, so no timer outlives the loop.
 export async function run({
   routes, launch, claimed = async () => true, log = console.log,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
-  now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
+  now = () => Date.now(), sleep = napping, onInterrupt,
 }) {
   const running = [];
   const done = [];
@@ -71,8 +78,13 @@ export async function run({
   const resting = new Map(); // project → { until, ms }: its checkout couldn't be updated, so it waits until then
   const stop = (reason) => { if (!stopping) { stopping = true; why = reason; } wake(); };
   let interrupted = false;
+  // Asked to stop: SIGTERM now, and the loop sends SIGKILL to whoever is still up after KILL_GRACE_MS.
+  const terminate = (w) => {
+    w.kill('SIGTERM');
+    w.killedAt ??= now();
+  };
   onInterrupt?.(() => {
-    running.forEach((w) => w.kill(interrupted ? 'SIGKILL' : 'SIGTERM'));
+    running.forEach((w) => (interrupted ? w.kill('SIGKILL') : terminate(w)));
     interrupted = true;
     stop('interrupted');
   });
@@ -101,8 +113,7 @@ export async function run({
     for (const w of running) {
       if (!w.killedAt && t - w.started > maxMinutes * 60_000) {
         log(`${w.name} ran past ${maxMinutes}m: stopping it (its lease expires and the item returns to the queue)`);
-        w.kill('SIGTERM');
-        w.killedAt = t;
+        terminate(w);
       } else if (w.killedAt && t - w.killedAt > KILL_GRACE_MS) {
         w.kill('SIGKILL');
       }
@@ -154,6 +165,8 @@ export async function run({
           w.started = now();
           running.push(w);
           log(`▶ ${w.name} → ${r.name ?? r.project}: ${r.item} ${r.title} (${r.mode})${w.where ? `  ${w.where}` : ''}`);
+          // Ctrl-C came while it was being set up: it was too late to skip it, so it stops like the others.
+          if (interrupted) terminate(w);
           w.exited.then(async (code) => {
             const ms = now() - w.started;
             const secs = Math.round(ms / 1000);
@@ -186,7 +199,11 @@ export async function run({
     }
     if (!stopping && launched >= maxRuns && !running.length) stop(`reached --max-runs ${maxRuns}`);
     if (stopping && !running.length) break;
-    await Promise.race([sleep(pollSeconds * 1000), new Promise((r) => { wake = r; })]);
+    // While a worker is being stopped, look again within a second, so SIGKILL follows its grace on time.
+    const ms = running.some((w) => w.killedAt) ? Math.min(pollSeconds * 1000, 1000) : pollSeconds * 1000;
+    const nap = new AbortController();
+    await Promise.race([sleep(ms, nap.signal), new Promise((r) => { wake = r; })]);
+    nap.abort(); // a wake ends the nap too: a pending timer would keep the process up after Done
   }
 
   const failed = done.filter((d) => d.code !== 0).length;

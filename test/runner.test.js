@@ -669,3 +669,98 @@ describe('run: the supervising loop', () => {
     assert.equal(res.launched, 3);
   });
 });
+
+describe('run: stopping', () => {
+  const settle = async (until) => { for (let i = 0; i < 1e5 && !until(); i++) await new Promise((r) => setImmediate(r)); };
+
+  test('a worker still up 10s after Ctrl-C is killed, without a second Ctrl-C', async () => {
+    const w = world([[route('a', 1)]]);
+    let interrupt;
+    const p = run({ ...w.opts, onInterrupt: (fn) => { interrupt = fn; } });
+    await settle(() => w.workers.length === 1);
+    const asked = w.opts.now();
+    interrupt();
+    await settle(() => w.workers[0].signals.includes('SIGKILL'));
+    assert.deepEqual(w.workers[0].signals, ['SIGTERM', 'SIGKILL']);
+    const waited = w.opts.now() - asked;
+    assert.ok(waited > 10_000 && waited <= 12_000, `killed after its 10s grace (${waited}ms)`);
+    w.workers[0].finish('SIGKILL');
+    assert.equal((await p).why, 'interrupted');
+  });
+
+  test('Ctrl-C while a worker is being set up stops that worker too, instead of waiting for its whole job', async () => {
+    const w = world([[route('a', 1)]]);
+    const start = w.opts.launch;
+    let ready;
+    w.opts.launch = async (r) => { await new Promise((res) => { ready = res; }); return start(r); };
+    let interrupt;
+    const p = run({ ...w.opts, workers: 2, onInterrupt: (fn) => { interrupt = fn; } });
+    await settle(() => ready);
+    interrupt();
+    ready();
+    await settle(() => w.workers.length === 1 && w.workers[0].signals.length);
+    assert.deepEqual(w.workers[0].signals, ['SIGTERM']);
+    w.workers[0].finish(143);
+    const res = await p;
+    assert.equal(res.why, 'interrupted');
+    assert.equal(res.launched, 1, 'nothing launched after the interrupt');
+  });
+
+  test('once it has stopped, no timer of its own is left to keep the process up', async () => {
+    const timers = () => process.getActiveResourcesInfo().filter((x) => x === 'Timeout').length;
+    const before = timers();
+    let worker;
+    let interrupt;
+    const p = run({
+      routes: async () => [route('a', 1)], log: () => {}, pollSeconds: 30, onInterrupt: (fn) => { interrupt = fn; },
+      launch: async (r) => {
+        let finish;
+        worker = { name: 'w1', project: r.project, kill: () => finish(143), exited: new Promise((res) => { finish = res; }) };
+        return worker;
+      },
+    });
+    await settle(() => worker);
+    interrupt();
+    assert.equal((await p).why, 'interrupted');
+    assert.equal(timers(), before, 'the 30s poll timer went with the loop');
+  });
+
+  test('nuworq run exits within seconds of SIGTERM, its workers too', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-stop-')));
+    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { stdio: 'ignore' });
+    const repo = join(dir, 'api'), home = join(dir, 'home'), bin = join(dir, 'bin');
+    g('init', '-q', '-b', 'main', repo);
+    g('-C', repo, 'commit', '-q', '--allow-empty', '-m', 'init');
+    for (const d of [home, bin]) mkdirSync(d);
+    // An agent that would work for a minute; it records its pid so the test can see it went.
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho $$ > ${join(dir, 'agent.pid')}\nexec sleep 60\n`, { mode: 0o755 });
+    const hub = new Hub();
+    hub.tx(() => hub.project('api', { create: true }));
+    hub.humanOp('api', 'settings', { path: repo, runner: true });
+    hub.humanOp('api', 'create', { title: 'Do it', acceptance: 'done' });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, NUWORQ_TOKEN: '', NUWORQ_AGENT_TOKEN: '' };
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, [BIN, 'run', '--url', `http://127.0.0.1:${server.address().port}`, '--agent', 'claude', '--poll', '30'], { env, cwd: repo });
+    let out = '';
+    child.stdout.on('data', (c) => { out += c; });
+    try {
+      await settle(() => false); // let it start
+      for (let i = 0; i < 200 && !existsSync(join(dir, 'agent.pid')); i++) await new Promise((r) => setTimeout(r, 50));
+      const agent = Number(readFileSync(join(dir, 'agent.pid'), 'utf8'));
+      const sent = Date.now();
+      child.kill('SIGTERM');
+      const code = await new Promise((r) => child.on('exit', r));
+      const took = Date.now() - sent;
+      assert.ok(took < 5_000, `exited ${took}ms after SIGTERM, not after the 30s poll\n${out}`);
+      assert.equal(code, 0);
+      assert.match(out, /Done: interrupted\. 1 launched/);
+      assert.throws(() => process.kill(agent, 0), /ESRCH/, 'the agent went with it');
+    } finally {
+      child.kill('SIGKILL');
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -624,7 +624,7 @@ async function runCmd(flags) {
     maxUsd: num(flags['max-usd'], Infinity),
     pollSeconds: num(flags.poll, 30),
     onInterrupt: (fn) => {
-      process.on('SIGINT', () => { console.log(dim('\nStopping: no new workers; asking running ones to stop (Ctrl-C again to kill them).')); fn(); });
+      process.on('SIGINT', () => { console.log(dim('\nStopping: no new workers; asking running ones to stop (killed in 10s, or now on a second Ctrl-C).')); fn(); });
       process.on('SIGTERM', fn);
     },
   });
