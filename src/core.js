@@ -466,13 +466,18 @@ export class Hub extends EventEmitter {
   // The plan's limit on agents working at once (planLimit, set per organization by Workspaces; null or
   // unset: no limit). Enforced where work is claimed: the hub holds every lease, so an agent that would be
   // one too many is refused, and the ones already working carry on.
-  checkPlan(agent) {
-    const limit = this.planLimit?.();
-    if (!limit) return;
-    const working = new Set([
+  // The agents holding work now, in any project: what the plan's limit counts.
+  working() {
+    return new Set([
       ...this.q(`SELECT DISTINCT holder FROM items WHERE holder IS NOT NULL AND holder != ?`).all(GITHUB).map((r) => r.holder),
       ...this.q(`SELECT DISTINCT agent FROM attempts WHERE stage = 'active' AND closed = 0`).all().map((r) => r.agent),
     ]);
+  }
+
+  checkPlan(agent) {
+    const limit = this.planLimit?.();
+    if (!limit) return;
+    const working = this.working();
     if (working.has(agent) || working.size < limit) return;
     throw new UserError(`The Free plan runs ${limit} agent at a time, and ${[...working].join(', ')} is working now`, {
       status: 402,

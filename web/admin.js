@@ -1,5 +1,7 @@
 // The admin host's dashboard, for the hub's owners: sign in here, then decide early-access requests.
 // New requests first; Approve and Decline each ask first; an approval's link (shown once) has a Copy button.
+// Then the workspaces (#169): one row each, most recently active first; tap a row for who and what is in it,
+// and to switch its plan between Free and Unlimited (that asks first too, saying what changes).
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ago = (t) => {
@@ -38,8 +40,11 @@ async function main() {
   $('#view').innerHTML = `<h2>Early access</h2>
     <p class="lead">Approve gives you a link to send: it lets them make one workspace, once, within 14 days.</p>
     <div class="seg admin-filter" role="group" aria-label="Show">${STATES.map(([v, label]) => `<button data-state="${v}" aria-pressed="${v === state}" class="${v === state ? 'on' : ''}">${label}</button>`).join('')}</div>
-    <div id="list" aria-live="polite"><p class="faint">Loading…</p></div>`;
+    <div id="list" aria-live="polite"><p class="faint">Loading…</p></div>
+    <h2 class="admin-h2">Workspaces</h2>
+    <div id="spaces" aria-live="polite"><p class="faint">Loading…</p></div>`;
   load();
+  loadSpaces();
 }
 
 async function signIn() {
@@ -74,7 +79,55 @@ function card(r) {
   </article>`;
 }
 
+const PLAN = { free: 'Free', unlimited: 'Unlimited' };
+const CHANGE = {
+  free: 'Free: one agent works at a time; a second claim is refused with an upgrade hint.',
+  unlimited: 'Unlimited: any number of agents work side by side.',
+};
+const expanded = new Set(); // workspaces whose detail is showing, kept across reloads
+
+async function loadSpaces() {
+  const el = $('#spaces');
+  try {
+    const { enforced, workspaces } = await api('/api/workspaces');
+    el.innerHTML = `${enforced ? '' : '<p class="faint">Plans aren\'t enforced on this hub (start it with --plans): changes are stored and apply once they are.</p>'}
+      ${workspaces.length ? workspaces.map(space).join('') : '<p class="faint">No workspaces yet.</p>'}`;
+  } catch (e) { el.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
+}
+
+function space(w) {
+  const other = w.plan === 'free' ? 'unlimited' : 'free';
+  const why = w.source === 'owners' ? 'Always Unlimited: a hub owner is in it.'
+    : w.source === 'set' ? `Set by ${esc(w.set_by || 'the host')} ${esc(ago(w.set_at))}.`
+    : `The default: ${w.plan === 'free' ? 'someone signed up for it' : 'the host made it'}.`;
+  return `<details class="admin-card admin-space" data-name="${esc(w.name)}"${expanded.has(w.name) ? ' open' : ''}>
+    <summary><span class="h">${esc(w.name)}</span><span class="plan plan-${esc(w.plan)}">${PLAN[w.plan]}</span>
+      <span class="faint">${w.working.length ? `<b class="ok">${w.working.length} working</b>` : 'idle'} · ${w.last_active ? esc(ago(w.last_active)) : 'never active'}</span></summary>
+    <p>Made by ${w.creator ? `${esc(w.creator.email)}${w.creator.github ? ` · <a href="https://github.com/${esc(w.creator.github)}" target="_blank" rel="noopener">@${esc(w.creator.github)}</a>` : ''}` : 'the host'}</p>
+    <p class="s">${w.people} ${w.people === 1 ? 'person' : 'people'} · ${w.projects} ${w.projects === 1 ? 'project' : 'projects'}${w.working.length ? ` · working: ${w.working.map(esc).join(', ')}` : ''}</p>
+    <p class="faint">${why}</p>
+    ${w.source === 'owners' ? '' : `<div class="admin-acts"><button class="btn" data-plan="${other}">Switch to ${PLAN[other]}</button></div>`}
+  </details>`;
+}
+
+document.addEventListener('toggle', (e) => {
+  const d = e.target.closest?.('.admin-space');
+  if (d) d.open ? expanded.add(d.dataset.name) : expanded.delete(d.dataset.name);
+}, true);
+
 document.addEventListener('click', async (e) => {
+  const pl = e.target.closest('button[data-plan]');
+  if (pl) {
+    const name = pl.closest('.admin-space').dataset.name, plan = pl.dataset.plan;
+    if (!confirm(`Switch ${name} to ${PLAN[plan]}?\n\n${CHANGE[plan]}\n\nYou can switch it back here.`)) return;
+    pl.disabled = true;
+    try {
+      const r = await api('/api/workspaces/plan', { workspace: name, plan });
+      showError('');
+      pl.closest('.admin-space').outerHTML = space(r.workspace);
+    } catch (err) { showError(err.message); pl.disabled = false; }
+    return;
+  }
   const f = e.target.closest('button[data-state]');
   if (f) { state = f.dataset.state; for (const b of document.querySelectorAll('.admin-filter button')) { b.classList.toggle('on', b === f); b.setAttribute('aria-pressed', String(b === f)); } return load(); }
   const c = e.target.closest('button[data-copy]');

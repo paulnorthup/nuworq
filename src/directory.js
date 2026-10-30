@@ -113,7 +113,20 @@ export class Directory {
 
   // An organization's plan as set by the hub owner, or null when nobody set one.
   plan(workspace) {
-    return this.db.prepare('SELECT plan FROM plans WHERE workspace = ?').get(workspace)?.plan ?? null;
+    return this.planSet(workspace)?.plan ?? null;
+  }
+
+  // The same, with who set it and when: { plan, set_by, at }, or null.
+  planSet(workspace) {
+    return this.db.prepare('SELECT plan, set_by, at FROM plans WHERE workspace = ?').get(workspace) ?? null;
+  }
+
+  // Who created the organization, when a signed-in person did: { email, github }, or null (the host made it).
+  // github: the handle their early-access request gave, if any.
+  creator(workspace) {
+    const c = this.db.prepare(`SELECT i.email, r.github FROM memberships m JOIN identities i ON i.id = m.identity_id
+      LEFT JOIN access_requests r ON r.email = i.email WHERE m.workspace = ? AND m.created = 1 ORDER BY m.at LIMIT 1`).get(workspace);
+    return c ? { email: c.email, github: c.github || null } : null;
   }
 
   setPlan(workspace, plan, by = '') {

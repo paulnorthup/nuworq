@@ -963,7 +963,8 @@ ${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w
 
 async function workspace(pos, flags) {
   const { Workspaces } = await import('../src/workspaces.js');
-  const spaces = new Workspaces({ dir: workspacesDir(flags) });
+  const owners = String(flags.owners ?? envVar('HUB_OWNERS') ?? envVar('OWNERS') ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const spaces = new Workspaces({ dir: workspacesDir(flags), owners });
   const [sub, name] = pos;
   try {
     if (sub === 'create') {
@@ -974,7 +975,10 @@ ${dim(`  Give someone a login: nuworq token create <name> --role human --workspa
     }
     if (sub === 'list') {
       const names = spaces.list();
-      return console.log(names.length ? names.join('\n') : dim(`No workspaces in ${spaces.dir}. Add one: nuworq workspace create <name>`));
+      if (!names.length) return console.log(dim(`No workspaces in ${spaces.dir}. Add one: nuworq workspace create <name>`));
+      // Each one's plan, the same the admin dashboard shows and sets (#169).
+      const why = (p) => (p.source === 'set' ? `set by ${p.set_by || 'host'} ${new Date(p.set_at).toISOString().slice(0, 10)}` : p.source === 'owners' ? 'a hub owner is in it' : 'default');
+      return console.log(names.map((n) => { const p = spaces.planInfo(n); return `${n}  ${bold(p.plan)} ${dim(`(${why(p)})`)}`; }).join('\n'));
     }
     // The hub owner's override: unlimited (Pro, Team, or yours), or free.
     if (sub === 'plan') {

@@ -1,0 +1,187 @@
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createHash, randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Workspaces } from '../src/workspaces.js';
+import { createServer } from '../src/server.js';
+
+const ADMIN = 'admin.example.test', APP = 'app.example.test';
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
+const PAUL = 'paul@example.com';
+
+function request(port, method, path, { host = APP, headers = {}, body } = {}) {
+  const data = body === undefined ? null : JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method, path, headers: { host, ...(data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), origin: `http://${host}` } : {}), ...headers } }, (res) => {
+      let text = '';
+      res.on('data', (c) => (text += c));
+      res.on('end', () => {
+        let json;
+        try { json = JSON.parse(text); } catch {}
+        resolve({ status: res.statusCode, headers: res.headers, text, json });
+      });
+    });
+    req.on('error', reject);
+    req.end(data ?? undefined);
+  });
+}
+const listen = (server) => new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+const cookies = (res) => (res.headers['set-cookie'] ?? []).map((c) => c.split(';')[0]).filter((c) => !c.endsWith('=')).join('; ');
+
+// GitHub, played by a local server: a code for whoever approves, traded for a token that says their email.
+function provider() {
+  const codes = new Map(), tokens = new Map();
+  const server = http.createServer(async (req, res) => {
+    const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    if (req.method === 'POST' && req.url === '/token') {
+      let raw = '';
+      for await (const c of req) raw += c;
+      const f = Object.fromEntries(new URLSearchParams(raw));
+      const c = codes.get(f.code);
+      codes.delete(f.code);
+      if (!c || createHash('sha256').update(f.code_verifier ?? '').digest('base64url') !== c.challenge) return json(400, { error: 'bad_verification_code' });
+      const t = randomBytes(8).toString('hex');
+      tokens.set(t, c.email);
+      return json(200, { access_token: t });
+    }
+    const email = tokens.get(String(req.headers.authorization ?? '').replace('Bearer ', ''));
+    if (email && req.url === '/user/emails') return json(200, [{ email, primary: true, verified: true }]);
+    json(401, {});
+  });
+  return {
+    server,
+    approve(authorizeUrl, email) {
+      const u = new URL(authorizeUrl);
+      const code = randomBytes(8).toString('hex');
+      codes.set(code, { challenge: u.searchParams.get('code_challenge'), email });
+      return { code, state: u.searchParams.get('state'), callback: new URL(u.searchParams.get('redirect_uri')) };
+    },
+  };
+}
+
+// The admin dashboard's Workspaces section (#169): every workspace with its plan, and the plan switch.
+describe('the admin host lists workspaces and sets their plans', () => {
+  let p, spaces, server, port, data, owner;
+  const op = (ws, agent, name, args = {}) => spaces.get(ws).agentOp('app', name, agent, args);
+  const cli = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--data-dir', data, '--owners', PAUL], { env: { ...process.env, HOME: data, NO_COLOR: '1' } });
+  const get = (cookie) => request(port, 'GET', '/api/workspaces', { host: ADMIN, headers: { cookie } });
+  const setPlan = (cookie, workspace, plan) => request(port, 'POST', '/api/workspaces/plan', { host: ADMIN, headers: { cookie }, body: { workspace, plan } });
+
+  before(async () => {
+    p = provider();
+    const stub = `http://127.0.0.1:${await listen(p.server)}`;
+    data = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-adminspaces-')));
+    spaces = new Workspaces({ dir: join(data, 'workspaces'), plans: true, owners: [PAUL] });
+    // acme: Ann signed up for it (so Free), with a project, two items, two people.
+    const dir = spaces.directory;
+    dir.request({ email: 'ann@acme.test', github: 'ann-gh', building: 'things' });
+    spaces.create('acme');
+    dir.identify('ann@acme.test', 'github');
+    dir.join('ann@acme.test', 'acme', { created: true });
+    const acme = spaces.get('acme');
+    acme.tx(() => acme.project('app', { create: true }));
+    for (const t of ['One', 'Two']) acme.humanOp('app', 'create', { title: t, acceptance: 'x' });
+    for (const [h, e] of [['ann', 'ann@acme.test'], ['bo', 'bo@acme.test']]) acme.db.prepare("INSERT INTO people (handle, email, role, created_at) VALUES (?, ?, 'owner', 0)").run(h, e);
+    // quiet: made by the host on the command line, nothing in it.
+    spaces.create('quiet');
+    server = createServer(spaces, {
+      publicUrl: `http://${APP}`, adminHost: ADMIN,
+      oauth: { github: { id: 'gh', secret: 'shh', authorize: `${stub}/authorize`, token: `${stub}/token`, api: stub } },
+      earlyAccess: { owners: [PAUL], verify: async () => true, gate: true },
+    });
+    port = await listen(server);
+    owner = await signIn(PAUL);
+  });
+  after(() => { for (const s of [server, p.server]) { s.close(); s.closeAllConnections(); } spaces.close(); });
+
+  async function signIn(email) {
+    const s = await request(port, 'GET', '/auth/github/start', { host: ADMIN });
+    const a = p.approve(s.headers.location, email);
+    return cookies(await request(port, 'GET', `${a.callback.pathname}?code=${a.code}&state=${encodeURIComponent(a.state)}`, { host: ADMIN, headers: { cookie: cookies(s) } }));
+  }
+
+  test('an owner gets every workspace, most recently active first, with its plan and what is in it', async () => {
+    op('acme', 'a1', 'checkin');
+    op('acme', 'a1', 'next');
+    const r = await get(owner);
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.enforced, true);
+    assert.deepEqual(r.json.workspaces.map((w) => w.name), ['acme', 'quiet'], 'sorted by last activity; quiet has none');
+    const [acme, quiet] = r.json.workspaces;
+    assert.deepEqual({ ...acme, last_active: typeof acme.last_active }, {
+      name: 'acme', plan: 'free', source: 'default', set_by: null, set_at: null,
+      creator: { email: 'ann@acme.test', github: 'ann-gh' },
+      people: 2, projects: 1, working: ['a1'], last_active: 'number',
+    });
+    assert.deepEqual(quiet, { name: 'quiet', plan: 'unlimited', source: 'default', set_by: null, set_at: null, creator: null, people: 0, projects: 0, working: [], last_active: null });
+  });
+
+  test('a non-owner gets 403, and the app host refuses the API with a hint naming the admin host', async () => {
+    const zed = await signIn('zed@example.com');
+    for (const r of [await get(zed), await setPlan(zed, 'acme', 'unlimited')]) {
+      assert.equal(r.status, 403);
+      assert.match(r.json.hint, /NUWORQ_HUB_OWNERS/);
+      assert.equal(r.json.workspaces, undefined);
+    }
+    assert.equal((await get('')).status, 401);
+    const appOwner = `nuworq_id=${spaces.directory.createSession(spaces.directory.identify(PAUL, 'github').id)}`;
+    for (const [method, path] of [['GET', '/api/workspaces'], ['POST', '/api/workspaces/plan']]) {
+      const r = await request(port, method, path, { headers: { cookie: appOwner }, ...(method === 'POST' ? { body: { workspace: 'acme', plan: 'unlimited' } } : {}) });
+      assert.equal(r.status, 403, path);
+      assert.match(r.json.hint, /admin\.example\.test/, path);
+    }
+    assert.equal(spaces.directory.plan('acme'), null, 'nothing was set');
+  });
+
+  test('an owner sets unlimited and back to free; Free refuses a second agent at once, Unlimited does not', async () => {
+    op('acme', 'a2', 'checkin');
+    assert.throws(() => op('acme', 'a2', 'next'), (e) => e.status === 402 && /upgrade/i.test(e.hint), 'free by default: a1 is working');
+    const up = await setPlan(owner, 'acme', 'unlimited');
+    assert.equal(up.status, 200, up.text);
+    assert.equal(up.json.workspace.plan, 'unlimited');
+    assert.equal(up.json.workspace.source, 'set');
+    assert.equal(up.json.workspace.set_by, PAUL);
+    assert.equal(typeof up.json.workspace.set_at, 'number');
+    assert.equal(op('acme', 'a2', 'next').mode, 'work', 'unlimited: a2 works beside a1');
+    op('acme', 'a2', 'handoff', { item: '#2', headline: 'Out' });
+    const down = await setPlan(owner, 'acme', 'free');
+    assert.equal(down.json.workspace.plan, 'free');
+    assert.equal(spaces.directory.planSet('acme').set_by, PAUL);
+    assert.throws(() => op('acme', 'a2', 'next'), (e) => e.status === 402 && /upgrade/i.test(e.hint), 'free again: refused while a1 works');
+  });
+
+  test('an unknown plan is a 400 and an unknown workspace a 404, each with a hint', async () => {
+    const bad = await setPlan(owner, 'acme', 'pro');
+    assert.equal(bad.status, 400);
+    assert.match(bad.json.hint, /free, unlimited/);
+    const none = await setPlan(owner, 'nope', 'free');
+    assert.equal(none.status, 404);
+    assert.ok(none.json.hint);
+    const cross = await request(port, 'POST', '/api/workspaces/plan', { host: ADMIN, headers: { cookie: owner, origin: `http://${APP}` }, body: { workspace: 'acme', plan: 'unlimited' } });
+    assert.equal(cross.status, 403, 'a write from another origin is refused');
+    assert.equal(spaces.directory.plan('acme'), 'free');
+  });
+
+  test('the CLI and the dashboard read and write the same plan', async () => {
+    await cli('workspace', 'plan', 'quiet', 'free');
+    const q = (await get(owner)).json.workspaces.find((w) => w.name === 'quiet');
+    assert.deepEqual([q.plan, q.source, q.set_by], ['free', 'set', 'host'], 'set on the command line, seen on the dashboard');
+    await setPlan(owner, 'quiet', 'unlimited');
+    const list = (await cli('workspace', 'list')).stdout;
+    assert.match(list, new RegExp(`^quiet  unlimited \\(set by ${PAUL.replace('.', '\\.')} \\d{4}-\\d\\d-\\d\\d\\)$`, 'm'), 'set on the dashboard, seen on the command line');
+    assert.match(list, /^acme  free \(set by /m);
+  });
+
+  test('the dashboard has a Workspaces section whose plan switch asks first', async () => {
+    const js = (await request(port, 'GET', '/admin.js', { host: ADMIN })).text;
+    assert.match(js, /\/api\/workspaces/);
+    assert.match(js, /confirm\(`Switch \$\{name\} to/);
+    assert.match(js, /one agent works at a time/);
+  });
+});

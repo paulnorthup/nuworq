@@ -93,9 +93,35 @@ export class Workspaces {
   // is. Otherwise the plan the hub owner set; with none, free if someone signed up for it, and unlimited if
   // the host made it (nuworq workspace create).
   planOf(slug) {
-    if (!this.plans) return 'unlimited';
-    if (this.directory.hasMember(slug, this.owners)) return 'unlimited';
-    return this.directory.plan(slug) ?? (this.directory.madeBySomeone(slug) ? 'free' : 'unlimited');
+    return this.plans ? this.planInfo(slug).plan : 'unlimited';
+  }
+
+  // The plan the organization is on while plans are on, and why: source 'owners' (a hub owner belongs to it),
+  // 'set' (the hub owner set it: set_by, set_at) or 'default' (free if someone signed up for it, else unlimited).
+  planInfo(slug) {
+    if (this.directory.hasMember(slug, this.owners)) return { plan: 'unlimited', source: 'owners', set_by: null, set_at: null };
+    const set = this.directory.planSet(slug);
+    if (set) return { plan: set.plan, source: 'set', set_by: set.set_by || null, set_at: set.at };
+    return { plan: this.directory.madeBySomeone(slug) ? 'free' : 'unlimited', source: 'default', set_by: null, set_at: null };
+  }
+
+  // One row per workspace for the hub owners' dashboard (#169), most recently active first: its plan, who
+  // made it, how many people and projects, the agents holding work now, and when anything last happened.
+  overview() {
+    const rows = this.list().map((name) => {
+      const hub = this.get(name);
+      const n = (sql) => hub.db.prepare(sql).get().n ?? null;
+      const last = Math.max(n('SELECT MAX(at) AS n FROM events') ?? 0, n('SELECT MAX(last_seen) AS n FROM agents') ?? 0);
+      return {
+        name, ...this.planInfo(name),
+        creator: this.directory.creator(name),
+        people: n('SELECT COUNT(*) AS n FROM people'),
+        projects: hub.projects().length,
+        working: [...hub.working()].sort(),
+        last_active: last || null,
+      };
+    });
+    return rows.sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0) || a.name.localeCompare(b.name));
   }
 
   setPlan(slug, plan, by = '') {
