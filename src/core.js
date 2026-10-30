@@ -2139,6 +2139,25 @@ const AGENT_OPS = {
     };
   },
 
+  // The asker takes back its own open question (#184): the answer came another way, or it no longer matters.
+  // The reason goes on the record; its escalations go with it; work it alone kept parked goes back to ready.
+  withdraw(p, agent, args) {
+    const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(args.question), p.id);
+    if (!q) throw new UserError(`No question ${args.question}`, { status: 404, hint: 'ask returned the id of each question you asked.' });
+    if (q.asked_by !== agent) {
+      throw new UserError(`Question ${q.id} is ${q.asked_by}'s, not yours`, { status: 403, hint: `Only the asker withdraws a question. Tell ${q.asked_by} (comment on the item), or leave a comment for the person.` });
+    }
+    if (q.status !== 'open') throw new UserError(`Question ${q.id} is already ${q.status}`, { status: 409, hint: 'Only an open question can be withdrawn.' });
+    const reason = clip(args.reason, 200);
+    if (!reason) throw new UserError('reason is required', { hint: 'One line, e.g. "Paul answered in a planning session: he is the only admin."' });
+    this.q(`UPDATE questions SET status = 'withdrawn', closed_reason = ? WHERE id = ?`).run(reason, q.id);
+    this.q(`UPDATE questions SET status = 'withdrawn', closed_reason = ? WHERE escalates = ? AND status = 'open'`).run(reason, q.id);
+    const item = this.itemById(q.item_id);
+    this.event(p, { item, actor: agent, type: 'question_withdrawn', headline: `${agent} withdrew its question: ${clip(q.question, 80)}`, summary: `Why: ${reason}`, data: { question: q.id } });
+    if (item?.stage === 'waiting' && !item.parked_by && !this.openQuestions(item, { blocking: true }).length) this.move(item, 'ready', agent);
+    return { ok: true, hint: `Withdrawn${item ? `; #${item.seq} is ${item.stage}` : ''}.` };
+  },
+
   submit(p, agent, args) {
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
     const item = this.heldItem(p, agent, args.item, 'submit');

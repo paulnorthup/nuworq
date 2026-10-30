@@ -84,6 +84,7 @@ const AGENT_CMDS = {
     };
   },
   answer: (p) => ({ question: need(p[0], '<question-id>'), answer: need(rest(p, 1), '<answer>') }),
+  withdraw: (p) => ({ question: need(p[0], '<question-id>'), reason: need(rest(p, 1), '<reason>') }),
   submit: (p, f) => ({
     item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f), acceptance: text(f.acceptance),
     evidence: evidenceFlags(f.evidence),
@@ -1189,6 +1190,7 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   ask <question> --escalates <question-id> --evidence "label|url"...
                                          operators only: carry a question up to the human, with evidence
   answer <question-id> <answer>          operators only: answer a question asked to: operator
+  withdraw <question-id> <reason>        take back your own open question: answered another way, or moot
   submit <item> <headline> [--evidence "label|url"]...
   handoff <item> <headline>              release with where you left off
   propose <title> [--acceptance] [--priority now|soon|later] [--parent] [--depends-on "#1,#2"]
