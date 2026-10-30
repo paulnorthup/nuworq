@@ -24,8 +24,10 @@ const OPERATOR = [
 
 // A question that asks the person to do something (not just decide) must come with numbered steps (Paul,
 // 2026-10-30). Deterministic like the routing above: a request aimed at the person, near a verb that is an action.
+// A decision verb in between ("could you decide whether to add…") makes it a decision, not a request to act.
 const ACT = String.raw`(create|add|install|set ?up|configure|enable|disable|turn (on|off)|click|tap|sign (in|up)|log ?in|run|paste|copy|grant|invite|connect|rotate|upload|merge|register|generate|go to|visit|authori[sz]e|restart)`;
-const REQUEST = new RegExp(String.raw`\b(can you|could you|would you|will you|please|you need to|you'?ll need to|you have to|you must|needs? you to|need you to|ask(ing)? you to)\b.{0,60}?\b${ACT}\b`);
+const DECIDE = String.raw`\b(decide|choose|pick|confirm|approve|prefer|agree|ok|okay)\b`;
+const REQUEST = new RegExp(String.raw`\b(can you|could you|would you|will you|please|you need to|you'?ll need to|you have to|you must|needs? you to|need you to|ask(ing)? you to)\b(?:(?!${DECIDE}).){0,60}?\b${ACT}\b`);
 const IMPERATIVE = new RegExp(String.raw`^(please )?${ACT}\b`);
 
 export function needsSteps({ question = '', context = '' } = {}) {
