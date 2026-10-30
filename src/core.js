@@ -11,6 +11,7 @@ import { normPrecondition, describe as describePrecondition, WAIT_DAYS } from '.
 import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from './issues.js';
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
+import { tidyUp } from './tidy.js';
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -1465,7 +1466,7 @@ export class Hub extends EventEmitter {
     // The freshness sweep (src/freshness.js) waits while now or soon work is ready, whoever can take it.
     const urgent = open.some((i) => !i.sweep && ranked({ item: i }).priority !== 'later' && !this.unmetDeps(i).length);
     const ready = open.filter((i) => fresh(i) && !this.unmetDeps(i).length && !(i.sweep && urgent))
-      .map((item) => ({ mode: 'work', item }));
+      .map((item) => ({ mode: item.tidy ? 'tidy' : 'work', item })); // a tidy job (src/tidy.js) keeps the groups true
     // Races with an open slot this agent hasn't taken a turn in. A slot goes to a different model first:
     // an agent on a model already in the race sees it after other work of the same priority.
     const model = agent ? this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model ?? '' : '';
@@ -1484,6 +1485,7 @@ export class Hub extends EventEmitter {
       large(a) - large(b) ||
       (operator ? own(a) - own(b) : 0) ||
       PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
+      (b.mode === 'tidy') - (a.mode === 'tidy') || // groups are how a person steers: true groups first, and it's quick (#202)
       own(a) - own(b) ||
       !!a.sameModel - !!b.sameModel ||
       (a.mode === 'shape') - (b.mode === 'shape') ||
@@ -1996,6 +1998,7 @@ const AGENT_OPS = {
       };
     }
     const repo = this.caller?.remote ?? '';
+    if (args.claim !== false) tidyUp(this, p); // groups that drifted become a tidy job before anything is picked (#202); a peek changes nothing
     const pick = this.pick(p, agent, { powers: this.caller?.powers, repo });
     if (!pick) {
       if (p.parked) return { mode: 'idle', hint: 'The human has parked this project: start nothing new. Signoff.' };
@@ -2037,6 +2040,8 @@ const AGENT_OPS = {
           ? this.landHint(p, this.itemById(pick.item.id))
         : pick.mode === 'shape' && args.claim !== false
           ? SHAPE_HINT(pick.item, p, this.remotesOf(p))
+        : pick.mode === 'tidy' && args.claim !== false
+          ? `You hold #${pick.item.seq}, a tidy job, for ${dur(LEASE_MS)}: its summary lists what drifted. No branch: fix each with refine and a one-line reason (parent moves an item, "" takes it out; pr attaches a pull request), propose a parent for a cluster, submit a group whose parts are all done. Never change a priority a person set or touch a decision. Then submit #${pick.item.seq} with what you changed; that finishes it.`
           : args.claim === false
           ? `Not claimed. Claim #${pick.item.seq} to start.`
           : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${this.workHint(p, this.itemById(pick.item.id))} ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`.replace(/  +/g, ' '),
@@ -2190,6 +2195,12 @@ const AGENT_OPS = {
     if (item.stage === 'landing') return finishLanding.call(this, p, agent, item, { headline, summary, detail, conflicts: str(args.conflicts) });
     if (item.stage !== 'active') throw new UserError(`#${item.seq} is ${item.stage}; only active work can be submitted`, { status: 409 });
     const evidence = evidenceList(args.evidence);
+    // A tidy job (#202) is bookkeeping, already on the record change by change: submitting finishes it.
+    if (item.tidy) {
+      this.move(item, 'done', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
+      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} tidied the groups: ${headline}`, summary, detail, data: { evidence } });
+      return { ok: true, hint: `#${item.seq} is done. Call next for more work.` };
+    }
     const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
     const nudge = evidence.length ? '' : 'Next time attach evidence (tests run, commands, commit or PR links); it makes verification fast. ';
     if (this.racing(item)) {
@@ -2380,6 +2391,7 @@ Object.assign(Hub.prototype, {
     const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at, fixes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t, fixes?.id ?? null);
     const item = this.itemById(Number(r.lastInsertRowid));
+    if (human && PRIORITY_RANK[args.priority] != null) this.patch(item, { priority_by: actor }); // a person chose it (#202)
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
     this.setDeps(p, item, args.depends_on);
     this.event(p, {
@@ -2389,6 +2401,11 @@ Object.assign(Hub.prototype, {
     });
     if (stage === 'waiting') this.askPrecondition(item, actor);
     return item;
+  },
+
+  // Whether this agent holds the project's tidy job (#202).
+  tidying(p, agent) {
+    return !!this.q(`SELECT 1 FROM items WHERE project_id = ? AND tidy != '' AND holder = ? AND stage = 'active'`).get(p.id, agent);
   },
 
   refineItem(p, actor, item, args) {
@@ -2414,7 +2431,15 @@ Object.assign(Hub.prototype, {
     for (const k of ['summary', 'detail', 'acceptance']) {
       if (args[k] != null && str(args[k]) !== item[k]) { set[k] = str(args[k]); changed.push(k); }
     }
-    if (args.priority && PRIORITY_RANK[args.priority] != null && args.priority !== item.priority) { set.priority = args.priority; changed.push(`priority → ${args.priority}`); }
+    if (args.priority && PRIORITY_RANK[args.priority] != null && args.priority !== item.priority) {
+      // A tidy job keeps the groups true; what matters most stays the person's call (#202).
+      if (!isHuman(actor) && item.priority_by && this.tidying(p, actor)) {
+        throw new UserError(`#${item.seq}'s priority was set by ${item.priority_by === HUMAN ? 'a person' : item.priority_by}; a tidy job doesn't change it`, { status: 403, hint: 'Leave priorities as they are. If one looks wrong, say so in your submit, or ask the person.' });
+      }
+      set.priority = args.priority;
+      set.priority_by = isHuman(actor) ? actor : '';
+      changed.push(`priority → ${args.priority}`);
+    }
     if (args.race != null && args.race !== '') {
       const n = Number(args.race);
       if (!Number.isInteger(n) || n < 1 || n > MAX_RACE) throw new UserError(`race must be a whole number from 1 to ${MAX_RACE}`, { hint: '1 means one agent at a time (the usual); 2 or more lets that many agents attempt it at once.' });
@@ -2451,6 +2476,17 @@ Object.assign(Hub.prototype, {
         changed.push(to ? `part of #${to.seq}` : 'in no group');
       }
     }
+    // A pull request no item tracked (#202), linked here: it lands with this item as usual.
+    let attach = null;
+    if (str(args.pr)) {
+      const m = str(args.pr).match(/^(?:(.+)#)?(\d+)$/);
+      const rows = m ? this.q(`SELECT * FROM untracked_prs WHERE project_id = ? AND number = ?${m[1] ? ' AND repo = ?' : ''}`).all(p.id, Number(m[2]), ...(m[1] ? [m[1]] : [])) : [];
+      if (rows.length !== 1) {
+        throw new UserError(rows.length ? `More than one untracked pull request is #${m[2]}` : `No untracked pull request ${str(args.pr)}`, { status: rows.length ? 400 : 404, hint: 'Name it as the tidy job lists it, e.g. "acme/api#12".' });
+      }
+      attach = rows[0];
+      changed.push(`tracks PR ${attach.repo}#${attach.number}`);
+    }
     if (args.repo != null) {
       const repo = this.checkRepo(p, args.repo);
       if (repo !== item.repo) {
@@ -2484,17 +2520,24 @@ Object.assign(Hub.prototype, {
     const human = isHuman(actor);
     const promote = item.stage === 'proposed' && !item.holder && item.acceptance && (human || p.autonomy !== 'ask') && args.ready !== false;
     if (promote) { this.move(item, 'ready', actor); changed.push('now ready'); }
+    if (attach) {
+      this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(p.id, attach.repo, attach.number, item.id, attach.url, attach.title, attach.state, attach.head_ref, attach.head_sha, this.now());
+      this.q('DELETE FROM untracked_prs WHERE project_id = ? AND repo = ? AND number = ?').run(p.id, attach.repo, attach.number);
+    }
+    // Why, in one line (#202): on the item's record and on both groups' when it moved.
+    const why = str(args.reason) ? `Why: ${clip(args.reason, 200)}` : '';
     if (changed.length) {
       this.event(p, {
         item, actor, type: 'refined',
         headline: `${You(actor)} refined #${item.seq}: ${changed.join(', ')}`,
-        summary: set.acceptance ? `Done means: ${set.acceptance}` : '',
+        summary: [why, set.acceptance ? `Done means: ${set.acceptance}` : ''].filter(Boolean).join('\n\n'),
       });
     }
     // Both groups' history says where it went, so a person sees why a group changed.
     const { from, to } = regroup ?? {};
-    if (from) this.event(p, { item: from, actor, type: 'regrouped', headline: `${You(actor)} moved #${item.seq} out of #${from.seq}${to ? ` into #${to.seq}` : ''}: ${clip(item.title, 80)}` });
-    if (to) this.event(p, { item: to, actor, type: 'regrouped', headline: `${You(actor)} moved #${item.seq} into #${to.seq}${from ? ` from #${from.seq}` : ''}: ${clip(item.title, 80)}` });
+    if (from) this.event(p, { item: from, actor, type: 'regrouped', headline: `${You(actor)} moved #${item.seq} out of #${from.seq}${to ? ` into #${to.seq}` : ''}: ${clip(item.title, 80)}`, summary: why });
+    if (to) this.event(p, { item: to, actor, type: 'regrouped', headline: `${You(actor)} moved #${item.seq} into #${to.seq}${from ? ` from #${from.seq}` : ''}: ${clip(item.title, 80)}`, summary: why });
     return changed;
   },
 

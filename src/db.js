@@ -223,6 +223,19 @@ CREATE TABLE IF NOT EXISTS prs (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (project_id, repo, number)
 );
+-- Pull requests on the project's repos that no item tracks (#202): the next tidy job attaches each to an item.
+CREATE TABLE IF NOT EXISTS untracked_prs (
+  project_id INTEGER NOT NULL,
+  repo       TEXT NOT NULL,                   -- as GitHub names it: owner/name
+  number     INTEGER NOT NULL,
+  url        TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  head_ref   TEXT NOT NULL DEFAULT '',
+  head_sha   TEXT NOT NULL DEFAULT '',
+  state      TEXT NOT NULL,                   -- open | merged | closed
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, repo, number)
+);
 -- GitHub issues that came in as proposals (src/issues.js): one item per issue, and at most one comment back.
 CREATE TABLE IF NOT EXISTS issues (
   project_id INTEGER NOT NULL,
@@ -372,6 +385,8 @@ export function openDb(file) {
     'ALTER TABLE projects ADD COLUMN run_paused INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN run_budget REAL',
     'ALTER TABLE projects ADD COLUMN staff_asked INTEGER NOT NULL DEFAULT 1',
+    "ALTER TABLE items ADD COLUMN tidy TEXT NOT NULL DEFAULT ''", // a tidy job the hub opened (src/tidy.js): JSON, the drift it listed; '' otherwise
+    "ALTER TABLE items ADD COLUMN priority_by TEXT NOT NULL DEFAULT ''", // the person who set its priority ('' = nobody did): a tidy job leaves it alone
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

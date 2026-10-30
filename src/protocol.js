@@ -175,6 +175,8 @@ export const OPS = [
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
       parent: s('Optional. Move it into another group: the item it is part of, e.g. "#170". "" takes it out of its group. Not under itself, not into a done or dropped group.'),
+      pr: s('Optional. A pull request no item tracks, as a tidy job lists it (e.g. "acme/api#12"): it becomes this item\'s, and lands with it.'),
+      reason: s('Optional. Why, in one line. It goes on the record, and on both groups\' history when the item moves. A tidy job always gives one.'),
       fixes: { ...FIXES, description: `${FIXES.description} "" clears it.` },
       needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
       size: SIZE,
@@ -264,6 +266,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 3. **No nuworq tools in this session?** Say so and stop. The machine needs \`nuworq connect <hub>\`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with \`look\`, ask what they want and why, offer options with trade-offs, then \`propose\` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
+6. **A tidy job** (\`next\` mode "tidy") keeps the groups true: move items into the right group, merge overlapping groups, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how.
 
 ## If you are the operator
 You are the operator only when the person started you as one (\`nuworq operator\` prints the /loop line) and you checked in with \`operator\` in \`has\`.
@@ -346,6 +349,7 @@ Hub: ${url} · project: ${project} (change with --project).
    - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. An item in the wrong group? ${c('refine')} it with \`parent\` (\`""\` takes it out of its group). Finish with ${c('submit')}.
    - **review**: check someone else's submission against done_means.
    - **land**: accepted work to put on main: rebase its branch onto main, run the checks, fast-forward main, then ${c('submit')}. Land jobs come first, because finished work that isn't on main helps nobody.
+   - **tidy**: the groups drifted; put them right (see Tidy jobs below). No branch.
 3. Work. As soon as you know which files you'll change, post ${c('progress', cli ? '<item> "<headline>" --touching "<paths>"' : '')} with \`touching\`, so others steer clear. Then post it at real milestones. You hold a 20-minute lease: in long stretches, a ${c('progress')} with no headline is a silent heartbeat. If you go quiet, the item returns to the queue.
 4. A question?
    - Can you make a reasonable call? ${c('ask')} with an \`assumption\` and keep going.
@@ -367,6 +371,13 @@ Some work needs a capable session more than a decision: running \`claude\`, the 
 - **Escalation:** an operator settles what it can. If one needs the human's approval (risky, irreversible, or a product call), it escalates: ${c('ask')} with \`escalates\` (the question id), one precise question, and \`evidence\`. The human's answer reaches the original asker.
 - **Keeping one running:** start Claude Code in the project folder and leave it on a loop:
   \`${operatorLoop(project)}\` (\`nuworq operator\` prints it with this machine's capabilities filled in).
+
+## Tidy jobs
+Groups (an item and its parts) are how a person sees and steers the work, so they have to stay true. When they drift, ${c('next')} hands one agent a tidy job; its summary lists what drifted.
+- **Look for:** open work in no group; two groups changing the same files or after the same outcome; a group whose parts are all done or dropped; a pull request no item tracks.
+- **Change:** move an item with ${c('refine')} \`parent\` (\`""\` takes it out); merge two groups by moving one's parts into the other; ${c('propose')} a parent for a cluster and move its parts in; ${c('submit')} or close a finished group; attach a stray pull request with ${c('refine')} \`pr\` (propose an item for it first if none fits). Give every change a one-line \`reason\`: it goes on both groups' history.
+- **Never touch:** a priority a person set (the hub refuses it) or a decision. If one looks wrong, say so in your submit.
+- **Finish:** ${c('submit')} the tidy job with what you changed and what you left alone on purpose. What it listed isn't raised again.
 
 ## Freshness sweep
 Once a week the hub opens a "Keep <project> fresh" item (priority later: you get it only when nothing more urgent is ready). Do it on your machine with the project's own tools; the hub runs nothing.
