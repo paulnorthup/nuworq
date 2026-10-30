@@ -460,8 +460,15 @@ function mapLine(n) {
     ${n.questions.map((q) => `<div class="m-q">${q.to === 'operator' ? 'To the operator' : q.blocking ? 'Asks you' : 'Assumed'}: ${esc(q.question)}</div>`).join('')}`;
 }
 
+// What each Needs you card is, in plain words: one per kind the hub puts at level "act" (test/cardlabels.test.js).
+const CARD_LABELS = {
+  question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction',
+  'no-agents': 'Nobody is working', 'group-stalled': 'A "now" group is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
+  'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked',
+};
+
 function card(a) {
-  const label = { question: a.escalation ? 'Escalated by an operator' : 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction', 'no-agents': 'Nobody is working', 'group-stalled': 'A "now" group is stalled','ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub' }[a.kind] ?? a.kind;
+  const label = a.kind === 'question' && a.escalation ? 'Escalated by an operator' : CARD_LABELS[a.kind] ?? 'Needs you';
   const key = 'a:' + a.key;
   const open = S.open.has(key) || z() >= 2;
   const hasMore = a.why || a.detail || a.acceptance;
