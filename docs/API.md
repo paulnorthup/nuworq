@@ -24,7 +24,8 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
   "since": 1759309200000,
   "until": 1761901200000,
   "items": [ … ],
-  "by_model": [ … ]
+  "by_model": [ … ],
+  "by_reviewer": [ … ]
 }
 ```
 
@@ -44,6 +45,11 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `attempts` | number | times it was claimed to build |
 | `implementer` | string \| null | the agent whose submission was accepted |
 | `model` | string \| null | that agent's model |
+| `reviewer` | string \| null | who accepted it last, the verdict it landed on (an agent, or a person: `you` / `@handle`); null if dropped |
+| `reviewer_model` | string \| null | that reviewer's model when it was an agent (a peer) |
+| `escaped` | boolean | landed, and a later item names it in `fixes` (it repairs this one) |
+| `fixed_by` | string[] | those later items, `#<n>` |
+| `overturned` | boolean | an agent accepted it and a person later sent it back, or it landed on an agent's verdict and escaped |
 | `usage` | array | what it cost, per agent, model and source: `{ agent, model, source, input_tokens, output_tokens, cost_usd }`. `source` is `agent` (reported), `runner` (read from the worker's CLI) or `llm-proxy` (measured). Where llm-proxy measured an agent, that agent's reported rows are left out, so nothing counts twice. `cost_usd` is null when unknown (a local model). |
 
 `by_model`: one row per implementer model (`model: null` for items nobody implemented, such as ones dropped unstarted).
@@ -53,9 +59,21 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `model` | string \| null | |
 | `landed`, `dropped` | number | items with that outcome |
 | `sent_back`, `stalls` | number | summed over its items |
+| `escapes` | number | its landed items that escaped (as builder) |
 | `median_cycle_ms` | number \| null | over its landed items |
 | `input_tokens`, `output_tokens` | number | summed over its items' usage, every agent included |
 | `cost_usd` | number \| null | null if any part is unpriced or there is no usage |
+
+`by_reviewer`: one row per peer reviewer's model (agents only; a person's verdicts aren't scored), over the landed items in the window.
+
+| field | type | meaning |
+|---|---|---|
+| `model` | string \| null | the reviewer's model |
+| `reviewed` | number | landed items that landed on its accept |
+| `escapes` | number | of those, how many escaped |
+| `overturned` | number | its accepts a person overturned: sent back afterwards, or escaped |
+
+An item names the landed work it repairs with `fixes` (on `propose` and `refine`, or in the item's Edit for people); only an item that reached done can be named.
 
 **Versioning.** Fields may be added within `version: 1`; read what you know and ignore the rest. Removing or changing the meaning of a field bumps `version`, and the old version stays served for a while, announced in this file.
 

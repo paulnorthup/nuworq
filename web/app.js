@@ -634,8 +634,18 @@ function flow(v) {
         <div class="spark" title="Finished per day, last 14 days">${f.throughput.map((n) => `<span class="${n ? '' : 'z'}" style="height:${Math.max(2, Math.round((n / max) * 28))}px" title="${n}"></span>`).join('')}</div>
         <span>${plural(f.finished, 'item')} finished in 14 days${f.median_cycle ? ` · median ${esc(f.median_cycle)} from ready to done` : ''}</span>
       </div>
+      ${flowHeld(f.verification)}
       ${f.cost ? flowCost(f.cost) : ''}
     </div></section>`;
+}
+
+// Whether verification held up (#176): landed work a later item fixes (an escape), per model as builder and as
+// peer reviewer, and peer verdicts a person overturned. Silent until there's a peer verdict or an escape.
+function flowHeld(v) {
+  if (!v || (!v.escaped && !v.peer_accepted)) return '';
+  const who = v.by_model.filter((m) => m.built_escaped || m.reviewed_escaped || m.overturned)
+    .map((m) => `${esc(m.model ?? 'unknown model')}: ${[m.built_escaped && `built ${m.built_escaped}`, m.reviewed_escaped && `reviewed ${m.reviewed_escaped}`, m.overturned && `${m.overturned} verdict${m.overturned === 1 ? '' : 's'} overturned`].filter(Boolean).join(', ')}`);
+  return `<p class="flow-held" title="An escape is landed work that a later item names in fixes">${plural(v.escaped, 'escape')} in ${v.landed} landed${v.peer_accepted ? ` · ${v.overturned} of ${plural(v.peer_accepted, 'peer verdict')} overturned` : ''}${who.length ? ` · ${who.join(' · ')}` : ''}</p>`;
 }
 
 // Why a stage is empty, and the one thing to do about it where there is one.
@@ -858,6 +868,7 @@ function renderDrawer() {
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
       <textarea data-draft="ei-summary" id="ei-summary" placeholder="Summary">${esc(it.summary)}</textarea>
       <textarea data-draft="ei-acceptance" id="ei-acceptance" placeholder="Done means…">${esc(it.acceptance)}</textarea>
+      <label class="field-label">Fixes a landed item <input data-draft="ei-fixes" id="ei-fixes" value="${esc(it.fixes?.item ?? '')}" placeholder="e.g. #12: the landed item this repairs (counts as an escape)" inputmode="numeric"></label>
       <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['ei-priority'] ?? it.priority) === p ? 'on' : ''}" data-action="ei-priority" data-p="${p}">${p}</button>`).join('')}</div>
       ${it.stage !== 'active' ? `<div class="seg" title="Race: how many agents attempt it at once, each on its own; you keep the best">${[1, 2, 3].map((n) => `<button class="${+(S.drafts['ei-race'] ?? it.race) === n ? 'on' : ''}" data-action="ei-race" data-n="${n}">${n === 1 ? '1 agent' : `race ${n}`}</button>`).join('')}</div>` : ''}
       <span style="flex:1"></span><button class="btn ghost" data-action="edit-item">Cancel</button><button class="btn primary" data-action="save-item" data-item="${it.item}">Save</button></div></div></div>` : '';
@@ -871,6 +882,8 @@ function renderDrawer() {
         ${it.parent ? `<dt>Part of</dt><dd>${refLink(it.parent.item)} ${esc(it.parent.title)}</dd>` : ''}
         ${it.children.length ? `<dt>Broken into</dt><dd>${it.children.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
         ${it.depends_on.length ? `<dt>Depends on</dt><dd>${it.depends_on.map((c) => `${refLink(c.item)} ${esc(c.title)} ${stagePill(c.stage, courtOf(c.stage))}`).join('<br>')}</dd>` : ''}
+        ${it.fixes ? `<dt>Repairs</dt><dd>${refLink(it.fixes.item)} ${esc(it.fixes.title)} <span class="age">landed; counted as an escape</span></dd>` : ''}
+        ${it.fixed_by?.length ? `<dt>Escaped</dt><dd>fixed later by ${it.fixed_by.map((f) => `${refLink(f.item)} ${esc(f.title)}`).join(', ')}</dd>` : ''}
       </dl></div>
     ${it.detail ? `<div class="d-sec"><div class="label">Detail</div>${md(it.detail)}</div>` : ''}
     ${it.usage ? usageTable(it.usage) : ''}
@@ -1243,15 +1256,15 @@ const ACTIONS = {
   },
   'item-steer': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('steer', { item: el.dataset.item, body }, 'Steer attached: whoever works on it must acknowledge'); },
   'item-note': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('comment', { item: el.dataset.item, body }, 'Noted'); },
-  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race'); render({ force: true }); },
+  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes'); render({ force: true }); },
   'ei-priority': (el) => { S.drafts['ei-priority'] = el.dataset.p; render({ force: true }); },
   'ei-race': (el) => { S.drafts['ei-race'] = el.dataset.n; render({ force: true }); },
   'save-item': async (el) => {
-    const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance') };
+    const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance'), fixes: val('ei-fixes') };
     if (S.drafts['ei-priority']) args.priority = S.drafts['ei-priority'];
     if (S.drafts['ei-race']) args.race = Number(S.drafts['ei-race']);
     S.editItem = false;
-    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race');
+    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes');
     await human('update', args, 'Saved');
   },
   'edit-pre': () => { S.editPre = !S.editPre; render({ force: true }); },

@@ -297,6 +297,7 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
 .takeaway { margin: 12px 0 0; font-size: 14px; }
 .takeaway::before { content: '→ '; color: var(--faint); }
+.flow-held { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
 .throughput { display: flex; align-items: flex-end; gap: 14px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 12.5px; }
 .flow .cost { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 28px; }
@@ -428,6 +429,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 
 .add-work { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 8px; margin: -14px 0 26px; }
 .add-work .row { display: flex; gap: 8px; align-items: center; }
+.add-work .field-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 
 @media (max-width: 860px) {
   #shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; } /* a short page grows the page, not the top bar */

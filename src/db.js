@@ -327,6 +327,7 @@ export function openDb(file) {
     'ALTER TABLE questions ADD COLUMN escalates INTEGER', // an operator's escalation to the human: the operator question it carries up
     "ALTER TABLE questions ADD COLUMN evidence TEXT NOT NULL DEFAULT '[]'", // an escalation's evidence: [{ label, url? }]
     "ALTER TABLE questions ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'", // what the person must do, in order: [{ do, where?, check? }]
+    'ALTER TABLE items ADD COLUMN fixes INTEGER', // the landed item this one repairs (its id): that one counts as an escape (#176)
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }
