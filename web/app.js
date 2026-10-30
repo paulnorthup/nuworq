@@ -901,6 +901,7 @@ function renderDrawer() {
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
       <textarea data-draft="ei-summary" id="ei-summary" placeholder="Summary">${esc(it.summary)}</textarea>
       <textarea data-draft="ei-acceptance" id="ei-acceptance" placeholder="Done means…">${esc(it.acceptance)}</textarea>
+      <label class="field-label">Part of <input data-draft="ei-parent" id="ei-parent" value="${esc(it.parent?.item ?? '')}" placeholder="e.g. #12: the group it belongs to; empty for none" inputmode="numeric"></label>
       <label class="field-label">Fixes a landed item <input data-draft="ei-fixes" id="ei-fixes" value="${esc(it.fixes?.item ?? '')}" placeholder="e.g. #12: the landed item this repairs (counts as an escape)" inputmode="numeric"></label>
       <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['ei-priority'] ?? it.priority) === p ? 'on' : ''}" data-action="ei-priority" data-p="${p}">${p}</button>`).join('')}</div>
       ${it.stage !== 'active' ? `<div class="seg" title="Race: how many agents attempt it at once, each on its own; you keep the best">${[1, 2, 3].map((n) => `<button class="${+(S.drafts['ei-race'] ?? it.race) === n ? 'on' : ''}" data-action="ei-race" data-n="${n}">${n === 1 ? '1 agent' : `race ${n}`}</button>`).join('')}</div>` : ''}
@@ -1298,15 +1299,15 @@ const ACTIONS = {
   },
   'item-steer': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('steer', { item: el.dataset.item, body }, 'Steer attached: whoever works on it must acknowledge'); },
   'item-note': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('comment', { item: el.dataset.item, body }, 'Noted'); },
-  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes'); render({ force: true }); },
+  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes', 'ei-parent'); render({ force: true }); },
   'ei-priority': (el) => { S.drafts['ei-priority'] = el.dataset.p; render({ force: true }); },
   'ei-race': (el) => { S.drafts['ei-race'] = el.dataset.n; render({ force: true }); },
   'save-item': async (el) => {
-    const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance'), fixes: val('ei-fixes') };
+    const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance'), fixes: val('ei-fixes'), parent: val('ei-parent') };
     if (S.drafts['ei-priority']) args.priority = S.drafts['ei-priority'];
     if (S.drafts['ei-race']) args.race = Number(S.drafts['ei-race']);
     S.editItem = false;
-    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes');
+    clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes', 'ei-parent');
     await human('update', args, 'Saved');
   },
   'edit-pre': () => { S.editPre = !S.editPre; render({ force: true }); },

@@ -158,6 +158,7 @@ export const OPS = [
       acceptance: s('Optional. What done means.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
+      parent: s('Optional. Move it into another group: the item it is part of, e.g. "#170". "" takes it out of its group. Not under itself, not into a done or dropped group.'),
       fixes: { ...FIXES, description: `${FIXES.description} "" clears it.` },
       needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
       size: SIZE,
@@ -319,7 +320,7 @@ Hub: ${url} · project: ${project} (change with --project).
 1. ${c('checkin', cli ? '--model <model> --client <tool> --has "docker,macos"' : '')}. Say what your machine can do in \`has\` (e.g. docker, linux, macos, browser, gpu), so you only get work you can finish. Read it. ${c('ack', cli ? '<steer-id> "how you will adjust"' : '')} any steering.
 2. ${c('next')} claims the most useful job and hands you its context. Read \`done_means\`, \`history\` and \`last_handoff\`. The job is one of:
    - **work**: build it.
-   - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. Finish with ${c('submit')}.
+   - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. An item in the wrong group? ${c('refine')} it with \`parent\` (\`""\` takes it out of its group). Finish with ${c('submit')}.
    - **review**: check someone else's submission against done_means.
    - **land**: accepted work to put on main: rebase its branch onto main, run the checks, fast-forward main, then ${c('submit')}. Land jobs come first, because finished work that isn't on main helps nobody.
 3. Work. As soon as you know which files you'll change, post ${c('progress', cli ? '<item> "<headline>" --touching "<paths>"' : '')} with \`touching\`, so others steer clear. Then post it at real milestones. You hold a 20-minute lease: in long stretches, a ${c('progress')} with no headline is a silent heartbeat. If you go quiet, the item returns to the queue.
