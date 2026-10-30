@@ -186,6 +186,24 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .attempt .h { font-weight: 600; }
 .attempt .btn { align-self: flex-start; margin-top: 6px; }
 .attempt.not_chosen { opacity: .6; }
+/* A question's steps (#162): a checklist; the whole row is a thumb-sized tick target, the place and check sit under it. */
+.steps { margin-top: 10px; }
+.steps-head { display: flex; align-items: baseline; gap: 8px; }
+.steps-head .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 600; }
+.steps-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.steps ol { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; }
+.steps li { border-top: 1px solid var(--line); padding-bottom: 6px; }
+.steps li:first-child { border-top: 0; }
+.step-tick { display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: 44px; padding: 10px 4px 4px; border: 0; background: none; text-align: left; border-radius: 6px; }
+.step-tick:hover { background: var(--sunken); }
+.step-tick .box { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 11.5px; font-weight: 600; color: var(--muted); flex: none; margin-top: -1px; }
+.step-tick .do { min-width: 0; overflow-wrap: anywhere; }
+.steps li.on .box { background: var(--ok-tint); border-color: transparent; color: var(--ok); }
+.steps li.on .do { color: var(--faint); text-decoration: line-through; }
+.step-more { margin-left: 36px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.step-more pre { margin: 2px 0; }
+.step-where { font-size: 13px; overflow-wrap: anywhere; }
+.step-check { font-size: 12.5px; color: var(--muted); }
 .answer { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .opts { display: flex; flex-wrap: wrap; gap: 6px; }
 .opt { border: 1px solid var(--you-line); background: var(--you-tint); color: var(--ink); border-radius: 8px; padding: 5px 12px; font-size: 13px; }

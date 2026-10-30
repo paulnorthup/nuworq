@@ -43,7 +43,7 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'check'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'check'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
@@ -2396,6 +2396,25 @@ const HUMAN_OPS = {
     return staleAnswered(this, p, q, text, by) ?? undefined;
   },
 
+  // Tick (or untick) one of a question's steps (#162), for whoever ticks it. The last tick of a question
+  // without options answers it; with options, the person still picks one.
+  step(p, { question, step, done = true }, by) {
+    const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
+    if (!q) throw new UserError(`No question ${question}`, { status: 404 });
+    if (q.status !== 'open') throw new UserError(`Question ${q.id} is already ${q.status}`, { status: 409, hint: 'Its card has left Needs you; reload to see what is there now.' });
+    const steps = json(q.steps, []);
+    const n = Number(step);
+    if (!Number.isInteger(n) || n < 1 || n > steps.length) {
+      throw new UserError(steps.length ? `Question ${q.id} has steps 1 to ${steps.length}, not ${step}` : `Question ${q.id} has no steps`, { hint: 'step counts from 1, in the order the card shows them.' });
+    }
+    if (done) this.q('INSERT OR IGNORE INTO step_ticks (project_id, question_id, person, step, at) VALUES (?, ?, ?, ?, ?)').run(p.id, q.id, by, n, this.now());
+    else this.q('DELETE FROM step_ticks WHERE question_id = ? AND person = ? AND step = ?').run(q.id, by, n);
+    const ticked = this.q('SELECT COUNT(*) AS n FROM step_ticks WHERE question_id = ? AND person = ?').get(q.id, by).n;
+    const answered = ticked === steps.length && !json(q.options, []).length;
+    if (answered) HUMAN_OPS.answer.call(this, p, { question: q.id, answer: `Done: all ${steps.length} steps completed` }, by);
+    return { done: ticked, of: steps.length, answered };
+  },
+
   // Let work kept parked (answer with keep_parked) go back to agents.
   unpark(p, { item }, by) {
     const it = this.item(p, item);
@@ -2549,7 +2568,7 @@ const HUMAN_OPS = {
     this.q(`DELETE FROM acks WHERE note_id IN (SELECT id FROM notes WHERE project_id = ?)`).run(p.id);
     for (const t of ['attempts', 'transitions']) this.q(`DELETE FROM ${t} WHERE item_id IN (${items})`).run();
     this.q(`DELETE FROM deps WHERE item_id IN (${items}) OR depends_on IN (${items})`).run();
-    for (const t of ['agents', 'events', 'questions', 'notes', 'project_stewards', 'dismissals', 'project_remotes', 'notified', 'prs', 'issues', 'checks', 'usage', 'items']) {
+    for (const t of ['agents', 'events', 'questions', 'notes', 'project_stewards', 'dismissals', 'step_ticks', 'project_remotes', 'notified', 'prs', 'issues', 'checks', 'usage', 'items']) {
       this.q(`DELETE FROM ${t} WHERE project_id = ?`).run(p.id);
     }
     this.q('DELETE FROM projects WHERE id = ?').run(p.id);
