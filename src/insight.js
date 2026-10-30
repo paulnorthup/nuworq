@@ -327,8 +327,18 @@ export function view(hub, slug, { light = false, viewer } = {}) {
 
   // Work that needs something no agent seen in the last day has: it would wait forever unnoticed.
   const fitAgents = agents.filter((a) => t - a.last_seen < DAY).map((a) => json(a.has, []));
+  const fitLately = agents.filter((a) => t - a.last_seen < 4 * HOUR).map((a) => json(a.has, []));
+  const eff = hub.effectivePriorities(p);
+  const stalledGroups = new Map(); // group seq → its oldest step stuck on a capability, for a "now" group (#201)
   for (const it of [...readyFree, ...shapeable]) {
     const missing = json(it.needs, []).filter((tag) => !fitAgents.some((has) => has.includes(tag)));
+    // A "now" group's next step that has waited 4 hours on what nobody connected in 4 hours has: it needs you.
+    const lately = json(it.needs, []).filter((tag) => !fitLately.some((has) => has.includes(tag)));
+    const e = eff.get(it.id);
+    if (lately.length && e?.priority === 'now' && it.stage === 'ready' && t - it.stage_since > 4 * HOUR) {
+      const group = e.from ?? it.seq;
+      if (!stalledGroups.has(group) || stalledGroups.get(group).it.stage_since > it.stage_since) stalledGroups.set(group, { it, missing: lately });
+    }
     if (!missing.length) continue;
     const forOperator = missing.some((tag) => OPERATOR_TAGS.includes(tag));
     push({
@@ -339,6 +349,18 @@ export function view(hub, slug, { light = false, viewer } = {}) {
         ? `Only an operator that declares ${missing.join(', ')} at checkin (has) is offered it. Start an operator session (see Operators in the guide, /agents.md), or change what the item needs.`
         : `Only agents that declare ${missing.join(', ')} at checkin (has) are offered it. Start one on a machine that has it, or change what the item needs.`,
       item: ref(it), missing, keep: json(it.needs, []).filter((t) => !missing.includes(t)),
+      // Infrastructure work can't go to just any agent: the fix is an operator session, not dropping the need.
+      ...(forOperator ? { operator: true, how: capabilitySteps(p, it, missing) } : {}),
+    });
+  }
+  for (const [group, { it, missing }] of stalledGroups) {
+    const g = group === it.seq ? it : items.find((i) => i.seq === group);
+    push({
+      key: `group-stalled:${g.id}:${missing.join(',')}`, level: 'act', kind: 'group-stalled', at: it.stage_since + 4 * HOUR,
+      headline: `"${g.title}" is stalled: ${ref(it)} needs ${missing.join(', ')}`,
+      sub: `${g.id === it.id ? 'It' : `Its next step, ${ref(it)},`} has waited ${dur(t - it.stage_since)}; no agent connected in 4 hours has ${missing.join(', ')}`,
+      why: `${ref(g)} is "now", and its next step needs ${missing.join(', ')}, which no agent connected in the last 4 hours has. Nothing else can move it.`,
+      item: ref(it), group: ref(g), missing, how: capabilitySteps(p, it, missing),
     });
   }
 
@@ -544,6 +566,20 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     stages: STAGES,
     all: items.map(brief),
   };
+}
+
+// How to get work that needs capabilities nobody connected has picked up (#201): an operator session for what
+// only an operator has (infra, admin, running claude), else a worker on a machine that has it. Numbered steps.
+function capabilitySteps(p, it, missing) {
+  const ref = (i) => `#${i.seq}`;
+  const seen = `${ref(it)} is claimed within a few minutes, and this entry goes away`;
+  if (missing.some((tag) => OPERATOR_TAGS.includes(tag))) {
+    return [
+      { do: `In ${p.name}'s folder on the machine that can do it, print the operator line`, where: `nuworq operator --project ${p.slug} --has ${missing.join(',')}`, check: `It prints "Declare: operator, ${missing.filter((m) => m !== 'operator').join(', ')}" and a /loop line` },
+      { do: 'Start Claude Code in that folder and paste the /loop line it printed', where: 'claude', check: seen },
+    ];
+  }
+  return [{ do: `On a machine that has ${missing.join(', ')}, start a worker that declares it`, where: `nuworq worker --agent claude --run --project ${p.slug} --has ${missing.join(',')}`, check: seen }];
 }
 
 // Why nothing is working on a project with claimable work (#173), from what the runners last said (#171): one
