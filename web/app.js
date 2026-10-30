@@ -529,7 +529,7 @@ function attemptsGrid(item, attempts, { keep = true } = {}) {
       <div class="h">${esc(s.headline)}</div>
       ${s.branch ? `<div class="touch"><code>${esc(s.branch)}</code>${s.commits?.length ? ` ${s.commits.map((c) => `<code title="${esc(c.subject ?? '')}">${esc(String(c.hash ?? c).slice(0, 7))}</code>`).join(' ')}` : ''}</div>` : ''}
       ${s.evidence?.length ? `<div class="evidence">${s.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
-      ${keep && s.stage === 'submitted' ? `<button class="btn go small" data-action="keep" data-item="${esc(item)}" data-attempt="${s.n}">Keep this one</button>` : ''}
+      ${keep && s.stage === 'submitted' ? `<button class="btn small" data-action="keep" data-item="${esc(item)}" data-attempt="${s.n}">Keep this one</button>` : ''}
     </div>`).join('')}</div>`;
 }
 
@@ -575,29 +575,29 @@ function cardActions(a, hasMore, open, key) {
     return `<div class="actions"><a class="btn primary" href="${esc(a.guide)}" target="_blank" rel="noopener">How to start an operator</a><button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}</div>`;
   }
   if (a.kind === 'kept-parked') {
-    return `<div class="actions"><button class="btn go" data-action="unpark" data-item="${esc(a.item)}">Unpark</button><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}</div>`;
+    return `<div class="actions"><button class="btn primary" data-action="unpark" data-item="${esc(a.item)}">Unpark</button><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}</div>`;
   }
   if (a.kind === 'review') {
     const r = `sb:${a.item}`;
     const race = a.attempts?.length > 1;
     return `<div class="actions">
-      ${race ? '' : `<button class="btn go" data-action="accept" data-item="${esc(a.item)}">Accept</button>`}
+      ${race ? '' : `<button class="btn primary" data-action="accept" data-item="${esc(a.item)}">Accept</button>`}
       ${S.reveal.has(r)
-        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What's missing? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send ${race ? 'all ' : ''}back</button></div>`
+        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What's missing? The next agent starts from this."><button class="btn primary" data-action="sendback" data-item="${esc(a.item)}">Send ${race ? 'all ' : ''}back</button></div>`
         : `<button class="btn" data-action="reveal" data-key="${r}">Send ${race ? 'all ' : ''}back…</button>`}
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
     </div>`;
   }
   if (a.kind === 'proposal') {
     return `<div class="actions">
-      <button class="btn go" data-action="approve" data-item="${esc(a.item)}">Approve</button>
+      <button class="btn primary" data-action="approve" data-item="${esc(a.item)}">Approve</button>
       <button class="btn" data-action="drop" data-item="${esc(a.item)}">Drop</button>
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
     </div>`;
   }
   if (a.kind === 'pr-review') {
     return `<div class="actions">
-      <a class="btn you" href="${esc(a.pr.url)}" target="_blank" rel="noopener">Approve PR #${a.pr.number} on GitHub</a>
+      <a class="btn primary" href="${esc(a.pr.url)}" target="_blank" rel="noopener">Approve PR #${a.pr.number} on GitHub</a>
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}
     </div>`;
   }
@@ -606,8 +606,8 @@ function cardActions(a, hasMore, open, key) {
     return `<div class="evidence">${a.pr.checks.map((c) => checkChip(c, esc)).join('')}</div>
       <div class="actions">
       ${S.reveal.has(r)
-        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What failed? The next agent starts from this."><button class="btn you" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
-        : `<button class="btn you" data-action="reveal" data-key="${r}">Send back…</button>`}
+        ? `<div class="inline-form grow"><input data-draft="${r}" id="${r}" placeholder="What failed? The next agent starts from this."><button class="btn primary" data-action="sendback" data-item="${esc(a.item)}">Send back</button></div>`
+        : `<button class="btn primary" data-action="reveal" data-key="${r}">Send back…</button>`}
       ${a.pr.url ? `<a class="btn" href="${esc(a.pr.url)}" target="_blank" rel="noopener">PR #${a.pr.number}</a>` : ''}
       <button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>
       <button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}
@@ -636,7 +636,7 @@ function worthKnowing(v) {
     if (a.kind === 'assumption') {
       const r = `ov:${a.question.id}`;
       acts = S.reveal.has(r)
-        ? `<div class="inline-form" style="width:320px"><input data-draft="${r}" id="${r}" placeholder="Instead…"><button class="btn you small" data-action="override" data-q="${a.question.id}">Override</button></div>`
+        ? `<div class="inline-form" style="width:320px"><input data-draft="${r}" id="${r}" placeholder="Instead…"><button class="btn primary small" data-action="override" data-q="${a.question.id}">Override</button></div>`
         : `<button class="btn small" data-action="confirm" data-q="${a.question.id}">Confirm</button><button class="btn small" data-action="reveal" data-key="${r}">Override…</button>`;
     }
     if (a.kind === 'proposal') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Look</button>` + acts;
@@ -928,14 +928,16 @@ function renderDrawer() {
   const actions = [];
   const raced = it.submissions?.filter((s) => s.stage === 'submitted').length > 1;
   if (it.stage === 'verifying') {
-    if (!raced) actions.push(`<button class="btn go" data-action="accept" data-item="${it.item}">Accept</button>`);
-    actions.push(S.reveal.has('dsb') ? `<div class="inline-form grow"><input data-draft="sb:${it.item}" id="sb:${it.item}" placeholder="What's missing?"><button class="btn you" data-action="sendback" data-item="${it.item}">Send back</button></div>`
+    if (!raced) actions.push(`<button class="btn primary" data-action="accept" data-item="${it.item}">Accept</button>`);
+    actions.push(S.reveal.has('dsb') ? `<div class="inline-form grow"><input data-draft="sb:${it.item}" id="sb:${it.item}" placeholder="What's missing?"><button class="btn primary" data-action="sendback" data-item="${it.item}">Send back</button></div>`
       : `<button class="btn" data-action="reveal" data-key="dsb">Send back…</button>`);
   }
-  if (it.stage === 'proposed' && it.priority !== 'now') actions.push(`<button class="btn primary" data-action="pick" data-item="${it.item}" title="Agents shape and build this first">Make it next</button>`);
   // Only "Check with me" waits on you; otherwise this is an optional shortcut, so it mustn't look like a request.
-  if (it.stage === 'proposed') actions.push(S.view?.project.autonomy === 'ask' && it.acceptance
-    ? `<button class="btn go" data-action="approve" data-item="${it.item}" title="It becomes ready as written">Approve</button>`
+  // One primary per drawer (#193): when Approve moves it on, "Make it next" steps back.
+  const approves = S.view?.project.autonomy === 'ask' && it.acceptance;
+  if (it.stage === 'proposed' && it.priority !== 'now') actions.push(`<button class="btn${approves ? '' : ' primary'}" data-action="pick" data-item="${it.item}" title="Agents shape and build this first">Make it next</button>`);
+  if (it.stage === 'proposed') actions.push(approves
+    ? `<button class="btn primary" data-action="approve" data-item="${it.item}" title="It becomes ready as written">Approve</button>`
     : `<button class="btn" data-action="approve" data-item="${it.item}" title="Optional: agents shape proposals on their own. This makes it ready as written.">Skip shaping</button>`);
   if (it.stage === 'done') actions.push(`<button class="btn" data-action="reopen" data-item="${it.item}">Reopen</button>`);
   if (!['done', 'dropped'].includes(it.stage)) actions.push(`<button class="btn ghost" data-action="drop" data-item="${it.item}">Drop</button>`);
