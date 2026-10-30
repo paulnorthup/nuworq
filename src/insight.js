@@ -7,7 +7,7 @@ import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, dur, providerOf, M
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
-import { verification } from './outcomes.js';
+import { humanCost, verification } from './outcomes.js';
 import { OPERATOR_TAGS } from './protocol.js';
 
 const FLOW_WINDOW = 14 * DAY;
@@ -610,6 +610,7 @@ function flowStats(hub, p, items, t) {
     takeaway,
     cost: costStats(hub, p, from),
     verification: verificationStats(hub, p, items, from),
+    you: youStats(hub, p, from, t),
   };
 }
 
@@ -620,6 +621,13 @@ function verificationStats(hub, p, items, from) {
   if (!landed.length) return null;
   const modelOf = (agent) => (agent ? hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model || null : null);
   return verification(hub, landed, modelOf);
+}
+
+// What the work cost you over the window (#175): your actions per landed item, and how long act-level Needs you
+// entries waited until you resolved them (median). The court share above is time work waits on you; this is your effort.
+function youStats(hub, p, from, t) {
+  const c = humanCost(hub, p, from, t);
+  return { actions: c.actions, landed: c.landed, per_landed: c.per_landed, median_wait: c.median_wait_ms == null ? null : dur(c.median_wait_ms), waits: c.waits };
 }
 
 // What finished work cost over the window, per model: median and total per finished item, tokens too

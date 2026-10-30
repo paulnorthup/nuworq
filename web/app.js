@@ -637,6 +637,7 @@ function flow(v) {
         <div class="spark" title="Finished per day, last 14 days">${f.throughput.map((n) => `<span class="${n ? '' : 'z'}" style="height:${Math.max(2, Math.round((n / max) * 28))}px" title="${n}"></span>`).join('')}</div>
         <span>${plural(f.finished, 'item')} finished in 14 days${f.median_cycle ? ` · median ${esc(f.median_cycle)} from ready to done` : ''}</span>
       </div>
+      ${flowYou(f.you)}
       ${flowHeld(f.verification)}
       ${f.cost ? flowCost(f.cost) : ''}
     </div></section>`;
@@ -649,6 +650,14 @@ function flowHeld(v) {
   const who = v.by_model.filter((m) => m.built_escaped || m.reviewed_escaped || m.overturned)
     .map((m) => `${esc(m.model ?? 'unknown model')}: ${[m.built_escaped && `built ${m.built_escaped}`, m.reviewed_escaped && `reviewed ${m.reviewed_escaped}`, m.overturned && `${m.overturned} verdict${m.overturned === 1 ? '' : 's'} overturned`].filter(Boolean).join(', ')}`);
   return `<p class="flow-held" title="An escape is landed work that a later item names in fixes">${plural(v.escaped, 'escape')} in ${v.landed} landed${v.peer_accepted ? ` · ${v.overturned} of ${plural(v.peer_accepted, 'peer verdict')} overturned` : ''}${who.length ? ` · ${who.join(' · ')}` : ''}</p>`;
+}
+
+// What the work cost you (#175): your actions (answers, verdicts, steers, decisions, comments) per landed item,
+// and how long work you had to move waited for you. Nothing to say until you've acted or something landed.
+function flowYou(y) {
+  if (!y || (!y.actions && !y.landed && !y.waits)) return '';
+  const per = y.per_landed != null ? `<b>${y.per_landed}</b> of your actions per landed item` : `${plural(y.actions, 'action')} of yours, nothing landed yet`;
+  return `<p class="flow-you" title="Your answers, verdicts, steers, decisions, comments and confirmations over 14 days, against the items that landed">${per}${y.median_wait ? ` · work waited a median <b>${esc(y.median_wait)}</b> for you (${plural(y.waits, 'time')})` : ''}</p>`;
 }
 
 // Why a stage is empty, and the one thing to do about it where there is one.
