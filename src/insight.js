@@ -113,6 +113,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       why: [orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
+      steps: json(q.steps, []),
       ...(orig ? { escalation: { question: orig.question, asked_by: orig.asked_by }, evidence: json(q.evidence, []) } : {}),
     });
   }
@@ -652,7 +653,7 @@ export function itemView(hub, slug, ref) {
     .map((q, _, all) => {
       const orig = q.escalates ? all.find((o) => o.id === q.escalates) : null;
       return {
-        ...q, options: json(q.options, []), blocking: !!q.blocking, ago: dur(t - q.at), evidence: json(q.evidence, []),
+        ...q, options: json(q.options, []), blocking: !!q.blocking, ago: dur(t - q.at), evidence: json(q.evidence, []), steps: json(q.steps, []),
         escalation: orig ? { question: orig.question, asked_by: orig.asked_by } : undefined,
       };
     });

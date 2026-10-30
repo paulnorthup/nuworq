@@ -77,6 +77,8 @@ For an operator: a trusted, attended session (or a tool driving one) that agents
 
 **Effect.** As the human's answer: the question is answered by the operator, the item returns to ready once no blocking question is left, and the asker gets the answer in its next checkin. Operator questions never appear in Needs you; if none of this project's agents with `operator` has been seen for a day while some wait, Needs you shows one line saying how many.
 
+**Steps when a person must act.** A question to the human (or an escalation) that asks them to do something, not just decide, needs `steps`: up to 12, in order, each `{ "do": "…", "where": "<URL or command>", "check": "<how they see it worked>" }` (`where` and `check` optional; a plain string is a `do`). The hub spots such a question by a fixed rule (`needsSteps` in src/audience.js: a request like "can you" / "please" / "you'll need to" near an action verb, or a question that starts with one) and refuses it without steps (`400`, the hint shows the shape). Questions to an operator or a reporter are not checked. Needs you and the item page carry `steps`.
+
 **Escalating to the human.** When settling a question needs the human's approval (risky, irreversible, or a product call), the operator escalates it instead of answering: the `ask` operation with `escalates`.
 
 ```

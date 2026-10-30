@@ -22,6 +22,17 @@ const OPERATOR = [
   [/\b(verify|check|confirm|test|reproduce)\b.{0,40}\b(real|live|actual)\b/, 'verifying on a real system'],
 ];
 
+// A question that asks the person to do something (not just decide) must come with numbered steps (Paul,
+// 2026-10-30). Deterministic like the routing above: a request aimed at the person, near a verb that is an action.
+const ACT = String.raw`(create|add|install|set ?up|configure|enable|disable|turn (on|off)|click|tap|sign (in|up)|log ?in|run|paste|copy|grant|invite|connect|rotate|upload|merge|register|generate|go to|visit|authori[sz]e|restart)`;
+const REQUEST = new RegExp(String.raw`\b(can you|could you|would you|will you|please|you need to|you'?ll need to|you have to|you must|needs? you to|need you to|ask(ing)? you to)\b.{0,60}?\b${ACT}\b`);
+const IMPERATIVE = new RegExp(String.raw`^(please )?${ACT}\b`);
+
+export function needsSteps({ question = '', context = '' } = {}) {
+  const q = question.trim().toLowerCase();
+  return IMPERATIVE.test(q) || REQUEST.test(`${q}\n${context.toLowerCase()}`);
+}
+
 // { audience: 'operator' | 'human', reason } for a question (and its context) asked without `to`.
 export function defaultAudience({ question = '', context = '' } = {}) {
   const text = `${question}\n${context}`.toLowerCase();

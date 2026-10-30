@@ -10,7 +10,7 @@ import { measure } from './llmproxy.js';
 import { normPrecondition, describe as describePrecondition, WAIT_DAYS } from './precondition.js';
 import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from './issues.js';
 import { prMerged, prSeen } from './github.js';
-import { defaultAudience } from './audience.js';
+import { defaultAudience, needsSteps } from './audience.js';
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -1745,6 +1745,29 @@ function evidenceList(raw) {
     .filter((e) => e.label);
 }
 
+// What a person must do, in order: [{ do, where?, check? }]. `where` is the exact place: a URL or a command.
+const STEPS_EXAMPLE = '[{ "do": "Open the repository\'s Actions secrets", "where": "https://github.com/acme/api/settings/secrets/actions" }, '
+  + '{ "do": "Click New repository secret, name it NPM_TOKEN and paste the token from npmjs.com", "check": "NPM_TOKEN is listed under Repository secrets" }]';
+const STEPS_HINT = `Pass steps: what to do, in order, each with the exact place (a URL or a command) and how to check it worked, e.g. ${STEPS_EXAMPLE}`;
+const MAX_STEPS = 12;
+function stepList(raw) {
+  if (raw == null || raw === '') return [];
+  if (!Array.isArray(raw)) throw new UserError('steps must be a list', { hint: STEPS_HINT });
+  if (raw.length > MAX_STEPS) throw new UserError(`At most ${MAX_STEPS} steps, not ${raw.length}`, { hint: 'Group small actions into one step, or split the work so the person gets fewer at once.' });
+  return raw.map((s, i) => {
+    const step = typeof s === 'string' ? { do: str(s) } : { do: str(s?.do), where: str(s?.where) || undefined, check: str(s?.check) || undefined };
+    if (!step.do) throw new UserError(`Step ${i + 1} says nothing to do`, { hint: `Each step needs do: what to do. ${STEPS_HINT}` });
+    return step;
+  });
+}
+
+// A question that asks a person to act must say exactly how (Paul, 2026-10-30).
+function requireSteps(question, steps) {
+  if (!steps.length && needsSteps({ question: question.headline, context: `${question.summary}\n${question.detail}` })) {
+    throw new UserError('This asks a person to do something, so it needs steps', { hint: STEPS_HINT });
+  }
+}
+
 // An operator carries a question it may not settle alone (risky, irreversible, a product call) up to the human:
 // one precise question with its evidence. The human's answer to it answers the original too (HUMAN_OPS.answer).
 function escalate(p, agent, args) {
@@ -1763,11 +1786,13 @@ function escalate(p, agent, args) {
   const question = layered(args.question, args.context, args.detail, 'question');
   const evidence = evidenceList(args.evidence);
   if (!evidence.length) throw new UserError('An escalation needs evidence', { hint: 'Pass evidence: what you ran or checked, e.g. [{ "label": "dry run: 3 tables dropped", "url": "https://…" }], so the human can decide without redoing it.' });
+  const steps = stepList(args.steps);
+  requireSteps(question, steps);
   const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
   const item = this.itemById(orig.item_id);
-  const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, escalates, evidence)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?, ?)`).run(p.id, orig.item_id, agent, question.headline, question.summary, question.detail,
-    JSON.stringify(options), this.now(), orig.id, JSON.stringify(evidence));
+  const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, escalates, evidence, steps)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?, ?, ?)`).run(p.id, orig.item_id, agent, question.headline, question.summary, question.detail,
+    JSON.stringify(options), this.now(), orig.id, JSON.stringify(evidence), JSON.stringify(steps));
   const id = Number(r.lastInsertRowid);
   this.event(p, {
     item, actor: agent, type: 'question', headline: `${agent} escalates ${orig.asked_by}'s question: ${question.headline}`,
@@ -1926,9 +1951,12 @@ const AGENT_OPS = {
     // Left out, `to` is picked from what the question is about (src/audience.js); given, it is kept as is.
     const routed = to ? null : defaultAudience({ question: question.headline, context: `${question.summary}\n${question.detail}` });
     const operator = (to || routed.audience) === 'operator';
-    const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, reporter, issue_repo, issue_number, audience)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, question.headline, question.summary, question.detail,
-      JSON.stringify(options), blocking ? 1 : 0, assumption, this.now(), issue?.author ?? '', issue?.repo ?? '', issue?.number ?? 0, operator ? 'operator' : '');
+    const steps = stepList(args.steps);
+    // Operators and reporters work it out themselves; the human gets told exactly how.
+    if (!issue && !operator) requireSteps(question, steps);
+    const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, reporter, issue_repo, issue_number, audience, steps)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, question.headline, question.summary, question.detail,
+      JSON.stringify(options), blocking ? 1 : 0, assumption, this.now(), issue?.author ?? '', issue?.repo ?? '', issue?.number ?? 0, operator ? 'operator' : '', JSON.stringify(steps));
     const id = Number(r.lastInsertRowid);
     let parked = false;
     if (blocking && item && ['active', 'ready'].includes(item.stage) && !this.racing(item)) {

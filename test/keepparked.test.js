@@ -10,7 +10,7 @@ function parkedOnQuestion() {
   hub.humanOp('k', 'create', { title: 'Needs a manual run', acceptance: 'x' });
   hub.humanOp('k', 'create', { title: 'Other work', acceptance: 'x' });
   hub.agentOp('k', 'claim', 'a1', { item: '#1' });
-  hub.agentOp('k', 'ask', 'a1', { item: '#1', question: 'Can you run the migration on prod?', blocking: true, to: 'human' });
+  hub.agentOp('k', 'ask', 'a1', { item: '#1', question: 'Can you run the migration on prod?', blocking: true, to: 'human', steps: [{ do: 'Run the migration', where: '`npm run migrate -- --prod`' }] });
   const q = hub.q("SELECT id FROM questions WHERE status = 'open'").get().id;
   return { hub, q, item: (n) => hub.item(hub.project('k'), `#${n}`) };
 }
