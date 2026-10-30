@@ -330,11 +330,12 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   for (const it of [...readyFree, ...shapeable]) {
     const missing = json(it.needs, []).filter((tag) => !fitAgents.some((has) => has.includes(tag)));
     if (!missing.length) continue;
+    const forOperator = missing.some((tag) => OPERATOR_TAGS.includes(tag));
     push({
       key: `unfit:${it.id}:${missing.join(',')}`, level: 'know', kind: 'unfit', at: it.stage_since,
-      headline: `${ref(it)} needs ${missing.join(', ')}; no agent connected in the last day has it`,
+      headline: forOperator ? `${ref(it)} waits for the operator: needs ${missing.join(', ')}` : `${ref(it)} needs ${missing.join(', ')}; no agent connected in the last day has it`,
       sub: it.title,
-      why: missing.some((tag) => OPERATOR_TAGS.includes(tag))
+      why: forOperator
         ? `Only an operator that declares ${missing.join(', ')} at checkin (has) is offered it. Start an operator session (see Operators in the guide, /agents.md), or change what the item needs.`
         : `Only agents that declare ${missing.join(', ')} at checkin (has) are offered it. Start one on a machine that has it, or change what the item needs.`,
       item: ref(it), missing, keep: json(it.needs, []).filter((t) => !missing.includes(t)),
@@ -361,11 +362,14 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   // agent that only checked in, looked, asked or commented isn't working on anything.
   const claimedLately = !!hub.q(`SELECT 1 FROM events WHERE project_id = ? AND at > ? AND type IN (${CLAIM_TYPES.map(() => '?').join(',')}) LIMIT 1`).get(p.id, t - 30 * MIN, ...CLAIM_TYPES);
   const capacity = items.some((i) => i.holder) || racers.length > 0 || claimedLately || hub.runnersOf(p).some((r) => r.state === 'up');
-  if (!p.parked && !direction && claimable && !capacity) {
+  // Starting an agent is no answer for work only an operator can do (#137): that waits quietly, above.
+  const generic = (i) => !json(i.needs, []).some((tag) => OPERATOR_TAGS.includes(tag));
+  const anyoneReady = readyFree.filter(generic).length;
+  if (!p.parked && !direction && anyoneReady + shapeable.filter(generic).length && !capacity) {
     const idle = idleCause(hub, p, t);
     push({
       key: `no-agents:${Math.floor(t / (6 * HOUR))}`, level: inFlight ? 'know' : 'act', kind: 'no-agents', at: lastAgentSeen || t,
-      headline: readyFree.length ? `${plural(readyFree.length, 'item')} ready, but no agent is working` : `Work is waiting to be shaped, but no agent is working`,
+      headline: anyoneReady ? `${plural(anyoneReady, 'item')} ready, but no agent is working` : `Work is waiting to be shaped, but no agent is working`,
       sub: idle.sub, why: idle.why, cause: idle.cause, how: idle.how, staff: idle.staff,
       start: true,
     });

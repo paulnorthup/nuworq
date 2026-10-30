@@ -104,6 +104,41 @@ describe('fit hints: what items need and what agents have', () => {
     assert.match(entry().why, /Start one on a machine that has it/, 'other tags keep the plain wording');
   });
 
+  test('an operator session takes what only it can do before "now" work anyone can do; others keep priority order (#137)', () => {
+    const { hub, op, create } = world();
+    hub.humanOp('p', 'settings', { autonomy: 'full' });
+    create({ title: 'Anyone, urgent', priority: 'now' });
+    const admin = create({ title: 'Rotate the app key', needs: ['github-admin'], priority: 'soon' });
+    op('admin', 'checkin', { has: ['operator', 'github-admin'] });
+    op('admin2', 'checkin', { has: ['github-admin'] });
+    assert.equal(op('admin', 'next', { claim: false }).item, admin, 'operator work first');
+    assert.equal(op('admin2', 'next', { claim: false }).item, '#1', 'not an operator: priority first, as before');
+
+    // Land and review jobs still come first for an operator.
+    op('w', 'claim', { item: '#1' });
+    op('w', 'submit', { item: '#1', headline: 'done', evidence: [{ label: 'tests pass' }] });
+    assert.equal(op('admin', 'next', { claim: false }).mode, 'review');
+  });
+
+  test('work only an operator can do waits quietly for one; Paul is asked to start an agent only for work anyone can do (#137)', () => {
+    const { hub, create } = world();
+    const att = () => view(hub, 'p').attention;
+    const noAgents = () => att().find((a) => a.kind === 'no-agents');
+    const act = () => att().filter((a) => a.level === 'act').length;
+    const key = create({ title: 'Rotate the app key', needs: ['github-admin'] });
+    const vm = create({ title: 'Try it on a VM', needs: ['homelab-vm', 'docker'] });
+    assert.equal(noAgents(), undefined, 'no "start an agent" for operator-only work, act or know');
+    assert.equal(act(), 0, 'nothing in Needs you');
+    const lines = att().filter((a) => a.kind === 'unfit').map((a) => [a.level, a.headline]);
+    assert.deepEqual(lines, [['know', `${key} waits for the operator: needs github-admin`], ['know', `${vm} waits for the operator: needs homelab-vm, docker`]]);
+
+    create({ title: 'Plain work' });
+    assert.equal(noAgents().headline, '1 item ready, but no agent is working', 'counts only what anyone can do');
+    create({ title: 'Needs a GPU', needs: ['gpu'] });
+    assert.equal(noAgents().headline, '2 items ready, but no agent is working', 'other missing tags still count');
+    assert.ok(att().some((a) => a.kind === 'unfit' && a.headline.endsWith('needs gpu; no agent connected in the last day has it')), 'and keep their wording');
+  });
+
   test('large work waits for small models, but they still get it when nothing else fits', () => {
     const { op, create } = world();
     create({ title: 'Big', size: 'large', priority: 'now' });
