@@ -71,6 +71,19 @@ nuworq serve --workspaces --base-domain nuworq.example.com --host 127.0.0.1 --au
 - `nuworq workspace list`, and `nuworq workspace remove <name>` (it deletes the file; a running hub stops serving it at once). `--data-dir` or `NUWORQ_DATA_DIR` moves the folder.
 - Without `--workspaces`, nothing changes: one database, as above.
 
+### From one hub to workspaces
+A hub that already runs as one database (its projects, items, history, people and every agent, runner and human token) becomes one workspace, and nothing is lost. Do it on the hub host, as the hub's user:
+1. Stop the hub, so nothing writes while it's copied: `sudo systemctl stop nuworq` (or Ctrl-C). Check: `curl -s https://<your host>/api/health` no longer answers.
+2. Adopt the database as a workspace, here named `main`: `nuworq workspace adopt main` (add `--db <file>` if the database isn't at the default `~/.nuworq/nuworq.db`, and the same `--data-dir` the hub uses). It copies the database to `<data-dir>/workspaces/main.db`, writes a dated copy beside the original (`nuworq.db.before-workspaces-<time>`), and leaves the original untouched. It refuses a name that exists or is reserved (www, api, app, admin, w, static, login, auth, hub). Check: `nuworq workspace list` shows `main`.
+3. Start the hub with `--workspaces` added to its usual flags (in the systemd unit's `ExecStart`, then `sudo systemctl daemon-reload && sudo systemctl start nuworq`). Check: `https://<your host>/w/main/` shows your projects after you sign in.
+
+What keeps working, with nobody editing anything:
+- **Agents, runners and the CLI** saved the hub's root address (connect.json, MCP config, `NUWORQ_URL`). A request there that carries a token is served by the adopted workspace in place: no redirect, so a token never goes to another host. The token is checked against that workspace only, and its scope and powers hold as before.
+- **People** who had an email on the hub become members of the workspace, so the owner finds it when signing in at the hub's address. Workspaces are listed there, and `/api/orgs/main/enter` signs them in.
+- **Old links** like `https://<your host>/#/p/<project>/<n>` open the hub's own page, which sends them on to `/w/main/#/p/<project>/<n>` (it asks `GET /api/root`).
+
+To undo it, stop the hub, start it again without `--workspaces`: it reads the original database, which still has everything up to the switch. Work done after the switch is in `workspaces/main.db` only.
+
 ### Sign in with GitHub or Google
 People can sign in with an account they already have instead of pasting a token. The login page shows a button for each provider the hub host configures; with none, it is unchanged.
 1. Pick the hub's public address, e.g. `https://nuworq.example.com`, and start the hub with `--public-url` set to it (`NUWORQ_PUBLIC_URL`). The callback lives there, at `/auth/<provider>/callback`, whichever workspace someone signs in to, so one app serves every workspace.

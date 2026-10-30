@@ -95,6 +95,18 @@ export class Directory {
       );`);
     // A session's kind: 'hub' (the app's own address) or 'admin' (the admin host). Neither opens the other.
     try { this.db.exec("ALTER TABLE hub_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'hub'"); } catch { /* already there */ }
+    // Hub-wide settings, e.g. root_workspace: the workspace a single hub became (#204).
+    this.db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  }
+
+  // The workspace a single hub was adopted into (#204), or null: tokens saved with the hub's root address
+  // reach it there, and old links find their project in it.
+  rootWorkspace() {
+    return this.db.prepare("SELECT value FROM settings WHERE key = 'root_workspace'").get()?.value ?? null;
+  }
+
+  setRootWorkspace(slug) {
+    this.db.prepare("INSERT INTO settings (key, value) VALUES ('root_workspace', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(slug);
   }
 
   // Which organization a GitHub App installation belongs to, or null.
