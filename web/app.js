@@ -888,7 +888,9 @@ function renderDrawer() {
       <div><b>${esc(q.question)}</b></div>${q.escalation ? `<div class="a">${esc(q.escalation.asked_by)} asked an operator: <i>${esc(q.escalation.question)}</i></div>` : ''}${q.context ? md(q.context) : ''}
       ${q.evidence?.length ? `<div class="evidence">${q.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
       ${q.assumption ? `<div class="a">Assumed: <i>${esc(q.assumption)}</i></div>` : ''}
-      ${q.answer ? `<div class="a">Answer: <b>${esc(q.answer)}</b></div>` : q.status === 'confirmed' ? '<div class="a">You confirmed the assumption.</div>' : ''}
+      ${q.answer ? `<div class="a">Answer: <b>${esc(q.answer)}</b></div>` : q.status === 'confirmed' ? '<div class="a">You confirmed the assumption.</div>'
+        : q.status === 'shipped' ? `<div class="a">Shipped with this assumption${q.closed_reason ? ` (${esc(q.closed_reason)})` : ''}. To change it now, steer or propose new work.</div>`
+        : q.status === 'withdrawn' ? `<div class="a">Withdrawn${q.closed_reason ? `: ${esc(q.closed_reason)}` : ''}.</div>` : ''}
       ${q.status === 'open' ? `<div class="answer">${q.options.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
         <div class="answer-row"><input data-draft="ans-${q.id}" id="ans-${q.id}" placeholder="${q.blocking ? 'Your answer…' : 'Override with…'}"><button class="btn primary" data-action="${q.blocking ? 'answer-text' : 'override'}" data-q="${q.id}" data-src="ans-${q.id}">${q.blocking ? 'Answer' : 'Override'}</button>
         ${q.blocking ? '' : `<button class="btn" data-action="confirm" data-q="${q.id}">Confirm</button>`}</div></div>` : ''}
