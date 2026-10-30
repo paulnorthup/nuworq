@@ -146,6 +146,7 @@ Keep one running by starting Claude Code in the project folder with:
 ```
 /loop Work on <project> as its operator using nuworq: checkin with has ["operator", <your capabilities>], ack steering, take next until it says there is nothing for you, answer operator questions, escalate to the human only what your safety checks need approved.
 ```
+`nuworq operator --project <project>` prints that line with this machine's capabilities filled in (`--has a,b` to choose them yourself).
 
 ---
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // nuworq: run the hub, connect agents, and check on projects from a terminal.
 import { writeFileSync, existsSync, readFileSync, mkdirSync, rmSync, renameSync } from 'node:fs';
-import { join, dirname, resolve, delimiter } from 'node:path';
+import { join, dirname, resolve, delimiter, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
-import { tools, guide, skill, planSkill } from '../src/protocol.js';
+import { tools, guide, skill, planSkill, operatorLoop } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { update, describeUpdate } from '../src/update.js';
 
@@ -174,6 +174,22 @@ function detectHas(flags) {
     flags.browser && 'browser', // --browser: the worker gets one (workerSetup)
     ...(refs(flags.has) ?? []),
   ].filter(Boolean).map((t) => String(t).toLowerCase()))];
+}
+
+// An operator session (see Operators in the guide): the tags to declare and the /loop line to paste into an
+// attended Claude Code session in the project folder. It prints them and starts nothing. Detected: the
+// platform, and browser when a Chrome or Chromium is installed; --has replaces what was detected.
+function operatorCmd(flags) {
+  const project = resolveSettings(flags).project ?? basename(process.cwd());
+  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
+  const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
+    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
+  const detected = [{ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform], chrome && 'browser'].filter(Boolean);
+  const has = ['operator', ...new Set((flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase()).filter((t) => t !== 'operator'))];
+  console.log(`${bold('Declare:')} ${has.join(', ')}${flags.has ? '' : dim('  (detected; add what else this session can really do with --has, e.g. --has macos,browser,claude-cli,nuworq-infra)')}
+${bold('Paste into')} an attended Claude Code session in ${project}'s folder:
+
+${operatorLoop(project, has)}`);
 }
 
 // A headless worker: ask the hub where work is waiting, give the worker its own git worktree there,
@@ -1211,6 +1227,8 @@ ${bold('Setup')}
   git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
   guide [--via cli|tools]                the agent guide
+  operator [--project p] [--has tags]    print the tags an operator session declares and the /loop line
+                                         to paste into Claude Code in the project folder (runs nothing)
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
   worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags] [--browser]
                                          start a headless worker where work is waiting (the hub routes it),
@@ -1334,6 +1352,7 @@ async function main() {
     const s = resolveSettings(flags);
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
   }
+  if (cmd === 'operator') return operatorCmd(flags);
   if (cmd === 'skill' && flags.plugin) {
     // The Claude Code plugin (src/plugin.js): <dir> (default this checkout's plugin/), plus the marketplace
     // that lists it when it is this checkout's own.

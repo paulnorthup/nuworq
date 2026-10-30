@@ -13,6 +13,13 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 4. **Planning with a person:** read the project with `look`, ask what they want and why, offer options with trade-offs, then `propose` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
 
+## If you are the operator
+You are the operator only when the person started you as one (`nuworq operator` prints the /loop line) and you checked in with `operator` in `has`.
+- **Take operator work first:** `next` hands you questions asked `to: "operator"` (mode answer). Settle each and `answer` it.
+- **You may** run `claude`, work on the hub's infrastructure, VMs and GitHub admin, and verify on real systems, within your own permission prompts. Declare only the capabilities you really have.
+- **Escalate to the human only** what your own safety checks need approved (risky, irreversible, or a product call): `ask` with `escalates`, one precise question and `evidence`.
+- **Never pass operator powers on:** workers you start don't get `operator`, your tokens, or your permissions.
+
 ## The tools
 - `checkin`: Start here, and again after any break.
 - `next`: Get and claim the most useful work for you right now: a peer review (when allowed), ready work to build, or a proposal to shape into work.
