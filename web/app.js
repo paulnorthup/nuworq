@@ -455,7 +455,7 @@ function groupMap(n) {
   return `<div class="map">${kids(n)}</div>`;
 }
 function mapLine(n) {
-  return `<div class="m-line${n.needs_you ? ' you' : ''}">${refLink(n.item)} <span class="m-title">${esc(n.title)}</span> ${stagePill(n.stage, courtOf(n.stage))}${n.holder ? ` ${who(n.holder)}` : ''}${n.needs_you ? ' <span class="tag now">needs you</span>' : ''}
+  return `<div class="m-line${n.needs_you ? ' you' : ''}">${refLink(n.item)} <span class="m-title">${esc(n.title)}</span> ${stagePill(n.stage, courtOf(n.stage))}${n.holder ? ` ${who(n.holder)}` : ''}${n.needs_you ? ' <span class="tag you">needs you</span>' : ''}
     ${n.depends_on.length ? `<span class="age">waits on ${n.depends_on.map(refLink).join(', ')}</span>` : ''}${n.prs.map((pr) => ` <a href="${esc(pr.url)}" target="_blank" rel="noopener">PR #${pr.number}${pr.ci === 'fail' ? ' ✗' : pr.ci === 'pass' ? ' ✓' : ''}</a>`).join('')}</div>
     ${n.questions.map((q) => `<div class="m-q">${q.to === 'operator' ? 'To the operator' : q.blocking ? 'Asks you' : 'Assumed'}: ${esc(q.question)}</div>`).join('')}`;
 }

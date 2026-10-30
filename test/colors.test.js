@@ -55,6 +55,18 @@ describe('the color map keeps meanings apart (#188)', () => {
     }
   });
 
+  test('every Needs you card is orange, and priority uses no state color (#189)', () => {
+    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+    const colors = (body) => [...body.matchAll(/(?:^|;)\s*(?:color|background(?:-color)?|border(?:-left)?(?:-color)?)\s*:\s*([^;]+)/g)].map((m) => m[1]);
+    const kinds = rules.filter((r) => /\.kind-/.test(r.sel));
+    for (const r of kinds) for (const c of colors(r.body)) assert.match(c, /^var\(--you\)$|^\d+px solid var\(--you\)$/, `${r.sel} sets ${c}`);
+    const base = rules.find((r) => r.sel === '.card');
+    assert.match(base.body, /border-left: 3px solid var\(--you\)/, 'a card is orange by default, so a new kind is too');
+    const now = rules.filter((r) => /\.tag\.now\b/.test(r.sel));
+    assert.ok(now.length, '.tag.now exists');
+    for (const r of now) for (const t of STATE) assert.doesNotMatch(r.body, new RegExp(`var\\(${t}(-tint)?\\)`), `${r.sel} uses ${t}`);
+  });
+
   test('a token change that brings two meanings too close fails', () => {
     assert.ok(dE('#c4520f', '#b42318') < 30, 'today\'s --bad next to --you would fail the state rule');
     assert.ok(dE('#c96442', '#c4520f') < 30, 'the old Anthropic mark next to --you would fail the provider rule');
