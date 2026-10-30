@@ -10,7 +10,7 @@ import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
-import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner } from './notify.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { freshen } from './freshness.js';
@@ -461,7 +461,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (!(await earlyAccess.verify(b.turnstile, ip))) return deny(400, "the form's check didn't pass", 'Reload the page and try again.');
       let r;
       try { r = dir.request({ email: b.email, github: b.github, building: b.building, ip }); } catch (e) { return deny(400, e.message, 'e.g. you@example.com'); }
-      return send(200, { ok: true, state: r.state, created: r.created_at === r.updated_at });
+      const created = r.created_at === r.updated_at;
+      // A new request (not a repeat) reaches the owners, linking to it where they decide it. Not awaited.
+      if (created && earlyAccess?.owners?.length) {
+        const link = adminHost ? `${adminOrigin(req)}/?request=${r.id}` : `${authOrigin(req)}/requests.html`;
+        const asked = { email: r.email, github: String(b.github ?? '').trim().replace(/^@/, '').slice(0, 60), building: String(b.building ?? '') };
+        notifyOwners(spaces, earlyAccess.owners, asked, link).catch((e) => console.error('notifying the owners failed', e));
+      }
+      return send(200, { ok: true, state: r.state, created });
     }
     // What the request form needs to show Turnstile's widget: the site key, which is public (never the secret).
     if (req.method === 'GET' && path === '/api/early-access/config') return send(200, { sitekey: earlyAccess?.sitekey || null, open: !!earlyAccess?.verify });
