@@ -3,7 +3,7 @@
 import { connectCommands } from './connect.js';
 import { copyBlock, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
-import { homePage, columns } from './home.js';
+import { homePage, columns, stateDot, STATE_LABELS } from './home.js';
 import { credit } from './credit.js';
 import { checkChip } from './checks.js';
 import { dotClass } from './timeline.js';
@@ -236,7 +236,7 @@ const go = (slug, ref) => { location.hash = slug ? `#/p/${encodeURIComponent(slu
 function renderRail() {
   const projects = S.projects.map((p) => `
     <a class="rail-item ${p.slug === S.slug ? 'on' : ''}" href="#/p/${encodeURIComponent(p.slug)}">
-      <span class="dot ${p.pulse.state}"></span><span class="name">${esc(p.name)}</span>
+      ${stateDot(p.pulse.state)}<span class="name">${esc(p.name)}</span>
       ${p.needs ? `<span class="badge" title="${plural(p.needs, 'thing')} need you">${p.needs}</span>` : ''}
     </a>`).join('');
   const total = S.projects.reduce((n, p) => n + p.needs, 0);
@@ -244,7 +244,7 @@ function renderRail() {
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
     <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
-    ${projects || '<div class="rail-item" style="color:var(--faint)">No projects yet</div>'}
+    ${projects || '<div class="rail-item" style="color:var(--muted)">No projects yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
       <button class="rail-item" data-action="archived">Archived projects</button>
@@ -367,7 +367,7 @@ function emptyProject() {
 }
 
 function pulse(v) {
-  const label = { 'needs-you': 'Needs you', flowing: 'Flowing', stalled: 'Stalled', idle: 'Idle', parked: 'Parked' }[v.pulse.state];
+  const label = STATE_LABELS[v.pulse.state];
   const c = v.since.counts;
   const bits = [
     c.finished && `<b>${c.finished}</b> finished`,
@@ -383,7 +383,7 @@ function pulse(v) {
   const list = z() >= 1 && v.since.finished.length
     ? `<div class="since-list">${v.since.finished.slice(0, 6).map((f) => `<div${f.project ? ` data-project="${esc(f.project.slug)}"` : ''}>✓ ${refLink(f.item)} ${esc(f.title)} <span class="age">${f.project ? `${esc(f.project.name)} · ` : ''}by ${esc(f.by === 'you' ? 'you' : f.by)}</span></div>`).join('')}</div>` : '';
   return `<div class="pulse state-${v.pulse.state}">
-      <div class="state-chip"><span class="dot ${v.pulse.state}"></span>${label}</div>
+      <div class="state-chip">${stateDot(v.pulse.state)}${label}</div>
       <div class="sentence">${esc(v.pulse.sentence)}</div>
       ${v.project.parked ? `<div class="actions"><button class="btn primary small" data-action="unpark">Unpark</button></div>` : ''}
       <div class="since"><span>${since}</span><span class="spacer"></span>

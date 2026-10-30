@@ -17,7 +17,7 @@ export function homePage(h, { z, pulse, card, esc, plural, wide = false, gs = ''
 
   const live = h.projects.filter((p) => !p.parked), parked = h.projects.filter((p) => p.parked);
   const line = (p) => `<div class="ov-line state-${p.pulse.state} ${p.parked ? 'parked' : ''}" data-action="goto" data-slug="${esc(p.slug)}">
-      <span class="dot ${p.pulse.state}"></span>
+      ${stateDot(p.pulse.state)}
       <div class="body"><b>${esc(p.name)}</b> <span class="s">${esc(short(p.pulse.sentence) || p.pulse.state)}</span>
         ${z >= 2 && p.mission ? `<div class="m">${esc(p.mission)}</div>` : ''}
         ${z >= 2 ? `<div class="m">${[p.remotes?.length ? esc(p.remotes.join(', ')) : 'No repo linked', p.runner ? 'nuworq run staffs it' : 'nuworq run leaves it alone'].join(' · ')}</div>` : ''}</div>
@@ -41,6 +41,13 @@ export function homePage(h, { z, pulse, card, esc, plural, wide = false, gs = ''
   if (wide && (needs || worth || motion)) return columns(`${needs}${worth}${motion}`, `${head}${gs}${projects}`);
   return `${gs}${head}${needs}${projects}${worth}${motion}`;
 }
+
+// A project's state dot (#195): its color never speaks alone, so it carries the state as its name and title.
+export const STATE_LABELS = { 'needs-you': 'Needs you', flowing: 'Flowing', stalled: 'Stalled', idle: 'Idle', parked: 'Parked' };
+export const stateDot = (state) => {
+  const label = STATE_LABELS[state] ?? state;
+  return `<span class="dot ${state}" role="img" aria-label="${label}" title="${label}"></span>`;
+};
 
 // Two columns: the work, and beside it what stays in view while you act on it.
 export const columns = (main, side) => `<div class="cols"><div class="col-main">${main}</div><aside class="col-side">${side}</aside></div>`;
