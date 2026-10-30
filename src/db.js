@@ -285,6 +285,7 @@ CREATE TABLE IF NOT EXISTS usage (
   at            INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_item ON usage (item_id);
+CREATE INDEX IF NOT EXISTS usage_project ON usage (project_id, at);
 
 -- nuworq run, as each runner last said on its poll (POST /api/runner, #171). Bookkeeping: no agent is touched.
 CREATE TABLE IF NOT EXISTS runners (
@@ -364,6 +365,13 @@ export function openDb(file) {
     'ALTER TABLE projects ADD COLUMN fresh_at INTEGER NOT NULL DEFAULT 0', // when the sweep timer last fired (or the project began)
     'ALTER TABLE items ADD COLUMN sweep INTEGER NOT NULL DEFAULT 0', // 1: a "keep <project> fresh" item the hub opened
     "ALTER TABLE questions ADD COLUMN closed_reason TEXT NOT NULL DEFAULT ''", // why a question closed with nobody answering (shipped, withdrawn), e.g. "#112 landed"
+    // Staffing, set on the hub and carried out by nuworq run (#174): at most this many agents working at once (NULL:
+    // each runner's own --workers), paused (no new workers), a daily budget in dollars (NULL: none, UTC days), and
+    // whether the person was asked if run may staff it (1 for projects from before #174; a new one starts at 0).
+    'ALTER TABLE projects ADD COLUMN run_workers INTEGER',
+    'ALTER TABLE projects ADD COLUMN run_paused INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE projects ADD COLUMN run_budget REAL',
+    'ALTER TABLE projects ADD COLUMN staff_asked INTEGER NOT NULL DEFAULT 1',
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

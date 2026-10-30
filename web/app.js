@@ -322,14 +322,25 @@ function project(v) {
         ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
         ${z() >= 2 ? `<button class="link" data-action="remove-project" title="Archive it (history kept) or delete it for good">Remove project</button>` : ''}
         ${z() >= 1 ? (P.runner
-          ? `<button class="link" data-action="runner-off" title="nuworq run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by nuworq run · stop</button>`
+          ? `<button class="link" data-action="runner-off" title="nuworq run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by nuworq run · stop</button>
+            <button class="link" data-action="staffing" title="Workers at once, a daily budget, pause">Staffing: ${esc(staffLine(P.staffing))}</button>`
           : `<button class="link" data-action="runner-on" title="Let nuworq run start headless workers here whenever work is waiting">Let nuworq run staff this project</button>`) : ''}
         ${z() >= 1 ? (P.fresh
           ? `<button class="link" data-action="fresh-off" title="Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade. Click to stop it.">Kept fresh weekly · stop</button>`
           : `<button class="link" data-action="fresh-on" title="Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade">Keep this project fresh weekly</button>`) : ''}
       </div>
     </div>
+    ${!P.runner && P.staffing && !P.staffing.asked ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
+      <div class="actions"><button class="btn primary" data-action="runner-on">Let run staff it</button><button class="btn ghost" data-action="staff-not-now">Not now</button></div></div>` : ''}
     ${projectBody(v, empty)}`;
+}
+
+// The staffing in a few words (#174): paused, budget spent for today, or the limit and budget that apply.
+function staffLine(s) {
+  if (!s) return '';
+  if (s.paused) return 'paused';
+  if (s.stopped === 'budget') return `today's $${s.budget.toFixed(2)} spent`;
+  return [s.workers ? `up to ${s.workers} at once` : 'runners decide how many', s.budget != null ? `$${s.budget.toFixed(2)}/day` : ''].filter(Boolean).join(' · ');
 }
 
 // The project's sections: one column on a phone; wide (#141), the work in the main column and the pulse,
@@ -808,7 +819,11 @@ function runners(v) {
     : r.state === 'skipping' ? `Leaves this project alone${r.skipping.for ? ` for ${esc(r.skipping.for)}` : ''}: ${esc(r.skipping.reason)}.`
     : `${r.running} of ${r.workers} worker${r.workers === 1 ? '' : 's'} running.`;
   const up = rs.filter((r) => r.state === 'up').length;
+  const st = v.project.staffing;
+  const held = st?.stopped === 'paused' ? 'Staffing is paused: no new workers start here; running ones finish.'
+    : st?.stopped === 'budget' ? `Today's budget is spent ($${st.spent_today.toFixed(2)} of $${st.budget.toFixed(2)}): new workers start here again tomorrow (UTC).` : '';
   return `<section class="sec"><header><h2>Runners</h2><span class="count">${up} up</span>${up < rs.length ? `<span class="hint">${rs.length - up} not starting work here</span>` : ''}</header>
+    ${held ? `<p class="warn">${held} <button class="link" data-action="staffing">Staffing</button></p>` : ''}
     <div class="rows">${rs.map((r) => `<div class="row-item runner"><div class="body">
       <div class="h">${esc(r.name)}<span class="status runner-${r.state}">${esc(r.state)}</span></div>
       <div class="s">${why(r)}</div>
@@ -1012,6 +1027,18 @@ function modal(html) {
   markNew(m);
 }
 const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''; };
+
+// Staffing (#174): what nuworq run does here, set on the hub so it can change from a phone. Runners follow it at
+// their next poll. Pause is one tap and says what happens to running workers; the numbers are blank for "no limit".
+function staffingModal() {
+  const s = S.view?.project?.staffing ?? {};
+  modal(`<h2>Staffing</h2>
+    <p class="lead">What <code>nuworq run</code> does here. Runners follow it at their next poll.</p>
+    <div class="form"><label>Workers at once<input id="st-workers" type="number" inputmode="numeric" min="1" max="100" placeholder="Each runner's own --workers" value="${s.workers ?? ''}"></label>
+    <label>Daily budget, dollars (UTC days)<input id="st-budget" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="No budget" value="${s.budget ?? ''}"></label></div>
+    <p class="faint">Spent here today: $${(s.spent_today ?? 0).toFixed(2)}. Once it reaches the budget, no new workers start until tomorrow.</p>
+    <div class="foot"><button class="btn ghost" data-action="staffing-pause" data-paused="${s.paused ? 1 : 0}">${s.paused ? 'Resume' : 'Pause'}</button><button class="btn primary" data-action="staffing-save">Save</button></div>`);
+}
 
 async function connect() {
   S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
@@ -1301,6 +1328,13 @@ const ACTIONS = {
   },
   'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
   'runner-off': () => human('settings', { runner: false }, '`nuworq run` will no longer start workers here'),
+  'staff-not-now': () => human('settings', { runner: false }, "Not staffed. You can let nuworq run staff it later from the project's controls"),
+  staffing: () => staffingModal(),
+  'staffing-save': async () => {
+    const r = await human('settings', { run_workers: val('st-workers'), run_budget: val('st-budget') }, 'Staffing saved: runners follow it at their next poll');
+    if (r) closeModal();
+  },
+  'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
   'fresh-on': () => human('settings', { fresh: true }, 'The weekly freshness sweep is on'),
   'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) human('settings', { fresh: false }, 'The weekly freshness sweep is off'); },
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
@@ -1396,13 +1430,14 @@ const ACTIONS = {
       const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ repo: el.dataset.repo, mission: el.dataset.desc }) });
       modal(`<h2>${esc(r.repo.replace('github.com/', ''))} is a project</h2>
         <p class="lead">Let <code>nuworq run</code> staff this project? It starts workers whenever there is work nobody is on, up to the limits it was started with. You can change this later in the project's settings.</p>
-        <div class="foot"><button class="btn ghost" data-action="goto-new" data-slug="${esc(r.slug)}">Not now</button><button class="btn primary" data-action="staff-new" data-slug="${esc(r.slug)}">Let run staff it</button></div>`);
+        <div class="foot"><button class="btn ghost" data-action="staff-new" data-runner="0" data-slug="${esc(r.slug)}">Not now</button><button class="btn primary" data-action="staff-new" data-slug="${esc(r.slug)}">Let run staff it</button></div>`);
     } catch (e) { toastError(e); }
   },
   'goto-new': (el) => { closeModal(); go(el.dataset.slug); },
+  // Either answer is recorded, so the project page doesn't ask again (#174).
   'staff-new': async (el) => {
     try {
-      await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/settings`, { method: 'POST', body: JSON.stringify({ runner: true }) });
+      await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/settings`, { method: 'POST', body: JSON.stringify({ runner: el.dataset.runner !== '0' }) });
       closeModal();
       go(el.dataset.slug);
     } catch (e) { toastError(e); }
