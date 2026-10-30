@@ -22,8 +22,8 @@ describe('a failing check shows a red ✗, never inside a green ✓ (#192)', () 
     assert.match(checkChip({ name: '<b>', conclusion: 'failure' }, esc), /✗ &lt;b&gt;/, 'names are escaped');
   });
 
-  test("the styles: a check chip drops the evidence chip's ✓, and failed is --bad", () => {
-    assert.match(css, /\.ev\.check::before \{ content: none; \}/);
+  test("the styles: no chip gets a ✓ from CSS (a check carries its own mark), and failed is --bad", () => {
+    assert.doesNotMatch(css, /\.ev[^{]*::before \{[^}]*✓/, 'since #191 evidence chips have no ✓, so a check never sits inside one');
     assert.match(css, /\.ev\.check\.fail \{ background: var\(--bad-tint\); color: var\(--bad\); \}/);
     assert.match(css, /\.tl\.t-pr_failed::before, \.tl\.t-pr_merge_failed::before \{ background: var\(--bad\); \}/);
     assert.match(css, /^\.bad \{ color: var\(--bad\);/m);

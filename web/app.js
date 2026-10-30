@@ -425,7 +425,7 @@ function needsYou(v) {
   const act = v.attention.filter((a) => a.level === 'act');
   const body = act.length
     ? `<div class="cards">${act.map(card).join('')}</div>`
-    : `<div class="zero"><span class="check">✓</span><div><b>Nothing needs you.</b> ${v.pulse.active ? 'Agents are working; you\'ll see things here when they need a decision, an answer or a verification.' : 'When agents need a decision, an answer or a verification, it shows up here.'}</div></div>`;
+    : `<div class="zero"><span class="check good">✓</span><div><b>Nothing needs you.</b> ${v.pulse.active ? 'Agents are working; you\'ll see things here when they need a decision, an answer or a verification.' : 'When agents need a decision, an answer or a verification, it shows up here.'}</div></div>`;
   return `<section class="sec"><header><h2>Needs you</h2>${act.length ? `<span class="count">${act.length}</span>` : ''}
     ${act.length ? '<span class="hint">oldest first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
 }
@@ -677,7 +677,7 @@ function motion(v) {
 function flow(v) {
   const f = v.flow;
   const stages = f.stages.filter((s) => s.stage !== 'dropped' || s.count);
-  const pills = stages.map((s) => `<button class="stage court-${s.court ?? 'none'} ${S.stage === s.stage ? 'on' : ''} ${s.count ? '' : 'zero-count'}" data-action="stage" data-stage="${s.stage}" title="${esc(s.blurb)}"><span class="n">${s.count}</span><span class="l">${esc(s.label)}</span></button>`).join('<span class="arrow">→</span>');
+  const pills = stages.map((s) => `<button class="stage stage-${s.stage} court-${s.court ?? 'none'} ${S.stage === s.stage ? 'on' : ''} ${s.count ? '' : 'zero-count'}" data-action="stage" data-stage="${s.stage}" title="${esc(s.blurb)}"><span class="n">${s.count}</span><span class="l">${esc(s.label)}</span></button>`).join('<span class="arrow">→</span>');
   let detail = '';
   if (S.stage) {
     const st = f.stages.find((s) => s.stage === S.stage);
