@@ -32,6 +32,8 @@ const KILL_GRACE_MS = 10_000;
 // exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited }.
 // launch throws an error with skip: true when this machine can't work on the route's project (no
 // checkout of it here): that project is left to others for this round, said once, and isn't a failure.
+// With pause: true too (its checkout couldn't be updated, e.g. git can't reach origin), the project is left
+// alone for 5 minutes, then 10, up to 30, and said each time; the others go on.
 // claimed(worker): whether the hub saw it take a job since it started (absent: assume it did).
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
 // maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
@@ -54,6 +56,7 @@ export async function run({
   let hubDown = false;
   let idle = false;
   const cant = new Map(); // project → why this machine can't work on it, as last said
+  const resting = new Map(); // project → { until, ms }: its checkout couldn't be updated, so it waits until then
   const stop = (reason) => { if (!stopping) { stopping = true; why = reason; } wake(); };
   let interrupted = false;
   onInterrupt?.(() => {
@@ -61,19 +64,24 @@ export async function run({
     interrupted = true;
     stop('interrupted');
   });
+  // A streak that would only repeat itself: with --until-idle, stop; otherwise wait 5m, then 10m, up to 30m.
+  const pause = (reason, advice) => {
+    if (untilIdle) return stop(reason);
+    log(`Paused ${pauseMs / 60_000}m: ${reason}. ${advice}`);
+    pausedUntil = now() + pauseMs;
+    pauseMs = Math.min(pauseMs * 2, MAX_PAUSE_MS);
+  };
   const failedFast = () => {
-    fastFails++;
-    if (fastFails >= FAST_FAILS) stop(`${FAST_FAILS} workers in a row failed within seconds; check the agent runs on its own (see its log)`);
+    if (++fastFails < FAST_FAILS) return;
+    fastFails = 0;
+    pause(`${FAST_FAILS} workers in a row failed within seconds`, 'Check the agent runs on its own (see its log).');
   };
   const foundNothing = (w) => {
     empties.push(w.project);
     if (empties.length < EMPTIES) return;
     const reason = `${EMPTIES} workers in a row found nothing to claim in ${[...new Set(empties)].join(', ')}`;
     empties = [];
-    if (untilIdle) return stop(reason);
-    log(`Paused ${pauseMs / 60_000}m: ${reason}. The hub routed them to work they couldn't take; check the project's needs and opt-ins.`);
-    pausedUntil = now() + pauseMs;
-    pauseMs = Math.min(pauseMs * 2, MAX_PAUSE_MS);
+    pause(reason, "The hub routed them to work they couldn't take; check the project's needs and opt-ins.");
   };
 
   for (;;) {
@@ -104,14 +112,19 @@ export async function run({
       const skip = new Set();
       for (let again = true; again && !stopping;) {
         again = false;
-        for (const r of plan(list.filter((x) => !skip.has(x.project)), running, { workers, maxRuns, launched })) {
+        for (const r of plan(list.filter((x) => !skip.has(x.project) && !(resting.get(x.project)?.until > t)), running, { workers, maxRuns, launched })) {
           if (stopping) break;
           let w;
           try {
             w = await launch(r);
           } catch (e) {
             if (e.skip) {
-              if (cant.get(r.project) !== e.message) log(`Skipping ${r.name ?? r.project}: ${e.message}${e.hint ? `\n  ${e.hint}` : ''}`);
+              const hint = e.hint ? `\n  ${e.hint}` : '';
+              if (e.pause) {
+                const ms = Math.min(2 * (resting.get(r.project)?.ms ?? PAUSE_MS / 2), MAX_PAUSE_MS);
+                resting.set(r.project, { until: now() + ms, ms });
+                log(`Skipping ${r.name ?? r.project} for ${ms / 60_000}m: ${e.message}${hint}`);
+              } else if (cant.get(r.project) !== e.message) log(`Skipping ${r.name ?? r.project}: ${e.message}${hint}`);
               cant.set(r.project, e.message);
               skip.add(r.project);
               again = true;
@@ -125,6 +138,7 @@ export async function run({
           }
           launched++;
           cant.delete(r.project);
+          resting.delete(r.project);
           w.started = now();
           running.push(w);
           log(`▶ ${w.name} → ${r.name ?? r.project}: ${r.item} ${r.title} (${r.mode})${w.where ? `  ${w.where}` : ''}`);
@@ -142,7 +156,7 @@ export async function run({
             // It counts as running until the hub answers, so no replacement starts meanwhile.
             const empty = code === 0 && !interrupted && !w.killedAt && ms < EMPTY_MS && !(await claimed(w).catch(() => true));
             if (empty) foundNothing(w);
-            else if (code === 0) empties = [];
+            else if (code === 0) { empties = []; pauseMs = PAUSE_MS; } // it worked: the next streak pauses 5m again
             running.splice(running.indexOf(w), 1);
             wake();
           });
