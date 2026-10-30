@@ -569,7 +569,7 @@ function worthKnowing(v) {
       const r = `ov:${a.question.id}`;
       acts = S.reveal.has(r)
         ? `<div class="inline-form" style="width:320px"><input data-draft="${r}" id="${r}" placeholder="Instead…"><button class="btn you small" data-action="override" data-q="${a.question.id}">Override</button></div>`
-        : `<button class="btn small" data-action="confirm" data-q="${a.question.id}">Fine</button><button class="btn small" data-action="reveal" data-key="${r}">Override…</button>`;
+        : `<button class="btn small" data-action="confirm" data-q="${a.question.id}">Confirm</button><button class="btn small" data-action="reveal" data-key="${r}">Override…</button>`;
     }
     if (a.kind === 'proposal') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Look</button>` + acts;
     if (a.start) acts = `<button class="btn small" data-action="connect">Start an agent</button>` + acts;
@@ -858,7 +858,7 @@ function renderDrawer() {
       ${q.answer ? `<div class="a">Answer: <b>${esc(q.answer)}</b></div>` : q.status === 'confirmed' ? '<div class="a">You confirmed the assumption.</div>' : ''}
       ${q.status === 'open' ? `<div class="answer">${q.options.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
         <div class="answer-row"><input data-draft="ans-${q.id}" id="ans-${q.id}" placeholder="${q.blocking ? 'Your answer…' : 'Override with…'}"><button class="btn primary" data-action="${q.blocking ? 'answer-text' : 'override'}" data-q="${q.id}" data-src="ans-${q.id}">${q.blocking ? 'Answer' : 'Override'}</button>
-        ${q.blocking ? '' : `<button class="btn" data-action="confirm" data-q="${q.id}">Fine</button>`}</div></div>` : ''}
+        ${q.blocking ? '' : `<button class="btn" data-action="confirm" data-q="${q.id}">Confirm</button>`}</div></div>` : ''}
     </div>`).join('')}</div>` : '';
 
   const steers = it.steers.length ? `<div class="d-sec"><div class="label">Your steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
