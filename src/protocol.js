@@ -100,6 +100,15 @@ export const OPS = [
     required: ['question', 'answer'],
   },
   {
+    name: 'withdraw',
+    description: 'Withdraw a question you asked that is still open, with a one-line reason: the answer came another way (say who said it), or it no longer matters. It leaves Needs you and Worth knowing, the reason goes on the record, and work it parked goes back to ready. Only the asker can.',
+    params: {
+      question: { type: 'integer', description: 'The question id (ask returned it).' },
+      reason: s('Why, in one line, e.g. "Paul answered in a planning session: he is the only admin."'),
+    },
+    required: ['question', 'reason'],
+  },
+  {
     name: 'submit',
     description: 'Finished an item you hold? Submit it for verification with evidence. Someone other than you verifies it; never mark your own work done. When you were shaping a proposal, submit ends the shaping: the item becomes ready (or goes to the human for approval). When you were landing accepted work, submit once main contains its branch: the hub checks git and marks it done.',
     params: {
@@ -329,6 +338,8 @@ Hub: ${url} · project: ${project} (change with --project).
    - Truly blocked? ${c('ask')} with \`blocking\`. The item parks; take other work with ${c('next')}.
    - About running things, permissions, or verifying on real infra? Ask \`to: "operator"\`, not the human. Leave out \`to\` and the hub picks: "can't run \`claude\` without approval" goes to an operator, "approve browser workers?" to the human, and anything unclear to the human. The response's \`routed\` says which; pass \`to\` to override.
    - Does a person have to do something (not just decide)? Give \`steps\`: in order, each with what to do (exact values), \`where\` (the URL or command) and \`check\` (how they see it worked), e.g. \`[{ "do": "Open the repository's Actions secrets", "where": "https://github.com/acme/api/settings/secrets/actions" }, { "do": "Click New repository secret, name it NPM_TOKEN, paste the token", "check": "NPM_TOKEN is listed" }]\`. The hub refuses such a question without them. Escalations too.
+   - Need a person to decide? ${c('ask')} without an \`assumption\`, with \`options\`: it reaches Needs you, where they pick one. With an assumption it only shows as worth knowing.
+   - The answer came another way (quote who said it, e.g. "Paul, in a planning session: he is the only admin"), or the question no longer matters? ${c('withdraw')} it with a one-line reason, so it stops asking. Only you can withdraw your own.
 5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it. Every item has its own branch, cut from the latest main (the claim names it), so it can land on its own. If you're told main moved, rebase early.
 6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for.
 7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item. When it repairs work that already landed (a bug in it, something it missed), set \`fixes\` to that item, on ${c('propose')} or ${c('refine')}: the hub counts the landed item as an escape, so everyone can see how well verification holds up.
