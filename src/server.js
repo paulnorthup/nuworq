@@ -681,7 +681,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       // Sign in with GitHub or Google: which providers the login page offers, and the last step of the flow.
       if (req.method === 'GET' && path === '/api/oauth') {
-        return send(200, { providers: required ? sso.list().map((p) => ({ ...p, start: `${authOrigin(req)}/auth/${p.name}/start${spaces ? `?ws=${encodeURIComponent(ws)}` : ''}` })) : [] });
+        return send(200, { providers: required ? sso.list().map((p) => ({ ...p, start: `${authOrigin(req)}/auth/${p.name}/start${spaces ? `?ws=${encodeURIComponent(ws)}` : ''}` })) : [], workspace: spaces ? ws : null });
       }
       if (req.method === 'GET' && path === '/api/oauth/finish') {
         const sid = required ? sso.redeem(url.searchParams.get('ticket'), ws) : null;
@@ -698,7 +698,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (recentFailures(ip).length >= LOGIN_MAX_FAILS) return deny(429, 'too many failed attempts', 'Wait 10 minutes, then try again.');
         const b = await body(req);
         const peek = authz.peekInvite(b.token);
-        if (!peek.ok) { recentFailures(ip).push(Date.now()); return deny(410, peek.error, 'Ask an owner of this workspace for a new invite.'); }
+        if (!peek.ok) { recentFailures(ip).push(Date.now()); return deny(410, peek.error, `Ask whoever invited you for a new link${spaces ? ' to the workspace' : ''}.`); }
         if (path === '/api/invite/peek') return send(200, { ok: true, role: peek.invite.role, email: peek.invite.email || undefined, invited_by: peek.invite.created_by || undefined });
         let r;
         try { r = authz.acceptInvite(b.token, b.handle); } catch (e) { return deny(400, e.message, 'Pick another handle: lowercase letters, digits, ., _ or -.'); }

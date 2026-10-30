@@ -6,7 +6,7 @@
 .login-card .hint { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
 .login-error { color: var(--bad); font-size: 13px; }
 .login-providers { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; border-bottom: 1px dashed var(--line); }
-.login-providers .btn { text-align: center; text-decoration: none; }
+.login-providers .btn, .login-card a.btn { text-align: center; text-decoration: none; }
 /* The early-access request (#121): the same card, a little wider for the form, its fields labelled above. */
 .ask-card { width: min(460px, 100%); }
 .ask-card h1 { font-size: 19px; margin: 0; }

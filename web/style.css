@@ -461,6 +461,9 @@ main.narrow .faint, .setup .faint, .dialog .faint { color: var(--muted); font-si
 .btn:disabled { opacity: .45; cursor: default; }
 .dialog .lead code { overflow-wrap: anywhere; } /* a long URL in a sentence wraps instead of widening a phone's dialog */
 .dialog h3 { margin: 24px 0 4px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 15px; }
+/* Notifications' add row (#155): the kind as wide as its words, the address taking the rest. */
+.notify-add select { width: auto; flex: none; }
+.notify-add input { flex: 1; min-width: 0; }
 .copyable { position: relative; }
 .copyable pre { padding-right: 64px; } /* the text scrolls clear of the Copy button */
 .copyable button { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--line-strong); background: var(--panel); }
@@ -516,6 +519,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 /* Phone first: one column, nothing wider than the screen, buttons big enough for a thumb. */
 @media (max-width: 420px) {
   #main { padding: 14px 12px 60px; overflow-x: hidden; }
+  .notify-add { flex-wrap: wrap; } .notify-add select { flex: 1 1 100%; } /* notifications: kind, then address + Add */
   .cards, .ov-lines, .home-card { min-width: 0; max-width: 100%; }
   .card .actions, .answer-row, .opts { flex-wrap: wrap; }
   .card .btn, .card .opt, .card .pick, .answer-row input, .pulse .btn, .ov-line, .get-started .btn, .seg button { min-height: 44px; }
