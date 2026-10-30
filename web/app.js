@@ -1385,7 +1385,7 @@ const ACTIONS = {
       await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/delete`, { method: 'POST', body: JSON.stringify({ confirm: val('rm-archived') }) });
       toast('Deleted for good');
       ACTIONS.archived();
-    } catch (e) { toast(e.message + (e.hint ? ` — ${e.hint}` : ''), true); }
+    } catch (e) { toastError(e); }
   },
   'restore-project': async (el) => {
     try {
