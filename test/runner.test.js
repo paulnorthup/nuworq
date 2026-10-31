@@ -207,6 +207,7 @@ describe('nuworq worker --browser', () => {
     const parts = ({ stdout }) => ({
       strict: /--mcp-config '[^']*' --strict-mcp-config /.test(stdout),
       settings: JSON.parse(stdout.match(/--settings '([^']*)'/)[1]),
+      noSkills: /--settings '[^']*' --disable-slash-commands /.test(stdout),
       servers: JSON.parse(stdout.match(/--mcp-config '([^']*)'/)[1]).mcpServers,
       allow: stdout.match(/--allowedTools '([^']*)'/)[1].split(','),
       deny: stdout.match(/--disallowedTools '([^']*)'/)?.[1],
@@ -217,6 +218,7 @@ describe('nuworq worker --browser', () => {
       assert.deepEqual(Object.keys(plain.servers), ['nuworq']);
       assert.ok(plain.strict, 'only the runner\'s MCP servers, none of the person\'s own');
       assert.deepEqual(plain.settings, { enabledPlugins: { 'nuworq@nuworq': false, 'other@market': false } }, 'every installed plugin off');
+      assert.ok(plain.noSkills, 'no skills either: ~/.claude/skills holds nuworq-operator, and it isn\'t a plugin (#368)');
       assert.ok(!plain.allow.includes('mcp__playwright'));
       assert.ok(!(plain.servers.nuworq.env.NUWORQ_HAS ?? '').split(',').includes('browser'));
       assert.doesNotMatch(plain.task, /mcp__playwright|375px|serve --demo/);
