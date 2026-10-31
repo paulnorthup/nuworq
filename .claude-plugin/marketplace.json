@@ -10,7 +10,6 @@
     {
       "name": "nuworq",
       "source": "./plugin",
-      "version": "0.2.0",
       "description": "The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator's listener."
     }
   ]

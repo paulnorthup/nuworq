@@ -1515,10 +1515,9 @@ async function main() {
     // The Claude Code plugin (src/plugin.js): <dir> (default this checkout's plugin/), plus the marketplace
     // that lists it when it is this checkout's own.
     const { pluginFiles, marketplace } = await import('../src/plugin.js');
-    const { version } = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
     const dir = resolve(typeof flags.plugin === 'string' ? flags.plugin : join(ROOT, 'plugin'));
-    const files = Object.entries(pluginFiles({ version })).map(([f, text]) => [join(dir, f), text]);
-    if (dir === join(ROOT, 'plugin')) files.push([join(ROOT, '.claude-plugin', 'marketplace.json'), marketplace({ version })]);
+    const files = Object.entries(pluginFiles()).map(([f, text]) => [join(dir, f), text]);
+    if (dir === join(ROOT, 'plugin')) files.push([join(ROOT, '.claude-plugin', 'marketplace.json'), marketplace()]);
     for (const [file, text] of files) {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, text);
