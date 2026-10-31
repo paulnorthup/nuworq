@@ -81,6 +81,31 @@ export async function archive(root, commit, file) {
   renameSync(tmp, file);
 }
 
+// The package of a release the hub never ran (#434): main can move past a release commit before the hub runs it
+// (its tests failed there, or main moved twice between checks), and the signer can sign only what the hub serves.
+// So a commit with a vX.Y.Z tag in root's repository, on the history root runs, is built when asked for, with
+// archive() as the running commit's is. Resolves { file, commit, sha256 }, or null when commit is no such release.
+const building = new Map();
+export async function releasePackage(root, dir, commit) {
+  const known = packageAt(dir, commit);
+  if (known) return known;
+  try {
+    const tags = await run(['-C', root, 'tag', '--points-at', commit]);
+    if (!tags.split('\n').some((t) => /^v\d+\.\d+\.\d+$/.test(t.trim()))) return null;
+    await run(['-C', root, 'merge-base', '--is-ancestor', commit, 'HEAD']);
+  } catch { return null; }
+  const file = join(dir, `nuworq-${commit}.tgz`);
+  if (!building.has(file)) {
+    mkdirSync(dir, { recursive: true });
+    building.set(file, archive(root, commit, file).finally(() => building.delete(file)));
+  }
+  try { await building.get(file); } catch (e) {
+    console.error(`nuworq: couldn't build the package of release ${commit.slice(0, 7)} (${e.message})`);
+    return null;
+  }
+  return packageAt(dir, commit);
+}
+
 // Build (or find) the package of root's commit in dir. Resolves { file, sha256, commit }, or null when
 // root isn't a git checkout. Never rejects: a failed build resolves null too, and says why on stderr.
 export async function buildPackage(root, dir) {

@@ -51,11 +51,13 @@ const json = async (get, url) => {
   if (!r.ok) throw new Error(`${url} answered ${r.status}`);
   return r.json();
 };
-// The hub's answer for a file: { status, etag }, without its body.
+// The hub's answer for a file: { status, etag, error }, without its body (only a refusal's error is read).
 const head = async (get, url) => {
   const r = await get(url, { signal: AbortSignal.timeout(30_000) });
-  await r.body?.cancel();
-  return { status: r.status, etag: String(r.headers.get('etag') ?? '').replace(/"/g, '') };
+  let error = '';
+  if (r.ok) await r.body?.cancel();
+  else error = await r.json().then((j) => String(j?.error ?? ''), () => '');
+  return { status: r.status, etag: String(r.headers.get('etag') ?? '').replace(/"/g, ''), error };
 };
 
 // One check. repo: a checkout whose origin is the project on GitHub. hub: its address. key: the release key
@@ -96,7 +98,14 @@ export async function round({ repo, hub, key, dest, scp, fetch: get = fetch, sta
     const file = `nuworq-${t.commit}.tgz`;
     if ((await head(get, `${base}/${file}.sig`)).status === 200) { say('done', 'the hub already has a signature for it'); continue; }
     const served = await head(get, `${base}/${file}`);
-    if (served.status === 404) { say('waiting', `the hub has no package of ${short} yet; it builds one when it runs that commit`); continue; }
+    if (served.status === 404) {
+      // Past it already (main moved on, or its tests failed there): the hub never runs it, so say what it does instead.
+      const past = pkg.commit && !t.commit.startsWith(pkg.commit) && await git(repo, ['merge-base', '--is-ancestor', t.commit, pkg.commit]).then(() => true, () => false);
+      say('waiting', past
+        ? `the hub skipped ${short} (it runs ${pkg.commit.slice(0, 7)}, after it) and has no package of it${served.error ? ` ("${served.error}")` : ''}; a hub with #434 builds one once its checkout has the ${t.tag} tag, else sign it by hand. Trying again next round`
+        : `the hub has no package of ${short} yet; it builds one when it runs that commit, or a later one with the ${t.tag} tag in its checkout`);
+      continue;
+    }
     if (served.status !== 200) { say('failed', `${base}/${file} answered ${served.status}; trying again next round`); continue; }
     const dir = mkdtempSync(join(tmpdir(), 'nuworq-signer-'));
     try {
