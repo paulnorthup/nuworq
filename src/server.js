@@ -1400,8 +1400,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const done = new AbortController();
         res.on('close', () => done.abort());
         const timeout = Number(url.searchParams.get('timeout'));
+        // One project (#329): ?project= names it; else the folder's (its remote or path, as checkin picks),
+        // so a session started in one repo isn't woken by another project's work. ?all=1 waits on every one.
+        const named = url.searchParams.get('project');
+        const here = named ? null : url.searchParams.get('all') ? null : hub.projectByRemote(remoteOf(req), caller.scope) ?? hub.projectByPath(rootOf(req), caller.scope);
+        const only = named ? slugify(named) : here?.slug;
+        const scope = only ? (caller.scope && !caller.scope.includes(only) ? [] : [only]) : caller.scope;
         const r = await waitFor(hub, header(req, 'agent'), {
-          since: Number(url.searchParams.get('since')) || 0, scope: caller.scope, tokenId: caller.token?.id ?? null, signal: done.signal,
+          since: Number(url.searchParams.get('since')) || 0, scope, tokenId: caller.token?.id ?? null, signal: done.signal,
           ...(timeout > 0 ? { ms: timeout * 1000 } : {}),
         });
         if (!done.signal.aborted) send(200, r);

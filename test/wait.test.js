@@ -89,6 +89,36 @@ describe('an operator waits on the hub', () => {
     assert.throws(() => waitFor(hub, '', { tokenId: 7 }), (e) => e.status === 403, 'not seen for a day: not listening for it');
   });
 
+  // #329: a freshly started listener (since 0) woke a new operator for answers and steering it already had.
+  test('a fresh listener replays nothing already delivered: a seen answer or an acked steer; new ones still come once', async () => {
+    const { hub, tick } = setup();
+    const old = hub.agentOp('o', 'ask', 'op', { question: 'May I restart the hub?' });
+    hub.humanOp('o', 'answer', { question: old.question, answer: 'Yes' });
+    hub.humanOp('o', 'steer', { body: 'Restart only after 18:00' });
+    const steer = hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] }).steers[0].steer;
+    hub.agentOp('o', 'ack', 'op', { steer });
+    assert.deepEqual((await waitFor(hub, 'op', { ms: 30 })).events, [], 'the checkin delivered the answer; the steer is acked');
+
+    const mine = hub.agentOp('o', 'ask', 'op', { question: 'And the VM?' });
+    tick(1);
+    hub.humanOp('o', 'answer', { question: mine.question, answer: 'Also yes' });
+    const r = await waitFor(hub, 'op', { ms: 30 });
+    assert.deepEqual(r.events, [{ kind: 'answer', project: 'o', question: mine.question }]);
+    assert.deepEqual(strip(operatorEvents(hub, 'op', { since: r.at })), [], 'once');
+  });
+
+  test("unnamed, operator-only work wakes it only when one operator has all its needs, not the operators' tags together", async () => {
+    const { hub, tick } = setup();
+    hub.agentOp('o', 'checkin', 'op2', { has: ['operator', 'claude-cli'] });
+    hub.q(`UPDATE agents SET token_id = 7 WHERE name IN ('op', 'op2')`).run();
+    const since = hub.now();
+    tick(1);
+    hub.humanOp('o', 'create', { title: 'Both', acceptance: 'x', needs: ['infra', 'claude-cli'] });
+    assert.deepEqual((await waitFor(hub, '', { since, tokenId: 7, ms: 30 })).events, [], 'op has infra, op2 has claude-cli, neither has both');
+    hub.humanOp('o', 'create', { title: 'CLI', acceptance: 'x', needs: ['claude-cli'] });
+    assert.deepEqual((await waitFor(hub, '', { since, tokenId: 7, ms: 30 })).events, [{ kind: 'item', project: 'o', item: '#2' }]);
+  });
+
   test('a listening operator counts as connected: Needs you says none is only when none has been here', async () => {
     const { hub, tick } = setup();
     hub.agentOp('o', 'ask', 'w1', { question: 'Prod check?', to: 'operator' });
@@ -130,6 +160,27 @@ describe('GET /api/wait and nuworq wait', () => {
       assert.match(r.body.hint, /Workers find work with next/);
       r = await get('for=worker', 'op');
       assert.equal(r.status, 400);
+    } finally {
+      server.close();
+      server.closeAllConnections();
+    }
+  });
+
+  test("waits on the folder's project; ?project= names one, ?all=1 takes every one", async () => {
+    const { hub, tick } = setup();
+    hub.agentOp('other', 'checkin', 'op', { has: ['operator', 'infra'] });
+    hub.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(hub.project('o').id, 'github.com/acme/o', hub.now());
+    const server = createServer(hub);
+    const url = `http://127.0.0.1:${await listen(server)}`;
+    try {
+      const get = async (q, headers = {}) => (await (await fetch(`${url}/api/wait?for=operator&timeout=0.05&${q}`, { headers: { 'x-nuworq-agent': 'op', ...headers } })).json()).events;
+      tick(1);
+      hub.humanOp('other', 'create', { title: 'Elsewhere', acceptance: 'x', needs: ['infra'] });
+      const inO = { 'x-nuworq-remote': encodeURIComponent('github.com/acme/o') };
+      assert.deepEqual(await get('', inO), [], "run in o's folder: other's work doesn't wake it");
+      assert.deepEqual(await get('all=1', inO), [{ kind: 'item', project: 'other', item: '#1' }]);
+      assert.deepEqual(await get('project=other', inO), [{ kind: 'item', project: 'other', item: '#1' }]);
+      assert.deepEqual(await get(''), [{ kind: 'item', project: 'other', item: '#1' }], 'a folder no project knows: every project');
     } finally {
       server.close();
       server.closeAllConnections();
