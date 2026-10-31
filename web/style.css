@@ -88,6 +88,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .rail-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; padding-top: 16px; }
 .rail-foot .rail-item { color: var(--muted); }
+.rail-foot .tag { text-transform: none; letter-spacing: 0; padding: 1px 4px; } /* Upgrade (#308): narrow enough to leave its label whole */
 .rail-menu, .rail-break { display: none; }
 /* The sidebar in the phone top bar's terms (#141): chips for projects, the count beside its label, quiet actions. */
 @media (min-width: 861px) {
