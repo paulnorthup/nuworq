@@ -811,7 +811,7 @@ function steering(v) {
     const expected = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off').map((a) => a.name);
     const missing = s.item ? [] : expected.filter((n) => !s.acks.some((x) => x.agent === n));
     return `<div class="row-item steer-item"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>
-      <div class="acks">${ackList({ acks: s.acks, missing, key: `acks:${s.id}`, open: z() >= 2 !== S.open.has(`acks:${s.id}`), responses: z() >= 2 }, { esc })}</div></div>
+      <div class="acks">${ackList({ acks: s.acks, missing, key: `acks:${s.id}`, open: S.open.has(`acks:${s.id}`), responses: z() >= 2 }, { esc })}</div></div>
       <div class="acts"><span class="age">${esc(dur(Date.now() - s.at))} ago</span><button class="btn ghost small" data-action="retire" data-note="${s.id}" title="Stop delivering it">Retire</button></div></div>`;
   }).join('');
   const decisions = v.decisions.map((d) => `<div class="row-item"><div class="body"><div class="h">${inline(d.body)}</div></div>
@@ -989,7 +989,7 @@ function renderDrawer() {
     </div>`).join('')}</div>` : '';
 
   const steers = it.steers.length ? `<div class="d-sec"><div class="label">Your steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
-      <div class="meta">${esc(s.ago)} ago</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: z() >= 2 !== S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
+      <div class="meta">${esc(s.ago)} ago</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
 
   const edit = S.editItem ? `<div class="d-sec"><div class="label">Edit</div><div class="add-work" style="margin:0">
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">

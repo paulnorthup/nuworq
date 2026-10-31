@@ -19,13 +19,19 @@ describe('who acknowledged a steer', () => {
   test('open, every agent is listed in a dense list, and the control collapses it', () => {
     const html = ackList({ acks: acks(152), key: 'acks:5', open: true }, { esc });
     assert.match(html, /aria-expanded="true">Show fewer</);
+    assert.match(html, /<ul class="ack-all">/, 'names alone: dense columns');
     assert.equal(html.match(/<li>/g).length, 152);
     assert.match(html, /<li><span class="ack" title="on it 0">claude-0000<\/span><\/li>/);
   });
 
-  test('responses show inline when asked, and are always in the title', () => {
+  test('responses show inline when asked, one full-width row each, and are always in the title', () => {
     const html = ackList({ acks: acks(8), key: 'k', open: true, responses: true }, { esc });
+    assert.match(html, /<ul class="ack-all rows">/);
     assert.match(html, /claude-0003: on it 3</);
+    const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
+    assert.match(css, /\.ack-all\.rows \{ columns: auto; \}/, 'a response runs to a few hundred characters: no columns');
+    assert.match(css, /\.ack-all \{[^}]*columns: 6\.5em;/, 'two columns of names in a 205px steering body at 375px');
+    assert.match(css, /\.more-acks \{[^}]*min-height: 44px;[^}]*margin: -13px 0;/, 'a thumb-sized "+N more" that keeps its line short');
   });
 
   test('active agents who haven\'t acknowledged are never hidden, and come before the count', () => {
@@ -48,9 +54,9 @@ describe('who acknowledged a steer', () => {
     assert.ok(!html.includes('<b>x') && !html.includes('<img>'));
   });
 
-  test('the steering section and the item drawer both use it, expanded by default at 30m', () => {
+  test('the steering section and the item drawer both use it, collapsed at every depth until tapped', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
-    assert.match(app, /ackList\(\{ acks: s\.acks, missing, key: `acks:\$\{s\.id\}`, open: z\(\) >= 2 !== S\.open\.has\(`acks:\$\{s\.id\}`\)/);
-    assert.match(app, /ackList\(\{ acks: s\.acks, key: `dacks:\$\{s\.id\}`, open: z\(\) >= 2 !== S\.open\.has\(`dacks:\$\{s\.id\}`\)/);
+    assert.match(app, /ackList\(\{ acks: s\.acks, missing, key: `acks:\$\{s\.id\}`, open: S\.open\.has\(`acks:\$\{s\.id\}`\), responses: z\(\) >= 2 \}/);
+    assert.match(app, /ackList\(\{ acks: s\.acks, key: `dacks:\$\{s\.id\}`, open: S\.open\.has\(`dacks:\$\{s\.id\}`\), responses: true,/);
   });
 });
