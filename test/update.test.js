@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { update, describeUpdate, offReason, fileInTarball, runningCommit, releaseOf, CHECK_EVERY, changelogEntry, versionOf } from '../src/update.js';
+import { update, describeUpdate, offReason, fileInTarball, runningCommit, releaseOf, CHECK_EVERY, changelogEntry, versionOf, takeNews, describeNews } from '../src/update.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
@@ -97,6 +97,51 @@ describe('the package updates itself only to a release signed by its pinned key'
       assert.equal(r.status, 'updated', describeUpdate(r));
       assert.equal(describeUpdate(r), 'Updated nuworq 0.2.0 → 0.3.0. The next run uses it.\n  What landed since v0.2.0.\n  Faster search (#12)\n  - Index titles (#13)');
     } finally { hub.close(); }
+  });
+
+  // #436: 0.3.0 arrived through a background check and nobody saw its changelog.
+  test('a background update keeps its news until each reader has been told once', async () => {
+    const changelog = '# Changelog\n\n## 0.4.0 (2026-10-31)\n\n**Operators wake on their own (#281)**\n\n- Releases tag themselves (#400)\n';
+    const hub = await fakeHub({ tgz: tarball({ version: '0.4.0', changelog }) });
+    try {
+      const root = installed(), dir = tmp('nuworq-upd-data-');
+      writeFileSync(join(root, 'package.json'), '{"name":"nuworq","version":"0.3.0"}');
+      assert.equal(takeNews(dir, 'cli'), null, 'nothing before an update');
+      const r = await update({ root, hub: hub.url, dir, install: async () => null });
+      assert.equal(r.status, 'updated', describeUpdate(r));
+      const news = { from: '0.3.0', to: '0.4.0', changes: ['Operators wake on their own (#281)', '- Releases tag themselves (#400)'] };
+      assert.deepEqual(takeNews(dir, 'cli'), news);
+      assert.equal(takeNews(dir, 'cli'), null, 'once');
+      assert.deepEqual(takeNews(dir, 'mcp'), news, 'the MCP server has its own once');
+      assert.equal(takeNews(dir, 'mcp'), null);
+      assert.equal(describeNews(news), 'nuworq updated 0.3.0 → 0.4.0:\n  Operators wake on their own (#281)\n  - Releases tag themselves (#400)');
+    } finally { hub.close(); }
+  });
+
+  test('the news says at most 10 lines, and how to see the rest', () => {
+    const changes = Array.from({ length: 13 }, (_, i) => `- Item ${i + 1}`);
+    const text = describeNews({ from: '0.3.0', to: '0.4.0', changes });
+    assert.equal(text.split('\n').length, 12);
+    assert.match(text, /\n {2}- Item 10\n {2}… 3 more: nuworq changes$/);
+  });
+
+  test('the next command prints the news once on stderr; mcp, wait and `nuworq changes` leave it alone', async () => {
+    const home = tmp('nuworq-upd-home-'), dir = join(home, '.nuworq', 'update');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'update.json'), JSON.stringify({ checked_at: Date.now(), news: { from: '0.3.0', to: '0.4.0', changes: ['- Releases tag themselves (#400)'], shown: {} } }));
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))), HOME: home, NUWORQ_URL: 'http://127.0.0.1:1' };
+    const cli = (...args) => promisify(execFile)(process.execPath, [BIN, ...args], { env }).catch((e) => e);
+    const mcpRun = await new Promise((resolve) => { const c = execFile(process.execPath, [BIN, 'mcp'], { env }, (e, stdout, stderr) => resolve({ stderr })); c.stdin.end(); });
+    assert.doesNotMatch(mcpRun.stderr, /updated 0\.3\.0/);
+    assert.doesNotMatch((await cli('wait')).stderr, /updated 0\.3\.0/);
+    const changes = await cli('changes');
+    assert.match(changes.stdout, /^nuworq \d+\.\d+\.\d+:\n {2}/, 'this checkout\'s own changelog entry');
+    assert.doesNotMatch(changes.stderr, /updated 0\.3\.0/);
+    const first = await cli('guide');
+    assert.equal(first.stderr, 'nuworq updated 0.3.0 → 0.4.0:\n  - Releases tag themselves (#400)\n');
+    assert.doesNotMatch(first.stdout, /updated 0\.3\.0/, 'stderr only');
+    assert.equal((await cli('guide')).stderr, '', 'never again');
+    assert.equal(JSON.parse(readFileSync(join(dir, 'update.json'), 'utf8')).news.shown.mcp, undefined, 'the MCP server is still to tell its session');
   });
 
   test('changelogEntry finds a version\'s lines; first: only when it leads (#400)', () => {
