@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { update, describeUpdate, offReason, fileInTarball, runningCommit, releaseOf, CHECK_EVERY } from '../src/update.js';
+import { update, describeUpdate, offReason, fileInTarball, runningCommit, releaseOf, CHECK_EVERY, changelogEntry, versionOf } from '../src/update.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
@@ -30,11 +30,12 @@ function installed({ pub = RELEASE.pub, commit = OLD, time = OLD_T } = {}) {
   return root;
 }
 // A package tarball in npm's layout, carrying the given release key.
-function tarball({ pub = RELEASE.pub, commit = NEW, time = NEW_T } = {}) {
+function tarball({ pub = RELEASE.pub, commit = NEW, time = NEW_T, version = null, changelog = null } = {}) {
   const dir = tmp('nuworq-upd-pkg-');
   mkdirSync(join(dir, 'package', 'src'), { recursive: true });
   writeFileSync(join(dir, 'package', 'src', 'commit.txt'), line(commit, time));
-  writeFileSync(join(dir, 'package', 'package.json'), '{"name":"nuworq"}');
+  writeFileSync(join(dir, 'package', 'package.json'), JSON.stringify({ name: 'nuworq', ...(version ? { version } : {}) }));
+  if (changelog) writeFileSync(join(dir, 'package', 'CHANGELOG.md'), changelog);
   if (pub) writeFileSync(join(dir, 'package', 'release-key.pub'), pub);
   execFileSync('tar', ['-czf', join(dir, 'p.tgz'), '-C', dir, 'package']);
   return readFileSync(join(dir, 'p.tgz'));
@@ -82,6 +83,31 @@ describe('the package updates itself only to a release signed by its pinned key'
       assert.equal(describeUpdate(r), `Updated nuworq aaaaaaa → bbbbbbb. The next run uses it.`);
       assert.equal(fileInTarball(tgz, 'release-key.pub').toString(), RELEASE.pub);
     } finally { hub.close(); }
+  });
+
+  test('a release says the versions it moved between, then its changelog lines (#400)', async () => {
+    const changelog = '# Changelog\n\n## 0.3.0 (2026-10-31)\n\nWhat landed since v0.2.0.\n\n**Faster search (#12)**\n\n- Index titles (#13)\n\n## 0.2.0\n\n- Old news\n';
+    const hub = await fakeHub({ tgz: tarball({ version: '0.3.0', changelog }) });
+    try {
+      const root = installed();
+      writeFileSync(join(root, 'package.json'), '{"name":"nuworq","version":"0.2.0"}');
+      // As npm install -g does, the install replaces the package the update runs from.
+      const install = async () => { writeFileSync(join(root, 'package.json'), '{"name":"nuworq","version":"0.3.0"}'); return null; };
+      const r = await update({ root, hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
+      assert.equal(r.status, 'updated', describeUpdate(r));
+      assert.equal(describeUpdate(r), 'Updated nuworq 0.2.0 → 0.3.0. The next run uses it.\n  What landed since v0.2.0.\n  Faster search (#12)\n  - Index titles (#13)');
+    } finally { hub.close(); }
+  });
+
+  test('changelogEntry finds a version\'s lines; first: only when it leads (#400)', () => {
+    const text = '# Changelog\n\n## v1.1.0 (2026-10-31)\n\n- New\n\n## 1.0.0\n\n- Old\n';
+    assert.equal(changelogEntry(text, '1.1.0', { first: true }), '- New');
+    assert.equal(changelogEntry(text, '1.0.0'), '- Old');
+    assert.equal(changelogEntry(text, '1.0.0', { first: true }), null, 'not the first entry');
+    assert.equal(changelogEntry(text, '1.2.0'), null);
+    assert.equal(changelogEntry(null, '1.0.0'), null);
+    assert.equal(versionOf('{"version":"1.2.3"}'), '1.2.3');
+    assert.equal(versionOf('{"name":"x"}'), null);
   });
 
   const refusedFor = async (hubOpts, why, root = installed()) => {

@@ -303,6 +303,19 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
       if (r.status !== 200 || !r.json.merged) throw new Error(`GitHub didn't merge PR #${number} (${said(r)})`);
       return { sha: r.json.sha ?? '' };
     },
+    // Tag a commit (#400): refs/tags/<tag> at sha, lightweight. A tag already there on that commit is fine.
+    async tag({ repo, tag, sha }) {
+      const [owner, name] = parts(repo);
+      const token = await tokenFor(repo);
+      const r = await app.call('POST', `/repos/${owner}/${name}/git/refs`, { ref: `refs/tags/${tag}`, sha }, token);
+      if (r.status === 201) return { sha };
+      if (r.status === 422) {
+        const have = await app.call('GET', `/repos/${owner}/${name}/git/ref/tags/${encodeURIComponent(tag)}`, null, token);
+        if (have.status === 200 && have.json.object?.sha === sha) return { sha };
+        if (have.status === 200) throw new Error(`${tag} is already on ${String(have.json.object?.sha ?? '').slice(0, 7)}`);
+      }
+      throw new Error(`GitHub didn't tag ${sha.slice(0, 7)} as ${tag} (${said(r)})`);
+    },
     // The PR as GitHub has it now: { state: open | merged | closed, mergeable_state (clean: it can merge as
     // it is; dirty: it conflicts with its base), auto_merge, base, sha (of the merge, once merged) }.
     async pull({ repo, number }) {

@@ -69,6 +69,13 @@ export function lastRelease(repo) {
   return SEMVER.test(version) ? { version: version.replace(/^v/, ''), tag: null, at: 0 } : null;
 }
 
+// Tag sha as tag in a checkout on this machine (#400): true when it is tagged there now (already was, too).
+export function tagAt(repo, tag, sha) {
+  const at = shaOf(repo, `refs/tags/${tag}`);
+  if (at) return at === shaOf(repo, sha);
+  return git(repo, 'tag', tag, sha) !== null;
+}
+
 // Each item is built on its own branch, cut from the latest main, so it can land on its own.
 export function itemBranch(item) {
   const words = String(item.title ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');

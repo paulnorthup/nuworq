@@ -6,6 +6,7 @@ import { UserError, normRemote } from './core.js';
 import { issueEvent, issueComment, installedRepos } from './issues.js';
 import { alertEvent } from './alerts.js';
 import { untrackedPr } from './tidy.js';
+import { tagRelease } from './releases.js';
 
 const ACTOR = 'github';
 const OK = new Set(['success', 'neutral', 'skipped']);
@@ -87,6 +88,7 @@ function pullRequest(hub, p, body) {
         summary: before === 'landing' ? '' : `It was ${before}${holder ? ` with ${holder}` : ''}: its pull request merged once its checks passed, so it is done${holder ? '; nothing more to do on it' : ''}.`,
         data: { pr: pr.number, url: pr.html_url, branch: pr.head?.ref ?? item.branch, base, head: pr.merge_commit_sha ?? '' },
       });
+      if (item.release) tagRelease(hub, p, item, pr.merge_commit_sha ?? ''); // its merge is the release (#400)
     } else if (item.stage === 'landing' && state === 'closed') {
       const headline = `PR #${pr.number} was closed without merging`;
       const summary = 'Read the pull request for why, rework it on the same branch, and submit again.';

@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { rmSync } from 'node:fs';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, mirrorPath, originOf, refetch } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, mirrorPath, originOf, refetch, shaOf } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -12,7 +12,7 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
-import { RELEASES, landed, askRelease } from './releases.js';
+import { RELEASES, landed, askRelease, tagRelease, releaseVersion } from './releases.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
@@ -1993,7 +1993,10 @@ export class Hub extends EventEmitter {
     const clone = remote && item.branch && this.caller && !this.caller.remote
       ? `You aren't in a clone of ${this.repoOf(p, item)}: clone it first (git clone ${cloneUrl(this.repoOf(p, item))}) and work in that clone. `
       : '';
-    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo);
+    // A release (#400): what its branch changes, and nothing else.
+    const version = item.release && releaseVersion(item);
+    const release = version ? ` This is a release: set the version file to ${version} (package.json's version, else VERSION) and put the summary at the top of CHANGELOG.md under "## ${version} (${new Date(this.now()).toISOString().slice(0, 10)})". Nothing else changes; the hub tags it v${version} once it lands (the guide's Releases section).` : '';
+    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo) + release;
   }
 
   // The branch git found for the latest submission, when the item has none of its own (older work).
@@ -2263,7 +2266,9 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
     summary, detail, data: { branch: item.branch, base: land.base, head: land.head },
   });
   this.setStatus(p, agent, `Landed #${item.seq}`);
-  return { ok: true, hint: `#${item.seq} is on ${land.base} and done. You can delete the branch: git branch -d ${item.branch}. Call next.` };
+  // A release is tagged on the commit it landed as (#400); when the hub can't, the lander does.
+  const tag = item.release ? tagRelease(this, p, item, shaOf(this.repoFor(p, item)?.path, item.branch) ?? '') : '';
+  return { ok: true, hint: `#${item.seq} is on ${land.base} and done. ${tag ? `${tag} ` : ''}You can delete the branch: git branch -d ${item.branch}. Call next.` };
 }
 
 function finishShaping(p, agent, item, { headline, summary, detail, acceptance, difficulty, difficulty_why }) {

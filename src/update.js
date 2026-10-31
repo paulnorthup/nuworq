@@ -59,6 +59,37 @@ export function fileInTarball(tgz, path) {
   return null;
 }
 
+// The version a package.json says (#400), or null.
+export function versionOf(text) {
+  let v = '';
+  try { v = String(JSON.parse(String(text ?? '')).version ?? ''); } catch {}
+  return /^\d+\.\d+\.\d+$/.test(v) ? v : null;
+}
+
+// A release's entry in CHANGELOG.md (#400): the lines under its "## X.Y.Z" heading (a "v" and a date after it
+// are fine), up to the next one. first: only when it is the first entry, as a release's own CHANGELOG has it.
+// null when there is none.
+const ENTRY = /^## v?(\d+\.\d+\.\d+)\b/;
+export function changelogEntry(text, version, { first = false } = {}) {
+  const lines = String(text ?? '').split('\n');
+  const heads = lines.flatMap((l, i) => (ENTRY.test(l) ? [i] : []));
+  const at = first ? heads.slice(0, 1).find((i) => ENTRY.exec(lines[i])[1] === version) : heads.find((i) => ENTRY.exec(lines[i])[1] === version);
+  if (at == null) return null;
+  const end = heads.find((i) => i > at) ?? lines.length;
+  return lines.slice(at + 1, end).join('\n').trim();
+}
+
+// What a package says of its own version: { version, changes } (changes: its CHANGELOG entry as lines, for a
+// terminal), from the tarball. Either may be null.
+function versionIn(tgz) {
+  let version = null, entry = null;
+  try { version = versionOf(fileInTarball(tgz, 'package.json')); } catch {}
+  try { entry = version && changelogEntry(fileInTarball(tgz, 'CHANGELOG.md'), version); } catch {}
+  const changes = entry ? entry.split('\n').map((l) => l.replace(/\*\*(.+?)\*\*/g, '$1').trimEnd()).filter(Boolean) : null;
+  return { version, changes };
+}
+const installedVersion = (root) => { try { return versionOf(readFileSync(join(root, 'package.json'), 'utf8')); } catch { return null; } };
+
 const readState = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return {}; } };
 const writeState = (file, s) => { try { writeFileSync(file, JSON.stringify(s)); } catch {} };
 
@@ -156,13 +187,17 @@ export async function update({ root, hub, dir, env = process.env, force = false,
       if (rel.time <= mine.time) return refused(`${to.slice(0, 7)} (${when(rel.time)} UTC) isn't newer than the installed ${from.slice(0, 7)} (${when(mine.time)} UTC); updates never go back`);
     }
 
+    // The version it moves from, read before npm replaces the package it is read from (root).
+    const fromVersion = installedVersion(root);
     const file = join(dir, `nuworq-${to}.tgz`);
     writeFileSync(file, tgz.body);
     const failed = await install(file);
     // By hand, the same verified file: downloading it again would skip the signature check.
     if (failed) return { status: 'failed', reason: `npm couldn't install it (${failed})`, from, to, command: `npm install -g ${file}` };
     writeState(stateFile, { ...readState(stateFile), installed: to });
-    return { status: 'updated', from, to };
+    // The versions it moved between, and what changed in the new one (#400).
+    const { version, changes } = versionIn(tgz.body);
+    return { status: 'updated', from, to, from_version: fromVersion, to_version: version, changes };
   } finally { unlock(); }
 }
 
@@ -179,7 +214,13 @@ export function staleListener({ root, have, need }) {
 // In words, for `nuworq update` and stderr.
 export function describeUpdate(r) {
   const v = (c) => (c ? c.slice(0, 7) : 'an unknown version');
-  if (r.status === 'updated') return `Updated nuworq ${v(r.from)} → ${v(r.to)}. The next run uses it.`;
+  if (r.status === 'updated') {
+    // A release (#400): its version and its changelog lines; otherwise the commits.
+    if (r.to_version && r.to_version !== r.from_version) {
+      return `Updated nuworq ${r.from_version ?? v(r.from)} → ${r.to_version}. The next run uses it.${r.changes?.length ? `\n${r.changes.map((l) => `  ${l}`).join('\n')}` : ''}`;
+    }
+    return `Updated nuworq ${v(r.from)} → ${v(r.to)}. The next run uses it.`;
+  }
   if (r.status === 'current') return `nuworq ${v(r.from)} is current${r.reason ? ` (${r.reason})` : ''}.`;
   if (r.status === 'off') return `Updates are off: ${r.reason}.`;
   if (r.status === 'failed') return `Didn't update to ${v(r.to)}: ${r.reason}. Run it yourself: ${r.command}`;
