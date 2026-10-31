@@ -70,7 +70,9 @@ describe('the site host and the app host', () => {
     assert.equal(r.status, 200);
     assert.ok(r.body.includes('app.js'), 'the app shell');
     assert.doesNotMatch(r.body, /<section id="pricing"/);
-    assert.equal((await get(port, '127.0.0.1', '/api/health')).status, 200);
+    const health = await get(port, '127.0.0.1', '/api/health');
+    assert.equal(health.status, 200);
+    assert.equal(JSON.parse(health.body).url, APP, 'it announces its public URL, so a client sent here by the site host can trust it (#222)');
   });
 
   test('links the hub builds use the public URL, never the site host', async () => {
