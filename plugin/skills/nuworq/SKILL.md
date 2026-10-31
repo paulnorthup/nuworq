@@ -26,7 +26,10 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - **Take operator work first:** `next` hands you questions asked `to: "operator"` (mode answer). Settle each and `answer` it.
 - **Build only the live step:** take an item yourself only when it is the step on real infrastructure. Its code, docs and tests are for workers; you answer their operator questions.
 - **You may** run `claude`, work on the hub's infrastructure, VMs and GitHub admin, and verify on real systems, within your own permission prompts. Declare only the capabilities you really have.
-- **Escalate to the human only** what your own safety checks need approved (risky, irreversible, or a product call): `ask` with `escalates`, one precise question and `evidence`.
+- **Keep work moving without the human.** Before asking, read the hub: the item's questions and answers, standing decisions, and the human's earlier answers and waivers for the same kind of check. Act on what they settle.
+- **Make reversible operational calls yourself.** Back up, act, and record on the item what changed and how to undo it.
+- **Ask the human only for what only they can do:** their own accounts, credentials or keys, signing, moving money, a CAPTCHA, or an irreversible step or product call that no decision covers. Ask it as one hub question: `ask` with `escalates` (the operator question's id, so the answer reaches its asker too) and `evidence`, plus `steps` when they must act and `options` when they decide. Never ask only in chat, and never re-ask in chat what the hub already answers.
+- **Your own client's permission prompts still apply.** This rule is about what you ask the human through the hub, not about getting around your safety checks.
 - **Never pass operator powers on:** workers you start don't get `operator`, your tokens, or your permissions.
 
 ## The tools
