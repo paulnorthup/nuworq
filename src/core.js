@@ -12,6 +12,7 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
+import { RELEASES, landed, askRelease } from './releases.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
@@ -51,7 +52,7 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'check'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'check', 'release'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
@@ -919,6 +920,7 @@ export class Hub extends EventEmitter {
     if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);    Object.assign(item, fields);
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
     if (['done', 'dropped'].includes(stage)) this.settleQuestions(item, stage);
+    if (stage === 'done') landed(this, item); // a finished milestone drafts the release (#399)
     if (unmet?.kind === 'ask') this.askPrecondition(item, actor);
   }
 
@@ -2671,6 +2673,11 @@ const AGENT_OPS = {
   },
 
   propose(p, agent, args) {
+    // A release now (#399): the hub drafts it from what landed, whatever the title says.
+    if (args.release) {
+      const it = askRelease(this, p, agent);
+      return { ok: true, item: `#${it.seq}`, stage: it.stage, title: it.title, hint: `#${it.seq} is ${it.title}, drafted from what landed. Its summary is the changelog; refine it if it needs words.` };
+    }
     const item = this.createItem(p, agent, args);
     return {
       ok: true, item: `#${item.seq}`, stage: item.stage,
@@ -3180,6 +3187,12 @@ const HUMAN_OPS = {
     }
   },
 
+  // "Release now" (#399): draft the next release from what landed, e.g. a patch for an urgent fix.
+  release(p, _args, by) {
+    const it = askRelease(this, p, by);
+    return { item: `#${it.seq}`, title: it.title };
+  },
+
   // "Check now": forget the backoff, so the next sweep checks it.
   check(p, { item }, by) {
     const it = this.item(p, item);
@@ -3276,7 +3289,7 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
     const changes = [];
     // The quality bar routing keeps to (#349): how close to the best model's results a cheaper one must come.
     if (model_quality != null && model_quality !== '') {
@@ -3344,6 +3357,13 @@ const HUMAN_OPS = {
     if (fresh != null && !!fresh !== !!p.fresh) {
       this.q('UPDATE projects SET fresh = ? WHERE id = ?').run(fresh ? 1 : 0, p.id);
       this.event(p, { actor: by, type: 'settings', headline: fresh ? `${You(by)} turned the weekly freshness sweep back on` : `${You(by)} turned off the weekly freshness sweep: ${p.name} is no longer kept current` });
+    }
+    // Releases (#399, src/releases.js): per milestone, a finished milestone drafts the next release.
+    if (releases != null && releases !== '' && releases !== p.releases) {
+      if (!RELEASES[releases]) throw new UserError(`releases is ${Object.keys(RELEASES).map((k) => `"${k}"`).join(' or ')}`, { hint: '"milestone": when a milestone finishes, the hub drafts the next release. "off": it never does.' });
+      this.q('UPDATE projects SET releases = ? WHERE id = ?').run(releases, p.id);
+      p.releases = releases;
+      this.event(p, { actor: by, type: 'settings', headline: releases === 'milestone' ? `${You(by)} set ${p.name} to release per milestone: when one finishes, the hub drafts the next release` : `${You(by)} turned off releases per milestone` });
     }
     // Watchable (#358): anyone with the link sees what src/live.js lets out, read-only, without signing in.
     if (live != null && !!live !== !!p.live) {

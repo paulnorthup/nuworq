@@ -7,7 +7,7 @@
 export const placeholder = (rows = 3, { head = true } = {}) =>
   `<div class="ph-block" aria-busy="true" aria-label="Loading">${head ? '<span class="ph h"></span><span class="ph s"></span><span class="ph xs"></span>' : ''}${'<span class="ph ph-row"></span>'.repeat(rows)}</div>`;
 
-const SETTINGS =['autonomy', 'parked', 'runner', 'fresh'];
+const SETTINGS =['autonomy', 'parked', 'runner', 'fresh', 'releases'];
 const MESSAGE = { steer: ['steer', 'You steered'], comment: ['comment', 'You noted'], decide: ['decision', 'Decision'] };
 
 // Every object in it that stands for the item ref (lanes, groups, the all-work table, the open item).

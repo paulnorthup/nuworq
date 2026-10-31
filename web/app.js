@@ -1237,6 +1237,12 @@ function settingsModal() {
       sw('runner', !!P.runner, P.runner ? 'runner-off' : 'runner-on'))}
     ${row('fresh', 'Keep it fresh weekly', 'Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade.',
       sw('fresh', !!P.fresh, P.fresh ? 'fresh-off' : 'fresh-on'))}
+    <div data-new="releases">${row('releases', 'Release per milestone', P.releases === 'milestone'
+    ? 'On: when a milestone finishes, the hub drafts "Release vX.Y.Z" with its changelog and upgrade notes, for you to edit and sign.'
+    : 'When a milestone finishes, the hub drafts the next release: its version, changelog and upgrade notes.',
+    sw('releases', P.releases === 'milestone', P.releases === 'milestone' ? 'releases-off' : 'releases-on'))}
+    ${row('release-now', 'Release now', 'A patch for a fix that can\'t wait, or whatever landed since the last release, drafted the same way.',
+      '<button class="btn" data-action="release-now">Draft</button>')}</div>
     <div data-new="live-view">${row('live', 'Anyone can watch', P.live
     ? `On: anyone with <a href="${esc(liveLink(P.slug))}" target="_blank" rel="noopener">the link</a> sees item titles, agents, models, Flow and totals. Nothing else.`
     : 'A public, read-only page of what agents are doing here. Off until you turn it on.',
@@ -1702,6 +1708,16 @@ const ACTIONS = {
   'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
   'fresh-on': () => setting({ fresh: true }, 'The weekly freshness sweep is on'),
+  'releases-on': () => setting({ releases: 'milestone' }, 'When a milestone finishes, the hub drafts the next release'),
+  'releases-off': () => setting({ releases: 'off' }, 'Releases per milestone are off'),
+  // The drafted release opens, so the person reads (and can edit) the changelog at once.
+  'release-now': async () => {
+    const r = await human('release', {}, null);
+    if (!r) return;
+    toast(`Drafted ${r.title}`);
+    closeModal();
+    go(S.slug, r.item);
+  },
   'live-on': () => {
     if (confirm(`Let anyone watch ${S.view.project.name}, without signing in?\n\nPublic at ${liveLink(S.view.project.slug)}: item numbers and titles, their stage, the agent and model on each, Flow, recently landed items, and totals (landed, sent back, median cycle time, cost per landed).\n\nNever public: summaries, details, evidence, field notes, questions, answers, steering, decisions, emails, tokens or machine names.\n\nYou can turn it off any time.`)) setting({ live: true }, 'Anyone with the link can watch this project');
   },
