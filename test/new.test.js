@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { NEW, isNew, seenNew, markSeen } from '../web/new.js';
 
 const DAY = 864e5;
@@ -39,7 +39,9 @@ describe('what just shipped', () => {
   });
 
   test('every listed key has a real date and is used by some element in the app', () => {
-    const app = ['app.js', 'milestones.js'].map((f) => readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8')).join('\n');
+    // The page and the pure modules it renders with (e.g. web/milestones.js, web/groupline.js).
+    const web = new URL('../web/', import.meta.url);
+    const app = readdirSync(web).filter((f) => f.endsWith('.js')).map((f) => readFileSync(new URL(f, web), 'utf8')).join('\n');
     assert.ok(Object.keys(NEW).length >= 2);
     for (const [key, date] of Object.entries(NEW)) {
       assert.match(date, /^\d{4}-\d{2}-\d{2}$/, key);
