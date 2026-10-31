@@ -649,6 +649,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
         return res.end(`${sig}\n`);
       }
+      // What the packages are, for installs deciding whether to update (src/update.js) and for signing one
+      // (scripts/sign-release.js): /api/info's package with its newest signed release, plus the running commit in
+      // full and whether it is signed. Public like the packages themselves: /api/info needs a sign-in on most hubs.
+      if (req.method === 'GET' && path === '/api/package') {
+        const b = await pkg;
+        return send(200, { package: b ? { ...packageInfo((!spaces && publicUrl) || origin(req)), commit: b.commit, signed: !!signatureOf(b) } : null });
+      }
       // A package by its full commit, and its signature: only the packages this hub built and kept, so an
       // install can fetch the release /api/info names after the hub has moved on to newer commits.
       let pm;

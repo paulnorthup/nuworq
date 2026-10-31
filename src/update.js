@@ -90,7 +90,8 @@ export async function update({ root, hub, dir, env = process.env, force = false,
   // Before asking: offline, a check every run would be a wait every run.
   writeState(stateFile, { ...state, checked_at: now });
 
-  const base = hub.replace(/\/+$/, '');
+  // The package lives at the hub's root, whichever workspace (/w/<slug>) this machine connected to.
+  const base = new URL(hub).origin;
   const from = runningCommit(root);
   const ask = async (path) => {
     const res = await get(`${base}${path}`, { signal: AbortSignal.timeout(timeoutMs) });
@@ -98,8 +99,11 @@ export async function update({ root, hub, dir, env = process.env, force = false,
   };
   let pkg;
   try {
-    const info = await ask('/api/info');
-    pkg = info.status === 200 ? JSON.parse(info.body).package : null;
+    // /api/package is public (#224). Hubs from before it name their package only in /api/info.
+    let info = await ask('/api/package');
+    if (info.status === 404) info = await ask('/api/info');
+    if (info.status !== 200) return { status: 'unreachable', reason: `the hub at ${base} answered ${info.status} when asked which version it serves; carrying on with the installed version`, from };
+    pkg = JSON.parse(info.body).package;
   } catch (e) {
     return { status: 'unreachable', reason: `the hub at ${base} didn't answer (${e.cause?.code ?? e.name}); carrying on with the installed version` };
   }
@@ -110,6 +114,9 @@ export async function update({ root, hub, dir, env = process.env, force = false,
   const to = String(named ? named.commit : pkg.commit);
   if (!/^[0-9a-f]{7,40}$/.test(to) || (named && to.length !== 40)) return { status: 'refused', reason: `the hub names its version "${to.slice(0, 40)}", which isn't a commit. Kept the installed version.`, from };
   if (from && (from.startsWith(to) || to.startsWith(from))) return { status: 'current', from };
+  // With no signed release named, the running package isn't one until someone signs it (docs/DEPLOY.md, "Signed
+  // releases"): nothing to fetch, nothing to say.
+  if (!named && pkg.signed === false) return { status: 'current', reason: `the hub's ${to.slice(0, 7)} isn't a signed release yet`, from, to };
   // What the hub says of the release's time only saves a download; the signed package's own time decides.
   const mine = running(root);
   if (named && mine?.time != null && Number.isInteger(named.time) && named.time <= mine.time) return { status: 'current', reason: `the newest signed release, ${to.slice(0, 7)}, isn't newer`, from };
