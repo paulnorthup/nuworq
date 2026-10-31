@@ -1122,6 +1122,7 @@ function renderDrawer() {
       <div class="life-steps">${life.map((l) => `<span><b>${esc(l.label)}</b> ${esc(l.time)}${l.court === 'agents' && l.actor ? ` (${esc(l.actor)})` : ''}</span>`).join('<span>→</span>')}</div></div>` : ''}
     ${it.summary ? `<div class="d-sec"><div class="label">Summary</div>${md(it.summary)}</div>` : ''}
     <div class="d-sec"><div class="label">Done means</div>${it.acceptance ? md(it.acceptance) : '<p class="faint">No acceptance criteria yet. Agents are asked to write them before submitting.</p>'}</div>
+    ${it.breaking ? `<div class="d-sec"><div class="label"><span data-new="breaking">Breaking: who must act when it ships</span></div><div class="warn">${inline(it.breaking)}</div></div>` : ''}
     ${preconditionSection(it, { editing: S.editPre })}
     ${it.submissions?.length ? `<div class="d-sec"><div class="label">The race <span class="count">${it.submissions.length} submitted</span></div>${attemptsGrid(it.item, it.submissions, { keep: it.stage === 'verifying' })}</div>` : ''}
     ${it.submission && it.stage === 'verifying' && !it.submissions?.length ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}

@@ -11,7 +11,7 @@ const SUMMARY = `The weekly freshness sweep: library dependencies, the runtime v
 
 const ACCEPTANCE = [
   '- Patch and minor updates of dependencies land in one batch on this branch, lockfiles included, with the tests passing.',
-  '- Each breaking upgrade (a major version, a runtime near or past end of life, a CI action\'s new major) is its own proposal, saying what breaks and how to migrate, instead of being done here.',
+  '- Each breaking upgrade (a major version, a runtime near or past end of life, a CI action\'s new major) is its own proposal, saying what breaks and how to migrate, with `breaking` set to who must do what when it changes what people install, instead of being done here.',
   '- Nothing goes against a standing decision (e.g. "stay on React 18"); an upgrade that needs a person\'s call is asked with options, not done.',
   '- Nothing to update: submit "fresh: nothing to update" with the commands\' output as evidence.',
 ].join('\n');

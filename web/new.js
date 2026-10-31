@@ -24,6 +24,7 @@ export const NEW = {
   'model-quality': '2026-10-31', // #349: the quality bar routing keeps to, in Staffing
   'model-why': '2026-10-31', // #349: in an item's drawer, which model its job runs on and why
   'model-routing-results': '2026-10-31', // #349: analytics' Model routing, each model's results per kind of job
+  breaking: '2026-10-31', // #398: an item that breaks someone says who must do what, in its drawer
   'copy-each-command': '2026-10-31', // #379: several commands in a step, each with its own Copy that copies clean
   'live-view': '2026-10-31', // #358: Settings → Anyone can watch, the project's public live page
   'propose-work': '2026-10-31', // #389: propose work from a project's board, one field first, the rest on demand
