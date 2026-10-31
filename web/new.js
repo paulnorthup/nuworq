@@ -5,6 +5,7 @@ export const NEW = {
   'github-app-status': '2026-10-29', // #94: where the hub's GitHub App stands, in Connect an agent
   'step-checklist': '2026-10-30', // #162: a question's steps as a checklist on its Needs you card
   'dependabot-alerts': '2026-10-30', // #180: whether Dependabot alerts come in, in a project's GitHub dialog
+  analytics: '2026-10-31', // #239: the workspace's analytics, for its owners (the home's Analytics button)
 };
 
 const DAYS = 7;

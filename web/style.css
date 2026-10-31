@@ -663,3 +663,17 @@ main.admin { padding-top: 24px; }
 .m-q { font-size: 13px; color: var(--muted); padding-left: 4px; }
 /* The folded done parts (#215): one line, a 44px target. */
 .m-fold .link { min-height: 44px; padding: 0 4px; margin: -6px 0 -6px -4px; color: var(--muted); text-decoration: underline; }
+
+/* ── analytics (#239): a line per project, model or agent; its figures wrap as short phrases, in ink and
+   muted only (no state color), each change a sign or a word. ── */
+.an-switch { margin: -16px 0 24px; }
+.an-open { min-height: 44px; display: inline-flex; align-items: center; margin-top: 8px; }
+.an-lines { display: flex; flex-direction: column; gap: 6px; }
+.an-line { padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.an-name { display: block; font-weight: 600; margin-bottom: 4px; overflow-wrap: anywhere; }
+a.an-name { display: flex; align-items: center; min-height: 44px; margin: -10px 0 -6px; color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.an-name .s { color: var(--muted); font-weight: 400; font-size: 12.5px; margin-left: 4px; }
+.an-figs { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+.an-figs .fig b { color: var(--ink); font-weight: 600; }
+.an-figs .chg { color: var(--ink); font-size: 12px; }
+.an-more { min-height: 44px; padding: 0 4px; margin-top: 4px; color: var(--ink); text-decoration: underline; }

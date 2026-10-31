@@ -10,6 +10,7 @@ import { dotClass } from './timeline.js';
 import { missingProject } from './missing.js';
 import { mapParts } from './groupmap.js';
 import { ackList } from './acks.js';
+import { analyticsPage } from './analytics.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
@@ -26,6 +27,7 @@ const store = {
 };
 const S = {
   projects: [], slug: null, view: null, info: null,
+  analytics: false, period: '14d', outcomes: null, person: null, // the workspace's analytics (#239)
   itemRef: null, item: null, deep: false,
   zoom: store.get('zoom', '30s'),
   open: new Set(), reveal: new Set(), drafts: {},
@@ -175,13 +177,16 @@ async function loadProjects() {
 }
 async function refresh({ force = false } = {}) {
   try {
-    if (S.slug) await loadProjects();
+    if (S.slug || S.analytics) await loadProjects();
     S.missing = null;
+    if (S.analytics) S.outcomes = await api(`/api/outcomes?period=${encodeURIComponent(S.period)}`);
     if (S.slug && !S.projects.some((p) => p.slug === S.slug)) {
       // A stale link, or a renamed or archived project: say so, rather than quietly showing the home (#143).
       const archived = await api('/api/projects?archived=1').catch(() => []);
       S.view = null;
       S.missing = { slug: S.slug, archived: archived.find((p) => p.slug === S.slug) ?? null };
+    } else if (S.analytics) {
+      S.view = null;
     } else if (S.slug) {
       S.view = await api(`/api/p/${encodeURIComponent(S.slug)}/view`);
       if (S.itemRef) S.item = await api(`/api/p/${encodeURIComponent(S.slug)}/items/${encodeURIComponent(S.itemRef.replace('#', ''))}`).catch(() => null);
@@ -209,7 +214,7 @@ function render({ force = false } = {}) {
   S.pending = false;
   const drawerScroll = $('#drawer').scrollTop;
   renderRail();
-  $('#main').innerHTML = S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
+  $('#main').innerHTML = S.analytics ? analytics() : S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
   renderDrawer();
   $('#drawer').scrollTop = drawerScroll;
   for (const el of document.querySelectorAll('[data-draft]')) {
@@ -223,6 +228,7 @@ function render({ force = false } = {}) {
 // ── routing ──
 function route() {
   if (!$('#modal').hidden) closeModal(); // a dialog belongs to the page it was opened on (#155)
+  S.analytics = location.hash.startsWith('#/analytics');
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
   const ref = m?.[2] ? `#${m[2]}` : null;
@@ -247,7 +253,7 @@ function renderRail() {
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
-    <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
+    <a class="rail-label rail-head ${!S.slug && !S.analytics ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--muted)">No projects yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
@@ -285,6 +291,10 @@ function zoomControl() {
     `<button class="${S.zoom === k ? 'on' : ''}" data-action="zoom" data-zoom="${k}">${k}</button>`).join('')}</div>`;
 }
 
+// Analytics (#239, web/analytics.js): the workspace's figures, for its owners, from the home.
+const owner = () => S.person?.role === 'owner';
+const analytics = () => analyticsPage(S.outcomes, { esc, dur, period: S.period, open: S.open.has('an-agents'), wide: WIDE.matches, columns });
+
 // The home, across every project (web/home.js): the pulse, what needs you, a line per project.
 const getStarted = () => getStartedCard(S.gs, { worker: S.info ? connectCommands(S.info, location).worker : '' });
 function overview() {
@@ -298,7 +308,8 @@ function overview() {
       <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`}`;
   }
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
-      <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div></div></div>
+      <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div>
+      ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div>
     ${homePage(S.home, { z: z(), pulse, card, esc, plural, wide: WIDE.matches, gs: getStarted() })}`;
 }
 
@@ -1299,6 +1310,7 @@ const val = (id) => (document.getElementById(id)?.value ?? '').trim();
 const clearDraft = (...keys) => keys.forEach((k) => delete S.drafts[k]);
 
 const ACTIONS = {
+  'an-period': (el) => { S.period = el.dataset.p; S.outcomes = null; render({ force: true }); refresh({ force: true }); },
   zoom: (el) => { S.zoom = el.dataset.zoom; store.set('zoom', S.zoom); render({ force: true }); },
   goto: (el) => go(el.dataset.slug),
   open: (el) => go(S.slug ?? S.actSlug, el.dataset.item),
@@ -1670,6 +1682,7 @@ function listen() {
   if (fromStripe) history.replaceState(null, '', `${location.pathname}#/`);
   window.addEventListener('hashchange', route);
   S.me = await api('/api/me').catch(() => null);
+  S.person = await api('/api/people/me').catch(() => null);
   S.info = await api('/api/info').catch(() => null) ?? undefined;
   // Billing (#231): only a workspace hub that takes payments answers; its owners get Workspace settings.
   if (S.me?.org) S.billing = await api('/api/billing').catch(() => null);
