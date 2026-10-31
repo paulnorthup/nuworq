@@ -118,7 +118,7 @@ function space(w) {
   const billing = w.billing?.line ? `<span class="${w.billing.line === 'payment failed' ? 'warn' : 'faint'}">${esc(w.billing.line)}</span>` : '';
   return `<details class="admin-card admin-space" data-name="${esc(w.name)}"${expanded.has(w.name) ? ' open' : ''}>
     <summary><span class="h">${esc(w.name)}</span><span class="plan plan-${esc(w.plan)}">${PLAN[w.plan]}</span>${billing}
-      <span class="faint">${w.working.length ? `<b class="ok">${w.working.length} working</b>` : 'idle'} · ${w.last_active ? esc(ago(w.last_active)) : 'never active'}</span></summary>
+      <span class="faint">${w.working.length ? `<b class="working">${w.working.length} working</b>` : 'idle'} · ${w.last_active ? esc(ago(w.last_active)) : 'never active'}</span></summary>
     <p>Made by ${w.creator ? `${esc(w.creator.email)}${w.creator.github ? ` · <a href="https://github.com/${esc(w.creator.github)}" target="_blank" rel="noopener">@${esc(w.creator.github)}</a>` : ''}` : 'the host'}</p>
     <p class="s">${w.people} ${w.people === 1 ? 'person' : 'people'} · ${w.projects} ${w.projects === 1 ? 'project' : 'projects'}${w.working.length ? ` · working: ${w.working.map(esc).join(', ')}` : ''}</p>
     <p class="faint">${why}</p>

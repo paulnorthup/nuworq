@@ -263,7 +263,7 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 
 /* ── agents ── */
 .agent { display: inline-flex; align-items: center; gap: 5px; font-weight: 550; font-size: 13px; white-space: nowrap; }
-.agent i { width: 7px; height: 7px; border-radius: 2px; background: var(--queue); transform: rotate(45deg); }
+.agent i { width: 7px; height: 7px; border-radius: 2px; background: var(--muted); transform: rotate(45deg); } /* unknown provider: no state color (#187) */
 .prov-anthropic i { background: var(--p-anthropic); }
 .prov-openai i { background: var(--p-openai); }
 .prov-openweight i { background: var(--p-open); }
@@ -619,9 +619,11 @@ main.admin { padding-top: 24px; }
 .admin-space summary::-webkit-details-marker { display: none; }
 .admin-space summary .faint { flex-basis: 100%; font-size: 13px; }
 .admin-space[open] summary { margin-bottom: 6px; }
-.plan { border-radius: 999px; font-size: 11.5px; font-weight: 600; padding: 2px 9px; }
-.plan-free { background: var(--queue-tint); color: var(--muted); }
-.plan-unlimited { background: var(--ok-tint); color: var(--ok); }
+/* A plan is a fact about the workspace, not a state (#187): told apart by ink, never by a state color. */
+.plan { border-radius: 999px; font-size: 11.5px; font-weight: 600; padding: 2px 9px; background: var(--sunken); }
+.plan-free { color: var(--muted); }
+.plan-unlimited { color: var(--ink); }
+.admin-space .working { color: var(--agents); }
 @media (min-width: 640px) { .admin-space summary .faint { flex-basis: auto; margin-left: auto; } }
 
 /* Groups (#200): one line each at the 30-second view, the state first; a tap opens the map. One column on a

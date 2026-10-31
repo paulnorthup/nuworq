@@ -143,6 +143,15 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.match(app, /class="st \$\{a\.status\.split\(' '\)\[0\]\}"/, 'the agent strip marks a working agent');
   });
 
+  test('the closing pass (#187): plans and an unknown provider carry no state color, and agents working on the admin host are blue', () => {
+    const rule = (sel) => { const m = css.match(new RegExp(`(?:^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`)); assert.ok(m, `a rule for ${sel}`); return m[1]; };
+    const states = /var\(--(you|agents|queue|ok|warn|bad)(-tint|-line)?\)/;
+    for (const sel of ['.plan', '.plan-free', '.plan-unlimited', '.agent i']) assert.doesNotMatch(rule(sel), states, `${sel} uses no state color`);
+    assert.match(rule('.admin-space .working'), /color: var\(--agents\)/);
+    const admin = readFileSync(new URL('../web/admin.js', import.meta.url), 'utf8');
+    assert.match(admin, /<b class="working">\$\{w\.working\.length\} working<\/b>/, 'a workspace\'s working agents are drawn as agents, not as done');
+  });
+
   test('a token change that brings two meanings too close fails', () => {
     assert.ok(dE('#c4520f', '#b42318') < 30, 'today\'s --bad next to --you would fail the state rule');
     assert.ok(dE('#c96442', '#c4520f') < 30, 'the old Anthropic mark next to --you would fail the provider rule');
