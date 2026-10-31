@@ -2,6 +2,7 @@
 // JSON-RPC 2.0, one message per line. Only protocol messages go to stdout; logs go to stderr.
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { hostname } from 'node:os';
 import { createClient } from './client.js';
 import { tools, guide } from './protocol.js';
 import { slugify } from './core.js';
@@ -80,6 +81,10 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
         // Whoever launched us detected what this machine can do (nuworq worker sets it).
         const has = envVar('HAS', env);
         if (args.has == null && has) args.has = has.split(',');
+        // How this session started (#238): nuworq run's workers carry their runner; everyone says where it runs.
+        const role = envVar('ROLE', env);
+        if (role && !args.role) Object.assign(args, { role, ...(envVar('RUNNER', env) ? { runner: envVar('RUNNER', env) } : {}) });
+        args.machine ||= envVar('MACHINE', env) || hostname().split('.')[0];
       }
       try {
         const result = await client.call(name, args, { agent, project });

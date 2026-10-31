@@ -12,6 +12,7 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
+import { OPERATOR_TAGS } from './protocol.js';
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -63,6 +64,11 @@ export const STAGES = {
 export const OPEN_STAGES = ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'landing'];
 // Events that mean an agent took a job: building (or a race slot), shaping, reviewing, landing.
 export const CLAIM_TYPES = ['claimed', 'shaping', 'review_started', 'landing'];
+// What a session is, fixed for its life (#238): an operator (attended, with the human's permissions), a shaper
+// (attended, turning a person's intent into proposals), a worker (headless, started by nuworq run), or a session.
+export const ROLES = ['operator', 'shaper', 'worker', 'session'];
+// The job an agent is on, by the stage of what it holds.
+const JOBS = { active: 'building', proposed: 'shaping', verifying: 'reviewing', landing: 'landing' };
 // Accepted work goes to its builder to land first; after this, any agent may land it.
 export const LAND_GRACE = 3 * MIN;
 
@@ -150,6 +156,8 @@ export function preconditionOut(item) {
   const pre = JSON.parse(item.precondition), last = json(item.last_check, null);
   return { ...pre, waits_for: describePrecondition(pre), met: !!last?.ok, last_check: last ? { ok: last.ok, detail: last.detail, at: last.at } : null };
 }
+// Work only an operator can do: it needs something only an attended session with the human's permissions has.
+const operatorOnly = (i) => json(i.needs, []).some((t) => OPERATOR_TAGS.includes(t));
 const fmtOther = (o) => `${o.agent} → ${o.item} ${o.title}${o.touching ? ` (changing ${o.touching.join(', ')})` : ''}`;
 
 // Paths an agent says it is changing. Normalised so "src/db/**", "./src/db/" and "src/db" all compare equal.
@@ -703,6 +711,8 @@ export class Hub extends EventEmitter {
   }
 
   event(p, { item = null, actor, type, headline, summary = '', detail = '', data = {} }) {
+    // Every claim records the role it was taken in (#238), so time and cost split by role.
+    if (CLAIM_TYPES.includes(type)) data = { role: this.roleOf(p, actor), ...data };
     const r = this.q(`INSERT INTO events (project_id, item_id, actor, type, headline, summary, detail, data, at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, actor, type, headline, summary, detail, JSON.stringify(data), this.now());
     return Number(r.lastInsertRowid);
@@ -825,9 +835,10 @@ export class Hub extends EventEmitter {
 
   // usage: normalized (src/usage.js). The model falls back to the one the agent checked in with.
   recordUsage(p, item, agent, u, source) {
-    const model = u.model || this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model || '';
-    this.q(`INSERT INTO usage (project_id, item_id, agent, model, input_tokens, output_tokens, cost_usd, source, at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, model, u.input_tokens, u.output_tokens, u.cost_usd, source, this.now());
+    const a = this.q('SELECT model, role FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
+    const model = u.model || a?.model || '';
+    this.q(`INSERT INTO usage (project_id, item_id, agent, model, input_tokens, output_tokens, cost_usd, source, at, role)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, model, u.input_tokens, u.output_tokens, u.cost_usd, source, this.now(), a?.role ?? '');
   }
 
   // One item's usage, per agent and model, with totals. Cost stays null while any part of it is unknown.
@@ -952,7 +963,71 @@ export class Hub extends EventEmitter {
   // An operator: a trusted, attended session that declared "operator" at checkin (has). It answers the
   // questions agents put to: "operator" (running things, permissions, verifying on real infra), not Paul.
   isOperator(p, agent) {
-    return json(this.q('SELECT has FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.has, []).includes('operator');
+    return this.roleOf(p, agent) === 'operator';
+  }
+
+  roleOf(p, agent) {
+    return this.q('SELECT role FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent ?? '')?.role ?? 'session';
+  }
+
+  // The role a call says this session has (#238), from how it started: a runner's token makes a worker (as does
+  // role "worker" with its runner, from nuworq run on a hub without logins), the operator tag an operator, role
+  // "shaper" (the nuworq-plan skill) a shaper. null: the call says nothing, so the session keeps what it has.
+  claimedRole(token, args = {}) {
+    const said = str(args.role).toLowerCase();
+    if (said && !ROLES.includes(said)) {
+      throw new UserError(`role must be one of ${ROLES.join(', ')}, not "${args.role}"`, { hint: 'Leave it out unless you are a shaper (role: "shaper"); the hub knows workers and operators by how they started.' });
+    }
+    const has = args.has != null ? normTags(args.has) : [];
+    const runner = clip(token?.runner || (said === 'worker' ? args.runner : ''), 80);
+    // A worker may have operator capabilities on its machine (claude on its PATH), but never gets operator-only work.
+    if (token?.runner || said === 'worker') {
+      if (said === 'operator' || has.includes('operator')) {
+        throw new UserError("A worker can't be an operator", {
+          status: 403, hint: 'Workers are headless sessions nuworq run starts; only an attended session with the human\'s permissions is an operator (nuworq operator prints how to start one). Check in again without the operator tag.',
+        });
+      }
+      return { role: 'worker', runner };
+    }
+    if (said === 'operator' && !has.includes('operator')) {
+      throw new UserError('An operator declares the operator tag', { hint: 'Check in with has: ["operator", ...]; nuworq operator prints the line.' });
+    }
+    if (has.includes('operator')) return { role: 'operator', runner: '' };
+    if (said) return { role: said, runner: '' };
+    return null;
+  }
+
+  // Give a session its role. Once it has one, it keeps it: another role is a new session.
+  setRole(p, agent, claimed, machine = '') {
+    const a = this.q('SELECT role, runner, machine FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
+    if (!a) return;
+    if (claimed && a.role !== 'session' && claimed.role !== 'session' && claimed.role !== a.role) {
+      throw new UserError(`${agent} is ${a.role === 'operator' ? 'an' : 'a'} ${a.role}; a session's role is fixed for its life`, {
+        status: 409, hint: `To work as ${claimed.role === 'operator' ? 'an' : 'a'} ${claimed.role}, start a new session (a new agent name).`,
+      });
+    }
+    const role = claimed && claimed.role !== 'session' ? claimed.role : a.role;
+    const runner = claimed?.runner || a.runner;
+    machine = clip(machine, 80) || a.machine;
+    if (role !== a.role || runner !== a.runner || machine !== a.machine) {
+      this.q('UPDATE agents SET role = ?, runner = ?, machine = ? WHERE project_id = ? AND name = ?').run(role, runner, machine, p.id, agent);
+    }
+  }
+
+  // Who an agent is and what it is doing, for checkin, look and the project page (#238): its role, where it runs
+  // (its runner, or the machine it said), and its current job ("building #12"), or null when it holds nothing.
+  presenceOf(p, a) {
+    const held = this.q(`SELECT seq, stage, tidy FROM items WHERE project_id = ? AND holder = ?
+      UNION SELECT i.seq, i.stage, i.tidy FROM attempts t JOIN items i ON i.id = t.item_id
+        WHERE i.project_id = ? AND t.agent = ? AND t.stage = 'active' AND t.closed = 0 ORDER BY seq`).all(p.id, a.name, p.id, a.name);
+    const job = held.map((i) => `${i.tidy && i.stage === 'active' ? 'tidying' : JOBS[i.stage] ?? 'holding'} #${i.seq}`).join(', ') || null;
+    return { role: a.role || 'session', where: a.runner ? `${a.runner} runner` : a.machine || null, job };
+  }
+
+  // The agents seen here in the last half hour, as presenceOf says, for checkin and look.
+  presentAgents(p) {
+    return this.q('SELECT * FROM agents WHERE project_id = ? AND signed_off = 0 AND last_seen > ? ORDER BY last_seen DESC LIMIT 30')
+      .all(p.id, this.now() - 30 * MIN).map((a) => ({ agent: a.name, ...this.presenceOf(p, a) }));
   }
 
   // The operator question to answer first: blocking before assumptions, then oldest.
@@ -1333,6 +1408,11 @@ export class Hub extends EventEmitter {
     const result = this.tx(() => {
       // The runner posts a worker's usage after it exited: that's bookkeeping, not the agent being here.
       const presence = op === 'usage' ? null : this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
+      // Its role (#238): a runner's token says worker on every call; a checkin says the rest, and where it runs.
+      if (presence) {
+        const claimed = op === 'checkin' ? this.claimedRole(token, args) : token?.runner ? { role: 'worker', runner: token.runner } : null;
+        if (claimed || (op === 'checkin' && args.machine)) this.setRole(p, agent, claimed, op === 'checkin' ? str(args.machine) : '');
+      }
       this.noteToken(p, agent, token?.name);
       if (token?.role === 'agent') this.q('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ?').run(token.id, p.id, agent);
       const need = powers && this.powerFor(p, op, args ?? {});
@@ -1419,6 +1499,7 @@ export class Hub extends EventEmitter {
       mission: p.mission || 'No mission written yet. Infer intent from the work and ask if it really matters.',
       autonomy: { level: p.autonomy, means: AUTONOMY[p.autonomy].agent },
       you: agent,
+      role: this.roleOf(p, agent),
       decisions: this.decisions(p).map((d) => d.body),
       steers: steers.length ? steers : undefined,
       answers: answers.length ? answers.map((a) => ({
@@ -1435,6 +1516,7 @@ export class Hub extends EventEmitter {
       field_notes: (() => { const n = this.fieldNotes(p); return n.length ? n : undefined; })(),
       holding: holding.length ? holding.map((i) => ({ item: `#${i.seq}`, title: i.title, stage: i.stage, lease_expires_in: dur(this.leaseOf(i, agent) - this.now()) })) : undefined,
       others_working: (() => { const o = this.others(p, agent); return o.length ? o.map(fmtOther) : undefined; })(),
+      agents: this.presentAgents(p),
       board,
       next,
     };
@@ -1471,10 +1553,14 @@ export class Hub extends EventEmitter {
   // repo: the repository the agent is in (its clone's origin). When it is one of the project's, only work
   // in that repository: the rest is left for agents in clones of the others.
   claimable(p, agent, { powers = null, has, repo = '' } = {}) {
+    const role = this.roleOf(p, agent);
+    // A shaper shapes proposals with a person, and nothing else (#238).
+    if (role === 'shaper') powers = ['shape'];
     const may = (power) => !powers || powers.includes(power);
     const fit = this.fit(p, agent, has);
     const inRepo = repo && this.remotesOf(p).includes(repo) ? (i) => this.repoOf(p, i) === repo : () => true;
-    const ok = (i) => (!fit.has || json(i.needs, []).every((t) => fit.has.includes(t))) && inRepo(i);
+    // A worker never gets operator-only work, whatever its machine has.
+    const ok = (i) => (!fit.has || json(i.needs, []).every((t) => fit.has.includes(t))) && inRepo(i) && !(role === 'worker' && operatorOnly(i));
     const gave = this.handedOff(p, agent);
     const fresh = (i) => !gave.has(i.id) && ok(i); // not just handed off, doable on this machine, in this clone
     // Each option carries the priority it ranks by: its group's or a dependent's when that is higher (#198).
@@ -1511,7 +1597,7 @@ export class Hub extends EventEmitter {
     // Work that needs what this agent's machine has goes to it first: few agents can do it, anyone can do the rest.
     const own = (x) => (fit.has && json(x.item.needs, []).length ? 0 : 1);
     // An operator session takes what only it can do before anything else (#137): anyone can do the rest.
-    const operator = !!fit.has?.includes('operator');
+    const operator = role === 'operator' || !!fit.has?.includes('operator');
     const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].map(ranked).sort((a, b) =>
       large(a) - large(b) ||
       (operator ? own(a) - own(b) : 0) ||
@@ -1541,6 +1627,19 @@ export class Hub extends EventEmitter {
 
   claimItem(p, agent, item) {
     const t = this.now();
+    const role = this.roleOf(p, agent);
+    if (role === 'shaper' && item.stage !== 'proposed') {
+      const job = { verifying: 'review', landing: 'land' }[item.stage] ?? 'build';
+      throw new UserError(`A shaper doesn't ${job}: #${item.seq} is ${item.stage}, and a shaper only shapes proposals`, {
+        status: 403, hint: 'Call next for a proposal to shape, or propose new work with the person you are planning with. Workers (nuworq run) and other sessions build, review and land.',
+      });
+    }
+    // Landing is a rebase, the checks and a push: any worker may land operator-only work once it's accepted.
+    if (role === 'worker' && operatorOnly(item) && item.stage !== 'landing') {
+      throw new UserError(`#${item.seq} is operator-only work (it needs ${json(item.needs, []).filter((x) => OPERATOR_TAGS.includes(x)).join(', ')}), and workers never take it`, {
+        status: 403, hint: 'An operator session takes it (nuworq operator prints how to start one). Pick other work with next.',
+      });
+    }
     if (item.stage === 'verifying') {
       if (p.autonomy !== 'full') throw new UserError(`#${item.seq} is waiting for the human to verify it`, { hint: 'Pick other work with next.' });
       if (this.implementedBy(item, agent)) throw new UserError(`You can't review your own work (#${item.seq})`, { hint: 'Another agent or the human will review it. Pick other work with next.' });
@@ -2348,7 +2447,7 @@ const AGENT_OPS = {
       .all(p.id, this.now() - 3 * DAY);
     if (!args.stage && recent.length) out.recently_done = recent.map((i) => `#${i.seq} ${i.title}`);
     const notes = this.fieldNotes(p);
-    return { board: out, decisions: this.decisions(p).map((d) => d.body), field_notes: notes.length ? notes : undefined, others_working: this.others(p, agent).map(fmtOther) };
+    return { board: out, decisions: this.decisions(p).map((d) => d.body), field_notes: notes.length ? notes : undefined, others_working: this.others(p, agent).map(fmtOther), agents: this.presentAgents(p) };
   },
 
   learn(p, agent, args) {

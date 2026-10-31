@@ -562,6 +562,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     return {
       name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), tokens: a.tokens ? a.tokens.split(',') : [], via, has: json(a.has, []),
       status, line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
+      ...hub.presenceOf(p, a), // role, where it runs, its current job (#238)
       record: {
         landed, sent_back: sentBack, stalls,
         claimed: rec.claimed ?? 0, submitted: rec.submitted ?? 0, handoffs: rec.handoffs ?? 0,

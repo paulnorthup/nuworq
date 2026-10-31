@@ -391,6 +391,14 @@ export function openDb(file) {
     // The weekly line (#178): on unless turned off on the channel, and when it last went (0: count from created_at).
     'ALTER TABLE channels ADD COLUMN weekly INTEGER NOT NULL DEFAULT 1',
     'ALTER TABLE channels ADD COLUMN weekly_at INTEGER NOT NULL DEFAULT 0',
+    // Each session's role (#238), fixed for its life: operator | shaper | worker | session. A worker carries its
+    // runner's name; any session may say which machine it runs on. Claims (event data) and usage record the role.
+    "ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT 'session'",
+    "ALTER TABLE agents ADD COLUMN runner TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agents ADD COLUMN machine TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE usage ADD COLUMN role TEXT NOT NULL DEFAULT ''",
+    // Sessions from before roles that declared the operator tag were operators.
+    `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

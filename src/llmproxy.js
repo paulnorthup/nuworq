@@ -120,9 +120,9 @@ export async function measure(hub, itemId) {
   hub.tx(() => {
     hub.q(`DELETE FROM usage WHERE item_id = ? AND source = 'llm-proxy'`).run(item.id);
     for (const r of rows) {
-      hub.q(`INSERT INTO usage (project_id, item_id, agent, model, input_tokens, output_tokens, cost_usd, source, at, duration_ms, requests, failures, cold_loads)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'llm-proxy', ?, ?, ?, ?, ?)`)
-        .run(p.id, item.id, r.agent, r.model, r.input_tokens, r.output_tokens, r.cost_usd, hub.now(), r.duration_ms, r.requests, r.failures, r.cold_loads);
+      hub.q(`INSERT INTO usage (project_id, item_id, agent, model, input_tokens, output_tokens, cost_usd, source, at, duration_ms, requests, failures, cold_loads, role)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'llm-proxy', ?, ?, ?, ?, ?, ?)`)
+        .run(p.id, item.id, r.agent, r.model, r.input_tokens, r.output_tokens, r.cost_usd, hub.now(), r.duration_ms, r.requests, r.failures, r.cold_loads, hub.roleOf(p, r.agent));
     }
     proxyState(hub, p, '');
   });
