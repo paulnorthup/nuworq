@@ -140,11 +140,21 @@ describe('the quick launcher (#290)', () => {
     const items = Array.from({ length: 1000 }, (_, i) => ({ p: i % 3 ? 'nuworq' : 'site', n: i + 1, s: 'ready', pr: 'soon',
       t: `${words[i % 10]} ${words[(i * 7) % 10]} when the ${words[(i * 3) % 10]} page loads on a slow phone` }));
     const ix = index({ items });
+    // Every keystroke of a long many-word query (the costly kind: most titles match it partway), then a number.
+    const long = 'billing export when the page loads on a slow phone';
+    const keys = [...Array.from(long, (_, i) => long.slice(0, i + 1)), '1', '12', '120'];
+    rank(ix, long, { current: 'nuworq', view }); // warm up, as a page that has been open a while is
     const start = performance.now();
-    const keys = ['b', 'bi', 'bil', 'bill', 'billi', 'billin', 'billing', '1', '12', '120'];
     for (const q of keys) rank(ix, q, { current: 'nuworq', view });
     const each = (performance.now() - start) / keys.length;
-    assert.ok(each < 25, `${each.toFixed(1)} ms a keystroke on this machine (a phone is a few times slower)`);
+    assert.ok(each < 10, `${each.toFixed(1)} ms a keystroke on this machine (a phone is a few times slower, and must stay under 100)`);
+  });
+
+  test('fuzzy skips what cannot match before building its table, and long texts still match', () => {
+    const t = `${'x'.repeat(5000)} billing export`;
+    assert.equal(fuzzy('billing exporz', t), null);
+    assert.deepEqual(fuzzy('bex', t).hits, [5001, 5009, 5010]);
+    assert.deepEqual(fuzzy('pm', 'Phone menu').hits, [0, 6], 'a reused table after a large one still scores afresh');
   });
 
   test('GET /api/launcher: a light index of every project, what needs the viewer and what they may do; people only', async () => {

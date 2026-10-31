@@ -8,36 +8,54 @@ const LIMIT = 12; // a short ranked list (Hick's law): narrow it by typing, not 
 
 // fzf-style matching: the query's letters must appear in order (spaces are free). A letter at a word start, right
 // after the previous one, or early in the text scores higher. Returns the best score and the matched positions.
+// Cheap before costly: a text whose letters aren't in order is out after one pass, and the table only spans, per
+// query letter, from its earliest possible place (greedy from the left) to its latest (greedy from the right).
+let buf = { size: 0 };
+const grow = (size) => {
+  if (size > buf.size) buf = { size, best: new Float64Array(size), carry: new Float64Array(size), from: new Int32Array(size), carryAt: new Int32Array(size) };
+  return buf;
+};
+const wordy = (c) => (c >= 97 && c <= 122) || (c >= 48 && c <= 57); // a-z 0-9, on lower-cased text
 export function fuzzy(query, text) {
   const q = String(query).toLowerCase().replace(/\s+/g, ''), t = String(text ?? '').toLowerCase();
   if (!q) return { score: 0, hits: [] };
   const m = q.length, n = t.length;
   if (m > n) return null;
-  const start = (i) => i === 0 || !/[a-z0-9]/.test(t[i - 1]);
-  const bonus = (i) => 1 + (start(i) ? 8 : 0);
+  const lo = new Int32Array(m), hi = new Int32Array(m);
+  for (let j = 0, i = 0; j < m; j++, i++) {
+    i = t.indexOf(q[j], i);
+    if (i < 0) return null;
+    lo[j] = i;
+  }
+  for (let j = m - 1, i = n - 1; j >= 0; j--, i--) hi[j] = i = t.lastIndexOf(q[j], i);
+  const H = hi[m - 1];
+  const bonus = (i) => 1 + (i === 0 || !wordy(t.charCodeAt(i - 1)) ? 8 : 0);
   // best[j][i]: q[0..j] matched with q[j] at i. carry[j][i]: the best of best[j][k≤i], less 1 per letter skipped since.
-  const best = [], from = [], carry = [], carryAt = [];
+  // Row j is written over lo[j]..H and reads row j-1 over lo[j]-1..H-1, which that row wrote.
+  const { best, carry, from, carryAt } = grow(m * n);
   for (let j = 0; j < m; j++) {
-    best.push(new Float64Array(n).fill(-Infinity)); from.push(new Int32Array(n).fill(-1));
-    carry.push(new Float64Array(n).fill(-Infinity)); carryAt.push(new Int32Array(n).fill(-1));
-    for (let i = j; i < n; i++) {
-      if (t[i] === q[j]) {
-        if (j === 0) best[0][i] = bonus(i) - Math.min(i, 20) * 0.2;
-        else if (i > 0) {
-          const run = best[j - 1][i - 1] + 6, gap = carry[j - 1][i - 1];
-          if (run >= gap) { best[j][i] = bonus(i) + run; from[j][i] = i - 1; } else { best[j][i] = bonus(i) + gap; from[j][i] = carryAt[j - 1][i - 1]; }
+    const r = j * n, p = r - n, c = q[j];
+    for (let i = lo[j]; i <= H; i++) {
+      let b = -Infinity, f = -1;
+      if (i <= hi[j] && t[i] === c) {
+        if (j === 0) b = bonus(i) - Math.min(i, 20) * 0.2;
+        else {
+          const run = best[p + i - 1] + 6, gap = carry[p + i - 1];
+          if (run >= gap) { b = bonus(i) + run; f = i - 1; } else { b = bonus(i) + gap; f = carryAt[p + i - 1]; }
         }
       }
-      const prev = i > 0 ? carry[j][i - 1] - 1 : -Infinity;
-      if (best[j][i] >= prev) { carry[j][i] = best[j][i]; carryAt[j][i] = i; } else { carry[j][i] = prev; carryAt[j][i] = carryAt[j][i - 1]; }
+      best[r + i] = b; from[r + i] = f;
+      const prev = i > lo[j] ? carry[r + i - 1] - 1 : -Infinity;
+      if (b >= prev) { carry[r + i] = b; carryAt[r + i] = i; } else { carry[r + i] = prev; carryAt[r + i] = carryAt[r + i - 1]; }
     }
   }
+  const last = (m - 1) * n;
   let end = -1;
-  for (let i = 0; i < n; i++) if (best[m - 1][i] > -Infinity && (end < 0 || best[m - 1][i] > best[m - 1][end])) end = i;
+  for (let i = lo[m - 1]; i <= H; i++) if (best[last + i] > -Infinity && (end < 0 || best[last + i] > best[last + end])) end = i;
   if (end < 0) return null;
-  const hits = [];
-  for (let j = m - 1, i = end; j >= 0; i = from[j][i], j--) hits.unshift(i);
-  return { score: best[m - 1][end], hits };
+  const score = best[last + end], hits = new Array(m);
+  for (let j = m - 1, i = end; j >= 0; i = from[j * n + i], j--) hits[j] = i;
+  return { score, hits };
 }
 
 // The text with its matched letters in <mark>.
