@@ -7,9 +7,9 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
-import { tools, guide, skill, planSkill, operatorSkill, operatorStart, TAG_ALIASES } from '../src/protocol.js';
+import { tools, guide, skill, planSkill, operatorSkill, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
-import { update, describeUpdate } from '../src/update.js';
+import { update, describeUpdate, staleListener } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(BIN), '..');
@@ -191,7 +191,18 @@ function detectHas(flags) {
 // Claude Code session in the project folder as the operator (the nuworq-operator skill, which starts its
 // listener; no /loop). It prints them and starts nothing. Detected: the platform, and browser when a Chrome or
 // Chromium is installed; --has replaces what was detected.
-function operatorCmd(flags) {
+// First, one line when this CLI's listener is below what the hub expects (#419): updating the plugin never
+// updates the CLI its listener runs. --check <level> (the operator skill's, before it goes idle) prints only
+// that line, and nothing when this CLI is new enough.
+async function operatorCmd(flags) {
+  const hub = await fetch(`${new URL(resolveSettings(flags).url).origin}/api/package`, { signal: AbortSignal.timeout(3000) })
+    .then((r) => r.json()).then((b) => Number(b?.listener) || 0).catch(() => 0);
+  const stale = staleListener({ root: ROOT, have: LISTENER, need: Math.max(hub, Number(flags.check) || 0) });
+  if (stale) console.log(stale);
+  if (flags.check !== undefined) {
+    if (stale) process.exitCode = 1;
+    return;
+  }
   const project = resolveSettings(flags).project ?? basename(process.cwd());
   const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
   const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
@@ -1393,7 +1404,9 @@ ${bold('Setup')}
   operator [--project p] [--has tags]    print the tags an operator session declares and the line that starts it
                                          to paste into Claude Code in the project folder (runs nothing). Operator
                                          tags: claude-cli, infra (the project's live infrastructure: servers and
-                                         VMs, DNS, cloud accounts, deploys), github-admin, browser
+                                         VMs, DNS, cloud accounts, deploys), github-admin, browser. First, one
+                                         line if this nuworq is too old for the operator listener. --check <level>:
+                                         only that line (exit 1), or nothing when it is new enough
   wait --operator [--follow] [--as name] [--project p | --all-projects]
                                          block until there is something for an operator (its work, a question
                                          to it, an answer, steering) and print one line; --follow: one per event.

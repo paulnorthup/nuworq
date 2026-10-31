@@ -11,6 +11,7 @@ import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { fileInTarball, releaseOf, update, describeUpdate } from '../src/update.js';
 import { Workspaces } from '../src/workspaces.js';
+import { LISTENER } from '../src/protocol.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
@@ -181,8 +182,9 @@ describe('a signed release reaches installs through the public /api/package', ()
     assert.equal((await fetch(`${url}/w/acme/api/info`)).status, 401);
     const r = await fetch(`${url}/api/package`);
     assert.equal(r.status, 200);
-    const { package: p } = await r.json();
+    const { package: p, listener } = await r.json();
     assert.deepEqual(p, { url: `${url}/nuworq.tgz`, release: null, commit, sha256: createHash('sha256').update(Buffer.from(await (await fetch(`${url}/nuworq.tgz`)).arrayBuffer())).digest('hex'), signed: false });
+    assert.equal(listener, LISTENER, 'the operator listener level it expects (#419)');
   });
 
   test('unsigned, it is no release: an install connected to a workspace stays quiet and downloads nothing', async () => {
