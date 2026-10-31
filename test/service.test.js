@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { launchdPlist, systemdUnit, install, uninstall, serviceEnv, serviceArgs, LABEL, UNIT } from '../src/service.js';
+import { launchdPlist, systemdUnit, install, uninstall, serviceEnv, serviceArgs, stableNode, missingCheckouts, LABEL, UNIT } from '../src/service.js';
 import { cleanWorktree } from '../src/runner.js';
 
 const command = ['/usr/local/bin/node', '/opt/nuworq/bin/nuworq.js', 'run', '--workers', '3', '--agent', 'claude', '--model', 'opus & "friends" 100%$'];
@@ -74,6 +74,56 @@ describe('nuworq run --install (#172)', () => {
     assert.throws(() => serviceArgs(['--install', '--until-idle']), /--until-idle makes run exit/);
     assert.throws(() => serviceArgs(['--install', '--max-runs=3']), /--max-runs makes run exit/);
     assert.deepEqual(serviceEnv({ PATH: '/bin', HOME: '/h', NUWORQ_TOKEN: 't', TRELLIS_URL: 'u', SECRET: 'no', SHELL: '/bin/zsh' }), { HOME: '/h', NUWORQ_TOKEN: 't', PATH: '/bin', TRELLIS_URL: 'u' });
+  });
+});
+
+describe('an installed runner finds the checkouts and its node (#225)', () => {
+  test('the service starts where it was installed: launchd and systemd WorkingDirectory', () => {
+    const p = launchdPlist({ command, env, log: '/l', cwd: '/Users/ann/Projects/app & co' });
+    assert.match(p, /<key>WorkingDirectory<\/key>\s*<string>\/Users\/ann\/Projects\/app &amp; co<\/string>/);
+    assert.doesNotMatch(launchdPlist({ command, env, log: '/l' }), /WorkingDirectory/, 'none given: none written');
+    const u = systemdUnit({ command, env, log: '/l', cwd: '/home/ann/Projects/100% app' });
+    assert.match(u, /^WorkingDirectory=\/home\/ann\/Projects\/100%% app$/m);
+    assert.doesNotMatch(systemdUnit({ command, env, log: '/l' }), /WorkingDirectory/);
+  });
+
+  test('NUWORQ_REPOS is the folder holding the checkout it was installed beside, unless the shell set one', () => {
+    assert.equal(serviceEnv({ PATH: '/bin' }, { repos: '/Users/ann/Projects' }).NUWORQ_REPOS, '/Users/ann/Projects');
+    assert.equal(serviceEnv({ NUWORQ_REPOS: '/src:/more' }, { repos: '/Users/ann/Projects' }).NUWORQ_REPOS, '/src:/more');
+    assert.deepEqual(serviceEnv({ TRELLIS_REPOS: '/old' }, { repos: '/p' }), { TRELLIS_REPOS: '/old' });
+    const u = systemdUnit({ command, env: serviceEnv({ HOME: '/h' }, { repos: '/h/Projects' }), log: '/l', cwd: '/h/Projects/app' });
+    assert.match(u, /^Environment="NUWORQ_REPOS=\/h\/Projects"$/m);
+  });
+
+  test('node: the PATH one when it is the same binary, not the versioned Cellar path', () => {
+    const real = (p) => ({
+      '/opt/homebrew/bin/node': '/opt/homebrew/Cellar/node/26.6.0/bin/node',
+      '/opt/homebrew/Cellar/node/26.6.0/bin/node': '/opt/homebrew/Cellar/node/26.6.0/bin/node',
+      '/Users/ann/.nvm/versions/node/v24/bin/node': '/Users/ann/.nvm/versions/node/v24/bin/node',
+    }[p] ?? (() => { throw new Error('ENOENT'); })());
+    const cellar = '/opt/homebrew/Cellar/node/26.6.0/bin/node';
+    assert.equal(stableNode(cellar, { path: '/nowhere:/opt/homebrew/bin:/usr/bin', real }), '/opt/homebrew/bin/node');
+    assert.equal(stableNode(cellar, { path: '/Users/ann/.nvm/versions/node/v24/bin:/opt/homebrew/bin', real }), cellar, 'the first node on PATH is another one: keep execPath');
+    assert.equal(stableNode(cellar, { path: '/usr/bin', real }), cellar, 'no node on PATH');
+  });
+
+  test('install names the opted-in projects it has no checkout of, with the fix', () => {
+    const find = ([remote]) => {
+      if (remote === 'github.com/acme/a') return '/p/a';
+      throw Object.assign(new Error('No checkout'), { hint: `git clone git@${remote.replace('/', ':')}.git /p/${remote.split('/').pop()}` });
+    };
+    const projects = [
+      { slug: 'a', name: 'A', runner: true, remotes: ['github.com/acme/a'] },
+      { slug: 'b', name: 'B', runner: true, remotes: ['github.com/acme/b'] },
+      { slug: 'c', name: 'C', runner: false, remotes: ['github.com/acme/c'] },
+      { slug: 'd', name: 'D', runner: true, parked: true, remotes: ['github.com/acme/d'] },
+      { slug: 'e', name: 'E', runner: true, path: '/here/e', remotes: ['github.com/acme/e'] },
+      { slug: 'f', name: 'F', runner: true, remotes: ['github.com/acme/a', 'github.com/acme/f'] },
+    ];
+    assert.deepEqual(missingCheckouts(projects, find, { exists: (p) => p === '/here/e' }), [
+      { slug: 'b', name: 'B', remote: 'github.com/acme/b', hint: 'git clone git@github.com:acme/b.git /p/b' },
+      { slug: 'f', name: 'F', remote: 'github.com/acme/f', hint: 'git clone git@github.com:acme/f.git /p/f' },
+    ]);
   });
 });
 
