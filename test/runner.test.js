@@ -417,6 +417,36 @@ describe('a worker for a project with no checkout on this machine', () => {
     }
   });
 
+  test('run starts each worker on the model its job calls for, for that one job, when the project routes models (#347)', async () => {
+    const w = far();
+    writeFileSync(join(w.dir, 'bin', 'claude'), '#!/bin/sh\nfor a in "$@"; do echo "ARG $a"; done\n', { mode: 0o755 });
+    w.hub.humanOp('far', 'settings', { model_routing: true, model_tiers: { claude: ['claude-haiku-5-5', 'claude-opus-5-5'] } });
+    w.hub.q("UPDATE items SET stage = 'landing', stage_since = 0 WHERE seq = 1").run(); // accepted work to land
+    const server = createServer(w.hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const run = (...a) => promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--max-runs', '1', '--until-idle', '--poll', '1', ...a], { env: w.env, cwd: w.home });
+    const logs = join(w.home, '.nuworq', 'logs');
+    const read = () => readdirSync(logs).map((f) => readFileSync(join(logs, f), 'utf8')).join('');
+    try {
+      const { stdout } = await run('--model', 'claude-opus-5-5');
+      assert.match(stdout, /#1 Do it \(land on claude-haiku-5-5\)/, stdout);
+      const log = read();
+      assert.match(log, /^ARG --model\nARG claude-haiku-5-5$/m, 'the cheapest tier, not the runner\'s --model');
+      assert.match(log, /"NUWORQ_MODEL":"claude-haiku-5-5"/, 'and its MCP server checks in saying so');
+      assert.match(log, /You were started on claude-haiku-5-5 for one job: land #1\. After checkin, claim #1, do that job, then sign off/);
+      assert.doesNotMatch(log, /Keep going until next says/);
+
+      w.hub.humanOp('far', 'settings', { model_routing: false });
+      rmSync(logs, { recursive: true });
+      await run();
+      assert.doesNotMatch(read(), /ARG --model/, "off, without --model: the agent's own default, as before");
+      assert.match(read(), /Keep going until next says/);
+    } finally {
+      server.close();
+    }
+  });
+
   test("run leaves a project whose checkout can't be updated for later, and never starts its agent", async () => {
     const w = far();
     execFileSync('git', ['clone', '-q', w.origin, join(w.repos, 'api')]);

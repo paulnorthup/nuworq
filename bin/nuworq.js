@@ -518,9 +518,13 @@ function workerSetup(target, agent, flags, s, token = null) {
   const has = (f) => existsSync(join(home, f));
   const browser = agent === 'claude' && !!flags.browser; // --browser: a headless Chrome to look at UI work with
   const tags = detectHas(flags);
+  // The model it runs on, when one is named (--model, or the job's under model routing, #347): the agent starts on
+  // it, and checks in saying so. opencode names its own (provider/model) below.
+  const model = typeof flags.model === 'string' && flags.model ? flags.model : '';
   const env = {
     NUWORQ_URL: s.url, NUWORQ_PROJECT: target.slug, NUWORQ_AGENT: name,
     ...(tags.length ? { NUWORQ_HAS: tags.join(',') } : {}),
+    ...(model && agent !== 'opencode' ? { NUWORQ_MODEL: model } : {}),
     // A worker nuworq run started says so at checkin, with its runner (#238); a runner's token says it too.
     ...(flags.run ? { NUWORQ_ROLE: 'worker', NUWORQ_RUNNER: hostname() } : {}),
     ...(token ? { NUWORQ_TOKEN: token } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
@@ -534,7 +538,9 @@ function workerSetup(target, agent, flags, s, token = null) {
       : 'To check UI work, start the app from this worktree on a free local port, in the background.'),
     browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide (browser_resize); the app is light only, so there is no dark mode to check. Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
     'While you work, run only the tests that cover what you change; run the full test suite once, just before you submit.',
-    'Keep going until next says there is nothing left for you, then sign off.',
+    // Routed (#347), it was started on the model this one job calls for, so it takes that job and no other.
+    flags.job ? `You were started on ${model} for one job: ${flags.job.mode} ${flags.job.item}. After checkin, claim ${flags.job.item}, do that job, then sign off. If you can't claim it, sign off; don't take other work.`
+      : 'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
 
   const run = [
@@ -585,11 +591,10 @@ function workerSetup(target, agent, flags, s, token = null) {
     // --proxy: Claude Code's traffic goes to llm-proxy's Anthropic route with the proxy's owner token (not the
     // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed.
     const via = flags.proxy === undefined ? '' : `ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN" \\\n  `;
-    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
-    const model = String(flags.model);
     const [provider, ...rest] = model.split('/');
     const headers = { 'x-client-name': label };
     const config = {
@@ -612,7 +617,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     const named = flags.proxy !== undefined
       ? ` \\\n  -c ${sq('model_provider="llmproxy"')} \\\n  -c ${sq(`model_providers.llmproxy={name="llm-proxy",base_url=${JSON.stringify(`${proxyUrl(flags)}/openai/v1`)},env_key="NUWORQ_LLM_PROXY_TOKEN",wire_api="responses",http_headers={"x-client-name"=${JSON.stringify(label)}}}`)}`
       : provider ? ` \\\n  -c ${sq(`model_providers.${provider}.http_headers={"x-client-name"=${JSON.stringify(label)}}`)}` : '';
-    lines.push(`codex exec${json} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
+    lines.push(`codex exec${json}${model ? ` -m ${sq(model)}` : ''} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
   }
   return {
     name, worktree, main: origin ? `origin/${main}` : main, origin, cwd,
@@ -682,9 +687,11 @@ async function runCmd(flags) {
     if (!target) throw new HubError(`the hub no longer has project "${r.project}"`);
     // The route names the repository of the work it found; with several, the worker starts there.
     const repo = (target.remotes ?? []).length > 1 ? r.repo : null;
+    // A project that routes models (#347) names the one this job calls for: the worker starts on it, for that one job.
+    const routed = r.model ? { model: r.model, job: r } : {};
     let setup;
     try {
-      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true }, s, client, token);
+      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true, ...routed }, s, client, token);
     } catch (e) {
       // This machine can't work on the project (no checkout of it here): the runner leaves it to others.
       if (e instanceof HubError) e.skip = true;
@@ -707,7 +714,7 @@ async function runCmd(flags) {
     const out = createWriteStream(log);
     // Its own process group, so stopping it stops the agent too, not just the shell.
     const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const usage = await tapUsage(child, agent, flags, (l) => out.write(`${l}\n`));
+    const usage = await tapUsage(child, agent, { ...flags, ...routed }, (l) => out.write(`${l}\n`));
     child.stderr.pipe(out, { end: false });
     return {
       name, project: target.slug, where: dim(`${worktree ?? cwd}  log: ${log}`),
@@ -732,7 +739,8 @@ async function runCmd(flags) {
   console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`up to ${workers} ${agent} worker${workers > 1 ? 's' : ''} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
   await run({
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
-    routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}`),
+    // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
+    routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`),
     launch, workers,
     // How this runner is, on every poll (#171), with the workers' agent token: a runner token names the runner.
     report: (state) => reporter.post('/api/runner', { name: hostname(), machine: hostname(), ...state }),

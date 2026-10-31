@@ -1123,14 +1123,35 @@ const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''
 
 // Staffing (#174): what nuworq run does here, set on the hub so it can change from a phone. Runners follow it at
 // their next poll. Pause is one tap and says what happens to running workers; the numbers are blank for "no limit".
+// Cheaper models (#347): one switch, set about once, and the tiers it picks from, cheapest first. Claude's show;
+// the other agents' sit one tap away, since most runners run Claude.
 function staffingModal(back) {
   const s = S.view?.project?.staffing ?? {};
-  modal(`${back ? '<button class="link back" data-action="settings">← Settings</button>' : ''}<h2>Staffing</h2>
+  const m = s.models ?? { on: false, tiers: {} };
+  const tier = (agent, label) => `<label>${label}<input id="st-tiers-${agent}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="The runner's --model" value="${esc((m.tiers[agent] ?? []).join(', '))}"></label>`;
+  modal(`${back ? '<button class="link back" data-action="settings">← Settings</button>' : ''}<h2 data-staffing data-back="${back ? 1 : ''}">Staffing</h2>
     <p class="lead">What <code>nuworq run</code> does here. Runners follow it at their next poll.</p>
     <div class="form"><label>Workers at once<input id="st-workers" type="number" inputmode="numeric" min="1" max="100" placeholder="Each runner's own --workers" value="${s.workers ?? ''}"></label>
     <label>Daily budget, dollars (UTC days)<input id="st-budget" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="No budget" value="${s.budget ?? ''}"></label></div>
     <p class="faint">Spent here today: $${(s.spent_today ?? 0).toFixed(2)}. Once it reaches the budget, no new workers start until tomorrow.</p>
+    <div class="setting" data-new="model-routing"><div class="body"><div class="h" id="set-models">Cheaper models for rote jobs</div>
+      <div class="s">${m.on ? 'On: landing and tidying start on the cheapest model below, and step up one when an attempt fails. Building, reviews and shaping use the top one.' : 'Off: every worker runs on its runner\'s own model.'}</div></div>
+      <button class="switch" role="switch" aria-checked="${m.on}" aria-labelledby="set-models" data-action="${m.on ? 'models-off' : 'models-on'}"></button></div>
+    <div class="form">${tier('claude', 'Claude models, cheapest first')}
+    <details><summary>Codex and opencode</summary>${tier('codex', 'Codex models, cheapest first')}${tier('opencode', 'opencode models (provider/model), cheapest first')}</details></div>
     <div class="foot"><button class="btn ghost" data-action="staffing-pause" data-paused="${s.paused ? 1 : 0}">${s.paused ? 'Resume' : 'Pause'}</button><button class="btn primary" data-action="staffing-save">Save</button></div>`);
+}
+const tiersTyped = () => Object.fromEntries(['claude', 'codex', 'opencode'].map((a) => [a, val(`st-tiers-${a}`)]));
+// The switch redraws the dialog in its new state, keeping what was typed and not yet saved.
+async function modelRouting(on) {
+  const back = !!$('#modal [data-staffing]')?.dataset.back;
+  const typed = { workers: val('st-workers'), budget: val('st-budget') };
+  const r = await human('settings', { model_routing: on, model_tiers: tiersTyped() }, on ? 'Cheaper models are on: runners pick each job\'s model at their next poll' : 'Cheaper models are off');
+  if (!r || !$('#modal [data-staffing]')) return;
+  staffingModal(back);
+  $('#st-workers').value = typed.workers ?? '';
+  $('#st-budget').value = typed.budget ?? '';
+  $('#modal .switch')?.focus();
 }
 
 // A project's settings (#213), changed about monthly, so one step from the header rather than in it. One row
@@ -1587,9 +1608,13 @@ const ACTIONS = {
   staffing: () => staffingModal(),
   'staffing-from-settings': () => staffingModal(true),
   'staffing-save': async () => {
-    const r = await human('settings', { run_workers: val('st-workers'), run_budget: val('st-budget') }, 'Staffing saved: runners follow it at their next poll');
+    const r = await human('settings', { run_workers: val('st-workers'), run_budget: val('st-budget'), model_tiers: tiersTyped() }, 'Staffing saved: runners follow it at their next poll');
     if (r) closeModal();
   },
+  'models-on': () => {
+    if (confirm('Turn on cheaper models for rote jobs?\n\nLanding and tidy jobs start on the cheapest model you listed (or the runner\'s --model if none). When an attempt is sent back, stalls or is handed off, that item\'s next attempt steps up one model. Building, reviews and shaping stay on the top model. Each routed worker does one job, then stops.\n\nTurn it off any time from here.')) modelRouting(true);
+  },
+  'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
   'fresh-on': () => setting({ fresh: true }, 'The weekly freshness sweep is on'),
   'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) setting({ fresh: false }, 'The weekly freshness sweep is off'); },

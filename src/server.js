@@ -1487,6 +1487,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', {
         runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null,
         has: url.searchParams.has('has') ? url.searchParams.get('has').split(',').filter(Boolean) : undefined,
+        kind: url.searchParams.get('agent') ?? '', model: url.searchParams.get('model') ?? '', // the runner's, for model routing (#347)
       }));
       // nuworq run's state, on every poll (#171): who it is comes from its token when it has a runner name.
       if (req.method === 'POST' && path === '/api/runner') {

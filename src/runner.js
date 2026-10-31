@@ -172,7 +172,7 @@ export async function run({
           resting.delete(r.project);
           w.started = now();
           running.push(w);
-          log(`▶ ${w.name} → ${r.name ?? r.project}: ${r.item} ${r.title} (${r.mode})${w.where ? `  ${w.where}` : ''}`);
+          log(`▶ ${w.name} → ${r.name ?? r.project}: ${r.item} ${r.title} (${r.mode}${r.model ? ` on ${r.model}` : ''})${w.where ? `  ${w.where}` : ''}`);
           w.exited.then(async (code) => {
             const ms = now() - w.started;
             const secs = Math.round(ms / 1000);

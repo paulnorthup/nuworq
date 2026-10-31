@@ -12,6 +12,7 @@ export const NEW = {
   'group-progress': '2026-10-31', // #270: a bar beside each milestone's state, how far along it is (the first line's)
   'phone-menu': '2026-10-31', // #114: on a phone, the rail's actions (New project, Notifications…) behind the top bar's Menu
   launcher: '2026-10-31', // #290: ⌘K, or the rail's Search, opens the quick launcher
+  'model-routing': '2026-10-31', // #347: cheaper models for rote jobs, a switch and the model tiers in Staffing
   feedback: '2026-10-31', // #295: tell nuworq's developers what got in your way (the rail's Feedback, on hubs that take it)
   'feedback-mine': '2026-10-31', // #297: under the Feedback form, what you sent and what happened to each
   'feedback-autonomy': '2026-10-31', // #296: how far feedback goes on its own (the admin dashboard's Feedback section)
