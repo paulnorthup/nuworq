@@ -8,7 +8,7 @@ Agents are first-class participants, not ticket-takers. Everything follows **0-3
 Set up a machine against your hub, once. Its "Connect an agent" dialog gives these lines with its own address, ready to copy:
 
 ```bash
-npm install -g https://nuworq.com/nuworq.tgz     # nuworq from your hub: no registry; it keeps itself up to date
+npm install -g https://nuworq.com/nuworq.tgz     # nuworq from your hub (public, no login); it updates itself to each signed release
 nuworq connect https://nuworq.com/w/acme         # browser login, saves the token, registers Claude Code and Codex
 nuworq run --workers 3 --agent claude            # keep workers going where work is waiting; Ctrl-C stops
 ```

@@ -635,6 +635,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
         return res.end(`${sig}\n`);
       }
+      // What the package is, for installs deciding whether to update (src/update.js) and for signing it
+      // (scripts/sign-release.js). Public like the package itself: /api/info needs a sign-in on most hubs.
+      if (req.method === 'GET' && path === '/api/package') {
+        const b = await pkg;
+        return send(200, { package: b ? { commit: b.commit, sha256: b.sha256, signed: !!signatureOf(b) } : null });
+      }
       // GitHub's app deliveries name no workspace: the signature is their credential (as for project webhooks below).
       if (req.method === 'POST' && path === '/api/hooks/github-app') return await appHook(req, send, deny);
       // Stripe's deliveries likewise (#227): the signature is the credential; each names its workspace inside.

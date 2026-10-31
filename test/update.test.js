@@ -41,12 +41,15 @@ function tarball({ pub = RELEASE.pub, commit = NEW, time = NEW_T } = {}) {
 }
 const sigOf = (bytes, key = RELEASE.privateKey) => `${sign(null, bytes, key).toString('base64')}\n`;
 
-// A hub serving /api/info, /nuworq.tgz and /nuworq.tgz.sig. Counts what was asked.
-async function fakeHub({ tgz = tarball(), sha = null, sig = undefined, commit = NEW } = {}) {
+// A hub serving /api/package, /nuworq.tgz and /nuworq.tgz.sig. old: one from before /api/package (#224),
+// naming its package only in /api/info. status: what it answers everything. Counts what was asked.
+async function fakeHub({ tgz = tarball(), sha = null, sig = undefined, commit = NEW, old = false, status = null } = {}) {
   const hits = [];
   const server = http.createServer((req, res) => {
     hits.push(req.url);
-    if (req.url === '/api/info') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ package: { url: 'x', sha256: sha ?? createHash('sha256').update(tgz).digest('hex'), commit: commit.slice(0, 7) } })); }
+    if (status) { res.writeHead(status); return res.end('{}'); }
+    const about = { sha256: sha ?? createHash('sha256').update(tgz).digest('hex'), ...(old ? { url: 'x', commit: commit.slice(0, 7) } : { commit, signed: sig !== null }) };
+    if (req.url === (old ? '/api/info' : '/api/package')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ package: about })); }
     if (req.url === '/nuworq.tgz') { res.writeHead(200); return res.end(tgz); }
     if (req.url === '/nuworq.tgz.sig' && sig !== null) { res.writeHead(200); return res.end(sig ?? sigOf(tgz)); }
     res.writeHead(404); res.end();
@@ -102,8 +105,49 @@ describe('the package updates itself only to a release signed by its pinned key'
     await refusedFor({ tgz, sig: sigOf(tgz, OTHER.privateKey) }, /isn't from the release key this install trusts/);
   });
 
-  test('no signature served', async () => {
-    await refusedFor({ sig: null }, /serves no signature .* isn't a signed release/);
+  test('a hub from before /api/package that serves no signature', async () => {
+    await refusedFor({ sig: null, old: true }, /serves no signature .* isn't a signed release/);
+  });
+
+  test("a newer package nobody has signed yet isn't a release: current, nothing downloads, nothing to print", async () => {
+    const hub = await fakeHub({ sig: null });
+    try {
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), force: true });
+      assert.equal(r.status, 'current');
+      assert.equal(describeUpdate(r), "nuworq aaaaaaa is current (the hub's bbbbbbb isn't a signed release yet).");
+      assert.deepEqual(hub.hits, ['/api/package']);
+    } finally { hub.close(); }
+  });
+
+  test('a hub from before /api/package is asked /api/info, and updates as before', async () => {
+    const hub = await fakeHub({ old: true });
+    try {
+      const { calls, install } = installer();
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
+      assert.equal(r.status, 'updated', describeUpdate(r));
+      assert.equal(calls.length, 1);
+      assert.deepEqual(hub.hits.slice(0, 2), ['/api/package', '/api/info']);
+    } finally { hub.close(); }
+  });
+
+  test('connected to a workspace (/w/acme), it asks the hub\'s root, where the package is', async () => {
+    const hub = await fakeHub();
+    try {
+      const { calls, install } = installer();
+      const r = await update({ root: installed(), hub: `${hub.url}/w/acme/`, dir: tmp('nuworq-upd-data-'), install, force: true });
+      assert.equal(r.status, 'updated', describeUpdate(r));
+      assert.equal(calls.length, 1);
+      assert.deepEqual(hub.hits, ['/api/package', '/nuworq.tgz', '/nuworq.tgz.sig']);
+    } finally { hub.close(); }
+  });
+
+  test('a hub that won\'t say which version it serves (401) isn\'t taken for "current"', async () => {
+    const hub = await fakeHub({ status: 401 });
+    try {
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), force: true });
+      assert.equal(r.status, 'unreachable');
+      assert.match(describeUpdate(r), /^Didn't update: the hub at http:\/\/127\.0\.0\.1:\d+ answered 401 when asked which version it serves; carrying on with the installed version\.$/);
+    } finally { hub.close(); }
   });
 
   test('a new package that pins a different release key', async () => {
@@ -142,7 +186,7 @@ describe('the package updates itself only to a release signed by its pinned key'
     try {
       const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), force: true });
       assert.equal(r.status, 'current');
-      assert.deepEqual(hub.hits, ['/api/info']);
+      assert.deepEqual(hub.hits, ['/api/package']);
     } finally { hub.close(); }
   });
 
@@ -181,7 +225,7 @@ describe('the package updates itself only to a release signed by its pinned key'
       const dir = tmp('nuworq-upd-data-');
       const r = await update({ root: installed(), hub: hub.url, dir, install: async () => 'EACCES: permission denied', force: true });
       assert.equal(r.status, 'failed');
-      const file = join(dir, `nuworq-${NEW.slice(0, 7)}.tgz`);
+      const file = join(dir, `nuworq-${NEW}.tgz`);
       assert.equal(r.command, `npm install -g ${file}`, 'the file that verified, not a fresh download from the hub');
       assert.ok(readFileSync(file).equals(tgz));
       assert.match(describeUpdate(r), /EACCES.*Run it yourself: npm install -g \//);
