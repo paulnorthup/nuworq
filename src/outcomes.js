@@ -1,6 +1,6 @@
 // What finished work came to, for other tools to read (GET /api/p/<project>/outcomes; documented in
 // docs/API.md, which is the contract). Built only from what the hub already records.
-import { HUMAN, HOUR, isHuman, isSystem } from './core.js';
+import { HUMAN, HOUR, isHuman, isSystem, dur, UserError } from './core.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 export const OUTCOMES_VERSION = 1;
@@ -135,32 +135,119 @@ export function outcomes(hub, slug, { since, until } = {}) {
       usage,
     };
   });
-  const groups = new Map();
-  for (const i of items) {
-    const k = i.model ?? '';
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(i);
-  }
-  const by_model = [...groups].map(([model, list]) => {
-    const rows = list.flatMap((i) => i.usage);
-    const sum = (key) => rows.reduce((a, r) => a + (r[key] ?? 0), 0);
-    return {
-      model: model || null,
-      landed: list.filter((i) => i.outcome === 'landed').length,
-      dropped: list.filter((i) => i.outcome === 'dropped').length,
-      sent_back: list.reduce((a, i) => a + i.sent_back, 0),
-      stalls: list.reduce((a, i) => a + i.stalls, 0),
-      escapes: list.filter((i) => i.escaped).length,
-      median_cycle_ms: median(list.filter((i) => i.outcome === 'landed').map((i) => i.cycle_ms)),
-      input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'),
-      cost_usd: rows.length && rows.every((r) => r.cost_usd != null) ? sum('cost_usd') : null,
-    };
-  });
+  const by_model = groupBy(items, (i) => i.model).map(([model, list]) => ({ model, ...tally(list) }));
+  const by_agent = groupBy(items, (i) => i.implementer).map(([agent, list]) => ({ agent, model: list.find((i) => i.model)?.model ?? null, ...tally(list) }));
   // Peer reviewers, per model: what they accepted that landed, how much of it escaped, and how many of their
   // verdicts a person overturned.
   const v = verification(hub, finished.filter((it) => it.stage === 'done'), modelOf);
   const by_reviewer = v.by_model.filter((m) => m.reviewed || m.overturned).map((m) => ({ model: m.model, reviewed: m.reviewed, escapes: m.reviewed_escaped, overturned: m.overturned }));
   const cost = humanCost(hub, p, from, to);
   const human_actions = { total: cost.actions, landed: cost.landed, per_landed: cost.per_landed, median_wait_ms: cost.median_wait_ms };
-  return { version: OUTCOMES_VERSION, project: p.slug, since: from, until: to, items, by_model, by_reviewer, human_actions };
+  return { version: OUTCOMES_VERSION, project: p.slug, since: from, until: to, items, by_model, by_agent, by_reviewer, human_actions };
+}
+
+// Finished items (outcomes().items) grouped by key(item): [[key or null, items]], in first-seen order.
+function groupBy(items, key) {
+  const groups = new Map();
+  for (const i of items) {
+    const k = key(i) ?? '';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(i);
+  }
+  return [...groups].map(([k, list]) => [k || null, list]);
+}
+
+// What some finished items came to: outcomes, tokens and cost (null if any part is unpriced or there is no
+// usage), and per landed item the cost, the median cycle time and how often it escaped.
+function tally(list) {
+  const rows = list.flatMap((i) => i.usage);
+  const sum = (key) => rows.reduce((a, r) => a + (r[key] ?? 0), 0);
+  const landed = list.filter((i) => i.outcome === 'landed');
+  const cost = rows.length && rows.every((r) => r.cost_usd != null) ? sum('cost_usd') : null;
+  const escapes = list.filter((i) => i.escaped).length;
+  return {
+    landed: landed.length,
+    dropped: list.length - landed.length,
+    sent_back: list.reduce((a, i) => a + i.sent_back, 0),
+    stalls: list.reduce((a, i) => a + i.stalls, 0),
+    escapes,
+    median_cycle_ms: median(landed.map((i) => i.cycle_ms)),
+    input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'),
+    cost_usd: cost,
+    cost_per_landed: cost != null && landed.length ? Math.round((100 * cost) / landed.length) / 100 : null,
+    escape_rate: landed.length ? Math.round((100 * escapes) / landed.length) / 100 : null,
+  };
+}
+
+// ── Across a workspace (#237): every project over a period, against the one before ──
+
+export const PERIODS = { '14d': 14 * DAY, '90d': 90 * DAY, all: null };
+const MIN_LANDED = 3; // fewer landed items than this in a group or a period say nothing worth deciding on
+
+// One project's figures over [from, to]: landed, median cycle time, cost, the owner's actions and median wait,
+// and escapes. raw: the finished items and the owner's waits, for figures across projects.
+function projectFigures(hub, p, from, to) {
+  const o = outcomes(hub, p.slug, { since: from, until: to });
+  const t = tally(o.items);
+  const waits = waitsForYou(hub, p, from, to);
+  return {
+    figures: {
+      landed: t.landed, median_cycle_ms: t.median_cycle_ms, cost_usd: t.cost_usd, cost_per_landed: t.cost_per_landed,
+      human_actions: o.human_actions.total, median_wait_ms: median(waits), escapes: t.escapes,
+    },
+    items: o.items, waits,
+  };
+}
+
+// GET /api/outcomes?period=14d|90d|all: one row per project with the previous period's figures beside them
+// (none for all), the same items by implementer model and agent across the workspace, and one takeaway.
+// scope: the project slugs a token may read (null: all).
+export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
+  if (!Object.hasOwn(PERIODS, period)) throw new UserError(`"${period}" is not a period`, { status: 400, hint: `One of: ${Object.keys(PERIODS).join(', ')}.` });
+  const to = hub.now();
+  const span = PERIODS[period];
+  const from = span == null ? 0 : to - span;
+  const items = [], waits = [];
+  const projects = hub.projects().filter((p) => !scope || scope.includes(p.slug)).map((p) => {
+    const now = projectFigures(hub, p, from, to);
+    items.push(...now.items);
+    waits.push(...now.waits);
+    const before = span == null ? null : projectFigures(hub, p, from - span, from - 1).figures;
+    return { project: p.slug, name: p.name, ...now.figures, previous: before };
+  });
+  const by_model = groupBy(items, (i) => i.model).map(([model, list]) => ({ model, ...tally(list) }));
+  const by_agent = groupBy(items, (i) => i.implementer).map(([agent, list]) => ({ agent, model: list.find((i) => i.model)?.model ?? null, ...tally(list) }));
+  const total = tally(items);
+  const summary = { ...total, median_wait_ms: median(waits) };
+  return {
+    version: OUTCOMES_VERSION, period, since: from, until: to,
+    takeaway: takeaway({ summary, projects, by_model }),
+    summary, projects, by_model, by_agent,
+  };
+}
+
+const usd = (n) => `$${n.toFixed(2)}`;
+
+// The one decision the figures suggest, or null when there is too little to go on. In order: the owner is the
+// wait; too much landed work needs fixing; one model lands for much less than another; a project slowed down.
+export function takeaway({ summary, projects, by_model }) {
+  if (summary.landed < MIN_LANDED) return null;
+  const { median_wait_ms: wait, median_cycle_ms: cycle } = summary;
+  if (wait != null && wait >= HOUR && cycle && wait >= cycle / 4) {
+    return `Your answers are the wait: median ${dur(wait)} against ${dur(cycle)} per item. Record decisions and prefer assumptions so agents ask less.`;
+  }
+  if (summary.escape_rate != null && summary.escape_rate >= 0.2) {
+    return `${Math.round(summary.escape_rate * 100)}% of landed work needed a fix later. Ask for stronger evidence before accepting, or review with another model.`;
+  }
+  const priced = by_model.filter((m) => m.model && m.landed >= MIN_LANDED && m.cost_per_landed != null).sort((a, b) => a.cost_per_landed - b.cost_per_landed);
+  if (priced.length >= 2) {
+    const [cheap, dear] = [priced[0], priced.at(-1)];
+    if (dear.cost_per_landed >= 1.5 * cheap.cost_per_landed && (cheap.escape_rate ?? 0) <= (dear.escape_rate ?? 0) + 0.1) {
+      return `${cheap.model} lands for ${usd(cheap.cost_per_landed)} an item vs ${usd(dear.cost_per_landed)} for ${dear.model}, with as few escapes: prefer it.`;
+    }
+  }
+  const slowed = projects.filter((p) => p.previous && p.previous.landed >= MIN_LANDED && p.landed <= p.previous.landed / 2)
+    .sort((a, b) => (b.previous.landed - b.landed) - (a.previous.landed - a.landed))[0];
+  if (slowed) return `${slowed.name} landed ${slowed.landed} vs ${slowed.previous.landed} the period before: give it more agents or see what holds it.`;
+  return null;
 }

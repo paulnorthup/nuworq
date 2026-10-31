@@ -22,7 +22,7 @@ import { getStarted, facts, finished, finish } from './getstarted.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
-import { outcomes } from './outcomes.js';
+import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf } from './package.js';
 import { verifySignature, applyEvent } from './billing.js';
@@ -82,7 +82,7 @@ const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 const REPO_PAGE = 30; // repositories per page in "+ Project"
 
@@ -1007,6 +1007,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const slug = decodeURIComponent(m[1]);
         if (caller.scope && !caller.scope.includes(slug)) return deny(403, `this token can't read ${slug}`, 'Use a token made for that project (nuworq token create <name> --role agent --project <slug>).');
         return send(200, outcomes(hub, slug, { since: url.searchParams.get('since'), until: url.searchParams.get('until') }));
+      }
+      // The same across the workspace (#237): every project an agent token may read, or all of them.
+      if (path === '/api/outcomes' && req.method === 'GET') {
+        return send(200, workspaceOutcomes(hub, { period: url.searchParams.get('period') || '14d', scope: caller.scope ?? null }));
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/items\/([^/]+)$/)) && req.method === 'GET') {
         return send(200, itemView(hub, decodeURIComponent(m[1]), decodeURIComponent(m[2])));
