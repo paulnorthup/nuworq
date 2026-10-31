@@ -1,6 +1,6 @@
 // The Get started card at the top of All projects (#117), from GET /api/get-started. Pure, so the UI and
 // the tests share it. Nothing to show (finished or hidden): no card at all.
-import { copyBlock } from './copy.js';
+import { commandBlocks } from './copy.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -20,7 +20,7 @@ export function getStartedCard(gs, { worker = '' } = {}) {
   };
   const rows = gs.steps.map((s) => `<li class="${s.done ? 'done' : s.key === next ? 'next' : ''}" data-step="${esc(s.key)}">
       <span class="tick">${s.done ? '✓' : ''}</span><span class="label">${esc(s.label)}</span>${s.done ? '' : action(s)}
-      ${!s.done && s.key === next && s.action?.command === 'worker' && worker ? copyBlock(worker) : ''}</li>`).join('');
+      ${!s.done && s.key === next && s.action?.command === 'worker' && worker ? commandBlocks(worker) : ''}</li>`).join('');
   return `<section class="get-started"><div class="gs-head"><h3>Get started</h3><span class="faint">${done} of ${gs.steps.length} done</span>
       <button class="link" data-action="get-started-hide" title="Hide this for good">Hide</button></div>
     <ol>${rows}</ol></section>`;

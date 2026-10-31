@@ -17,6 +17,7 @@ export const NEW = {
   'feedback-mine': '2026-10-31', // #297: under the Feedback form, what you sent and what happened to each
   'feedback-autonomy': '2026-10-31', // #296: how far feedback goes on its own (the admin dashboard's Feedback section)
   'ea-sources': '2026-10-31', // #356: on the admin dashboard, how far the people from each early-access source got
+  'copy-each-command': '2026-10-31', // #379: several commands in a step, each with its own Copy that copies clean
 };
 
 const DAYS = 7;

@@ -15,6 +15,7 @@ import { tidyUp } from './tidy.js';
 import { AGENTS, modelFor, modeAt, parseTiers } from './models.js';
 import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
+import { commandParts } from '../web/commands.js';
 export { slugify, normRemote };
 
 const GIT_CHECK = Symbol('git check');
@@ -2141,21 +2142,39 @@ function evidenceList(raw) {
     .filter((e) => e.label);
 }
 
-// What a person must do, in order: [{ do, where?, check? }]. `where` is the exact place: a URL or a command.
+// What a person must do, in order: [{ do, where?, check? }]. `where` is the exact place: a URL or one bare command.
 const STEPS_EXAMPLE = '[{ "do": "Open the repository\'s Actions secrets", "where": "https://github.com/acme/api/settings/secrets/actions" }, '
   + '{ "do": "Click New repository secret, name it NPM_TOKEN and paste the token from npmjs.com", "check": "NPM_TOKEN is listed under Repository secrets" }]';
-const STEPS_HINT = `Pass steps: what to do, in order, each with the exact place (a URL or a command) and how to check it worked, e.g. ${STEPS_EXAMPLE}`;
+const STEPS_HINT = `Pass steps: what to do, in order, each with the exact place (a URL or one command, no backticks) and how to check it worked, e.g. ${STEPS_EXAMPLE}`;
 const MAX_STEPS = 12;
-function stepList(raw) {
+// tidied collects what the hub changed in a step's where (#379), for the response's hint.
+function stepList(raw, tidied = []) {
   if (raw == null || raw === '') return [];
   if (!Array.isArray(raw)) throw new UserError('steps must be a list', { hint: STEPS_HINT });
   if (raw.length > MAX_STEPS) throw new UserError(`At most ${MAX_STEPS} steps, not ${raw.length}`, { hint: 'Group small actions into one step, or split the work so the person gets fewer at once.' });
   return raw.map((s, i) => {
     const step = typeof s === 'string' ? { do: str(s) } : { do: str(s?.do), where: str(s?.where) || undefined, check: str(s?.check) || undefined };
     if (!step.do) throw new UserError(`Step ${i + 1} says nothing to do`, { hint: `Each step needs do: what to do. ${STEPS_HINT}` });
-    return step;
+    return tidyWhere(step, i + 1, tidied);
   });
 }
+
+// A where is a URL or one bare command, so the person's Copy pastes and runs (#379). Tidied rather than refused:
+// one wrapped command loses its backticks, fence or prompt; several become `commands`, in order, while `where`
+// keeps the joining words ("then") for display.
+function tidyWhere(step, n, tidied) {
+  if (!step.where || /^https?:\/\/\S+$/i.test(step.where)) return step;
+  const parts = commandParts(step.where);
+  const commands = parts.filter((x) => x.cmd).map((x) => x.cmd);
+  if (!commands.length) return step;
+  if (commands.length === 1 && parts.length === 1) {
+    if (commands[0] !== step.where) tidied.push(`step ${n}: took the backticks or prompt off its command`);
+    return { ...step, where: commands[0] };
+  }
+  tidied.push(`step ${n}: split its where into ${commands.length === 1 ? 'one command and the words around it' : `${commands.length} commands, each copied on its own`}`);
+  return { ...step, commands };
+}
+const tidiedHint = (tidied) => (tidied.length ? ` Tidied your steps: ${tidied.join('; ')}. Next time give each where as a URL or one command, with no backticks.` : '');
 
 // A question that asks a person to act must say exactly how (Paul, 2026-10-30).
 function requireSteps(question, steps) {
@@ -2182,7 +2201,8 @@ function escalate(p, agent, args) {
   const question = layered(args.question, args.context, args.detail, 'question');
   const evidence = evidenceList(args.evidence);
   if (!evidence.length) throw new UserError('An escalation needs evidence', { hint: 'Pass evidence: what you ran or checked, e.g. [{ "label": "dry run: 3 tables dropped", "url": "https://…" }], so the human can decide without redoing it.' });
-  const steps = stepList(args.steps);
+  const tidied = [];
+  const steps = stepList(args.steps, tidied);
   requireSteps(question, steps);
   const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
   const item = this.itemById(orig.item_id);
@@ -2197,7 +2217,7 @@ function escalate(p, agent, args) {
   });
   return {
     ok: true, question: id, escalates: orig.id,
-    hint: `Escalated to the human. Their answer answers question ${orig.id} too, so ${orig.asked_by} gets it at its next checkin${item ? ` and #${item.seq} unparks` : ''}. Call next.`,
+    hint: `Escalated to the human. Their answer answers question ${orig.id} too, so ${orig.asked_by} gets it at its next checkin${item ? ` and #${item.seq} unparks` : ''}. Call next.${tidiedHint(tidied)}`,
   };
 }
 
@@ -2353,7 +2373,8 @@ const AGENT_OPS = {
     // Left out, `to` is picked from what the question is about (src/audience.js); given, it is kept as is.
     const routed = to ? null : defaultAudience({ question: question.headline, context: `${question.summary}\n${question.detail}` });
     const operator = (to || routed.audience) === 'operator';
-    const steps = stepList(args.steps);
+    const tidied = [];
+    const steps = stepList(args.steps, tidied);
     // Operators and reporters work it out themselves; the human gets told exactly how.
     if (!issue && !operator) requireSteps(question, steps);
     const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, reporter, issue_repo, issue_number, audience, steps)
@@ -2381,13 +2402,13 @@ const AGENT_OPS = {
       ...(issue ? { reporter: `@${issue.author}`, issue: issue.url } : {}),
       to: issue ? 'reporter' : operator ? 'operator' : 'human',
       ...(routed ? { routed: `${operator ? 'To an operator' : 'To the human'}: ${routed.reason}. Pass to: "${operator ? 'human' : 'operator'}" to send it ${operator ? 'to the human' : 'to an operator'} instead.` } : {}),
-      hint: issue
+      hint: (issue
         ? `Posted for @${issue.author} on ${issue.url || 'the issue'}; #${item.seq} is parked until they reply (or, after ${p.reporter_wait}h without a reply, the human answers). Call next and take other work.`
         : blocking
         ? parked
           ? `#${item.seq} is parked until ${operator ? 'an operator' : 'the human'} answers. Don't wait: call next and take other work. The answer will be in your next checkin.`
           : "Asked. Keep working on anything that doesn't depend on the answer; it will appear in your next checkin."
-        : 'Assumption recorded; keep going. If the human overrides it, it will arrive as steering.',
+        : 'Assumption recorded; keep going. If the human overrides it, it will arrive as steering.') + tidiedHint(tidied),
     };
   },
 

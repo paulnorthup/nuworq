@@ -4,10 +4,21 @@
 // from a proxy, an unfocused document, an origin the browser doesn't call secure. Then the async API.
 // If both refuse, the caller selects the text so Cmd/Ctrl-C works.
 
+import { commandParts } from './commands.js';
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 // A block of text with a Copy button that copies exactly that text. Nothing to copy: no block at all.
 export const copyBlock = (text) => (String(text ?? '').trim() ?`<div class="copyable"><pre>${esc(text)}</pre><button data-action="copy" data-text="${esc(text)}">Copy</button></div>` : '');
+
+// Commands to run (#379): each its own block and Copy, in order, with the joining words ("then") as plain text
+// between them. Backticks, fences and prompts never reach the clipboard. For text that isn't commands (a config
+// file), use copyBlock: it copies verbatim.
+export function commandBlocks(where) {
+  const parts = commandParts(where);
+  const html = parts.map((x) => (x.cmd ? copyBlock(x.cmd) : `<p class="cmd-join">${esc(x.text)}</p>`)).join('');
+  return parts.filter((x) => x.cmd).length > 1 ? `<div class="cmds" data-new="copy-each-command">${html}</div>` : html;
+}
 
 function syncCopy(text, doc) {
   if (typeof doc?.execCommand !== 'function') return false;
