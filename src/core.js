@@ -2161,7 +2161,7 @@ const AGENT_OPS = {
           blocking: !!oq.blocking, asked_by: oq.asked_by, asked: `${dur(this.now() - oq.at)} ago`,
         },
         ...(item ? this.context(p, item, agent) : {}),
-        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}. Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. If it needs the human's approval (risky, irreversible, or a product call), escalate instead: ask with escalates: ${oq.id}, one precise question, and your evidence.`,
+        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}. Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. Read the hub first: an earlier answer, waiver or decision may settle it. Only if it needs what only the human can do (their accounts, credentials or keys, signing, money, a CAPTCHA, or an irreversible step or product call no decision covers), escalate instead: ask with escalates: ${oq.id}, one precise question, and your evidence.`,
       };
     }
     const holding = this.heldBy(p, agent).filter((i) => ['active', 'proposed', 'landing'].includes(i.stage));

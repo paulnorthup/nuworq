@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { guide, skill, operatorSkill, operatorStart, OPERATOR_WAIT, OPS } from '../src/protocol.js';
+import { guide, skill, operatorSkill, operatorStart, operatorAsks, OPERATOR_WAIT, OPS } from '../src/protocol.js';
 import { MONITORS } from '../src/plugin.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
@@ -59,6 +59,30 @@ describe('one start line for the guide, the README and the command; no /loop any
     const s = skill();
     assert.match(s, /## If you are the operator/);
     for (const want of [/nuworq operator/, /\/nuworq-operator/, /to: "operator"/, /escalates/, /Never pass operator powers on/]) assert.match(s.split('## If you are the operator')[1], want);
+  });
+});
+
+// #312: every text an operator reads says, in the same words, to read the hub before asking and to ask the human
+// only for what only they can do; the old "escalate whatever is risky" rule is gone, so there is one rule.
+describe('an operator keeps work moving and asks the human only for what only they can do', () => {
+  const texts = {
+    skill: skill().split('## If you are the operator')[1].split('## The tools')[0],
+    'operator skill': operatorSkill(),
+    guide: guide({ project: 'acme' }).split('## Operators')[1].split('## Milestones')[0],
+    'guide (CLI)': guide({ project: 'acme', via: 'cli' }).split('## Operators')[1].split('## Milestones')[0],
+  };
+  for (const [name, t] of Object.entries(texts)) {
+    test(name, () => {
+      assert.match(t, /\*\*Keep work moving without the human\.\*\* Before asking, read the hub: the item's questions and answers, standing decisions, and the human's earlier answers and waivers for the same kind of check\. Act on what they settle\./);
+      assert.match(t, /\*\*Make reversible operational calls yourself\.\*\* Back up, act, and record on the item what changed and how to undo it\./);
+      assert.match(t, /\*\*Ask the human only for what only they can do:\*\* their own accounts, credentials or keys, signing, moving money, a CAPTCHA, or an irreversible step or product call that no decision covers\./);
+      assert.match(t, /`escalates`.*`evidence`, plus `steps` when they must act and `options` when they decide\. Never ask only in chat, and never re-ask in chat what the hub already answers\./);
+      assert.match(t, /\*\*Your own client's permission prompts still apply\.\*\*/);
+      assert.doesNotMatch(t, /Escalate to the human only|risky, irreversible, or a product call/, 'the old rule is replaced, not kept beside');
+    });
+  }
+  test('the four rules are word for word the same in each', () => {
+    for (const [name, t] of Object.entries(texts)) if (name !== 'guide (CLI)') for (const r of operatorAsks()) assert.ok(t.includes(r), `${name}: ${r.slice(0, 40)}`);
   });
 });
 
