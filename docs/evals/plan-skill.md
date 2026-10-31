@@ -1,6 +1,6 @@
-# Eval: the nuworq-plan skill (#96)
+# Eval: the shaper skill (#96)
 
-An agent (claude-opus-5-5, Claude Code) followed the generated `nuworq-plan/SKILL.md` against a throwaway
+Run when the shaper skill was still the planning skill (renamed in #432). An agent (claude-opus-5-5, Claude Code) followed its generated `SKILL.md` against a throwaway
 hub (`nuworq serve --demo --port 47961`, in memory, seeded with the demo nuworq project). No person was present:
 the agent wrote the person's turns itself. Every tool call and response below is real CLI output, trimmed.
 

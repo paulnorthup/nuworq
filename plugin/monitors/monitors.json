@@ -3,6 +3,6 @@
     "name": "nuworq-operator-listener",
     "command": "nuworq wait --operator --follow",
     "description": "nuworq operator listener",
-    "when": "on-skill-invoke:nuworq:nuworq-operator"
+    "when": "on-skill-invoke:nuworq:operator"
   }
 ]

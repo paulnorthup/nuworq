@@ -273,7 +273,7 @@ Pause it with `node scripts/sign-release.js watch --uninstall`, which stops and 
 The Claude Code plugin installs from this repository (`claude plugin marketplace add paulnorthup/nuworq`, then `claude plugin install nuworq@nuworq`), so it works for others only once the repository is public. `plugin/` and `.claude-plugin/marketplace.json` are what `nuworq skill --plugin` writes, and test/plugin.test.js fails if they differ.
 1. Scan every commit on every ref for secrets: `git fetch origin` then `node scripts/scan-history.js`. Check: it prints `No secrets in … added lines`. On a hit it names the commit, file and kind (never the secret) and exits 1: rotate that secret first, then decide whether to rewrite history.
 2. Make it public: `gh repo edit paulnorthup/nuworq --visibility public --accept-visibility-change-consequences`. Check: `gh repo view paulnorthup/nuworq --json visibility` says `PUBLIC`.
-3. From a GitHub account with no access before step 2 (or signed out, with `HOME` set to an empty folder): `claude plugin marketplace add paulnorthup/nuworq`, then `claude plugin install nuworq@nuworq`. Check: `claude plugin list` shows nuworq, and the plugin's folder holds the nuworq, nuworq-plan and nuworq-operator skills and `.mcp.json`.
+3. From a GitHub account with no access before step 2 (or signed out, with `HOME` set to an empty folder): `claude plugin marketplace add paulnorthup/nuworq`, then `claude plugin install nuworq@nuworq`. Check: `claude plugin list` shows nuworq, and the plugin's folder holds the nuworq, shaper and operator skills and `.mcp.json`.
 Undo: `gh repo edit paulnorthup/nuworq --visibility private --accept-visibility-change-consequences`. Copies and forks made while it was public stay out there.
 
 ### Tokens

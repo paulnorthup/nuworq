@@ -623,8 +623,8 @@ function capabilitySteps(p, it, missing) {
   const seen = `${ref(it)} is claimed within a few minutes, and this entry goes away`;
   if (missing.some((tag) => OPERATOR_TAGS.includes(tag))) {
     return [
-      { do: `In ${p.name}'s folder on the machine that can do it, print the operator line`, where: `nuworq operator --project ${p.slug} --has ${missing.join(',')}`, check: `It prints "Declare: operator, ${missing.filter((m) => m !== 'operator').join(', ')}" and a /nuworq-operator line` },
-      { do: 'Open Claude Code in that folder (the terminal or the desktop app\'s Code tab) and type the /nuworq-operator line it printed', where: 'claude', check: seen },
+      { do: `In ${p.name}'s folder on the machine that can do it, print the operator line`, where: `nuworq operator --project ${p.slug} --has ${missing.join(',')}`, check: `It prints "Declare: operator, ${missing.filter((m) => m !== 'operator').join(', ')}" and a /nuworq:operator line` },
+      { do: 'Open Claude Code in that folder (the terminal or the desktop app\'s Code tab) and type the /nuworq:operator line it printed', where: 'claude', check: seen },
     ];
   }
   return [{ do: `On a machine that has ${missing.join(', ')}, start a worker that declares it`, where: `nuworq worker --agent claude --run --project ${p.slug} --has ${missing.join(',')}`, check: seen }];

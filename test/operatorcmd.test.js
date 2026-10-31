@@ -22,13 +22,14 @@ describe('nuworq operator', () => {
     cwd: home, env: { HOME: home, PATH: join(process.execPath, '..'), NO_COLOR: '1', NUWORQ_NO_UPDATE: '1', NUWORQ_URL: 'http://127.0.0.1:9' },
   });
 
-  test('prints the has list and the /nuworq-operator line with that list, and no /loop', async () => {
+  test('prints the has list and the /nuworq:operator line with that list, and no /loop', async () => {
     const { stdout } = await run('--project', 'nuworq');
     const declared = stdout.match(/^Declare: (.+?)(  |$)/m)[1].split(', ');
     assert.equal(declared[0], 'operator');
     assert.ok(declared.includes({ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform]), 'the platform is detected');
     assert.ok(stdout.includes(`\n${operatorStart(declared)}\n`), 'the shared start line, on its own line');
-    assert.match(stdout, /^\/nuworq-operator \S+$/m);
+    assert.match(stdout, /^\/nuworq:operator \S+$/m);
+    assert.match(stdout, /\(Without the nuworq plugin: \/nuworq-operator \S+\.\)/, 'and the copy connect writes without the plugin (#432)');
     assert.match(stdout, /nuworq's folder/);
     assert.doesNotMatch(stdout, /^\/loop/m, 'no /loop line to paste');
   });
@@ -36,7 +37,7 @@ describe('nuworq operator', () => {
   test('--has replaces what was detected; operator is implied, not repeated', async () => {
     const { stdout } = await run('--project', 'acme', '--has', 'claude-cli,Browser,operator');
     assert.match(stdout, /^Declare: operator, claude-cli, browser$/m);
-    assert.match(stdout, /^\/nuworq-operator claude-cli,browser$/m);
+    assert.match(stdout, /^\/nuworq:operator claude-cli,browser$/m);
     assert.doesNotMatch(stdout, /macos|linux/);
   });
 
@@ -101,7 +102,7 @@ describe('one start line for the guide, the README and the command; no /loop any
   test('the skill has an operator section that points at the operator skill', () => {
     const s = skill();
     assert.match(s, /## If you are the operator/);
-    for (const want of [/nuworq operator/, /\/nuworq-operator/, /to: "operator"/, /escalates/, /Never pass operator powers on/]) assert.match(s.split('## If you are the operator')[1], want);
+    for (const want of [/nuworq operator/, /\/nuworq:operator/, /to: "operator"/, /escalates/, /Never pass operator powers on/]) assert.match(s.split('## If you are the operator')[1], want);
   });
 });
 
@@ -131,10 +132,11 @@ describe('an operator keeps work moving and asks the human only for what only th
 
 // The operator skill (#284): only a person starts it, it checks in as the operator, works until nothing waits,
 // then idles on the listener instead of looping.
-describe('the nuworq-operator skill', () => {
+describe('the operator skill', () => {
   const s = operatorSkill();
   test('only a person invokes it, with capabilities as its argument', () => {
-    assert.match(s, /^---\nname: nuworq-operator\ndescription: .+\ndisable-model-invocation: true\nargument-hint: .+\n---\n/);
+    assert.match(s, /^---\nname: operator\ndescription: .+ e\.g\. \/nuworq:operator macos,browser,claude-cli .+\ndisable-model-invocation: true\nargument-hint: .+\n---\n/);
+    assert.match(operatorSkill({ name: 'nuworq-operator' }), /^---\nname: nuworq-operator\ndescription: .+ e\.g\. \/nuworq-operator macos/, 'the copy in ~/.claude/skills names its own command');
     assert.match(s, /\$ARGUMENTS/);
   });
 
@@ -160,7 +162,7 @@ describe('the nuworq-operator skill', () => {
 
   test('the plugin listens only once the operator skill runs', () => {
     // A plugin skill dispatches as <plugin>:<dir> (#328); the bare name never matches the plugin's own skill.
-    assert.deepEqual(MONITORS, [{ name: 'nuworq-operator-listener', command: OPERATOR_WAIT, description: 'nuworq operator listener', when: 'on-skill-invoke:nuworq:nuworq-operator' }]);
+    assert.deepEqual(MONITORS, [{ name: 'nuworq-operator-listener', command: OPERATOR_WAIT, description: 'nuworq operator listener', when: 'on-skill-invoke:nuworq:operator' }]);
   });
 
   test('before going idle it checks the CLI is new enough for the listener, and says how to update it (#419)', () => {

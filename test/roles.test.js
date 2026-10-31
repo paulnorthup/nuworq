@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, MIN } from '../src/core.js';
 import { view } from '../src/insight.js';
-import { tools, guide, skill, planSkill } from '../src/protocol.js';
+import { tools, guide, skill, shaperSkill } from '../src/protocol.js';
 
 // #238: every session has one role, fixed for its life, from how it started; the role decides what it is offered.
 function setup() {
@@ -239,14 +239,14 @@ describe('claims, usage and presence carry the role', () => {
   });
 });
 
-// #241: the guide and both skills say how each role starts, what it may take and what it never does.
-describe('the guide and both skills describe the roles', () => {
-  const texts = { guide: guide(), 'cli guide': guide({ via: 'cli' }), skill: skill(), 'plan skill': planSkill() };
+// #241: the guide, the worker skill and the shaper skill say how each role starts, what it may take and what it never does.
+describe('the guide and the worker and shaper skills describe the roles', () => {
+  const texts = { guide: guide(), 'cli guide': guide({ via: 'cli' }), skill: skill(), 'shaper skill': shaperSkill() };
   test('each names Operator, Shaper and Worker and how each starts', () => {
     for (const [name, t] of Object.entries(texts)) {
-      for (const want of [/\*\*Operator\b/, /\*\*Shaper\b/, /\*\*Worker\b/, /nuworq operator/, /nuworq run/]) assert.match(t, want, `${name}: ${want}`);
+      for (const want of [/\*\*Operator\b/, /\*\*Shaper\b/, /\*\*Worker\b/, /nuworq operator/, /\/nuworq:operator/, /nuworq run/]) assert.match(t, want, `${name}: ${want}`);
     }
-    for (const t of [texts.guide, texts.skill]) assert.match(t, /nuworq-plan skill/);
+    for (const t of [texts.guide, texts.skill]) assert.match(t, /shaper skill \(`\/nuworq:shaper`/);
   });
 
   test('each says what a shaper and a worker never do', () => {
@@ -280,8 +280,8 @@ describe('the guide and both skills describe the roles', () => {
     assert.doesNotMatch(a('sh', 'claim', { item: '#4' }).hint ?? '', split);
   });
 
-  test('the planning skill checks in as a shaper', () => {
-    assert.match(planSkill(), /`checkin` with role "shaper"/);
+  test('the shaper skill checks in as a shaper', () => {
+    assert.match(shaperSkill(), /`checkin` with role "shaper"/);
     assert.match(guide(), /`checkin` with role `"shaper"`/);
   });
 });

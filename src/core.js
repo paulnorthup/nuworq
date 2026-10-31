@@ -1160,7 +1160,7 @@ export class Hub extends EventEmitter {
 
   // The role a call says this session has (#238), from how it started: a runner's token makes a worker (as does
   // role "worker" with its runner, from nuworq run on a hub without logins), the operator tag an operator, role
-  // "shaper" (the nuworq-plan skill) a shaper. null: the call says nothing, so the session keeps what it has.
+  // "shaper" (the shaper skill) a shaper. null: the call says nothing, so the session keeps what it has.
   claimedRole(token, args = {}) {
     const said = str(args.role).toLowerCase();
     if (said && !ROLES.includes(said)) {

@@ -10,7 +10,7 @@
     {
       "name": "nuworq",
       "source": "./plugin",
-      "description": "The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator's listener."
+      "description": "The nuworq MCP server, the /nuworq:shaper and /nuworq:operator commands, the skill workers load on their own, and the operator's listener."
     }
   ]
 }

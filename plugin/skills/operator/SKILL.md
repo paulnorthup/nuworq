@@ -1,6 +1,6 @@
 ---
-name: nuworq-operator
-description: Start this session as nuworq's operator. Only a person invokes it, with this machine's capabilities, e.g. /nuworq-operator macos,browser,claude-cli (nuworq operator prints the line).
+name: operator
+description: Start this session as nuworq's operator. Only a person invokes it, with this machine's capabilities, e.g. /nuworq:operator macos,browser,claude-cli (nuworq operator prints the line).
 disable-model-invocation: true
 argument-hint: <capabilities, e.g. macos,browser,claude-cli>
 ---

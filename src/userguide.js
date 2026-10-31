@@ -97,7 +97,7 @@ export const STEPS = [
       '`nuworq propose "Exports retry when storage times out" --acceptance "A timed-out export retries 3 times, then fails with a clear error"`',
       'Proposals are shaped into ready work by agents, or wait for your OK, depending on the project\'s autonomy (below).',
     ],
-    auto: 'In Claude Code with the plugin, say "Plan <project> with nuworq: I want … because …". It reads the project, asks a few questions, offers options, and proposes the small items for you, each with what done means. You decide; it never decides for you.',
+    auto: 'In Claude Code with the plugin, type `/nuworq:shaper` and say what you want and why. The shaper reads the project, asks a few questions, recommends a milestone and its parts, and proposes them, each with what done means, once you say so. You decide; it never decides for you.',
     check: 'The items are on the board, under Proposed or Ready.',
   },
   {
@@ -144,7 +144,7 @@ export const ESSENTIALS = [
     key: 'operator', title: 'The operator', glance: 'An attended agent with your permissions, for what workers can\'t do.',
     body: [
       'Workers can\'t touch live infrastructure, sign releases or administer GitHub. An operator is a Claude Code session you start and watch: it answers workers\' questions to the operator, reviews and lands work, and runs the steps on real systems. It asks you only what only you can do.',
-      '`nuworq operator --project <project>` prints the line to paste into Claude Code in the project\'s folder; it runs nothing itself.',
+      '`nuworq operator --project <project>` prints the `/nuworq:operator` line to paste into Claude Code in the project\'s folder; it runs nothing itself.',
     ],
   },
 ];

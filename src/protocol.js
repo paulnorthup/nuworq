@@ -44,11 +44,26 @@ export const OPERATOR_TAGS = ['operator', 'claude-cli', 'infra', 'github-admin']
 export const TAG_ALIASES = { 'nuworq-infra': 'infra', 'homelab-vm': 'infra' };
 
 // What a person types to start an operator session, one text for the guide, the README and `nuworq operator`:
-// the nuworq-operator skill with the tags to check in with. Invoking it starts the plugin's listener (no /loop).
+// the plugin's operator skill with the tags to check in with. Invoking it starts the plugin's listener (no /loop).
 // has: the capabilities besides "operator"; without it, a placeholder for the reader's own.
-export function operatorStart(has = null) {
+// plugin: false for a machine without the plugin, whose copy `nuworq connect` wrote as nuworq-operator (#432).
+export function operatorStart(has = null, { plugin = true } = {}) {
   const tags = has ? has.filter((t) => t !== 'operator').join(',') : '<your capabilities>';
-  return `/nuworq-operator ${tags}`.trim();
+  return `/${plugin ? 'nuworq:operator' : USER_SKILLS.operator} ${tags}`.trim();
+}
+// The names the skills go by (#432). In the plugin, Claude Code shows them as nuworq:<name>, so a person sees
+// /nuworq:shaper and /nuworq:operator; the worker skill (nuworq) loads on its own and stays out of the menu.
+// Written into ~/.claude/skills (no plugin) they show unprefixed, so there they keep nuworq- in front, which
+// also keeps them clear of a person's own skills called shaper or operator.
+export const PLUGIN_SKILLS = { worker: 'nuworq', shaper: 'shaper', operator: 'operator' };
+export const USER_SKILLS = { worker: 'nuworq', shaper: 'nuworq-shaper', operator: 'nuworq-operator' };
+// { folder name: SKILL.md } for ~/.claude/skills (`nuworq skill`, and `nuworq connect` without the plugin).
+export function userSkills({ url = '' } = {}) {
+  return {
+    [USER_SKILLS.worker]: skill({ url }),
+    [USER_SKILLS.shaper]: shaperSkill({ url, name: USER_SKILLS.shaper }),
+    [USER_SKILLS.operator]: operatorSkill({ url, name: USER_SKILLS.operator }),
+  };
 }
 // The line an operator session listens to: one line per event, ids and kinds only (see `nuworq wait`).
 export const OPERATOR_WAIT = 'nuworq wait --operator --follow';
@@ -295,12 +310,15 @@ export function tools(format = 'mcp', prefix = '') {
 // The nuworq skill for Claude (SKILL.md), generated from OPS so it can't drift from the hub's tools.
 // Short on purpose: when to use it, where to start, and that the hub's guide and hints are the rulebook.
 // url: the hub the machine is connected to, if known (its /agents.md is the guide).
+// Out of the slash menu (user-invocable: false, #432): a person types /nuworq:shaper or /nuworq:operator, and
+// this one still loads on its own whenever a session is asked to work on nuworq.
 export function skill({ url = '' } = {}) {
   const guideAt = url ? `${url.replace(/\/+$/, '')}/agents.md` : 'the hub\'s /agents.md (or `nuworq guide`)';
   const line = (o) => `- \`${o.name}\`: ${o.description.split(/(?<=\.)\s/)[0]}`;
   return `---
-name: nuworq
+name: ${PLUGIN_SKILLS.worker}
 description: Use whenever the user mentions nuworq, asks you to work on a project "using nuworq", to take, shape, review or land work items, or to plan or propose work in nuworq. nuworq is a work hub reached through the nuworq MCP tools (mcp__nuworq__*). Everything comes from the hub; never search the disk for it.
+user-invocable: false
 ---
 
 # nuworq
@@ -316,13 +334,13 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 
 ## Roles
 Your role comes from how you started and is fixed for the session. \`checkin\` says which you are.
-- **Operator:** started with the nuworq-operator skill (\`nuworq operator\` prints how), checks in with \`operator\` in \`has\`. Takes operator questions, reviews and landing, and operator-only work; workers build the rest.
-- **Shaper:** started with the nuworq-plan skill (checkin role "shaper"). Takes only proposals to shape. Never builds, reviews or lands.
+- **Operator:** started with the operator skill (\`${operatorStart()}\`; \`nuworq operator\` prints it), checks in with \`operator\` in \`has\`. Takes operator questions, reviews and landing, and operator-only work; workers build the rest.
+- **Shaper:** started with the shaper skill (\`/nuworq:shaper\`; checkin role "shaper"). Takes only proposals to shape. Never builds, reviews or lands.
 - **Worker:** started by a runner (\`nuworq run\`). Builds, reviews and lands. Never builds operator-only work (it may review and land it) and never declares \`operator\`.
 - **Session:** any other agent, e.g. one a person opened. Takes any work but operator-only work.
 
 ## If you are the operator
-You are the operator only when the person started you as one (they typed \`/nuworq-operator\`, which \`nuworq operator\` prints) and you checked in with \`operator\` in \`has\`. The nuworq-operator skill says how to listen.
+You are the operator only when the person started you as one (they typed \`/nuworq:operator\`, which \`nuworq operator\` prints) and you checked in with \`operator\` in \`has\`. The operator skill says how to listen.
 - **Take operator work first:** \`next\` hands you questions asked \`to: "operator"\` (mode answer). Settle each and \`answer\` it.
 - **Build only the live step:** take an item yourself only when it is the step on real infrastructure. Its code, docs and tests are for workers; you answer their operator questions.
 - **You may** run \`claude\`, work on the hub's infrastructure, VMs and GitHub admin, and verify on real systems, within your own permission prompts. Declare only the capabilities you really have.
@@ -336,39 +354,42 @@ Generated by \`nuworq skill\` from the hub's protocol; regenerate it rather than
 `.replace(/\n{3,}/g, '\n\n');
 }
 
-// The nuworq-plan skill: planning with a person, a thin layer over the same tools. Tool names go through
-// op(), so a renamed or removed operation fails here instead of shipping a skill that names it.
-// Agents never write decisions: the skill drafts one and asks, and the person makes it.
-export function planSkill({ url = '' } = {}) {
+// The shaper skill (#432; the planning skill before it): shaping work with a person, a thin layer over the same tools.
+// Tool names go through op(), so a renamed or removed operation fails here instead of shipping a skill that
+// names it. Agents never write decisions: the skill drafts one and asks, and the person makes it.
+// name: the plugin's, or USER_SKILLS.shaper for the copy in ~/.claude/skills.
+export function shaperSkill({ url = '', name = PLUGIN_SKILLS.shaper } = {}) {
   const guideAt = url ? `${url.replace(/\/+$/, '')}/agents.md` : 'the hub\'s /agents.md (or `nuworq guide`)';
   const op = (name) => {
-    if (!OPS.some((o) => o.name === name)) throw new Error(`planSkill names "${name}", which is not an operation`);
+    if (!OPS.some((o) => o.name === name)) throw new Error(`shaperSkill names "${name}", which is not an operation`);
     return `\`${name}\``;
   };
   return `---
-name: nuworq-plan
-description: Use when a person wants to plan work in nuworq with you: decide what to build, break an idea into items, or turn "I want X because Y" into proposals. A short conversation, then small, well-shaped proposals through the nuworq MCP tools (mcp__nuworq__*). Not for building or reviewing items; that is the nuworq skill.
+name: ${name}
+description: Shape work in nuworq with a person: interview them, ask questions, hone the idea, and build milestones with their parts to submit to the hub. Use when a person wants to plan what to build, break an idea into items, or turn "I want X because Y" into proposals. Never builds, reviews or lands; that is the nuworq skill.
 ---
 
-# Planning with a person in nuworq
+# Shaping work with a person in nuworq
 
-You turn a short conversation into proposals any agent can pick up cold. The person decides; you do the reading, the options and the writing. Keep it to a few turns.
+You are the **Shaper**. You help shape work: interview the person, ask questions, hone the idea, and build milestones with their parts to submit to the hub, as proposals any agent can pick up cold. The person decides; you do the reading, the options and the writing. Keep it to a few turns.
 
-You are a **Shaper**: you shape proposals and never build, review or land. The other roles do that: an **Operator** (started with \`nuworq operator\`) takes operator-only work, and a **Worker** (started by \`nuworq run\`) builds, reviews and lands but never builds operator-only work.
+You never build, review or land. The other roles do that: an **Operator** (started with \`/nuworq:operator\`, which \`nuworq operator\` prints) takes operator-only work, and a **Worker** (started by \`nuworq run\`) builds, reviews and lands but never builds operator-only work.
 
 1. **Read the project first.** ${op('checkin')} with role "shaper", then ${op('look')} for the board and the standing decisions, and ${op('look')} with an item for anything related. Don't propose what already exists or what a decision rules out.
-2. **Ask what they want and why.** One or two questions: the outcome, who it is for, what "done" looks like to them, and what must not change. The why decides the shape.
-3. **Offer 2–3 options with trade-offs.** A line each: what it delivers, what it costs, what it leaves out. Recommend one. Let the person pick or mix.
-4. **Propose small items** with ${op('propose')}, once the person has picked:
+2. **Interview: what they want and why.** One or two questions at a time: the outcome, who it is for, what "done" looks like to them, and what must not change. The why decides the shape.
+3. **Explain and recommend.** Offer 2–3 options with trade-offs, a line each: what it delivers, what it costs, what it leaves out. Recommend one, and say what you would propose: the milestone and its parts, with titles.
+4. **Ask before proposing.** Nothing goes to the hub until the person says to propose it. Once they have, propose all of it without asking again.
+5. **Propose** with ${op('propose')}:
    - **title**: the outcome, not the activity. "Exports finish in under 5s", not "Optimize exports".
    - **summary**: why it matters and what you learned reading the project.
    - **acceptance**: criteria a reviewer can check without asking you: commands, observable behaviour, tests that pass.
-   - **parent** for parts of a bigger item (propose the parent first); **depends_on** where one item must land before another.
+   - **A milestone** is a parent with parts. ${op('look')} at the parent first (another agent may already have split it), then propose its missing parts at once, each with **parent** set. Propose a new parent first. **depends_on** where one part must land before another.
    - **needs** (e.g. docker, browser) when not every machine can do it; **size** "large" for multi-step work; **priority** when it isn't "soon".
    - Work across repositories: one item per repo (**repo**), linked by parent or depends_on.
    - To fix an item that already exists, ${op('refine')} it instead.
-5. **Standing answers become decisions, and only the person makes them.** When the conversation settles a rule that should outlast these items ("no new dependencies", "mobile first"), never record it yourself: draft the wording and ${op('ask')} the person to confirm it, with the draft as an option. The person answers in the hub and chooses whether it becomes a decision.
-6. **Read it back.** List what you proposed (number, title, how they connect) so the person can correct it in one reply.
+   - **A propose that was interrupted** (an error, a timeout, a cancelled call) may have gone through anyway. ${op('look')} at the board before proposing it again, so nothing is filed twice.
+6. **Standing answers become decisions, and only the person makes them.** When the conversation settles a rule that should outlast these items ("no new dependencies", "mobile first"), never record it yourself: draft the wording and ${op('ask')} the person to confirm it, with the draft as an option. The person answers in the hub and chooses whether it becomes a decision.
+7. **Read it back.** List what you proposed (number, title, how they connect) so the person can correct it in one reply.
 
 The hub's guide is the rulebook: ${guideAt}. When anything here disagrees with it or with a hint in a tool response, follow the hub.
 
@@ -376,20 +397,21 @@ Generated by \`nuworq skill\` from the hub's protocol; regenerate it rather than
 `;
 }
 
-// The nuworq-operator skill: how a person starts an operator session, and how it stays listening without a /loop.
+// The operator skill: how a person starts an operator session, and how it stays listening without a /loop.
 // Only a person invokes it (disable-model-invocation), so only operator sessions listen. Invoking it starts the
 // plugin's monitor (when: on-skill-invoke, see src/plugin.js); the skill checks it with pgrep and, when none runs
 // (no plugin, or Claude Code didn't arm it), arms the Monitor tool itself (#328).
 // Each line the listener prints starts a turn in the idle session; nothing runs, and nothing is spent, in between.
-export function operatorSkill({ url = '' } = {}) {
+// name: the plugin's, or USER_SKILLS.operator for the copy in ~/.claude/skills.
+export function operatorSkill({ url = '', name = PLUGIN_SKILLS.operator } = {}) {
   const guideAt = url ? `${url.replace(/\/+$/, '')}/agents.md` : 'the hub\'s /agents.md (or `nuworq guide`)';
   const op = (name) => {
     if (!OPS.some((o) => o.name === name)) throw new Error(`operatorSkill names "${name}", which is not an operation`);
     return `\`${name}\``;
   };
   return `---
-name: nuworq-operator
-description: Start this session as nuworq's operator. Only a person invokes it, with this machine's capabilities, e.g. /nuworq-operator macos,browser,claude-cli (nuworq operator prints the line).
+name: ${name}
+description: Start this session as nuworq's operator. Only a person invokes it, with this machine's capabilities, e.g. ${operatorStart(['macos', 'browser', 'claude-cli'], { plugin: name === PLUGIN_SKILLS.operator })} (nuworq operator prints the line).
 disable-model-invocation: true
 argument-hint: <capabilities, e.g. macos,browser,claude-cli>
 ---
@@ -466,8 +488,8 @@ Hub: ${url} · project: ${project} (change with --project).
 
 ## Roles
 Every session has one role, from how it started and fixed for its life. ${c('checkin')} says yours, and the role decides what ${c('next')} and ${c('claim')} offer you.
-- **Operator:** a person starts it with the nuworq-operator skill (\`nuworq operator\` prints the line to type); it checks in with \`operator\` in \`has\`. It takes operator questions and operator-only work first, then any other work (see Operators below). It never passes its powers on to workers it starts.
-- **Shaper:** planning with a person, through the nuworq-plan skill: ${c('checkin')} with role \`"shaper"\`. It takes only proposals to shape. It never builds, reviews or lands; the hub refuses such a claim.
+- **Operator:** a person starts it with the operator skill, \`/nuworq:operator\` (\`nuworq operator\` prints the line to type); it checks in with \`operator\` in \`has\`. It takes operator questions and operator-only work first, then any other work (see Operators below). It never passes its powers on to workers it starts.
+- **Shaper:** shaping work with a person, through the shaper skill (\`/nuworq:shaper\`): ${c('checkin')} with role \`"shaper"\`. It takes only proposals to shape. It never builds, reviews or lands; the hub refuses such a claim.
 - **Worker:** started by a runner, \`nuworq run\`, which launches it on a ready item. It builds, reviews and lands. It never builds operator-only work, though it may review it (from the code and the live output its builder recorded, asking an operator for any live recheck) and land it once accepted. The hub refuses a worker that declares \`operator\`.
 - **Session:** any other agent, e.g. one a person opened. It takes any work except operator-only work.
 
@@ -480,7 +502,7 @@ Some work needs a capable session more than a decision: running \`claude\`, the 
 - **Asking the human:** an operator settles what it can. As the operator:
 ${operatorAsks(c).map((r) => `  - ${r}`).join('\n')}
 - **Keeping one running:** open Claude Code in ${project}'s folder (the terminal or the desktop app's Code tab) and type
-  \`${operatorStart()}\` (\`nuworq operator\` prints it with this machine's capabilities filled in; with the plugin it is also \`/nuworq:nuworq-operator\`).
+  \`${operatorStart()}\` (\`nuworq operator\` prints it with this machine's capabilities filled in; without the plugin it is \`${operatorStart(null, { plugin: false })}\`).
   No /loop: the session works until nothing waits, then goes idle and spends nothing. A listener holds one open request to the hub (\`${OPERATOR_WAIT}\`, which the plugin starts when the skill runs, or the Monitor tool without the plugin), and each line it prints, e.g. "nuworq: operator work waiting (#219). Run next.", starts a turn. The lines carry ids and kinds only, never text other agents wrote.
 
 ## Milestones
