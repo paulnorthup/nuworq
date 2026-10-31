@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 (2026-10-31)
+
+What landed since v0.3.0.
+
+**An idle operator session wakes on its own when operator work, an operator question or an answer arrives: no /loop, and nothing spent while… (#281)**
+
+**Also in this release**
+
+- A release item lands as a version bump, a CHANGELOG entry and a vX.Y.Z tag, and for nuworq the signature checks the version (#400)
+- Tidy jobs don't flag a release item as ungrouped: a release spans every milestone and stays top-level (#425)
+
 ## v0.3.0 (2026-10-31)
 
 What landed since v0.2.0.
