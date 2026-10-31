@@ -249,6 +249,20 @@ describe('agent tokens limited to projects', () => {
     assert.deepEqual(all.json.map((r) => r.project), ['beta']);
   });
 
+  test("agent tokens read finished branches for the sweep, only their projects' (#448)", async () => {
+    for (const slug of ['alpha', 'beta']) {
+      const it = ctx.hub.humanOp(slug, 'create', { title: `${slug} done`, acceptance: 'x' }).item;
+      ctx.hub.patch(ctx.hub.item(ctx.hub.project(slug), it), { stage: 'done', branch: `nuworq/9-${slug}` });
+    }
+    const mine = await request(ctx.port, 'GET', '/api/finished?project=alpha', { headers: as(scoped) });
+    assert.equal(mine.status, 200);
+    assert.deepEqual(mine.json.branches, ['nuworq/9-alpha']);
+    const theirs = await request(ctx.port, 'GET', '/api/finished?project=beta', { headers: as(scoped) });
+    assert.deepEqual(theirs.json.branches, []);
+    const all = await request(ctx.port, 'GET', '/api/finished?project=beta', { headers: as(other) });
+    assert.deepEqual(all.json.branches, ['nuworq/9-beta']);
+  });
+
   test('each agent records the tokens that acted under its name', async () => {
     await request(ctx.port, 'POST', '/api/p/alpha/agent/checkin', { body: {}, headers: as(other, 'w1') });
     assert.equal(ctx.hub.q("SELECT tokens FROM agents WHERE name = 'w1'").get().tokens, 'alpha-box,spare-box');
