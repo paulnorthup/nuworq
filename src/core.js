@@ -1567,15 +1567,17 @@ export class Hub extends EventEmitter {
     // An operator session takes what only it can do before anything else (#137): anyone can do the rest.
     const operator = role === 'operator' || !!fit.has?.includes('operator');
     // A review waits while a reviewer's question on it is open (#259): for an operator's answer, only
-    // operators get it meanwhile; for the human's, nobody does. And a reviewer who handed it off doesn't
-    // get it back until something new arrives on it: an answer, a new submission or a comment.
+    // operators get it meanwhile; for the human's, nobody does. An open operator question from its builder
+    // holds it too, since that answer is usually the live evidence (#298); the builder's questions to the
+    // human don't: the reviewer judges the assumption. And a reviewer who handed it off doesn't get it
+    // back until something new arrives on it: an answer, a new submission or a comment.
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
         AND COALESCE(implementer, '') != ?
         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
         AND NOT EXISTS (SELECT 1 FROM events r WHERE r.item_id = items.id AND r.actor = ? AND r.type = 'rebased' AND r.at >= items.stage_since
           AND json_extract(r.data, '$.conflicts') = 1)
-        AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.item_id = items.id AND q.status = 'open' AND q.at >= items.stage_since
-          AND q.asked_by != COALESCE(items.implementer, '') AND (q.audience != 'operator' OR ? = 0))
+        AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.item_id = items.id AND q.status = 'open' AND CASE WHEN q.audience = 'operator'
+          THEN ? = 0 ELSE q.at >= items.stage_since AND q.asked_by != COALESCE(items.implementer, '') END)
         AND NOT EXISTS (SELECT 1 FROM events h WHERE h.item_id = items.id AND h.actor = ? AND h.type = 'handoff' AND h.at >= items.stage_since
           AND NOT EXISTS (SELECT 1 FROM events n WHERE n.item_id = items.id AND n.at > h.at AND n.actor != h.actor
             AND n.type IN ('answered', 'assumption_confirmed', 'question_withdrawn', 'submitted', 'comment')))
