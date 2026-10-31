@@ -2,7 +2,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, writeFileSync, readFileSync, statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createClient } from '../src/client.js';
 
@@ -50,7 +52,38 @@ describe('the client rides out a hub restart', () => {
     const took = Date.now() - t0;
     assert.ok(took >= 250 && took < 3000, `retried for a while, then gave up (${took}ms)`);
   });
+
+  test("a proxy's 502 page while the hub restarts is waited out", async () => {
+    let hits = 0;
+    const server = createServer((req, res) => {
+      if (++hits <= 2) { res.statusCode = 502; res.setHeader('content-type', 'text/html'); return res.end('<html><body>Bad gateway</body></html>'); }
+      res.setHeader('content-type', 'application/json');
+      res.end('{"ok":true}');
+    });
+    const port = await listen(server);
+    try {
+      assert.deepEqual(await client(port).get('/api/health'), { ok: true });
+      assert.equal(hits, 3);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('a proxy that keeps answering 502 is reported as restarting, without its page', async () => {
+    const server = createServer((req, res) => { res.statusCode = 502; res.setHeader('content-type', 'text/html'); res.end('<html><body>Bad gateway</body></html>'); });
+    const port = await listen(server);
+    try {
+      await assert.rejects(client(port, { retryMs: 400 }).get('/api/health'), (e) => e.status === 502 && /restarting or unreachable/.test(e.message) && !/</.test(e.message + e.hint));
+    } finally {
+      server.close();
+    }
+  });
 });
+
+const listen = async (server, host = '127.0.0.1') => { await new Promise((r) => server.listen(0, host, r)); return server.address().port; };
+const json = (res, body) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(body)); };
+// The old address: answers every /api call with a 308 to the same path at `to()`.
+const mover = (to, seen = []) => createServer((req, res) => { seen.push(req.url); res.writeHead(308, { location: `${to()}${req.url}` }); res.end(); });
 
 describe('a hub that moved to a subdomain', () => {
   // nuworq.com answers app paths with a 308 to app.nuworq.com. Names like app.hub.test don't resolve, so fetch is faked.
@@ -65,6 +98,8 @@ describe('a hub that moved to a subdomain', () => {
     calls.push({ url, auth: init.headers?.authorization, redirect: init.redirect });
     const u = new URL(url);
     if (u.host === 'hub.test') return new Response(null, { status: 308, headers: { location: `https://app.hub.test${u.pathname}${u.search}` } });
+    // The new address says it is the hub (#222), asked without the token.
+    if (u.host === 'app.hub.test' && u.pathname.endsWith('/api/health')) return Response.json({ ok: true, name: 'nuworq', url: `https://app.hub.test${u.pathname.slice(0, -'/api/health'.length)}` });
     if (u.host === 'app.hub.test' && init.headers?.authorization === 'Bearer tok') return Response.json({ ok: true, at: u.pathname });
     return Response.json({ error: 'login required' }, { status: 401 });
   };
@@ -97,6 +132,7 @@ describe('a hub that moved to a subdomain', () => {
     assert.equal(c.settings.url, 'https://app.hub.test/w/acme');
   });
 
+  // Since #222 a redirect anywhere else fails with a hint rather than being followed without the token.
   test('a redirect anywhere else never carries the token and moves nothing', async () => {
     const { dir, connectFile } = saved();
     const seen = [];
@@ -111,14 +147,89 @@ describe('a hub that moved to a subdomain', () => {
     try {
       const c = createClient({ cwd: dir, connectFile, retryMs: 0 });
       assert.equal(c.settings.token, 'tok');
-      assert.deepEqual(await c.get('/api/health'), { ok: true });
-      assert.deepEqual(seen, [undefined], 'the other host never saw the token');
+      await assert.rejects(c.get('/api/health'), (e) => e.status === 308 && /token was not sent/.test(e.message) && e.hint.includes('nuworq connect http://localhost:'));
+      assert.deepEqual(seen, [], 'the other host was never asked, so never saw the token');
       assert.equal(c.settings.url, url);
       assert.equal(JSON.parse(readFileSync(connectFile, 'utf8')).url, url);
       assert.equal(JSON.parse(readFileSync(join(dir, '.nuworq.json'), 'utf8')).url, url);
     } finally {
       hub.close();
       other.close();
+    }
+  });
+});
+
+describe('the client follows a moved hub, and only a moved hub (#222)', () => {
+  test('a 308 to the address the hub announces is followed with the token, and later calls go there directly', async () => {
+    const auth = [], old = [];
+    let newUrl;
+    const hub = createServer((req, res) => {
+      if (req.url === '/api/health') return json(res, { ok: true, name: 'nuworq', url: newUrl });
+      auth.push(req.headers.authorization);
+      json(res, { ok: true, at: 'new' });
+    });
+    newUrl = `http://127.0.0.1:${await listen(hub)}`;
+    const from = mover(() => newUrl, old);
+    const c = createClient({ url: `http://127.0.0.1:${await listen(from)}`, token: 'tok', cwd: tmpdir(), connectFile: join(tmpdir(), 'nuworq-none.json') });
+    try {
+      assert.deepEqual(await c.get('/api/projects'), { ok: true, at: 'new' });
+      assert.deepEqual(await c.get('/api/projects'), { ok: true, at: 'new' });
+      assert.deepEqual(auth, ['Bearer tok', 'Bearer tok']);
+      assert.deepEqual(old, ['/api/projects'], 'the second call went straight to the new address');
+      assert.equal(c.settings.url, newUrl);
+    } finally {
+      hub.close();
+      from.close();
+    }
+  });
+
+  test('a 308 to another host never gets the token: neither one that says nothing nor one on another site', async () => {
+    const auth = [];
+    let foreignUrl;
+    const foreign = (announce) => createServer((req, res) => {
+      auth.push(req.headers.authorization);
+      if (req.url === '/api/health') return json(res, { ok: true, name: 'nuworq', ...(announce ? { url: foreignUrl } : {}) });
+      json(res, { ok: true, at: 'foreign' });
+    });
+    for (const [host, announce] of [['127.0.0.1', false], ['localhost', true]]) {
+      const there = foreign(announce);
+      foreignUrl = `http://${host}:${await listen(there)}`;
+      const from = mover(() => foreignUrl);
+      try {
+        await assert.rejects(client(await listen(from), { token: 'tok', connectFile: join(tmpdir(), 'nuworq-none.json') }).get('/api/projects'), (e) => e.status === 308 && /token was not sent/.test(e.message) && e.hint.includes(`nuworq connect ${foreignUrl}`));
+      } finally {
+        there.close();
+        from.close();
+      }
+    }
+    assert.ok(auth.every((a) => a === undefined), 'no request to a foreign host carried the token');
+  });
+
+  test('a session started before `nuworq connect` moved this machine reaches the new hub without a restart', { timeout: 20_000 }, async () => {
+    const seen = [];
+    const hub = createServer((req, res) => { seen.push(req.headers.authorization); json(res, { ok: true, at: 'new' }); });
+    const port = await listen(hub);
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'nuworq-cwd-'));
+    mkdirSync(join(home, '.nuworq'));
+    const file = join(home, '.nuworq', 'connect.json');
+    const dead = `http://127.0.0.1:${await freePort()}`;
+    writeFileSync(file, JSON.stringify({ url: dead, token: 'old' }));
+    // In a process of its own, so the client's connect.json is the one in this test's HOME.
+    const script = `
+      import { writeFileSync } from 'node:fs';
+      const { createClient } = await import(${JSON.stringify(new URL('../src/client.js', import.meta.url).href)});
+      const c = createClient({ cwd: ${JSON.stringify(cwd)}, retryMs: 200 });
+      if (c.settings.url !== ${JSON.stringify(dead)}) throw new Error('started on ' + c.settings.url);
+      writeFileSync(${JSON.stringify(file)}, JSON.stringify({ url: 'http://127.0.0.1:${port}', token: 'new' }));
+      console.log(JSON.stringify(await c.get('/api/projects')));`;
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k)));
+    try {
+      const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], { env: { ...env, HOME: home }, cwd });
+      assert.deepEqual(JSON.parse(stdout), { ok: true, at: 'new' });
+      assert.deepEqual(seen, ['Bearer new']);
+    } finally {
+      hub.close();
     }
   });
 });

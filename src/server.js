@@ -481,7 +481,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // The hub's own address (workspaces mode): who you are, your organizations, and making a new one.
   // Only GitHub/Google sign-in reaches it; tokens belong to one workspace.
   async function hubRoot(req, res, url, path, { send, deny }) {
-    if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', workspaces: true });
+    if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', workspaces: true, url: publicUrl || origin(req) });
     const dir = spaces.directory;
     // Where the single hub this one grew from lives now (#204), so an old link (/#/p/<slug>/<n>) finds its project.
     if (req.method === 'GET' && path === '/api/root') {
@@ -709,7 +709,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (unsafe && req.headers.origin && !sameOrigin(req)) return deny(403, 'cross-origin request refused');
 
       // ── public ──
-      if (req.method === 'GET' && path === '/api/health') return send(200, { ok: true, name: 'nuworq' });
+      // Its own address too, so a client sent here by a redirect can tell it is the hub it meant (src/client.js).
+      if (req.method === 'GET' && path === '/api/health') return send(200, { ok: true, name: 'nuworq', url: ((!spaces && publicUrl) || origin(req)) + base });
       // The guide is how any agent learns nuworq, before it has a token: no project data, no secrets.
       if (req.method === 'GET' && (path === '/agents.md' || path === '/api/guide')) {
         return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req) + base, via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
