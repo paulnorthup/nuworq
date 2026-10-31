@@ -251,6 +251,7 @@ function renderRail() {
       <button class="rail-item" data-action="archived">Archived projects</button>
       <button class="rail-item" data-action="connect">Connect an agent</button>
       <button class="rail-item" data-action="notify">Notifications</button>
+      ${S.billing?.owner ? '<button class="rail-item" data-action="workspace-settings">Workspace settings</button>' : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
     </div>`;
@@ -466,7 +467,7 @@ function mapLine(n) {
 const CARD_LABELS = {
   question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction',
   'no-agents': 'Nobody is working', 'group-stalled': 'A "now" group is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
-  'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked', 'app-wiring': 'GitHub App setup',
+  'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked', 'app-wiring': 'GitHub App setup', 'payment-failed': 'Payment failed',
 };
 
 function card(a) {
@@ -575,6 +576,9 @@ function cardActions(a, hasMore, open, key) {
   }
   if (a.kind === 'operator-missing') {
     return `<div class="actions"><a class="btn primary" href="${esc(a.guide)}" target="_blank" rel="noopener">How to start an operator</a><button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}</div>`;
+  }
+  if (a.kind === 'payment-failed') {
+    return `<div class="actions"><button class="btn primary" data-action="billing-portal">Manage billing</button>${moreBtn}</div>`;
   }
   if (a.kind === 'kept-parked') {
     return `<div class="actions"><button class="btn primary" data-action="unpark" data-item="${esc(a.item)}">Unpark</button><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}</div>`;
@@ -1143,6 +1147,20 @@ async function notifySettings() {
   help();
 }
 
+// The workspace's settings (#231), for its owners while the hub takes payments: billing in one plain line, and
+// Stripe's own page to change the card, see invoices or cancel. A failed payment leads, in warning color.
+// Stripe sends the owner back to #/settings, which opens this again.
+async function workspaceSettings() {
+  let b;
+  try { b = S.billing = await api('/api/billing'); } catch (e) { return toastError(e); }
+  const state = b.state ?? 'Free: one agent works at a time';
+  modal(`<h2>Workspace settings</h2>
+    <h4>Billing</h4>
+    <p class="lead"${b.failing ? ' style="color:var(--warn)"' : ''}>${b.failing ? '⚠ ' : ''}<b>${esc(state)}</b></p>
+    ${b.manage ? `<p class="lead faint">Stripe's billing page: change the card, see and download invoices, or cancel. Cancelling keeps the paid plan until the period ends; then the workspace goes back to Free.</p>` : ''}
+    <div class="foot">${b.manage ? `<button class="btn${b.failing ? ' primary' : ''}" data-action="billing-portal">Manage billing</button>` : ''}<button class="btn${b.failing ? '' : ' primary'}" data-action="close-modal">Done</button></div>`);
+}
+
 // Where the hub's GitHub App stands (/api/github/app), one line and its next step, so a person who closed a
 // tab mid-flow knows where they are. Nothing when there's no app and this person can't make one.
 function appStatus(st) {
@@ -1453,6 +1471,11 @@ const ACTIONS = {
   connect: () => connect(),
   'connect-deep': () => { S.zoom = '30m'; store.set('zoom', S.zoom); render({ force: true }); connect(); },
   notify: () => notifySettings(),
+  'workspace-settings': () => workspaceSettings(),
+  'billing-portal': async (el) => {
+    el.disabled = true;
+    try { location.href = (await api('/api/billing/portal', { method: 'POST', body: '{}' })).url; } catch (e) { el.disabled = false; toastError(e); }
+  },
   github: () => githubSettings(),
   'github-generate': () => {
     const el = $('#gh-secret');
@@ -1616,11 +1639,17 @@ function listen() {
   // GitHub returns to the app's setup_url (#/) with ?installation_id=…&setup_action=install, before or in the hash.
   const fromGitHub = /[?&]setup_action=(install|update)\b/.test(location.search + location.hash);
   if (fromGitHub) history.replaceState(null, '', `${location.pathname}#/`);
+  // Back from Stripe's billing page (#231): the workspace's settings again, over the home.
+  const fromStripe = location.hash === '#/settings';
+  if (fromStripe) history.replaceState(null, '', `${location.pathname}#/`);
   window.addEventListener('hashchange', route);
   S.me = await api('/api/me').catch(() => null);
   S.info = await api('/api/info').catch(() => null) ?? undefined;
+  // Billing (#231): only a workspace hub that takes payments answers; its owners get Workspace settings.
+  if (S.me?.org) S.billing = await api('/api/billing').catch(() => null);
   await loadProjects().catch(() => {});
   if (fromGitHub) return void (route(), listen(), setInterval(() => refresh(), 30_000), backFromGitHub());
+  if (fromStripe) return void (route(), listen(), setInterval(() => refresh(), 30_000), workspaceSettings());
   if (!location.hash || location.hash === '#/') {
     // One project opens it, unless Get started still has steps to show on All projects.
     S.gs = await api('/api/get-started').catch(() => null);

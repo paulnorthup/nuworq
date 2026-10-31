@@ -3,6 +3,7 @@
 // keeps a per-workspace billing row in the directory (src/directory.js); Workspaces.planInfo follows it.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { envVar } from './names.js';
+import { deliver } from './notify.js';
 
 export const TOLERANCE_MS = 5 * 60 * 1000; // a signature older (or newer) than this is refused: no replays
 // A subscription in one of these makes its workspace paid; a cancelled one stays paid until its period ends.
@@ -51,6 +52,73 @@ export function billingLine(b, now = Date.now()) {
   return b.status.replace(/_/g, ' ');
 }
 
+// Whether a payment failed and nothing was paid since (#231): an invoice.payment_failed not yet followed by an
+// invoice.paid, or Stripe saying past_due/unpaid after the last payment.
+export function failing(b) {
+  if (!b) return false;
+  return !!b.failed_at || (['past_due', 'unpaid'].includes(b.status) && b.event_at > (b.paid_at ?? 0));
+}
+
+const day = (t) => new Date(t).toISOString().slice(0, 10);
+const planName = (b) => { const p = String(b?.plan || 'pro'); return p[0].toUpperCase() + p.slice(1); };
+
+// The workspace's billing in plain words, for its owner (#231): "Pro, renews 2026-12-01", "Pro until
+// 2026-12-01, then Free", "Payment failed: update your card by 2026-11-08 to keep Pro". null: nothing paid (Free).
+export function billingState(b, now = Date.now()) {
+  if (!b?.status) return null;
+  const plan = planName(b);
+  if (failing(b)) {
+    return paid(b, now) ? `Payment failed: update your card ${b.pay_by > now ? `by ${day(b.pay_by)}` : 'now'} to keep ${plan}`
+      : `Payment failed: ${plan} has stopped. Update your card to start it again`;
+  }
+  if (!paid(b, now)) return null;
+  if (b.status === 'canceled' || b.cancel_at_period_end) return b.period_end ? `${plan} until ${day(b.period_end)}, then Free` : `${plan}, cancelled`;
+  const kind = b.status === 'trialing' ? `${plan} trial` : plan;
+  return b.period_end ? `${kind}, renews ${day(b.period_end)}` : kind;
+}
+
+// The Needs you entry a failed payment raises for the workspace's owners (#231), or null. settings: the address
+// of the workspace's settings (where Manage billing is). It goes once invoice.paid arrives.
+export function paymentEntry(b, settings, now = Date.now()) {
+  if (!failing(b)) return null;
+  const at = b.failed_at ?? b.event_at;
+  const plan = planName(b);
+  return {
+    key: `payment-failed:${b.subscription}:${at}`, level: 'act', kind: 'payment-failed', at,
+    headline: billingState(b, now), sub: 'this workspace',
+    why: `Stripe couldn't take the payment for ${plan}. It retries the card for a while; once it gives up, the workspace goes back to Free and runs one agent at a time.`,
+    how: [
+      { do: 'Open Workspace settings and click Manage billing: it opens Stripe\'s billing page for this workspace', where: settings },
+      { do: 'Under Payment method, click Add payment method, enter the new card and make it the default. If an invoice shows as unpaid, click it and pay it with that card' },
+      { do: 'Click Return to nuworq', check: `Workspace settings read "${plan}, renews <date>" again, and this card is gone` },
+    ],
+  };
+}
+
+// The Stripe customer portal for a customer (#231): POST /v1/billing_portal/sessions over fetch. Returns its url;
+// throws with Stripe's message. billing.api: Stripe's address (tests point it at a fake).
+export async function portalSession(billing, customer, returnUrl, { fetch = globalThis.fetch } = {}) {
+  const res = await fetch(`${billing.api || 'https://api.stripe.com'}/v1/billing_portal/sessions`, {
+    method: 'POST', signal: AbortSignal.timeout(10_000),
+    headers: { authorization: `Bearer ${billing.secretKey}`, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ customer, return_url: returnUrl }).toString(),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.url) throw new Error(`Stripe didn't open the billing portal: ${j.error?.message ?? `HTTP ${res.status}`}`);
+  return j.url;
+}
+
+// A failed payment, pushed once to the personal notification channels of the workspace's owners (#231): the
+// workspace's hub-wide channels reach people who don't manage billing. Never throws: a failing channel is recorded on it.
+export async function pushFailed(hub, b, settings, opts = {}) {
+  const channels = hub.db.prepare(`SELECT c.* FROM channels c JOIN people p ON c.person = '@' || p.handle WHERE p.role = 'owner' ORDER BY c.id`).all();
+  const e = paymentEntry(b, settings, hub.now());
+  if (!e || !channels.length) return [];
+  const title = `nuworq: payment failed for ${hub.workspace ?? 'your workspace'}`;
+  const msg = { title, url: settings, text: [title, e.headline, `→ ${settings}`].join('\n'), entries: [] };
+  return Promise.all(channels.map((c) => deliver(hub.db, c, msg, opts)));
+}
+
 const ms = (s) => (Number(s) > 0 ? Number(s) * 1000 : null);
 const idOf = (x) => (typeof x === 'string' ? x : x?.id ?? null);
 
@@ -90,6 +158,16 @@ function apply(spaces, event, prices) {
       at, status: event.type.endsWith('deleted') ? 'canceled' : o.status, period_end: end, cancel_at_period_end: !!o.cancel_at_period_end, plan,
     });
     return { ok: true, workspace: row?.workspace ?? null };
+  }
+  // A renewal that failed, or was paid (#231). Only for a subscription the hub already keeps: anything else on the
+  // same Stripe account isn't ours. Newer API versions name the subscription under parent.subscription_details.
+  if (event.type === 'invoice.payment_failed' || event.type === 'invoice.paid') {
+    const subscription = idOf(o.subscription) ?? idOf(o.parent?.subscription_details?.subscription);
+    const failed = event.type === 'invoice.payment_failed';
+    // next_payment_attempt: Stripe's next retry; none means it has stopped retrying.
+    const row = subscription && dir.setPayment(subscription, { at, failed, pay_by: failed ? ms(o.next_payment_attempt) : null });
+    if (!row) return { ok: true, ignored: 'not a subscription the hub keeps' };
+    return { ok: true, workspace: row.workspace, ...(failed && row.failed_at === at && row.workspace ? { failed: true } : {}) };
   }
   return { ok: true, ignored: event.type };
 }

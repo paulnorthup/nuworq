@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, normRemote, slugify, MIN, HOUR, DAY } from './core.js';
-import { view, itemView, projectList, homeView } from './insight.js';
+import { view, itemView, projectList, homeView, withEntry } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
@@ -26,7 +26,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf } from './package.js';
-import { verifySignature, applyEvent } from './billing.js';
+import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -231,7 +231,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!verifySignature(billing.webhookSecret, req.headers['stripe-signature'], raw)) return deny(400, "the Stripe-Signature doesn't match, or is too old", "Check the hub's NUWORQ_STRIPE_WEBHOOK_SECRET is this endpoint's signing secret.");
     let event;
     try { event = JSON.parse(raw.toString('utf8')); } catch { return deny(400, 'the body is not JSON'); }
-    return send(200, applyEvent(spaces, event, billing));
+    const r = applyEvent(spaces, event, billing);
+    // A renewal that just failed reaches the workspace's owners where they get pushes (#231). Not awaited.
+    if (r.failed) pushFailed(spaces.get(r.workspace), spaces.directory.billingOf(r.workspace), `${homeOf(req, r.workspace)}/#/settings`).catch((e) => console.error('pushing a failed payment failed', e));
+    return send(200, r);
   };
   // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
   const minted = new Map(); // `${agent}|${item id}|${repo}` → { token, expires_at, repo }
@@ -956,11 +959,35 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // The home (#124): what needs the viewer across every project, in one request; Mark all seen for all of them.
       if (path === '/api/home' || path === '/api/home/seen') {
         if (who.role === 'agent') return deny(403, 'the home is for people', 'Agents start with checkin; workers list projects with GET /api/projects.');
-        if (req.method === 'GET' && path === '/api/home') return send(200, homeView(hub, { viewer }));
+        if (req.method === 'GET' && path === '/api/home') {
+          // A failed payment needs the workspace's owners (#231): the one Needs you entry no project owns.
+          const paying = spaces && billing && personRole === 'owner' && paymentEntry(spaces.directory.billingOf(ws), `${homeOf(req, ws)}/#/settings`, hub.now());
+          return send(200, paying ? withEntry(homeView(hub, { viewer }), paying) : homeView(hub, { viewer }));
+        }
         if (req.method !== 'POST' || path !== '/api/home/seen') return deny(405, path === '/api/home' ? 'use GET' : 'use POST');
         if (!PERSON_CAN[personRole]?.includes('seen')) return deny(403, `a ${personRole} can't mark projects seen`, 'Ask an owner of this workspace for a different role.');
         for (const p of hub.projects()) hub.humanOp(p.slug, 'seen', {}, by);
         return send(200, { ok: true });
+      }
+      // Billing (#231): the workspace's plan in plain words, and Stripe's portal for its owners. 404 with billing off.
+      if (path === '/api/billing' || path === '/api/billing/portal') {
+        if (!spaces || !billing) return deny(404, 'this hub takes no payments', 'Billing is off: it needs workspaces and NUWORQ_STRIPE_WEBHOOK_SECRET.');
+        const owner = personRole === 'owner';
+        const b = spaces.directory.billingOf(ws);
+        if (req.method === 'GET' && path === '/api/billing') {
+          if (!owner) return send(200, { on: true, owner: false });
+          return send(200, { on: true, owner, plan: spaces.planInfo(ws).plan, state: billingState(b, hub.now()), failing: failing(b), manage: !!b?.customer });
+        }
+        if (req.method !== 'POST' || path !== '/api/billing/portal') return deny(405, path === '/api/billing' ? 'use GET' : 'use POST');
+        if (!owner) {
+          const owners = hub.db.prepare("SELECT handle FROM people WHERE role = 'owner' ORDER BY id").all().map((p) => `@${p.handle}`);
+          return deny(403, "only the workspace's owner manages its billing", `Ask ${owners.join(' or ') || 'an owner'}.`);
+        }
+        if (!b?.customer) return deny(409, 'this workspace has no Stripe subscription yet', 'Upgrade it first; then Manage billing opens Stripe\'s billing page.');
+        if (!billing.secretKey) return deny(503, "this hub can't open Stripe's billing page", 'The hub host sets NUWORQ_STRIPE_SECRET_KEY (see DEPLOY.md).');
+        try {
+          return send(200, { ok: true, url: await portalSession(billing, b.customer, `${homeOf(req, ws)}/#/settings`) });
+        } catch (e) { return deny(502, e.message, 'Try again in a minute. If it keeps failing, check the Stripe dashboard\'s customer portal settings.'); }
       }
       // Get started (#117): the viewer's checklist, until every step is done or they hide it; then never again.
       if (path === '/api/get-started' || path === '/api/get-started/hide') {
