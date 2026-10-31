@@ -136,6 +136,8 @@ export class Directory {
         decided_by TEXT NOT NULL DEFAULT '',
         decided_at INTEGER
       );`);
+    // When its sender was told it's fixed (#297): once, never again.
+    try { this.db.exec('ALTER TABLE feedback ADD COLUMN told_at INTEGER'); } catch { /* already there */ }
   }
 
   // ── billing (#227) ──
@@ -330,6 +332,22 @@ export class Directory {
   feedbackList({ state = '' } = {}) {
     return this.db.prepare(`SELECT id FROM feedback ${state ? 'WHERE state = ?' : ''} ORDER BY created_at DESC, id DESC`).all(...(state ? [state] : []))
       .map((r) => this.feedbackById(r.id));
+  }
+
+  // What one sender sent from one workspace (#297), newest first.
+  feedbackFrom({ kind, sender, workspace }, limit = 50) {
+    return this.db.prepare('SELECT id FROM feedback WHERE kind = ? AND sender = ? AND workspace = ? ORDER BY created_at DESC, id DESC LIMIT ?')
+      .all(kind, sender, workspace, limit).map((r) => this.feedbackById(r.id));
+  }
+
+  // Proposed feedback whose sender hasn't been told it's fixed yet (#297).
+  feedbackUntold() {
+    return this.db.prepare("SELECT id FROM feedback WHERE proposal != '' AND told_at IS NULL ORDER BY id").all().map((r) => this.feedbackById(r.id));
+  }
+
+  // Mark it told; false when it already was, so each sender hears once.
+  toldFeedback(id) {
+    return this.db.prepare('UPDATE feedback SET told_at = ? WHERE id = ? AND told_at IS NULL').run(this.now(), Number(id)).changes === 1;
   }
 
   // Record an owner's decision on new feedback: approved (with the proposal it made) or declined (with an optional

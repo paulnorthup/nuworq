@@ -32,7 +32,7 @@ function request(port, method, path, { host = APP, headers = {}, body } = {}) {
 }
 
 // A workspaces hub with an admin host: paul owns it, feedback lands in nuworq/nuworq, and ann works in acme.
-async function hub({ feedbackProject = 'nuworq/nuworq' } = {}) {
+async function hub({ feedbackProject = 'nuworq/nuworq', sweepMs } = {}) {
   const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-fb-')), owners: ['paul@example.com'] });
   spaces.create('nuworq');
   spaces.get('nuworq').project('nuworq', { create: true });
@@ -42,7 +42,7 @@ async function hub({ feedbackProject = 'nuworq/nuworq' } = {}) {
   const ann = `nuworq_session=${acme.signInByEmail('ann@acme.test', 'github').sid}`;
   const agentToken = acme.createToken('bot', 'agent');
   const server = createServer(spaces, {
-    publicUrl: `http://${APP}`, adminHost: ADMIN, feedbackProject, feedbackBatchMs: 20,
+    publicUrl: `http://${APP}`, adminHost: ADMIN, feedbackProject, feedbackBatchMs: 20, ...(sweepMs ? { sweepMs } : {}),
     earlyAccess: { owners: ['paul@example.com'], verify: null, gate: false },
   });
   const port = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
@@ -52,7 +52,7 @@ async function hub({ feedbackProject = 'nuworq/nuworq' } = {}) {
   const asAnn = (method, path, body) => call(method, `/w/acme${path}`, body, { headers: { cookie: ann } });
   const asAgent = (path, body, name = 'claude-7') => call('POST', `/w/acme${path}`, body, { headers: { authorization: `Bearer ${agentToken}`, 'x-nuworq-agent': name } });
   const asPaul = (method, path, body) => call(method, path, body, { host: ADMIN, headers: { cookie: paul } });
-  return { spaces, dir, call, asAnn, asAgent, asPaul, close: () => server.close() };
+  return { spaces, dir, call, asAnn, asAgent, asPaul, annCookie: ann, close: () => server.close() };
 }
 
 describe('feedback about nuworq (#295)', () => {
@@ -176,6 +176,100 @@ describe('feedback about nuworq (#295)', () => {
     assert.equal(browserOf('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'), 'Chrome 131 on macOS');
     assert.equal(browserOf('Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0'), 'Firefox 133 on Windows');
     assert.deepEqual(Object.keys(attached({ href: 'x', version: 'v1', ua: '' })), ['page', 'version', 'browser']);
+  });
+
+  test("the sender sees each piece's state: received, being worked on, fixed, declined, and nothing of the feedback project (#297)", async () => {
+    const h = await hub();
+    try {
+      for (const text of ['Fix the lying button', 'Make it purple', 'Drop this later']) await h.asAnn('POST', '/api/feedback', { text });
+      const [later, purple, button] = h.dir.feedbackList();
+      const mine = async () => Object.fromEntries((await h.asAnn('GET', '/api/feedback/mine')).json.feedback.map((f) => [f.text, f]));
+      assert.deepEqual(Object.values(await mine()).map((f) => f.state), ['received', 'received', 'received']);
+      await h.asPaul('POST', '/api/feedback/decide', { id: button.id, approve: true });
+      await h.asPaul('POST', '/api/feedback/decide', { id: later.id, approve: true });
+      await h.asPaul('POST', '/api/feedback/decide', { id: purple.id, approve: false, note: "We're keeping the colours" });
+      let m = await mine();
+      assert.equal(m['Fix the lying button'].state, 'working');
+      assert.equal(m['Make it purple'].state, 'declined');
+      assert.equal(m['Make it purple'].note, "We're keeping the colours");
+      const nw = h.spaces.get('nuworq');
+      const item = (f) => nw.q('SELECT * FROM items WHERE feedback = ?').get(f.id);
+      nw.patch(item(button), { stage: 'active' });
+      assert.equal((await mine())['Fix the lying button'].state, 'working');
+      nw.patch(item(button), { stage: 'done', stage_since: Date.now() });
+      nw.patch(item(later), { stage: 'dropped' });
+      m = await mine();
+      assert.equal(m['Fix the lying button'].state, 'fixed');
+      assert.ok(m['Fix the lying button'].fixed_at);
+      assert.equal(m['Drop this later'].state, 'declined', 'a dropped proposal is declined');
+      // Only their words and the state: no proposal, item, agent or email.
+      const raw = JSON.stringify((await h.asAnn('GET', '/api/feedback/mine')).json);
+      assert.doesNotMatch(raw, /nuworq\/nuworq|#\d|proposal|ann@acme/);
+      assert.deepEqual(Object.keys(m['Fix the lying button']).sort(), ['fixed_at', 'id', 'sent_at', 'state', 'text']);
+      // And they can't read the feedback project itself.
+      for (const path of ['/w/nuworq/api/projects', `/w/nuworq/api/p/nuworq`, `/w/nuworq/api/p/nuworq/item/${item(button).seq}`]) {
+        const r = await h.call('GET', path, undefined, { headers: { cookie: h.annCookie } });
+        assert.ok([401, 403, 404].includes(r.status), `${path} answered ${r.status}`);
+      }
+    } finally { h.close(); }
+  });
+
+  test('an agent gets the states of what its name sent at checkin (#297)', async () => {
+    const h = await hub();
+    try {
+      const quiet = await h.asAgent('/api/p/api/agent/checkin', { model: 'm' });
+      assert.equal(quiet.json.your_feedback, undefined, 'nothing sent, nothing listed');
+      await h.asAgent('/api/agent/feedback', { text: 'next lied' });
+      await h.asAgent('/api/agent/feedback', { text: 'not mine' }, 'codex-1');
+      const [, mine] = h.dir.feedbackList();
+      await h.asPaul('POST', '/api/feedback/decide', { id: mine.id, approve: true });
+      const r = await h.asAgent('/api/p/api/agent/checkin', { model: 'm' });
+      assert.deepEqual(r.json.your_feedback.map((f) => [f.text, f.state]), [['next lied', 'working']]);
+    } finally { h.close(); }
+  });
+
+  test('the sender hears once, when the work lands, and not for the other changes (#297)', async () => {
+    const pushes = [];
+    const sink = http.createServer((req, res) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => { pushes.push(JSON.parse(b)); res.end('ok'); }); });
+    await new Promise((r) => sink.listen(0, '127.0.0.1', r));
+    const h = await hub({ sweepMs: 20 });
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    try {
+      const { addChannel } = await import('../src/notify.js');
+      addChannel(h.spaces.get('acme').db, 'webhook', `http://127.0.0.1:${sink.address().port}/ann`, Date.now(), { person: '@ann' });
+      await h.asAnn('POST', '/api/feedback', { text: 'Fix the lying button' });
+      await h.asAnn('POST', '/api/feedback', { text: 'Make it purple' });
+      const [purple, button] = h.dir.feedbackList();
+      await h.asPaul('POST', '/api/feedback/decide', { id: button.id, approve: true });
+      await h.asPaul('POST', '/api/feedback/decide', { id: purple.id, approve: false });
+      const nw = h.spaces.get('nuworq');
+      const it = nw.q('SELECT * FROM items WHERE feedback = ?').get(button.id);
+      nw.patch(it, { stage: 'active' });
+      await wait(120);
+      assert.equal(pushes.length, 0, 'approved, declined and being worked on send nothing');
+      nw.patch(it, { stage: 'done', stage_since: Date.now() });
+      await wait(150);
+      assert.equal(pushes.length, 1, 'one push when it lands');
+      assert.equal(pushes[0].title, 'nuworq: your feedback is fixed');
+      assert.match(pushes[0].text, /You said: "Fix the lying button"/);
+      assert.match(pushes[0].url, /\/w\/acme\/#\/feedback$/);
+      await wait(120);
+      assert.equal(pushes.length, 1, 'and never again');
+    } finally { h.close(); sink.close(); }
+  });
+
+  test("the sender's list: a bar filled to the state, their words escaped, a declined piece's note (#297)", async () => {
+    const { feedbackMine } = await import('../web/feedback.js');
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    assert.equal(feedbackMine([], esc), '', 'nothing sent, no list');
+    const html = feedbackMine([
+      { id: 1, text: '<script>x</script>', state: 'working', sent_at: 0 },
+      { id: 2, text: 'purple', state: 'declined', note: 'Not now', sent_at: 0 },
+    ], esc);
+    assert.doesNotMatch(html, /<script>/);
+    assert.match(html, /fb-working[\s\S]*?<span class="on"><\/span><span class="on"><\/span><span class=""><\/span>/);
+    assert.match(html, /Declined<\/b> · “Not now”/);
+    assert.match(html, /data-new="feedback-mine"/);
   });
 
   test("new feedback reaches the owners in one push per window, each line its sender, workspace and words", () => {

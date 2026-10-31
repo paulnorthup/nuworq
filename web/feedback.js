@@ -24,9 +24,35 @@ export function feedbackForm(ctx, esc) {
       <li>nuworq ${esc(ctx.version || 'version unknown')}</li>
       <li>${esc(ctx.browser)}</li>
     </ul><p class="faint">Nothing else from your workspace.</p></div>
-    <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="feedback-send">Send</button></div>`;
+    <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="feedback-send">Send</button></div>
+    <div id="fb-mine-slot"></div>`;
+}
+
+// What they sent and what happened to each (#297), under the form: a three-step bar (received, being worked on,
+// fixed) to read at a glance, their words, and the state in words. Declined shows the owners' note instead.
+// Nothing of the feedback project: no item, agent or discussion.
+export const FB_STATES = {
+  received: { step: 1, label: 'Received', blurb: 'Waiting for nuworq’s owners to read it' },
+  working: { step: 2, label: 'Being worked on', blurb: 'Accepted: it’s being improved' },
+  fixed: { step: 3, label: 'Fixed', blurb: 'The fix has shipped' },
+  declined: { step: 0, label: 'Declined', blurb: 'Not planned' },
+};
+
+export function feedbackMine(list, esc, ago = () => '') {
+  if (!list?.length) return '';
+  const row = (f) => {
+    const s = FB_STATES[f.state] ?? FB_STATES.received;
+    const bar = [1, 2, 3].map((n) => `<span class="${n <= s.step ? 'on' : ''}"></span>`).join('');
+    return `<li class="fb-piece fb-${esc(f.state)}">
+      <div class="fb-steps" role="img" aria-label="${esc(s.label)}">${bar}</div>
+      <div class="fb-words">${esc(f.text)}</div>
+      <div class="fb-state"><b>${esc(s.label)}</b> · ${f.state === 'declined' && f.note ? `“${esc(f.note)}”` : esc(s.blurb)}<span class="age"> · sent ${esc(ago(f.sent_at))}</span></div>
+    </li>`;
+  };
+  return `<div class="fb-mine" id="fb-mine"><span class="label" data-new="feedback-mine">What you sent</span><ul>${list.map(row).join('')}</ul></div>`;
 }
 
 export const feedbackThanks = () => `<h2>Thanks</h2>
   <p class="lead">It's on its way to the people who build nuworq. They read every piece.</p>
-  <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`;
+  <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>
+  <div id="fb-mine-slot"></div>`;
