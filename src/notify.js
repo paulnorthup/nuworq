@@ -326,6 +326,12 @@ export async function notifyFeedback(spaces, owners, list, url, opts = {}) {
   return Promise.all(ownerChannels(spaces, owners).map(({ db, c }) => deliver(db, c, msg, opts)));
 }
 
+// Feedback someone sent is fixed (#297): the one push its sender gets, with the start of their words.
+export function composeFixed({ text }, url = '') {
+  const title = 'nuworq: your feedback is fixed';
+  return { title, url, text: [title, `You said: "${clip(text, 140)}"`, url && `→ ${url}`].filter(Boolean).join('\n'), entries: [] };
+}
+
 // A workspace's address, for links in pushes: its subdomain of baseDomain, else /w/<name>/ under the hub.
 export function workspaceUrl(name, { baseDomain = '', publicUrl = '', url = '' } = {}) {
   const base = (publicUrl || url).replace(/\/+$/, '');

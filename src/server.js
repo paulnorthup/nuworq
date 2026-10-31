@@ -10,7 +10,7 @@ import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
-import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, notifyFeedback, requestChannels, setWeekly } from './notify.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, notifyFeedback, composeFixed, deliver, workspaceUrl, requestChannels, setWeekly } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { freshen } from './freshness.js';
@@ -290,6 +290,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Questions to issue reporters that GitHub refused when asked go out again.
       if (app && hub._app === app) for (const p of hub.projects()) askReporters(hub, p, hub.github.app).catch((e) => console.error('asking reporters failed', e));
     }
+    // Feedback whose work landed: its sender hears once (#297).
+    if (feedbackOn) try { tellFixed(); } catch (e) { console.error('telling senders their feedback is fixed failed', e); }
   }, sweepMs);
   const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
 
@@ -479,6 +481,37 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     });
     hub.changed(p);
     return `${fbSpace}/${p.slug}#${it.seq}`;
+  };
+  // What happened to a piece, as its sender may see it (#297): received, declined (with the owners' note), being
+  // worked on, or fixed (its proposal landed). Read from the proposal's stage, never showing the proposal itself.
+  const proposalOf = (f) => {
+    const [, ws, slug, seq] = String(f.proposal).match(/^([^/]+)\/([^#]+)#(\d+)$/) ?? [];
+    const hub = ws && spaces.get(ws);
+    if (!hub) return null;
+    try { return hub.item(hub.project(slug), seq); } catch { return null; }
+  };
+  const feedbackState = (f) => {
+    if (f.state === 'declined') return { state: 'declined', note: f.note };
+    if (!f.proposal) return { state: 'received' };
+    const it = proposalOf(f);
+    if (it?.stage === 'done') return { state: 'fixed', at: it.stage_since };
+    if (it?.stage === 'dropped') return { state: 'declined', note: f.note };
+    return { state: 'working' };
+  };
+  const forSender = (f) => {
+    const s = feedbackState(f);
+    return { id: f.id, text: f.text, sent_at: f.created_at, state: s.state, ...(s.note ? { note: s.note } : {}), ...(s.at ? { fixed_at: s.at } : {}) };
+  };
+  // Tell each sender once when a piece is fixed: a person on the channels that hear them in their workspace; an
+  // agent at its next checkin, where its pieces' states are listed anyway. Nothing for the other changes.
+  const tellFixed = () => {
+    for (const f of spaces.directory.feedbackUntold()) {
+      if (feedbackState(f).state !== 'fixed' || !spaces.directory.toldFeedback(f.id)) continue;
+      const db = f.kind === 'person' && spaces.get(f.workspace)?.db;
+      if (!db) continue;
+      const msg = composeFixed(f, `${workspaceUrl(f.workspace, { baseDomain, publicUrl })}/#/feedback`);
+      for (const c of requestChannels(db, f.sender.replace(/^@/, ''))) deliver(db, c, msg).catch((e) => console.error('telling a sender feedback is fixed failed', e));
+    }
   };
 
   // The owners' early-access requests: the list, and approving or declining one. The caller has checked
@@ -812,6 +845,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const p = h.q('SELECT * FROM projects WHERE id = (SELECT project_id FROM questions WHERE id = ?)').get(out.question);
         try { out.github = await askReporters(h, p, appOf(h), { link: itemLink(rq, p.slug) }); } catch (e) { out.github = { error: e.message }; }
         return out;
+      };
+      // An agent's checkin lists what its name sent as feedback and what happened to each (#297), when it sent any.
+      const withFeedback = (op, agent, out) => {
+        if (op !== 'checkin' || !feedbackOn || !out?.you) return out;
+        const sent = spaces.directory.feedbackFrom({ kind: 'agent', sender: out.you, workspace: ws }, 10).map(forSender);
+        return sent.length ? { ...out, your_feedback: sent } : out;
       };
 
       // GitHub can't log in: the delivery's signature is its credential, so this answers under any host name
@@ -1160,6 +1199,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         });
         return send(200, { ok: true, id: fb.id });
       }
+      // What this person sent from here, and what happened to each (#297). Nothing of the feedback project.
+      if (path === '/api/feedback/mine' && req.method === 'GET') {
+        if (!feedbackOn) throw FEEDBACK_OFF();
+        const sender = who.person ? by : String(who.name ?? 'someone');
+        return send(200, { feedback: spaces.directory.feedbackFrom({ kind: 'person', sender, workspace: ws }).map(forSender) });
+      }
       // Get started (#117): the viewer's checklist, until every step is done or they hide it; then never again.
       if (path === '/api/get-started' || path === '/api/get-started/hide') {
         const me = viewer ?? HUMAN;
@@ -1285,7 +1330,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         delete b.agent;
         if (m[2] === 'feedback') return send(200, agentFeedback(req, hub, ws, decodeURIComponent(m[1]), agent, b, caller));
         if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
-        return send(200, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller })));
+        return send(200, withFeedback(m[2], agent, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller }))));
       }
       // git asks for a credential (nuworq git-credential): a token for the repository of the item this
       // agent holds, minted by the GitHub App for that one repository and an hour. On the record, never shown.
@@ -1357,7 +1402,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         delete b.agent;
         if (m[1] === 'feedback') return send(200, agentFeedback(req, hub, ws, '', agent, b, caller));
         if (DECIDES.agent.includes(m[1])) await hub.prefetch('', b, { remote: remoteOf(req), root: rootOf(req), scope: caller.scope });
-        return send(200, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller })));
+        return send(200, withFeedback(m[1], agent, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller }))));
       }
       // Push channels: hub-wide (or workspace-wide) ones, and personal ones that get only what that person owns.
       // Agent tokens never reach these. An owner manages them all; a person manages their own.

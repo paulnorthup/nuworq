@@ -19,7 +19,7 @@ import { preconditionSection, toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
 import { shortcutFor, shortcutsHtml } from './shortcuts.js';
 import { rank, resultsHtml, confirmHtml } from './launcher.js';
-import { feedbackForm, feedbackThanks, attached } from './feedback.js';
+import { feedbackForm, feedbackThanks, feedbackMine, attached } from './feedback.js';
 import { LOGO } from './logo.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
@@ -1441,6 +1441,14 @@ $('#launcher').addEventListener('click', (e) => {
 // ── events ──
 const val =(id) => (document.getElementById(id)?.value ?? '').trim();
 const clearDraft = (...keys) => keys.forEach((k) => delete S.drafts[k]);
+// What this person sent as feedback and what happened to each (#297), under the Feedback form or its thanks.
+async function showMine({ scroll = false } = {}) {
+  const r = await api('/api/feedback/mine').catch(() => null);
+  const slot = $('#fb-mine-slot');
+  if (!slot || !r) return;
+  slot.innerHTML = feedbackMine(r.feedback, esc, (t) => `${dur(Date.now() - t)} ago`);
+  if (scroll) $('#fb-mine')?.scrollIntoView({ block: 'start' });
+}
 
 const ACTIONS = {
   'an-period': (el) => { S.period = el.dataset.p; S.outcomes = null; render({ force: true }); refresh({ force: true }); },
@@ -1646,10 +1654,11 @@ const ACTIONS = {
   shortcuts: () => modal(shortcutsHtml({ mac: MAC })),
   launcher: () => (L.open ? closeLauncher() : openLauncher()),
   'workspace-settings': () => workspaceSettings(),
-  feedback: () => {
+  feedback: (_el, { mine = false } = {}) => {
     S.feedbackCtx = attached({ href: location.href, version: S.feedback?.version, ua: navigator.userAgent });
     modal(feedbackForm(S.feedbackCtx, esc));
-    $('#fb-text').focus();
+    if (!mine) $('#fb-text').focus();
+    showMine({ scroll: mine });
   },
   'only-feedback': () => { S.onlyFeedback = !S.onlyFeedback; render({ force: true }); },
   'feedback-send': async (el) => {
@@ -1659,6 +1668,7 @@ const ACTIONS = {
     try {
       await api('/api/feedback', { method: 'POST', body: JSON.stringify({ text, ...S.feedbackCtx }) });
       modal(feedbackThanks());
+      showMine();
     } catch (e) { el.disabled = false; toastError(e); }
   },
   'billing-portal': async (el) => {
@@ -1853,6 +1863,9 @@ function listen() {
   const fromStripe = location.hash === '#/settings';
   S.checkoutDone = fromStripe && /[?&]checkout=done\b/.test(location.search);
   if (fromStripe) history.replaceState(null, '', `${location.pathname}#/`);
+  // From the push that says their feedback is fixed (#297): what they sent, over the home.
+  const fromFixed = location.hash === '#/feedback';
+  if (fromFixed) history.replaceState(null, '', `${location.pathname}#/`);
   window.addEventListener('hashchange', route);
   S.me = await api('/api/me').catch(() => null);
   S.person = await api('/api/people/me').catch(() => null);
@@ -1864,6 +1877,7 @@ function listen() {
   await loadProjects().catch(() => {});
   if (fromGitHub) return void (route(), listen(), setInterval(() => refresh(), 30_000), backFromGitHub());
   if (fromStripe) return void (route(), listen(), setInterval(() => refresh(), 30_000), workspaceSettings());
+  if (fromFixed && S.feedback?.on) return void (route(), listen(), setInterval(() => refresh(), 30_000), ACTIONS.feedback(null, { mine: true }));
   if (!location.hash || location.hash === '#/') {
     // One project opens it, unless Get started still has steps to show on All projects.
     S.gs = await api('/api/get-started').catch(() => null);

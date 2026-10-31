@@ -506,6 +506,19 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; border: 1px sol
 .tag.fb-tag { background: var(--panel); color: var(--muted); border: 1px solid var(--line); } /* a label, not a move: magenta is the person's (#336); --panel because the stage list is --sunken */
 .fb-only { margin: 4px 0 8px; min-height: 36px; padding: 4px 12px; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--panel); font: inherit; cursor: pointer; }
 .fb-only.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+/* What you sent (#297): a three-step bar in the state's color (agents on it, then done), their words, the state. */
+.fb-mine { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.fb-mine ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.fb-piece { display: flex; flex-direction: column; gap: 4px; }
+.fb-steps { display: flex; gap: 3px; }
+.fb-steps span { width: 22px; height: 6px; border-radius: 3px; background: var(--line); }
+.fb-received .fb-steps .on { background: var(--queue); }
+.fb-working .fb-steps .on { background: var(--agents); }
+.fb-fixed .fb-steps .on { background: var(--ok); }
+.fb-words { white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.fb-state { font-size: 12.5px; color: var(--muted); }
+.fb-fixed .fb-state b { color: var(--ok); }
+.fb-working .fb-state b { color: var(--agents); }
 .setup { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; max-width: 640px; }
 .setup .lead, .narrow .lead { color: var(--muted); margin: 0 0 14px; }
 .ok { color: var(--ok); font-size: 12.5px; margin-top: 4px; }
