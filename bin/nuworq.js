@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
+import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, skill, planSkill, operatorLoop } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { update, describeUpdate } from '../src/update.js';
@@ -552,12 +552,25 @@ async function runService(flags) {
   let args;
   try { args = svc.serviceArgs(process.argv.slice(3)); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
-  const r = await svc.install({ ...where, command: [process.execPath, BIN, 'run', ...args], env: svc.serviceEnv(), log })
+  // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
+  const cwd = process.cwd();
+  const env = svc.serviceEnv(process.env, { repos: besideOf(cwd) });
+  const r = await svc.install({ ...where, command: [svc.stableNode(process.execPath), BIN, 'run', ...args], env, log, cwd })
     .catch((e) => { throw new HubError(e.message, { hint: e.hint ?? 'Run it without --install to see what goes wrong.' }); });
   console.log(`${green('●')} Installed ${bold('nuworq run')} as a ${r.kind}: it starts now, after every reboot, and again if it stops.
+  Runs in: ${cwd}  ${dim(`(checkouts: ${env.NUWORQ_REPOS ?? env.TRELLIS_REPOS})`)}
   Wrote:   ${r.file}
   Log:     ${r.log}
   Remove:  ${r.uninstall}${process.platform === 'linux' ? `\n  ${dim('To keep it running while you are logged out: loginctl enable-linger')}` : ''}`);
+  // Opted-in projects it couldn't work on from there: say so now, with the fix, not later in the log.
+  const projects = await createClient(flags).get('/api/projects').catch(() => null);
+  if (!projects) return console.log(dim(`  Couldn't reach the hub to check this machine has checkouts of its projects.`));
+  const roots = env.NUWORQ_REPOS ?? env.TRELLIS_REPOS ?? '';
+  const missing = svc.missingCheckouts(projects, (remotes) => checkoutOf(remotes, { cwd, roots }));
+  if (!missing.length) return;
+  console.log(`\n${amber('!')} No checkout here of ${missing.length === 1 ? 'an opted-in project' : `${missing.length} opted-in projects`}. The runner clones ${missing.length === 1 ? 'it' : 'them'} when the hub's GitHub App can, and otherwise skips ${missing.length === 1 ? 'it' : 'them'}. To clone yourself:`);
+  for (const m of missing) console.log(`  ${bold(m.name ?? m.slug)} (${m.remote})\n    ${m.hint}`);
+  console.log(dim(`  Then run nuworq run --install again from here, or install it with NUWORQ_REPOS=<the folder holding your checkouts>.`));
 }
 
 // Keep up to --workers headless workers on waiting work in the projects the human opted in.
@@ -1309,6 +1322,7 @@ ${bold('Setup')}
                                          the same runner as a service: a LaunchAgent (macOS) or systemd
                                          user unit (Linux) that survives closed terminals and reboots;
                                          installing again replaces it. Log: ~/.nuworq/logs/run.log
+                                         Install from a checkout: it runs there and finds the ones beside it
   update                               install the hub's newer nuworq now, if it is signed by the release key
                                          this install pinned (otherwise, or offline, it keeps this version and
                                          says why). Every command checks by itself at most every 10 minutes;

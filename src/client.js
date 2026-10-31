@@ -75,7 +75,7 @@ export function checkoutOf(remotes, { cwd = process.cwd(), roots = envVar('REPOS
 }
 
 // The folders beside the repo cwd is in (or cwd itself, outside one): where checkoutOf looks, and clones go.
-const besideOf = (cwd) => (git(cwd, 'rev-parse', '--show-toplevel') ? dirname(repoRoot(cwd)) : resolve(cwd));
+export const besideOf = (cwd) => (git(cwd, 'rev-parse', '--show-toplevel') ? dirname(repoRoot(cwd)) : resolve(cwd));
 
 // Where a clone of remote goes, so that checkoutOf finds it: in the first of NUWORQ_REPOS, else beside
 // the repo cwd is in. Named after the repository.
