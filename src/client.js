@@ -122,8 +122,9 @@ export class HubError extends Error {
 
 // Connection failures worth another try: refused (nothing listening yet) or reset/closed (the old process went away).
 const RETRY_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET']);
-// A proxy in front of a restarting hub (Cloudflare's tunnel) answers these with a page of its own.
-const GATEWAY = new Set([502, 503, 504]);
+// A proxy in front of a restarting hub (Cloudflare's tunnel) answers these with a page of its own:
+// 520-524 are Cloudflare's for an origin it can't reach, 530 for a tunnel with no connector.
+const GATEWAY = new Set([502, 503, 504, 520, 521, 522, 523, 524, 530]);
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 // A hub on this machine is back in a moment; one behind a proxy takes up to a minute (serve --follow on a VM).
 const RETRY_MS = 5000;
@@ -131,6 +132,9 @@ const RESTART_MS = 60_000;
 const LOOPBACK_HOST = /^(localhost|127(\.\d+){3}|\[::1\])$/i;
 const sameSite = (a, b) => a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
 const isJson = (res) => /json/i.test(res.headers.get('content-type') ?? '');
+const isPage = (res, text) => /html/i.test(res.headers.get('content-type') ?? '') || /^\s*</.test(text);
+// Never more than this much of a body the hub didn't write goes into an error.
+const clip = (s, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
 // opts: url, project, token, cwd, connectFile (see resolveSettings); retryMs: how long to retry a refused or
 // dropped connection, or a proxy's 502/503/504. session: this process's session keys (src/session.js), sent
@@ -244,17 +248,23 @@ export function createClient(opts = {}) {
       return once(method, path, { body, agent }, hops + 1);
     }
     const text = await res.text();
+    const host = new URL(settings.url).host;
+    if (GATEWAY.has(res.status) && !isJson(res)) {
+      throw new HubError(`nuworq hub at ${settings.url} is restarting or unreachable (HTTP ${res.status} from ${host})`, {
+        status: res.status, hint: 'Try again in a minute. If it lasts, whoever runs the hub should check that it is up.',
+      });
+    }
+    // A page (HTML), whatever its status, is never the hub's answer: something else stands in front of it.
+    if (!isJson(res) && isPage(res, text)) {
+      throw new HubError(`${host} answered with a web page (HTTP ${res.status}), not the nuworq hub's answer`, {
+        status: res.status, hint: 'Try again in a minute. If it lasts, check the hub URL (--url, NUWORQ_URL, .nuworq.json or nuworq connect).',
+      });
+    }
     let data;
     try { data = text ? JSON.parse(text) : {}; } catch { data = text; }
     if (!res.ok) {
-      if (GATEWAY.has(res.status) && !isJson(res)) {
-        throw new HubError(`nuworq hub at ${settings.url} is restarting or unreachable (HTTP ${res.status} from the proxy in front of it)`, {
-          status: res.status, hint: 'Try again in a minute. If it lasts, whoever runs the hub should check that it is up.',
-        });
-      }
-      // A page (HTML) is never an error message.
-      const d = typeof data === 'object' && data ? data : { error: /</.test(String(data)) ? '' : String(data) };
-      throw new HubError(d.error || `HTTP ${res.status} from ${settings.url}`, { status: res.status, hint: d.hint });
+      const d = typeof data === 'object' && data ? data : { error: clip(String(data)), hint: 'Try again in a minute.' };
+      throw new HubError(d.error || `HTTP ${res.status} from ${host}`, { status: res.status, hint: d.hint });
     }
     return data;
   }
