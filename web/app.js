@@ -10,6 +10,7 @@ import { checkChip } from './checks.js';
 import { dotClass } from './timeline.js';
 import { missingProject } from './missing.js';
 import { mapParts } from './groupmap.js';
+import { boardWork } from './oldwork.js';
 import { milestonesSection, prioritySeg as milestonePriority } from './milestones.js';
 import { ackList } from './acks.js';
 import { analyticsPage } from './analytics.js';
@@ -536,15 +537,18 @@ const prioritySeg = (item, priority) => milestonePriority(item, priority, { esc 
 
 // A milestone's map in the drawer: the nested tree, each item with its stage, who holds it, what it waits on,
 // its pull requests and open questions, and a mark on what needs you. At each level what's left comes first,
-// and the done parts fold behind one line until tapped (#215).
+// and the done parts fold behind one line until tapped (#215). Dropped parts show only at 30m, behind
+// "Show dropped" (#442).
 function groupMap(n) {
   const li = (c) => `<li>${mapLine(c)}${kids(c)}</li>`;
   const kids = (x) => {
-    if (!x.children.length) return '';
-    const { open, folded, label } = mapParts(x.children);
+    const { open, folded, label, dropped } = mapParts(x.children);
     const key = `mapdone:${x.item}`, shown = S.open.has(key);
     const fold = folded.length ? `<li class="m-fold"><button class="link" data-action="toggle" data-key="${esc(key)}" aria-expanded="${shown}">${shown ? `Hide ${label}` : label}</button></li>` : '';
-    return `<ul>${open.map(li).join('')}${fold}${shown ? folded.map(li).join('') : ''}</ul>`;
+    const dkey = `mapdrop:${x.item}`, dshown = S.open.has(dkey);
+    const drops = z() >= 2 && dropped.length ? `<li class="m-fold"><button class="link" data-action="toggle" data-key="${esc(dkey)}" aria-expanded="${dshown}">${dshown ? 'Hide dropped' : `Show dropped (${dropped.length})`}</button></li>${dshown ? dropped.map(li).join('') : ''}` : '';
+    if (!open.length && !fold && !drops) return '';
+    return `<ul>${open.map(li).join('')}${fold}${shown ? folded.map(li).join('') : ''}${drops}</ul>`;
   };
   return `<div class="map">${kids(n)}</div>`;
 }
@@ -780,12 +784,13 @@ function motion(v) {
 // ── 5m: flow ──
 function flow(v) {
   const f = v.flow;
-  const stages = f.stages.filter((s) => s.stage !== 'dropped' || s.count);
+  // Dropped work isn't on the board (#442): All work's "Show dropped", at 30m, lists it.
+  const stages = f.stages.filter((s) => s.stage !== 'dropped');
   const pills = stages.map((s) => `<button class="stage stage-${s.stage} court-${s.court ?? 'none'} ${S.stage === s.stage ? 'on' : ''} ${s.count ? '' : 'zero-count'}" data-action="stage" data-stage="${s.stage}" title="${esc(s.blurb)}"><span class="n">${s.count}</span><span class="l">${esc(s.label)}</span></button>`).join('<span class="arrow">→</span>');
   let detail = '';
   if (S.stage) {
     const st = f.stages.find((s) => s.stage === S.stage);
-    const here = v.all.filter((i) => i.stage === S.stage);
+    const here = boardWork(v.all).rows.filter((i) => i.stage === S.stage);
     // Approved feedback about nuworq (#295) is marked, and can be shown on its own.
     const fb = here.some((i) => i.feedback);
     const items = here.filter((i) => !S.onlyFeedback || !fb || i.feedback).slice(-25).reverse();
@@ -844,7 +849,7 @@ const STAGE_EMPTY = {
   waiting: 'No agent is waiting on an answer from you.',
   verifying: 'Nothing to review: no submissions are waiting.',
   landing: 'Nothing accepted is waiting to land on main.',
-  done: 'Nothing finished yet.',
+  done: 'Nothing finished in the last 3 days. <button class="link" data-action="launcher">Search</button> finds older work.',
 };
 
 // The repository an item lands in, when its project has several (the hub sends null otherwise).
@@ -887,9 +892,19 @@ function finished(v) {
   if (!v.done.length) return '';
   const shown = z() >= 2 ? v.done : v.done.slice(0, 5);
   return `<section class="sec"><header><h2>Recently finished</h2><span class="count">${v.done.length}</span><span class="hint">last 3 days</span></header>
-    <div class="rows">${shown.map((i) => `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
+    <div class="rows">${shown.map((i) => i.parts ? finishedMilestone(i) : `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
       <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>${credit(i, who) ? `<div class="s">${credit(i, who)}</div>` : ''}</div>
       <span class="age">${esc(i.ago)} ago</span></div>`).join('')}</div></section>`;
+}
+// A finished milestone is one line (#442): its title, how many parts, when it finished. Tapping the parts count
+// opens them under it.
+function finishedMilestone(i) {
+  const key = `fin:${i.item}`, shown = S.open.has(key);
+  return `<div class="row-item fin-ms" data-key="${esc(key)}" data-new="finished-milestones"><div class="body">
+    <div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>
+    <button class="link fin-parts" data-action="toggle" data-key="${esc(key)}" aria-expanded="${shown}">${shown ? 'Hide parts' : `${plural(i.parts.length, 'part')}`}</button>
+    ${shown ? `<ul class="fin-list">${i.parts.map((c) => `<li>${refLink(c.item)} ${esc(c.title)}${c.stage === 'done' ? '' : ` ${stagePill(c.stage, courtOf(c.stage))}`}</li>`).join('')}</ul>` : ''}</div>
+    <span class="age">finished ${esc(i.ago)} ago</span></div>`;
 }
 
 function steering(v) {
@@ -1007,13 +1022,22 @@ function activity(v) {
     }).join('')}</div></section>`;
 }
 
+// Every item on the board (#442): done work older than 3 days and dropped work aren't here; search (⌘K) and
+// analytics find the old, and "Show dropped" brings the dropped back.
 function allWork(v) {
-  const rows = [...v.all].reverse();
-  if (!rows.length) return `<section class="sec"><header><h2>All work</h2></header>${zero('<b>No work yet.</b> Every item, in every stage, will be listed here.')}</section>`;
-  return `<section class="sec"><header><h2>All work</h2><span class="count">${rows.length}</span></header>
-    <div class="work-scroll"><table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Worked on by</th><th>In stage</th></tr></thead><tbody>
-    ${rows.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : '<span class="age" title="No agent has worked on it yet">—</span>'}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
-    </tbody></table></div></section>`;
+  if (!v.all.length) return `<section class="sec"><header><h2>All work</h2></header>${zero('<b>No work yet.</b> Every item, in every stage, will be listed here.')}</section>`;
+  const { rows, dropped, old } = boardWork(v.all);
+  const showDropped = S.open.has('all:dropped');
+  const shown = [...rows, ...(showDropped ? dropped : [])].sort((a, b) => b.item.slice(1) - a.item.slice(1));
+  const foot = [
+    old ? `${plural(old, 'item')} finished more than 3 days ago: <button class="link" data-action="launcher">Search</button> finds them.` : '',
+    dropped.length ? `<button class="link" data-action="toggle" data-key="all:dropped" aria-expanded="${showDropped}" data-new="show-dropped">${showDropped ? 'Hide dropped' : `Show dropped (${dropped.length})`}</button>` : '',
+  ].filter(Boolean).join(' · ');
+  return `<section class="sec"><header><h2>All work</h2><span class="count">${shown.length}</span></header>
+    ${shown.length ? `<div class="work-scroll"><table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Worked on by</th><th>In stage</th></tr></thead><tbody>
+    ${shown.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : '<span class="age" title="No agent has worked on it yet">—</span>'}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
+    </tbody></table></div>` : zero('<b>Nothing open or recently finished.</b>')}
+    ${foot ? `<div class="zoom-more">${foot}</div>` : ''}</section>`;
 }
 
 // ── item drawer: 30s header, 5m body, 30m deep dive ──

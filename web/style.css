@@ -854,6 +854,10 @@ main.admin { padding-top: var(--sp-6); }
 .m-q { font-size: var(--fs-3); color: var(--muted); padding-left: var(--sp-1); }
 /* The folded done parts (#215): one line, a 44px target. */
 .m-fold .link { min-height: 44px; padding: 0 var(--sp-1); margin: calc(-1 * var(--sp-2)) 0 calc(-1 * var(--sp-2)) calc(-1 * var(--sp-1)); color: var(--muted); text-decoration: underline; }
+/* A finished milestone in Recently finished (#442): one line; its parts count is a 44px target that opens them. */
+.fin-parts { min-height: 44px; padding: 0 var(--sp-1); margin: calc(-1 * var(--sp-2)) 0 calc(-1 * var(--sp-2)) calc(-1 * var(--sp-1)); color: var(--muted); text-decoration: underline; }
+.fin-list { margin: 0 0 var(--sp-1); padding-left: var(--sp-4); font-size: var(--fs-3); }
+.fin-list li { padding: 2px 0; }
 
 /* ── analytics (#239): a line per project, model or agent; its figures wrap as short phrases, in ink and
    muted only (no state color), each change a sign or a word. ── */
