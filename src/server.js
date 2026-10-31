@@ -10,7 +10,7 @@ import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
-import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, setWeekly } from './notify.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, requestChannels, setWeekly } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { freshen } from './freshness.js';
@@ -1206,7 +1206,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Push channels: hub-wide (or workspace-wide) ones, and personal ones that get only what that person owns.
       // Agent tokens never reach these. An owner manages them all; a person manages their own.
       const own = who.person && personRole !== 'owner' ? by : null; // null: every channel
-      if (req.method === 'GET' && path === '/api/notify') return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null });
+      if (req.method === 'GET' && path === '/api/notify') {
+        // One of the hub's owners: which channels here hear about early-access requests (#251), maybe none.
+        const email = who.person && spaces && hub.db.prepare('SELECT email FROM people WHERE handle = ?').get(who.person.handle)?.email?.toLowerCase();
+        const requests = email && earlyAccess?.owners?.includes(email) ? requestChannels(hub.db, who.person.handle).map((c) => c.id) : null;
+        return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null, requests });
+      }
       if (req.method === 'POST' && path.startsWith('/api/notify') && personRole !== 'owner' && !(own && ['/api/notify', '/api/notify/remove', '/api/notify/weekly'].includes(path))) {
         return deny(403, 'only an owner manages hub-wide push channels', 'Add one for yourself instead: it gets only what needs you.');
       }
