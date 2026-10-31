@@ -1,5 +1,5 @@
 // Talks to a running hub over HTTP. Shared by the CLI and the MCP server.
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join, dirname, basename, resolve, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { slugify, normRemote } from './core.js';
@@ -88,9 +88,9 @@ function discoveredUrl() {
   try { return JSON.parse(readFileSync(HUB_FILE, 'utf8')).url || null; } catch { return null; }
 }
 
-export function connected() {
+export function connected(file = CONNECT_FILE) {
   try {
-    const c = JSON.parse(readFileSync(CONNECT_FILE, 'utf8'));
+    const c = JSON.parse(readFileSync(file, 'utf8'));
     return c?.url ? { url: String(c.url).replace(/\/+$/, ''), token: String(c.token ?? '') } : null;
   } catch {
     return null;
@@ -101,9 +101,9 @@ export function connected() {
 // from the folder the agent is in, or by routing it to the work that matters most.
 // The hub: flag, env, .nuworq.json, the connected hub, the one serving on this machine, the default.
 // The token: flag, env, then the connected hub's, which is only ever sent to that hub.
-export function resolveSettings({ url, project, token, cwd = process.cwd() } = {}) {
+export function resolveSettings({ url, project, token, cwd = process.cwd(), connectFile } = {}) {
   const config = findConfig(cwd);
-  const conn = connected();
+  const conn = connected(connectFile);
   const hubUrl = (url || envVar('URL') || config?.url || conn?.url || discoveredUrl() || DEFAULT_URL).replace(/\/+$/, '');
   const named = project || envVar('PROJECT') || config?.project;
   return {
@@ -124,7 +124,7 @@ export class HubError extends Error {
 const RETRY_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET']);
 const RETRY_MS = 5000;
 
-// opts: url, project, token, cwd (see resolveSettings); retryMs: how long to retry a refused or dropped connection.
+// opts: url, project, token, cwd, connectFile (see resolveSettings); retryMs: how long to retry a refused or dropped connection.
 export function createClient(opts = {}) {
   const settings = resolveSettings(opts);
   // Each x-nuworq-* header goes out under its old x-trellis-* name too, so hubs not yet updated still understand.
@@ -139,7 +139,7 @@ export function createClient(opts = {}) {
   // moment. Those are retried for a few seconds, so a call made meanwhile just takes a little longer.
   // HTTP errors are answers, never retried.
   const retryMs = opts.retryMs ?? RETRY_MS;
-  async function send(path, init) {
+  async function attempt(path, init) {
     const until = Date.now() + retryMs;
     for (let wait = 100; ; wait = Math.min(wait * 2, 1000)) {
       try {
@@ -148,6 +148,50 @@ export function createClient(opts = {}) {
         if (!RETRY_CODES.has(e?.cause?.code) || Date.now() + wait > until) throw e;
         await new Promise((r) => setTimeout(r, wait));
       }
+    }
+  }
+
+  // A hub that moved for good to a subdomain of itself (nuworq.com → app.nuworq.com) answers with a
+  // permanent redirect. fetch would follow it but drop the token on the way, so every call would fail
+  // as not logged in. Instead the client moves: it uses the new address from then on, saves it where
+  // the old one was saved, and asks again there with the token. A token never follows any other redirect.
+  async function send(path, init) {
+    const res = await attempt(path, { ...init, redirect: 'manual' });
+    if (res.status < 300 || res.status > 399) return res;
+    const to = movedTo(settings.url, path, res);
+    if (!to) return attempt(path, init);
+    moved(settings.url, to);
+    settings.url = to;
+    return attempt(path, init);
+  }
+
+  // Where the hub moved, or null: a 301/308 to a subdomain of the hub's host, over https (or the hub's own scheme).
+  function movedTo(base, path, res) {
+    if (res.status !== 301 && res.status !== 308) return null;
+    let from, loc;
+    try { from = new URL(base); loc = new URL(res.headers.get('location') ?? '', base + path); } catch { return null; }
+    if (!loc.hostname.endsWith(`.${from.hostname}`) || (loc.protocol !== 'https:' && loc.protocol !== from.protocol)) return null;
+    // The hub keeps the path it was asked for, so the new address is what comes before it (a /w/<workspace> stays).
+    return loc.href.endsWith(path) ? loc.href.slice(0, -path.length) : loc.origin;
+  }
+
+  // Saves the new address in connect.json and .nuworq.json, wherever they named the old one. Best effort:
+  // a file that can't be written leaves this process moved and the next one to find out for itself.
+  function moved(from, to) {
+    const file = opts.connectFile ?? CONNECT_FILE;
+    try {
+      const c = JSON.parse(readFileSync(file, 'utf8'));
+      if (String(c?.url ?? '').replace(/\/+$/, '') === from) {
+        // Written whole with mode 600 and moved into place, like `nuworq connect` does: it holds the token.
+        const tmp = `${file}.${process.pid}`;
+        rmSync(tmp, { force: true });
+        writeFileSync(tmp, JSON.stringify({ ...c, url: to }, null, 2) + '\n', { mode: 0o600 });
+        renameSync(tmp, file);
+      }
+    } catch {}
+    const { file: cfg, ...config } = settings.config ?? {};
+    if (cfg && String(config.url ?? '').replace(/\/+$/, '') === from) {
+      try { writeFileSync(cfg, JSON.stringify({ ...config, url: to }, null, 2) + '\n'); } catch {}
     }
   }
 
