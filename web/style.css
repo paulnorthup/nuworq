@@ -736,7 +736,7 @@ main.admin { padding-top: 24px; }
 .funnel dt { font-size: 13px; color: var(--muted); }
 .funnel dd { margin: 0; }
 .funnel dd:not(.n) { height: 10px; background: var(--sunken); border-radius: 5px; overflow: hidden; }
-.funnel .bar { display: block; height: 100%; background: var(--agents); border-radius: 5px; }
+.funnel .bar { display: block; height: 100%; background: var(--muted); border-radius: 5px; } /* a count, not a state: no state color */
 .funnel .n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 560; }
 /* Asked once per new project (#174): may nuworq run staff it? */
 .staff-ask { background: var(--you-tint); border: 1px solid var(--you-line); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 14px; }
