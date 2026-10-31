@@ -57,13 +57,18 @@ function collect(hub, operators, since) {
 
 function eventsFor(hub, p, agent, since) {
   const out = [];
-  const has = json(hub.q('SELECT has FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.has, []);
+  const me = hub.q('SELECT has, has_since FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
+  const has = json(me?.has, []);
   if (!p.parked) {
-    const items = hub.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL AND stage_since > ? ORDER BY stage_since`).all(p.id, since);
+    // From when it became work this operator can take (#406), not only when it became ready: an item already
+    // ready whose needs changed, whose last dependency or part finished, or whose tags the operator just gained,
+    // comes once from then.
+    const items = hub.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL AND needs != '[]' ORDER BY stage_since`).all(p.id);
     for (const it of items) {
       const needs = json(it.needs, []);
       if (!needs.some((t) => OPERATOR_TAGS.includes(t)) || !needs.every((t) => has.includes(t)) || hub.unmetDeps(it).length) continue;
-      out.push({ at: it.stage_since, kind: 'item', project: p.slug, item: `#${it.seq}` });
+      const at = Math.max(it.stage_since, it.needs_since, me?.has_since ?? 0, finishedAt(hub, it));
+      if (at > since) out.push({ at, kind: 'item', project: p.slug, item: `#${it.seq}` });
     }
   }
   const seq = (id) => (id ? hub.q('SELECT seq FROM items WHERE id = ?').get(id)?.seq : null);
@@ -80,6 +85,12 @@ function eventsFor(hub, p, agent, since) {
     if (at > since) out.push({ at, kind: 'steer', project: p.slug, steer: s.steer, ...(s.about !== 'whole project' ? { item: s.about } : {}) });
   }
   return out;
+}
+
+// When the last of an item's dependencies and parts finished (0: none did).
+function finishedAt(hub, it) {
+  return hub.q(`SELECT MAX(t.at) AS at FROM transitions t WHERE t.stage IN ('done', 'dropped')
+    AND (t.item_id IN (SELECT depends_on FROM deps WHERE item_id = ?) OR t.item_id IN (SELECT id FROM items WHERE parent_id = ?))`).get(it.id, it.id)?.at ?? 0;
 }
 
 // An open wait is an operator present: Needs you counts operators by when they were last seen.
@@ -114,7 +125,9 @@ export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, s
     const quit = () => finish(null);
     hub.on('change', check);
     signal?.addEventListener('abort', quit);
-    timer = setTimeout(() => finish([]), ms);
+    // A last look before the empty answer: its at becomes the next since, so anything a change event didn't
+    // announce would otherwise be skipped for good (#406).
+    timer = setTimeout(() => { check(); finish([]); }, ms);
     check();
   });
 }
