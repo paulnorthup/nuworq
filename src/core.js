@@ -13,6 +13,8 @@ import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
 import { OPERATOR_TAGS } from './protocol.js';
+import { slugify, normRemote } from './text.js';
+export { slugify, normRemote };
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -192,26 +194,9 @@ function refuseSecrets(args) {
   }
 }
 
-// A git remote in the one form every clone shares: host/owner/repo. ssh, scp-style and https forms
-// of the same repository compare equal (git@github.com:Acme/api.git → github.com/acme/api). A path
-// (a repository on this machine) keeps its case: unlike GitHub, a filesystem may care.
-export function normRemote(url) {
-  let s = str(url);
-  if (!s) return '';
-  const scp = !/^[a-z][a-z0-9+.-]*:\/\//i.test(s) && s.match(/^(?:[^@/]+@)?([^:/]+):(?!\/)(.+)$/);
-  if (scp) s = `${scp[1]}/${scp[2]}`;
-  else s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^[^@/]+@/, '').replace(/^([^/:]+):\d*(?=\/|$)/, '$1');
-  s = s.replace(/\/+$/, '').replace(/\.git$/i, '').replace(/\/+$/, '');
-  return s.startsWith('/') ? s : s.toLowerCase();
-}
-
 // What to give git clone for a normalized remote: https for host/owner/repo, a path as it is.
 export function cloneUrl(remote) {
   return remote.startsWith('/') ? remote : `https://${remote}.git`;
-}
-
-export function slugify(s) {
-  return str(s).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
 
 export class Hub extends EventEmitter {
