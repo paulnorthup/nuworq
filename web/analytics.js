@@ -64,6 +64,34 @@ export function analyticsPage(o, { esc, dur, period = o?.period ?? '14d', open =
   const agentSec = `<section class="sec"><header><h2>Agents</h2><span class="count">${agents.length}</span></header>
     <div class="an-lines">${shown.map((a) => compared(a, esc(a.agent ?? 'unknown'), a.model ? esc(a.model) : '')).join('') || '<div class="zero">Nothing landed in this period.</div>'}</div>${more}</section>`;
 
+  const calSec = calibrationSection(o.calibration, { esc });
   const top = `${head}${take}<div class="an-switch">${seg}</div>`;
-  return wide ? `${top}${columns(projects, `${modelSec}${agentSec}`)}` : `${top}${projects}${modelSec}${agentSec}`;
+  return wide ? `${top}${columns(`${projects}${calSec}`, `${modelSec}${agentSec}`)}` : `${top}${projects}${modelSec}${agentSec}${calSec}`;
+}
+
+const LABELS = { rote: 'Rote', standard: 'Standard', hard: 'Hard', small: 'Small', large: 'Large' };
+
+// Calibration (#348): whether an item's difficulty foretells what it costs better than its size does. Read when
+// deciding whether to trust difficulty to pick models, so the answer comes first, in words; then each rating's
+// median cost as a bar on one scale shared by both, its count and attempts beside it. Bars are amounts: no state color.
+export function calibrationSection(c, { esc }) {
+  if (!c) return '';
+  const groups = [...c.by_difficulty, ...c.by_size];
+  const max = Math.max(...groups.map((g) => g.median_cost ?? 0), 0);
+  const x = (n) => `${n.toFixed(1)}×`;
+  const { difficulty: d, size: s } = c.spread;
+  const verdict = c.landed < MIN_LANDED ? `Too little has landed in this period to tell: the comparison speaks once ${MIN_LANDED} or more items land.`
+    : c.predicts === 'difficulty' ? `Difficulty foretells cost better than size: its ratings differ ${x(d.cost)} in median cost${s.cost ? `, size ${x(s.cost)}` : ''}.`
+      : c.predicts === 'size' ? `Size foretells cost better than difficulty: ${x(s.cost)} between sizes${d.cost ? ` against ${x(d.cost)}` : ''}.`
+        : c.predicts === 'neither' ? `Difficulty and size foretell cost about as well: ${x(d.cost)} and ${x(s.cost)} between their groups.`
+          : `Not enough rated work yet to tell: ${c.rated} of ${c.landed} landed ${c.landed === 1 ? 'item was' : 'items were'} rated. Shaping rates each item from now on.`;
+  const rows = (list) => list.map((g) => `<div class="step"><dt>${LABELS[g.key]} <span class="s">${g.landed}</span></dt>
+      <dd><span class="bar" style="width:${max && g.median_cost ? Math.max(2, Math.round((100 * g.median_cost) / max)) : 0}%"></span></dd>
+      <dd class="n">${g.median_cost == null ? '—' : money(g.median_cost)}</dd></div>`).join('');
+  const tries = (list) => list.filter((g) => g.landed).map((g) => `${LABELS[g.key].toLowerCase()} ${g.mean_attempts}`).join(', ');
+  const block = (name, list) => `<div class="an-line"><span class="an-name">${name}</span><dl class="funnel an-cal">${rows(list)}</dl>
+      ${tries(list) ? `<div class="an-figs"><span class="fig">Attempts per item: ${esc(tries(list))}</span></div>` : ''}</div>`;
+  return `<section class="sec" data-new="calibration"><header><h2>Difficulty or size</h2><span class="hint">median cost per landed item, by rating</span></header>
+    <p class="an-verdict">${esc(verdict)}</p>
+    <div class="an-lines">${block('By difficulty', c.by_difficulty)}${block('By size', c.by_size)}</div></section>`;
 }

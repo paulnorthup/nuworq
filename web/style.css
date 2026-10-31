@@ -801,4 +801,9 @@ a.an-name { display: flex; align-items: center; min-height: 44px; margin: -10px 
 .an-figs { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
 .an-figs .fig b { color: var(--ink); font-weight: 600; }
 .an-figs .chg { color: var(--ink); font-size: 12px; }
+/* Difficulty or size (#348): one cost scale shared by both blocks, so the bars compare across them. */
+.an-verdict { margin: 0 0 10px; }
+.an-cal { margin: 4px 0 6px; }
+.an-cal .step { grid-template-columns: 7.5em 1fr 4em; }
+.an-cal dt .s { font-size: 12px; font-variant-numeric: tabular-nums; margin-left: 2px; }
 .an-more { min-height: 44px; padding: 0 4px; margin-top: 4px; color: var(--ink); text-decoration: underline; }
