@@ -85,7 +85,47 @@ describe('lifecycle', () => {
     assert.equal(a('checkin').answers, undefined, 'answers are delivered once');
   });
 
-  test('a non-blocking ask keeps working; overriding it steers the holder', () => {
+  test('an override steers the asker, not the holder, and never the answerer itself', () => {
+    const { hub, clock, agent, human } = setup();
+    const op1 = agent('op-1'), op2 = agent('op-2'), tester = agent('tester');
+    op1('checkin', { has: ['operator'] });
+    op2('checkin', { has: ['operator'] });
+    tester('checkin');
+    human('create', { title: 'Live check', acceptance: 'x' });
+    op1('claim', { item: '#1' });
+    const ask = (who, question) => who('ask', { item: '#1', to: 'operator', question, assumption: 'Answering it is the test' }).question;
+    const steers = (who) => who('checkin').steers ?? [];
+
+    // The holder answers someone else's question: the asker is steered, the holder (and answerer) isn't.
+    op1('answer', { question: ask(tester, 'First?'), answer: 'Use the staging VM' });
+    assert.deepEqual(steers(tester).map((s) => s.about), ['#1']);
+    assert.match(steers(tester)[0].body, /Change of course on #1: .*staging VM/);
+    assert.deepEqual(steers(op1), [], 'the answerer is never steered by its own answer');
+    assert.equal(op1('progress', { item: '#1', headline: 'Working' }).steers, undefined);
+    assert.equal(hub.context(hub.project('demo'), hub.q('SELECT * FROM items WHERE seq = 1').get(), 'op-1').steers, undefined);
+
+    // Another operator answers: the holder isn't steered either.
+    op2('answer', { question: ask(tester, 'Second?'), answer: 'Use prod' });
+    assert.equal(steers(tester).length, 2);
+    assert.deepEqual(steers(op1), [], 'the holder is not steered by an answer to someone else');
+    assert.deepEqual(steers(op2), []);
+
+    // Answering your own question steers nobody.
+    op1('answer', { question: ask(op1, 'Mine?'), answer: 'Something else' });
+    assert.deepEqual(steers(op1), []);
+
+    // A gone asker isn't steered: the change of course stays in the item's history for whoever is next.
+    const q = ask(tester, 'Third?');
+    tester('signoff', { headline: 'Done testing' });
+    clock.t += MIN;
+    const before = hub.q(`SELECT COUNT(*) AS n FROM notes WHERE kind = 'steer'`).get().n;
+    op2('answer', { question: q, answer: 'Skip it' });
+    assert.equal(hub.q(`SELECT COUNT(*) AS n FROM notes WHERE kind = 'steer'`).get().n, before);
+    const ev = hub.q(`SELECT summary FROM events WHERE type = 'answered' ORDER BY id DESC LIMIT 1`).get();
+    assert.match(ev.summary, /tester asked: Third\?\nThey assumed "Answering it is the test"; this answer changes course\./);
+  });
+
+  test('a non-blocking ask keeps working; overriding it steers the asker', () => {
     const { hub, agent, human, row } = setup();
     const a = agent('claude-1');
     a('checkin');
