@@ -219,20 +219,37 @@ async function waitCmd(flags) {
   const agent = flags.as || envVar('AGENT') || '';
   const { describeEvent } = await import('../src/wait.js');
   // Unnamed, it says which session started it (#335), so it wakes that session's operator, not every one on the token.
+  // --follow retries a hub that is away itself (below), for as long as it takes, so the client's own short retry is off.
   const { listenerKeys } = await import('../src/session.js');
-  const client = createClient({ ...flags, session: agent ? [] : listenerKeys() });
+  const client = createClient({ ...flags, session: agent ? [] : listenerKeys(), ...(flags.follow ? { retryMs: 0 } : {}) });
   // --follow started beside a session that hasn't checked in yet: no operator on this token is "not yet"
   // for a couple of minutes, retried quietly. Any other refusal ends it at once.
   const settle = Number(flags['settle-ms']) || 120_000, until = Date.now() + settle;
-  for (let since = 0; ;) {
+  // #342: the hub restarts on every merge to main. With --follow, a proxy's 502/503/504 or a refused, dropped
+  // or timed-out connection is waited out with backoff (about 2 s doubling to 30 s), quietly and keeping
+  // `since`, so nothing is lost or repeated. Away for long (10 minutes), it says so once and keeps trying.
+  const first = Number(flags['retry-ms']) || 2000, cap = 15 * first, longMs = Number(flags['down-ms']) || 600_000;
+  let away = null, told = false;
+  for (let since = 0, backoff = first; ;) {
     let r;
     try {
       r = await client.wait({ since, timeout: Number(flags.timeout) || undefined, all: !!flags['all-projects'] }, { agent });
     } catch (e) {
+      if (flags.follow && e instanceof HubError && [0, 502, 503, 504].includes(e.status)) {
+        away ??= Date.now();
+        if (!told && Date.now() - away >= longMs) {
+          told = true;
+          console.log(`nuworq: hub at ${client.settings.url} unreachable for ${Math.max(1, Math.round((Date.now() - away) / 60_000))} min; still trying.`);
+        }
+        await new Promise((res) => setTimeout(res, backoff));
+        backoff = Math.min(backoff * 2, cap);
+        continue;
+      }
       if (!flags.follow || agent || e.status !== 403 || !/^no operator has checked in/.test(e.message) || Date.now() >= until) throw e;
       await new Promise((res) => setTimeout(res, Math.min(settle / 12, Math.max(0, until - Date.now()))));
       continue;
     }
+    away = null, told = false, backoff = first;
     since = r.at;
     for (const e of r.events) console.log(describeEvent(e));
     if (r.events.length && !flags.follow) return;

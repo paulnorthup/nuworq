@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import http from 'node:http';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -324,5 +325,81 @@ describe('GET /api/wait and nuworq wait', () => {
       server.close();
       server.closeAllConnections();
     }
+  });
+
+  // #342: the live hub restarts on every merge; a listener that exits on the proxy's 502 leaves the operator deaf.
+  describe('--follow outlives a hub restart', () => {
+    const bin = join(import.meta.dirname, '..', 'bin', 'nuworq.js');
+    // A fake hub: answer(n, req, res) handles the n-th /api/wait; `asked` keeps each one's since.
+    const fake = async (answer) => {
+      const asked = [];
+      const server = http.createServer((req, res) => {
+        asked.push(new URL(req.url, 'http://x').searchParams.get('since'));
+        answer(asked.length, req, res);
+      });
+      const url = `http://127.0.0.1:${await listen(server)}`;
+      const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: '', NUWORQ_AGENT: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
+      return { server, asked, env, close: () => { server.close(); server.closeAllConnections(); } };
+    };
+    const gateway = (res) => res.writeHead(502, { 'content-type': 'text/html' }).end('<html>Bad gateway</html>');
+    const event = (res, at) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ at, events: [{ kind: 'item', project: 'o', item: '#1' }] }));
+    // Runs the listener for ms, then stops it: what it printed, and whether it had exited on its own.
+    const listenFor = (env, ms, ...args) => new Promise((resolve) => {
+      const child = execFile(process.execPath, [bin, 'wait', '--operator', '--follow', '--retry-ms', '50', ...args], { env });
+      let stdout = '', stderr = '', exited = null;
+      child.stdout.on('data', (d) => { stdout += d; });
+      child.stderr.on('data', (d) => { stderr += d; });
+      const timer = setTimeout(() => child.kill(), ms);
+      child.on('exit', (code) => { clearTimeout(timer); exited = code; });
+      child.on('close', () => resolve({ stdout, stderr, exited }));
+    });
+
+    test('a 502 twice, then an event: exactly that one line, the same since, and no exit', async () => {
+      const hub = await fake((n, _req, res) => (n <= 2 ? gateway(res) : n === 3 ? event(res, 5) : null));
+      try {
+        const r = await listenFor(hub.env, 1500, '--as', 'op');
+        assert.equal(r.stdout, 'nuworq: operator work waiting (#1 in o). Run next.\n', r.stderr);
+        assert.equal(r.exited, null, 'still listening');
+        assert.deepEqual(hub.asked.slice(0, 4), ['0', '0', '0', '5'], 'since kept through the 502s, then moved on');
+      } finally { hub.close(); }
+    });
+
+    test('a dropped connection is waited out too', async () => {
+      const hub = await fake((n, req, res) => (n === 1 ? req.socket.destroy() : n === 2 ? event(res, 5) : null));
+      try {
+        const r = await listenFor(hub.env, 1000, '--as', 'op');
+        assert.equal(r.stdout, 'nuworq: operator work waiting (#1 in o). Run next.\n', r.stderr);
+        assert.equal(r.exited, null);
+      } finally { hub.close(); }
+    });
+
+    test('away for long, it says so once and keeps trying', async () => {
+      const hub = await fake((_n, _req, res) => gateway(res));
+      try {
+        const r = await listenFor(hub.env, 1500, '--as', 'op', '--down-ms', '300');
+        assert.match(r.stdout, /^nuworq: hub at http:\/\/127\.0\.0\.1:\d+ unreachable for 1 min; still trying\.\n$/);
+        assert.equal(r.exited, null);
+        assert.ok(hub.asked.length >= 3, 'kept asking');
+      } finally { hub.close(); }
+    });
+
+    test('a 401 or an unknown agent ends it at once with the hint; without --follow a 502 ends it too', async () => {
+      const refuse = (status, error, hint) => (res) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify({ error, hint }));
+      for (const [status, error, hint] of [[401, 'not logged in', 'Run nuworq connect.'], [403, "nobody isn't an operator here", 'Check in with has: ["operator"].']]) {
+        const hub = await fake((_n, _req, res) => refuse(status, error, hint)(res));
+        try {
+          const r = await listenFor(hub.env, 1000, '--as', 'nobody');
+          assert.equal(r.exited, 1, `${status} exits`);
+          assert.ok(r.stderr.includes(error) && r.stderr.includes(`hint: ${hint}`), r.stderr);
+          assert.equal(hub.asked.length, 1);
+        } finally { hub.close(); }
+      }
+      const hub = await fake((_n, _req, res) => gateway(res));
+      try {
+        const r = await new Promise((resolve) => execFile(process.execPath, [bin, 'wait', '--operator', '--as', 'op'], { env: hub.env }, (err, _o, stderr) => resolve({ code: err?.code ?? 0, stderr })));
+        assert.equal(r.code, 1);
+        assert.match(r.stderr, /restarting or unreachable \(HTTP 502/);
+      } finally { hub.close(); }
+    });
   });
 });
