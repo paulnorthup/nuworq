@@ -22,6 +22,6 @@ export function getStartedCard(gs, { worker = '' } = {}) {
       <span class="tick">${s.done ? '✓' : ''}</span><span class="label">${esc(s.label)}</span>${s.done ? '' : `${action(s)}<a class="link how" href="guide#${esc(s.key)}">How?</a>`}
       ${!s.done && s.key === next && s.action?.command === 'worker' && worker ? commandBlocks(worker) : ''}</li>`).join('');
   return `<section class="get-started"><div class="gs-head"><h3>Get started</h3><span class="faint">${done} of ${gs.steps.length} done</span>
-      <a class="link gs-guide" href="guide"><span data-new="guide">Guide</span></a><button class="link" data-action="get-started-hide" title="Hide this for good">Hide</button></div>
+      <a class="link gs-guide" href="guide"><span data-new="guide-gs">Guide</span></a><button class="link" data-action="get-started-hide" title="Hide this for good">Hide</button></div>
     <ol>${rows}</ol></section>`;
 }

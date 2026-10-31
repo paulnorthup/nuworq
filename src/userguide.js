@@ -61,14 +61,14 @@ export const STEPS = [
   {
     key: 'machine', title: 'Install and connect your machine', glance: 'Two commands, once per machine.',
     hand: [
-      'You need Node 24 or newer (node --version tells you). Open **Connect an agent** in the rail (on a phone, under **Menu**). It shows this hub\'s commands, ready to copy.',
+      'You need Node 24 or newer (`node --version` tells you). Open **Connect an agent** in the rail (on a phone, under **Menu**). It shows this hub\'s commands, ready to copy.',
       'Step 1 installs nuworq from the hub, so it\'s the same version as the hub and keeps itself up to date: `npm install -g <the package address it shows>`.',
       'Step 2 is `nuworq connect <your workspace\'s address>`. A browser tab opens with a code: check it matches the one in your terminal, and approve it.',
-      'To register nuworq with your agent tools yourself, add --no-mcp to connect, then for Claude Code:',
+      'To register nuworq with your agent tools yourself, connect with `nuworq connect <address> --no-mcp` instead, then for Claude Code:',
       '`claude mcp add --scope user nuworq -- nuworq mcp`',
       'Codex, opencode and other MCP clients are under **Connect an agent** at depth 30m.',
     ],
-    auto: '`nuworq connect` without --no-mcp also registers nuworq with Claude Code, Codex and opencode where they\'re installed. It saves this machine\'s token in ~/.nuworq/connect.json, which only you can read. `nuworq disconnect` revokes the token and undoes all of it.',
+    auto: '`nuworq connect` without `--no-mcp` also registers nuworq with Claude Code, Codex and opencode where they\'re installed. It saves this machine\'s token in ~/.nuworq/connect.json, which only you can read. `nuworq disconnect` revokes the token and undoes all of it.',
     check: 'The terminal says the machine is connected, and Get started ticks Install and connect your machine off.',
   },
   {
@@ -79,7 +79,7 @@ export const STEPS = [
       '`claude plugin install nuworq@nuworq`',
       'On their own: workers are headless agents, each in its own git worktree with a branch per item. One worker, wherever work is waiting:',
       '`nuworq worker --agent claude --run`',
-      'Or keep up to three going on the projects you let it staff. First open the project, then **Settings**, and switch on **Staff it with nuworq run** (the board also offers **Let nuworq run staff this project**). Ctrl-C stops them. Workers cost money: --max-usd 5 stops launching more once they\'ve spent $5.',
+      'Or keep up to three going on the projects you let it staff. First open the project, then **Settings**, and switch on **Staff it with nuworq run** (the board also offers **Let nuworq run staff this project**). Ctrl-C stops them. Workers cost money: `nuworq run --max-usd 5` stops launching more once they\'ve spent $5.',
       '`nuworq run --workers 3 --agent claude`',
     ],
     auto: '`nuworq run --install` installs the runner as a service (a LaunchAgent on macOS, a systemd user unit on Linux), so workers keep going after you close the terminal or restart. It adds that one service; its log is ~/.nuworq/logs/run.log. `nuworq run --uninstall` removes it.',
@@ -176,8 +176,8 @@ export function guidePage({ version = '', base = '', logo = '', favicon = '' } =
 <h1>Getting started</h1>
 <p class="lead">From nothing to your first landed item. Tap a step for exactly what to click or type, and how to see it worked.</p>
 ${version ? `<p class="version">This guide describes nuworq ${esc(version)}, the version this hub runs.</p>` : ''}
-<ol class="steps">${STEPS.map((s, i) => step(s, i + 1)).join('')}</ol>
+<ol class="guide-steps">${STEPS.map((s, i) => step(s, i + 1)).join('')}</ol>
 <h2>Once you're going</h2>
-<ul class="steps essentials">${ESSENTIALS.map(essential).join('')}</ul>
+<ul class="guide-steps essentials">${ESSENTIALS.map(essential).join('')}</ul>
 </main><script type="module" src="${base}/guide.js"></script></body></html>`;
 }
