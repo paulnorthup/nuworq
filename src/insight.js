@@ -31,6 +31,12 @@ const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mis
 // but what it already asked of you (a blocking question, work to verify) still needs you, so it counts here as
 // it does on its own line and badge (#152). Parking only stops new asks: direction and staffing.
 const URGENCY = ['needs-you', 'stalled', 'flowing', 'idle'];
+// An agent's role, where it runs and its job (core.js presenceOf), by name; null for a name the hub doesn't know.
+function presenceNamed(hub, p, name) {
+  const a = name ? hub.q('SELECT * FROM agents WHERE project_id = ? AND name = ?').get(p.id, name) : null;
+  return a ? hub.presenceOf(p, a) : null;
+}
+
 export function homeView(hub, { viewer } = {}) {
   const t = hub.now();
   const rows = hub.projects().map((p) => ({ p, v: view(hub, p.slug, { light: true, viewer }) }));
@@ -57,7 +63,7 @@ export function homeView(hub, { viewer } = {}) {
   const motion = rows.flatMap(({ p }) => hub.q(`SELECT seq, title, stage, holder AS agent FROM items WHERE project_id = ? AND holder IS NOT NULL AND holder != '' AND stage IN ('active', 'proposed', 'landing')
       UNION ALL SELECT i.seq, i.title, i.stage, a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND i.stage = 'active' AND a.stage = 'active' AND a.closed = 0
       ORDER BY seq`).all(p.id, p.id)
-    .map((r) => ({ agent: r.agent, item: `#${r.seq}`, title: r.title, stage: r.stage, project: tag(p) })));
+    .map((r) => ({ agent: r.agent, presence: presenceNamed(hub, p, r.agent), item: `#${r.seq}`, title: r.title, stage: r.stage, project: tag(p) })));
   return {
     pulse: {
       state, sentence, act: needs.length, working, active: inFlight,
@@ -100,6 +106,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const lastEvent = (i, types) => hub.q(`SELECT * FROM events WHERE item_id = ? AND type IN (${types.map(() => '?').join(',')}) ORDER BY at DESC, id DESC LIMIT 1`).get(i.id, ...types);
 
   const in_ = (stage) => items.filter((i) => i.stage === stage);
+  // Who an agent named in an entry is, for the page to say "Worker · mac-mini runner" rather than its id (#240).
+  const presence = (name) => presenceNamed(hub, p, name);
   const active = in_('active');
   const shaping = in_('proposed').filter((i) => i.holder);
   const landing = in_('landing');
@@ -130,6 +138,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       why: [orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
+      agent: q.asked_by, presence: presence(q.asked_by),
       steps: json(q.steps, []),
       // The steps this viewer has ticked (#162), counting from 1; each person ticks their own.
       ticked: hub.q('SELECT step FROM step_ticks WHERE question_id = ? AND person = ? ORDER BY step').all(q.id, viewer ?? HUMAN).map((r) => r.step),
@@ -258,7 +267,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
         why: sub?.summary, detail: sub?.detail,
         acceptance: it.acceptance, evidence, git,
         warn: [evidence.length ? null : 'No evidence attached', gitWarning(git)].filter(Boolean).join(' · ') || null,
-        item: ref(it),
+        item: ref(it), agent: it.implementer, presence: presence(it.implementer),
         attempts: it.race > 1 ? hub.submissions(it) : undefined, // a race: compare and keep one
       });
     }

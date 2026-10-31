@@ -9,7 +9,7 @@
 const short = (s) => String(s ?? '').replace(/^(Nothing needs you\.|\d+ things? needs? you\.)\s*/, '');
 
 // wide: lay it out in two columns; gs: the Get started card, if any.
-export function homePage(h, { z, pulse, card, esc, plural, wide = false, gs = '' }) {
+export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(name), wide = false, gs = '' }) {
   const tag = (p) => `<a class="proj-tag" href="#/p/${encodeURIComponent(p.slug)}">${esc(p.name)}</a>`;
   const needs = h.needs.length ? `<section class="sec home-needs"><header><h2>Needs you</h2><span class="count">${h.needs.length}</span>
       <span class="hint">oldest first, across projects</span></header>
@@ -34,7 +34,7 @@ export function homePage(h, { z, pulse, card, esc, plural, wide = false, gs = ''
       ${h.worth_knowing.map((w) => `<div class="ov-line" data-action="goto" data-slug="${esc(w.slug)}"><div class="body"><b>${esc(w.name)}</b> <span class="s">${plural(w.count, 'thing')} worth knowing</span></div></div>`).join('')}
     </div></section>` : '';
   const motion = z >= 1 && h.motion.length ? `<section class="sec"><header><h2>In motion</h2><span class="count">${h.motion.length}</span></header><div class="ov-lines">
-      ${h.motion.map((m) => `<div class="ov-line" data-project="${esc(m.project.slug)}" data-action="open" data-item="${esc(m.item)}"><div class="body"><b>${esc(m.agent)}</b> <span class="s">${esc(m.item)} ${esc(m.title)}</span></div>${tag(m.project)}</div>`).join('')}
+      ${h.motion.map((m) => `<div class="ov-line" data-project="${esc(m.project.slug)}" data-action="open" data-item="${esc(m.item)}"><div class="body"><b>${who(m.agent, null, { presence: m.presence })}</b> <span class="s">${esc(m.item)} ${esc(m.title)}</span></div>${tag(m.project)}</div>`).join('')}
     </div></section>` : '';
 
   const head = pulse({ pulse: h.pulse, since: h.pulse.since, project: { parked: false }, home: true });
