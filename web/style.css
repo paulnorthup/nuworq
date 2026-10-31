@@ -202,7 +202,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 /* ── sections ── */
 .sec { margin-bottom: var(--sp-8); }
 .sec > header { display: flex; align-items: baseline; gap: var(--sp-3); margin-bottom: var(--sp-3); }
-.sec > header h2 { font-size: var(--fs-3); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; }
+/* A section's name stays on one line; on a phone its hint wraps beside it instead (#390). */
+.sec > header h2 { font-size: var(--fs-3); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; white-space: nowrap; }
 .sec > header .count { color: var(--muted); font-weight: 500; }
 .sec > header .hint { color: var(--muted); font-size: var(--fs-2); }
 .sec > header .right { margin-left: auto; }

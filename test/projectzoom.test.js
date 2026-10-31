@@ -24,6 +24,12 @@ test('All work keeps its headings on one line and scrolls on a narrow screen', (
   assert.match(app, /<div class="work-scroll"><table class="work">/);
 });
 
+// A section's name (Needs you, Steering & memory…) stays on one line on a phone; its hint wraps beside it (#390).
+test('section names stay on one line', () => {
+  const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.sec > header h2 \{[^}]*white-space: nowrap/);
+});
+
 test("the 30s footer names what 5m adds", () => {
   const footer = app.match(/That's the 30-second view\.[^`]*`/)[0];
   for (const words of ['worth knowing', "what's next", 'what finished', 'agents']) assert.ok(footer.includes(words), words);
