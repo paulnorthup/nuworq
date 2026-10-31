@@ -51,5 +51,6 @@ export const stateDot = (state) => {
   return `<span class="dot ${state}" role="img" aria-label="${label}" title="${label}"></span>`;
 };
 
-// Two columns: the work, and beside it what stays in view while you act on it.
-export const columns = (main, side) => `<div class="cols"><div class="col-main">${main}</div><aside class="col-side">${side}</aside></div>`;
+// Two columns: the work, and beside it what stays in view while you act on it. The side column scrolls on its own,
+// so it carries a key a redraw finds it by (#376): one per page, so moving to another page starts it at the top.
+export const columns = (main, side, page = 'home') => `<div class="cols"><div class="col-main">${main}</div><aside class="col-side" data-scroll="side:${page}">${side}</aside></div>`;

@@ -66,7 +66,7 @@ describe('the home page', () => {
     hub.agentOp('p2', 'claim', 'bot2', { item: '#1' });
     hub.agentOp('p2', 'ask', 'bot2', { item: '#1', question: 'Which region?', blocking: true });
     html = homePage(homeView(hub), { ...deps(), wide: true, gs });
-    const [main, side] = html.split('<aside class="col-side">');
+    const [main, side] = html.split('<aside class="col-side" data-scroll="side:home">');
     assert.ok(main.startsWith('<div class="cols"><div class="col-main">') && main.includes('home-needs'));
     assert.ok(side.indexOf('<!--pulse:') < side.indexOf(gs) && side.indexOf(gs) < side.indexOf('home-projects'), 'pulse, Get started, projects');
     const narrow = homePage(homeView(hub), { ...deps(), gs });
