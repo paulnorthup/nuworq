@@ -583,6 +583,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 .propose-row input { flex: 1; min-width: 0; min-height: 44px; }
 .propose-row .btn { min-height: 44px; }
 .add-work .propose-more { align-self: flex-start; min-height: 44px; }
+.add-work > input, .add-work .row .btn { min-height: 44px; } /* Waits on and Add to Ready, thumb-sized too (#403) */
 .add-work p.faint { margin: 0; font-size: 12px; }
 .add-work .field-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 

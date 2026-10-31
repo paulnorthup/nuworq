@@ -3,7 +3,7 @@
 import { connectCommands } from './connect.js';
 import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
-import { proposeForm, proposal } from './propose.js';
+import { proposeForm, proposal, sentToast } from './propose.js';
 import { homePage, columns, stateDot, STATE_LABELS } from './home.js';
 import { credit } from './credit.js';
 import { checkChip } from './checks.js';
@@ -1218,7 +1218,7 @@ async function addWork(ready) {
   const body = proposal({ title: val('nw-title'), acceptance: more ? val('nw-acceptance') : '', summary: more ? val('nw-summary') : '',
     priority: S.drafts['nw-priority'], precondition: pre ? toPrecondition(pre) : null, ready });
   if (!body) { $('#nw-title')?.focus(); return toast('Say what should be true when it\'s done', true); }
-  await human('create', body, pre ? 'Added; it waits until that holds' : ready ? 'Added to Ready' : 'Proposed: an agent shapes it next');
+  await human('create', body, sentToast({ ready, waits: !!pre }));
   clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority', 'nw-pre');
   S.addWork = S.addMore = false;
   render({ force: true });
