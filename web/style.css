@@ -348,10 +348,19 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .spark span.z { background: var(--line-strong); }
 
 /* ── steering ── */
-.steer-item .acks { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; font-size: 12px; }
+.acks { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; font-size: 12px; min-width: 0; }
 .ack { color: var(--ok); }
 .ack::before { content: '✓ '; }
 .unacked { color: var(--muted); }
+/* Many acks (#211): one summary line, the full list behind a tap. Open, names sit in dense columns (two on a
+   phone); with responses, one full-width row each. "+N more" is a 44px target whose negative margins keep its
+   line as tall as the text around it. */
+.ack-sum { color: var(--muted); overflow-wrap: anywhere; }
+.more-acks { display: inline-flex; align-items: center; min-height: 44px; margin: -13px 0; padding: 0 8px; font-size: 12px; color: var(--ink); text-decoration: underline; vertical-align: middle; }
+.ack-all { flex-basis: 100%; list-style: none; margin: 4px 0 0; padding: 0; columns: 6.5em; column-gap: 12px; }
+.ack-all.rows { columns: auto; }
+.ack-all li { break-inside: avoid; overflow-wrap: anywhere; padding: 1px 0; }
+.ack-all.rows li { padding: 3px 0; }
 
 /* ── activity ── */
 .feed .row-item { padding: 8px 14px; }
