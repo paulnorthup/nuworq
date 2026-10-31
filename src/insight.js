@@ -651,7 +651,7 @@ function idleCause(hub, p, t) {
       sub: last ? `No runner is up: ${last.name} was last seen ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''}` : 'No runner has ever reported here',
       why: `Nothing starts workers for this project: no \`nuworq run\` is up${last ? ` (${last.name} went quiet ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''})` : ''}. Start one, or start an agent yourself. Or park the project if it should stay quiet.`,
       how: [
-        ...(p.runner ? [] : [{ do: 'Let nuworq run staff this project: click "Let nuworq run staff this project" at the top of this page (5m)', check: 'It reads "Auto-staffed by nuworq run"' }]),
+        ...(p.runner ? [] : [{ do: 'Let nuworq run staff this project: click Settings at the top of this page (5m), then turn on "Staff it with nuworq run"', check: 'The switch is on, and Runners appears on this page' }]),
         { do: `On ${last?.machine || 'a machine connected to this hub'}, start a runner`, where: run, check },
         { do: 'To keep it going after the terminal closes and across reboots, install it instead', where: `${run} --install` },
       ],
@@ -661,7 +661,7 @@ function idleCause(hub, p, t) {
     return {
       cause: 'unstaffed', sub: `${plural(live.length, 'runner')} up, but this project isn't staffed`,
       why: `${live.map((r) => r.name).join(', ')} ${live.length === 1 ? 'is' : 'are'} up, but this project doesn't let \`nuworq run\` start workers. One click lets it.`,
-      how: [{ do: 'Click "Let nuworq run staff this project" on this card', check: 'It reads "Auto-staffed by nuworq run", and Runners shows a worker within a poll' }],
+      how: [{ do: 'Click "Let nuworq run staff this project" on this card', check: 'Runners appears on this page and shows a worker within a poll' }],
       staff: true,
     };
   }
