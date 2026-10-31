@@ -41,12 +41,20 @@ function tarball({ pub = RELEASE.pub, commit = NEW, time = NEW_T } = {}) {
 }
 const sigOf = (bytes, key = RELEASE.privateKey) => `${sign(null, bytes, key).toString('base64')}\n`;
 
-// A hub serving /api/info, /nuworq.tgz and /nuworq.tgz.sig. Counts what was asked.
-async function fakeHub({ tgz = tarball(), sha = null, sig = undefined, commit = NEW } = {}) {
+// A hub serving /api/info, /nuworq.tgz and /nuworq.tgz.sig. Counts what was asked. release: { tgz, commit,
+// time?, sig? }, the newest signed release it names in /api/info and serves at /nuworq-<commit>.tgz (#254).
+async function fakeHub({ tgz = tarball(), sha = null, sig = undefined, commit = NEW, release = null } = {}) {
   const hits = [];
+  const sha256 = (b) => createHash('sha256').update(b).digest('hex');
   const server = http.createServer((req, res) => {
     hits.push(req.url);
-    if (req.url === '/api/info') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ package: { url: 'x', sha256: sha ?? createHash('sha256').update(tgz).digest('hex'), commit: commit.slice(0, 7) } })); }
+    if (req.url === '/api/info') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ package: { url: 'x', sha256: sha ?? sha256(tgz), commit: commit.slice(0, 7),
+        release: release && { url: 'y', sha256: sha256(release.tgz), commit: release.commit, time: release.time } } }));
+    }
+    if (release && req.url === `/nuworq-${release.commit}.tgz`) { res.writeHead(200); return res.end(release.tgz); }
+    if (release && req.url === `/nuworq-${release.commit}.tgz.sig`) { res.writeHead(200); return res.end(release.sig ?? sigOf(release.tgz)); }
     if (req.url === '/nuworq.tgz') { res.writeHead(200); return res.end(tgz); }
     if (req.url === '/nuworq.tgz.sig' && sig !== null) { res.writeHead(200); return res.end(sig ?? sigOf(tgz)); }
     res.writeHead(404); res.end();
@@ -135,6 +143,41 @@ describe('the package updates itself only to a release signed by its pinned key'
   test('the signed package must be the version the hub named', async () => {
     const tgz = tarball({ commit: 'c'.repeat(40) });
     await refusedFor({ tgz }, /the signed package says it is ccccccc, not bbbbbbb/);
+  });
+
+  // #254: the hub runs a newer, unsigned commit, and names the newest signed release it keeps.
+  const SIGNED = 'd'.repeat(40);
+  test('the newest signed release the hub names is installed by its commit, not the unsigned package it runs', async () => {
+    const tgz = tarball({ commit: SIGNED, time: NEW_T });
+    const hub = await fakeHub({ tgz: tarball({ commit: 'e'.repeat(40), time: NEW_T + 600 }), sig: null, commit: 'e'.repeat(40), release: { tgz, commit: SIGNED, time: NEW_T } });
+    try {
+      const { calls, install } = installer();
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
+      assert.equal(r.status, 'updated', describeUpdate(r));
+      assert.equal(r.to, SIGNED);
+      assert.ok(calls[0].equals(tgz));
+      assert.deepEqual(hub.hits, ['/api/info', `/nuworq-${SIGNED}.tgz`, `/nuworq-${SIGNED}.tgz.sig`]);
+    } finally { hub.close(); }
+  });
+
+  test('a named release the hub says is no newer than the installed one: current, nothing downloads', async () => {
+    const hub = await fakeHub({ sig: null, release: { tgz: tarball({ commit: SIGNED, time: OLD_T }), commit: SIGNED, time: OLD_T } });
+    try {
+      const r = await update({ root: installed(), hub: hub.url, dir: tmp('nuworq-upd-data-'), force: true });
+      assert.equal(r.status, 'current', describeUpdate(r));
+      assert.match(describeUpdate(r), /the newest signed release, ddddddd, isn't newer/);
+      assert.deepEqual(hub.hits, ['/api/info']);
+    } finally { hub.close(); }
+  });
+
+  test('a named release still has to verify: its signed time, its key, its commit', async () => {
+    // The hub claims a later time than the package signs: the signed time decides.
+    const old = tarball({ commit: SIGNED, time: OLD_T - 60 });
+    await refusedFor({ sig: null, release: { tgz: old, commit: SIGNED, time: NEW_T } }, /ddddddd .* isn't newer than the installed aaaaaaa/);
+    const tgz = tarball({ commit: SIGNED });
+    await refusedFor({ sig: null, release: { tgz, commit: SIGNED, time: NEW_T, sig: sigOf(tgz, OTHER.privateKey) } }, /isn't from the release key this install trusts/);
+    await refusedFor({ sig: null, release: { tgz: tarball({ commit: 'c'.repeat(40) }), commit: SIGNED, time: NEW_T } }, /says it is ccccccc, not ddddddd/);
+    await refusedFor({ sig: null, release: { tgz, commit: SIGNED.slice(0, 7), time: NEW_T } }, /isn't a commit/);
   });
 
   test('the same version is current; nothing downloads', async () => {
