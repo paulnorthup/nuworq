@@ -99,7 +99,7 @@ describe('the page', () => {
   test('live updates wait while any box is focused, and every redraw, forced ones too, brings focus back', () => {
     assert.match(app, /const typing = \(\) => isTextBox\(document\.activeElement\);/);
     const render = app.slice(app.indexOf('function render('), app.indexOf('// ── routing ──'));
-    assert.ok(render.indexOf('saveFocus(document)') < render.indexOf("$('#main').innerHTML"), 'saved before the HTML goes');
+    assert.ok(render.indexOf('saveFocus(document)') < render.indexOf("paint($('#main')"), 'saved before the HTML changes');
     assert.ok(render.indexOf('restoreFocus(document, writing)') > render.indexOf('el.value = v'), 'restored after the drafts are back');
   });
 });

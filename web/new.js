@@ -63,9 +63,29 @@ export function markNew(root, { now = Date.now(), store } = {}) {
     if (on && !tag) host.after(newTag(el, key));
     if (!on && tag) { tag.remove(); drawn?.unobserve(el); }
   }
+  // A redraw leaves the tags in place (#392): one whose feature is gone, or moved away from it, goes too.
+  for (const tag of root.querySelectorAll('.new-tag')) {
+    const host = tag.previousElementSibling, key = tag.dataset?.newTag;
+    if (!key) continue;
+    const el = host?.dataset?.new === key ? host : host?.querySelector?.(`[data-new="${key}"]`);
+    if (!el || !isNew(key, { now, seen })) tag.remove();
+  }
 }
+const anchorOf = (key) => `--new-${key.replace(/[^\w-]/g, '-')}`;
+
+// For a redraw that changes only what changed (web/morph.js, #392): the tags stay where they are, and a tagged
+// element's new markup gets the class and anchor markNew gave it, so neither is taken off and put back.
+export const keepNew = {
+  keep: (n) => !!n.classList?.contains('new-tag'),
+  adopt(from, to) {
+    if (!from.classList?.contains('is-new') || to.getAttribute('data-new') !== from.getAttribute('data-new')) return;
+    to.classList.add('is-new');
+    const anchor = from.style.getPropertyValue('anchor-name');
+    if (anchor) to.style.setProperty('anchor-name', anchor);
+  },
+};
 function newTag(el, key) {
-  const anchor = `--new-${key.replace(/[^\w-]/g, '-')}`;
+  const anchor = anchorOf(key);
   el.style.setProperty('anchor-name', anchor);
   const tag = el.ownerDocument.createElement('button');
   Object.assign(tag, { type: 'button', className: 'new-tag', title: 'Dismiss', textContent: 'new' });
