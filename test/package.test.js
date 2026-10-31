@@ -130,6 +130,49 @@ describe('/nuworq.tgz', () => {
     } finally { hub.close(); }
   });
 
+  // #434: main moved past a release commit before the hub ran it, so no package of it was built and the
+  // signer had nothing to sign. Asked for, a tagged commit on the history the hub runs is built; nothing else is.
+  test('a release the hub never ran is built when asked for, and signed it is the release', async () => {
+    const d = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-pkg-skip-')));
+    const repo = join(d, 'src'), cache = join(d, 'cache');
+    execFileSync('git', ['clone', '-q', '--no-hardlinks', ROOT, repo]);
+    const g = (...args) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' }).trim();
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    writeFileSync(join(repo, 'release-key.pub'), publicKey.export({ type: 'spki', format: 'pem' }));
+    g('add', 'release-key.pub');
+    g('commit', '-qm', 'Release v9.9.9');
+    const rel = g('rev-parse', 'HEAD');
+    g('tag', 'v9.9.9');
+    g('commit', '-q', '--allow-empty', '-m', 'untagged');
+    const untagged = g('rev-parse', 'HEAD');
+    g('switch', '-qc', 'side');
+    g('commit', '-q', '--allow-empty', '-m', 'Release v9.9.10, off main');
+    const side = g('rev-parse', 'HEAD');
+    g('tag', 'v9.9.10');
+    g('switch', '-q', '-');
+    g('commit', '-q', '--allow-empty', '-m', 'landed after');
+    const s = createServer(new Hub(), { source: repo, packageDir: cache });
+    const u = `http://127.0.0.1:${await listen(s)}`;
+    try {
+      await s.package;
+      assert.ok(!existsSync(join(cache, `nuworq-${rel}.tgz`)), 'it only ran the newest commit');
+      for (const c of [untagged, side]) {
+        const r = await fetch(`${u}/nuworq-${c}.tgz`);
+        assert.equal(r.status, 404, c);
+        assert.match((await r.json()).error, /it builds the commits it runs, and releases \(a vX\.Y\.Z tag in its checkout, on the history it runs\)/);
+      }
+      assert.equal((await fetch(`${u}/nuworq-${rel}.tgz.sig`)).status, 404, 'a signature request builds nothing');
+      const got = await Promise.all([1, 2].map(() => fetch(`${u}/nuworq-${rel}.tgz`)));
+      assert.deepEqual(got.map((r) => r.status), [200, 200]);
+      const bytes = Buffer.from(await got[0].arrayBuffer());
+      assert.ok(bytes.equals(Buffer.from(await got[1].arrayBuffer())), 'built once, however many ask at once');
+      assert.deepEqual(releaseOf(fileInTarball(bytes, 'src/commit.txt'))?.commit, rel, 'the package of that commit, as running it would build');
+      writeFileSync(join(cache, `nuworq-${rel}.tgz.sig`), `${sign(null, bytes, privateKey).toString('base64')}\n`);
+      const p = (await (await fetch(`${u}/api/package`)).json()).package;
+      assert.equal(p.release?.commit, rel, 'the hub names it as its release');
+    } finally { s.close(); s.closeAllConnections(); }
+  });
+
   test('a hub not running from a git checkout says so', async () => {
     const plain = createServer(new Hub(), { source: join(dir, 'nowhere'), packageDir: join(dir, 'cache2') });
     const u = `http://127.0.0.1:${await listen(plain)}`;
@@ -146,7 +189,9 @@ describe('/nuworq.tgz', () => {
 
 // On a hub that needs a sign-in (the live one, with workspaces), installs never saw the package: /api/info
 // answers 401 or 404 to them, and update took that for "current" (#224). /api/package is public at the root.
-describe('a signed release reaches installs through the public /api/package', () => {
+// tagged: the checkout the tests run in already has the release's tag on its commit, as the hub's hub-next has
+// when follow tests a release commit the hub tagged on landing. v0.4.0's commit failed here that way (#434).
+for (const tagged of [false, true]) describe(`a signed release reaches installs through the public /api/package${tagged ? ', tested on a tagged release commit' : ''}`, () => {
   const SIGN = join(ROOT, 'scripts', 'sign-release.js');
   const run = promisify(execFile);
   let dir, clone, server, url, commit, time, version;
@@ -168,6 +213,7 @@ describe('a signed release reaches installs through the public /api/package', ()
     copyFileSync(join(dir, 'key', 'release-key.pub'), join(clone, 'release-key.pub'));
     // A release (#400): its version's CHANGELOG entry first. No origin to fetch tags from: only the clone's count.
     version = JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version;
+    if (tagged) execFileSync('git', ['-C', clone, 'tag', '-f', `v${version}`, 'HEAD'], { stdio: 'ignore' });
     writeFileSync(join(clone, 'CHANGELOG.md'), `# Changelog\n\n## ${version} (2026-10-31)\n\n- Signed releases\n`);
     execFileSync('git', ['-C', clone, 'remote', 'remove', 'origin']);
     // The real release's tag came with the clone once main is tagged; these tests tag their own commit.

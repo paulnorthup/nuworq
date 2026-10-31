@@ -31,7 +31,7 @@ import { liveView, LIVE_TTL_MS } from './live.js';
 import { waitFor } from './wait.js';
 import { parseKeys } from './session.js';
 import { tmpdir } from 'node:os';
-import { buildPackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
+import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
 import { LOGO, FAVICON, withLogo } from '../web/logo.js';
 import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
 
@@ -826,12 +826,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { package: b ? { ...packageInfo((!spaces && publicUrl) || origin(req)), commit: b.commit, signed: !!signatureOf(b) } : null, listener: LISTENER });
       }
       // A package by its full commit, and its signature: only the packages this hub built and kept, so an
-      // install can fetch the release /api/info names after the hub has moved on to newer commits.
+      // install can fetch the release /api/info names after the hub has moved on to newer commits. A release
+      // the hub skipped is built when asked for, so the signer can sign it (#434).
       let pm;
       if (req.method === 'GET' && (pm = path.slice(1).replace(/\.sig$/, '').match(PACKAGE_NAME))) {
         await pkg;
-        const b = packageAt(packageDir, pm[1]);
-        if (!b) return deny(404, `this hub has no package of ${pm[1].slice(0, 7)}`, 'GET /api/info names the packages it serves: package.url and package.release.url.');
+        const b = path.endsWith('.sig') ? packageAt(packageDir, pm[1]) : await releasePackage(source, packageDir, pm[1]);
+        if (!b) return deny(404, `this hub has no package of ${pm[1].slice(0, 7)}: it builds the commits it runs, and releases (a vX.Y.Z tag in its checkout, on the history it runs)`, 'GET /api/info names the packages it serves: package.url and package.release.url.');
         if (path.endsWith('.sig')) {
           const sig = signatureOf(b);
           if (!sig) return deny(404, `the package of ${pm[1].slice(0, 7)} isn't signed`, 'Installed copies update only to a signed release (docs/DEPLOY.md, "Signed releases").');

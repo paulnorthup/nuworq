@@ -7,7 +7,7 @@ import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, write
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { archive, newestSigned, packageAt, signatureOf, PACKAGE_NAME } from '../src/package.js';
+import { archive, newestSigned, packageAt, releasePackage, signatureOf, PACKAGE_NAME } from '../src/package.js';
 import { round, watch, newer, releaseItem } from '../scripts/signer.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
@@ -22,7 +22,8 @@ const keypair = () => {
 // the packages of the commits it ran and names its newest validly signed one as its release, as the real one
 // does (src/package.js). scp copies into the hub's package folder, unless told to fail.
 describe('the release signer (#430)', () => {
-  let dir, origin, work, repo, hubDir, server, hub, ours, pinned, scpFails, ran, comments;
+  // buildsReleases: the hub builds a skipped release's package when asked for it, as hubs with #434 do.
+  let dir, origin, work, repo, hubDir, server, hub, ours, pinned, scpFails, ran, comments, buildsReleases;
   const commit = (files, msg) => {
     for (const [f, text] of Object.entries(files)) { mkdirSync(join(work, f, '..'), { recursive: true }); writeFileSync(join(work, f), text); }
     git(work, 'add', '-A');
@@ -56,7 +57,7 @@ describe('the release signer (#430)', () => {
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
     execFileSync('git', ['clone', '-q', origin, work]);
     git(work, 'config', 'user.email', 't@example.com'); git(work, 'config', 'user.name', 'T');
-    ours = keypair(); pinned = ours.pub; scpFails = false; comments = [];
+    ours = keypair(); pinned = ours.pub; scpFails = false; comments = []; buildsReleases = false;
     commit({ '.gitattributes': 'src/commit.txt export-subst\n', 'src/commit.txt': '$Format:%H %ct$\n', 'bin/nuworq.js': '// nuworq\n', 'release-key.pub': pinned }, 'start');
     git(work, 'push', '-q', 'origin', 'main');
     await runs(git(work, 'rev-parse', 'HEAD'));
@@ -70,8 +71,8 @@ describe('the release signer (#430)', () => {
         return res.end(JSON.stringify({ package: { commit: ran.slice(0, 7), signed: !!signatureOf({ file: join(hubDir, `nuworq-${ran}.tgz`) }), release: r && { commit: r.commit, time: r.time, sha256: r.sha256 } } }));
       }
       const m = path.slice(1).replace(/\.sig$/, '').match(PACKAGE_NAME);
-      const b = m && packageAt(hubDir, m[1]);
-      if (!b) { res.writeHead(404); return res.end(); }
+      const b = m && (buildsReleases && !path.endsWith('.sig') ? await releasePackage(origin, hubDir, m[1]) : packageAt(hubDir, m[1]));
+      if (!b) { res.writeHead(404, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: false, error: 'this hub has no package of it' })); }
       if (path.endsWith('.sig')) {
         const sig = signatureOf(b);
         res.writeHead(sig ? 200 : 404);
@@ -149,9 +150,25 @@ describe('the release signer (#430)', () => {
 
   test('waits while the hub hasn\'t built the tagged commit yet', async () => {
     const c = await release('0.3.0', { run: false });
-    assert.equal(outcome(await check(), 'v0.3.0').outcome, 'waiting');
+    const r = outcome(await check(), 'v0.3.0');
+    assert.equal(r.outcome, 'waiting');
+    assert.match(r.reason, /no package of [0-9a-f]{7} yet; it builds one when it runs that commit, or a later one with the v0\.3\.0 tag/);
     await runs(c);
     assert.equal(outcome(await check(), 'v0.3.0').outcome, 'signed');
+  });
+
+  // #434: v0.4.0's commit failed follow's tests, the hub moved straight on to the next one, and the signer
+  // said "it builds one when it runs that commit" every round, forever.
+  test('a release the hub skipped: said plainly, and signed once the hub builds it on request', async () => {
+    const c = await release('0.3.0', { run: false });
+    commit({ 'bin/nuworq.js': '// landed after\n' }, 'landed after'); git(work, 'push', '-q', 'origin', 'main');
+    await runs(git(work, 'rev-parse', 'HEAD'));
+    const r = outcome(await check(), 'v0.3.0');
+    assert.equal(r.outcome, 'waiting');
+    assert.match(r.reason, new RegExp(`^the hub skipped ${c.slice(0, 7)} \\(it runs ${ran.slice(0, 7)}, after it\\) and has no package of it \\("this hub has no package of it"\\); a hub with #434 builds one once its checkout has the v0\\.3\\.0 tag, else sign it by hand\\. Trying again next round$`));
+    buildsReleases = true;
+    assert.equal(outcome(await check(), 'v0.3.0').outcome, 'signed');
+    assert.ok(verify(null, readFileSync(join(hubDir, `nuworq-${c}.tgz`)), createPublicKey(ours.key), Buffer.from(readFileSync(join(hubDir, `nuworq-${c}.tgz.sig`), 'utf8'), 'base64')));
   });
 
   test('an scp failure is tried again on the next round', async () => {
