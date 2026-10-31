@@ -80,6 +80,89 @@ describe('the client rides out a hub restart', () => {
       server.close();
     }
   });
+
+  // Cloudflare's 502 page is about 6 KB; none of it may reach an agent's context.
+  const page = `<!DOCTYPE html><html><head><title>Bad gateway</title></head><body>${'<div>cloudflare</div>'.repeat(300)}</body></html>`;
+  const answering = (status, type, body) => createServer((req, res) => { res.statusCode = status; res.setHeader('content-type', type); res.end(body); });
+
+  for (const status of [502, 530]) {
+    test(`a ${status} page from the proxy is one short line with a retry hint, naming the status and the host`, async () => {
+      const server = answering(status, 'text/html; charset=UTF-8', page);
+      const port = await listen(server);
+      try {
+        await assert.rejects(client(port, { retryMs: 0 }).call('look', {}, { agent: 'a' }), (e) => {
+          assert.equal(e.message, `nuworq hub at http://127.0.0.1:${port} is restarting or unreachable (HTTP ${status} from 127.0.0.1:${port})`);
+          assert.match(e.hint, /Try again in a minute/);
+          return true;
+        });
+      } finally {
+        server.close();
+      }
+    });
+  }
+
+  test('a proxy page is waited out for reads (checkin, look, next without claiming), never for writes', async () => {
+    const hits = {};
+    const server = createServer((req, res) => {
+      const op = req.url.split('/').pop();
+      hits[op] = (hits[op] ?? 0) + 1;
+      res.statusCode = 502; res.setHeader('content-type', 'text/html'); res.end(page);
+    });
+    const port = await listen(server);
+    const c = client(port, { retryMs: 400 });
+    try {
+      for (const [op, args] of [['comment', { headline: 'hi' }], ['submit', { item: '#1', headline: 'done' }], ['next', {}]]) {
+        await assert.rejects(c.call(op, args, { agent: 'a' }), (e) => e.status === 502 && /restarting or unreachable/.test(e.message) && /look before sending it again/.test(e.hint));
+      }
+      assert.deepEqual(hits, { comment: 1, submit: 1, next: 1 });
+      for (const [op, args] of [['checkin', {}], ['look', {}], ['next', { claim: false }]]) {
+        hits[op] = 0;
+        await assert.rejects(c.call(op, args, { agent: 'a' }), (e) => e.status === 502 && /Try again in a minute/.test(e.hint));
+        assert.ok(hits[op] > 1, `${op} was sent ${hits[op]} time(s)`);
+      }
+    } finally {
+      server.close();
+    }
+  });
+
+  test('a web page at any other status, 200 included, is reported briefly, never echoed', async () => {
+    for (const status of [200, 403, 404]) {
+      const server = answering(status, 'text/html', page);
+      const port = await listen(server);
+      try {
+        await assert.rejects(client(port).get('/api/projects'), (e) => e.status === status && /answered with a web page/.test(e.message) && e.message.length < 200 && !/</.test(e.message + e.hint) && /Try again/.test(e.hint));
+      } finally {
+        server.close();
+      }
+    }
+  });
+
+  test("a long plain-text error is cut to about 200 characters; the hub's JSON errors pass through as before", async () => {
+    let server = answering(500, 'text/plain', 'x'.repeat(5000));
+    let port = await listen(server);
+    try {
+      await assert.rejects(client(port).get('/api/projects'), (e) => e.status === 500 && e.message.length <= 201 && /Try again/.test(e.hint));
+    } finally {
+      server.close();
+    }
+    server = answering(400, 'application/json', JSON.stringify({ error: 'title is required', hint: 'Give a title.' }));
+    port = await listen(server);
+    try {
+      await assert.rejects(client(port).get('/api/projects'), (e) => e.status === 400 && e.message === 'title is required' && e.hint === 'Give a title.');
+    } finally {
+      server.close();
+    }
+  });
+
+  test("the hub's plain-text answers (the guide) still come back as text", async () => {
+    const server = answering(200, 'text/markdown; charset=utf-8', '# nuworq\n');
+    const port = await listen(server);
+    try {
+      assert.equal(await client(port).get('/api/guide'), '# nuworq\n');
+    } finally {
+      server.close();
+    }
+  });
 });
 
 const listen = async (server, host = '127.0.0.1') => { await new Promise((r) => server.listen(0, host, r)); return server.address().port; };
