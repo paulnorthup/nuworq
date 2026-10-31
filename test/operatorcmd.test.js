@@ -2,14 +2,17 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { guide, skill, operatorSkill, operatorStart, operatorAsks, OPERATOR_WAIT, OPERATOR_NEXT, OPS } from '../src/protocol.js';
+import { guide, skill, operatorSkill, operatorStart, operatorAsks, OPERATOR_WAIT, OPERATOR_NEXT, OPS, LISTENER } from '../src/protocol.js';
+import { staleListener } from '../src/update.js';
 import { MONITORS } from '../src/plugin.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
+const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 
 // `nuworq operator` (#140, #284): the tags to declare and the line that starts the session, printed; nothing is started.
 describe('nuworq operator', () => {
@@ -35,6 +38,46 @@ describe('nuworq operator', () => {
     assert.match(stdout, /^Declare: operator, claude-cli, browser$/m);
     assert.match(stdout, /^\/nuworq-operator claude-cli,browser$/m);
     assert.doesNotMatch(stdout, /macos|linux/);
+  });
+
+  // #419: the plugin updates the skill, never the CLI the listener runs.
+  test('--check prints nothing when this CLI is new enough (hub away), and the one stale line with exit 1 when not', async () => {
+    const ok = await run('--check', String(LISTENER));
+    assert.equal(ok.stdout, '');
+    const stale = await run('--check', String(LISTENER + 1)).catch((e) => e);
+    assert.equal(stale.code, 1);
+    assert.equal(stale.stdout, staleListener({ root: ROOT, have: LISTENER, need: LISTENER + 1 }) + '\n');
+    assert.match(stale.stdout, /^nuworq: this nuworq \(\S+\) is older than the operator listener needs; update it: git -C .+ pull, then restart the listener\.\n$/);
+  });
+
+  test('against a hub that expects a newer listener it says so first, in one line; a current hub adds nothing', async () => {
+    let level = LISTENER + 1;
+    const hub = createServer((req, res) => res.end(JSON.stringify(req.url === '/api/package' ? { package: null, listener: level } : {})));
+    const port = await new Promise((r) => hub.listen(0, '127.0.0.1', () => r(hub.address().port)));
+    const at = (...a) => promisify(execFile)(process.execPath, [BIN, 'operator', ...a], {
+      cwd: home, env: { HOME: home, PATH: join(process.execPath, '..'), NO_COLOR: '1', NUWORQ_NO_UPDATE: '1', NUWORQ_URL: `http://127.0.0.1:${port}` },
+    });
+    try {
+      const old = (await at('--project', 'acme', '--has', 'macos')).stdout.split('\n');
+      assert.match(old[0], /is older than the operator listener needs; update it: /);
+      assert.match(old[1], /^Declare: operator, macos$/);
+      assert.match((await at('--check', '1').catch((e) => e)).stdout, /is older than the operator listener needs/, 'the hub wins over a lower --check');
+      level = LISTENER;
+      const current = await at('--project', 'acme', '--has', 'macos');
+      assert.ok(current.stdout.startsWith('Declare: operator, macos\n'), 'nothing before it');
+      assert.equal((await at('--check', String(LISTENER))).stdout, '');
+    } finally {
+      hub.close();
+    }
+  });
+
+  test('installed from a package, the line names its commit and nuworq update', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nuworq-pkg-'));
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src', 'commit.txt'), '64a655430b58ba78f032ae68e36ca750c3219c22 1793462965\n');
+    assert.equal(staleListener({ root, have: 1, need: 2 }), 'nuworq: this nuworq (64a6554) is older than the operator listener needs; update it: nuworq update, then restart the listener.');
+    assert.equal(staleListener({ root, have: 2, need: 2 }), null);
+    assert.equal(staleListener({ root, have: 2, need: 0 }), null, 'a hub that names no level');
   });
 
   test('help lists it', async () => {
@@ -118,6 +161,12 @@ describe('the nuworq-operator skill', () => {
   test('the plugin listens only once the operator skill runs', () => {
     // A plugin skill dispatches as <plugin>:<dir> (#328); the bare name never matches the plugin's own skill.
     assert.deepEqual(MONITORS, [{ name: 'nuworq-operator-listener', command: OPERATOR_WAIT, description: 'nuworq operator listener', when: 'on-skill-invoke:nuworq:nuworq-operator' }]);
+  });
+
+  test('before going idle it checks the CLI is new enough for the listener, and says how to update it (#419)', () => {
+    assert.ok(s.includes(`\`nuworq operator --check ${LISTENER}\``));
+    assert.match(s, /Nothing back means it is\. Any output .* means the listener runs old code: tell the person in one line, with that command \(none given: `nuworq update`\)/);
+    assert.match(s, /stop the listener .* and start it again with the Monitor tool/);
   });
 
   test('it checks its own listener is running before trusting the plugin, and starts one when none is (#328)', () => {

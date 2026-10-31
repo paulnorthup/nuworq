@@ -166,6 +166,16 @@ export async function update({ root, hub, dir, env = process.env, force = false,
   } finally { unlock(); }
 }
 
+// The one line `nuworq operator` prints when this CLI's listener is below the level the hub or the skill needs
+// (#419), with the command that updates it; null when it is new enough.
+export function staleListener({ root, have, need }) {
+  if (!(need > have)) return null;
+  const update = existsSync(join(root, '.git')) ? `git -C ${root} pull` : 'nuworq update';
+  let version = runningCommit(root)?.slice(0, 7);
+  try { version ??= JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version; } catch {}
+  return `nuworq: this nuworq${version ? ` (${version})` : ''} is older than the operator listener needs; update it: ${update}, then restart the listener.`;
+}
+
 // In words, for `nuworq update` and stderr.
 export function describeUpdate(r) {
   const v = (c) => (c ? c.slice(0, 7) : 'an unknown version');

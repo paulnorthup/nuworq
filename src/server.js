@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, STAGES, normRemote, slugify, refuseSecrets, providerOf, MIN, HOUR, DAY } from './core.js';
 import { checkLocalModels } from './llmproxy.js';
 import { view, itemView, projectList, homeView, withEntry } from './insight.js';
-import { tools, guide } from './protocol.js';
+import { tools, guide, LISTENER } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
@@ -820,9 +820,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // What the packages are, for installs deciding whether to update (src/update.js) and for signing one
       // (scripts/sign-release.js): /api/info's package with its newest signed release, plus the running commit in
       // full and whether it is signed. Public like the packages themselves: /api/info needs a sign-in on most hubs.
+      // listener: the operator listener level this hub expects, for `nuworq operator` to say when its CLI is below it (#419).
       if (req.method === 'GET' && path === '/api/package') {
         const b = await pkg;
-        return send(200, { package: b ? { ...packageInfo((!spaces && publicUrl) || origin(req)), commit: b.commit, signed: !!signatureOf(b) } : null });
+        return send(200, { package: b ? { ...packageInfo((!spaces && publicUrl) || origin(req)), commit: b.commit, signed: !!signatureOf(b) } : null, listener: LISTENER });
       }
       // A package by its full commit, and its signature: only the packages this hub built and kept, so an
       // install can fetch the release /api/info names after the hub has moved on to newer commits.
