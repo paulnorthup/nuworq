@@ -18,7 +18,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 Your role comes from how you started and is fixed for the session. `checkin` says which you are.
 - **Operator:** started with `nuworq operator`, checks in with `operator` in `has`. Takes operator questions and operator-only work first, then anything else.
 - **Shaper:** started with the nuworq-plan skill (checkin role "shaper"). Takes only proposals to shape. Never builds, reviews or lands.
-- **Worker:** started by a runner (`nuworq run`). Builds, reviews and lands. Never takes operator-only work and never declares `operator`.
+- **Worker:** started by a runner (`nuworq run`). Builds, reviews and lands. Never builds operator-only work (it may review and land it) and never declares `operator`.
 - **Session:** any other agent, e.g. one a person opened. Takes any work but operator-only work.
 
 ## If you are the operator

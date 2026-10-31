@@ -1554,8 +1554,11 @@ export class Hub extends EventEmitter {
     const may = (power) => !powers || powers.includes(power);
     const fit = this.fit(p, agent, has);
     const inRepo = repo && this.remotesOf(p).includes(repo) ? (i) => this.repoOf(p, i) === repo : () => true;
-    // A worker never gets operator-only work, whatever its machine has.
+    // A worker never gets operator-only work to build, whatever its machine has.
     const ok = (i) => (!fit.has || json(i.needs, []).every((t) => fit.has.includes(t))) && inRepo(i) && !(role === 'worker' && operatorOnly(i));
+    // Reviewing operator-only work is reading the code and the live output its builder recorded (#271):
+    // anyone may, workers included. Other needs (a browser, say) still gate the review.
+    const reviewable = (i) => (!fit.has || json(i.needs, []).every((t) => OPERATOR_TAGS.includes(t) || fit.has.includes(t))) && inRepo(i);
     const gave = this.handedOff(p, agent);
     const fresh = (i) => !gave.has(i.id) && ok(i); // not just handed off, doable on this machine, in this clone
     // Each option carries the priority it ranks by: its group's or a dependent's when that is higher (#198).
@@ -1576,7 +1579,7 @@ export class Hub extends EventEmitter {
         AND NOT EXISTS (SELECT 1 FROM events h WHERE h.item_id = items.id AND h.actor = ? AND h.type = 'handoff' AND h.at >= items.stage_since
           AND NOT EXISTS (SELECT 1 FROM events n WHERE n.item_id = items.id AND n.at > h.at AND n.actor != h.actor
             AND n.type IN ('answered', 'assumption_confirmed', 'question_withdrawn', 'submitted', 'comment')))
-      ORDER BY stage_since`).all(p.id, agent, agent, agent, operator ? 1 : 0, agent ?? '').filter(ok).map((item) => ({ mode: 'review', item }));
+      ORDER BY stage_since`).all(p.id, agent, agent, agent, operator ? 1 : 0, agent ?? '').filter(reviewable).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
     // An open pull request lands it: GitHub's merge marks it done. Unless it conflicts with main: then an
@@ -1639,9 +1642,10 @@ export class Hub extends EventEmitter {
         status: 403, hint: 'Call next for a proposal to shape, or propose new work with the person you are planning with. Workers (nuworq run) and other sessions build, review and land.',
       });
     }
-    // Landing is a rebase, the checks and a push: any worker may land operator-only work once it's accepted.
-    if (role === 'worker' && operatorOnly(item) && item.stage !== 'landing') {
-      throw new UserError(`#${item.seq} is operator-only work (it needs ${json(item.needs, []).filter((x) => OPERATOR_TAGS.includes(x)).join(', ')}), and workers never take it`, {
+    // Landing is a rebase, the checks and a push, and reviewing is reading the code and the recorded live
+    // output (#271): any worker may land or review operator-only work. Building it stays an operator's.
+    if (role === 'worker' && operatorOnly(item) && !['landing', 'verifying'].includes(item.stage)) {
+      throw new UserError(`#${item.seq} is operator-only work (it needs ${json(item.needs, []).filter((x) => OPERATOR_TAGS.includes(x)).join(', ')}), and workers never build it`, {
         status: 403, hint: 'An operator session takes it (nuworq operator prints how to start one). Pick other work with next.',
       });
     }
@@ -1777,9 +1781,12 @@ export class Hub extends EventEmitter {
     return json(e?.data, {}).git ?? null;
   }
 
-  // A reviewer's hint, led by anything git found wrong with the submission.
+  // A reviewer's hint, led by anything git found wrong with the submission. For operator-only work, the
+  // reviewer reads the live output its builder recorded, and asks an operator for anything to recheck (#271).
   reviewHint(item, hint) {
     const warn = item.race > 1 ? null : gitWarning(this.submittedGit(item));
+    const live = json(item.needs, []).filter((t) => OPERATOR_TAGS.includes(t));
+    if (live.length) hint += ` Its ${live.join(', ')} part was verified live by its builder or an operator: check the code, and the live output in the submission's evidence. If you need something checked on real infrastructure, ask to: "operator" with the exact command and how to check it, and don't accept until it's answered.`;
     return warn ? `${warn}: check it before you accept. ${hint}` : hint;
   }
 
