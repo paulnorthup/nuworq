@@ -37,6 +37,12 @@ function presenceNamed(hub, p, name) {
   return a ? hub.presenceOf(p, a) : null;
 }
 
+// Whether an agent shows in the app's lists of agents (#441): while it holds work, or within an hour of when it
+// was last seen. Signing off takes it out at once. Gone agents stay in item history, analytics and the 30m view's
+// "Show earlier agents".
+export const PRESENT_FOR = HOUR;
+export const isPresent = (a, holding, t) => holding.length > 0 || (!a.signed_off && t - a.last_seen < PRESENT_FOR);
+
 export function homeView(hub, { viewer } = {}) {
   const t = hub.now();
   const rows = hub.projects().map((p) => ({ p, v: view(hub, p.slug, { light: true, viewer }) }));
@@ -64,6 +70,11 @@ export function homeView(hub, { viewer } = {}) {
       UNION ALL SELECT i.seq, i.title, i.stage, a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND i.stage = 'active' AND a.stage = 'active' AND a.closed = 0
       ORDER BY seq`).all(p.id, p.id)
     .map((r) => ({ agent: r.agent, presence: presenceNamed(hub, p, r.agent), item: `#${r.seq}`, title: r.title, stage: r.stage, project: tag(p) })));
+  // The agents here now across live projects (#441), for the home to count by role.
+  const agents = live.flatMap(({ p }) => hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id)
+    .map((a) => ({ a, presence: hub.presenceOf(p, a) }))
+    .filter(({ a, presence }) => isPresent(a, presence.job ? [presence.job] : [], t))
+    .map(({ a, presence }) => ({ name: a.name, model: a.model, ...presence, project: tag(p) })));
   return {
     pulse: {
       state, sentence, act: needs.length, working, active: inFlight,
@@ -73,6 +84,7 @@ export function homeView(hub, { viewer } = {}) {
     projects: rows.map(({ p, v }) => projectLine(hub, p, v)),
     worth_knowing: rows.map(({ p, v }) => ({ ...tag(p), count: v.attention.filter((a) => a.level !== 'act').length })).filter((w) => w.count),
     motion,
+    agents,
   };
 }
 
@@ -564,7 +576,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const agentRows = agents.map((a) => {
     const holding = items.filter((i) => i.holder === a.name || racers.some((r) => r.item_id === i.id && r.agent === a.name)).map(ref);
     const idle = t - a.last_seen;
-    const status = a.signed_off ? 'signed off' : holding.length ? (idle > 10 * MIN ? 'quiet' : 'working') : idle < 30 * MIN ? 'idle' : 'away';
+    const status = a.signed_off ? 'signed off' : holding.length ? (idle > 10 * MIN ? 'quiet' : 'working') : idle < PRESENT_FOR ? 'idle' : 'away';
     const rec = hub.q(`SELECT
         SUM(type = 'submitted') AS submitted,
         SUM(type = 'claimed') AS claimed,
@@ -586,7 +598,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
         WHERE i.project_id = ? AND a.agent = ?`).get(p.id, a.name);
     return {
       name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), tokens: a.tokens ? a.tokens.split(',') : [], via, has: json(a.has, []),
-      status, line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
+      status, present: isPresent(a, holding, t), line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
       ...hub.presenceOf(p, a), // role, where it runs, its current job (#238)
       record: {
         landed, sent_back: sentBack, stalls,

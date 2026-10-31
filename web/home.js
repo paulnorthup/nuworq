@@ -37,7 +37,7 @@ export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(n
       ${h.motion.map((m) => `<div class="ov-line" data-project="${esc(m.project.slug)}" data-action="open" data-item="${esc(m.item)}"><div class="body"><b>${who(m.agent, null, { presence: m.presence })}</b> <span class="s">${esc(m.item)} ${esc(m.title)}</span></div>${tag(m.project)}</div>`).join('')}
     </div></section>` : '';
 
-  const head = pulse({ pulse: h.pulse, since: h.pulse.since, project: { parked: false }, home: true });
+  const head = pulse({ pulse: h.pulse, since: h.pulse.since, project: { parked: false }, home: true, agents: h.agents });
   // Wide (#141): the work in the main column, the 30-second answer (pulse, Get started, projects) beside it.
   // The same sections either way; with nothing to act on, one column, so no empty band.
   if (wide && (needs || worth || motion)) return columns(`${needs}${worth}${motion}`, `${head}${gs}${projects}`);

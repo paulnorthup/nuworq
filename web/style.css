@@ -342,6 +342,11 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .agent-strip { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); }
 .agent-strip .a { display: inline-flex; gap: var(--sp-2); align-items: baseline; }
 .agent-strip .st { font-size: var(--fs-2); color: var(--muted); }
+/* Who is here now, as counts by role (#441): each count opens to its agents. Thumb-sized targets. */
+.role-counts { margin-top: var(--sp-2); font-size: var(--fs-3); color: var(--muted); }
+.role-counts .role-label { margin-right: var(--sp-1); }
+.role-counts .role-count, .sec .earlier { min-height: 44px; display: inline-flex; align-items: center; }
+.role-names { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); padding: var(--sp-2) 0; color: var(--ink); }
 
 /* ── flow ── */
 .flow { background: var(--panel); border: var(--rule) solid var(--line); border-radius: var(--r-m); padding: var(--sp-4) var(--sp-5); }
