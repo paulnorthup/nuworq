@@ -471,6 +471,19 @@ const browserServer = (name) => ({
     '--allowed-origins', 'http://127.0.0.1:*;http://localhost:*', '--output-dir', join(tmpdir(), 'nuworq-browser', name)],
 });
 
+// A Claude worker runs only what the runner gives it (#360). --strict-mcp-config drops the person's own MCP
+// servers; plugins come from settings, so every plugin installed on this machine is turned off for the worker.
+// Otherwise one installed for a checkout (--scope local) follows into every worktree of it, with its own MCP
+// server (a second, unscoped nuworq identity), skills and tool definitions in each worker's context.
+function workerSettings() {
+  let plugins = {};
+  try {
+    const file = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'plugins', 'installed_plugins.json');
+    plugins = JSON.parse(readFileSync(file, 'utf8')).plugins ?? {};
+  } catch { /* none installed */ }
+  return JSON.stringify({ enabledPlugins: Object.fromEntries(Object.keys(plugins).map((p) => [p, false])) });
+}
+
 // The shell command that gives a worker its worktree (detached at main, or at origin/main after a
 // fetch when there is an origin; reused if it exists) and starts the agent in it.
 // token: the agent token the worker gets when it runs (null: the hub needs none, or we only print).
@@ -552,7 +565,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   const label = clientLabel(target.slug, name);
   if (agent === 'claude') {
     const headers = [process.env.ANTHROPIC_CUSTOM_HEADERS, `x-client-name: ${label}`].filter(Boolean).join('\n');
-    lines.push(`ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
