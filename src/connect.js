@@ -4,10 +4,10 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, realpathSync } from 'node:fs';
 import { join, dirname, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { skill, planSkill } from './protocol.js';
+import { skill, planSkill, operatorSkill } from './protocol.js';
 
 const NAME = 'nuworq';
-const SKILLS = { [NAME]: skill, [`${NAME}-plan`]: planSkill };
+const SKILLS = { [NAME]: skill, [`${NAME}-plan`]: planSkill, [`${NAME}-operator`]: operatorSkill };
 
 const which = (cmd, env) => (env.PATH ?? '').split(delimiter).map((d) => d && join(d, cmd)).find((f) => f && existsSync(f)) ?? null;
 const onPath = (cmd, env) => !!which(cmd, env);
@@ -217,7 +217,7 @@ export function registerMcp({ bin, home, env = process.env, kept = [], url = '' 
     const r = t.add(ctx);
     if (r.record) {
       added.push({ tool, ...r.record });
-      lines.push(tool === 'skill' ? `${t.label}: wrote the ${Object.keys(SKILLS).join(' and ')} skills (${t.where(ctx)})`: `${t.label}: added the ${NAME} MCP server (${t.where(ctx)})`);
+      lines.push(tool === 'skill' ? `${t.label}: wrote the ${Object.keys(SKILLS).join(', ').replace(/, ([^,]+)$/, ' and $1')} skills (${t.where(ctx)})`: `${t.label}: added the ${NAME} MCP server (${t.where(ctx)})`);
     } else {
       lines.push(`${t.label}: left alone, ${r.skip}`);
     }

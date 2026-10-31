@@ -7,7 +7,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
-import { skill, planSkill, OPS } from '../src/protocol.js';
+import { skill, planSkill, operatorSkill, OPS } from '../src/protocol.js';
 import { Auth } from '../src/auth.js';
 import { Workspaces } from '../src/workspaces.js';
 import { createServer } from '../src/server.js';
@@ -160,7 +160,8 @@ describe('nuworq connect', () => {
       const planFile = join(m.home, '.claude', 'skills', 'nuworq-plan', 'SKILL.md');
       assert.equal(readFileSync(skillFile, 'utf8'), skill({ url }));
       assert.equal(readFileSync(planFile, 'utf8'), planSkill({ url }));
-      assert.match(out.stdout, /Claude Code skill: wrote the nuworq and nuworq-plan skills/);
+      assert.equal(readFileSync(join(m.home, '.claude', 'skills', 'nuworq-operator', 'SKILL.md'), 'utf8'), operatorSkill({ url }));
+      assert.match(out.stdout, /Claude Code skill: wrote the nuworq, nuworq-plan and nuworq-operator skills/);
 
       // Each tool got nuworq and kept everything else; no config holds the token.
       assert.deepEqual(m.read.claude(), ['mcp get nuworq', `mcp add --scope user nuworq -- node ${BIN} mcp`]);

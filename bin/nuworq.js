@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
-import { tools, guide, skill, planSkill, operatorLoop } from '../src/protocol.js';
+import { tools, guide, skill, planSkill, operatorSkill, operatorStart } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { update, describeUpdate } from '../src/update.js';
 
@@ -186,9 +186,10 @@ function detectHas(flags) {
   ].filter(Boolean).map((t) => String(t).toLowerCase()))];
 }
 
-// An operator session (see Operators in the guide): the tags to declare and the /loop line to paste into an
-// attended Claude Code session in the project folder. It prints them and starts nothing. Detected: the
-// platform, and browser when a Chrome or Chromium is installed; --has replaces what was detected.
+// An operator session (see Operators in the guide): the tags to declare and the line that starts an attended
+// Claude Code session in the project folder as the operator (the nuworq-operator skill, which starts its
+// listener; no /loop). It prints them and starts nothing. Detected: the platform, and browser when a Chrome or
+// Chromium is installed; --has replaces what was detected.
 function operatorCmd(flags) {
   const project = resolveSettings(flags).project ?? basename(process.cwd());
   const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
@@ -197,9 +198,12 @@ function operatorCmd(flags) {
   const detected = [{ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform], chrome && 'browser'].filter(Boolean);
   const has = ['operator', ...new Set((flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase()).filter((t) => t !== 'operator'))];
   console.log(`${bold('Declare:')} ${has.join(', ')}${flags.has ? '' : dim('  (detected; add what else this session can really do with --has, e.g. --has macos,browser,claude-cli,nuworq-infra)')}
-${bold('Paste into')} an attended Claude Code session in ${project}'s folder:
+${bold('Start it:')} open Claude Code in ${project}'s folder (the terminal or the desktop app's Code tab) and type:
 
-${operatorLoop(project, has)}`);
+${operatorStart(has)}
+
+It works until nothing waits, then stays idle and listens: each new operator item, operator question or answer
+starts a turn on its own. No /loop.${dim(' (With the nuworq plugin it is also /nuworq:nuworq-operator.)')}`);
 }
 
 // An operator waiting on the hub (#283): one line when there is something for it, then exit; --follow
@@ -1324,13 +1328,13 @@ ${bold('Setup')}
                                          and add the nuworq MCP server to Claude Code, Codex and opencode here.
                                          --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
   disconnect                             revoke that token, remove what connect added, forget the hub
-  skill [--dir d]                        write the nuworq and nuworq-plan skills for Claude (generated; connect does both too)
+  skill [--dir d]                        write the nuworq, nuworq-plan and nuworq-operator skills for Claude (generated; connect does them too)
   skill --plugin [dir]                   write the Claude Code plugin (MCP server + both skills; default: plugin/)
   mcp                                    run the stdio MCP server (one per agent session)
   git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
   guide [--via cli|tools]                the agent guide
-  operator [--project p] [--has tags]    print the tags an operator session declares and the /loop line
+  operator [--project p] [--has tags]    print the tags an operator session declares and the line that starts it
                                          to paste into Claude Code in the project folder (runs nothing)
   wait --operator [--follow] [--as name] block until there is something for an operator (its work, a question
                                          to it, an answer, steering) and print one line; --follow: one per event.
@@ -1477,11 +1481,11 @@ async function main() {
     return;
   }
   if (cmd === 'skill') {
-    // The nuworq skills for Claude, generated from the protocol: <dir>/nuworq/SKILL.md and <dir>/nuworq-plan/SKILL.md
-    // (default ~/.claude/skills).
+    // The nuworq skills for Claude, generated from the protocol: <dir>/nuworq/SKILL.md, <dir>/nuworq-plan/SKILL.md
+    // and <dir>/nuworq-operator/SKILL.md (default ~/.claude/skills).
     const dir = resolve(String(flags.dir || join(homedir(), '.claude', 'skills')));
     const url = resolveSettings(flags).url;
-    for (const [name, make] of [['nuworq', skill], ['nuworq-plan', planSkill]]) {
+    for (const [name, make] of [['nuworq', skill], ['nuworq-plan', planSkill], ['nuworq-operator', operatorSkill]]) {
       const file = join(dir, name, 'SKILL.md');
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, make({ url }));
