@@ -22,6 +22,7 @@ export const NEW = {
   'guide-gs': '2026-10-31', // #383: the same guide from Get started's head (each undone step's How? opens its section)
   'ea-sources': '2026-10-31', // #356: on the admin dashboard, how far the people from each early-access source got
   'copy-each-command': '2026-10-31', // #379: several commands in a step, each with its own Copy that copies clean
+  'live-view': '2026-10-31', // #358: Settings → Anyone can watch, the project's public live page
 };
 
 const DAYS = 7;

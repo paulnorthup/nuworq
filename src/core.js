@@ -3227,7 +3227,7 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race }, by) {
     const changes = [];
     // Trials (#348): the shares of eligible building jobs that try one tier down, and that race a cheaper model.
     for (const [key, v, said] of [['model_trial', model_trial, 'try a cheaper model'], ['model_race', model_race, 'race a cheaper model against the top one']]) {
@@ -3285,6 +3285,11 @@ const HUMAN_OPS = {
     if (fresh != null && !!fresh !== !!p.fresh) {
       this.q('UPDATE projects SET fresh = ? WHERE id = ?').run(fresh ? 1 : 0, p.id);
       this.event(p, { actor: by, type: 'settings', headline: fresh ? `${You(by)} turned the weekly freshness sweep back on` : `${You(by)} turned off the weekly freshness sweep: ${p.name} is no longer kept current` });
+    }
+    // Watchable (#358): anyone with the link sees what src/live.js lets out, read-only, without signing in.
+    if (live != null && !!live !== !!p.live) {
+      this.q('UPDATE projects SET live = ? WHERE id = ?').run(live ? 1 : 0, p.id);
+      this.event(p, { actor: by, type: 'settings', headline: live ? `${You(by)} made ${p.name} watchable: anyone with the link sees its live view` : `${You(by)} took ${p.name}'s live view down` });
     }
     if (reporter_wait != null && Number(reporter_wait) !== p.reporter_wait) {
       const hours = Number(reporter_wait);

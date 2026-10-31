@@ -25,6 +25,7 @@ import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
+import { liveView, LIVE_TTL_MS } from './live.js';
 import { waitFor } from './wait.js';
 import { parseKeys } from './session.js';
 import { tmpdir } from 'node:os';
@@ -1003,6 +1004,16 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 <p class="lead">The app <b>${name}</b> exists${a.owner ? ` on the GitHub account ${a.owner.replace(/[<>&"]/g, '')}` : ''}, but it can't reach any repository yet. Next, GitHub asks where to install it: all your repositories, or only the ones you pick.</p>
 <p class="lead">Then you come back here, with <b>+ Project</b> open on those repositories.</p>
 <a class="btn primary" href="${to}">Choose repositories on GitHub</a><p class="hint">Taking you there in a moment.</p>`), 'text/html; charset=utf-8');
+      }
+      // A project its owner made watchable (#358): its live view and the page that shows it, to anyone, read-only.
+      // Only src/live.js's allowlist leaves; a proxy in front (Cloudflare) may cache both as long as the hub does.
+      const watch = req.method === 'GET' && path.match(/^\/(api\/)?live\/([^/]+)\/?$/);
+      if (watch) {
+        const data = liveView(hub, decodeURIComponent(watch[2]));
+        if (!data) return send(404, 'not found', 'text/plain');
+        res.writeHead(200, { 'content-type': watch[1] ? 'application/json; charset=utf-8' : TYPES['.html'], 'cache-control': `public, max-age=${LIVE_TTL_MS / 1000}` });
+        // The page's script and styles sit under the workspace's path too (/w/<workspace>/live.js), or it never loads.
+        return res.end(watch[1] ? JSON.stringify(data) : withLogo(await readFile(join(WEB, 'live.html'), 'utf8')).replace(/(href|src)="\//g, (_, attr) => `${attr}="${base}/`));
       }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);

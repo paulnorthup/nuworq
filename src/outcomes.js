@@ -235,7 +235,7 @@ function groupBy(items, key) {
 
 // What some finished items came to: outcomes, tokens and cost (null if any part is unpriced or there is no
 // usage), and per landed item the cost, the median cycle time and how often it escaped.
-function tally(list) {
+export function tally(list) {
   const rows = list.flatMap((i) => i.usage);
   const sum = (key) => rows.reduce((a, r) => a + (r[key] ?? 0), 0);
   const landed = list.filter((i) => i.outcome === 'landed');

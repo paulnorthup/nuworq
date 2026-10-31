@@ -430,6 +430,7 @@ export function openDb(file) {
     "ALTER TABLE items ADD COLUMN trial TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE projects ADD COLUMN model_trial INTEGER NOT NULL DEFAULT 10',
     'ALTER TABLE projects ADD COLUMN model_race INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE projects ADD COLUMN live INTEGER NOT NULL DEFAULT 0', // anyone may watch it, read-only, at /live/<slug> (#358; src/live.js)
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,
