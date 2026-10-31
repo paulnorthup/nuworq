@@ -203,7 +203,7 @@ export const OPS = [
       duplicate_of: { ...ITEM, description: 'Optional, for a proposal imported from a GitHub issue: the item it duplicates. Its issue moves there and this proposal is dropped.' },
       stale: s('Optional, for a proposal imported from a GitHub issue: why it is stale, in one line. The human gets one question to close all flagged issues at once.'),
       race: { type: 'integer', minimum: 1, maximum: 4, description: 'Optional. For hard items: how many agents may attempt it at once (each on its own; the reviewer keeps the best). 1 is the usual single worker. Only while it is not being worked on.' },
-      drop: { type: 'integer', description: 'Optional. Drop this item because a person said so: the id of their answered question that says to drop it (asked on this item, or naming it, e.g. "Drop #136-#139"). Only a person decides; you carry it out, and nothing else in this call applies.' },
+      drop: { type: 'integer', description: 'Optional. Drop this item because a person said so: the id of their answered question that says to drop it (its question_id in next or look; asked on this item, or naming it, e.g. "Drop #136-#139"). Only a person decides; you carry it out, and nothing else in this call applies.' },
     },
     required: ['item'],
   },

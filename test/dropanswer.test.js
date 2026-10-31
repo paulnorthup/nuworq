@@ -73,6 +73,22 @@ describe('dropping on a person\'s answer', () => {
     assert.equal(op('w1', 'refine', { item: '#2', drop: question }).stage, 'dropped');
   });
 
+  test('another agent reads the question id from look and next, and drops with it the first time (#366)', () => {
+    const hub = new Hub({ clock: () => Date.UTC(2026, 9, 30, 12) });
+    hub.tx(() => hub.project('p', { create: true }));
+    hub.humanOp('p', 'create', { title: 'One', acceptance: 'x' });
+    const op = (agent, name, args = {}) => hub.agentOp('p', name, agent, args);
+    op('w1', 'claim', { item: '#1' });
+    const { question } = op('w1', 'ask', { item: '#1', question: 'This duplicates #2. Drop it?', blocking: true });
+    hub.humanOp('p', 'answer', { question, answer: 'Drop it' });
+    const fromLook = op('w2', 'look', { item: '#1' }).questions.find((q) => q.answer === 'Drop it');
+    assert.equal(fromLook.question_id, question);
+    const job = op('w2', 'next');
+    assert.equal(job.item, '#1');
+    assert.deepEqual(job.questions.map((q) => q.question_id), [question]);
+    assert.equal(op('w2', 'refine', { item: '#1', drop: job.questions[0].question_id }).stage, 'dropped');
+  });
+
   test('the guide tells agents to drop on the answer instead of handing the item back', async () => {
     const { guide, tools } = await import('../src/protocol.js');
     assert.match(guide(), /`drop` set to that question/);

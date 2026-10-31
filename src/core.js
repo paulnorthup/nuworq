@@ -1328,8 +1328,9 @@ export class Hub extends EventEmitter {
       children: children.length ? children.map((c) => `#${c.seq} [${c.stage}] ${c.title}`) : undefined,
       depends_on: (() => { const d = this.deps(item); return d.length ? d.map((x) => `#${x.seq} [${x.stage}] ${x.title}`) : undefined; })(),
       fixes: (() => { const f = item.fixes && this.itemById(item.fixes); return f ? `#${f.seq} ${f.title} (landed; this repairs it)` : undefined; })(),
+      // question_id: what refine { drop } and withdraw take, so an agent never has to guess it.
       questions: questions.length ? questions.map((q) => ({
-        question: q.question, status: q.status, blocking: !!q.blocking,
+        question_id: q.id, question: q.question, status: q.status, blocking: !!q.blocking,
         assumption: q.assumption || undefined, answer: q.answer || undefined,
       })) : undefined,
       steers: steers.length ? steers.map((n) => ({ steer: n.id, from: n.author, body: n.body, ago: dur(this.now() - n.at) })) : undefined,
