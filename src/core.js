@@ -468,14 +468,20 @@ export class Hub extends EventEmitter {
     ]);
   }
 
-  checkPlan(agent) {
+  // p: the project it asked in. A refusal is remembered (planRefused), so the workspace's owners hear of it in
+  // Needs you with Upgrade (#228); upgradeUrl (set by the server while billing is on) is where they upgrade.
+  checkPlan(agent, p = null) {
     const limit = this.planLimit?.();
     if (!limit) return;
     const working = this.working();
     if (working.has(agent) || working.size < limit) return;
+    const was = this.planRefused;
+    this.planRefused = { agent, working: [...working], at: this.now(), project: p?.id ?? null };
+    if (p && (was?.agent !== agent || was?.project !== p.id)) this.changed(p);
+    const upgrade = this.upgradeUrl?.();
     throw new UserError(`The Free plan runs ${limit} agent at a time, and ${[...working].join(', ')} is working now`, {
       status: 402,
-      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. To run agents side by side, upgrade the workspace to Pro.`,
+      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. To run agents side by side, the workspace's owner can upgrade it to Pro${upgrade ? `: ${upgrade}` : ''}.`,
     });
   }
 
@@ -1408,7 +1414,7 @@ export class Hub extends EventEmitter {
           status: 403, hint: `Call next: it only offers work this token may do. A token with ${need} comes from: nuworq token create <name> --powers ${need}.`,
         });
       }
-      if (op === 'claim' || (op === 'next' && args?.claim !== false)) this.checkPlan(agent);
+      if (op === 'claim' || (op === 'next' && args?.claim !== false)) this.checkPlan(agent, p);
       this.caller = { powers, remote };
       // Checked before the op runs, so a malformed usage changes nothing.
       const usage = USAGE_OPS.includes(op) ? normUsage(args?.usage) : null;

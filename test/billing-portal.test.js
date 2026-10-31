@@ -83,7 +83,10 @@ describe("a paying owner manages billing in Stripe's portal (#231)", () => {
   test('the owner sees the state in plain words, and Manage billing opens the portal for their customer, back to the settings', async () => {
     const b = await call('own', 'GET', '/api/billing');
     assert.equal(b.status, 200);
-    assert.deepEqual(b.json, { on: true, owner: true, plan: 'unlimited', state: 'Pro, renews 2026-12-01', failing: false, manage: true });
+    assert.deepEqual(b.json, {
+      on: true, owner: true, plan: 'unlimited', state: 'Pro, renews 2026-12-01', failing: false, manage: true,
+      plans: [], terms: 'https://nuworq.com/terms', privacy: 'https://nuworq.com/privacy',
+    });
     const p = await call('own', 'POST', '/api/billing/portal', {});
     assert.equal(p.status, 200, JSON.stringify(p.json));
     assert.equal(p.json.url, 'https://billing.stripe.test/p/session_1');
@@ -98,12 +101,15 @@ describe("a paying owner manages billing in Stripe's portal (#231)", () => {
     const p = await call('mem', 'POST', '/api/billing/portal', {});
     assert.equal(p.status, 403);
     assert.match(p.json.hint, /@ownacme/);
-    assert.deepEqual((await call('mem', 'GET', '/api/billing')).json, { on: true, owner: false });
+    assert.deepEqual((await call('mem', 'GET', '/api/billing')).json, { on: true, owner: false, owners: ['@ownacme'] });
     assert.equal(stripe.sessions.length, n, 'Stripe was never asked');
   });
 
-  test('a workspace with no subscription reads Free, with no Manage billing; the portal says to upgrade first', async () => {
-    assert.deepEqual((await call('freeown', 'GET', '/api/billing', undefined, 'free')).json, { on: true, owner: true, plan: 'free', state: null, failing: false, manage: false });
+  test('a workspace with no subscription reads Free, with Upgrade and no Manage billing; the portal says to upgrade first', async () => {
+    assert.deepEqual((await call('freeown', 'GET', '/api/billing', undefined, 'free')).json, {
+      on: true, owner: true, plan: 'free', state: null, failing: false, manage: false,
+      plans: [{ plan: 'pro', label: 'Pro' }], terms: 'https://nuworq.com/terms', privacy: 'https://nuworq.com/privacy',
+    });
     const p = await call('freeown', 'POST', '/api/billing/portal', {}, 'free');
     assert.equal(p.status, 409);
     assert.match(p.json.hint, /Upgrade/);

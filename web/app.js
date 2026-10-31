@@ -11,6 +11,7 @@ import { missingProject } from './missing.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
+import { billingSection } from './billing.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -251,7 +252,7 @@ function renderRail() {
       <button class="rail-item" data-action="archived">Archived projects</button>
       <button class="rail-item" data-action="connect">Connect an agent</button>
       <button class="rail-item" data-action="notify">Notifications</button>
-      ${S.billing?.owner ? '<button class="rail-item" data-action="workspace-settings">Workspace settings</button>' : ''}
+      ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings">Workspace settings${S.billing.plans?.length ? ' · <b>Upgrade</b>' : ''}</button>` : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
     </div>`;
@@ -468,6 +469,7 @@ const CARD_LABELS = {
   question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction',
   'no-agents': 'Nobody is working', 'group-stalled': 'A "now" group is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
   'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked', 'app-wiring': 'GitHub App setup', 'payment-failed': 'Payment failed',
+  'plan-limit': 'Free plan limit',
 };
 
 function card(a) {
@@ -579,6 +581,9 @@ function cardActions(a, hasMore, open, key) {
   }
   if (a.kind === 'payment-failed') {
     return `<div class="actions"><button class="btn primary" data-action="billing-portal">Manage billing</button>${moreBtn}</div>`;
+  }
+  if (a.kind === 'plan-limit') {
+    return `<div class="actions"><button class="btn primary" data-action="workspace-settings">Upgrade</button><button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}</div>`;
   }
   if (a.kind === 'kept-parked') {
     return `<div class="actions"><button class="btn primary" data-action="unpark" data-item="${esc(a.item)}">Unpark</button><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}</div>`;
@@ -1148,18 +1153,17 @@ async function notifySettings() {
   help();
 }
 
-// The workspace's settings (#231), for its owners while the hub takes payments: billing in one plain line, and
-// Stripe's own page to change the card, see invoices or cancel. A failed payment leads, in warning color.
-// Stripe sends the owner back to #/settings, which opens this again.
-async function workspaceSettings() {
+// The workspace's settings (#231), for its owners while the hub takes payments: billing in one plain line,
+// Upgrade while Free (#228), and Stripe's own page to change the card, see invoices or cancel. A failed payment
+// leads, in warning color. Stripe sends the owner back to #/settings, which opens this again.
+async function workspaceSettings({ again = false } = {}) {
+  if (again && !$('#ws-settings')) return; // closed meanwhile
   let b;
-  try { b = S.billing = await api('/api/billing'); } catch (e) { return toastError(e); }
-  const state = b.state ?? 'Free: one agent works at a time';
-  modal(`<h2>Workspace settings</h2>
-    <h4>Billing</h4>
-    <p class="lead"${b.failing ? ' style="color:var(--warn)"' : ''}>${b.failing ? '⚠ ' : ''}<b>${esc(state)}</b></p>
-    ${b.manage ? `<p class="lead faint">Stripe's billing page: change the card, see and download invoices, or cancel. Cancelling keeps the paid plan until the period ends; then the workspace goes back to Free.</p>` : ''}
-    <div class="foot">${b.manage ? `<button class="btn${b.failing ? ' primary' : ''}" data-action="billing-portal">Manage billing</button>` : ''}<button class="btn${b.failing ? '' : ' primary'}" data-action="close-modal">Done</button></div>`);
+  try { b = S.billing = await api('/api/billing'); } catch (e) { return again || toastError(e); }
+  modal(`<h2 id="ws-settings">Workspace settings</h2>${billingSection(b, { esc, done: S.checkoutDone })}`);
+  // Back from Checkout: look again soon, until the webhook has made it paid.
+  if (S.checkoutDone && b.plan === 'free') setTimeout(() => workspaceSettings({ again: true }), 5000);
+  else S.checkoutDone = false;
 }
 
 // Where the hub's GitHub App stands (/api/github/app), one line and its next step, so a person who closed a
@@ -1461,6 +1465,17 @@ const ACTIONS = {
   'remove-pre': (el) => human('update', { item: el.dataset.item, precondition: {} }, 'Removed: it no longer waits'),
   'check-now': (el) => human('check', { item: el.dataset.item }, 'The hub checks it on its next sweep'),
   dismiss: (el) => human('dismiss', { key: el.dataset.key }),
+  // Stripe Checkout for the plan (#228): the hub opens the session, the browser goes there.
+  upgrade: async (el) => {
+    el.disabled = true;
+    try {
+      const r = await api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan: el.dataset.plan }) });
+      location.href = r.url;
+    } catch (e) {
+      el.disabled = false;
+      toastError(e);
+    }
+  },
   // One click retires; the toast's Undo brings the same note back (#146).
   retire: async (el) => {
     const note = Number(el.dataset.note);
@@ -1640,8 +1655,10 @@ function listen() {
   // GitHub returns to the app's setup_url (#/) with ?installation_id=…&setup_action=install, before or in the hash.
   const fromGitHub = /[?&]setup_action=(install|update)\b/.test(location.search + location.hash);
   if (fromGitHub) history.replaceState(null, '', `${location.pathname}#/`);
-  // Back from Stripe's billing page (#231): the workspace's settings again, over the home.
+  // Back from Stripe's billing page (#231) or Checkout (#228), or sent by Free's limit: the workspace's settings,
+  // over the home. From Checkout (?checkout=done) they say what happens next.
   const fromStripe = location.hash === '#/settings';
+  S.checkoutDone = fromStripe && /[?&]checkout=done\b/.test(location.search);
   if (fromStripe) history.replaceState(null, '', `${location.pathname}#/`);
   window.addEventListener('hashchange', route);
   S.me = await api('/api/me').catch(() => null);
