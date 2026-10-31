@@ -963,7 +963,8 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
-  const orgCap = Number(flags['org-cap'] || envVar('ORG_CAP')) || undefined; // organizations one person may create
+  // Workspaces one person may create; --org-cap and NUWORQ_ORG_CAP are its older names, still accepted.
+  const orgCap = Number(flags['workspace-cap'] || flags['org-cap'] || envVar('WORKSPACE_CAP') || envVar('ORG_CAP')) || undefined;
   const { appFromEnv, appFromFile } = await import('../src/ghapp.js');
   const { notifyWorkspaces, workspaceUrl } = await import('../src/notify.js');
   let pushes = null;
@@ -1237,8 +1238,8 @@ ${bold('Human')}
   serve --workspaces [--data-dir d] [--base-domain example.com]
                                          one process, many workspaces (one database each),
                                          at <name>.<base-domain> or /w/<name>/. Login always required.
-                                         [--org-cap 5]: organizations one signed-in person may create
-                                         [--early-access]: making an organization takes an approved request
+                                         [--workspace-cap 5]: workspaces one signed-in person may create
+                                         [--early-access]: making a workspace takes an approved request
                                          (owners: --owners or NUWORQ_HUB_OWNERS emails; form at /early-access with
                                          NUWORQ_TURNSTILE_SITEKEY, checked with NUWORQ_TURNSTILE_SECRET)
                                          [--admin-host admin.example.com] (with --public-url): the owners'
