@@ -570,6 +570,9 @@ kbd { display: inline-block; min-width: 1.6em; padding: var(--sp-h) var(--sp-2);
 .tag.fb-tag { background: var(--panel); color: var(--muted); border: var(--rule) solid var(--line); } /* a label, not a move: magenta is the person's (#336); --panel because the stage list is --sunken */
 .fb-only { margin: var(--sp-1) 0 var(--sp-2); min-height: 36px; padding: var(--sp-1) var(--sp-3); border: var(--rule) solid var(--line-strong); border-radius: var(--r-full); background: var(--panel); font: inherit; cursor: pointer; }
 .fb-only.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.acts .btn.ghost.on { color: var(--ink); font-weight: 550; border-color: var(--line-strong); } /* a field note every agent gets (#443) */
+/* On a phone a field note's three controls go under it, so the note keeps the width to be read. */
+@media (max-width: 600px) { .note-item { flex-wrap: wrap; } .note-item .acts { flex-basis: 100%; justify-content: flex-end; } }
 /* What you sent (#297): a three-step bar in the state's color (agents on it, then done), their words, the state. */
 .fb-mine { margin-top: var(--sp-5); padding-top: var(--sp-4); border-top: var(--rule) solid var(--line); }
 .fb-mine ul { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-3); }

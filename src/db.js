@@ -449,6 +449,12 @@ export function openDb(file) {
     'ALTER TABLE items ADD COLUMN release INTEGER NOT NULL DEFAULT 0', // 1: a "Release vX.Y.Z" item the hub drafted
     "ALTER TABLE items ADD COLUMN release_draft TEXT NOT NULL DEFAULT ''", // the summary as the hub last drafted it
     'ALTER TABLE items ADD COLUMN release_through INTEGER NOT NULL DEFAULT 0', // the draft covers work done up to then
+    // Field notes stay few and relevant (#443, src/fieldnotes.js): a note a person marked always-show, when a review
+    // last looked at it, the project's weekly review (when it last fired), and the review item the hub opened.
+    'ALTER TABLE notes ADD COLUMN always INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE notes ADD COLUMN reviewed_at INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE projects ADD COLUMN notes_at INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE items ADD COLUMN notes_review INTEGER NOT NULL DEFAULT 0',
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,

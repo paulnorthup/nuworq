@@ -12,6 +12,7 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
+import { fieldNotesFor, reviewUp, reviewed, setAlways, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion } from './releases.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken } from './outcomes.js';
@@ -52,7 +53,7 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'check', 'release'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'always', 'check', 'release'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
@@ -358,7 +359,7 @@ export class Hub extends EventEmitter {
     let p = this.q('SELECT * FROM projects WHERE slug = ?').get(s)
       ?? this.q('SELECT * FROM projects WHERE lower(name) = lower(?) ORDER BY id LIMIT 1').get(String(slug).trim());
     if (!p && create) {
-      this.q('INSERT INTO projects (slug, name, created_at, fresh_at, staff_asked) VALUES (?, ?, ?, ?, 0)').run(s, str(name) || s, this.now(), this.now());
+      this.q('INSERT INTO projects (slug, name, created_at, fresh_at, notes_at, staff_asked) VALUES (?, ?, ?, ?, ?, 0)').run(s, str(name) || s, this.now(), this.now(), this.now());
       p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);
       this.event(p, { actor: SYSTEM, type: 'project', headline: `Project ${p.name} created` });
     }
@@ -1394,10 +1395,21 @@ export class Hub extends EventEmitter {
     else this.patch(item, { touching: JSON.stringify(normPaths(v)) });
   }
 
-  fieldNotes(p) {
-    return this.q(`SELECT n.id, n.body, n.author, i.seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
-      WHERE n.project_id = ? AND n.kind = 'learning' AND n.active = 1 ORDER BY n.at DESC LIMIT 40`).all(p.id)
-      .map((n) => ({ id: n.id, note: n.body, by: n.author, about: n.seq ? `#${n.seq}` : undefined }));
+  // The field notes for work on these items, at most ten and the most relevant first (#443, src/fieldnotes.js):
+  // { field_notes, field_notes_hidden } to spread into a response.
+  fieldNotes(p, items = [], opts) {
+    const { notes, hidden } = fieldNotesFor(this, p, items, opts);
+    return {
+      field_notes: notes.length ? notes : undefined,
+      field_notes_hidden: hidden ? `${hidden} more, less relevant to this work: look with notes: "all" lists every one.` : undefined,
+    };
+  }
+
+  // What an agent's field notes are ranked by: what it holds, or else what next would offer it.
+  workFor(p, agent) {
+    const held = this.heldBy(p, agent);
+    if (held.length) return held;
+    try { return [this.pick(p, agent, { powers: this.caller?.powers, repo: this.caller?.remote ?? '' })?.item].filter(Boolean); } catch { return []; }
   }
 
   // ── who a "needs you" belongs to, when there are people ──
@@ -1434,7 +1446,7 @@ export class Hub extends EventEmitter {
     const children = this.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(item.id);
     const history = this.q(`SELECT * FROM events WHERE item_id = ?
         AND type IN ('handoff','sent_back','lease_expired','answered','assumption_confirmed','submitted','shaped','picked','comment','steer','refined',
-          'accepted','pr_failed','pr_blocked','rebased','issue_close_failed','stepped_up','trial')
+          'accepted','pr_failed','pr_blocked','rebased','issue_close_failed','stepped_up','trial','retired','restored')
         ORDER BY at DESC LIMIT 8`).all(item.id).reverse();
     const questions = this.q('SELECT * FROM questions WHERE item_id = ? ORDER BY at').all(item.id);
     const steers = this.q(`SELECT n.* FROM notes n WHERE n.item_id = ? AND n.kind = 'steer' AND n.active = 1
@@ -1500,6 +1512,8 @@ export class Hub extends EventEmitter {
         ? `Steers from ${steerers.slice(0, -1).join(', ')} and ${steerers.at(-1)}. If they disagree, ask: the question goes to all of them.`
         : undefined,
       history: history.length ? history.map((e) => ({ ago: dur(this.now() - e.at), by: e.actor, type: e.type, headline: e.headline, summary: e.summary || undefined })) : undefined,
+      // What earlier agents learned that bears on this item (#443): the few most relevant, not every note.
+      ...this.fieldNotes(p, [item]),
       others_working: (() => { const o = this.others(p, agent); return o.length ? o.map(fmtOther) : undefined; })(),
       heads_up: agent ? this.headsUp(p, agent, item) : undefined,
     };
@@ -1730,7 +1744,7 @@ export class Hub extends EventEmitter {
         by: e.actor,
         note: (e.type === 'sent_back' ? json(this.itemById(e.item_id).handoff, {})?.headline : '') || undefined,
       })) : undefined,
-      field_notes: (() => { const n = this.fieldNotes(p); return n.length ? n : undefined; })(),
+      ...this.fieldNotes(p, holding.length ? holding : this.workFor(p, agent)),
       holding: holding.length ? holding.map((i) => ({ item: `#${i.seq}`, title: i.title, stage: i.stage, lease_expires_in: dur(this.leaseOf(i, agent) - this.now()) })) : undefined,
       others_working: (() => { const o = this.others(p, agent); return o.length ? o.map(fmtOther) : undefined; })(),
       agents: this.presentAgents(p),
@@ -2044,6 +2058,14 @@ export class Hub extends EventEmitter {
 
 // Open-weight models (and others) skipped progress entirely until told when the first one is due.
 const TOUCHING_HINT = 'As soon as you know which files you will change, post progress with a headline and touching, so other agents steer clear.';
+// A field-notes review (#443, src/fieldnotes.js): who retires depends on the autonomy.
+const NOTES_HINT = (item, p) => [
+  `You hold #${item.seq}, a field-notes review, for ${dur(LEASE_MS)}. No branch. For each note its summary lists, check whether the lesson is now in the code, the agents' guide or a test (search the repo for it), and whether another note says the same.`,
+  p.autonomy === 'full'
+    ? 'Retire each one whose lesson is built in with retire { notes, reason }, the reason naming where it lives now. Merge duplicates: learn the combined note, then retire { notes: [the duplicates], into: <its id>, reason }. Keep the rest.'
+    : `Don't retire anything yourself in this project: ask the person one question listing the notes to retire or merge and why (the reason naming where each lesson lives now); they retire them on the project page.`,
+  `Then submit #${item.seq} with what you kept, merged and retired; that finishes it.`,
+].join(' ');
 // Infra work is built by workers; only its live step needs the operator (#272).
 const INFRA_SPLIT = (item) => `#${item.seq} needs ${json(item.needs, []).filter((t) => OPERATOR_TAGS.includes(t)).join(', ')}, so only the operator can take it. If it has code, docs or tests to change, split it: drop the operator tag (refine needs) so any worker builds it, and make the step on real infrastructure an ask to: "operator" with steps (the exact command, how to check), whose answer is the evidence. Keep the tag only on a small child item when that live step is all there is.`;
 // Feedback about nuworq is shaped like any proposal, but a change of scope or direction is the owners' call (#296).
@@ -2463,7 +2485,9 @@ const AGENT_OPS = {
       };
     }
     const repo = this.caller?.remote ?? '';
-    if (args.claim !== false) tidyUp(this, p); // groups that drifted become a tidy job before anything is picked (#202); a peek changes nothing
+    // Groups that drifted become a tidy job before anything is picked (#202), and field notes due for a look a
+    // review (#443); a peek changes nothing.
+    if (args.claim !== false) { tidyUp(this, p); reviewUp(this, p); }
     const pick = this.pick(p, agent, { powers: this.caller?.powers, repo });
     if (!pick) {
       if (p.parked) return { mode: 'idle', hint: 'The human has parked this project: start nothing new. Signoff.' };
@@ -2508,6 +2532,8 @@ const AGENT_OPS = {
           ? this.landHint(p, this.itemById(pick.item.id))
         : pick.mode === 'shape' && args.claim !== false
           ? SHAPE_HINT(pick.item, p, this.remotesOf(p))
+        : pick.mode === 'tidy' && args.claim !== false && pick.item.notes_review
+          ? NOTES_HINT(pick.item, p)
         : pick.mode === 'tidy' && args.claim !== false
           ? `You hold #${pick.item.seq}, a tidy job, for ${dur(LEASE_MS)}: its summary lists what drifted. No branch: fix each with refine and a one-line reason (parent moves an item, "" takes it out; pr attaches a pull request), propose a parent for a cluster, submit a milestone whose parts are all done. Never change a priority a person set or touch a decision. Then submit #${pick.item.seq} with what you changed; that finishes it.`
           : args.claim === false
@@ -2667,7 +2693,8 @@ const AGENT_OPS = {
     // A tidy job (#202) is bookkeeping, already on the record change by change: submitting finishes it.
     if (item.tidy) {
       this.move(item, 'done', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
-      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} tidied the milestones: ${headline}`, summary, detail, data: { evidence } });
+      if (item.notes_review) reviewed(this, item); // the notes it listed were looked at (#443)
+      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} ${item.notes_review ? 'reviewed the field notes' : 'tidied the milestones'}: ${headline}`, summary, detail, data: { evidence } });
       return { ok: true, hint: `#${item.seq} is done. Call next for more work.` };
     }
     const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
@@ -2797,8 +2824,8 @@ const AGENT_OPS = {
     const recent = this.q(`SELECT seq, title FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? ORDER BY stage_since DESC LIMIT 10`)
       .all(p.id, this.now() - 3 * DAY);
     if (!args.stage && recent.length) out.recently_done = recent.map((i) => `#${i.seq} ${i.title}`);
-    const notes = this.fieldNotes(p);
-    return { board: out, decisions: this.decisions(p).map((d) => d.body), field_notes: notes.length ? notes : undefined, others_working: this.others(p, agent).map(fmtOther), agents: this.presentAgents(p) };
+    const notes = this.fieldNotes(p, args.notes === 'all' ? [] : this.workFor(p, agent), { all: args.notes === 'all' });
+    return { board: out, decisions: this.decisions(p).map((d) => d.body), ...notes, others_working: this.others(p, agent).map(fmtOther), agents: this.presentAgents(p) };
   },
 
   learn(p, agent, args) {
@@ -2818,7 +2845,34 @@ const AGENT_OPS = {
       headline: `${agent} noted: ${clip(text)}`,
       summary: replaced ? `Replaces: "${replaced.body}"` : '', data: { note: Number(r.lastInsertRowid) },
     });
-    return { ok: true, note: Number(r.lastInsertRowid), hint: 'Every agent will see this at checkin.' };
+    return { ok: true, note: Number(r.lastInsertRowid), hint: 'Agents whose work it bears on will see it at checkin and next.' };
+  },
+
+  // A field-notes review retires notes whose lesson is built in, and merges duplicates (#443): each with its
+  // reason on the review's history, and a person can bring any back (unretire).
+  retire(p, agent, args) {
+    const ids = [...new Set([].concat(args.notes ?? args.note ?? []).map(Number).filter(Boolean))];
+    const reason = str(args.reason);
+    if (!ids.length) throw new UserError('notes is required', { hint: 'The ids of the field notes to retire, as the review lists them, e.g. notes: [12, 40].' });
+    if (!reason) throw new UserError('reason is required', { hint: 'Say where the lesson lives now (a file, the guide section, a test), or for a merge which note carries it.' });
+    const review = this.q(`SELECT * FROM items WHERE project_id = ? AND notes_review = 1 AND holder = ? AND stage = 'active'`).get(p.id, agent);
+    if (!review) throw new UserError('Only a field-notes review retires notes', { status: 403, hint: 'The hub reviews notes when their item lands and every week. To correct one now, learn a better note with replaces set to its id.' });
+    if (p.autonomy !== 'full') throw new UserError('In this project a person retires field notes', { status: 403, hint: 'Ask the person one question listing the notes to retire or merge and why; they retire them on the project page.' });
+    const note = (id) => this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(id, p.id);
+    const into = args.into != null ? note(Number(args.into)) : null;
+    if (args.into != null && (!into || !into.active || ids.includes(into.id))) throw new UserError(`No active field note ${args.into} to merge into`, { status: 404, hint: 'learn the combined note first, then pass its id as into.' });
+    const rows = ids.map((id) => note(id) ?? (() => { throw new UserError(`No field note ${id}`, { status: 404 }); })());
+    const done = [];
+    for (const n of rows.filter((x) => x.active)) {
+      this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
+      this.event(p, {
+        item: review, actor: agent, type: 'retired',
+        headline: into ? `${agent} merged field note ${n.id} into note ${into.id}: ${clip(n.body, 100)}` : `${agent} retired field note ${n.id}: ${clip(n.body, 100)}`,
+        summary: `Why: ${reason}`, data: { note: n.id, into: into?.id, reason },
+      });
+      done.push(n.id);
+    }
+    return { ok: true, retired: done, hint: 'On the record with your reason; a person can bring any back.' };
   },
 
   signoff(p, agent, args) {
@@ -3212,6 +3266,15 @@ const HUMAN_OPS = {
     if (n.active) return;
     this.q('UPDATE notes SET active = 1 WHERE id = ?').run(n.id);
     this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'restored', headline: `${You(by)} brought back a ${n.kind === 'learning' ? 'field note' : n.kind}: ${clip(n.body, 100)}` });
+  },
+
+  // Always show a field note, whatever an agent works on (#443): a safety rule, say. At most ALWAYS_MAX are.
+  always(p, { note, on = true }, by) {
+    const n = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(Number(note), p.id);
+    if (!n) throw new UserError(`No field note ${note}`, { status: 404 });
+    if (!!n.always === !!on) return;
+    if (!setAlways(this, n, on)) throw new UserError(`At most ${ALWAYS_MAX} field notes are always shown`, { status: 409, hint: 'Stop always showing one of them first.' });
+    this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'always', headline: `${You(by)} ${on ? 'always shows' : 'stopped always showing'} a field note: ${clip(n.body, 100)}` });
   },
 
   comment(p, { item, body }, by) {

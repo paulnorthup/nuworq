@@ -106,7 +106,8 @@ const AGENT_CMDS = {
   },
   ack: (p) => ({ steer: need(p[0], '<steer-id>'), response: rest(p, 1) }),
   feedback: (p, f) => ({ text: need(text(rest(p, 0) ?? f.text), '<what happened>'), item: f.item }),
-  look: (p, f) => ({ item: p[0], stage: f.stage }),
+  look: (p, f) => ({ item: p[0], stage: f.stage, notes: f.notes }),
+  retire: (p, f) => ({ notes: need(p.length ? p : undefined, '<note-id>').map(Number), reason: need(text(f.reason), '--reason'), into: f.into }),
   signoff: (p, f) => ({ headline: rest(p, 0), summary: text(f.summary) }),
 };
 
@@ -1434,7 +1435,9 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
   review <item> <accept|reject> <headline> [--attempt n|agent]   (raced items: which attempt to keep)
   comment [<item>] <headline>
   ack <steer-id> [response]
-  look [<item>] [--stage s]
+  look [<item>] [--stage s] [--notes all]
+  retire <note-id>... --reason r [--into <note-id>]
+                                         in a field-notes review: retire notes whose lesson is built in
   signoff [headline]
   Text flags: --summary, --detail (use "-" to read from stdin)
 

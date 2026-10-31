@@ -75,8 +75,8 @@ export function drift(hub, p) {
   return out;
 }
 
-// The project's open tidy item, if any.
-export const openTidy = (hub, p) => hub.q(`SELECT * FROM items WHERE project_id = ? AND tidy != '' AND ${OPEN} LIMIT 1`).get(p.id);
+// The project's open tidy item, if any (a field-notes review, src/fieldnotes.js, is a tidy job of its own).
+export const openTidy = (hub, p) => hub.q(`SELECT * FROM items WHERE project_id = ? AND tidy != '' AND notes_review = 0 AND ${OPEN} LIMIT 1`).get(p.id);
 
 // People read "milestone" for a group (#269), so what the hub writes on the tidy item says it too.
 const SUMMARY = (found) => `The milestones drifted. Put them right:\n${found.map((d) => `- ${d.text}`).join('\n')}`;
@@ -93,7 +93,7 @@ export function tidyUp(hub, p) {
   if (p.parked) return null;
   // What a finished tidy job listed was looked at: fixed, or left alone on purpose. It comes back only once it
   // looks different (its key changes), never alongside new drift (#243).
-  const handled = new Set(hub.q(`SELECT tidy FROM items WHERE project_id = ? AND tidy != '' AND stage = 'done'`).all(p.id).flatMap((r) => json(r.tidy, [])));
+  const handled = new Set(hub.q(`SELECT tidy FROM items WHERE project_id = ? AND tidy != '' AND notes_review = 0 AND stage = 'done'`).all(p.id).flatMap((r) => json(r.tidy, [])));
   const found = drift(hub, p).filter((d) => !handled.has(d.key));
   const keys = found.map((d) => d.key);
   const cur = openTidy(hub, p);

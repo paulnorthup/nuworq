@@ -17,7 +17,7 @@ export const DOT = {
   landed: 'ok', tagged: 'ok', tag_failed: 'warn', branch_deleted: 'ok', branch_delete_failed: 'warn', lease_expired: 'warn', pr_failed: 'bad', pr_merge_failed: 'bad', issue_close_failed: 'bad', credential_refused: 'bad',
   // notes and bookkeeping: nobody's move changes
   comment: '', created: '', refined: '', regrouped: '', tidied: '', not_chosen: '', question_withdrawn: '', staged: '', check_now: '',
-  alert: '', issue: '', duplicate: '', stale: '', ci: '', retired: '', restored: '', learned: '', ack: '', picked: '', stewards: '',
+  alert: '', issue: '', duplicate: '', stale: '', ci: '', retired: '', restored: '', always: '', learned: '', ack: '', picked: '', stewards: '',
   checkin: '', signoff: '', project: '', path: '', remote: '', runner: '', settings: '', github: '', github_app: '', parked: '',
   mission: '', joined: '', connected: '', credential: '',
 };
