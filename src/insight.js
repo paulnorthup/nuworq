@@ -289,7 +289,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     }
   }
 
-  for (const it of items.filter((i) => OPEN_STAGES.includes(i.stage) && i.stalls + i.rejections >= 2)) {
+  // Accepted work in landing is agents' to put on main, and a stuck land job is its own signal: nothing for the human (#216).
+  for (const it of items.filter((i) => OPEN_STAGES.includes(i.stage) && i.stage !== 'landing' && i.stalls + i.rejections >= 2)) {
     const h = json(it.handoff, null);
     const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
     const parts = [it.rejections && `sent back ${times(it.rejections)}`, it.stalls && `agents went quiet ${times(it.stalls)}`].filter(Boolean).join(', ');
