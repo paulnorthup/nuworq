@@ -148,6 +148,7 @@ cloudflared tunnel login                         # once, as root: open the link,
 cloudflared tunnel create nuworq
 cloudflared tunnel route dns nuworq app.nuworq.com   # the app
 cloudflared tunnel route dns nuworq nuworq.com       # the landing page; an apex name works (Cloudflare flattens the CNAME)
+cloudflared tunnel route dns nuworq admin.nuworq.com # the owners' dashboard (--admin-host)
 install -d -m 700 /etc/cloudflared && install -m 600 ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/
 cat > /etc/cloudflared/config.yml <<EOF
 tunnel: <tunnel-id>
@@ -157,11 +158,32 @@ ingress:
     service: http://127.0.0.1:4747
   - hostname: nuworq.com
     service: http://127.0.0.1:4747
+  - hostname: admin.nuworq.com
+    service: http://127.0.0.1:4747
   - service: http_status:404
 EOF
 cloudflared tunnel ingress validate && cloudflared service install && systemctl enable --now cloudflared
-# the hub: deploy/nuworq.service as is, plus --public-url https://app.nuworq.com --site-host nuworq.com
 ```
+The hub, as nuworq.com runs it (since 2026-10-31, #205): `deploy/nuworq.service` with signups on. Its `ExecStart`:
+```
+/usr/local/bin/node /opt/nuworq/bin/nuworq.js serve --follow --host 127.0.0.1 --port 4747 \
+  --db /var/lib/nuworq/nuworq.db --auth --trust-proxy --public-url https://app.nuworq.com --site-host nuworq.com \
+  --workspaces --early-access --admin-host admin.nuworq.com
+```
+Its environment comes from drop-ins in `/etc/systemd/system/nuworq.service.d/`. The files they load are root-only (`chmod 600`), and their values never go in an item or a commit:
+```ini
+# github-oauth.conf: GitHub sign-in (an OAuth App whose callback is https://nuworq.com/auth/github/callback, so app. and admin. both match)
+# The file holds NUWORQ_GITHUB_CLIENT_ID=… and NUWORQ_GITHUB_CLIENT_SECRET=…
+[Service]
+EnvironmentFile=/etc/nuworq/github-oauth.env
+
+# signups.conf: who owns the hub, and the request form's spam check.
+# The file holds NUWORQ_TURNSTILE_SITEKEY=… and NUWORQ_TURNSTILE_SECRET=… (a Managed widget for app.nuworq.com)
+[Service]
+Environment=NUWORQ_HUB_OWNERS=paul@paulnorthup.com
+EnvironmentFile=/etc/nuworq/turnstile.env
+```
+The single hub's database became the workspace `northup` (`nuworq workspace adopt northup --db /var/lib/nuworq/nuworq.db --data-dir /var/lib/nuworq`, see "From one hub to workspaces"). Agents and runners kept their saved address `https://app.nuworq.com`. `--db` stays in `ExecStart` so that undoing it is only a matter of removing the three flags. Backups from the switch: `/var/lib/nuworq/before-205.db`, `/root/nuworq.service.before-205`, `/root/nuworq.service.d.before-205/`, `/root/cloudflared-config.before-205.yml`.
 Verified: a valid certificate, 401 without login, a `Secure` session cookie, and the live stream (`/api/stream`) arriving unbuffered through Cloudflare.
 
 **The app on its own host, the landing page on the apex.** Start the hub with `--public-url https://app.nuworq.com --site-host nuworq.com` (`NUWORQ_SITE_HOST`), and route both hostnames to it. On the site host, `/` and `site/`'s files serve the landing page. Every other path (`/api/…`, `/login.html`, `/auth/…`, `/w/…`, `/agents.md`) gets a `308` to the same path and query on the public URL. Old links like `nuworq.com/#/p/<slug>/12` keep working: the fragment never reaches the server, so the landing page's one inline script (allowed by its hash in the CSP) sends them on to the public URL. Every link the hub builds uses the public URL. When nuworq.com is served elsewhere (e.g. Cloudflare Pages) with its own early-access form, that form calls the app cross-origin: `GET /api/early-access/config` and `POST /api/early-access` answer `https://<site-host>` (and only it) with `Access-Control-Allow-Origin`, without credentials. Check: `curl -si -H 'Origin: https://nuworq.com' https://app.nuworq.com/api/early-access/config | grep -i access-control` shows `access-control-allow-origin: https://nuworq.com`.
