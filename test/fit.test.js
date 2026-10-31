@@ -104,7 +104,7 @@ describe('fit hints: what items need and what agents have', () => {
     assert.match(entry().why, /Start one on a machine that has it/, 'other tags keep the plain wording');
   });
 
-  test('an operator session takes what only it can do before "now" work anyone can do; others keep priority order (#137)', () => {
+  test('an operator session takes what only it can do, never "now" work anyone can do; others keep priority order (#137, #333)', () => {
     const { hub, op, create } = world();
     hub.humanOp('p', 'settings', { autonomy: 'full' });
     create({ title: 'Anyone, urgent', priority: 'now' });

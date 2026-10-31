@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { guide, skill, operatorSkill, operatorStart, operatorAsks, OPERATOR_WAIT, OPS } from '../src/protocol.js';
+import { guide, skill, operatorSkill, operatorStart, operatorAsks, OPERATOR_WAIT, OPERATOR_NEXT, OPS } from '../src/protocol.js';
 import { MONITORS } from '../src/plugin.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
@@ -108,6 +108,11 @@ describe('the nuworq-operator skill', () => {
   test('it names only real operations, and takes the connected hub\'s guide', () => {
     for (const name of s.match(/`([a-z]+)`/g).map((m) => m.slice(1, -1)).filter((n) => /^(checkin|ack|next|answer|ask)$/.test(n))) assert.ok(OPS.some((o) => o.name === name), name);
     assert.match(operatorSkill({ url: 'https://hub.example/' }), /https:\/\/hub\.example\/agents\.md/);
+  });
+
+  test('the skill and the guide say the same about what next gives an operator, and nothing offers it "anything else" (#333)', () => {
+    for (const text of [s, guide(), guide({ via: 'cli' })]) assert.ok(text.includes(OPERATOR_NEXT));
+    for (const text of [s, guide(), skill()]) assert.doesNotMatch(text, /then anything else/);
   });
 
   test('the plugin listens only once the operator skill runs', () => {

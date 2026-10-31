@@ -92,6 +92,33 @@ describe('the role decides what next and claim offer', () => {
     assert.equal(a('op', 'next', { claim: false }).mode, 'answer');
   });
 
+  // #333: the operator builds only the live step; workers build the rest.
+  test('an operator is never offered ordinary work: idle with a hint, though it may still claim it', () => {
+    const { a, human, item } = setup();
+    human('update', { item: '#2', needs: [] }); // only #1 and #2, both ordinary, are ready
+    a('op', 'checkin', { has: ['operator', 'infra'] });
+    const idle = a('op', 'next');
+    assert.equal(idle.mode, 'idle');
+    assert.match(idle.hint, /#1, #2 are ready, but workers build them: an operator takes only the live steps/);
+    assert.equal(a('s', 'next', { claim: false }).item, '#1', 'a plain session still gets it');
+    a('op', 'claim', { item: '#1' });
+    assert.equal(item(1).holder, 'op');
+  });
+
+  test('reviews and landing still come before the live step for an operator', () => {
+    const { hub, a, item } = setup();
+    a('op', 'checkin', { has: ['operator', 'infra'] });
+    a('b', 'checkin');
+    a('b', 'claim', { item: '#1' });
+    a('b', 'submit', { item: '#1', headline: 'Done', evidence: [{ label: 'tests' }] });
+    assert.equal(a('op', 'next', { claim: false }).mode, 'review');
+    hub.q("UPDATE items SET stage = 'landing', holder = NULL, implementer = 'op' WHERE id = ?").run(item(1).id);
+    assert.equal(a('op', 'next', { claim: false }).mode, 'land');
+    hub.q("UPDATE items SET stage = 'done' WHERE id = ?").run(item(1).id);
+    const live = a('op', 'next', { claim: false });
+    assert.deepEqual([live.mode, live.item], ['work', '#2']);
+  });
+
   test('a shaper gets only proposals to shape; a build, review or land claim is refused with a hint', () => {
     const { hub, p, a, human, item } = setup();
     a('sh', 'checkin', { role: 'shaper' });
