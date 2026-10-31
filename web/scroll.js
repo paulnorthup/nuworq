@@ -25,7 +25,13 @@ function rows(doc, box) {
   });
 }
 
-// Before a redraw: every scrolled area with a key, its offset, and the first row in view with its place on screen.
+// How tall the visible part of a box is: the window for the page, the box itself otherwise.
+const heightOf = (doc, el) => (el === doc.scrollingElement && el.clientHeight) || el.getBoundingClientRect().height;
+const ANCHORS = 20;
+
+// Before a redraw: every scrolled area with a key, its offset, and the rows in view with their places on screen.
+// Several rows, not one (#378): when an agent claims the row you were on, it moves to another section, and the
+// rows around it, which didn't move, say where your place is.
 export function saveScroll(doc) {
   const page = doc.scrollingElement;
   const boxes = [...doc.querySelectorAll('[data-scroll], [id]')].filter((el) => el !== page && keyOf(el) && (el.scrollTop > 0 || el.scrollLeft > 0));
@@ -34,28 +40,41 @@ export function saveScroll(doc) {
     const top = topOf(doc, box);
     // Its own rows only: not ones inside another area that scrolls (they move with that one).
     const inner = boxes.filter((b) => b !== box && contains(doc, box, b));
-    const row = rows(doc, box).find(({ el, key }) => {
+    const bottom = top + heightOf(doc, box);
+    const anchors = rows(doc, box).filter(({ el, key }) => {
       if (!key || inner.some((b) => b.contains(el))) return false;
       const r = el.getBoundingClientRect();
-      return r.height > 0 && r.bottom > top;
-    });
-    return {
-      key: box === page ? PAGE : keyOf(box), top: box.scrollTop, left: box.scrollLeft,
-      anchor: row ? { key: row.key, n: row.n, at: row.el.getBoundingClientRect().top - top } : null,
-    };
+      return r.height > 0 && r.bottom > top && r.top < bottom;
+    }).slice(0, ANCHORS).map((row) => ({ key: row.key, n: row.n, at: row.el.getBoundingClientRect().top - top }));
+    return { key: box === page ? PAGE : keyOf(box), top: box.scrollTop, left: box.scrollLeft, anchors };
   });
 }
 
-// After a redraw: each area back where it was; then nudged so the row the person was on sits where it sat.
+// How far the rows in view moved: the shift most of them share, so one row that moved elsewhere can't carry the
+// place off with it. Shifts a pixel or two apart agree (layout lands on fractions); a tie goes to the row higher up.
+const AGREE = 2;
+function shift(doc, box, anchors) {
+  const found = rows(doc, box);
+  const shifts = anchors.flatMap((a) => {
+    const row = found.find((r) => r.key === a.key && r.n === a.n);
+    return row ? [row.el.getBoundingClientRect().top - topOf(doc, box) - a.at] : [];
+  });
+  let best = 0, most = 0;
+  for (const d of shifts) {
+    const c = shifts.filter((x) => Math.abs(x - d) <= AGREE).length;
+    if (c > most) { best = d; most = c; }
+  }
+  return Math.round(best);
+}
+
+// After a redraw: each area back where it was; then nudged so the rows the person was on sit where they sat.
 export function restoreScroll(doc, saved) {
   for (const s of saved ?? []) {
     const box = s.key === PAGE ? doc.scrollingElement : [...doc.querySelectorAll('[data-scroll], [id]')].find((el) => keyOf(el) === s.key);
     if (!box) continue;
     box.scrollTop = s.top;
     box.scrollLeft = s.left;
-    if (!s.anchor) continue;
-    const row = rows(doc, box).find((r) => r.key === s.anchor.key && r.n === s.anchor.n);
-    if (row) box.scrollTop += row.el.getBoundingClientRect().top - topOf(doc, box) - s.anchor.at;
+    if (s.anchors?.length) box.scrollTop += shift(doc, box, s.anchors);
   }
 }
 
