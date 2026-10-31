@@ -14,7 +14,7 @@ import { ackList } from './acks.js';
 import { analyticsPage } from './analytics.js';
 import { agentLine } from './agentline.js';
 import { errorText, errorHtml } from './errors.js';
-import { markNew, markSeen, dismissNew } from './new.js';
+import { markNew, markSeen, dismissNew, keepNew } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
 import { shortcutFor, shortcutsHtml } from './shortcuts.js';
@@ -23,6 +23,8 @@ import { feedbackForm, feedbackThanks, feedbackMine, attached } from './feedback
 import { LOGO } from './logo.js';
 import { isTextBox, saveFocus, restoreFocus } from './focus.js';
 import { keepScroll } from './scroll.js';
+import { morph } from './morph.js';
+import { liveGate } from './pace.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -230,13 +232,16 @@ async function refresh({ force = false } = {}) {
 
 // A focused box counts as typing even while empty (#374): live updates wait until focus leaves it.
 const typing = () => isTextBox(document.activeElement);
+// A redraw changes only what changed, in place (#392); the "new" tags markNew adds stay for it to look after.
+const paint = (el, html) => morph(el, html, keepNew);
 function render({ force = false } = {}) {
-  if (!force && typing()) { S.pending = true; return; }
+  // Nor while they scroll or hold a pointer down (#392): it waits until they let go.
+  if (!force && (typing() || live.busy())) { S.pending = true; return; }
   S.pending = false;
   const writing = saveFocus(document); // a forced redraw puts the person back where they were writing
   keepScroll(document, () => { // every scrolled area keeps its place, anchored to the row in view (#376)
     renderRail();
-    $('#main').innerHTML = S.analytics ? analytics() : S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
+    paint($('#main'), S.analytics ? analytics() : S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview());
     renderDrawer();
   });
   for (const el of document.querySelectorAll('[data-draft]')) {
@@ -275,7 +280,7 @@ function renderRail() {
       ${p.needs ? `<span class="badge" title="${needYou(p.needs)}">${p.needs}</span>` : ''}
     </a>`).join('');
   const total = S.projects.reduce((n, p) => n + p.needs, 0);
-  $('#rail').innerHTML = `
+  paint($('#rail'), `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
     <button class="rail-item rail-search" data-action="launcher" data-new="launcher" title="Quick launcher: go to an item, a project or a setting"><span>Search</span><kbd class="kbd-hint">${MAC ? '⌘K' : 'Ctrl K'}</kbd></button>
@@ -293,7 +298,7 @@ function renderRail() {
       ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings"><span class="name">Workspace settings</span>${S.billing.plans?.length ? '<span class="tag now">Upgrade</span>' : ''}</button>` : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
-    </div>`;
+    </div>`);
   // On a phone the rail's actions sit behind Menu, the top bar's only way to them.
   $('#rail').classList.toggle('menu-open', !!S.railMenu);
   markNew($('#rail'));
@@ -700,7 +705,7 @@ function worthKnowing(v) {
     else if (a.kind === 'unfit') acts = `<button class="btn small" data-action="needs" data-item="${esc(a.item)}" data-needs="${esc(JSON.stringify(a.keep ?? []))}" title="Drop ${esc((a.missing ?? []).join(', '))} from what it needs">Let any agent take it</button><button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Keep waiting</button>`;
     // "Got it" is for news; next to a real action, dismissing just hides it.
     else if (/data-action="(open|connect|notify)"/.test(acts)) acts = acts.replace('>Got it</button>', '>Hide</button>');
-    return `<div class="row-item"><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
+    return `<div class="row-item"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
       ${z() >= 2 && a.why ? `<div class="s" style="margin-top:4px">${esc(a.why)}</div>` : ''}${a.how?.length ? howList(a.how) : ''}</div><div class="acts">${acts}</div></div>`;
   }).join('');
   return `<section class="sec"><header><h2>Worth knowing</h2><span class="count">${know.length}</span><span class="hint">agents carried on without you; glance and confirm, or redirect</span></header><div class="rows">${rows}</div></section>`;
@@ -843,14 +848,14 @@ function steering(v) {
   const steers = v.steers.map((s) => {
     const expected = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off').map((a) => a.name);
     const missing = s.item ? [] : expected.filter((n) => !s.acks.some((x) => x.agent === n));
-    return `<div class="row-item steer-item"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>
+    return `<div class="row-item steer-item" data-key="note:${s.id}"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>
       <div class="acks">${ackList({ acks: s.acks, missing, key: `acks:${s.id}`, open: S.open.has(`acks:${s.id}`), responses: z() >= 2 }, { esc })}</div></div>
       <div class="acts"><span class="age">${esc(dur(Date.now() - s.at))} ago</span><button class="btn ghost small" data-action="retire" data-note="${s.id}" title="Stop delivering it">Retire</button></div></div>`;
   }).join('');
-  const decisions = v.decisions.map((d) => `<div class="row-item"><div class="body"><div class="h">${inline(d.body)}</div></div>
+  const decisions = v.decisions.map((d) => `<div class="row-item" data-key="note:${d.id}"><div class="body"><div class="h">${inline(d.body)}</div></div>
     <div class="acts"><span class="age">${esc(d.ago)} ago</span><button class="btn ghost small" data-action="retire" data-note="${d.id}">Retire</button></div></div>`).join('');
   const shownNotes = z() >= 2 ? v.notes : v.notes.slice(0, 3);
-  const notes = shownNotes.map((n) => `<div class="row-item"><div class="body"><div class="h">${inline(n.note ?? n.body)}</div><div class="s">${who(n.by)}${n.item ? ` on ${refLink(n.item)}` : ''}</div></div>
+  const notes = shownNotes.map((n) => `<div class="row-item" data-key="note:${n.id}"><div class="body"><div class="h">${inline(n.note ?? n.body)}</div><div class="s">${who(n.by)}${n.item ? ` on ${refLink(n.item)}` : ''}</div></div>
     <div class="acts"><span class="age">${esc(n.ago)} ago</span><button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button></div></div>`).join('');
   const sub = (label, hint) => `<div class="sublabel">${label}<span>${hint}</span></div>`;
   return `<section class="sec"><header><h2>Steering &amp; memory</h2><span class="hint">did your nudges land, and what every agent carries into every session</span></header>
@@ -960,11 +965,10 @@ function allWork(v) {
 function renderDrawer() {
   const d = $('#drawer');
   const show = !!S.itemRef;
-  d.hidden = !show;
-  $('#scrim').hidden = !show;
+  if (d.hidden === show) d.hidden = $('#scrim').hidden = !show; // untouched when it stays as it is (#392)
   if (!show) return;
   const it = S.item;
-  if (!it) { d.innerHTML = '<div class="loading">Loading…</div>'; return; }
+  if (!it) { paint(d, '<div class="loading">Loading…</div>'); return; }
   const holderLine = {
     proposed: it.holder
       ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
@@ -1060,7 +1064,7 @@ function renderDrawer() {
       </div>`).join('')}
     </div></div>` : '';
 
-  d.innerHTML = `
+  paint(d, `
     <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${it.effective_priority ? ` <span class="tag ${esc(it.effective_priority.split(' ')[0])}" title="Agents take it at this priority: its milestone, or work waiting on it, ranks higher">ranks ${esc(it.effective_priority)}</span>` : ''}${repoTag(it)}${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
       <button class="btn ghost small x" data-action="close" title="Close (Esc)">✕</button></div>
     <h2 class="title">${esc(it.title)}</h2>
@@ -1089,7 +1093,7 @@ function renderDrawer() {
       <button class="btn primary" data-action="item-steer" data-item="${it.item}" title="The agent on it must read and acknowledge">Steer</button>
       <button class="btn" data-action="item-note" data-item="${it.item}">Note</button></div></div>
     <div class="d-sec">${S.deep ? '' : `<button class="btn" data-action="deep">Deep dive (30m): the timeline, every event and its detail</button>`}</div>
-    ${deep}`;
+    ${deep}`);
 }
 
 // ── a new workspace: step 2 (its first project, with its repositories) and step 3 (connect a machine) ──
@@ -1889,8 +1893,12 @@ for (const type of ['click', 'focusin']) {
 document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) S.orgOpen = e.target.open; }, true);
 
 // ── live updates ──
-let refreshTimer;
-function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => refresh(), 250); }
+// At most one a second, and none while the person scrolls or holds a pointer down: it waits, then applies (#392).
+const live = liveGate({ run: () => refresh(), idle: () => { if (S.pending && !typing()) render(); } });
+document.addEventListener('pointerdown', () => live.press(), true);
+for (const ev of ['pointerup', 'pointercancel']) document.addEventListener(ev, () => live.release(), true);
+document.addEventListener('scroll', () => live.scrolled(), { capture: true, passive: true });
+const scheduleRefresh = () => live.poke();
 function listen() {
   const es = new EventSource('api/stream');
   // A hub that moved onto a new commit restarts, so the stream reconnects: pick up the version it runs now.
@@ -1924,9 +1932,9 @@ function listen() {
   // Feedback about nuworq (#295): only a hub that takes it shows the entry.
   S.feedback = await api('/api/feedback').catch(() => null);
   await loadProjects().catch(() => {});
-  if (fromGitHub) return void (route(), listen(), setInterval(() => refresh(), 30_000), backFromGitHub());
-  if (fromStripe) return void (route(), listen(), setInterval(() => refresh(), 30_000), workspaceSettings());
-  if (fromFixed && S.feedback?.on) return void (route(), listen(), setInterval(() => refresh(), 30_000), ACTIONS.feedback(null, { mine: true }));
+  if (fromGitHub) return void (route(), listen(), setInterval(() => live.poke(), 30_000), backFromGitHub());
+  if (fromStripe) return void (route(), listen(), setInterval(() => live.poke(), 30_000), workspaceSettings());
+  if (fromFixed && S.feedback?.on) return void (route(), listen(), setInterval(() => live.poke(), 30_000), ACTIONS.feedback(null, { mine: true }));
   if (!location.hash || location.hash === '#/') {
     // One project opens it, unless Get started still has steps to show on All projects.
     S.gs = await api('/api/get-started').catch(() => null);
@@ -1934,5 +1942,5 @@ function listen() {
   }
   route();
   listen();
-  setInterval(() => refresh(), 30_000);
+  setInterval(() => live.poke(), 30_000);
 })();
