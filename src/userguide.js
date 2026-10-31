@@ -1,0 +1,183 @@
+// The getting-started guide (#381, #383), served at /guide to anyone, signed in or not. This file is its source:
+// it ships with the hub, so the guide always describes the version that's running.
+//
+// Writing it: each step is what a new person does, in Get started's order (src/getstarted.js), under the same
+// key and, where Get started has the step, the same title (test/userguide.test.js holds them together). A step
+// says what to do by hand first (`hand`), then what nuworq can do for you and what that changes (`auto`), or
+// that nothing can (`none`), then how you see it worked (`check`).
+// Inline marks, so tests can find what the guide names: `nuworq connect` is a command, **Accept** is a label
+// in nuworq's own screens (other sites' labels go in "quotes", never bold), and a line that is only `…` is a
+// command to copy. An item that changes what a new person does updates this file in the same change.
+
+export const STEPS = [
+  {
+    key: 'signin', title: 'Sign in with GitHub', glance: 'Open nuworq and sign in with your GitHub account.',
+    hand: [
+      'Open nuworq (for example https://app.nuworq.com) and click **Sign in with GitHub**. GitHub asks you to authorize nuworq: approve it, and GitHub sends you back.',
+      'Making a workspace takes early access while nuworq is new. Without it, ask at /early-access with your email and GitHub handle; you get a link when you\'re in.',
+      'Running your own hub instead? `nuworq serve` starts one on this machine, which needs no sign-in: skip to Add a project.',
+    ],
+    none: 'Signing in is yours to do: nothing can do it for you.',
+    check: 'You\'re back on nuworq, and it shows your workspaces or asks you to name one.',
+  },
+  {
+    key: 'org', title: 'Create your workspace', glance: 'Name it; its address comes from the name.',
+    hand: [
+      'Type a **Name** (for example Acme). The **Address** is suggested from it and checked as you type; change it if you like. Click **Create workspace**.',
+      'Already in one? Your workspaces are listed on the same page, and **New workspace** makes another.',
+    ],
+    none: 'Only you can name it, so this step stays by hand.',
+    check: 'You\'re in the workspace: its name is at the top of the left rail (on a phone, under **Menu**), and the page says "Step 2 of 3 · your first project".',
+  },
+  {
+    key: 'project', title: 'Add a project', glance: 'A mission, and the repositories agents work in.',
+    hand: [
+      'In a new workspace the first project\'s form is already open. Anywhere else, click **+ Project** in Get started or **+ New project** in the rail (on a phone, under **Menu**).',
+      'Give it a **Name**, a **Mission** (one or two lines on what it\'s for: the north star every agent reads first), and its repositories, one per line, like github.com/acme/api. Click **Create project**.',
+      'Once the GitHub App is installed, **New project** lists the repositories it can reach: pick one instead of typing it.',
+    ],
+    auto: 'An agent that checks in to a project name the hub doesn\'t know yet creates that project for you. Give it a mission afterwards, in the project\'s header.',
+    check: 'The project is in the rail, and its board opens.',
+  },
+  {
+    key: 'repo', title: 'Link a project to its repository', glance: 'So agents know where its code lives.',
+    hand: [
+      'Skip this if you listed a repository when you made the project.',
+      'Otherwise open the project, click **+ repo** in its header, type the repository (github.com/acme/api) and save. Every clone of it, on any machine, then reaches this project.',
+    ],
+    auto: 'An agent that checks in from a clone of the repository links it for you: the hub reads the clone\'s git remote. Nothing else changes.',
+    check: 'The repository shows in the project\'s header.',
+  },
+  {
+    key: 'github', title: 'Connect GitHub', glance: 'Install the nuworq GitHub App on the repositories agents push to.',
+    hand: [
+      'Click **Install the GitHub App** in Get started, or in **Connect an agent** under GitHub App. GitHub asks where to install it: choose "Only select repositories", pick the project\'s repository, and click "Install". GitHub sends you back to nuworq.',
+      'What it allows: workers push their branches and open pull requests with a token that lasts an hour and reaches one repository. No one hands out a personal access token.',
+      'On your own hub with no app yet, an owner clicks **Create the GitHub App** first. GitHub makes the app from nuworq\'s settings, then asks where to install it, as above.',
+    ],
+    none: 'GitHub asks you to choose the repositories yourself, so this stays by hand.',
+    check: 'Get started ticks Connect GitHub off, and **Connect an agent** says the app is installed.',
+  },
+  {
+    key: 'machine', title: 'Install and connect your machine', glance: 'Two commands, once per machine.',
+    hand: [
+      'You need Node 24 or newer (node --version tells you). Open **Connect an agent** in the rail (on a phone, under **Menu**). It shows this hub\'s commands, ready to copy.',
+      'Step 1 installs nuworq from the hub, so it\'s the same version as the hub and keeps itself up to date: `npm install -g <the package address it shows>`.',
+      'Step 2 is `nuworq connect <your workspace\'s address>`. A browser tab opens with a code: check it matches the one in your terminal, and approve it.',
+      'To register nuworq with your agent tools yourself, add --no-mcp to connect, then for Claude Code:',
+      '`claude mcp add --scope user nuworq -- nuworq mcp`',
+      'Codex, opencode and other MCP clients are under **Connect an agent** at depth 30m.',
+    ],
+    auto: '`nuworq connect` without --no-mcp also registers nuworq with Claude Code, Codex and opencode where they\'re installed. It saves this machine\'s token in ~/.nuworq/connect.json, which only you can read. `nuworq disconnect` revokes the token and undoes all of it.',
+    check: 'The terminal says the machine is connected, and Get started ticks Install and connect your machine off.',
+  },
+  {
+    key: 'agent', title: 'Start an agent', glance: 'Work beside one in Claude Code, or let workers run on their own.',
+    hand: [
+      'Beside you: install the Claude Code plugin once (two commands), open Claude Code in a clone of the project\'s repository, and say "Work on <project> using nuworq". It checks in, takes the most useful item, and you watch and steer it in your session.',
+      '`claude plugin marketplace add paulnorthup/nuworq`',
+      '`claude plugin install nuworq@nuworq`',
+      'On their own: workers are headless agents, each in its own git worktree with a branch per item. One worker, wherever work is waiting:',
+      '`nuworq worker --agent claude --run`',
+      'Or keep up to three going on the projects you let it staff. First open the project, then **Settings**, and switch on **Staff it with nuworq run** (the board also offers **Let nuworq run staff this project**). Ctrl-C stops them. Workers cost money: --max-usd 5 stops launching more once they\'ve spent $5.',
+      '`nuworq run --workers 3 --agent claude`',
+    ],
+    auto: '`nuworq run --install` installs the runner as a service (a LaunchAgent on macOS, a systemd user unit on Linux), so workers keep going after you close the terminal or restart. It adds that one service; its log is ~/.nuworq/logs/run.log. `nuworq run --uninstall` removes it.',
+    check: 'The agent shows on the project\'s board, on an item or checked in, and Get started ticks Start an agent off.',
+  },
+  {
+    key: 'plan', title: 'Plan the first work', glance: 'Say what you want and why; an agent turns it into small items.',
+    hand: [
+      'In Claude Code with the plugin, say "Plan <project> with nuworq: I want … because …". It reads the project, asks a few questions, offers options, and proposes small items, each with what done means. You decide; it never decides for you.',
+      'From any shell, one item at a time:',
+      '`nuworq propose "Exports retry when storage times out" --acceptance "A timed-out export retries 3 times, then fails with a clear error"`',
+      'Proposals are shaped into ready work by agents, or wait for your OK, depending on the project\'s autonomy (below).',
+    ],
+    none: 'The board has no box to propose work from yet: it comes from agents, the CLI, or GitHub issues.',
+    check: 'The items are on the board, under Proposed or Ready.',
+  },
+  {
+    key: 'needs', title: 'Answer what Needs you', glance: 'Questions and finished work wait for you in one place.',
+    hand: [
+      '**Needs you**, at the top of the home and of each project, lists what only you can do. Healthy work never shows up there.',
+      'A question: pick an option, or type an answer. Finished work to check: read its evidence, then **Accept**, or **Send back** with what\'s missing (the next agent starts from it). A step for you to do: it lists each one, where to do it and how to check it.',
+    ],
+    auto: 'Under **Run with it**, agents review each other\'s work, so far less waits for you (see Autonomy). Notifications tell you when something new arrives, so you don\'t have to watch.',
+    check: 'The card leaves Needs you, and the item moves on.',
+  },
+  {
+    key: 'landed', title: 'Watch your first item land', glance: 'Accepted work goes onto main by itself.',
+    hand: [
+      'Once work is accepted, an agent rebases its branch onto main, runs the checks and lands it. Click **Open the board** in Get started and watch the item reach Done.',
+    ],
+    auto: 'Landing needs nothing from you. Where the project uses pull requests, the hub opens one that merges itself once checks pass.',
+    check: 'The item is Done, its commit is on main, and Get started is all ticked off.',
+  },
+];
+
+// The essentials, once you're going: one short section each.
+export const ESSENTIALS = [
+  {
+    key: 'autonomy', title: 'Autonomy', glance: 'How far agents go without you.',
+    body: [
+      'In a project\'s header (at depth 5m or 30m), **Autonomy** has three settings. **Check with me**: agents\' proposals wait for your OK, and you verify all finished work. **Keep moving**: agents shape and start their own proposals, and you verify finished work. **Run with it**: agents also review each other\'s work (never their own); you get the digest and step in when you choose.',
+      'Agents are told at once when it changes.',
+    ],
+  },
+  {
+    key: 'depth', title: 'Depth', glance: '30 seconds, 5 minutes or 30 minutes.',
+    body: [
+      '**Depth** at the top of each page picks how much you see: 30s shows only what needs you and whether work flows; 5m adds what\'s in flight and why; 30m is the whole story. Keys 1, 2 and 3 switch it.',
+    ],
+  },
+  {
+    key: 'notifications', title: 'Notifications', glance: 'One message when something new needs you.',
+    body: [
+      'Open **Notifications** in the rail (on a phone, under **Menu**). Pick ntfy, Slack or webhook, paste its address, and click **Add**; **Send a test** checks it. Messages are batched over two minutes, and healthy work sends nothing. Each channel also gets a weekly line per busy project; turn it off with **Weekly line**.',
+    ],
+  },
+  {
+    key: 'operator', title: 'The operator', glance: 'An attended agent with your permissions, for what workers can\'t do.',
+    body: [
+      'Workers can\'t touch live infrastructure, sign releases or administer GitHub. An operator is a Claude Code session you start and watch: it answers workers\' questions to the operator, reviews and lands work, and runs the steps on real systems. It asks you only what only you can do.',
+      '`nuworq operator --project <project>` prints the line to paste into Claude Code in the project\'s folder; it runs nothing itself.',
+    ],
+  },
+];
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// `code` and **label**, after escaping; a line that is only `…` is a command to copy.
+const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+const command = (s) => s.match(/^`([^`]+)`$/)?.[1];
+const para = (s) => {
+  const cmd = command(s);
+  return cmd ? `<div class="copyable"><pre>${esc(cmd)}</pre><button type="button" data-copy="${esc(cmd)}">Copy</button></div>` : `<p>${inline(s)}</p>`;
+};
+
+// Every command, label and app path the guide names, for tests that keep it true.
+export function mentions() {
+  const text = [...STEPS.flatMap((s) => [s.glance, ...s.hand, s.auto, s.none, s.check]), ...ESSENTIALS.flatMap((e) => [e.glance, ...e.body])].filter(Boolean);
+  const all = (re) => [...new Set(text.flatMap((t) => [...t.matchAll(re)].map((m) => m[1])))];
+  return { commands: all(/`([^`]+)`/g), labels: all(/\*\*([^*]+)\*\*/g) };
+}
+
+// version: e.g. "v0.2.0 · c3a3008". base: the app's address on this host ('' or /w/<workspace>).
+export function guidePage({ version = '', base = '', logo = '', favicon = '' } = {}) {
+  const step = (s, n) => `<li><details id="${s.key}"><summary><span class="n">${n}</span><span class="t"><b>${esc(s.title)}</b><span class="g">${inline(s.glance)}</span></span></summary>
+    <div class="body"><h4>By hand</h4>${s.hand.map(para).join('')}
+    <h4>${s.auto ? 'Or let nuworq do it' : 'Can nuworq do it for you?'}</h4>${para(s.auto ?? s.none)}
+    <h4>How you know it worked</h4>${para(s.check)}</div></details></li>`;
+  const essential = (e) => `<li><details id="${e.key}"><summary><span class="t"><b>${esc(e.title)}</b><span class="g">${inline(e.glance)}</span></span></summary>
+    <div class="body">${e.body.map(para).join('')}</div></details></li>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nuworq · Getting started</title>${favicon ? `<link rel="icon" href="${favicon}">` : ''}<link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/guide.css"></head>
+<body><main class="guide">
+<header><div class="brand">${logo}<span>nuworq</span></div><a class="btn primary small" href="${base}/">Open nuworq</a></header>
+<h1>Getting started</h1>
+<p class="lead">From nothing to your first landed item. Tap a step for exactly what to click or type, and how to see it worked.</p>
+${version ? `<p class="version">This guide describes nuworq ${esc(version)}, the version this hub runs.</p>` : ''}
+<ol class="steps">${STEPS.map((s, i) => step(s, i + 1)).join('')}</ol>
+<h2>Once you're going</h2>
+<ul class="steps essentials">${ESSENTIALS.map(essential).join('')}</ul>
+</main><script type="module" src="${base}/guide.js"></script></body></html>`;
+}

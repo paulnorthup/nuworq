@@ -20,6 +20,7 @@ import { checkWiring, wiringEntry } from './appwiring.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP, ADMIN_SESSION_MS } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
+import { guidePage } from './userguide.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -69,6 +70,11 @@ const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><m
 <title>nuworq · ${title}</title><link rel="icon" href="${FAVICON}"><link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/login.css"></head>
 <body><main class="login"><div class="login-card flow-card"><div class="brand">${LOGO}<span>nuworq</span></div>
 <h1>${title}</h1>${body}</div></main></body></html>`;
+// The getting-started guide (src/userguide.js), for anyone: it names the version it describes, the one running.
+const guideHtml = (base) => {
+  const b = buildInfo();
+  return guidePage({ version: [b.version && `v${b.version}`, b.commit].filter(Boolean).join(' · '), base, logo: LOGO, favicon: FAVICON });
+};
 const COOKIE = 'nuworq_session';
 const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
 const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode): who you are, not any one workspace
@@ -707,7 +713,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
     const page = path === '/' ? '/join.html' : path;
-    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css', '/login.css'].includes(page) && req.method === 'GET') {
+    if (page === '/guide' && req.method === 'GET') return send(200, guideHtml(''), TYPES['.html']);
+    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css', '/login.css', '/guide.css', '/guide.js', '/copy.js'].includes(page) && req.method === 'GET') {
       return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
     }
     const sid = jarOf(req).get(HUB_COOKIE);
@@ -905,6 +912,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && (path === '/agents.md' || path === '/api/guide')) {
         return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req) + base, via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
       }
+      // The getting-started guide is for people, before they have an account: no project data either.
+      if (req.method === 'GET' && path === '/guide') return send(200, guideHtml(base), TYPES['.html']);
       if (req.method === 'POST' && path === '/api/login') {
         if (!required) return send(200, { ok: true, auth: 'local' });
         const ip = clientIp(req);
