@@ -198,9 +198,15 @@ describe('nuworq worker --browser', () => {
     hub.humanOp('ui', 'settings', { path: repo });
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    // A plugin installed for this checkout, with an MCP server of its own (#360).
+    const config = mkdtempSync(join(tmpdir(), 'nuworq-claude-'));
+    mkdirSync(join(config, 'plugins'));
+    writeFileSync(join(config, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'nuworq@nuworq': [{ scope: 'local', projectPath: repo }], 'other@market': [{ scope: 'user' }] } }));
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'ui', '--as', 'b-1', ...a],
-      { env: { ...process.env, NUWORQ_TOKEN: '' } });
+      { env: { ...process.env, NUWORQ_TOKEN: '', CLAUDE_CONFIG_DIR: config } });
     const parts = ({ stdout }) => ({
+      strict: /--mcp-config '[^']*' --strict-mcp-config /.test(stdout),
+      settings: JSON.parse(stdout.match(/--settings '([^']*)'/)[1]),
       servers: JSON.parse(stdout.match(/--mcp-config '([^']*)'/)[1]).mcpServers,
       allow: stdout.match(/--allowedTools '([^']*)'/)[1].split(','),
       deny: stdout.match(/--disallowedTools '([^']*)'/)?.[1],
@@ -209,6 +215,8 @@ describe('nuworq worker --browser', () => {
     try {
       const plain = parts(await cli('--agent', 'claude'));
       assert.deepEqual(Object.keys(plain.servers), ['nuworq']);
+      assert.ok(plain.strict, 'only the runner\'s MCP servers, none of the person\'s own');
+      assert.deepEqual(plain.settings, { enabledPlugins: { 'nuworq@nuworq': false, 'other@market': false } }, 'every installed plugin off');
       assert.ok(!plain.allow.includes('mcp__playwright'));
       assert.ok(!(plain.servers.nuworq.env.NUWORQ_HAS ?? '').split(',').includes('browser'));
       assert.doesNotMatch(plain.task, /mcp__playwright|375px|serve --demo/);
@@ -220,6 +228,8 @@ describe('nuworq worker --browser', () => {
         args: ['-y', '@playwright/mcp@0.0.83', '--headless', '--browser', 'chrome', '--isolated',
           '--allowed-origins', 'http://127.0.0.1:*;http://localhost:*', '--output-dir', join(tmpdir(), 'nuworq-browser', 'b-1')],
       });
+      assert.deepEqual(Object.keys(b.servers), ['nuworq', 'playwright']);
+      assert.ok(b.strict);
       assert.deepEqual(b.allow, [...plain.allow, 'mcp__playwright'], 'the same allowlist, plus the browser');
       assert.equal(b.deny, 'mcp__playwright__browser_run_code_unsafe', 'except its tool that runs any code in the server process');
       assert.ok(b.servers.nuworq.env.NUWORQ_HAS.split(',').includes('browser'), 'it declares browser, as --has browser would');
