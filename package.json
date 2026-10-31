@@ -9,6 +9,6 @@
     "demo": "node bin/nuworq.js serve --demo",
     "test": "node scripts/run-tests.js"
   },
-  "engines": { "node": ">=22.13" },
+  "engines": { "node": ">=24" },
   "license": "MIT"
 }

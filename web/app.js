@@ -1174,7 +1174,7 @@ async function connect() {
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
     <h4>1. Install nuworq (once)</h4>
-    ${c.install ? `<p class="lead">From this hub: Node 22.13+, no other dependencies, and it keeps itself up to date.</p>${copyBlock(c.install)}`
+    ${c.install ? `<p class="lead">From this hub: Node 24+, no other dependencies, and it keeps itself up to date.</p>${copyBlock(c.install)}`
       : '<p class="lead">This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed.</p>'}
     <h4>2. Connect this machine (once)</h4><p class="lead">It logs you in through the browser, saves this machine's token, and registers nuworq with Claude Code, Codex and opencode if they're installed. <code>nuworq disconnect</code> undoes it all.</p>${copyBlock(c.connect)}
     <h4>3. Keep workers going</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${copyBlock(c.run)}
