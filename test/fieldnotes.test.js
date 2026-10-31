@@ -120,6 +120,23 @@ describe('a tidy job reviews the field notes (#443)', () => {
     human('settings', { autonomy: 'full' });
   });
 
+  test('a weekly review waiting behind other work keeps its notes until someone takes it', () => {
+    const { hub, human, agent, tick } = setup();
+    human('create', { title: 'Urgent fix', acceptance: 'x', priority: 'now' });
+    human('create', { title: 'Another urgent fix', acceptance: 'x', priority: 'now' });
+    tick(8 * DAY);
+    const review = () => hub.q('SELECT stage, summary FROM items WHERE notes_review = 1').get();
+    assert.equal(agent('next', 'a2').mode, 'work', 'urgent work comes first');
+    assert.equal(review().stage, 'ready');
+    agent('checkin', 'a3');
+    assert.equal(agent('next', 'a3').mode, 'work');
+    tick(DAY);
+    agent('checkin', 'a4');
+    agent('next', 'a4');
+    assert.equal(review().stage, 'ready', 'the review is still there');
+    assert.equal((review().summary.match(/^- note /gm) ?? []).length, 34, 'with every note it listed');
+  });
+
   test('only a review retires notes', () => {
     const { agent, ids } = setup();
     agent('checkin', 'a2');
