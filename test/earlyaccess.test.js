@@ -104,6 +104,9 @@ describe('early access', () => {
       const html = await page.text();
       assert.match(html, /<form id="ask"/);
       assert.match(html, /\/early-access\.js/);
+      // What asking agrees to (#232): nuworq.com's terms and privacy pages, each in a new tab.
+      assert.match(html, /By asking you agree to the <a [^>]*>terms<\/a> and <a [^>]*>privacy policy<\/a>/);
+      for (const page of ['terms', 'privacy']) assert.match(html, new RegExp(`<a href="https://nuworq\\.com/${page}" target="_blank" rel="noopener">`), page);
       // It looks like the sign-in card (#121): both stylesheets come from the hub's own address.
       assert.match(html, /href="\/login\.css"/);
       for (const css of ['/style.css', '/login.css']) assert.match((await fetch(h.base + css)).headers.get('content-type'), /text\/css/, css);
