@@ -18,20 +18,30 @@ async function until(ok, what, ms = 10_000) {
 }
 
 // Two projects with work and history in each: "gone" is removed, "kept" must not change.
-function twoProjects() {
+// The ops below start a background clone of each mirror. It must never reach the network, and it must be
+// over before the folders are made: a failed clone that made its folder removes it, whenever it ends.
+async function twoProjects() {
   const repos = mkdtempSync(join(tmpdir(), 'nuworq-rm-'));
   const hub = new Hub({ repos });
-  for (const [slug, remote] of [['gone', 'github.com/acme/gone'], ['kept', 'github.com/acme/kept']]) {
-    hub.tx(() => hub.project(slug, { create: true }));
-    hub.addRemote(hub.project(slug), remote, 'you');
-    hub.humanOp(slug, 'create', { title: `${slug} one`, acceptance: 'x' });
-    hub.humanOp(slug, 'create', { title: `${slug} two`, acceptance: 'x', depends_on: ['#1'] });
-    hub.agentOp(slug, 'checkin', 'a1');
-    hub.agentOp(slug, 'next', 'a1');
-    hub.agentOp(slug, 'ask', 'a1', { item: '#1', question: 'Which?', assumption: 'This one' });
-    hub.humanOp(slug, 'steer', { body: 'Keep it small' });
-    mkdirSync(mirrorPath(repos, remote), { recursive: true });
+  const was = process.env.GIT_SSH_COMMAND;
+  process.env.GIT_SSH_COMMAND = 'false';
+  const remotes = [['gone', 'github.com/acme/gone'], ['kept', 'github.com/acme/kept']];
+  try {
+    for (const [slug, remote] of remotes) {
+      hub.tx(() => hub.project(slug, { create: true }));
+      hub.addRemote(hub.project(slug), remote, 'you');
+      hub.humanOp(slug, 'create', { title: `${slug} one`, acceptance: 'x' });
+      hub.humanOp(slug, 'create', { title: `${slug} two`, acceptance: 'x', depends_on: ['#1'] });
+      hub.agentOp(slug, 'checkin', 'a1');
+      hub.agentOp(slug, 'next', 'a1');
+      hub.agentOp(slug, 'ask', 'a1', { item: '#1', question: 'Which?', assumption: 'This one' });
+      hub.humanOp(slug, 'steer', { body: 'Keep it small' });
+    }
+    for (const [, remote] of remotes) await fetchMirror(repos, remote); // joins the clone under way
+  } finally {
+    was === undefined ? delete process.env.GIT_SSH_COMMAND : process.env.GIT_SSH_COMMAND = was;
   }
+  for (const [, remote] of remotes) mkdirSync(mirrorPath(repos, remote), { recursive: true });
   // Every table that holds a project's rows, counted per project.
   const count = (slug) => {
     const id = hub.q('SELECT id FROM projects WHERE slug = ?').get(slug)?.id ?? -1;
@@ -46,8 +56,8 @@ function twoProjects() {
 }
 
 describe('an owner removes a project', () => {
-  test('archive: out of lists, routing and lookups, history kept; restore brings it back as it was', () => {
-    const { hub, count } = twoProjects();
+  test('archive: out of lists, routing and lookups, history kept; restore brings it back as it was', async () => {
+    const { hub, count } = await twoProjects();
     const before = { gone: count('gone'), kept: count('kept') };
     hub.humanOp('gone', 'archive');
     assert.deepEqual(hub.projects().map((p) => p.slug), ['kept']);
@@ -69,7 +79,7 @@ describe('an owner removes a project', () => {
   });
 
   test('delete: only after typing its name; every row, the mirror and its place in tokens go; nothing else changes', async () => {
-    const { hub, repos, count } = twoProjects();
+    const { hub, repos, count } = await twoProjects();
     const auth = new Auth(hub.db);
     const both = auth.createToken('both', 'agent', { projects: ['gone', 'kept'] });
     const only = auth.createToken('only', 'agent', { projects: ['gone'] });
@@ -85,7 +95,7 @@ describe('an owner removes a project', () => {
     assert.throws(() => hub.project('gone'), /No project "gone"/);
     assert.deepEqual(Object.values(count('gone')), Object.values(count('gone')).map(() => 0), 'no row left anywhere');
     assert.equal(hub.q("SELECT COUNT(*) AS n FROM acks WHERE note_id NOT IN (SELECT id FROM notes)").get().n, 0);
-    await until(() => !existsSync(mirrorPath(repos, 'github.com/acme/gone')), 'its mirror is gone');
+    assert.ok(!existsSync(mirrorPath(repos, 'github.com/acme/gone')), 'its mirror is gone (no fetch under way: at once)');
     assert.ok(existsSync(mirrorPath(repos, 'github.com/acme/kept')), "the other project's mirror stays");
     assert.deepEqual(count('kept'), kept, 'the other project is untouched');
 
