@@ -7,12 +7,14 @@ import { createClient } from './client.js';
 import { tools, guide } from './protocol.js';
 import { slugify } from './text.js';
 import { envVar } from './names.js';
+import { serverKeys } from './session.js';
 
 const VERSIONS = ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25'];
 const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 export function runMcp({ input = process.stdin, output = process.stdout, env = process.env, clientOpts = {} } = {}) {
-  const client = createClient(clientOpts);
+  // Its session's keys go with every call, so the listener beside it wakes it and no other session (#335).
+  const client = createClient({ session: serverKeys({ env }), ...clientOpts });
   const { url } = client.settings;
   let project = client.settings.project;
   let agent = envVar('AGENT', env) || null;

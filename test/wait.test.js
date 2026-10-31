@@ -8,6 +8,7 @@ import { Hub, DAY } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { createServer } from '../src/server.js';
 import { waitFor, operatorEvents, describeEvent } from '../src/wait.js';
+import { serverKeys, listenerKeys, parseKeys } from '../src/session.js';
 
 // #283: an idle operator session waits on the hub, and hears the moment something is there for it.
 function setup() {
@@ -119,6 +120,50 @@ describe('an operator waits on the hub', () => {
     assert.deepEqual((await waitFor(hub, '', { since, tokenId: 7, ms: 30 })).events, [{ kind: 'item', project: 'o', item: '#2' }]);
   });
 
+  test("two operator sessions on one token: each listener wakes for its own session's answers, and keeps only it present", async () => {
+    const { hub, tick } = setup();
+    const KA = ['aaaaaaaaaaaaaaaa'], KB = ['bbbbbbbbbbbbbbbb'];
+    hub.agentOp('o', 'checkin', 'opa', { has: ['operator'] }, { session: KA });
+    hub.agentOp('o', 'checkin', 'opb', { has: ['operator'] }, { session: KB });
+    hub.q(`UPDATE agents SET token_id = 7 WHERE name IN ('op', 'opa', 'opb')`).run();
+    hub.q(`UPDATE agents SET signed_off = 1 WHERE name = 'op'`).run();
+    const since = hub.now();
+    tick(1);
+    const b = hub.agentOp('o', 'ask', 'opb', { question: 'May I restart the VM?' });
+    hub.humanOp('o', 'answer', { question: b.question, answer: 'Yes' });
+    assert.deepEqual(strip(operatorEvents(hub, '', { since, tokenId: 7, session: KA })), [], "B's answer doesn't wake A");
+    assert.deepEqual(strip(operatorEvents(hub, '', { since, tokenId: 7, session: KB })), [{ kind: 'answer', project: 'o', question: b.question }]);
+    assert.equal(strip(operatorEvents(hub, '', { since, tokenId: 7 })).length, 1, 'without keys: every operator on the token, as before');
+
+    tick(1);
+    const q = hub.agentOp('o', 'ask', 'w1', { question: 'Is the VM up?', to: 'operator' });
+    for (const session of [KA, KB]) {
+      assert.deepEqual(strip(operatorEvents(hub, '', { since, tokenId: 7, session })).filter((e) => e.kind === 'question'), [{ kind: 'question', project: 'o', question: q.question }], 'an operator question still wakes either');
+    }
+
+    const before = hub.q(`SELECT name, last_seen FROM agents WHERE name IN ('opa', 'opb') ORDER BY name`).all();
+    tick(1000);
+    await waitFor(hub, '', { since: hub.now(), tokenId: 7, session: KA, ms: 10 });
+    const after = hub.q(`SELECT name, last_seen FROM agents WHERE name IN ('opa', 'opb') ORDER BY name`).all();
+    assert.ok(after[0].last_seen > before[0].last_seen, "A's wait keeps A present");
+    assert.equal(after[1].last_seen, before[1].last_seen, 'and not B');
+  });
+
+  test('a listener whose session no operator named yet serves the operators from before session keys, never another session', () => {
+    const { hub, tick } = setup();
+    hub.agentOp('o', 'checkin', 'opb', { has: ['operator'] }, { session: ['bbbbbbbbbbbbbbbb'] });
+    const since = hub.now();
+    tick(1);
+    const mine = hub.agentOp('o', 'ask', 'op', { question: 'Old client?' });
+    hub.humanOp('o', 'answer', { question: mine.question, answer: 'Yes' });
+    const theirs = hub.agentOp('o', 'ask', 'opb', { question: 'New client?' });
+    hub.humanOp('o', 'answer', { question: theirs.question, answer: 'Yes' });
+    const fresh = ['cccccccccccccccc'];
+    assert.deepEqual(strip(operatorEvents(hub, '', { since, session: fresh })).map((e) => e.question), [mine.question], 'op said no keys: it keeps its listener');
+    hub.agentOp('o', 'checkin', 'opc', { has: ['operator'] }, { session: fresh });
+    assert.deepEqual(strip(operatorEvents(hub, '', { since, session: fresh })), [], 'once its own operator checked in, only that one');
+  });
+
   test('a listening operator counts as connected: Needs you says none is only when none has been here', async () => {
     const { hub, tick } = setup();
     hub.agentOp('o', 'ask', 'w1', { question: 'Prod check?', to: 'operator' });
@@ -185,6 +230,50 @@ describe('GET /api/wait and nuworq wait', () => {
       server.close();
       server.closeAllConnections();
     }
+  });
+
+  test('x-nuworq-session: the checkin stores it, and a wait that sends it hears only its own operator', async () => {
+    const { hub, tick } = setup();
+    const server = createServer(hub);
+    const url = `http://127.0.0.1:${await listen(server)}`;
+    const KA = serverKeys({ env: { CLAUDE_CODE_SESSION_ID: 'session-a' }, host: 'mac', ppid: 501 });
+    const KB = serverKeys({ env: {}, host: 'mac', ppid: 502 });
+    try {
+      const call = (path, agent, session, body) => fetch(`${url}${path}`, {
+        method: body ? 'POST' : 'GET',
+        headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, 'x-nuworq-session': session.join(',') },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      }).then((r) => r.json());
+      await call('/api/p/o/agent/checkin', 'opa', KA, { has: ['operator'] });
+      await call('/api/p/o/agent/checkin', 'opb', KB, { has: ['operator'] });
+      hub.q(`UPDATE agents SET signed_off = 1 WHERE name = 'op'`).run();
+      assert.equal(hub.q(`SELECT session FROM agents WHERE name = 'opa'`).get().session, KA.join(','));
+      const since = hub.now();
+      tick(1);
+      const asked = hub.agentOp('o', 'ask', 'opa', { question: 'May I restart the hub?' });
+      hub.humanOp('o', 'answer', { question: asked.question, answer: 'Yes' });
+      // The listener of session A, two processes below it (a shell, then nuworq): its ancestors include 501.
+      const listenA = listenerKeys({ env: {}, host: 'mac', ppid: 900, table: '900 501\n501 77\n77 1\n' });
+      assert.deepEqual((await call(`/api/wait?for=operator&since=${since}&timeout=0.05`, '', listenA)).events, [{ kind: 'answer', project: 'o', question: asked.question }]);
+      const listenB = listenerKeys({ env: {}, host: 'mac', ppid: 901, table: '901 502\n502 77\n77 1\n' });
+      assert.deepEqual((await call(`/api/wait?for=operator&since=${since}&timeout=0.05`, '', listenB)).events, [], "A's answer doesn't wake B");
+    } finally {
+      server.close();
+      server.closeAllConnections();
+    }
+  });
+
+  test('session keys: a listener below its session meets the MCP server beside it, and not one of a sibling session', () => {
+    const table = '700 600\n600 500\n500 400\n400 1\n710 610\n610 500\n';
+    const server = serverKeys({ env: {}, host: 'mac', ppid: 600 });
+    const sibling = serverKeys({ env: {}, host: 'mac', ppid: 610 });
+    const listener = listenerKeys({ env: {}, host: 'mac', ppid: 700, table });
+    assert.ok(server.some((k) => listener.includes(k)), 'the session (600) is an ancestor of its listener');
+    assert.ok(!sibling.some((k) => listener.includes(k)), 'a sibling session in the same terminal (500) is not');
+    assert.ok(!listener.some((k) => /mac|600/.test(k)), 'hashed: no host or process id goes to the hub');
+    assert.deepEqual(serverKeys({ env: { CLAUDE_CODE_SESSION_ID: 'x' }, host: 'mac', ppid: 1 }), listenerKeys({ env: { CLAUDE_CODE_SESSION_ID: 'x' }, host: 'mac', ppid: 1, table: '' }), 'the session id alone matches');
+    assert.deepEqual(listenerKeys({ env: {}, host: 'mac', ppid: 700, table: '' }).length, 1, 'no ps: the parent only');
+    assert.deepEqual(parseKeys(`${server.join(',')},nothex,${'f'.repeat(17)}`), server, 'the hub keeps only well-formed keys');
   });
 
   test('nuworq wait --operator prints one line and exits; a worker gets the hint and exit 1', async () => {

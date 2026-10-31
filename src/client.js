@@ -133,7 +133,8 @@ const sameSite = (a, b) => a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`)
 const isJson = (res) => /json/i.test(res.headers.get('content-type') ?? '');
 
 // opts: url, project, token, cwd, connectFile (see resolveSettings); retryMs: how long to retry a refused or
-// dropped connection, or a proxy's 502/503/504.
+// dropped connection, or a proxy's 502/503/504. session: this process's session keys (src/session.js), sent
+// as x-nuworq-session so an operator's listener finds the session it serves (#335).
 export function createClient(opts = {}) {
   const settings = resolveSettings(opts);
   // What the saved connection said when last read: `nuworq connect` may change it while this client lives.
@@ -143,7 +144,7 @@ export function createClient(opts = {}) {
   const named = (h) => Object.fromEntries(Object.entries(h).flatMap(([k, v]) => [[`x-nuworq-${k}`, v], [`x-trellis-${k}`, v]]));
   const headers = (extra = {}) => ({
     'content-type': 'application/json',
-    ...named({ root: encodeURIComponent(settings.root), ...(settings.remote ? { remote: encodeURIComponent(settings.remote) } : {}), ...extra }),
+    ...named({ root: encodeURIComponent(settings.root), ...(settings.remote ? { remote: encodeURIComponent(settings.remote) } : {}), ...(opts.session?.length ? { session: opts.session.join(',') } : {}), ...extra }),
     ...(settings.token ? { authorization: `Bearer ${settings.token}` } : {}),
   });
 
