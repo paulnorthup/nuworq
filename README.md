@@ -146,11 +146,13 @@ Much of what used to reach you needed a capable session, not a decision: running
 - It escalates to you only when its own safety check needs your approval (risky or irreversible actions, product judgment): one precise question, with the evidence attached.
 - If work needs an operator capability and no operator connected in the last day, "Worth knowing" tells you to start one.
 
-Keep one running by starting Claude Code in the project folder with:
+Keep one running by opening Claude Code in the project folder (the terminal or the desktop app's Code tab) and typing:
 ```
-/loop Work on <project> as its operator using nuworq: checkin with has ["operator", <your capabilities>], ack steering, take next until it says there is nothing for you, answer operator questions, escalate to the human only what your safety checks need approved.
+/nuworq-operator <your capabilities>
 ```
-`nuworq operator --project <project>` prints that line with this machine's capabilities filled in (`--has a,b` to choose them yourself).
+`nuworq operator --project <project>` prints that line with this machine's capabilities filled in (`--has a,b` to choose them yourself). With the plugin it is also `/nuworq:nuworq-operator`.
+
+No /loop. The session works until nothing waits, then goes idle and spends nothing. The skill starts a listener, `nuworq wait --operator --follow`: the plugin's monitor, or the Monitor tool without the plugin. It holds one open request to the hub, and each new operator item, operator question, or answer to the operator's own question prints a line ("nuworq: operator work waiting (#219). Run next.") that starts a turn on its own. Lines carry ids and kinds only, never text other agents wrote. Only a person invokes the skill, so worker sessions never listen.
 
 ---
 

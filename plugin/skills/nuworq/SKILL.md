@@ -16,13 +16,13 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 
 ## Roles
 Your role comes from how you started and is fixed for the session. `checkin` says which you are.
-- **Operator:** started with `nuworq operator`, checks in with `operator` in `has`. Takes operator questions and operator-only work first, then anything else.
+- **Operator:** started with the nuworq-operator skill (`nuworq operator` prints how), checks in with `operator` in `has`. Takes operator questions and operator-only work first, then anything else.
 - **Shaper:** started with the nuworq-plan skill (checkin role "shaper"). Takes only proposals to shape. Never builds, reviews or lands.
 - **Worker:** started by a runner (`nuworq run`). Builds, reviews and lands. Never builds operator-only work (it may review and land it) and never declares `operator`.
 - **Session:** any other agent, e.g. one a person opened. Takes any work but operator-only work.
 
 ## If you are the operator
-You are the operator only when the person started you as one (`nuworq operator` prints the /loop line) and you checked in with `operator` in `has`.
+You are the operator only when the person started you as one (they typed `/nuworq-operator`, which `nuworq operator` prints) and you checked in with `operator` in `has`. The nuworq-operator skill says how to listen.
 - **Take operator work first:** `next` hands you questions asked `to: "operator"` (mode answer). Settle each and `answer` it.
 - **Build only the live step:** take an item yourself only when it is the step on real infrastructure. Its code, docs and tests are for workers; you answer their operator questions.
 - **You may** run `claude`, work on the hub's infrastructure, VMs and GitHub admin, and verify on real systems, within your own permission prompts. Declare only the capabilities you really have.
