@@ -977,7 +977,9 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   // The admin host (e.g. admin.nuworq.com): the owners' dashboard, signed in on its own address.
   const adminHost = String(flags['admin-host'] || envVar('ADMIN_HOST') || '');
   if (adminHost && !owners.length) console.warn(amber(`--admin-host ${adminHost} has no owners, so nobody can get in: set --owners or NUWORQ_HUB_OWNERS.`));
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, siteHost, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess });
+  // Billing (#227): Stripe, from the environment only; off unless NUWORQ_STRIPE_WEBHOOK_SECRET is set.
+  const { billingFromEnv } = await import('../src/billing.js');
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, siteHost, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv() });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();

@@ -11,6 +11,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { SESSION_MS } from './auth.js';
+import { paid } from './billing.js';
 
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 export const ORG_CAP = 5; // organizations one person may create, unless the host says otherwise
@@ -97,6 +98,64 @@ export class Directory {
     try { this.db.exec("ALTER TABLE hub_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'hub'"); } catch { /* already there */ }
     // Hub-wide settings, e.g. root_workspace: the workspace a single hub became (#204).
     this.db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    // Billing (#227): what Stripe's signed webhook said about each subscription, and which events it already sent.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS billing (
+        subscription TEXT PRIMARY KEY,            -- Stripe's sub_…
+        workspace    TEXT,                        -- null until its checkout names one
+        customer     TEXT,                        -- cus_…
+        status       TEXT,                        -- Stripe's: active, trialing, past_due, canceled, …
+        period_end   INTEGER,                     -- ms
+        cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
+        plan         TEXT,                        -- the name NUWORQ_STRIPE_PRICES gives its price
+        event_at     INTEGER NOT NULL DEFAULT 0,  -- the newest event applied (ms): an older one changes nothing
+        updated_at   INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, at INTEGER NOT NULL);`);
+  }
+
+  // ── billing (#227) ──
+
+  eventSeen(id) {
+    return !!this.db.prepare('SELECT 1 FROM stripe_events WHERE id = ?').get(String(id));
+  }
+
+  markEvent(id) {
+    this.db.prepare('INSERT OR IGNORE INTO stripe_events (id, at) VALUES (?, ?)').run(String(id), this.now());
+  }
+
+  // Record what an event says about a subscription. ids: the workspace and customer it names (null: keep what is
+  // known; a customer seen with a workspace before brings it along). state applies only when its event (at) is
+  // no older than the last one applied; fill: only when no state is known yet (a checkout, ahead of its events).
+  setBilling(subscription, { workspace = null, customer = null } = {}, { at = this.now(), status = null, period_end = null, cancel_at_period_end = false, plan = null, fill = false } = {}) {
+    if (!subscription) return null;
+    const row = this.db.prepare('SELECT * FROM billing WHERE subscription = ?').get(subscription);
+    const ws = workspace ?? row?.workspace ?? (customer
+      ? this.db.prepare('SELECT workspace FROM billing WHERE customer = ? AND workspace IS NOT NULL ORDER BY updated_at DESC LIMIT 1').get(customer)?.workspace ?? null : null);
+    const t = this.now();
+    if (!row) {
+      this.db.prepare(`INSERT INTO billing (subscription, workspace, customer, status, period_end, cancel_at_period_end, plan, event_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(subscription, ws, customer, status, period_end, cancel_at_period_end ? 1 : 0, plan, fill ? 0 : at, t);
+    } else {
+      this.db.prepare('UPDATE billing SET workspace = ?, customer = COALESCE(?, customer), updated_at = ? WHERE subscription = ?').run(ws, customer, t, subscription);
+      if (fill ? !row.status && status : at >= row.event_at) {
+        this.db.prepare(fill ? 'UPDATE billing SET status = ? WHERE subscription = ?'
+          : 'UPDATE billing SET status = ?, period_end = ?, cancel_at_period_end = ?, plan = ?, event_at = ? WHERE subscription = ?')
+          .run(...(fill ? [status, subscription] : [status, period_end, cancel_at_period_end ? 1 : 0, plan, at, subscription]));
+      }
+    }
+    return this.billingRow(subscription);
+  }
+
+  billingRow(subscription) {
+    const r = this.db.prepare('SELECT * FROM billing WHERE subscription = ?').get(subscription);
+    return r ? { ...r, cancel_at_period_end: !!r.cancel_at_period_end } : null;
+  }
+
+  // A workspace's billing: the subscription that makes it paid now, else its latest one; null with none.
+  billingOf(workspace, now = this.now()) {
+    const rows = this.db.prepare('SELECT subscription FROM billing WHERE workspace = ? ORDER BY updated_at DESC').all(workspace).map((r) => this.billingRow(r.subscription));
+    return rows.find((b) => paid(b, now)) ?? rows[0] ?? null;
   }
 
   // The workspace a single hub was adopted into (#204), or null: tokens saved with the hub's root address

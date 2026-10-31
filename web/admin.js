@@ -99,9 +99,12 @@ function space(w) {
   const other = w.plan === 'free' ? 'unlimited' : 'free';
   const why = w.source === 'owners' ? 'Always Unlimited: a hub owner is in it.'
     : w.source === 'set' ? `Set by ${esc(w.set_by || 'the host')} ${esc(ago(w.set_at))}.`
+    : w.source === 'billing' ? 'Paid through Stripe.'
     : `The default: ${w.plan === 'free' ? 'someone signed up for it' : 'the host made it'}.`;
+  // What Stripe last said (#227), e.g. "paid until 2026-12-01", "cancels 2026-12-01", "payment failed".
+  const billing = w.billing?.line ? `<span class="${w.billing.line === 'payment failed' ? 'warn' : 'faint'}">${esc(w.billing.line)}</span>` : '';
   return `<details class="admin-card admin-space" data-name="${esc(w.name)}"${expanded.has(w.name) ? ' open' : ''}>
-    <summary><span class="h">${esc(w.name)}</span><span class="plan plan-${esc(w.plan)}">${PLAN[w.plan]}</span>
+    <summary><span class="h">${esc(w.name)}</span><span class="plan plan-${esc(w.plan)}">${PLAN[w.plan]}</span>${billing}
       <span class="faint">${w.working.length ? `<b class="ok">${w.working.length} working</b>` : 'idle'} · ${w.last_active ? esc(ago(w.last_active)) : 'never active'}</span></summary>
     <p>Made by ${w.creator ? `${esc(w.creator.email)}${w.creator.github ? ` · <a href="https://github.com/${esc(w.creator.github)}" target="_blank" rel="noopener">@${esc(w.creator.github)}</a>` : ''}` : 'the host'}</p>
     <p class="s">${w.people} ${w.people === 1 ? 'person' : 'people'} · ${w.projects} ${w.projects === 1 ? 'project' : 'projects'}${w.working.length ? ` · working: ${w.working.map(esc).join(', ')}` : ''}</p>

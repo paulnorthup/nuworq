@@ -25,6 +25,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { outcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf } from './package.js';
+import { verifySignature, applyEvent } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -103,7 +104,9 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // adminHost (workspaces mode): the admin host (e.g. admin.nuworq.com). It serves the admin dashboard, its own
 // sign-in and the admin APIs, and nothing else; only earlyAccess.owners get past sign-in. With it set, the
 // early-access request list and its APIs are no longer served anywhere else.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null } = {}) {
+// billing (workspaces mode): src/billing.js billingFromEnv(): { webhookSecret, secretKey, prices }. null: billing
+// is off, and POST /api/stripe/webhook answers 404.
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   siteHost = String(siteHost).toLowerCase();
   if (siteHost && !publicUrl) throw new Error('a site host needs the public URL the app lives at (--public-url)');
@@ -192,6 +195,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       projects.push({ project: p.slug, ...(await intake(hub, p, event, result, link)) });
     }
     return send(200, { ok: true, ...(event === 'ping' ? { pong: true } : {}), projects });
+  };
+  // Stripe's webhook (#227): the only way a payment reaches the hub. Off (404) unless billing is configured.
+  const stripeHook = async (req, send, deny) => {
+    if (!spaces || !billing?.webhookSecret) return deny(404, 'this hub takes no payments', 'Billing is off: it needs workspaces and NUWORQ_STRIPE_WEBHOOK_SECRET.');
+    const raw = await rawBody(req);
+    if (!verifySignature(billing.webhookSecret, req.headers['stripe-signature'], raw)) return deny(400, "the Stripe-Signature doesn't match, or is too old", "Check the hub's NUWORQ_STRIPE_WEBHOOK_SECRET is this endpoint's signing secret.");
+    let event;
+    try { event = JSON.parse(raw.toString('utf8')); } catch { return deny(400, 'the body is not JSON'); }
+    return send(200, applyEvent(spaces, event, billing));
   };
   // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
   const minted = new Map(); // `${agent}|${item id}|${repo}` → { token, expires_at, repo }
@@ -604,6 +616,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       // GitHub's app deliveries name no workspace: the signature is their credential (as for project webhooks below).
       if (req.method === 'POST' && path === '/api/hooks/github-app') return await appHook(req, send, deny);
+      // Stripe's deliveries likewise (#227): the signature is the credential; each names its workspace inside.
+      if (req.method === 'POST' && path === '/api/stripe/webhook') return await stripeHook(req, send, deny);
       // Which hub: the only one, or the workspace this address names.
       let hub = target, base = '', ws = '';
       if (spaces) {
