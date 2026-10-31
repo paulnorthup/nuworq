@@ -1,9 +1,8 @@
 // The hub's state and every operation agents and humans can perform.
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
-import { rmSync } from 'node:fs';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, mirrorPath, originOf, refetch, shaOf } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -3406,7 +3405,8 @@ const HUMAN_OPS = {
         else { this.q('UPDATE tokens SET revoked_at = ? WHERE id = ?').run(this.now(), t.id); revoked++; }
       }
     }
-    if (this.repos) for (const r of remotes) rmSync(mirrorPath(this.repos, r), { recursive: true, force: true });
+    // After any fetch under way for it, and never failing the delete (see removeMirror).
+    if (this.repos) for (const r of remotes) removeMirror(this.repos, r);
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 

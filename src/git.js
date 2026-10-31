@@ -273,3 +273,35 @@ export function mirror(dir, remote, { fresh = false, keys = null, https = null, 
   if (last?.error) return { error: last.error };
   return isRepo(plan.path) ? { path: plan.path } : { error: `${remote} is still being cloned`, pending: true };
 }
+
+const leftover = new Set(); // mirror paths whose removal failed: sweepMirrors tries again
+function rmMirror(path) {
+  fetched.delete(path);
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    leftover.delete(path);
+  } catch (e) {
+    leftover.add(path);
+    console.error(`nuworq: couldn't remove the mirror ${path} (${e.code ?? e.message}); the next sweep tries again`);
+  }
+}
+
+// Remove remote's mirror for good (its project was deleted). Never throws. A fetch or clone under way is
+// writing into it, so the removal waits for that to finish; one that still fails is left to sweepMirrors.
+export function removeMirror(dir, remote) {
+  const path = mirrorPath(dir, remote);
+  if (!path) return Promise.resolve();
+  const run = inflight.get(path);
+  if (run) return run.then(() => rmMirror(path), () => rmMirror(path));
+  rmMirror(path);
+  return Promise.resolve();
+}
+
+// Try the failed removals again, on the hub's sweep. A mirror fetched again since (its repository was
+// linked anew) is in use, so it stays.
+export function sweepMirrors() {
+  for (const path of leftover) {
+    if (fetched.has(path) || inflight.has(path)) leftover.delete(path);
+    else rmMirror(path);
+  }
+}
