@@ -122,13 +122,15 @@ export function outcomes(hub, slug, { since, until } = {}) {
     const usage = (hub.usageOf(it)?.rows ?? []).filter((r) => !r.superseded)
       .map((r) => ({ agent: r.agent, model: r.model, source: r.source, input_tokens: r.input_tokens, output_tokens: r.output_tokens, cost_usd: r.cost_usd }));
     const held = it.stage === 'done' ? heldUp(hub, it) : null;
+    // No model from checkin in this project (#306): the one the implementer's own usage rows name, if just one.
+    const reported = [...new Set(usage.filter((r) => r.agent === it.implementer && r.model).map((r) => r.model))];
     return {
       item: `#${it.seq}`, title: it.title, size: it.size || null, repo: hub.repoOf(p, it) || null,
       outcome: it.stage === 'done' ? 'landed' : 'dropped',
       done_at: it.stage_since,
       cycle_ms: claimed != null ? it.stage_since - claimed : null,
       sent_back: it.rejections, stalls: it.stalls, attempts: it.attempts,
-      implementer: it.implementer || null, model: modelOf(it.implementer),
+      implementer: it.implementer || null, model: modelOf(it.implementer) ?? (reported.length === 1 ? reported[0] : null),
       reviewer: held?.reviewer ?? null, reviewer_model: held?.peer_review ? modelOf(held.reviewer) : null,
       escaped: held?.escaped ?? false, fixed_by: held?.fixed_by ?? [], overturned: held?.overturned ?? false,
       human_actions: humanActionsOn(hub, it),

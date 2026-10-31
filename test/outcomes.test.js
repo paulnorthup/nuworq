@@ -2,6 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
+import { outcomes, workspaceOutcomes } from '../src/outcomes.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const HOUR = 60 * 60 * 1000;
@@ -100,4 +101,28 @@ describe('GET /api/p/<project>/outcomes', () => {
     assert.equal(out.status, 403);
     assert.ok(out.body.hint);
   });
+});
+
+// #306: an agent that never told this project its model at checkin is counted under the one its usage reported.
+test("no checkin model: the model the implementer's usage names; checkin's still wins; with neither, not reported", () => {
+  const hub = new Hub();
+  hub.tx(() => hub.project('demo', { create: true }));
+  const agent = (name, op, args = {}) => hub.agentOp('demo', op, name, args);
+  const land = (name, usage) => {
+    const { item } = agent(name, 'next');
+    agent(name, 'submit', { item, headline: 'Done', usage });
+    hub.humanOp('demo', 'accept', { item });
+  };
+  for (let i = 1; i <= 3; i++) hub.humanOp('demo', 'create', { title: `Item ${i}`, acceptance: 'x' });
+  land('bare', { model: 'gpt-5-codex', input_tokens: 100, output_tokens: 10, cost_usd: 2 });
+  agent('both', 'checkin', { model: 'claude-opus-5-5' });
+  land('both', { model: 'qwen3-coder', input_tokens: 100, output_tokens: 10, cost_usd: 1 });
+  land('none', { input_tokens: 100, output_tokens: 10, cost_usd: 3 });
+
+  const o = outcomes(hub, 'demo');
+  assert.deepEqual(o.items.map((i) => [i.implementer, i.model]), [['bare', 'gpt-5-codex'], ['both', 'claude-opus-5-5'], ['none', null]]);
+  for (const r of [o, workspaceOutcomes(hub)]) {
+    assert.deepEqual(r.by_model.map((m) => [m.model, m.landed, m.cost_usd]), [['gpt-5-codex', 1, 2], ['claude-opus-5-5', 1, 1], [null, 1, 3]]);
+    assert.deepEqual(r.by_agent.map((a) => [a.agent, a.model]), [['bare', 'gpt-5-codex'], ['both', 'claude-opus-5-5'], ['none', null]]);
+  }
 });
