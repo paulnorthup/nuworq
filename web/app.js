@@ -17,6 +17,7 @@ import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
+import { shortcutFor, shortcutsHtml } from './shortcuts.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -274,6 +275,7 @@ function renderRail() {
       <button class="rail-item" data-action="archived">Archived projects</button>
       <button class="rail-item" data-action="connect">Connect an agent</button>
       <button class="rail-item" data-action="notify">Notifications</button>
+      <button class="rail-item kbd-hint" data-action="shortcuts"><span data-new="shortcuts"><kbd>?</kbd> Shortcuts</span></button>
       ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings">Workspace settings${S.billing.plans?.length ? ' · <b>Upgrade</b>' : ''}</button>` : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
@@ -1506,6 +1508,7 @@ const ACTIONS = {
   connect: () => connect(),
   'connect-deep': () => { S.zoom = '30m'; store.set('zoom', S.zoom); render({ force: true }); connect(); },
   notify: () => notifySettings(),
+  shortcuts: () => modal(shortcutsHtml({ mac: /Mac|iP(hone|ad)/.test(navigator.platform) })),
   'workspace-settings': () => workspaceSettings(),
   'billing-portal': async (el) => {
     el.disabled = true;
@@ -1625,24 +1628,31 @@ document.addEventListener('input', (e) => {
   if (e.target.dataset?.draft) S.drafts[e.target.dataset.draft] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
 });
 document.addEventListener('focusout', () => setTimeout(() => { if (S.pending && !typing()) render(); }, 150));
-document.addEventListener('keydown', (e) => {
-  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
-  if (e.key === 'Escape') {
-    if (!$('#modal').hidden) return closeModal();
-    if (S.itemRef) return go(S.slug);
-    if (inField) document.activeElement.blur();
-  }
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && document.activeElement?.id === 'compose') return ACTIONS['compose-send']();
-  if (e.key === 'Enter' && inField && document.activeElement.tagName === 'INPUT') {
-    const btn = document.activeElement.parentElement?.querySelector('button[data-action]');
-    if (btn) { e.preventDefault(); btn.click(); }
-  }
+// What each shortcut in SHORTCUTS (web/shortcuts.js) does; the two lists name the same ids.
+const KEYS = {
+  help: () => { if ($('#modal .shortcuts')) closeModal(); else if ($('#modal').hidden) ACTIONS.shortcuts(); },
+  close: () => closeModal(),
   // 1, 2, 3 set the depth everywhere: a project, and All projects.
-  if (!inField && !e.metaKey && !e.ctrlKey && !e.altKey && ['1', '2', '3'].includes(e.key)) {
+  depth: (e) => {
     S.zoom = Object.keys(Z)[Number(e.key) - 1];
     store.set('zoom', S.zoom);
     render({ force: true });
-  }
+  },
+  'leave-item': () => go(S.slug),
+  send: () => ACTIONS['compose-send'](),
+  press: (e) => {
+    const btn = document.activeElement.parentElement?.querySelector('button[data-action]');
+    if (btn) { e.preventDefault(); btn.click(); }
+  },
+  blur: () => document.activeElement.blur(),
+};
+document.addEventListener('keydown', (e) => {
+  const el = document.activeElement;
+  const s = shortcutFor(e, {
+    inField: /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName) || !!el?.isContentEditable,
+    input: el?.tagName === 'INPUT', compose: el?.id === 'compose', modal: !$('#modal').hidden, item: !!S.itemRef,
+  });
+  if (s) KEYS[s.id](e);
 });
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 // Using a feature tagged "new" (#130) retires its tag for this viewer.

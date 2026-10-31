@@ -7,6 +7,7 @@ export const NEW = {
   'dependabot-alerts': '2026-10-30', // #180: whether Dependabot alerts come in, in a project's GitHub dialog
   analytics: '2026-10-31', // #239: the workspace's analytics, for its owners (the home's Analytics button)
   milestones: '2026-10-31', // #269: groups are called milestones (the project's 30-second Milestones section)
+  shortcuts: '2026-10-31', // #274: every keyboard shortcut, on ? (the rail's "? Shortcuts" hint)
 };
 
 const DAYS = 7;
