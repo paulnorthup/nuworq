@@ -885,7 +885,8 @@ a:not([class]):active, a.step-where:active, .link:active, .ref:active, .zoom-mor
 .sg > header p { margin: 0; color: var(--muted); }
 .sg-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-4); }
 .sg-col { display: flex; flex-direction: column; gap: var(--sp-3); margin-bottom: var(--sp-4); }
-.sg-name { font-family: var(--mono); font-size: var(--fs-2); color: var(--muted); min-width: 8em; }
+.sg-col > .sg-row { margin-bottom: 0; }
+.sg-name { font-family: var(--mono); font-size: var(--fs-2); color: var(--muted); flex: none; width: 9em; }
 .sg-type { display: flex; align-items: baseline; gap: var(--sp-4); padding: var(--sp-2) 0; border-top: var(--rule) solid var(--line); }
 .sg-space { height: var(--sp-3); background: var(--muted); border-radius: var(--r-s); }
 .sg-box { width: 96px; height: 64px; background: var(--panel); border: var(--rule) solid var(--line); display: grid; place-items: center; font-size: var(--fs-2); color: var(--muted); }

@@ -53,5 +53,5 @@ test('a change made from the dialog keeps focus on the control that made it, aft
 
 test("the staffing line's Change is a 44px target that doesn't stretch its line", () => {
   const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.setting \.staff-words \.link \{ display: inline-flex; align-items: center; min-height: 44px; margin: -13px 0;/);
+  assert.match(css, /\.setting \.staff-words \.link \{ display: inline-flex; align-items: center; min-height: 44px; margin: calc\(-1 \* var\(--sp-3\)\) 0;/);
 });
