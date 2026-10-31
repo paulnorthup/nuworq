@@ -733,8 +733,12 @@ export function groupsOf(hub, p, items, { agents, openQs, t, stalled = new Map()
     const members = [g, ...all].filter(open);
     if (!members.length) return null;
     const e = eff.get(g.id) ?? { priority: g.priority, from: null };
+    // The group itself is its last step (#270): done counts it only once closed, so an open one is never full.
+    const parts = all.filter((i) => i.stage !== 'dropped'), partsDone = parts.filter((i) => i.stage === 'done').length;
+    // Every part done: the reason says so, and that closing the group is what's left, before the usual one.
+    const allIn = parts.length && partsDone === parts.length ? `All ${parts.length} parts done · closing ${ref(g)} itself is the last step · ` : '';
     const line = { item: ref(g), title: g.title, priority: g.priority, effective: e.priority, from: e.from ? `#${e.from}` : null,
-      done: all.filter((i) => i.stage === 'done').length, total: all.filter((i) => i.stage !== 'dropped').length };
+      done: partsDone + (g.stage === 'done' ? 1 : 0), total: parts.length + 1, allIn };
     // What Needs you calls stalled is Stuck here too, for the same step and capability, whatever else moves:
     // by the step, so a "now" sub-group or a "now" dependent outside the group counts too (#266).
     const st = [...stalled.values()].filter((s) => members.some((i) => i.id === s.it.id))
@@ -766,7 +770,7 @@ export function groupsOf(hub, p, items, { agents, openQs, t, stalled = new Map()
     if (operator) return { ...line, state: 'stuck', reason: `${ref(operator)} waits on an operator` };
     const outside = members.find((i) => i.stage === 'outside');
     return { ...line, state: 'stuck', reason: outside ? `${ref(outside)} waits on an outside fact` : 'nothing in it can start' };
-  }).filter(Boolean);
+  }).filter(Boolean).map(({ allIn, ...g }) => ({ ...g, reason: allIn + g.reason }));
   groups.sort((a, b) => PRIORITY_ORDER[a.effective] - PRIORITY_ORDER[b.effective] || GROUP_STATE[a.state] - GROUP_STATE[b.state] || a.item.slice(1) - b.item.slice(1));
   const ungrouped = items.filter((i) => open(i) && !i.parent_id && !kids.has(i.id)).length;
   return { groups, ungrouped };

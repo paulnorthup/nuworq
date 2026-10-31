@@ -38,10 +38,10 @@ describe('groups at a glance (#200)', () => {
 
     const v = view(hub, 'p');
     assert.deepEqual(v.groups.map((g) => [g.item, g.effective, g.state, g.done, g.total]), [
-      ['#1', 'now', 'stuck', 1, 2],
-      ['#4', 'soon', 'moving', 0, 2],
-      ['#7', 'later', 'you', 0, 1],
-    ], 'the finished group is gone; sorted by priority');
+      ['#1', 'now', 'stuck', 1, 3],
+      ['#4', 'soon', 'moving', 0, 3],
+      ['#7', 'later', 'you', 0, 2],
+    ], 'the finished group is gone; sorted by priority; each group counts as its own last step (#270)');
     const [lane, admin, help] = v.groups;
     assert.equal(lane.title, 'Operator lane');
     assert.equal(lane.reason, '#2 needs an operator (github-admin); none has checked in today');
