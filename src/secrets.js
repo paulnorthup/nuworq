@@ -1,6 +1,6 @@
 // Secrets don't belong in the record: whatever agents write is stored, shown and (hosted) held by
 // a third party. These shapes are specific enough that git SHAs, UUIDs and hashes never match.
-const SHAPES = [
+export const SHAPES = [
   ['an AWS access key', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
   ['a GitHub token', /\bgh[pousr]_[A-Za-z0-9]{36,}\b/],
   ['a GitHub token', /\bgithub_pat_[A-Za-z0-9_]{22,255}\b/],
