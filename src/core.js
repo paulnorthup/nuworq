@@ -1568,10 +1568,20 @@ export class Hub extends EventEmitter {
     // Each option carries the priority it ranks by: its group's or a dependent's when that is higher (#198).
     const eff = this.effectivePriorities(p);
     const ranked = (x) => ({ ...x, priority: eff.get(x.item.id)?.priority ?? x.item.priority });
+    // An operator session takes what only it can do before anything else (#137): anyone can do the rest.
+    const operator = role === 'operator' || !!fit.has?.includes('operator');
+    // A review waits while a reviewer's question on it is open (#259): for an operator's answer, only
+    // operators get it meanwhile; for the human's, nobody does. And a reviewer who handed it off doesn't
+    // get it back until something new arrives on it: an answer, a new submission or a comment.
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
         AND COALESCE(implementer, '') != ?
         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
-      ORDER BY stage_since`).all(p.id, agent, agent).filter(fresh).map((item) => ({ mode: 'review', item }));
+        AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.item_id = items.id AND q.status = 'open' AND q.at >= items.stage_since
+          AND q.asked_by != COALESCE(items.implementer, '') AND (q.audience != 'operator' OR ? = 0))
+        AND NOT EXISTS (SELECT 1 FROM events h WHERE h.item_id = items.id AND h.actor = ? AND h.type = 'handoff' AND h.at >= items.stage_since
+          AND NOT EXISTS (SELECT 1 FROM events n WHERE n.item_id = items.id AND n.at > h.at AND n.actor != h.actor
+            AND n.type IN ('answered', 'assumption_confirmed', 'question_withdrawn', 'submitted', 'comment')))
+      ORDER BY stage_since`).all(p.id, agent, agent, operator ? 1 : 0, agent ?? '').filter(ok).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
     // An open pull request lands it: GitHub's merge marks it done. Unless it conflicts with main: then an
@@ -1598,8 +1608,6 @@ export class Hub extends EventEmitter {
     const large = (x) => (fit.weak && x.item.size === 'large' ? 1 : 0);
     // Work that needs what this agent's machine has goes to it first: few agents can do it, anyone can do the rest.
     const own = (x) => (fit.has && json(x.item.needs, []).length ? 0 : 1);
-    // An operator session takes what only it can do before anything else (#137): anyone can do the rest.
-    const operator = role === 'operator' || !!fit.has?.includes('operator');
     const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].map(ranked).sort((a, b) =>
       large(a) - large(b) ||
       (operator ? own(a) - own(b) : 0) ||
