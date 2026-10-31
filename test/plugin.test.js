@@ -23,14 +23,15 @@ describe('the Claude Code plugin', () => {
     assert.ok(monitors.every((m) => m.when.startsWith('on-skill-invoke:')), 'no monitor starts in every session');
     const manifest = JSON.parse(read(PLUGIN, '.claude-plugin', 'plugin.json'));
     assert.equal(manifest.name, 'nuworq');
-    assert.equal(manifest.version, JSON.parse(read(ROOT, 'package.json')).version);
+    assert.ok(!('version' in manifest), 'no pinned version: Claude Code takes it from the commit, so `claude plugin update` finds new ones (#364)');
     assert.match(manifest.description, /MCP server/);
     assert.equal(manifest.author.name, 'nuworq', '`claude plugin validate` warns without an author');
     assert.deepEqual(JSON.parse(read(PLUGIN, '.mcp.json')), { mcpServers: { nuworq: { command: 'nuworq', args: ['mcp'] } } }, 'no folder path, no token');
     for (const name of ['nuworq', 'nuworq-plan', 'nuworq-operator']) assert.match(read(PLUGIN, 'skills', name, 'SKILL.md'), new RegExp(`^---\\nname: ${name}\\ndescription: .+\\n(?:[a-z-]+: .+\\n)*---\\n`));
     const market = JSON.parse(read(ROOT, '.claude-plugin', 'marketplace.json'));
     assert.ok(market.metadata.description, '`claude plugin validate` warns without a marketplace description');
-    assert.deepEqual(market.plugins.map((p) => [p.name, p.source, p.version]), [['nuworq', './plugin', manifest.version]]);
+    assert.deepEqual(market.plugins.map((p) => [p.name, p.source]), [['nuworq', './plugin']]);
+    assert.ok(market.plugins.every((p) => !('version' in p)), 'nor in the marketplace entry');
   });
 
   // `nuworq skill` writes skill({ url }) for the hub this machine is connected to; the plugin serves any hub,

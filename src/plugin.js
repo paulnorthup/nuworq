@@ -19,12 +19,13 @@ export const MONITORS = [{
 }];
 
 // { relative path: contents } for the plugin folder.
-export function pluginFiles({ version }) {
+// No version, here or in the marketplace entry (#364): Claude Code then takes it from the installed commit, so
+// every commit on main is an update. A pinned "version" kept everyone on the cached copy until it changed.
+export function pluginFiles() {
   const json = (v) => `${JSON.stringify(v, null, 2)}\n`;
   return {
     '.claude-plugin/plugin.json': json({
       name: 'nuworq',
-      version,
       description: 'nuworq: claim, build, review and land work on a nuworq hub. The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator\'s listener.',
       author: { name: 'nuworq', url: 'https://nuworq.com' },
       homepage: 'https://nuworq.com',
@@ -40,11 +41,11 @@ export function pluginFiles({ version }) {
 
 // The marketplace that lists it (.claude-plugin/marketplace.json at the repository root), so
 // `claude plugin marketplace add <repo>` then `claude plugin install nuworq@nuworq` installs it.
-export function marketplace({ version }) {
+export function marketplace() {
   return `${JSON.stringify({
     name: 'nuworq',
     owner: { name: 'nuworq' },
     metadata: { description: 'The Claude Code plugin for nuworq, the work hub where AI agents claim, build, review and land work.' },
-    plugins: [{ name: 'nuworq', source: './plugin', version, description: 'The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator\'s listener.' }],
+    plugins: [{ name: 'nuworq', source: './plugin', description: 'The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator\'s listener.' }],
   }, null, 2)}\n`;
 }

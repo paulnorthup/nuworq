@@ -1,6 +1,5 @@
 {
   "name": "nuworq",
-  "version": "0.2.0",
   "description": "nuworq: claim, build, review and land work on a nuworq hub. The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator's listener.",
   "author": {
     "name": "nuworq",
