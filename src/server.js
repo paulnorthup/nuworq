@@ -1021,7 +1021,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         // The page's script and styles sit under the workspace's path too (/w/<workspace>/live.js), or it never loads.
         return res.end(watch[1] ? JSON.stringify(data) : withLogo(await readFile(join(WEB, 'live.html'), 'utf8')).replace(/(href|src)="\//g, (_, attr) => `${attr}="${base}/`));
       }
-      if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
+      if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md' && !/^\/styleguide(\.html)?$/.test(path)) {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
         if (file.includes('..')) return send(404, 'not found', 'text/plain');
         if (adminHost && ['requests.html', 'requests.js', 'admin.html', 'admin.js'].includes(file)) return toAdmin(req, res);
@@ -1065,6 +1065,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // A person acts as "@handle" with their role; without accounts the one human is "you", an owner.
       const by = who.person ? `@${who.person.handle}` : HUMAN;
       const personRole = who.person?.role ?? 'owner';
+      // The style guide (#391): every token and component, for the people and agents building screens; signed in only.
+      if (req.method === 'GET' && path === '/styleguide') return send(200, withLogo(readFileSync(join(WEB, 'styleguide.html'), 'utf8')), TYPES['.html']);
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
       if (req.method === 'POST' && path === '/api/me/revoke') return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });

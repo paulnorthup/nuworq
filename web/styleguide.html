@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nuworq · Style guide</title>
+<link rel="icon" href="<!--favicon-->">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="sg">
+  <header>
+    <div class="brand"><!--logo--><span>nuworq</span></div>
+    <h1>Style guide</h1>
+    <p>One strict set of tokens and the parts built from them. A new screen uses these, nothing else.</p>
+  </header>
+
+  <section class="sec" id="type">
+    <header><h2>Type</h2><span class="hint">six sizes, each with its line height and weight</span></header>
+    <div class="sg-type"><span class="sg-name">--fs-6 20/1.3 600</span><span style="font-size: var(--fs-6); line-height: var(--lh-6); font-weight: var(--fw-6)">Headlines and big figures</span></div>
+    <div class="sg-type"><span class="sg-name">--fs-5 16/1.4 600</span><span style="font-size: var(--fs-5); line-height: var(--lh-5); font-weight: var(--fw-5)">Titles: a card, a dialog</span></div>
+    <div class="sg-type"><span class="sg-name">--fs-4 14/1.5 400</span><span style="font-size: var(--fs-4); line-height: var(--lh-4); font-weight: var(--fw-4)">Body: what most of a screen says</span></div>
+    <div class="sg-type"><span class="sg-name">--fs-3 13/1.5 400</span><span style="font-size: var(--fs-3); line-height: var(--lh-3); font-weight: var(--fw-3)">Secondary: buttons, rows, notes</span></div>
+    <div class="sg-type"><span class="sg-name">--fs-2 12/1.45 400</span><span style="font-size: var(--fs-2); line-height: var(--lh-2); font-weight: var(--fw-2)">Meta: ages, hints, who did it</span></div>
+    <div class="sg-type"><span class="sg-name">--fs-1 11/1.4 600</span><span style="font-size: var(--fs-1); line-height: var(--lh-1); font-weight: var(--fw-1); text-transform: uppercase; letter-spacing: .05em">Labels and caps</span></div>
+    <div class="sg-type"><span class="sg-name">tabular-nums</span><span class="count">1,204 · $3.56 · 12m 40s · 87%</span></div>
+  </section>
+
+  <section class="sec" id="space">
+    <header><h2>Space</h2><span class="hint">a 4px grid: --sp-N is N×4px</span></header>
+    <div class="sg-col">
+      <div class="sg-row"><span class="sg-name">--sp-h 2</span><div class="sg-space" style="width: var(--sp-h)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-1 4</span><div class="sg-space" style="width: var(--sp-1)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-2 8</span><div class="sg-space" style="width: var(--sp-2)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-3 12</span><div class="sg-space" style="width: var(--sp-3)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-4 16</span><div class="sg-space" style="width: var(--sp-4)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-5 20</span><div class="sg-space" style="width: var(--sp-5)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-6 24</span><div class="sg-space" style="width: var(--sp-6)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-7 28</span><div class="sg-space" style="width: var(--sp-7)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-8 32</span><div class="sg-space" style="width: var(--sp-8)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-10 40</span><div class="sg-space" style="width: var(--sp-10)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-12 48</span><div class="sg-space" style="width: var(--sp-12)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-15 60</span><div class="sg-space" style="width: var(--sp-15)"></div></div>
+      <div class="sg-row"><span class="sg-name">--sp-20 80</span><div class="sg-space" style="width: var(--sp-20)"></div></div>
+    </div>
+  </section>
+
+  <section class="sec" id="shape">
+    <header><h2>Shape</h2><span class="hint">three radii, two elevations, one rule</span></header>
+    <div class="sg-row">
+      <div class="sg-box" style="border-radius: var(--r-s)">--r-s 4</div>
+      <div class="sg-box" style="border-radius: var(--r-m)">--r-m 8</div>
+      <div class="sg-box" style="border-radius: var(--r-full)">--r-full</div>
+    </div>
+    <div class="sg-row">
+      <div class="sg-box" style="border-radius: var(--r-m); box-shadow: var(--e-1)">--e-1 raised</div>
+      <div class="sg-box" style="border-radius: var(--r-m); box-shadow: var(--e-2)">--e-2 over</div>
+      <div class="sg-box" style="border-radius: var(--r-m); border: var(--rule) solid var(--ink)">--rule 1</div>
+      <div class="sg-box" style="border-radius: var(--r-m); border-left: var(--accent) solid var(--you)">--accent 3</div>
+    </div>
+  </section>
+
+  <section class="sec" id="color">
+    <header><h2>Color</h2><span class="hint">each means one thing (the map at the top of style.css)</span></header>
+    <div class="sg-row">
+      <div class="sg-swatch"><i style="background: var(--you)"></i>--you</div>
+      <div class="sg-swatch"><i style="background: var(--agents)"></i>--agents</div>
+      <div class="sg-swatch"><i style="background: var(--queue)"></i>--queue</div>
+      <div class="sg-swatch"><i style="background: var(--hatch)"></i>--hatch</div>
+      <div class="sg-swatch"><i style="background: var(--ok)"></i>--ok</div>
+      <div class="sg-swatch"><i style="background: var(--warn)"></i>--warn</div>
+      <div class="sg-swatch"><i style="background: var(--bad)"></i>--bad</div>
+      <div class="sg-swatch"><i style="background: var(--ink)"></i>--ink</div>
+      <div class="sg-swatch"><i style="background: var(--muted)"></i>--muted</div>
+      <div class="sg-swatch"><i style="background: var(--brand)"></i>--brand</div>
+    </div>
+  </section>
+
+  <section class="sec" id="buttons">
+    <header><h2>Buttons</h2><span class="hint">emphasis, never state</span></header>
+    <div class="sg-row">
+      <button class="btn primary">Primary</button>
+      <button class="btn">Default</button>
+      <button class="btn small">Small</button>
+      <button class="btn ghost">Ghost</button>
+      <button class="btn primary" disabled>Disabled</button>
+      <button class="btn" disabled>Disabled</button>
+      <button class="link">Link button</button>
+      <a href="#buttons">A link</a>
+    </div>
+    <div class="sg-row">
+      <div class="seg"><button class="on">30s</button><button>5m</button><button>30m</button></div>
+      <button class="switch" role="switch" aria-checked="false" aria-label="Off"></button>
+      <button class="switch" role="switch" aria-checked="true" aria-label="On"></button>
+      <button class="opt">A choice</button><button class="opt">Its peer</button>
+    </div>
+  </section>
+
+  <section class="sec" id="inputs">
+    <header><h2>Inputs</h2><span class="hint">empty, filled, disabled</span></header>
+    <div class="sg-col" style="max-width: 420px">
+      <input placeholder="Placeholder">
+      <input value="Filled in">
+      <input value="Disabled" disabled>
+      <select><option>A select</option></select>
+      <textarea placeholder="A textarea"></textarea>
+      <label class="check-label"><input type="checkbox" checked> A checkbox</label>
+    </div>
+  </section>
+
+  <section class="sec" id="pills">
+    <header><h2>Pills and marks</h2></header>
+    <div class="sg-row">
+      <span class="tag now">now</span><span class="tag soon">soon</span><span class="tag later">later</span>
+      <span class="tag you">you</span><span class="tag go">go</span><span class="tag shaping">shaping</span>
+      <span class="badge">3</span><span class="ref">#391</span><code>code</code><kbd>⌘K</kbd>
+    </div>
+    <div class="sg-row">
+      <span class="stage-pill court-you">waiting</span><span class="stage-pill court-agents">active</span>
+      <span class="stage-pill court-queue">ready</span><span class="stage-pill court-external">outside</span>
+      <span class="stage-pill done">done</span><span class="stage-pill">dropped</span>
+    </div>
+    <div class="sg-row">
+      <span class="dot needs-you" role="img" aria-label="Needs you"></span><span class="dot flowing" role="img" aria-label="Flowing"></span>
+      <span class="dot stalled" role="img" aria-label="Stalled"></span><span class="dot idle" role="img" aria-label="Idle"></span>
+      <span class="dot parked" role="img" aria-label="Parked"></span>
+      <span class="agent prov-anthropic"><i></i>claude-f4cb</span><span class="agent prov-openai"><i></i>codex-1</span>
+      <span class="ev">evidence</span><span class="ev check pass">✓ CI passed</span><span class="ev check fail">CI failed</span>
+    </div>
+  </section>
+
+  <section class="sec" id="cards">
+    <header><h2>Cards and rows</h2></header>
+    <div class="cards">
+      <div class="card">
+        <div class="card-top"><span class="kind">Question</span><span class="ref">#387</span><span class="age">3m</span></div>
+        <h3>Can you turn on llm-proxy usage for the hub?</h3>
+        <div class="sub">claude-f4cb asks. Two short steps.</div>
+        <div class="actions"><button class="btn primary">Answer</button><button class="btn">Later</button></div>
+      </div>
+    </div>
+    <div class="rows" style="margin-top: var(--sp-3)">
+      <div class="row-item"><div class="body"><div class="h">A row that says one thing</div><div class="s">and a muted line under it</div></div><span class="tag soon">soon</span><span class="age">2h</span></div>
+      <div class="row-item clickable"><div class="body"><div class="h">A row you can open</div></div><span class="age">5m</span></div>
+    </div>
+    <div class="zero" style="margin-top: var(--sp-3)"><span class="check good">✓</span>Nothing needs you. An empty state.</div>
+  </section>
+
+  <section class="sec" id="bars">
+    <header><h2>Bars and figures</h2></header>
+    <div class="flow">
+      <div class="stages">
+        <div class="stage court-backlog"><span class="n">13</span><span class="l">Proposed</span></div>
+        <div class="stage court-queue"><span class="n">4</span><span class="l">Ready</span></div>
+        <div class="stage court-external"><span class="n">1</span><span class="l">Outside</span></div>
+        <div class="stage court-agents on"><span class="n">3</span><span class="l">Active</span></div>
+        <div class="stage court-you"><span class="n">1</span><span class="l">Waiting</span></div>
+        <div class="stage stage-done"><span class="n">8</span><span class="l">Done</span></div>
+        <div class="stage zero-count"><span class="n">0</span><span class="l">Dropped</span></div>
+      </div>
+      <div class="courtbar"><span class="seg-c agents" style="flex: 5">agents</span><span class="seg-c queue" style="flex: 2">queue</span><span class="seg-c you" style="flex: 1">you</span><span class="seg-c external" style="flex: 1"></span></div>
+      <div class="legend"><span><i class="agents"></i>agents</span><span><i class="queue"></i>queue</span><span><i class="you"></i>you</span><span><i class="external"></i>outside</span></div>
+      <div class="throughput"><div class="spark"><span style="height: 40%"></span><span class="z"></span><span style="height: 70%"></span><span style="height: 100%"></span></div>8 finished in 14 days</div>
+    </div>
+    <div class="sg-row" style="margin-top: var(--sp-3)">
+      <div class="lifebar" style="width: 320px"><span class="queue" style="flex: 1">ready</span><span class="agents" style="flex: 3">active</span><span class="you" style="flex: 1">you</span></div>
+      <span class="g-bar"><i style="width: 60%"></i></span><span class="g-count">6 of 10</span>
+    </div>
+  </section>
+
+  <section class="sec" id="steps">
+    <header><h2>Steps</h2><span class="hint">a checklist; each row a thumb-sized target</span></header>
+    <div class="steps">
+      <div class="steps-head"><span class="label">Steps</span><span class="steps-count">1 of 2</span></div>
+      <ol>
+        <li class="on"><button class="step-tick"><span class="box">✓</span><span class="do">Open the repository's Actions secrets</span></button></li>
+        <li><button class="step-tick"><span class="box">2</span><span class="do">Add NPM_TOKEN</span></button><div class="step-more"><span class="step-check">NPM_TOKEN is listed</span></div></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="sec" id="overlays">
+    <header><h2>Dialogs and toasts</h2></header>
+    <div class="dialog">
+      <h2>A dialog</h2>
+      <p class="lead">Its lead says what it's for, in one sentence.</p>
+      <div class="form"><label>A field<input placeholder="Type here"></label></div>
+      <div class="foot"><button class="btn ghost">Cancel</button><button class="btn primary">Save</button></div>
+    </div>
+    <div class="sg-row" style="margin-top: var(--sp-4)">
+      <div class="toast">Saved.</div>
+      <div class="toast err">The hub couldn't save it.</div>
+    </div>
+  </section>
+</main>
+</body>
+</html>
