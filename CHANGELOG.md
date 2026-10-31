@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 (2026-10-31)
+
+What landed since v0.4.0.
+
+**Each finished milestone becomes a versioned, signed release with a changelog and upgrade notes, in any project (#397)**
+
+- Releases sign themselves on Paul's Mac: a signer service signs each vX.Y.Z tag on main, built from GitHub, and puts the signature on the hub (#430)
+- The release signer runs on Paul's Mac, and v0.3.0 is signed by it, not by hand (#431)
+- A release tag gets signed even when the hub never ran its commit: v0.4.0 (e596c95) is stuck unsigned (#434)
+- v0.4.0 is signed by the signer and installs on Paul's Mac with its changelog, once the hub runs #434 (#435)
+- After nuworq updates itself in the background, the next command says once what changed: the version and its changelog lines (#436)
+
+**Also in this release**
+
+- A person sees two nuworq commands, /nuworq:shaper and /nuworq:operator, installed once through the plugin (#432)
+
 ## 0.4.0 (2026-10-31)
 
 What landed since v0.3.0.
