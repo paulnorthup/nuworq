@@ -99,6 +99,23 @@ describe('bulk shaping of an imported backlog', () => {
     } finally { close(); }
   });
 
+  test('a proposal flagged stale is not offered to shape while the question waits; "Keep them all" offers it again', async () => {
+    try {
+      const shapeable = () => hub.shapeable(hub.project('app')).map((i) => i.seq);
+      assert.ok(shapeable().includes(1));
+      refine('a1', { item: '#1', stale: 'a delivery probe, not work' });
+      assert.ok(!shapeable().includes(1), 'flagged: waits for the human, not for shaping');
+      assert.ok(shapeable().includes(2), 'unflagged proposals are still offered');
+      for (let i = 0; i < 7; i++) {
+        const r = hub.agentOp('app', 'next', `a${i}`, {});
+        if (r.mode !== 'shape') break;
+        assert.notEqual(r.item, '#1', 'next never hands out the flagged proposal');
+      }
+      await human('answer', { question: staleQs()[0].id, answer: 'Keep them all' });
+      assert.ok(shapeable().includes(1), 'kept: shaping it is fair game again');
+    } finally { close(); }
+  });
+
   test('duplicate_of moves the issue link to the target and drops the duplicate; no issue link → 400', async () => {
     try {
       const r = refine('a1', { item: '#3', duplicate_of: '#1' });
