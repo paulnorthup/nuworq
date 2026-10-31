@@ -344,7 +344,14 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .agent-strip .st { font-size: var(--fs-2); color: var(--muted); }
 /* Who is here now, as counts by role (#441): each count opens to its agents. Thumb-sized targets. */
 .role-counts { margin-top: var(--sp-2); font-size: var(--fs-3); color: var(--muted); }
-.role-counts .role-label { margin-right: var(--sp-1); }
+/* Wrapping (#445): a count that wraps starts flush on the next line at normal spacing. Its "·" sits in the gap before
+   it and is clipped away at a line start; its 44px target overlaps the line box instead of spacing the lines apart. */
+.role-counts .role-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--sp-6); clip-path: inset(-12px -12px -12px 0); }
+.role-counts .role-label { margin-right: calc(-1 * var(--sp-2)); }
+.role-counts .role-item { position: relative; display: inline-flex; align-items: center; }
+.role-counts .role-item .sep { position: absolute; left: calc(-1 * var(--sp-3)); transform: translateX(-50%); }
+.role-counts .role-row .role-count { margin: calc(-1 * var(--sp-2)) 0; padding: 0; }
+.role-counts .role-row .role-count:focus-visible { outline-offset: -2px; }
 .role-counts .role-count, .sec .earlier { min-height: 44px; display: inline-flex; align-items: center; }
 .role-names { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); padding: var(--sp-2) 0; color: var(--ink); }
 

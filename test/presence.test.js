@@ -76,4 +76,14 @@ describe('counts by role', () => {
     assert.doesNotMatch(open, />o</);
     assert.equal(roleCounts([], { esc, who }), '');
   });
+
+  test('each count after the first carries its own separator, with no loose text between them (#445)', () => {
+    const html = roleCounts(agents, { scope: 'r', esc, who });
+    const row = html.match(/<div class="role-row">(.*?)<\/div>/)[1];
+    assert.equal((row.match(/<span class="role-item">/g) ?? []).length, 3);
+    assert.equal((row.match(/class="sep"/g) ?? []).length, 2);
+    assert.match(row, /^<span class="role-label">Here now<\/span><span class="role-item"><button/);
+    assert.match(row, /<span class="role-item"><span class="sep" aria-hidden="true">·<\/span><button[^>]*>1 operator</);
+    assert.doesNotMatch(row, />\s+</);
+  });
 });
