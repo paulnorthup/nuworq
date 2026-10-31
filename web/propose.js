@@ -16,7 +16,7 @@ export function proposeForm({ more = false, priority = 'soon', autonomy = '' } =
       <div class="row"><span class="faint">Priority</span><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${priority === p ? 'on' : ''}" data-action="nw-priority" data-p="${p}">${p}</button>`).join('')}</div>
         <span style="flex:1"></span><button class="btn" data-action="add-ready" title="Already shaped: skip the agent's shaping and your OK">Add to Ready</button></div>`
     : '<button class="link propose-more" data-action="nw-more">+ What done means, context, priority</button>'}
-      <p class="faint">${autonomy === 'ask' ? 'An agent shapes it into work if it needs it; it waits for your OK, then gets built.' : 'An agent shapes it into work, then it gets built.'}${more ? ' Add to Ready skips both: it goes straight into the queue.' : ''}</p>
+      <p class="faint">${autonomy === 'ask' ? 'An agent shapes it into work if it needs it; it waits for your OK, then gets built.' : 'An agent shapes it into work, then it gets built.'}${more ? ' Add to Ready skips that: it goes straight into the queue.' : ''}</p>
     </div>`;
 }
 

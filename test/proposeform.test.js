@@ -27,7 +27,7 @@ describe('propose from the board', () => {
     const open = proposeForm({ more: true });
     assert.match(open, /id="nw-pre"/);
     assert.match(open, /data-action="add-ready"[^>]*>Add to Ready</);
-    assert.match(open, /Add to Ready skips both/);
+    assert.match(open, /Add to Ready skips that: it goes straight into the queue/);
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.match(app, /'add-ready': \(\) => addWork\(true\)/);
     assert.match(app, /precondition: pre \? toPrecondition\(pre\)/);
