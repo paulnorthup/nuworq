@@ -1204,6 +1204,18 @@ async function setting(body, msg) {
   return r;
 }
 
+// The board's + Work (#389): Propose makes the person's proposal; Add to Ready puts it straight into the queue.
+async function addWork(ready) {
+  const more = S.addMore, pre = more ? val('nw-pre') : '';
+  const body = proposal({ title: val('nw-title'), acceptance: more ? val('nw-acceptance') : '', summary: more ? val('nw-summary') : '',
+    priority: S.drafts['nw-priority'], precondition: pre ? toPrecondition(pre) : null, ready });
+  if (!body) { $('#nw-title')?.focus(); return toast('Say what should be true when it\'s done', true); }
+  await human('create', body, pre ? 'Added; it waits until that holds' : ready ? 'Added to Ready' : 'Proposed: an agent shapes it next');
+  clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority', 'nw-pre');
+  S.addWork = S.addMore = false;
+  render({ force: true });
+}
+
 async function connect() {
   S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
   const slug = S.slug ?? 'my-project';
@@ -1517,14 +1529,8 @@ const ACTIONS = {
   'toggle-add': () => { S.addWork = !S.addWork; if (!S.addWork) S.addMore = false; render({ force: true }); if (S.addWork) setTimeout(() => $('#nw-title')?.focus(), 0); },
   'nw-priority': (el) => { S.drafts['nw-priority'] = el.dataset.p; render({ force: true }); },
   'nw-more': () => { S.addMore = true; render({ force: true }); setTimeout(() => $('#nw-acceptance')?.focus(), 0); },
-  'add-work': async () => {
-    const body = proposal({ title: val('nw-title'), acceptance: S.addMore ? val('nw-acceptance') : '', summary: S.addMore ? val('nw-summary') : '', priority: S.drafts['nw-priority'] });
-    if (!body) { $('#nw-title')?.focus(); return toast('Say what should be true when it\'s done', true); }
-    await human('create', body, 'Proposed: an agent shapes it next');
-    clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority');
-    S.addWork = S.addMore = false;
-    render({ force: true });
-  },
+  'add-work': () => addWork(false),
+  'add-ready': () => addWork(true),
   answer: (el) => {
     const q = el.dataset.q;
     const decide = document.getElementById(`dec-${q}`)?.checked;

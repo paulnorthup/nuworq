@@ -21,6 +21,17 @@ describe('propose from the board', () => {
     assert.doesNotMatch(open, /data-action="nw-more"/);
   });
 
+  test('what + Work could already do stays, behind the same link: Waits on, and Add to Ready', () => {
+    assert.doesNotMatch(proposeForm(), /nw-pre|add-ready/, 'not at first');
+    const open = proposeForm({ more: true });
+    assert.match(open, /id="nw-pre"/);
+    assert.match(open, /data-action="add-ready"[^>]*>Add to Ready</);
+    assert.match(open, /Add to Ready skips both/);
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    assert.match(app, /'add-ready': \(\) => addWork\(true\)/);
+    assert.match(app, /precondition: pre \? toPrecondition\(pre\)/);
+  });
+
   test('wired in: the board\'s + Work opens it and is tagged new', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.match(app, /proposeForm\(\{ more: S\.addMore/);
@@ -38,6 +49,26 @@ describe('propose from the board', () => {
     assert.equal(proposal({ title: '  ' }), null);
     assert.deepEqual(proposal({ title: ' Users can reset their password ' }), { title: 'Users can reset their password', acceptance: '', summary: '', priority: 'soon', stage: 'proposed' });
     assert.equal(proposal({ title: 'x', acceptance: 'A reset email arrives', priority: 'now' }).acceptance, 'A reset email arrives');
+    assert.equal(proposal({ title: 'x', ready: true }).stage, undefined, 'Add to Ready: no stage, so the hub puts it in Ready');
+    assert.deepEqual(proposal({ title: 'x', precondition: { url: 'https://example.com' } }).precondition, { url: 'https://example.com' });
+    assert.equal('precondition' in proposal({ title: 'x' }), false);
+  });
+
+  test('Add to Ready goes straight into the queue, even under "ask"; with Waits on it waits outside', async () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('w', { create: true }));
+    hub.humanOp('w', 'settings', { autonomy: 'ask' });
+    const server = createServer(hub, { sweepMs: 3_600_000 });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const send = async (form) => (await (await fetch(`http://127.0.0.1:${server.address().port}/api/p/w/human/create`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(proposal(form)),
+    })).json()).item;
+    try {
+      const ready = await send({ title: 'Users can reset their password', acceptance: 'A reset email arrives', ready: true });
+      assert.equal(hub.item(hub.project('w'), ready).stage, 'ready');
+      const outside = await send({ title: 'Use the vendor API', ready: true, precondition: { url: 'https://example.com/v2' } });
+      assert.equal(hub.item(hub.project('w'), outside).stage, 'outside');
+    } finally { server.close(); }
   });
 
   // Over HTTP, as the board sends it: the person's proposal, then shaped or waiting per the project's autonomy.
