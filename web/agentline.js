@@ -31,8 +31,9 @@ export function roleCounts(agents, { scope = '', isOpen = () => false, who, esc 
   const groups = byRole(agents);
   if (!groups.length) return '';
   const key = (role) => `roles:${scope}:${role}`;
-  const counts = groups.map((g) => `<button class="link role-count" data-action="toggle" data-key="${esc(key(g.role))}" aria-expanded="${isOpen(key(g.role))}">${esc(g.label)}</button>`).join(' · ');
+  // Each count carries its own separator, so a count that wraps (#445) takes its "·" along and the line starts flush.
+  const counts = groups.map((g, i) => `<span class="role-item">${i ? '<span class="sep" aria-hidden="true">·</span>' : ''}<button class="link role-count" data-action="toggle" data-key="${esc(key(g.role))}" aria-expanded="${isOpen(key(g.role))}">${esc(g.label)}</button></span>`).join('');
   const open = groups.filter((g) => isOpen(key(g.role)))
     .map((g) => `<div class="role-names">${g.agents.map((a) => `<span class="a">${who(a)}</span>`).join('')}</div>`).join('');
-  return `<div class="role-counts" data-new="present-agents"><span class="role-label">Here now</span> ${counts}${open}</div>`;
+  return `<div class="role-counts" data-new="present-agents"><div class="role-row"><span class="role-label">Here now</span>${counts}</div>${open}</div>`;
 }
