@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import { createClient } from './client.js';
 import { tools, guide } from './protocol.js';
-import { slugify } from './core.js';
+import { slugify } from './text.js';
 import { envVar } from './names.js';
 
 const VERSIONS = ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25'];

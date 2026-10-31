@@ -2,7 +2,7 @@
 import { readFileSync, existsSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join, dirname, basename, resolve, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { slugify, normRemote } from './core.js';
+import { slugify, normRemote } from './text.js';
 import { mirrorSource } from './git.js';
 import { envVar, dataDir, CONFIG_FILES } from './names.js';
 
