@@ -15,6 +15,7 @@ export const NEW = {
   feedback: '2026-10-31', // #295: tell nuworq's developers what got in your way (the rail's Feedback, on hubs that take it)
   'feedback-mine': '2026-10-31', // #297: under the Feedback form, what you sent and what happened to each
   'feedback-autonomy': '2026-10-31', // #296: how far feedback goes on its own (the admin dashboard's Feedback section)
+  'ea-sources': '2026-10-31', // #356: on the admin dashboard, how far the people from each early-access source got
 };
 
 const DAYS = 7;

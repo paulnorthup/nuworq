@@ -277,10 +277,10 @@ export function notifyWorkspaces(spaces, baseUrlFor, { every = 30_000, ...opts }
 // ── the hub's owners (workspaces mode) ──
 
 // A new early-access request, as its push: who asked and the link that opens it, nothing else (#167).
-export function composeRequest({ email, github = '', building = '' }, url = '') {
+export function composeRequest({ email, github = '', building = '', source = '' }, url = '') {
   const title = 'nuworq: early-access request';
   const note = clip(building, 140);
-  const who = `${email}${github ? ` (@${github})` : ''}`;
+  const who = `${email}${github ? ` (@${github})` : ''}${source ? ` via ${source}` : ''}`;
   return { title, url, text: [title, `${who} asked to come in${note ? `: ${note}` : ''}`, url && `→ ${url}`].filter(Boolean).join('\n'), entries: [] };
 }
 

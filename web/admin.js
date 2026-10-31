@@ -44,6 +44,10 @@ async function main() {
     <p class="lead">Approve gives you a link to send: it lets them make one workspace, once, within 14 days.</p>
     <div class="seg admin-filter" role="group" aria-label="Show">${STATES.map(([v, label]) => `<button data-state="${v}" aria-pressed="${v === state}" class="${v === state ? 'on' : ''}">${label}</button>`).join('')}</div>
     <div id="list" aria-live="polite"><p class="faint">Loading…</p></div>
+    <h2 class="admin-h2" data-new="ea-sources">Where they came from</h2>
+    <p class="lead">How far the people from each source got. A source is the ?ref= tag on nuworq.com's link, or the site they came from.</p>
+    <div class="seg admin-filter src-filter" role="group" aria-label="Count">${SPANS.map(([v, label]) => `<button data-span="${v}" aria-pressed="${v === span}" class="${v === span ? 'on' : ''}">${label}</button>`).join('')}</div>
+    <div id="sources" aria-live="polite"><p class="faint">Loading…</p></div>
     <h2 class="admin-h2" id="feedback">Feedback</h2>
     <p class="lead" id="fb-lead">What got in people's and agents' way. Approve makes it a proposal agents shape; Decline closes it, with a note to the sender if you like.</p>
     <div id="fb-level"></div>
@@ -52,6 +56,7 @@ async function main() {
     <h2 class="admin-h2">Workspaces</h2>
     <div id="spaces" aria-live="polite"><p class="faint">Loading…</p></div>`;
   load();
+  loadSources();
   loadFeedback();
   loadSpaces();
   loadWiring();
@@ -91,12 +96,39 @@ async function load() {
 function card(r) {
   const link = links.get(r.id);
   return `<article class="admin-card${r.id === focus ? ' focus' : ''}" id="request-${r.id}" data-email="${esc(r.email)}">
-    <div class="h">${esc(r.email)}${r.github ? ` · <a href="https://github.com/${esc(r.github)}" target="_blank" rel="noopener">@${esc(r.github)}</a>` : ''}</div>
+    <div class="h">${esc(r.email)}${r.github ? ` · <a href="https://github.com/${esc(r.github)}" target="_blank" rel="noopener">@${esc(r.github)}</a>` : ''}${r.source ? ` <span class="src-tag">via ${esc(r.source)}</span>` : ''}</div>
     <p class="s">${esc(r.building) || '<span class="faint">No note.</span>'}</p>
     <p class="faint">Asked ${esc(ago(r.updated_at))}${r.decided_at ? ` · ${esc(r.state)} by ${esc(r.decided_by)} ${esc(ago(r.decided_at))}` : ''}</p>
     ${link ? `<div class="admin-link"><p class="ok">Approved. Send them this link (it's shown only now):</p><code>${esc(link)}</code>
       <button class="btn primary" data-copy="${esc(link)}">Copy link</button></div>` : ''}
     ${r.state === 'new' ? `<div class="admin-acts"><button class="btn primary" data-id="${r.id}" data-approve="1">Approve</button><button class="btn" data-id="${r.id}">Decline</button></div>` : ''}
+  </article>`;
+}
+
+// ── where they came from (#356): per source, a funnel of bars from requests to a first item landed ──
+// Read at a glance, on a phone, before deciding where to spend: the same scale across sources, so a long first bar
+// that drops to nothing stands out next to a short one that holds.
+const SPANS = [['recent', 'Last 14 days'], ['all', 'All time']];
+const STEPS = [['requests', 'Asked'], ['let_in', 'Let in'], ['connected', 'Agent connected'], ['landed', 'Item landed']];
+let span = 'recent', sourcesData = null;
+
+async function loadSources() {
+  const el = $('#sources');
+  try {
+    sourcesData ??= await api('/api/early-access/sources');
+    const rows = sourcesData.sources.filter((s) => s[span].requests);
+    const max = Math.max(1, ...rows.map((s) => s[span].requests));
+    el.innerHTML = rows.length ? rows.map((s) => sourceCard(s, s[span], max)).join('')
+      : `<p class="faint">${span === 'recent' ? `No requests in the last ${sourcesData.days} days.` : 'No requests yet.'}</p>`;
+    markNew(document);
+  } catch (e) { el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+}
+
+function sourceCard(s, c, max) {
+  return `<article class="admin-card src" data-source="${esc(s.source)}">
+    <div class="h">${s.source ? esc(s.source) : '<span class="faint">No source</span>'}</div>
+    <dl class="funnel">${STEPS.map(([k, label]) => `<div class="step"><dt>${label}</dt>
+      <dd><span class="bar" style="width:${(c[k] / max) * 100}%"></span></dd><dd class="n">${c[k]}</dd></div>`).join('')}</dl>
   </article>`;
 }
 
@@ -220,6 +252,8 @@ document.addEventListener('click', async (e) => {
     try { await api('/api/feedback/autonomy', { level }); showError(''); } catch (err) { showError(err.message); }
     return loadFeedback();
   }
+  const sp = e.target.closest('button[data-span]');
+  if (sp) { span = sp.dataset.span; for (const b of document.querySelectorAll('.src-filter button')) { b.classList.toggle('on', b === sp); b.setAttribute('aria-pressed', String(b === sp)); } return loadSources(); }
   const fs = e.target.closest('button[data-fb-state]');
   if (fs) { fbState = fs.dataset.fbState; for (const b of document.querySelectorAll('.fb-filter button')) { b.classList.toggle('on', b === fs); b.setAttribute('aria-pressed', String(b === fs)); } return loadFeedback(); }
   const fb = e.target.closest('button[data-fb]');
