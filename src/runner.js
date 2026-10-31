@@ -34,11 +34,24 @@ export async function cleanWorktree(worktree, git) {
   return { kept: false };
 }
 
+// The commits on ref whose work would be lost with it (#455), as "<short sha> <subject>" lines: none when every
+// commit is on origin, when its item's PR merged (merged: a Set of branch names), or when main has each one's
+// changes (`git cherry` finds no "+"): a branch rebased or squashed before landing keeps commits origin never had.
+async function unlanded(cwd, ref, branch, merged, git) {
+  if (!(await git(['-C', cwd, 'rev-list', '-n1', ref, '--not', '--remotes'])).trim()) return [];
+  if (branch && merged.has(branch)) return [];
+  const main = (await git(['-C', cwd, 'rev-parse', '--abbrev-ref', 'origin/HEAD']).catch(() => '')).trim() || 'origin/main';
+  const lacks = (await git(['-C', cwd, 'cherry', main, ref])).split('\n').filter((l) => l.startsWith('+ ')).map((l) => l.slice(2));
+  return Promise.all(lacks.map(async (sha) => (await git(['-C', cwd, 'log', '-1', '--format=%h %s', sha])).trim()));
+}
+// Once, short: "1a2b3c4 Add x; 5d6e7f8 Fix y and 3 more".
+const commitsLine = (c) => `${c.slice(0, 2).join('; ')}${c.length > 2 ? ` and ${c.length - 2} more` : ''}`;
+
 // A worker's branch, once it has gone with its worktree (#444): deleted when its item is done or dropped and
-// every commit on it is on origin. Returns whether it was deleted.
-export async function cleanBranch(home, branch, finished, git) {
+// nothing on it would be lost (see unlanded). Returns whether it was deleted.
+export async function cleanBranch(home, branch, finished, git, merged = new Set()) {
   if (!branch || !finished.has(branch)) return false;
-  if ((await git(['-C', home, 'rev-list', '-n1', `refs/heads/${branch}`, '--not', '--remotes'])).trim()) return false;
+  if ((await unlanded(home, `refs/heads/${branch}`, branch, merged, git)).length) return false;
   await git(['-C', home, 'branch', '-D', branch]);
   return true;
 }
@@ -51,16 +64,19 @@ const DETACHED_IDLE_MS = 24 * 3600_000;
 // The weekly sweep (#444) of one checkout, home: the worktrees nuworq made for it (each directly in a folder
 // named <checkout>.worktrees, also one from before the checkout was renamed) and its nuworq/* branches, where
 // their item is done or dropped (finished: a Set of branch names), and nothing would be lost: no uncommitted
-// changes, no commits origin lacks. A worktree with no branch goes when it is clean, on origin, and idle a day.
-// Never home itself, never another branch, never one in keep (running workers' worktrees).
+// changes, no commits whose work main lacks (see unlanded; merged: branches whose item's PR merged). A worktree
+// with no branch goes when it is clean, landed, and idle a day.
+// Never home itself, never another branch, never one in keep (running workers' worktrees). A worktree git still
+// can't read after repair is only reported, by its path.
 // idle(path): ms since that worktree's HEAD last moved. dryRun: only say what would go.
-// Returns { worktrees, branches, pruned, kept: [{ what, why }] }.
-export async function sweep({ home, finished, git, idle, keep = [], dryRun = false }) {
+// Returns { worktrees, branches, pruned, kept: [{ what, why, detail? }] }.
+export async function sweep({ home, finished, merged = new Set(), git, idle, keep = [], dryRun = false }) {
   const out = { worktrees: [], branches: [], pruned: 0, kept: [] };
   const ours = (path) => /\.worktrees\/[^/]+$/.test(path);
   const name = (path) => path.split('/').slice(-2).join('/');
   // Worktrees made before the checkout moved can't find it until repaired (their .git names the old path).
-  if (!dryRun) await git(['-C', home, 'worktree', 'repair']).catch(() => '');
+  // Repair only fixes those links and deletes nothing, so a dry run does it too and judges them like the rest.
+  await git(['-C', home, 'worktree', 'repair']).catch(() => '');
   const trees = [];
   for (const block of (await git(['-C', home, 'worktree', 'list', '--porcelain'])).split(/\n\n+/)) {
     const path = block.match(/^worktree (.+)$/m)?.[1];
@@ -77,10 +93,11 @@ export async function sweep({ home, finished, git, idle, keep = [], dryRun = fal
       if (!t.branch && await idle(t.path) < DETACHED_IDLE_MS) continue;
       // --no-optional-locks: looking doesn't rewrite its index, so the worktree stays as idle as it was.
       if ((await git(['--no-optional-locks', '-C', t.path, 'status', '--porcelain'])).trim()) { out.kept.push({ what: name(t.path), why: 'uncommitted changes' }); continue; }
-      if ((await git(['-C', t.path, 'rev-list', '-n1', 'HEAD', '--not', '--remotes'])).trim()) { out.kept.push({ what: name(t.path), why: 'commits origin lacks' }); continue; }
+      const lacks = await unlanded(t.path, 'HEAD', t.branch, merged, git);
+      if (lacks.length) { out.kept.push({ what: name(t.path), why: 'commits main lacks', detail: commitsLine(lacks) }); continue; }
       if (!dryRun) await git(['-C', home, 'worktree', 'remove', t.path]);
     } catch (e) {
-      out.kept.push({ what: name(t.path), why: "git can't read it", detail: String(e.stderr || e.message).trim().split('\n')[0] });
+      out.kept.push({ what: t.path, why: "git can't read it", detail: String(e.stderr || e.message).trim().split('\n')[0] });
       continue;
     }
     out.worktrees.push(name(t.path));
@@ -88,7 +105,8 @@ export async function sweep({ home, finished, git, idle, keep = [], dryRun = fal
   }
   for (const branch of (await git(['-C', home, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/nuworq/'])).split('\n').filter(Boolean)) {
     if (!finished.has(branch) || left.has(branch)) continue;
-    if ((await git(['-C', home, 'rev-list', '-n1', `refs/heads/${branch}`, '--not', '--remotes'])).trim()) { out.kept.push({ what: branch, why: 'commits origin lacks' }); continue; }
+    const lacks = await unlanded(home, `refs/heads/${branch}`, branch, merged, git);
+    if (lacks.length) { out.kept.push({ what: branch, why: 'commits main lacks', detail: commitsLine(lacks) }); continue; }
     if (!dryRun) await git(['-C', home, 'branch', '-D', branch]);
     out.branches.push(branch);
   }
@@ -96,7 +114,7 @@ export async function sweep({ home, finished, git, idle, keep = [], dryRun = fal
 }
 
 // The sweep's one line, e.g. "Swept nuworq: removed 3 worktrees and 5 branches, pruned 1 stale record; kept 2 (1 uncommitted
-// changes, 1 commits origin lacks)".
+// changes, 1 commits main lacks)".
 export function sweepLine(name, r, { dryRun = false } = {}) {
   const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
   const did = [r.worktrees.length && n(r.worktrees.length, 'worktree'), r.branches.length && n(r.branches.length, 'branch').replace(/branchs$/, 'branches')].filter(Boolean);

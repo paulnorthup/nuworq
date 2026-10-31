@@ -66,16 +66,16 @@ describe('the sweep (#444)', () => {
       assert.equal(dry.pruned, 1);
       assert.ok(existsSync(`${c.home}.worktrees/done`), 'a dry run removes nothing');
       assert.ok(c.branches().includes('nuworq/1-done'));
-      assert.equal(sweepLine('app', dry, { dryRun: true }), 'Sweep (dry run) app: would remove 3 worktrees and 2 branches, would prune 1 stale record; kept 2 (1 uncommitted changes, 1 commits origin lacks)');
+      assert.equal(sweepLine('app', dry, { dryRun: true }), 'Sweep (dry run) app: would remove 3 worktrees and 2 branches, would prune 1 stale record; kept 2 (1 uncommitted changes, 1 commits main lacks)');
 
       const r = await sweep(args);
       assert.deepEqual(r.worktrees.sort(), ['app.worktrees/done', 'app.worktrees/idle', 'old-name.worktrees/renamed']);
       assert.deepEqual(r.branches.sort(), ['nuworq/1-done', 'nuworq/6-landed']);
       assert.deepEqual(r.kept.sort((a, b) => a.what.localeCompare(b.what)), [
         { what: 'app.worktrees/dirty', why: 'uncommitted changes' },
-        { what: 'nuworq/3-unpushed', why: 'commits origin lacks' },
+        { what: 'nuworq/3-unpushed', why: 'commits main lacks', detail: `${g(c.home, 'rev-parse', '--short', 'nuworq/3-unpushed')} unpushed` },
       ]);
-      assert.equal(sweepLine('app', r), 'Swept app: removed 3 worktrees and 2 branches, pruned 1 stale record; kept 2 (1 uncommitted changes, 1 commits origin lacks)');
+      assert.equal(sweepLine('app', r), 'Swept app: removed 3 worktrees and 2 branches, pruned 1 stale record; kept 2 (1 uncommitted changes, 1 commits main lacks)');
       assert.ok(!existsSync(`${c.home}.worktrees/done`) && !existsSync(`${c.home}.worktrees/idle`));
       for (const kept of ['dirty', 'open', 'running', 'fresh']) assert.ok(existsSync(`${c.home}.worktrees/${kept}`), kept);
       assert.ok(existsSync(join(c.dir, 'elsewhere', 'mine')), 'not in a .worktrees folder: left alone');
@@ -85,23 +85,81 @@ describe('the sweep (#444)', () => {
       assert.doesNotMatch(g(c.home, 'worktree', 'list'), /gone/, 'the stale record is pruned');
 
       // Again: nothing left to take.
-      assert.equal(sweepLine('app', await sweep(args)), 'Swept app: nothing to remove; kept 2 (1 uncommitted changes, 1 commits origin lacks)');
+      assert.equal(sweepLine('app', await sweep(args)), 'Swept app: nothing to remove; kept 2 (1 uncommitted changes, 1 commits main lacks)');
     } finally { rmSync(c.dir, { recursive: true, force: true }); }
   });
 
-  test('a checkout that was moved: its worktrees are repaired, then swept; a dry run keeps them and says why', async () => {
+  test('a checkout that was moved: its worktrees are repaired first, even in a dry run, then judged like the rest (#455)', async () => {
     const c = checkout();
     try {
       c.wt('old');
+      c.wt('olddone', 'nuworq/1-old');
+      c.wt('oldwip', 'nuworq/2-wip', { push: false });
       const moved = join(c.dir, 'renamed');
-      execFileSync('mv', [c.home, moved]); // the worktree's .git now names a checkout that isn't there
+      execFileSync('mv', [c.home, moved]); // the worktrees' .git now names a checkout that isn't there
       const idle = async () => 2 * 24 * 3600_000;
-      const dry = await sweep({ home: moved, finished: new Set(), git, idle, dryRun: true });
-      assert.deepEqual(dry.kept.map((k) => [k.what, k.why]), [['app.worktrees/old', "git can't read it"]]);
-      assert.equal(sweepLine('app', dry, { dryRun: true }), "Sweep (dry run) app: nothing to remove; kept 1 (1 git can't read it)");
-      const r = await sweep({ home: moved, finished: new Set(), git, idle });
-      assert.deepEqual(r.worktrees, ['app.worktrees/old']);
-      assert.ok(!existsSync(`${c.home}.worktrees/old`));
+      const finished = new Set(['nuworq/1-old', 'nuworq/2-wip']);
+      const dry = await sweep({ home: moved, finished, git, idle, dryRun: true });
+      assert.deepEqual(dry.worktrees.sort(), ['app.worktrees/old', 'app.worktrees/olddone']);
+      assert.deepEqual(dry.kept.map((k) => [k.what, k.why]), [['app.worktrees/oldwip', 'commits main lacks']]);
+      assert.ok(existsSync(`${c.home}.worktrees/old`), 'a dry run removes nothing');
+      const r = await sweep({ home: moved, finished, git, idle });
+      assert.deepEqual(r.worktrees.sort(), ['app.worktrees/old', 'app.worktrees/olddone']);
+      assert.ok(!existsSync(`${c.home}.worktrees/old`) && existsSync(`${c.home}.worktrees/oldwip`));
+    } finally { rmSync(c.dir, { recursive: true, force: true }); }
+  });
+
+  test("a worktree git still can't read after repair is reported by its path, never deleted (#455)", async () => {
+    const c = checkout();
+    try {
+      const path = c.wt('broken');
+      writeFileSync(join(c.home, '.git', 'worktrees', 'broken', 'HEAD'), 'garbage\n'); // nothing repair can mend
+      const idle = async () => 2 * 24 * 3600_000;
+      const r = await sweep({ home: c.home, finished: new Set(), git, idle });
+      assert.deepEqual(r.kept.map((k) => [k.what, k.why]), [[path, "git can't read it"]]);
+      assert.deepEqual(r.worktrees, []);
+      assert.ok(existsSync(join(path, 'f')), 'left as it was');
+    } finally { rmSync(c.dir, { recursive: true, force: true }); }
+  });
+
+  test('done work rebased or squashed before landing goes; a branch with a commit main lacks stays, named (#455)', async () => {
+    const c = checkout();
+    try {
+      // Rebased: its pre-rebase commit never reached origin, but main has its change.
+      c.wt('rebased', 'nuworq/1-rebased', { push: false });
+      g(c.home, 'worktree', 'remove', `${c.home}.worktrees/rebased`);
+      g(c.home, 'cherry-pick', 'nuworq/1-rebased');
+      g(c.home, 'push', '-q', 'origin', 'main');
+      // Squash-merged on GitHub: two commits main has only as one, so only the merged PR says it landed.
+      const sq = c.wt('squashed', 'nuworq/2-squashed', { push: false });
+      writeFileSync(join(sq, 'more'), 'more'); g(sq, 'add', '.'); g(sq, 'commit', '-qm', 'more');
+      g(c.home, 'worktree', 'remove', sq);
+      g(c.home, 'merge', '-q', '--squash', 'nuworq/2-squashed'); g(c.home, 'commit', '-qm', 'Squashed (#2)');
+      g(c.home, 'push', '-q', 'origin', 'main');
+      // Real unlanded work: one commit main has, then one it doesn't.
+      const half = c.wt('half', 'nuworq/3-half', { push: false });
+      writeFileSync(join(half, 'late'), 'late'); g(half, 'add', '.'); g(half, 'commit', '-qm', 'Late fix');
+      g(c.home, 'worktree', 'remove', half);
+      g(c.home, 'cherry-pick', 'nuworq/3-half~1');
+      g(c.home, 'push', '-q', 'origin', 'main');
+      g(c.home, 'fetch', '-q');
+
+      const finished = new Set(['nuworq/1-rebased', 'nuworq/2-squashed', 'nuworq/3-half']);
+      const args = { home: c.home, finished, merged: new Set(['nuworq/2-squashed']), git, idle: async () => 0 };
+      const dry = await sweep({ ...args, dryRun: true });
+      assert.deepEqual(dry.branches, ['nuworq/1-rebased', 'nuworq/2-squashed']);
+      const late = g(c.home, 'rev-parse', '--short', 'nuworq/3-half');
+      assert.deepEqual(dry.kept, [{ what: 'nuworq/3-half', why: 'commits main lacks', detail: `${late} Late fix` }]);
+      assert.equal(c.branches().length, 4, 'a dry run removes nothing');
+
+      // Without the merged PR, the squashed branch's commits aren't on main one by one: kept.
+      assert.deepEqual((await sweep({ ...args, merged: new Set(), dryRun: true })).kept.map((k) => k.what), ['nuworq/2-squashed', 'nuworq/3-half']);
+
+      const r = await sweep(args);
+      assert.deepEqual(r.branches, ['nuworq/1-rebased', 'nuworq/2-squashed']);
+      assert.deepEqual(c.branches(), ['main', 'nuworq/3-half']);
+      // A worker's branch at exit is judged the same way.
+      assert.equal(await cleanBranch(c.home, 'nuworq/3-half', finished, git), false);
     } finally { rmSync(c.dir, { recursive: true, force: true }); }
   });
 
@@ -200,5 +258,16 @@ describe('landed branches leave GitHub (#444)', () => {
     assert.deepEqual(hub.finishedBranches('g'), [done.branch]);
     assert.deepEqual(hub.finishedBranches('g', { scope: ['other'] }), []);
     assert.deepEqual(hub.finishedBranches('nope'), []);
+  });
+
+  test("/api/finished's merged lists done items whose PR merged (#455)", async () => {
+    const { hub, p, merge } = world();
+    const done = merge('Done');
+    const it = hub.humanOp('g', 'create', { title: 'Dropped', acceptance: 'x' }).item;
+    hub.patch(hub.item(p, it), { stage: 'dropped', branch: 'nuworq/60-dropped' });
+    await branchesSettled(hub);
+    assert.deepEqual(hub.finishedBranches('g'), [done.branch, 'nuworq/60-dropped']);
+    assert.deepEqual(hub.mergedBranches('g'), [done.branch]);
+    assert.deepEqual(hub.mergedBranches('g', { scope: ['other'] }), []);
   });
 });
