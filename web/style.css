@@ -459,7 +459,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; border: 1px sol
 /* The quick launcher (#290): one box at the top, the ranked list under it; on a phone, the width of the screen. */
 .rail-search { color: var(--muted); border: 1px solid var(--line) !important; background: var(--panel) !important; margin-bottom: 6px; }
 .rail-search kbd { margin-left: auto; font-size: 11px; color: var(--muted); }
-#launcher { position: fixed; inset: 0; z-index: 40; background: rgba(20,20,18,.3); padding: 12vh 16px 16px; }
+#launcher { position: fixed; inset: 0; z-index: 40; background: rgba(20,22,26,.3); padding: 12vh 16px 16px; }
 #launcher[hidden] { display: none; }
 .ln-box { background: var(--panel); border-radius: 14px; width: min(640px, 100%); margin: 0 auto; box-shadow: 0 20px 60px rgba(0,0,0,.25); overflow: hidden; }
 .ln-box input { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 16px; font-size: 16px; outline: none; }
