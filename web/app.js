@@ -3,6 +3,7 @@
 import { connectCommands } from './connect.js';
 import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
+import { proposeForm, proposal } from './propose.js';
 import { homePage, columns, stateDot, STATE_LABELS } from './home.js';
 import { credit } from './credit.js';
 import { checkChip } from './checks.js';
@@ -437,7 +438,7 @@ function pulse(v) {
     </div>`;
 }
 
-function composer() {
+function composer(v) {
   const hints = {
     steer: 'Every agent must read and acknowledge it. You\'ll see who did.',
     decision: 'A standing rule. Every agent gets it at every checkin.',
@@ -453,17 +454,9 @@ function composer() {
           <button class="btn primary small" data-action="compose-send">Send</button>
         </div>
       </div>
-      <button class="btn" data-action="toggle-add" style="height:40px">+ Work</button>
+      <button class="btn" data-action="toggle-add" style="height:40px" data-new="propose-work" aria-expanded="${!!S.addWork}">${S.addWork ? 'Close' : '+ Work'}</button>
     </div>
-    ${S.addWork ? `<div class="add-work">
-      <input data-draft="nw-title" id="nw-title" placeholder="Outcome, in one line (e.g. 'Users can reset their password')">
-      <textarea data-draft="nw-summary" id="nw-summary" placeholder="Why it matters, context, constraints (optional)"></textarea>
-      <textarea data-draft="nw-acceptance" id="nw-acceptance" placeholder="Done means… (checkable criteria; agents verify against this)"></textarea>
-      <input data-draft="nw-pre" id="nw-pre" placeholder="Waits on (optional): a URL that must answer 200, or a question for a person">
-
-      <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['nw-priority'] ?? 'soon') === p ? 'on' : ''}" data-action="nw-priority" data-p="${p}">${p}</button>`).join('')}</div>
-        <span style="flex:1"></span><button class="btn ghost" data-action="toggle-add">Cancel</button><button class="btn primary" data-action="add-work">Add to Ready</button></div>
-    </div>` : ''}`;
+    ${S.addWork ? proposeForm({ more: S.addMore, priority: S.drafts['nw-priority'] ?? 'soon', autonomy: v?.project.autonomy }) : ''}`;
 }
 
 // ── 30s: what needs you ──
@@ -1211,6 +1204,18 @@ async function setting(body, msg) {
   return r;
 }
 
+// The board's + Work (#389): Propose makes the person's proposal; Add to Ready puts it straight into the queue.
+async function addWork(ready) {
+  const more = S.addMore, pre = more ? val('nw-pre') : '';
+  const body = proposal({ title: val('nw-title'), acceptance: more ? val('nw-acceptance') : '', summary: more ? val('nw-summary') : '',
+    priority: S.drafts['nw-priority'], precondition: pre ? toPrecondition(pre) : null, ready });
+  if (!body) { $('#nw-title')?.focus(); return toast('Say what should be true when it\'s done', true); }
+  await human('create', body, pre ? 'Added; it waits until that holds' : ready ? 'Added to Ready' : 'Proposed: an agent shapes it next');
+  clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority', 'nw-pre');
+  S.addWork = S.addMore = false;
+  render({ force: true });
+}
+
 async function connect() {
   S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
   const slug = S.slug ?? 'my-project';
@@ -1521,17 +1526,11 @@ const ACTIONS = {
     else if (kind === 'decision') await human('decide', { body }, 'Decision recorded: every agent will carry it');
     else await human('steer', { body }, 'Steer sent: agents will acknowledge it');
   },
-  'toggle-add': () => { S.addWork = !S.addWork; render({ force: true }); if (S.addWork) setTimeout(() => $('#nw-title')?.focus(), 0); },
+  'toggle-add': () => { S.addWork = !S.addWork; if (!S.addWork) S.addMore = false; render({ force: true }); if (S.addWork) setTimeout(() => $('#nw-title')?.focus(), 0); },
   'nw-priority': (el) => { S.drafts['nw-priority'] = el.dataset.p; render({ force: true }); },
-  'add-work': async () => {
-    const title = val('nw-title');
-    if (!title) return toast('Give it a title', true);
-    const pre = val('nw-pre');
-    await human('create', { title, summary: val('nw-summary'), acceptance: val('nw-acceptance'), priority: S.drafts['nw-priority'] ?? 'soon', ...(pre ? { precondition: toPrecondition(pre) } : {}) }, pre ? 'Added; it waits until that holds' : 'Added to Ready');
-    clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority', 'nw-pre');
-    S.addWork = false;
-    render({ force: true });
-  },
+  'nw-more': () => { S.addMore = true; render({ force: true }); setTimeout(() => $('#nw-acceptance')?.focus(), 0); },
+  'add-work': () => addWork(false),
+  'add-ready': () => addWork(true),
   answer: (el) => {
     const q = el.dataset.q;
     const decide = document.getElementById(`dec-${q}`)?.checked;
