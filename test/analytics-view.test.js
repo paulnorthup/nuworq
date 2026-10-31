@@ -71,9 +71,22 @@ describe('analytics', () => {
   });
 
   test('too little to go on says so; all time has nothing to compare against', () => {
-    const html = page(outcomes({ takeaway: null, period: 'all' }), { period: 'all' });
+    const html = page(outcomes({ takeaway: null, period: 'all', summary: { landed: 2 } }), { period: 'all' });
     assert.match(html, /Too little has landed in this period to suggest a change/);
     assert.ok(!html.includes('changes against'));
+  });
+
+  test('enough landed but nothing calls for a change says that, not "too little"', () => {
+    const html = page(outcomes({ takeaway: null, summary: { landed: 8 } }));
+    assert.match(html, /Nothing in these figures calls for a change this period\./);
+    assert.ok(!html.includes('Too little'));
+  });
+
+  test('the period switch stays while the figures load', () => {
+    const html = page(null, { period: '90d' });
+    assert.match(html, /Loading the figures/);
+    assert.match(html, /data-action="an-period" data-p="90d"/);
+    assert.match(html, /class="on" aria-pressed="true" data-action="an-period" data-p="90d"/);
   });
 
   test('desktop: projects beside models and agents, nothing added', () => {
@@ -93,7 +106,7 @@ describe('analytics', () => {
 
   test('owners open it from the home; #/analytics is its address', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
-    assert.match(app, /\$\{owner\(\) \? '<a class="btn an-open" href="#\/analytics">Analytics<\/a>' : ''\}/);
+    assert.match(app, /\$\{owner\(\) \? '<a class="btn an-open" href="#\/analytics" data-new="analytics">Analytics<\/a>' : ''\}/);
     assert.match(app, /const owner = \(\) => S\.person\?\.role === 'owner';/);
     assert.match(app, /S\.analytics = location\.hash\.startsWith\('#\/analytics'\);/);
     assert.match(app, /if \(S\.analytics\) S\.outcomes = await api\(`\/api\/outcomes\?period=\$\{encodeURIComponent\(S\.period\)\}`\);/);

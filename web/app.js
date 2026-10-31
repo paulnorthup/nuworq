@@ -309,7 +309,7 @@ function overview() {
   }
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div>
-      ${owner() ? '<a class="btn an-open" href="#/analytics">Analytics</a>' : ''}</div></div>
+      ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div>
     ${homePage(S.home, { z: z(), pulse, card, esc, plural, wide: WIDE.matches, gs: getStarted() })}`;
 }
 

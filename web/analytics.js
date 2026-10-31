@@ -5,6 +5,7 @@
 // or a word ("+4", "−20m", "same"). Pure: the page hands in esc, dur and its two-column layout.
 export const PERIODS = ['14d', '90d', 'all'];
 const AGENTS_SHOWN = 5;
+const MIN_LANDED = 3; // src/outcomes.js suggests nothing below this many landed
 
 const money = (n) => `$${n.toFixed(2)}`;
 const pct = (r) => `${Math.round(r * 100)}%`;
@@ -25,10 +26,14 @@ export function analyticsPage(o, { esc, dur, period = o?.period ?? '14d', open =
     <div class="mission">What your agents landed, how long it took, what it cost and how much of your time it took, across every project.</div></div></div>`;
   const seg = `<div class="seg an-period" role="group" aria-label="Period">${PERIODS.map((p) =>
     `<button class="${p === period ? 'on' : ''}" aria-pressed="${p === period}" data-action="an-period" data-p="${p}">${p === 'all' ? 'All time' : `Last ${p.replace('d', ' days')}`}</button>`).join('')}</div>`;
-  if (!o) return `${head}<div class="loading">Loading the figures…</div>`;
+  // The switch stays while the figures load, so it doesn't vanish for a moment on every switch.
+  if (!o) return `${head}<div class="an-switch">${seg}</div><div class="loading">Loading the figures…</div>`;
 
-  const take = `<section class="sec an-take"><p class="takeaway">${o.takeaway ? esc(o.takeaway)
-    : 'Too little has landed in this period to suggest a change: the figures speak once 3 or more items land.'}</p></section>`;
+  // No takeaway means too little landed, or enough landed and nothing calls for a change: say which.
+  const quiet = (o.summary?.landed ?? 0) < MIN_LANDED
+    ? `Too little has landed in this period to suggest a change: the figures speak once ${MIN_LANDED} or more items land.`
+    : 'Nothing in these figures calls for a change this period.';
+  const take = `<section class="sec an-take"><p class="takeaway">${o.takeaway ? esc(o.takeaway) : quiet}</p></section>`;
   const versus = period === 'all' ? '' : `<span class="hint">changes against the ${period} before</span>`;
 
   const project = (p) => {
