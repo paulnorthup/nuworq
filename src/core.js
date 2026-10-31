@@ -1454,6 +1454,7 @@ export class Hub extends EventEmitter {
       detail: item.detail || undefined,
       precondition: preconditionOut(item),
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
+      breaking: item.breaking || undefined, // who must do what once it ships (#398)
       issue: this.q('SELECT url FROM issues WHERE item_id = ?').get(item.id)?.url || undefined, // the GitHub issue it came from
       repo: this.repoOf(p, item) || undefined,
       branch: item.branch || undefined,
@@ -2815,8 +2816,8 @@ Object.assign(Hub.prototype, {
     const needs = JSON.stringify(normTags(args.needs));
     const size = SIZES.includes(args.size) ? args.size : '';
     const fixes = this.fixesOf(p, args.fixes);
-    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at, fixes, gate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t, fixes?.id ?? null, gate);
+    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at, fixes, gate, breaking)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t, fixes?.id ?? null, gate, str(args.breaking));
     const item = this.itemById(Number(r.lastInsertRowid));
     if (human && PRIORITY_RANK[args.priority] != null) this.patch(item, { priority_by: actor }); // a person chose it (#202)
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
@@ -2882,6 +2883,11 @@ Object.assign(Hub.prototype, {
     }
     if (args.size != null && (SIZES.includes(args.size) || args.size === '') && args.size !== item.size) { set.size = args.size; changed.push(`size → ${args.size || 'unset'}`); }
     Object.assign(set, rateDifficulty(item, args, changed));
+    // Who it breaks, for the release that ships it (#398): "" says it breaks nobody.
+    if (args.breaking != null && str(args.breaking) !== item.breaking) {
+      set.breaking = str(args.breaking);
+      changed.push(set.breaking ? `breaking: ${set.breaking}` : 'breaks nobody');
+    }
     if (args.fixes != null) {
       const fixes = this.fixesOf(p, args.fixes, item);
       if ((fixes?.id ?? null) !== item.fixes) { set.fixes = fixes?.id ?? null; changed.push(fixes ? `fixes #${fixes.seq}` : 'fixes nothing'); }

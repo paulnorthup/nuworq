@@ -951,6 +951,7 @@ export function itemView(hub, slug, ref) {
   const parent = hub.itemById(it.parent_id);
   return {
     item: `#${it.seq}`, title: it.title, summary: it.summary, detail: it.detail, acceptance: it.acceptance,
+    breaking: it.breaking || null, // who must do what once it ships (#398)
     stage: it.stage, stage_label: STAGES[it.stage].label, stage_blurb: STAGES[it.stage].blurb, court: courtOf(it.stage, p.autonomy),
     priority: it.priority, effective_priority: hub.effectiveLabel(p, it) ?? null, needs: json(it.needs, []), size: it.size || null, repo: repoTag(hub.remotesOf(p), it),
     model_why: it.route_why || null, // which model routing picked for its job, and why (#349)

@@ -435,6 +435,7 @@ export function openDb(file) {
     // the one line an item last got on which model its job runs on and why.
     "ALTER TABLE projects ADD COLUMN model_quality TEXT NOT NULL DEFAULT 'balanced'",
     "ALTER TABLE items ADD COLUMN route_why TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE items ADD COLUMN breaking TEXT NOT NULL DEFAULT ''", // who must do what when it lands; '' breaks nobody (#398)
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,
