@@ -171,3 +171,54 @@ function apply(spaces, event, prices) {
   }
   return { ok: true, ignored: event.type };
 }
+
+// ── Checkout (#228): a Free workspace's owner pays; the webhook above changes the plan ──
+
+export const TERMS = 'https://nuworq.com/terms';
+export const PRIVACY = 'https://nuworq.com/privacy';
+
+// Whether people can pay: a secret key to open Checkout with, and at least one price to sell. billingFromEnv's
+// webhook secret is already there, or billing would be null.
+export const canSell = (billing) => !!(billing?.secretKey && Object.keys(billing.prices ?? {}).length);
+
+// The plans on sale, in NUWORQ_STRIPE_PRICES order: [{ plan, price, label }].
+export const plansOf = (billing) => Object.entries(billing?.prices ?? {})
+  .map(([price, plan]) => ({ plan, price, label: plan.charAt(0).toUpperCase() + plan.slice(1) }));
+
+// Stripe's API: form-encoded POST, JSON back. billing.api points it at a fake in tests. Throws on anything
+// but 2xx, with Stripe's own message.
+export async function stripe(billing, path, params) {
+  const body = new URLSearchParams();
+  const add = (k, v) => {
+    if (v === undefined || v === null) return;
+    if (typeof v === 'object') for (const [kk, vv] of Object.entries(v)) add(`${k}[${kk}]`, vv);
+    else body.append(k, String(v));
+  };
+  for (const [k, v] of Object.entries(params)) add(k, v);
+  const r = await fetch(`${billing.api ?? 'https://api.stripe.com'}${path}`, {
+    method: 'POST', body, signal: AbortSignal.timeout(15_000),
+    headers: { authorization: `Bearer ${billing.secretKey}`, 'content-type': 'application/x-www-form-urlencoded' },
+  });
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(json?.error?.message ?? `Stripe answered ${r.status}`);
+  return json;
+}
+
+// A Checkout Session that subscribes workspace to plan's price. home: the workspace's address; Stripe returns
+// to its settings either way, and only the webhook changes the plan. Returns Stripe's session ({ id, url }).
+export function checkout(billing, { workspace, plan, home, email = null, customer = null }) {
+  const sale = plansOf(billing).find((p) => p.plan === plan);
+  if (!sale) throw new Error(`"${plan}" is not on sale`);
+  return stripe(billing, '/v1/checkout/sessions', {
+    mode: 'subscription',
+    line_items: { 0: { price: sale.price, quantity: 1 } },
+    client_reference_id: workspace,
+    // So the subscription's own events name the workspace too, whatever order they come in.
+    subscription_data: { metadata: { workspace } },
+    metadata: { workspace },
+    ...(customer ? { customer } : email ? { customer_email: email } : {}),
+    success_url: `${home}/?checkout=done#/settings`,
+    cancel_url: `${home}/#/settings`,
+    custom_text: { submit: { message: `By subscribing you agree to nuworq's [Terms](${TERMS}) and [Privacy Policy](${PRIVACY}).` } },
+  });
+}

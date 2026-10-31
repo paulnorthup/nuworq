@@ -220,6 +220,20 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const wiring = hub.appWiring?.(viewer);
   if (wiring) push({ ...wiringEntry(wiring), level: 'act', kind: 'app-wiring', hubwide: true });
 
+  // Free's limit stopped a second agent here (#228): the workspace's owners can upgrade, while billing is on.
+  // Gone once the plan isn't Free, the agent got work, or an hour has passed without another refusal.
+  const refused = hub.planRefused;
+  const upgrade = refused?.project === p.id && t - refused.at < HOUR && hub.planLimit?.() && hub.upgradeUrl?.();
+  if (upgrade && !hub.working().has(refused.agent)) {
+    push({
+      key: `plan-limit:${refused.agent}`, level: 'act', kind: 'plan-limit', at: refused.at, upgrade,
+      headline: `${refused.agent} is waiting: the Free plan runs one agent at a time, and ${refused.working.join(', ')} is working`,
+      sub: `refused ${dur(t - refused.at)} ago`,
+      why: `On Free, a second agent waits until the first finishes or hands off. Pro runs any number side by side. Upgrade opens Stripe Checkout; the plan changes within a minute once Stripe confirms the payment.`,
+      owners: hub.q("SELECT handle FROM people WHERE role = 'owner' ORDER BY handle").all().map((r) => `@${r.handle}`),
+    });
+  }
+
   // Agents keep arriving and leaving with nothing: routed here for work they can't take.
   const churnSince = t - CHURN_WINDOW;
   const arrivals = hub.q(`SELECT actor, MIN(id) AS first FROM events WHERE project_id = ? AND type = 'checkin' AND at >= ? GROUP BY actor ORDER BY first`).all(p.id, churnSince);
@@ -455,7 +469,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const bySeq = new Map(items.map((i) => [ref(i), i]));
     for (const a of attention.filter((x) => x.level === 'act')) {
       // Work kept parked is the parker's to release.
-      a.owners = a.parked_by?.startsWith('@') ? [a.parked_by] : hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
+      // Some are the workspace owners' alone (an upgrade).
+      a.owners ??= a.parked_by?.startsWith('@') ? [a.parked_by] : hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
       if (viewer && !a.owners.includes(viewer)) {
         a.level = 'know';
         a.sub = [a.owners.length ? `needs ${a.owners.join(', ')}` : 'needs a steward (none set)', a.sub].filter(Boolean).join(' · ');
