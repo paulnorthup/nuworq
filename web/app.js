@@ -1585,9 +1585,11 @@ const ACTIONS = {
     const kind = S.composeKind;
     clearDraft('compose');
     $('#compose').value = '';
-    if (kind === 'note') await human('comment', { body }, 'Noted');
-    else if (kind === 'decision') await human('decide', { body }, 'Decision recorded: every agent will carry it');
-    else await human('steer', { body }, 'Steer sent: agents will acknowledge it');
+    const r = kind === 'note' ? await human('comment', { body }, 'Noted')
+      : kind === 'decision' ? await human('decide', { body }, 'Decision recorded: every agent will carry it')
+      : await human('steer', { body }, 'Steer sent: agents will acknowledge it');
+    // Refused: what they wrote goes back in the box, so nothing is lost.
+    if (!r && !$('#compose').value) { S.drafts.compose = body; $('#compose').value = body; }
   },
   'toggle-add': () => { S.addWork = !S.addWork; if (!S.addWork) S.addMore = false; render({ force: true }); if (S.addWork) setTimeout(() => $('#nw-title')?.focus(), 0); },
   'nw-priority': (el) => { S.drafts['nw-priority'] = el.dataset.p; render({ force: true }); },

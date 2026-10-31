@@ -834,7 +834,8 @@ a.an-name { display: flex; align-items: center; min-height: 44px; margin: -10px 
 .seg button:hover:not(.on):not(:disabled) { color: var(--ink); background: color-mix(in srgb, var(--panel) 50%, transparent); }
 .seg button:active:not(:disabled) { background: var(--line); color: var(--ink); }
 .rail-item:active, .org-item:active, .org-switch summary:active, .row-item.clickable:active, button.row-item:active,
-table.work tr:active td, .step-tick:active, .opt:active, .pick:active, .ov-line:active { background: var(--line); }
+table.work tr:active td, .step-tick:active, .opt:active, .pick:active, .ov-line:active { background: var(--line-strong); }
+button.row-item:focus-visible { outline: 2px solid var(--agents); outline-offset: -2px; }
 a:not([class]):active, a.step-where:active, .link:active, .ref:active, .zoom-more button:active { color: var(--muted); text-decoration-color: var(--muted); }
 :where(button, input, textarea, select):disabled, .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--line-strong); }
