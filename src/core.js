@@ -1634,7 +1634,8 @@ export class Hub extends EventEmitter {
         status: 403, hint: 'Call next for a proposal to shape, or propose new work with the person you are planning with. Workers (nuworq run) and other sessions build, review and land.',
       });
     }
-    if (role === 'worker' && operatorOnly(item)) {
+    // Landing is a rebase, the checks and a push: any worker may land operator-only work once it's accepted.
+    if (role === 'worker' && operatorOnly(item) && item.stage !== 'landing') {
       throw new UserError(`#${item.seq} is operator-only work (it needs ${json(item.needs, []).filter((x) => OPERATOR_TAGS.includes(x)).join(', ')}), and workers never take it`, {
         status: 403, hint: 'An operator session takes it (nuworq operator prints how to start one). Pick other work with next.',
       });

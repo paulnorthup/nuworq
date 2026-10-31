@@ -121,6 +121,16 @@ describe('the role decides what next and claim offer', () => {
     assert.equal(a('w', 'next', { claim: false }, RUNNER).item, '#1');
     assert.throws(() => a('w', 'claim', { item: '#2' }, RUNNER), (e) => e.status === 403 && /operator-only/.test(e.message) && /operator session/.test(e.hint));
   });
+
+  test('once operator-only work is accepted, a worker may land it, so its next never stalls on it', () => {
+    const { hub, a, item, tick } = setup();
+    a('op', 'checkin', { has: ['operator', 'nuworq-infra'] });
+    a('op', 'claim', { item: '#2' });
+    hub.q("UPDATE items SET stage = 'landing', holder = NULL, stage_since = ? WHERE id = ?").run(hub.now(), item(2).id); // accepted, with a branch to land
+    tick(10 * MIN); // past the builder's grace
+    const n = a('w', 'next', {}, RUNNER);
+    assert.deepEqual([n.mode, n.item], ['land', '#2']);
+  });
 });
 
 describe('claims, usage and presence carry the role', () => {
