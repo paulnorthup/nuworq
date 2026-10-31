@@ -243,6 +243,7 @@ function render({ force = false } = {}) {
 // ── routing ──
 function route() {
   if (!$('#modal').hidden) closeModal(); // a dialog belongs to the page it was opened on (#155)
+  S.railMenu = false;
   S.analytics = location.hash.startsWith('#/analytics');
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
@@ -268,6 +269,7 @@ function renderRail() {
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
+    <button class="rail-item rail-menu" data-action="rail-menu" aria-expanded="${!!S.railMenu}"><span data-new="phone-menu">${S.railMenu ? 'Close' : 'Menu'}</span></button><span class="rail-break"></span>
     <a class="rail-label rail-head ${!S.slug && !S.analytics ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--muted)">No projects yet</div>'}
     <div class="rail-foot">
@@ -280,6 +282,9 @@ function renderRail() {
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
     </div>`;
+  // On a phone the rail's actions sit behind Menu, the top bar's only way to them.
+  $('#rail').classList.toggle('menu-open', !!S.railMenu);
+  markNew($('#rail'));
 }
 
 // On a hub with workspaces: which one this is, the others you belong to (one click signs you in there),
@@ -1546,6 +1551,7 @@ const ACTIONS = {
   connect: () => connect(),
   'connect-deep': () => { S.zoom = '30m'; store.set('zoom', S.zoom); render({ force: true }); connect(); },
   notify: () => notifySettings(),
+  'rail-menu': () => { S.railMenu = !S.railMenu; renderRail(); },
   shortcuts: () => modal(shortcutsHtml({ mac: /Mac|iP(hone|ad)/.test(navigator.platform) })),
   'workspace-settings': () => workspaceSettings(),
   'billing-portal': async (el) => {
@@ -1656,6 +1662,8 @@ document.addEventListener('click', (e) => {
   e.stopPropagation();
   // On the home, a card's actions belong to its own project.
   S.actSlug = el.closest('[data-project]')?.dataset.project ?? null;
+  // Picking something from the phone's Menu closes it.
+  if (S.railMenu && el.closest('.rail-foot')) { S.railMenu = false; renderRail(); }
   fn(el);
 });
 document.addEventListener('change', (e) => {
