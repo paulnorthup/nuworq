@@ -32,7 +32,8 @@ export const NEW = {
   'instant-actions': '2026-10-31', // #393: actions show their result on the tap, and go back if the hub refuses (the Autonomy switch)
   'present-agents': '2026-10-31', // #441: the agents here now as counts by role ("2 workers · 1 operator"), each opening to its names
   'finished-milestones': '2026-10-31', // #442: a finished milestone is one line in Recently finished, opening to its parts
-  'show-dropped': '2026-10-31', // #442: dropped work leaves the board; All work's "Show dropped" at 30m brings it back};
+  'show-dropped': '2026-10-31', // #442: dropped work leaves the board; All work's "Show dropped" at 30m brings it back
+};
 
 const DAYS = 7;
 const KEY = 'nuworq.seen-new';
