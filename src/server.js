@@ -1529,6 +1529,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && path === '/api/claims') {
         return send(200, { claims: hub.claimsSince(url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0, { scope: caller.scope }) });
       }
+      if (req.method === 'GET' && path === '/api/finished') {
+        return send(200, { branches: hub.finishedBranches(url.searchParams.get('project') ?? '', { scope: caller.scope }) });
+      }
       if (req.method === 'GET' && path === '/api/where') {
         const p = hub.projectByRemote(url.searchParams.get('remote') ?? '', caller.scope) ?? hub.projectByPath(url.searchParams.get('root') ?? '', caller.scope);
         return send(200, { project: p?.slug ?? null, path: p?.path ?? null });

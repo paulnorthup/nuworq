@@ -817,6 +817,15 @@ export class Hub extends EventEmitter {
     return n;
   }
 
+  // The branches of a project's finished work (done or dropped), for `nuworq run`'s sweep (#444): its local
+  // copies of them can go. Only the projects a token may reach.
+  finishedBranches(slug, { scope = null } = {}) {
+    if (scope && !scope.includes(slug)) return [];
+    const p = this.q('SELECT id FROM projects WHERE slug = ?').get(slug);
+    if (!p) return [];
+    return this.q(`SELECT branch FROM items WHERE project_id = ? AND stage IN ('done', 'dropped') AND branch != '' ORDER BY seq`).all(p.id).map((r) => r.branch);
+  }
+
   // nuworq run says how it is on every poll (#171): workers running and its limit, projects it skips and
   // why, whether it paused itself and why, what it has spent. Bookkeeping, not an agent being present.
   // name: its token's runner name when it has one, else what it calls itself. scope: the slugs its token
@@ -920,7 +929,7 @@ export class Hub extends EventEmitter {
     if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);    Object.assign(item, fields);
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
     if (['done', 'dropped'].includes(stage)) this.settleQuestions(item, stage);
-    if (stage === 'done') landed(this, item); // a finished milestone drafts the release (#399)
+    if (stage === 'done') { landed(this, item); deleteBranch.call(this, item); } // a finished milestone drafts the release (#399)
     if (unmet?.kind === 'ask') this.askPrecondition(item, actor);
   }
 
@@ -2187,6 +2196,31 @@ async function mergeReady() {
   return landed;
 }
 
+// Landed work leaves no branch behind on GitHub (#444): the hub deletes it there as its GitHub App. Only the
+// branch the hub named for this item (nuworq/<seq>-…), never main. Without the app, the land hint tells the
+// lander to delete it. Returns whether the hub is deleting it; a failure goes on the record.
+function deleteBranch(item) {
+  const p = this.q('SELECT * FROM projects WHERE id = ?').get(item.project_id);
+  if (!p || !deletesBranch.call(this, p, item)) return false;
+  const repo = this.repoOf(p, item);
+  const run = this.github.deleteBranch({ repo, branch: item.branch }).then(
+    () => this.tx(() => this.event(p, { item, actor: SYSTEM, type: 'branch_deleted', headline: `nuworq deleted ${item.branch} on ${repo}`, data: { branch: item.branch } })),
+    (e) => this.tx(() => this.event(p, { item, actor: SYSTEM, type: 'branch_delete_failed', headline: `The hub couldn't delete ${item.branch} on ${repo}: ${clip(e.message)}`, summary: `Delete it: git push origin --delete ${item.branch}`, data: { branch: item.branch } })),
+  ).then(() => this.changed(p), (e) => console.error('deleting a branch failed', e));
+  this._deleting ??= new Set();
+  this._deleting.add(run);
+  run.finally(() => this._deleting.delete(run));
+  return true;
+}
+
+function deletesBranch(p, item) {
+  return String(item.branch ?? '').startsWith(`nuworq/${item.seq}-`) && this.remoteMode(p, item)
+    && !!this.github?.deleteBranch && this.github.covers(this.repoOf(p, item));
+}
+
+// Resolves once every branch being deleted on GitHub is deleted (or has failed). For tests.
+export const branchesSettled = async (hub) => { while (hub._deleting?.size) await Promise.all(hub._deleting); };
+
 // GitHub wouldn't merge a ready pull request: the reason goes on the record once (until it changes), and the
 // next pass of mergeReady tries again. The item stays in landing.
 function mergeFailed(p, row, why) {
@@ -2268,7 +2302,10 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   this.setStatus(p, agent, `Landed #${item.seq}`);
   // A release is tagged on the commit it landed as (#400); when the hub can't, the lander does.
   const tag = item.release ? tagRelease(this, p, item, shaOf(this.repoFor(p, item)?.path, item.branch) ?? '') : '';
-  return { ok: true, hint: `#${item.seq} is on ${land.base} and done. ${tag ? `${tag} ` : ''}You can delete the branch: git branch -d ${item.branch}. Call next.` };
+  // Its branch goes (#444): the hub deletes it on GitHub when it can, and nuworq run's sweep takes local copies.
+  const branch = deletesBranch.call(this, p, item) ? `The hub deletes ${item.branch} on origin.`
+    : remote ? `Delete the branch: git push origin --delete ${item.branch}.` : `You can delete the branch: git branch -d ${item.branch}.`;
+  return { ok: true, hint: `#${item.seq} is on ${land.base} and done. ${tag ? `${tag} ` : ''}${branch} Call next.` };
 }
 
 function finishShaping(p, agent, item, { headline, summary, detail, acceptance, difficulty, difficulty_why }) {
