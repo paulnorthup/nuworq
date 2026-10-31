@@ -177,6 +177,8 @@ export function createClient(opts = {}) {
     // The hub keeps the path it was asked for, so the new address is what comes before it (a /w/<workspace> stays).
     const base = to.endsWith(path) ? to.slice(0, -path.length).replace(/\/+$/, '') : null;
     if (!base) return { to };
+    // Never from https down to plain http: the token, and the health check vouching for the address, would cross in the clear.
+    if (new URL(base).protocol !== 'https:' && new URL(base).protocol !== new URL(settings.url).protocol) return { to };
     if (new URL(base).origin === new URL(settings.url).origin || connected(opts.connectFile)?.url === base) return { to, base };
     if (!sameSite(new URL(base).hostname, new URL(settings.url).hostname)) return { to };
     try {

@@ -205,6 +205,25 @@ describe('the client follows a moved hub, and only a moved hub (#222)', () => {
     assert.ok(auth.every((a) => a === undefined), 'no request to a foreign host carried the token');
   });
 
+  test('a 308 from https down to http on the same site is refused, and the http host is never asked', async () => {
+    const calls = [];
+    const real = globalThis.fetch;
+    // TLS is beside the point here: a stand-in fetch plays the https hub and an http host that would vouch for itself.
+    globalThis.fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), auth: init.headers?.authorization });
+      if (String(url).startsWith('https://')) return new Response(null, { status: 308, headers: { location: 'http://app.nuworq.test/api/projects' } });
+      return new Response(JSON.stringify({ ok: true, name: 'nuworq', url: 'http://app.nuworq.test' }), { headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const c = createClient({ url: 'https://nuworq.test', token: 'tok', cwd: tmpdir(), connectFile: join(tmpdir(), 'nuworq-none.json') });
+      await assert.rejects(c.get('/api/projects'), (e) => e.status === 308 && /token was not sent/.test(e.message));
+      assert.equal(c.settings.url, 'https://nuworq.test', 'it did not move');
+    } finally {
+      globalThis.fetch = real;
+    }
+    assert.deepEqual(calls.map((x) => x.url), ['https://nuworq.test/api/projects'], 'nothing went to the http host, not even its health check');
+  });
+
   test('a session started before `nuworq connect` moved this machine reaches the new hub without a restart', { timeout: 20_000 }, async () => {
     const seen = [];
     const hub = createServer((req, res) => { seen.push(req.headers.authorization); json(res, { ok: true, at: 'new' }); });
