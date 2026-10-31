@@ -237,7 +237,9 @@ export function createClient(opts = {}) {
       // process, wherever the old address was saved.
       if (base !== settings.url) moved(settings.url, base);
       settings.url = base;
-      seen = saved(settings);
+      // What the saved connection says now: an address given outright (--url, NUWORQ_URL) still names the old
+      // one, and must not send a failing call back there in a loop.
+      seen = saved(resolveSettings(opts));
       return once(method, path, { body, agent }, hops + 1);
     }
     const text = await res.text();
