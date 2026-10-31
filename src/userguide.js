@@ -6,8 +6,11 @@
 // says what to do by hand first (`hand`), then what nuworq can do for you and what that changes (`auto`), or
 // that nothing can (`none`), then how you see it worked (`check`).
 // Inline marks, so tests can find what the guide names: `nuworq connect` is a command, **Accept** is a label
-// in nuworq's own screens (other sites' labels go in "quotes", never bold), and a line that is only `…` is a
-// command to copy. An item that changes what a new person does updates this file in the same change.
+// in nuworq's own screens (other sites' labels go in "quotes", never bold), /early-access is a page of the hub
+// (a bare path starting a word; files are written ~/… so they never read as one), and a line that is only `…`
+// is a command to copy. test/guidefresh.test.js fails when a `nuworq …` command or flag isn't in the CLI's help,
+// a **label** isn't in any web/ file, or a /path isn't served by src/server.js.
+// An item that changes what a new person does updates this file in the same change.
 
 export const STEPS = [
   {
@@ -158,7 +161,7 @@ const para = (s) => {
 export function mentions() {
   const text = [...STEPS.flatMap((s) => [s.glance, ...s.hand, s.auto, s.none, s.check]), ...ESSENTIALS.flatMap((e) => [e.glance, ...e.body])].filter(Boolean);
   const all = (re) => [...new Set(text.flatMap((t) => [...t.matchAll(re)].map((m) => m[1])))];
-  return { commands: all(/`([^`]+)`/g), labels: all(/\*\*([^*]+)\*\*/g) };
+  return { commands: all(/`([^`]+)`/g), labels: all(/\*\*([^*]+)\*\*/g), paths: all(/(?:^|[\s(])(\/[a-z][\w-]*(?:\/[\w-]+)*)/g) };
 }
 
 // version: e.g. "v0.2.0 · c3a3008". base: the app's address on this host ('' or /w/<workspace>).
