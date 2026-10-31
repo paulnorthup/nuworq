@@ -23,7 +23,7 @@ Two kinds of token:
 Nothing is exposed to the internet. Your laptop, phone and agent machines reach the hub over your tailnet with HTTPS.
 
 ```bash
-# on the VM (Node 22.13+), from the nuworq folder
+# on the VM (Node 24+), from the nuworq folder
 node bin/nuworq.js token create paul --role human        # copy it; shown once
 node bin/nuworq.js serve --auth --trust-proxy             # listens on 127.0.0.1:4747
 tailscale serve --bg 4747                                  # https://<vm>.<tailnet>.ts.net

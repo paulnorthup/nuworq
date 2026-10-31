@@ -53,7 +53,7 @@ nuworq seed                # add the nuworq project itself, to build nuworq with
 ```
 
 Agents find their project from the folder they're in; anywhere else, the hub routes them to the work that matters most. Any agent with a shell can also use the CLI: `nuworq guide` tells it everything.
-Requirements: Node 22.13+. No dependencies.
+Requirements: Node 24+. No dependencies.
 
 ### Setting up by hand
 What `connect` does for you. No token or address goes in these: `connect` saved both, and `nuworq mcp` reads them.

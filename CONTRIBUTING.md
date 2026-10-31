@@ -7,4 +7,4 @@ git clone https://github.com/paulnorthup/nuworq.git && cd nuworq && npm test
 node bin/nuworq.js serve --demo        # the UI with demo data, in memory
 ```
 
-Requirements: Node 22.13+. No dependencies, and none get added (see the project's decisions on the hub).
+Requirements: Node 24+. No dependencies, and none get added (see the project's decisions on the hub).
