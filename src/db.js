@@ -394,6 +394,10 @@ export function openDb(file) {
     'ALTER TABLE projects ADD COLUMN fresh INTEGER NOT NULL DEFAULT 1', // the weekly freshness sweep is on (src/freshness.js)
     'ALTER TABLE projects ADD COLUMN fresh_at INTEGER NOT NULL DEFAULT 0', // when the sweep timer last fired (or the project began)
     'ALTER TABLE items ADD COLUMN sweep INTEGER NOT NULL DEFAULT 0', // 1: a "keep <project> fresh" item the hub opened
+    // The weekly guide walk-through (#386, src/walkthrough.js): when it last looked, main's commit then, and its items.
+    'ALTER TABLE projects ADD COLUMN walk_at INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE projects ADD COLUMN walk_sha TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE items ADD COLUMN walk INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE questions ADD COLUMN closed_reason TEXT NOT NULL DEFAULT ''", // why a question closed with nobody answering (shipped, withdrawn), e.g. "#112 landed"
     // Staffing, set on the hub and carried out by nuworq run (#174): at most this many agents working at once (NULL:
     // each runner's own --workers), paused (no new workers), a daily budget in dollars (NULL: none, UTC days), and
