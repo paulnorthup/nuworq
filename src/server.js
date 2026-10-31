@@ -101,7 +101,8 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // decide requests; verify checks the form's Turnstile token (src/directory.js turnstile); gate: making an
 // organization takes an approved request's grant. null: no early access.
 // siteHost: the marketing host (e.g. nuworq.com), when the app lives at publicUrl (app.nuworq.com): it serves
-// the landing page (site/) and sends every other path to the same path on publicUrl.
+// the landing page (site/) and sends every other path to the same path on publicUrl. Its https origin may also
+// call the public early-access APIs cross-origin (nuworq.com's own form, #245).
 // adminHost (workspaces mode): the admin host (e.g. admin.nuworq.com). It serves the admin dashboard, its own
 // sign-in and the admin APIs, and nothing else; only earlyAccess.owners get past sign-in. With it set, the
 // early-access request list and its APIs are no longer served anywhere else.
@@ -513,6 +514,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another workspace on this hub', 'Install the app for this workspace on its own account or repositories.');
       return redirect(res, `/w/${encodeURIComponent(ws)}/#github-installed`);
+    }
+    // The site's own form (#245) asks from its origin: the form's two public APIs answer it there. No
+    // credentials: these calls neither set nor read cookies. Any other origin, and the owners' list, get no CORS headers.
+    if ((path === '/api/early-access' && ['POST', 'OPTIONS'].includes(req.method)) || (path === '/api/early-access/config' && req.method === 'GET')) {
+      res.setHeader('vary', 'Origin');
+      if (siteHost && req.headers.origin === `https://${siteHost}`) {
+        res.setHeader('access-control-allow-origin', req.headers.origin);
+        if (req.method === 'OPTIONS' && path === '/api/early-access') {
+          res.writeHead(204, { 'access-control-allow-methods': 'POST', 'access-control-allow-headers': 'content-type', 'access-control-max-age': '600' });
+          return res.end();
+        }
+      }
     }
     // Early access: anyone may ask to come in (a Turnstile token and a per-address limit keep bots out).
     if (req.method === 'POST' && path === '/api/early-access') {

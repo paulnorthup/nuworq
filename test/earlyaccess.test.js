@@ -117,6 +117,56 @@ describe('early access', () => {
     } finally { h.close(); }
   });
 
+  test("nuworq.com's form may call the form's APIs cross-origin (#245); no other origin or endpoint may", async () => {
+    const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
+    const server = createServer(spaces, {
+      publicUrl: 'http://app.example.test', siteHost: 'nuworq.com',
+      earlyAccess: { owners: ['paul@example.com'], verify: async (t) => t === 'good', gate: true, sitekey: '0xSITEKEY' },
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const site = 'https://nuworq.com';
+    const ask = (origin, b) => fetch(`${base}/api/early-access`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ email: 'ann@example.com', ...b }) });
+    const cors = (r) => [...r.headers.keys()].filter((k) => k.startsWith('access-control-'));
+    try {
+      const config = await fetch(`${base}/api/early-access/config`, { headers: { origin: site } });
+      assert.equal(config.headers.get('access-control-allow-origin'), site);
+      assert.match(config.headers.get('vary'), /Origin/);
+      assert.deepEqual(await config.json(), { sitekey: '0xSITEKEY', open: true });
+
+      const pre = await fetch(`${base}/api/early-access`, { method: 'OPTIONS', headers: { origin: site, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' } });
+      assert.equal(pre.status, 204);
+      assert.equal(pre.headers.get('access-control-allow-origin'), site);
+      assert.match(pre.headers.get('access-control-allow-methods'), /POST/);
+      assert.match(pre.headers.get('access-control-allow-headers'), /content-type/);
+
+      // Turnstile still applies cross-origin; a passing one is stored.
+      const bad = await ask(site, { turnstile: 'bad' });
+      assert.equal(bad.status, 400);
+      const ok = await ask(site, { turnstile: 'good' });
+      assert.equal(ok.status, 200);
+      assert.equal(ok.headers.get('access-control-allow-origin'), site);
+      assert.equal(ok.headers.get('set-cookie'), null);
+      assert.equal(spaces.directory.requests().length, 1);
+      // ...and so does the per-address limit (5 an hour, this one is the 3rd–6th).
+      for (let i = 0; i < 3; i++) await ask(site, { turnstile: 'good' });
+      assert.equal((await ask(site, { turnstile: 'good' })).status, 429);
+
+      // Never credentials; never another origin (http, a subdomain, a stranger); never another endpoint.
+      for (const r of [config, pre, ok]) assert.equal(r.headers.get('access-control-allow-credentials'), null);
+      for (const origin of ['http://nuworq.com', 'https://evil.nuworq.com', 'https://evil.example']) {
+        assert.deepEqual(cors(await fetch(`${base}/api/early-access/config`, { headers: { origin } })), [], origin);
+        const refused = await fetch(`${base}/api/early-access`, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'POST' } });
+        assert.notEqual(refused.status, 204, origin);
+        assert.deepEqual(cors(refused), [], origin);
+      }
+      for (const [method, path] of [['GET', '/api/early-access'], ['GET', '/api/me'], ['OPTIONS', '/api/orgs'], ['GET', '/api/oauth']]) {
+        const r = await fetch(base + path, { method, headers: { origin: site } });
+        assert.deepEqual(cors(r), [], `${method} ${path}`);
+      }
+    } finally { server.close(); }
+  });
+
   test('a request is decided once', async () => {
     const h = await hub();
     try {
