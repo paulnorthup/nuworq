@@ -33,17 +33,27 @@ function request(port, method, path, { headers = {}, body } = {}) {
   });
 }
 
-// Read an SSE stream for a while; resolve with everything received.
-function listen(port, path, headers, ms) {
-  return new Promise((resolve, reject) => {
+// Read an SSE stream until `until` matches or `ms` passes; resolve with everything
+// received. `open` resolves on the first chunk (the server's hello), so a test can
+// wait for the stream to be live instead of guessing with a timer.
+function listen(port, path, headers, { until, ms = 5000 } = {}) {
+  let opened;
+  const open = new Promise((r) => (opened = r));
+  const done = new Promise((resolve, reject) => {
     let text = '';
     const req = http.request({ host: '127.0.0.1', port, method: 'GET', path, headers }, (res) => {
-      res.on('data', (c) => (text += c));
-      setTimeout(() => { req.destroy(); resolve({ status: res.statusCode, text }); }, ms);
+      const finish = () => { clearTimeout(timer); req.destroy(); resolve({ status: res.statusCode, text }); };
+      const timer = setTimeout(finish, ms);
+      res.on('data', (c) => {
+        text += c;
+        opened();
+        if (until && until.test(text)) finish();
+      });
     });
     req.on('error', (e) => (e.code === 'ECONNRESET' ? resolve({ text }) : reject(e)));
     req.end();
   });
+  return { open, done };
 }
 
 const bearer = (t) => ({ authorization: `Bearer ${t}` });
@@ -141,11 +151,11 @@ describe('one server, two workspaces', () => {
 
   test("a workspace's live stream carries only its own changes", async () => {
     const a = ctx.tokens.acme, g = ctx.tokens.globex;
-    const gStream = listen(ctx.port, '/api/stream', { ...at('globex'), ...bearer(g.human) }, 250);
-    const aStream = listen(ctx.port, '/api/stream', { ...at('acme'), ...bearer(a.human) }, 250);
-    await new Promise((r) => setTimeout(r, 50));
+    const gStream = listen(ctx.port, '/api/stream', { ...at('globex'), ...bearer(g.human) }, { ms: 500 });
+    const aStream = listen(ctx.port, '/api/stream', { ...at('acme'), ...bearer(a.human) }, { until: /"project":"rockets"/ });
+    await Promise.all([gStream.open, aStream.open]);
     await call('POST', '/api/p/rockets/human/comment', { headers: { ...at('acme'), ...bearer(a.human) }, body: { body: 'hello' } });
-    const [gs, as] = await Promise.all([gStream, aStream]);
+    const [gs, as] = await Promise.all([gStream.done, aStream.done]);
     assert.match(as.text, /"project":"rockets"/);
     assert.doesNotMatch(gs.text, /data:/);
   });

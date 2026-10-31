@@ -46,22 +46,41 @@ describe('the color map keeps meanings apart (#188)', () => {
     for (const [a, b] of pairs(PROVIDER)) assert.ok(dE(root[a], root[b]) >= 30, `${a} vs ${b}`);
   });
 
-  test('the logo is the brand, not a state', () => {
+  test('the logo is the brand, not a state: the mark in ink on the citron tile (#319)', () => {
     // Every logo the hub draws, including the flow pages the server renders itself (src/server.js flowPage).
     for (const f of ['web/app.js', 'web/login.html', 'web/device.html', 'web/invite.html', 'web/early-access.html', 'src/server.js']) {
       const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
-      assert.match(src, /rx="8" fill="var\(--brand\)"/, f);
+      assert.match(src, /rx="8" fill="var\(--brand\)"\/><path d="[^"]*" stroke="var\(--ink\)"/, f);
       assert.doesNotMatch(src, /rx="8" fill="var\(--agents\)"/, f);
+    }
+    // A favicon can't read CSS variables, so it carries the same two colors as hexes.
+    const [brand, ink] = [root['--brand'], root['--ink']].map((h) => `%23${h.slice(1)}`);
+    for (const f of ['index.html', 'login.html', 'device.html', 'invite.html', 'early-access.html']) {
+      const icon = readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8').match(/<link rel="icon" href="([^"]*)"/)[1];
+      assert.ok(icon.includes(`rx='8' fill='${brand}'`) && icon.includes(`stroke='${ink}'`), `${f}'s favicon is the ink mark on --brand`);
     }
   });
 
-  test('every Needs you card is orange, and priority uses no state color (#189)', () => {
+  test('the citron brand stands apart from every meaning, carries a readable mark, and is never text (#319)', () => {
+    for (const s of STATE) assert.ok(dE(root['--brand'], root[s]) >= 30, `--brand vs ${s}: ΔE ${dE(root['--brand'], root[s]).toFixed(1)}`);
+    for (const p of PROVIDER) assert.ok(dE(root['--brand'], root[p]) >= 25, `--brand vs ${p}: ΔE ${dE(root['--brand'], root[p]).toFixed(1)}`);
+    assert.ok(contrast(root['--ink'], root['--brand']) >= 4.5, `the mark (--ink) on --brand: ${contrast(root['--ink'], root['--brand']).toFixed(2)}`);
+    assert.ok(contrast('#ffffff', root['--brand']) < 4.5, 'a white mark on citron would fail this rule');
+    for (const dir of ['web', 'src']) {
+      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n))) {
+        const src = readFileSync(new URL(`../${dir}/${f}`, import.meta.url), 'utf8');
+        assert.doesNotMatch(src, /(^|[^-])color:\s*var\(--brand\)/, `${dir}/${f} draws text in --brand`);
+      }
+    }
+  });
+
+  test('every Needs you card is magenta, and priority uses no state color (#189)', () => {
     const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
     const colors = (body) => [...body.matchAll(/(?:^|;)\s*(?:color|background(?:-color)?|border(?:-left)?(?:-color)?)\s*:\s*([^;]+)/g)].map((m) => m[1]);
     const kinds = rules.filter((r) => /\.kind-/.test(r.sel));
     for (const r of kinds) for (const c of colors(r.body)) assert.match(c, /^var\(--you\)$|^\d+px solid var\(--you\)$/, `${r.sel} sets ${c}`);
     const base = rules.find((r) => r.sel === '.card');
-    assert.match(base.body, /border-left: 3px solid var\(--you\)/, 'a card is orange by default, so a new kind is too');
+    assert.match(base.body, /border-left: 3px solid var\(--you\)/, 'a card is magenta by default, so a new kind is too');
     const now = rules.filter((r) => /\.tag\.now\b/.test(r.sel));
     assert.ok(now.length, '.tag.now exists');
     for (const r of now) for (const t of STATE) assert.doesNotMatch(r.body, new RegExp(`var\\(${t}(-tint)?\\)`), `${r.sel} uses ${t}`);

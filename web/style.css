@@ -8,49 +8,49 @@
      --bad      failed: a failing check, an error. Not for at-risk or waiting.
      --ink      the main action and plain emphasis. Carries no state.
      --p-*      which provider an agent runs on (a 7px mark beside its name), nothing else.
-     --brand    the logo only.
+     --brand    the logo's tile only, with the mark in --ink on it. Never text.
    Links, focus rings and highlights such as "new" use no state color.
    Priority (now, soon, later) shows by weight, not color. Every Needs you card is --you, whatever its kind.
    Text that carries information is --muted or darker, at least 4.5:1 on its background (#195); --faint is decoration
    only (borders, disabled states, placeholders), never text. Hierarchy comes from size and weight.
    test/colors.test.js keeps them apart: the five state colors are at least ΔE76 30 from each other and 4.5:1 on
    --panel (white text on them too); each provider color is at least ΔE76 30 from every state color and the other
-   providers, and 3:1 on --panel. */
+   providers, and 3:1 on --panel; --brand is at least ΔE76 30 from every state color and 25 from every provider. */
 :root {
-  --bg: #f6f5f1;
+  --bg: #f2f3f5;
   --panel: #ffffff;
-  --sunken: #efede7;
-  --ink: #1c1c1a;
-  --muted: #64625d;
-  --faint: #9c9a93;
-  --line: #e4e1d9;
-  --line-strong: #d3d0c6;
+  --sunken: #e7e9ed;
+  --ink: #14161a;
+  --muted: #585d67;
+  --faint: #979ca5;
+  --line: #dfe2e7;
+  --line-strong: #cdd1d8;
 
-  --you: #b84b0c;
-  --you-tint: #fdf0e6;
-  --you-line: #f2c9a8;
-  --agents: #3b5bdb;
-  --agents-tint: #edf1ff;
+  --you: #b3166f;
+  --you-tint: #fbe8f2;
+  --you-line: #f0bcd8;
+  --agents: #2f56d6;
+  --agents-tint: #ecf0fd;
   --queue: #8b9099;
-  --queue-tint: #f0f1f3;
+  --queue-tint: #eceef1;
   /* Outside's stripes (#209): white labels sit on --hatch and ink text on --hatch-tint, 4.5:1 on every stripe. */
   --hatch: repeating-linear-gradient(135deg, var(--muted) 0 4px, var(--ink) 4px 7px);
   --hatch-tint: repeating-linear-gradient(135deg, var(--sunken) 0 5px, var(--line-strong) 5px 7px);
   --ok: #2a7549;
   --ok-tint: #e8f5ec;
-  --warn: #866a00;
-  --bad: #c01048;
-  --bad-tint: #fde8ef;
+  --warn: #8a6400;
+  --bad: #c62828;
+  --bad-tint: #fdeaea;
 
   --p-anthropic: #bb6655;
   --p-openai: #669999;
   --p-open: #9933bb;
   --p-google: #5588dd;
 
-  --brand: #3b5bdb;
+  --brand: #d4e034; /* citron (#319): the logo's tile, with the mark in --ink on it */
 
   --radius: 10px;
-  --shadow: 0 1px 2px rgba(20, 20, 18, .05), 0 2px 8px rgba(20, 20, 18, .04);
+  --shadow: 0 1px 2px rgba(20, 22, 26, .05), 0 2px 8px rgba(20, 22, 26, .04);
   --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light; /* light only, on every device (#141): no dark theme */
@@ -255,7 +255,7 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .row-item.clickable { cursor: pointer; }
 .row-item.clickable:hover { background: var(--sunken); }
 .tag { font-size: 11px; font-weight: 600; border-radius: 5px; padding: 1px 6px; text-transform: uppercase; letter-spacing: .04em; flex: none; }
-/* Every Needs you card is orange (#189); priority shows by weight, never a state color: now in ink, soon muted, later outlined. */
+/* Every Needs you card is magenta (#189); priority shows by weight, never a state color: now in ink, soon muted, later outlined. */
 .tag.now { background: var(--ink); color: #fff; }
 .tag.you { background: var(--you-tint); color: var(--you); }
 .tag.soon { background: var(--sunken); color: var(--muted); }
@@ -387,7 +387,7 @@ table.work tr:hover td { background: var(--sunken); cursor: pointer; }
 
 /* ── drawer ── */
 #drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(600px, 100vw); background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 30px rgba(0,0,0,.08); overflow-y: auto; z-index: 20; padding: 22px 26px 60px; }
-#scrim { position: fixed; inset: 0; background: rgba(20,20,18,.18); z-index: 15; }
+#scrim { position: fixed; inset: 0; background: rgba(20,22,26,.18); z-index: 15; }
 .d-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .d-top .x { margin-left: auto; }
 #drawer h2.title { font-size: 20px; line-height: 1.3; letter-spacing: -.01em; }
@@ -445,7 +445,7 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 .get-started li .copyable { flex-basis: 100%; margin-left: 28px; }
 
 /* ── modal & toast ── */
-#modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(20,20,18,.3); padding: 16px; }
+#modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(20,22,26,.3); padding: 16px; }
 #modal[hidden] { display: none; }
 .dialog { background: var(--panel); border-radius: 14px; width: min(680px, 100%); max-height: 88vh; overflow-y: auto; padding: 22px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
 .dialog h2 { font-size: 18px; margin-bottom: 4px; }
@@ -719,7 +719,7 @@ main.admin { padding-top: 24px; }
 @media (min-width: 640px) { .admin-space summary .faint { flex-basis: auto; margin-left: auto; } }
 
 /* Groups (#200): one line each at the 30-second view, the state first; a tap opens the map. One column on a
-   phone, the priority beside the line when there is room. Every target 44px. Waits on you is orange (yours),
+   phone, the priority beside the line when there is room. Every target 44px. Waits on you is magenta (yours),
    stuck amber (at risk), moving blue (agents), queued grey. */
 .groups { display: flex; flex-direction: column; gap: 8px; }
 .group { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--queue); border-radius: var(--radius); padding: 8px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
