@@ -3,7 +3,7 @@
 //   30s → pulse + the few things that need you, each with the action that moves it on
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
-import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem, preconditionOut } from './core.js';
+import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, waitsForOk, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem, preconditionOut } from './core.js';
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
@@ -283,7 +283,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   }
 
   for (const it of in_('proposed')) {
-    if (p.autonomy === 'ask') {
+    if (waitsForOk(p, it)) {
       // Only shaped proposals reach you: approving a raw idea isn't a 30-second decision; approving a shaped one is.
       if (!it.acceptance || it.holder) continue;
       const shaped = lastEvent(it, ['shaped']);
@@ -441,7 +441,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       start: true,
     });
   } else if (!p.parked && !claimable && !inFlight && recentAgents.length) {
-    const approvals = in_('proposed').filter((i) => !i.holder && i.acceptance && p.autonomy === 'ask').length;
+    const approvals = in_('proposed').filter((i) => !i.holder && i.acceptance && waitsForOk(p, i)).length;
     if (in_('waiting').length || approvals) {
       push({
         key: `starved:${Math.floor(t / (6 * HOUR))}`, level: 'know', kind: 'starved', at: t,
@@ -692,7 +692,7 @@ function idleCause(hub, p, t) {
 // operator's question isn't theirs.
 function waitsOnYou(p, i, openQs) {
   return !!i.parked_by || openQs.some((q) => q.item_id === i.id && q.blocking && q.audience !== 'operator')
-    || (i.stage === 'proposed' && !i.holder && !!i.acceptance && p.autonomy === 'ask')
+    || (i.stage === 'proposed' && !i.holder && !!i.acceptance && waitsForOk(p, i))
     || (i.stage === 'verifying' && !i.holder && p.autonomy !== 'full');
 }
 
@@ -956,6 +956,7 @@ export function itemView(hub, slug, ref) {
     created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
     holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
     race: it.race,
+    ...(waitsForOk(p, it) ? { waits_for_ok: true } : {}), // a shaped proposal waits for a person's approval (#296)
     racers: it.race > 1 ? hub.attemptsOf(it).map((a) => ({ agent: a.agent, model: a.model, stage: a.stage, lease_left: a.lease_until ? dur(a.lease_until - t) : null })) : [],
     submissions: hub.submissions(it),
     implementer: it.implementer, last_worker: it.last_worker,

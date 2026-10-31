@@ -726,6 +726,9 @@ main.admin { padding-top: 24px; }
 .admin-link { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .admin-link code { display: block; padding: 8px; word-break: break-all; user-select: all; }
 .admin-h2 { margin-top: 28px; }
+/* How far feedback goes on its own (#296): three levels, full width, thumb-sized. */
+.fb-level .seg { display: flex; width: 100%; margin: 8px 0 4px; }
+.fb-level .seg button { flex: 1; min-height: 44px; font-size: 13.5px; padding: 4px 6px; }
 /* Asked once per new project (#174): may nuworq run staff it? */
 .staff-ask { background: var(--you-tint); border: 1px solid var(--you-line); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 14px; }
 .staff-ask .actions { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }

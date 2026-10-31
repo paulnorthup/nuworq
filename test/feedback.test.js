@@ -279,5 +279,112 @@ describe('feedback about nuworq (#295)', () => {
     const many = composeFeedback(Array.from({ length: 7 }, (_, i) => ({ sender: `a${i}`, workspace: 'w', text: 't' })));
     assert.equal(many.title, 'nuworq: 7 pieces of feedback');
     assert.match(many.text, /and 2 more/);
+    const auto = composeFeedback([{ sender: '@ann', workspace: 'acme', text: 'x', auto: 'full', proposal: 'nuworq/nuworq#4' }]);
+    assert.match(auto.text, /@ann \(acme\): x \(proposed as nuworq\/nuworq#4\)/, 'says it is already moving');
+  });
+});
+
+describe('feedback has its own autonomy (#296)', () => {
+  const shapeIt = (nw, agent, text) => {
+    nw.agentOp('nuworq', 'checkin', agent);
+    const job = nw.agentOp('nuworq', 'next', agent);
+    assert.equal(job.mode, 'shape', JSON.stringify(job));
+    assert.match(job.hint, /change scope or direction/, 'shaping says the scope rule');
+    nw.agentOp('nuworq', 'refine', agent, { item: job.item, acceptance: text });
+    return { job, done: nw.agentOp('nuworq', 'submit', agent, { item: job.item, headline: 'Shaped' }) };
+  };
+  const itemOf = (nw, f) => nw.q('SELECT * FROM items WHERE feedback = ?').get(f.id);
+
+  test('it starts at Check with me; only the owners change it, on the admin host, to one of the three levels', async () => {
+    const h = await hub();
+    try {
+      assert.equal((await h.asPaul('GET', '/api/feedback/list')).json.autonomy, 'ask');
+      await h.asAnn('POST', '/api/feedback', { text: 'Waits for you' });
+      const [f] = h.dir.feedbackList();
+      assert.equal(f.state, 'new', 'Check with me: it waits for Approve or Decline');
+      assert.equal(h.spaces.get('nuworq').q('SELECT COUNT(*) AS n FROM items WHERE feedback IS NOT NULL').get().n, 0);
+      assert.equal((await h.asPaul('POST', '/api/feedback/autonomy', { level: 'everything' })).status, 400);
+      assert.equal((await h.asAnn('POST', '/api/feedback/autonomy', { level: 'full' })).status, 404, 'not for people in a workspace');
+      assert.equal((await h.call('POST', '/api/feedback/autonomy', { level: 'full' })).status, 403, 'not on the app');
+      const set = await h.asPaul('POST', '/api/feedback/autonomy', { level: 'balanced' });
+      assert.equal(set.status, 200, JSON.stringify(set.json));
+      assert.equal((await h.asPaul('GET', '/api/feedback/list')).json.autonomy, 'balanced');
+      assert.equal(h.dir.feedbackById(f.id).state, 'new', 'only feedback from then on');
+    } finally { h.close(); }
+  });
+
+  test('Keep moving: a proposal at once that agents shape, but nobody builds it (or its parts) until an owner approves it', async () => {
+    const h = await hub();
+    try {
+      await h.asPaul('POST', '/api/feedback/autonomy', { level: 'balanced' });
+      await h.asAnn('POST', '/api/feedback', { text: 'The Approve button hides below the fold on a phone' });
+      const [f] = h.dir.feedbackList();
+      assert.equal(f.state, 'approved');
+      assert.equal(f.auto, 'balanced');
+      assert.equal(f.decided_by, '', 'no owner decided it');
+      const nw = h.spaces.get('nuworq');
+      const it = itemOf(nw, f);
+      assert.equal(`nuworq/nuworq#${it.seq}`, f.proposal);
+      assert.equal(it.stage, 'proposed');
+      assert.equal(it.gate, 1);
+      assert.match(it.summary, /waits for the owners' OK/);
+
+      const { job, done } = shapeIt(nw, 'claude-a', 'The Approve button is on screen at 375px');
+      assert.match(job.hint, /The human then approves it/);
+      assert.equal(done.stage, 'proposed', 'shaped, not ready');
+      assert.match(done.hint, /waiting for the human to approve/);
+      // Its parts wait too, even with acceptance criteria.
+      const part = nw.agentOp('nuworq', 'propose', 'claude-a', { title: 'Move the button up', acceptance: 'It is', parent: job.item });
+      assert.equal(part.stage, 'proposed');
+      nw.agentOp('nuworq', 'checkin', 'claude-b');
+      assert.equal(nw.agentOp('nuworq', 'next', 'claude-b').item, undefined, 'nothing to build or shape');
+      assert.throws(() => nw.agentOp('nuworq', 'claim', 'claude-b', { item: job.item }), /waiting for the human to approve/);
+      const { itemView, view } = await import('../src/insight.js');
+      assert.equal(itemView(nw, 'nuworq', job.item).waits_for_ok, true, 'the drawer offers Approve');
+      assert.ok(view(nw, 'nuworq').attention.some((n) => n.level === 'act' && n.kind === 'proposal' && n.item === job.item), 'it reaches the owners in Needs you');
+      // An owner approves it in the project: then it is built, its approved part first.
+      nw.humanOp('nuworq', 'update', { item: job.item, stage: 'ready' });
+      assert.equal(nw.agentOp('nuworq', 'next', 'claude-b').item, undefined, 'it waits for its part, still unapproved');
+      nw.humanOp('nuworq', 'update', { item: part.item, stage: 'ready' });
+      assert.equal(nw.agentOp('nuworq', 'next', 'claude-b').item, part.item);
+    } finally { h.close(); }
+  });
+
+  test('Run with it: proposed at once, shaped and built under the project\'s own autonomy; the dashboard says so', async () => {
+    const h = await hub();
+    try {
+      await h.asPaul('POST', '/api/feedback/autonomy', { level: 'full' });
+      await h.asAgent('/api/agent/feedback', { text: 'next said rebase, but the branch was already rebased' });
+      const [f] = (await h.asPaul('GET', '/api/feedback/list?state=approved')).json.feedback;
+      assert.equal(f.auto, 'full');
+      const nw = h.spaces.get('nuworq');
+      const it = itemOf(nw, f);
+      assert.equal(it.gate, 0);
+      assert.match(it.summary, /proposed at once \("Run with it"\)/);
+      const { done } = shapeIt(nw, 'claude-a', 'next stops saying rebase once the branch contains main');
+      assert.equal(done.stage, 'ready', 'no owner OK needed');
+    } finally { h.close(); }
+  });
+
+  test('at every level, a change of scope or direction goes to the owners as a question instead of being built', async () => {
+    const { guide } = await import('../src/protocol.js');
+    assert.match(guide({ url: 'http://x', project: 'p' }), /Feedback about nuworq[^\n]*change scope or direction[^\n]*blocking/, 'the guide\'s shaping rules say how');
+    for (const level of ['ask', 'balanced', 'full']) {
+      const h = await hub();
+      try {
+        await h.asPaul('POST', '/api/feedback/autonomy', { level });
+        await h.asAnn('POST', '/api/feedback', { text: 'Add a pricing page with a team plan' });
+        let [f] = h.dir.feedbackList();
+        if (level === 'ask') [f] = [(await h.asPaul('POST', '/api/feedback/decide', { id: f.id, approve: true })).json.feedback];
+        const nw = h.spaces.get('nuworq');
+        nw.agentOp('nuworq', 'checkin', 'claude-a');
+        const job = nw.agentOp('nuworq', 'next', 'claude-a');
+        assert.match(job.hint, /ask the human, blocking/, level);
+        nw.agentOp('nuworq', 'ask', 'claude-a', { item: job.item, question: 'Take on a pricing page with a team plan?', blocking: true });
+        assert.equal(itemOf(nw, f).holder, null, `${level}: parked with the owners`);
+        nw.agentOp('nuworq', 'checkin', 'claude-b');
+        assert.equal(nw.agentOp('nuworq', 'next', 'claude-b').item, undefined, `${level}: nobody shapes or builds it meanwhile`);
+      } finally { h.close(); }
+    }
   });
 });
