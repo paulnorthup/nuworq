@@ -77,6 +77,9 @@ describe('the page uses one function for every agent', () => {
     assert.match(app, /<div class="top">\$\{who\(a\.name, a\.model, \{ job: true \}\)\}/);
     assert.match(app, /<span class="sub">\$\{named\(a\.sub, a\.agent, a\.presence\)\}<\/span>/);
     assert.equal(app.match(/named\(e\.headline, e\.actor, undefined, \{ beside: true \}\)/g).length, 2);
+    // In motion's last step sits beside the agent's line: no "claude-80e7 is shaping #9" under it.
+    assert.match(app, /m\.last\.type === 'shaping' \? 'Started shaping it' : named\(m\.last\.headline, m\.agent, undefined, \{ beside: true \}\)/);
+    assert.doesNotMatch(app, /esc\(m\.last\.headline\)/);
     assert.match(app, /homePage\(S\.home, \{ z: z\(\), pulse, card, esc, plural, who,/);
     const home = readFileSync(new URL('../web/home.js', import.meta.url), 'utf8');
     assert.match(home, /<b>\$\{who\(m\.agent, null, \{ presence: m\.presence \}\)\}<\/b>/);
