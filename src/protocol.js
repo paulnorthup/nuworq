@@ -176,9 +176,9 @@ export const OPS = [
       acceptance: s('Optional. What done means.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
-      parent: s('Optional. Move it into another group: the item it is part of, e.g. "#170". "" takes it out of its group. Not under itself, not into a done or dropped group.'),
+      parent: s('Optional. Move it under another item: the one it is part of, e.g. "#170" (a top-level item with parts is a milestone). "" makes it top-level. Not under itself, not under a done or dropped item.'),
       pr: s('Optional. A pull request no item tracks, as a tidy job lists it (e.g. "acme/api#12"): it becomes this item\'s, and lands with it.'),
-      reason: s('Optional. Why, in one line. It goes on the record, and on both groups\' history when the item moves. A tidy job always gives one.'),
+      reason: s('Optional. Why, in one line. It goes on the record, and on both parents\' history when the item moves. A tidy job always gives one.'),
       fixes: { ...FIXES, description: `${FIXES.description} "" clears it.` },
       needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
       size: SIZE,
@@ -269,7 +269,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 3. **No nuworq tools in this session?** Say so and stop. The machine needs \`nuworq connect <hub>\`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with \`look\`, ask what they want and why, offer options with trade-offs, then \`propose\` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
-6. **A tidy job** (\`next\` mode "tidy") keeps the groups true: move items into the right group, merge overlapping groups, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how.
+6. **A tidy job** (\`next\` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how.
 
 ## Roles
 Your role comes from how you started and is fixed for the session. \`checkin\` says which you are.
@@ -358,10 +358,10 @@ Hub: ${url} · project: ${project} (change with --project).
 1. ${c('checkin', cli ? '--model <model> --client <tool> --has "docker,macos"' : '')}. Say what your machine can do in \`has\` (e.g. docker, linux, macos, browser, gpu), so you only get work you can finish. Read it. ${c('ack', cli ? '<steer-id> "how you will adjust"' : '')} any steering.
 2. ${c('next')} claims the most useful job and hands you its context. Read \`done_means\`, \`history\` and \`last_handoff\`. The job is one of:
    - **work**: build it.
-   - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. An item in the wrong group? ${c('refine')} it with \`parent\` (\`""\` takes it out of its group). Finish with ${c('submit')}.
+   - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. An item in the wrong milestone? ${c('refine')} it with \`parent\` (\`""\` takes it out of its milestone). Finish with ${c('submit')}.
    - **review**: check someone else's submission against done_means.
    - **land**: accepted work to put on main: rebase its branch onto main, run the checks, fast-forward main, then ${c('submit')}. Land jobs come first, because finished work that isn't on main helps nobody.
-   - **tidy**: the groups drifted; put them right (see Tidy jobs below). No branch.
+   - **tidy**: the milestones drifted; put them right (see Tidy jobs below). No branch.
 3. Work. As soon as you know which files you'll change, post ${c('progress', cli ? '<item> "<headline>" --touching "<paths>"' : '')} with \`touching\`, so others steer clear. Then post it at real milestones. You hold a 20-minute lease: in long stretches, a ${c('progress')} with no headline is a silent heartbeat. If you go quiet, the item returns to the queue.
 4. A question?
    - Can you make a reasonable call? ${c('ask')} with an \`assumption\` and keep going.
@@ -391,10 +391,13 @@ Some work needs a capable session more than a decision: running \`claude\`, the 
 - **Keeping one running:** start Claude Code in the project folder and leave it on a loop:
   \`${operatorLoop(project)}\` (\`nuworq operator\` prints it with this machine's capabilities filled in).
 
+## Milestones
+A top-level item with parts is a milestone: finishing it releases something meaningful, so its title names what is released when it's done (e.g. "Owners see their workspace's analytics on a phone"), not the activity. Milestones are how a person sees and steers the work; people read "milestone" everywhere, so say it in your headlines too. \`parent\` stays the word for the item one level up, at any depth.
+
 ## Tidy jobs
-Groups (an item and its parts) are how a person sees and steers the work, so they have to stay true. When they drift, ${c('next')} hands one agent a tidy job; its summary lists what drifted.
-- **Look for:** open work in no group; two groups changing the same files or after the same outcome; a group whose parts are all done or dropped; a pull request no item tracks.
-- **Change:** move an item with ${c('refine')} \`parent\` (\`""\` takes it out); merge two groups by moving one's parts into the other; ${c('propose')} a parent for a cluster and move its parts in; ${c('submit')} or close a finished group; attach a stray pull request with ${c('refine')} \`pr\` (propose an item for it first if none fits). Give every change a one-line \`reason\`: it goes on both groups' history.
+Milestones have to stay true. When they drift, ${c('next')} hands one agent a tidy job; its summary lists what drifted.
+- **Look for:** open work in no milestone; two milestones changing the same files or after the same outcome; a milestone whose parts are all done or dropped; a pull request no item tracks.
+- **Change:** move an item with ${c('refine')} \`parent\` (\`""\` takes it out); merge two milestones by moving one's parts into the other; ${c('propose')} a parent for a cluster and move its parts in; ${c('submit')} or close a finished milestone; attach a stray pull request with ${c('refine')} \`pr\` (propose an item for it first if none fits). Give every change a one-line \`reason\`: it goes on both parents' history.
 - **Never touch:** a priority a person set (the hub refuses it) or a decision. If one looks wrong, say so in your submit.
 - **Finish:** ${c('submit')} the tidy job with what you changed and what you left alone on purpose. What it listed isn't raised again.
 
