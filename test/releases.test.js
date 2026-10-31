@@ -7,7 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { Hub, PERSON_CAN } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { OPS } from '../src/protocol.js';
-import { nextVersion } from '../src/releases.js';
+import { nextVersion, tagRelease, tagsSettled } from '../src/releases.js';
+import { prMerged } from '../src/github.js';
 
 // When a milestone finishes, the hub drafts the next release (#399).
 const T0 = Date.UTC(2026, 9, 1);
@@ -179,6 +180,64 @@ describe('asking for a release (#399)', () => {
     assert.equal(r.title, 'Release v1.0.1');
     assert.equal(w.hub.agentOp('p', 'propose', 'a1', { title: 'Release', release: true }).item, r.item, 'asked again: the same item');
     assert.ok(OPS.find((o) => o.name === 'propose').params.release);
+  });
+});
+
+describe('a release that lands is tagged with its version (#400)', () => {
+  const git = (dir, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', dir, ...a], { encoding: 'utf8' }).trim();
+
+  test('in a checkout on the hub\'s machine: the lander submits, the hub tags the commit vX.Y.Z', () => {
+    const w = world({ tags: [['v1.4.2', T0]] });
+    w.milestone('Faster search', ['Index titles']);
+    const [r] = w.releases();
+    w.hub.agentOp('p', 'checkin', 'a1', {});
+    const job = w.hub.agentOp('p', 'next', 'a1', {});
+    assert.equal(job.item, `#${r.seq}`);
+    assert.match(job.hint, /This is a release: set the version file to 1\.5\.0 .* top of CHANGELOG\.md under "## 1\.5\.0 \(\d{4}-\d\d-\d\d\)"/);
+    // Built, accepted and put on main by hand, as a land job does.
+    const dir = w.hub.project('p').path;
+    git(dir, 'switch', '-q', '-c', job.branch);
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.5.0' }));
+    writeFileSync(join(dir, 'CHANGELOG.md'), `## 1.5.0 (2026-10-31)\n\n${r.summary}\n`);
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'Release v1.5.0');
+    const sha = git(dir, 'rev-parse', 'HEAD');
+    git(dir, 'switch', '-q', 'main');
+    git(dir, 'merge', '-q', '--ff-only', job.branch);
+    w.hub.patch(w.hub.itemById(r.id), { stage: 'landing', holder: 'a1', lease_until: w.hub.now() + 600_000 });
+    const res = w.hub.agentOp('p', 'submit', 'a1', { item: `#${r.seq}`, headline: 'Landed' });
+    assert.doesNotMatch(res.hint, /Tag it/, 'the hub tagged it; nothing for the lander to do');
+    assert.equal(git(dir, 'rev-parse', 'v1.5.0^{commit}'), sha);
+    const ev = w.hub.q(`SELECT * FROM events WHERE item_id = ? AND type = 'tagged'`).get(r.id);
+    assert.equal(ev.headline, `nuworq tagged ${sha.slice(0, 7)} v1.5.0`);
+  });
+
+  test('on GitHub: the merge of its pull request is tagged through the GitHub App; otherwise it says how by hand', async () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('g', { create: true }));
+    hub.humanOp('g', 'remote', { add: 'github.com/acme/api' });
+    const calls = [];
+    hub.github = { covers: () => true, async tag(a) { calls.push(a); return { sha: a.sha }; } };
+    const p = hub.project('g');
+    const it = hub.humanOp('g', 'create', { title: 'Release v0.3.0', acceptance: 'x' }).item;
+    const item = hub.item(p, it);
+    hub.patch(item, { release: 1, stage: 'landing', branch: 'nuworq/9-release-v0-3-0' });
+    hub.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, 'github.com/acme/api', 9, ?, '', 'Release v0.3.0', 'open', ?, '', 0)`)
+      .run(p.id, item.id, item.branch);
+    const sha = 'f'.repeat(40);
+    hub.tx(() => prMerged(hub, p, hub.q('SELECT * FROM prs WHERE number = 9').get(), { sha }));
+    await tagsSettled(hub);
+    assert.equal(hub.item(p, it).stage, 'done');
+    assert.deepEqual(calls, [{ repo: 'github.com/acme/api', tag: 'v0.3.0', sha }]);
+    assert.equal(hub.q(`SELECT headline FROM events WHERE item_id = ? AND type = 'tagged'`).get(item.id).headline, 'nuworq tagged fffffff v0.3.0 on github.com/acme/api');
+
+    // No GitHub App to write with: the record and the lander get the commands.
+    hub.github = null;
+    const hint = hub.tx(() => tagRelease(hub, p, hub.item(p, it), sha));
+    assert.equal(hint, `Tag it: git fetch origin, then git tag v0.3.0 ${sha}, then git push origin v0.3.0.`);
+    assert.match(hub.q(`SELECT summary FROM events WHERE item_id = ? AND type = 'tagged' ORDER BY id DESC`).get(item.id).summary, /can't write tags to github\.com\/acme\/api/);
+    // Only release items are tagged.
+    assert.equal(hub.tx(() => tagRelease(hub, p, { ...hub.item(p, it), release: 0 }, sha)), '');
   });
 });
 

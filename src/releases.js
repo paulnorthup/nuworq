@@ -4,7 +4,7 @@
 // major (minor while on 0.x), any finished milestone minor, anything else a patch. The draft changelog is the
 // item's summary, which a person may edit before signing: a redraft then only adds what it doesn't mention.
 import { SYSTEM, UserError } from './core.js';
-import { lastRelease } from './git.js';
+import { lastRelease, tagAt } from './git.js';
 
 export const RELEASES = { milestone: 'per milestone', off: 'off' };
 
@@ -95,6 +95,44 @@ export function landed(hub, item) {
   if (item.release && !contents(hub, p).milestones.length) return;
   draftRelease(hub, p);
 }
+
+// The version a release item's title names ("Release v1.5.0"), or null.
+export const releaseVersion = (item) => /^Release v(\d+\.\d+\.\d+)$/.exec(String(item?.title ?? '').trim())?.[1] ?? null;
+
+const tagging = new WeakMap(); // hub → its tags being made on GitHub
+
+// A release item landed (#400): the hub tags the commit main got as vX.Y.Z. In a checkout on this machine, there;
+// on GitHub, as the hub's GitHub App. Otherwise the hub can't write to the repository, and says how to tag it by
+// hand. sha: the commit main got (its pull request's merge, or its branch's head). In a transaction; returns a
+// sentence for whoever landed it ('' when there is nothing for them to do).
+export function tagRelease(hub, p, item, sha) {
+  const version = releaseVersion(item);
+  if (!item.release || !version) return '';
+  const tag = `v${version}`, short = String(sha ?? '').slice(0, 7);
+  const byHand = `Tag it: git fetch origin, then git tag ${tag} ${sha || 'origin/main'}, then git push origin ${tag}.`;
+  const record = (headline, summary = '') => hub.event(p, { item, actor: SYSTEM, type: 'tagged', headline, summary, data: { tag, sha } });
+  if (sha && hub.localFor(p, item)) {
+    if (tagAt(p.path, tag, sha)) { record(`nuworq tagged ${short} ${tag}`); return ''; }
+    record(`The hub couldn't tag ${short} ${tag} in ${p.path}`, byHand);
+    return byHand;
+  }
+  const repo = hub.repoOf(p, item);
+  if (!sha || !hub.github?.tag || !hub.github.covers(repo)) {
+    record(`#${item.seq} landed; ${tag} needs tagging by hand`, `The hub can't write tags to ${repo || 'its repository'}. ${byHand}`);
+    return byHand;
+  }
+  const run = hub.github.tag({ repo, tag, sha }).then(
+    () => hub.tx(() => record(`nuworq tagged ${short} ${tag} on ${repo}`)),
+    (e) => hub.tx(() => record(`The hub couldn't tag ${short} ${tag} on ${repo}: ${e.message}`, byHand)),
+  ).then(() => hub.changed(p), (e) => console.error('tagging a release failed', e));
+  const all = tagging.get(hub) ?? new Set();
+  tagging.set(hub, all.add(run));
+  run.finally(() => all.delete(run));
+  return '';
+}
+
+// Resolves once every tag being made is made (or has failed). For tests.
+export const tagsSettled = async (hub) => { while (tagging.get(hub)?.size) await Promise.all(tagging.get(hub)); };
 
 // A person (or an agent for them) asks for a release now, whatever the setting.
 export function askRelease(hub, p, by) {

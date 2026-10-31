@@ -149,12 +149,13 @@ describe('/nuworq.tgz', () => {
 describe('a signed release reaches installs through the public /api/package', () => {
   const SIGN = join(ROOT, 'scripts', 'sign-release.js');
   const run = promisify(execFile);
-  let dir, clone, server, url, commit, time;
+  let dir, clone, server, url, commit, time, version;
   // An install that pinned the release key, one minute older than the hub's commit.
   const installed = () => {
     const root = mkdtempSync(join(tmpdir(), 'nuworq-rel-root-'));
     mkdirSync(join(root, 'src'));
     writeFileSync(join(root, 'src', 'commit.txt'), `${'a'.repeat(40)} ${time - 60}\n`);
+    writeFileSync(join(root, 'package.json'), '{"name":"nuworq","version":"0.0.1"}');
     copyFileSync(join(dir, 'key', 'release-key.pub'), join(root, 'release-key.pub'));
     return root;
   };
@@ -165,7 +166,11 @@ describe('a signed release reaches installs through the public /api/package', ()
     // Its release key, the public half committed at the root, as on main once the key is made.
     for (const k of ['key', 'other']) { mkdirSync(join(dir, k)); execFileSync(process.execPath, [SIGN, 'keygen', join(dir, k)]); }
     copyFileSync(join(dir, 'key', 'release-key.pub'), join(clone, 'release-key.pub'));
-    execFileSync('git', ['-C', clone, 'add', 'release-key.pub']);
+    // A release (#400): its version's CHANGELOG entry first. No origin to fetch tags from: only the clone's count.
+    version = JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version;
+    writeFileSync(join(clone, 'CHANGELOG.md'), `# Changelog\n\n## ${version} (2026-10-31)\n\n- Signed releases\n`);
+    execFileSync('git', ['-C', clone, 'remote', 'remove', 'origin']);
+    execFileSync('git', ['-C', clone, 'add', 'release-key.pub', 'CHANGELOG.md']);
     execFileSync('git', ['-C', clone, '-c', 'user.name=t', '-c', 'user.email=t@t.test', 'commit', '-qm', 'release key']);
     [commit, time] = execFileSync('git', ['-C', clone, 'log', '-1', '--format=%H %ct'], { encoding: 'utf8' }).trim().split(' ');
     time = Number(time);
@@ -202,11 +207,21 @@ describe('a signed release reaches installs through the public /api/package', ()
     assert.ok(!existsSync(join(out, `nuworq-${commit}.tgz.sig`)), 'nothing signed');
   });
 
+  test('release refuses a version that has no tag on the commit the hub serves (#400)', async () => {
+    const key = join(dir, 'key', 'release-key.pem');
+    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`says it is ${version.replace(/\./g, '\\.')}, but there is no v${version.replace(/\./g, '\\.')} tag`));
+    execFileSync('git', ['-C', clone, 'tag', `v${version}`, `${commit}~1`]);
+    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`v${version.replace(/\./g, '\\.')} is [0-9a-f]{7}, not ${commit.slice(0, 7)} as the hub serves`));
+    execFileSync('git', ['-C', clone, 'tag', '-d', `v${version}`]);
+    assert.ok(!existsSync(join(clone, `nuworq-${commit}.tgz.sig`)), 'nothing signed');
+  });
+
   test('release signs what the hub serves; put beside it, installs take it', async () => {
-    const out = mkdtempSync(join(tmpdir(), 'nuworq-rel-out-'));
+    const out = clone; // a checkout of nuworq, where the release's tag is
+    execFileSync('git', ['-C', clone, 'tag', `v${version}`, commit]);
     const { stdout } = await run(process.execPath, [SIGN, 'release', `${url}/w/acme`, join(dir, 'key', 'release-key.pem')], { cwd: out });
     const sig = `nuworq-${commit}.tgz.sig`;
-    assert.match(stdout, new RegExp(`Signed ${commit.slice(0, 7)} \\(made \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\): wrote ${sig}`));
+    assert.match(stdout, new RegExp(`Signed ${version.replace(/\./g, '\\.')} \\(${commit.slice(0, 7)}, made \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\): wrote ${sig}`));
     assert.match(stdout, new RegExp(`scp ${sig} <hub host>:/var/lib/nuworq/package/`));
     copyFileSync(join(out, sig), join(dir, 'cache', sig));
     const named = (await (await fetch(`${url}/api/package`)).json()).package;
@@ -216,7 +231,7 @@ describe('a signed release reaches installs through the public /api/package', ()
     const installs = [];
     const r = await update({ root: installed(), hub: `${url}/w/acme`, dir: mkdtempSync(join(tmpdir(), 'nuworq-rel-upd-')), force: true, install: async (f) => { installs.push(readFileSync(f)); return null; } });
     assert.equal(r.status, 'updated', describeUpdate(r));
-    assert.equal(describeUpdate(r), `Updated nuworq aaaaaaa → ${commit.slice(0, 7)}. The next run uses it.`);
+    assert.equal(describeUpdate(r), `Updated nuworq 0.0.1 → ${version}. The next run uses it.\n  - Signed releases`, 'the versions, then what changed (#400)');
     assert.ok(installs[0].equals(Buffer.from(await (await fetch(`${url}/nuworq.tgz`)).arrayBuffer())), 'the bytes that were signed');
   });
 });

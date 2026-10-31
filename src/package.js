@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { fileInTarball, releaseOf } from './update.js';
 
 // release-key.pub: the public half of the key releases are signed with, pinned by every install (src/update.js).
-const RUNS = ['bin', 'src', 'web', 'package.json', 'README.md', 'LICENSE', 'release-key.pub'];
+const RUNS = ['bin', 'src', 'web', 'package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'release-key.pub'];
 
 const run = (args) => new Promise((resolve, reject) => {
   execFile('git', args, { timeout: 60_000 }, (e, out, err) => (e ? reject(new Error(String(err || e.message).trim())) : resolve(out)));
