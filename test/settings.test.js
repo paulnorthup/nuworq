@@ -13,7 +13,8 @@ test('the project header renders none of the settings actions, only Settings', (
     const inHeader = header.slice(0, header.indexOf('staff-ask'));
     assert.ok(!inHeader.includes(`data-action="${a}"`), `${a} is not in the header`);
   }
-  assert.match(header, /z\(\) >= 1 \? `<div class="ctl-row"><span class="seg-label">Autonomy<\/span>\$\{autoSeg\}<\/div>\s*<button class="btn settings-btn" data-action="settings"/);
+  // Settings ends the Autonomy row (#394), not a row of its own.
+  assert.match(header, /z\(\) >= 1 \? `<div class="ctl-row"><span class="seg-label">Autonomy<\/span>\$\{autoSeg\}\s*<button class="btn settings-btn" data-action="settings"[^`]*<\/button><\/div>`/);
 });
 
 test('Settings has a row per setting, switches for staffing and freshness, Park and Remove set apart', () => {
