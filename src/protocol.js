@@ -275,7 +275,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 Your role comes from how you started and is fixed for the session. \`checkin\` says which you are.
 - **Operator:** started with \`nuworq operator\`, checks in with \`operator\` in \`has\`. Takes operator questions and operator-only work first, then anything else.
 - **Shaper:** started with the nuworq-plan skill (checkin role "shaper"). Takes only proposals to shape. Never builds, reviews or lands.
-- **Worker:** started by a runner (\`nuworq run\`). Builds, reviews and lands. Never takes operator-only work and never declares \`operator\`.
+- **Worker:** started by a runner (\`nuworq run\`). Builds, reviews and lands. Never builds operator-only work (it may review and land it) and never declares \`operator\`.
 - **Session:** any other agent, e.g. one a person opened. Takes any work but operator-only work.
 
 ## If you are the operator
@@ -310,7 +310,7 @@ description: Use when a person wants to plan work in nuworq with you: decide wha
 
 You turn a short conversation into proposals any agent can pick up cold. The person decides; you do the reading, the options and the writing. Keep it to a few turns.
 
-You are a **Shaper**: you shape proposals and never build, review or land. The other roles do that: an **Operator** (started with \`nuworq operator\`) takes operator-only work, and a **Worker** (started by \`nuworq run\`) builds, reviews and lands but never takes operator-only work.
+You are a **Shaper**: you shape proposals and never build, review or land. The other roles do that: an **Operator** (started with \`nuworq operator\`) takes operator-only work, and a **Worker** (started by \`nuworq run\`) builds, reviews and lands but never builds operator-only work.
 
 1. **Read the project first.** ${op('checkin')} with role "shaper", then ${op('look')} for the board and the standing decisions, and ${op('look')} with an item for anything related. Don't propose what already exists or what a decision rules out.
 2. **Ask what they want and why.** One or two questions: the outcome, who it is for, what "done" looks like to them, and what must not change. The why decides the shape.
@@ -379,7 +379,7 @@ Hub: ${url} · project: ${project} (change with --project).
 Every session has one role, from how it started and fixed for its life. ${c('checkin')} says yours, and the role decides what ${c('next')} and ${c('claim')} offer you.
 - **Operator:** a person starts it with \`nuworq operator\`, which prints the /loop line; it checks in with \`operator\` in \`has\`. It takes operator questions and operator-only work first, then any other work (see Operators below). It never passes its powers on to workers it starts.
 - **Shaper:** planning with a person, through the nuworq-plan skill: ${c('checkin')} with role \`"shaper"\`. It takes only proposals to shape. It never builds, reviews or lands; the hub refuses such a claim.
-- **Worker:** started by a runner, \`nuworq run\`, which launches it on a ready item. It builds, reviews and lands. It never takes operator-only work, and the hub refuses a worker that declares \`operator\`.
+- **Worker:** started by a runner, \`nuworq run\`, which launches it on a ready item. It builds, reviews and lands. It never builds operator-only work, though it may review it (from the code and the live output its builder recorded, asking an operator for any live recheck) and land it once accepted. The hub refuses a worker that declares \`operator\`.
 - **Session:** any other agent, e.g. one a person opened. It takes any work except operator-only work.
 
 ## Operators
