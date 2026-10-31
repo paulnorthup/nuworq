@@ -64,6 +64,21 @@ describe('an operator waits on the hub', () => {
     assert.match(describeEvent(r.events[0]), /^nuworq: steering for you \(steer \d+ in o\)\. Run checkin and ack it\.$/);
   });
 
+  // #281: Paul's answer to an operator's escalation reached its idle terminal only ~114 s later.
+  test("the human's answer to an operator's escalation wakes that operator at once", async () => {
+    const { hub, tick } = setup();
+    const orig = hub.agentOp('o', 'ask', 'w1', { question: 'Will you sign the release?', to: 'operator' });
+    const up = hub.agentOp('o', 'ask', 'op', { question: 'Will you sign it?', escalates: orig.question, evidence: [{ label: 'built' }] });
+    const since = hub.now();
+    const waiting = waitFor(hub, 'op', { since, ms: 5000 });
+    tick(1);
+    hub.humanOp('o', 'answer', { question: up.question, answer: 'Signed' });
+    const t = Date.now();
+    const r = await waiting;
+    assert.ok(Date.now() - t < 1000, 'not at the timeout');
+    assert.deepEqual(r.events, [{ kind: 'answer', project: 'o', question: up.question }]);
+  });
+
   test('with nothing for it, the wait ends quietly and empty', async () => {
     const { hub } = setup();
     hub.humanOp('o', 'create', { title: 'Anyone', acceptance: 'x' });
@@ -300,6 +315,41 @@ describe('GET /api/wait and nuworq wait', () => {
       assert.deepEqual((await call(`/api/wait?for=operator&since=${since}&timeout=0.05`, '', listenA)).events, [{ kind: 'answer', project: 'o', question: asked.question }]);
       const listenB = listenerKeys({ env: {}, host: 'mac', ppid: 901, table: '901 502\n502 77\n77 1\n' });
       assert.deepEqual((await call(`/api/wait?for=operator&since=${since}&timeout=0.05`, '', listenB)).events, [], "A's answer doesn't wake B");
+    } finally {
+      server.close();
+      server.closeAllConnections();
+    }
+  });
+
+  // #281: the live check's shape. An unnamed listener of the escalating operator's session, and the
+  // human's answer to the escalation through the human API, as Needs you sends it.
+  test("over HTTP, the human's answer to an escalation wakes the escalating operator's listener at once", async () => {
+    const { hub, tick } = setup();
+    const server = createServer(hub);
+    const url = `http://127.0.0.1:${await listen(server)}`;
+    const KA = serverKeys({ env: { CLAUDE_CODE_SESSION_ID: 'session-a' }, host: 'mac', ppid: 501 });
+    try {
+      const call = (path, agent, session, body) => fetch(`${url}${path}`, {
+        method: body ? 'POST' : 'GET',
+        headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, 'x-nuworq-session': session.join(',') },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      }).then((r) => r.json());
+      await call('/api/p/o/agent/checkin', 'opa', KA, { has: ['operator'] });
+      hub.q(`UPDATE agents SET signed_off = 1 WHERE name = 'op'`).run();
+      const orig = hub.agentOp('o', 'ask', 'w1', { question: 'Will you sign the release?', to: 'operator' });
+      const up = await call('/api/p/o/agent/ask', 'opa', KA, { question: 'Will you sign it?', escalates: orig.question, evidence: [{ label: 'built' }], blocking: true });
+      const listenA = listenerKeys({ env: {}, host: 'mac', ppid: 900, table: '900 501\n501 77\n77 1\n' });
+      const first = await call('/api/wait?for=operator&timeout=0.05', '', listenA);
+      assert.deepEqual(first.events, [], 'the escalated question waits for the human, so it wakes nobody');
+      const pending = call(`/api/wait?for=operator&since=${first.at}&timeout=5`, '', listenA);
+      await new Promise((res) => setTimeout(res, 50));
+      tick(1);
+      const t = Date.now();
+      const answered = await call('/api/p/o/human/answer', '', [], { question: up.question, answer: 'Signed' });
+      assert.equal(answered.ok, true, JSON.stringify(answered));
+      const r = await pending;
+      assert.ok(Date.now() - t < 1000, 'not at the timeout');
+      assert.deepEqual(r.events, [{ kind: 'answer', project: 'o', question: up.question }]);
     } finally {
       server.close();
       server.closeAllConnections();

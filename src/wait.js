@@ -72,7 +72,9 @@ function eventsFor(hub, p, agent, since) {
     }
   }
   const seq = (id) => (id ? hub.q('SELECT seq FROM items WHERE id = ?').get(id)?.seq : null);
-  for (const q of hub.q(`SELECT * FROM questions WHERE project_id = ? AND audience = 'operator' AND status = 'open' AND asked_by != ? AND at > ? ORDER BY at`).all(p.id, agent, since)) {
+  // One already escalated waits for the human's answer, as next leaves it: that answer wakes the escalating operator.
+  for (const q of hub.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'open' AND asked_by != ? AND at > ?
+      AND NOT EXISTS (SELECT 1 FROM questions e WHERE e.escalates = q.id AND e.status = 'open') ORDER BY at`).all(p.id, agent, since)) {
     out.push({ at: q.at, kind: 'question', project: p.slug, question: q.id, ...(q.item_id ? { item: `#${seq(q.item_id)}` } : {}) });
   }
   // Only answers the asker hasn't had yet (#329): one checkin already delivered isn't worth a wake, so a
