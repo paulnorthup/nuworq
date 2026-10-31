@@ -45,7 +45,7 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `stalls` | number | times a worker went quiet and its lease lapsed |
 | `attempts` | number | times it was claimed to build |
 | `implementer` | string \| null | the agent whose submission was accepted |
-| `model` | string \| null | that agent's model |
+| `model` | string \| null | that agent's model, as it said at checkin in this project; without one, the model its own `usage` rows on this item name, if just one |
 | `reviewer` | string \| null | who accepted it last, the verdict it landed on (an agent, or a person: `you` / `@handle`); null if dropped |
 | `reviewer_model` | string \| null | that reviewer's model when it was an agent (a peer) |
 | `escaped` | boolean | landed, and a later item names it in `fixes` (it repairs this one) |
