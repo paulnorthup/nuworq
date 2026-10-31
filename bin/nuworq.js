@@ -563,7 +563,10 @@ async function runService(flags) {
   const env = svc.serviceEnv(process.env, { repos: besideOf(cwd) });
   const r = await svc.install({ ...where, command: [svc.stableNode(process.execPath), BIN, 'run', ...args], env, log, cwd })
     .catch((e) => { throw new HubError(e.message, { hint: e.hint ?? 'Run it without --install to see what goes wrong.' }); });
-  console.log(`${green('●')} Installed ${bold('nuworq run')} as a ${r.kind}: it starts now, after every reboot, and again if it stops.
+  // Loaded isn't running (#250): only report success once the runner is up.
+  if (!r.up) process.exitCode = 1;
+  console.log(`${r.up ? `${green('●')} Installed ${bold('nuworq run')} as a ${r.kind}, and the runner is up: it runs now, after every reboot, and again if it stops.`
+    : `${amber('!')} Installed ${bold('nuworq run')} as a ${r.kind}, but the runner isn't up after 10 seconds. Check on it with: ${r.status}\n  and read the log below for why it stopped.`}
   Runs in: ${cwd}  ${dim(`(checkouts: ${env.NUWORQ_REPOS ?? env.TRELLIS_REPOS})`)}
   Wrote:   ${r.file}
   Log:     ${r.log}
