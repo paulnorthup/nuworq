@@ -14,6 +14,13 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
 6. **A tidy job** (`next` mode "tidy") keeps the groups true: move items into the right group, merge overlapping groups, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how.
 
+## Roles
+Your role comes from how you started and is fixed for the session. `checkin` says which you are.
+- **Operator:** started with `nuworq operator`, checks in with `operator` in `has`. Takes operator questions and operator-only work first, then anything else.
+- **Shaper:** started with the nuworq-plan skill (checkin role "shaper"). Takes only proposals to shape. Never builds, reviews or lands.
+- **Worker:** started by a runner (`nuworq run`). Builds, reviews and lands. Never takes operator-only work and never declares `operator`.
+- **Session:** any other agent, e.g. one a person opened. Takes any work but operator-only work.
+
 ## If you are the operator
 You are the operator only when the person started you as one (`nuworq operator` prints the /loop line) and you checked in with `operator` in `has`.
 - **Take operator work first:** `next` hands you questions asked `to: "operator"` (mode answer). Settle each and `answer` it.

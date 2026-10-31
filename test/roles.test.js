@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, MIN } from '../src/core.js';
 import { view } from '../src/insight.js';
-import { tools } from '../src/protocol.js';
+import { tools, guide, skill, planSkill } from '../src/protocol.js';
 
 // #238: every session has one role, fixed for its life, from how it started; the role decides what it is offered.
 function setup() {
@@ -180,5 +180,28 @@ describe('claims, usage and presence carry the role', () => {
     tick(31 * MIN);
     a('here', 'checkin');
     assert.deepEqual(a('here', 'look').agents.map((x) => x.agent), ['here']);
+  });
+});
+
+// #241: the guide and both skills say how each role starts, what it may take and what it never does.
+describe('the guide and both skills describe the roles', () => {
+  const texts = { guide: guide(), 'cli guide': guide({ via: 'cli' }), skill: skill(), 'plan skill': planSkill() };
+  test('each names Operator, Shaper and Worker and how each starts', () => {
+    for (const [name, t] of Object.entries(texts)) {
+      for (const want of [/\*\*Operator\b/, /\*\*Shaper\b/, /\*\*Worker\b/, /nuworq operator/, /nuworq run/]) assert.match(t, want, `${name}: ${want}`);
+    }
+    for (const t of [texts.guide, texts.skill]) assert.match(t, /nuworq-plan skill/);
+  });
+
+  test('each says what a shaper and a worker never do', () => {
+    for (const [name, t] of Object.entries(texts)) {
+      assert.match(t, /never builds?, reviews? or lands?/i, `${name}: the shaper`);
+      assert.match(t, /Worker[^\n]*never takes operator-only work/i, `${name}: the worker`);
+    }
+  });
+
+  test('the planning skill checks in as a shaper', () => {
+    assert.match(planSkill(), /`checkin` with role "shaper"/);
+    assert.match(guide(), /`checkin` with role `"shaper"`/);
   });
 });
