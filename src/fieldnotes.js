@@ -85,15 +85,16 @@ export const openReview = (hub, p) => hub.q(`SELECT * FROM items WHERE project_i
 // Notes due for review now: [{ note, why }]. Those about an item that landed since they were last looked at, and
 // those of this week's review: every note older than a day before it fired that nobody looked at in the week before.
 // The week counts from when it fired (notes_at), so a review still waiting for an agent keeps its notes.
+// A review finishing isn't a landing: the notes it merged into wait for the week, or each review would open the next.
 export function dueNotes(hub, p) {
   const t = hub.now();
-  const rows = hub.q(`SELECT n.*, i.seq, i.stage AS item_stage, i.stage_since FROM notes n LEFT JOIN items i ON i.id = n.item_id
+  const rows = hub.q(`SELECT n.*, i.seq, i.stage AS item_stage, i.stage_since, i.notes_review FROM notes n LEFT JOIN items i ON i.id = n.item_id
     WHERE n.project_id = ? AND n.kind = 'learning' AND n.active = 1 ORDER BY n.at, n.id`).all(p.id);
   const weekly = t - (p.notes_at ?? 0) >= NOTES_EVERY;
   const since = weekly ? t : p.notes_at ?? 0; // when this week's review fired, or fires now
   const due = [];
   for (const n of rows) {
-    if (n.item_stage === 'done' && n.at < n.stage_since && n.reviewed_at < n.stage_since) due.push({ n, why: `#${n.seq} landed` });
+    if (n.item_stage === 'done' && !n.notes_review && n.at < n.stage_since && n.reviewed_at < n.stage_since) due.push({ n, why: `#${n.seq} landed` });
     else if (since && n.at <= since - DAY && n.reviewed_at <= since - NOTES_EVERY) due.push({ n, why: 'weekly' });
   }
   return { due, weekly };

@@ -105,6 +105,20 @@ describe('a tidy job reviews the field notes (#443)', () => {
     assert.notEqual(agent('next', 'a2', { claim: false }).mode, 'tidy', 'reviewed: not raised again');
   });
 
+  test('notes learned during a review aren\'t raised again when it finishes, only in the weekly review (#451)', () => {
+    const { human, agent, tick } = setup();
+    human('update', { item: '#2', stage: 'done' });
+    const r = agent('next', 'a2');
+    assert.equal(r.mode, 'tidy');
+    const merged = agent('learn', 'a2', { note: 'Storage timeouts and retries: see src/export.js.', item: r.item }).note;
+    agent('submit', 'a2', { item: r.item, headline: 'Merged 1, kept the rest' });
+    assert.notEqual(agent('next', 'a2', { claim: false }).mode, 'tidy', 'no review of the note it just wrote');
+    tick(8 * DAY);
+    const weekly = agent('next', 'a2');
+    assert.equal(weekly.mode, 'tidy');
+    assert.match(weekly.summary, new RegExp(`- note ${merged} \\(about ${r.item}\\): Storage timeouts and retries`), 'the weekly review has it');
+  });
+
   test('every week the rest is reviewed; below "Run with it" the agent asks instead of retiring', () => {
     const { human, agent, tick, ids } = setup({ autonomy: 'balanced' });
     assert.notEqual(agent('next', 'a2', { claim: false }).mode, 'tidy');
