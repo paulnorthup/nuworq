@@ -100,6 +100,34 @@ describe('landing: done means on main', () => {
     assert.ok(hub.q(`SELECT 1 FROM events WHERE type = 'rebased'`).get());
   });
 
+  test("whoever resolved the conflicts doesn't review them, and the review sees the branch they pushed (#264)", () => {
+    const { hub, git, op, worktree, build, item, tick } = setup();
+    hub.humanOp('demo', 'settings', { autonomy: 'full' });
+    hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+    for (const a of ['a1', 'a2', 'a3', 'a4']) op(a, 'checkin');
+    const wt = worktree('a1');
+    build(wt, op('a1', 'next').branch, 'thing');
+    op('a1', 'submit', { item: '#1', headline: 'Done' });
+    assert.equal(op('a2', 'next').mode, 'review');
+    op('a2', 'review', { item: '#1', verdict: 'accept', headline: 'Fine' });
+    assert.equal(item(1).stage, 'landing');
+
+    // a3 lands it after the grace period, and the rebase changes the work.
+    tick(LAND_GRACE);
+    assert.equal(op('a3', 'next').mode, 'land');
+    writeFileSync(join(wt, 'thing'), 'thing, merged with main\n');
+    git(wt, 'commit', '-q', '-am', 'resolve conflicts');
+    op('a3', 'submit', { item: '#1', headline: 'Rebased', conflicts: 'Kept both.' });
+    assert.equal(item(1).stage, 'verifying');
+
+    assert.notEqual(op('a3', 'next', { claim: false })?.item, '#1', 'not offered its own resolution');
+    assert.throws(() => op('a3', 'claim', { item: '#1' }), /your own work/);
+    const review = op('a4', 'next');
+    assert.deepEqual([review.mode, review.item], ['review', '#1']);
+    assert.equal(review.git.commits[0].subject, 'resolve conflicts', 'the head a3 pushed, not the first submission');
+    assert.throws(() => op('a3', 'review', { item: '#1', verdict: 'accept', headline: 'Mine' }), /your own work/);
+  });
+
   test('work already on main is done at accept; work with no repo is done at accept as before', () => {
     const { hub, repo, git, op, worktree, build, item } = setup();
     hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });

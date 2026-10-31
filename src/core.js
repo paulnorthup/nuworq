@@ -1058,10 +1058,12 @@ export class Hub extends EventEmitter {
     return item.holder === agent || (this.racing(item) && !!this.attemptOf(item, agent));
   }
 
-  // Racers can't review the race they ran.
+  // Racers can't review the race they ran, nor an agent the conflicts it resolved while landing (#264).
   implementedBy(item, agent) {
     return item.implementer === agent ||
-      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent = ? AND stage = 'submitted' AND closed = 0`).get(item.id, agent);
+      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent = ? AND stage = 'submitted' AND closed = 0`).get(item.id, agent) ||
+      !!this.q(`SELECT 1 FROM events WHERE item_id = ? AND actor = ? AND type = 'rebased' AND at >= ? AND json_extract(data, '$.conflicts') = 1`)
+        .get(item.id, agent, item.stage_since);
   }
 
   leaseOf(item, agent) {
@@ -1567,12 +1569,14 @@ export class Hub extends EventEmitter {
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
         AND COALESCE(implementer, '') != ?
         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
+        AND NOT EXISTS (SELECT 1 FROM events r WHERE r.item_id = items.id AND r.actor = ? AND r.type = 'rebased' AND r.at >= items.stage_since
+          AND json_extract(r.data, '$.conflicts') = 1)
         AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.item_id = items.id AND q.status = 'open' AND q.at >= items.stage_since
           AND q.asked_by != COALESCE(items.implementer, '') AND (q.audience != 'operator' OR ? = 0))
         AND NOT EXISTS (SELECT 1 FROM events h WHERE h.item_id = items.id AND h.actor = ? AND h.type = 'handoff' AND h.at >= items.stage_since
           AND NOT EXISTS (SELECT 1 FROM events n WHERE n.item_id = items.id AND n.at > h.at AND n.actor != h.actor
             AND n.type IN ('answered', 'assumption_confirmed', 'question_withdrawn', 'submitted', 'comment')))
-      ORDER BY stage_since`).all(p.id, agent, agent, operator ? 1 : 0, agent ?? '').filter(ok).map((item) => ({ mode: 'review', item }));
+      ORDER BY stage_since`).all(p.id, agent, agent, agent, operator ? 1 : 0, agent ?? '').filter(ok).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
     // An open pull request lands it: GitHub's merge marks it done. Unless it conflicts with main: then an
@@ -1766,9 +1770,10 @@ export class Hub extends EventEmitter {
     return this.submittedGit(item)?.branch ?? '';
   }
 
-  // What git found when the latest submission came in (#24), or null.
+  // What git found when the latest submission came in (#24), or a rebase that resolved conflicts after it (#264), or null.
   submittedGit(item) {
-    const e = this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'submitted' ORDER BY at DESC LIMIT 1`).get(item.id);
+    const e = this.q(`SELECT data FROM events WHERE item_id = ? AND (type = 'submitted' OR (type = 'rebased' AND json_extract(data, '$.git') IS NOT NULL))
+      ORDER BY at DESC, id DESC LIMIT 1`).get(item.id);
     return json(e?.data, {}).git ?? null;
   }
 
@@ -1957,10 +1962,14 @@ function mergeFailed(p, row, why) {
 function finishLanding(p, agent, item, { headline, summary, detail, conflicts }) {
   const reviewer = p.autonomy === 'full' ? 'Another agent reviews it again' : 'The human verifies it again';
   if (conflicts) {
+    // The resolution is this agent's work now: it doesn't review it (#264), and the review sees the branch it pushed.
     this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent });
-    this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased #${item.seq} and had to resolve conflicts; it needs another look`, summary: conflicts, detail });
+    const event = this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased #${item.seq} and had to resolve conflicts; it needs another look`, summary: conflicts, detail, data: { conflicts: true } });
     this.setStatus(p, agent, `Sent #${item.seq} back for review after a rebase`);
-    return { ok: true, hint: `#${item.seq} is verifying again with your note on the conflicts. ${reviewer}, then it lands. Call next.` };
+    return {
+      ok: true, hint: `#${item.seq} is verifying again with your note on the conflicts. ${reviewer}, then it lands. Call next.`,
+      [GIT_CHECK]: { event, about: item.id, branch: item.branch, claim: { headline, summary: conflicts, evidence: [] } },
+    };
   }
   const land = this.toLand(p, item, item.branch, { fresh: true });
   const remote = this.remoteMode(p, item);
