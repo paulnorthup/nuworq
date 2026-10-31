@@ -81,14 +81,40 @@ export function changelogEntry(text, version, { first = false } = {}) {
 
 // What a package says of its own version: { version, changes } (changes: its CHANGELOG entry as lines, for a
 // terminal), from the tarball. Either may be null.
+const asLines = (entry) => (entry ? entry.split('\n').map((l) => l.replace(/\*\*(.+?)\*\*/g, '$1').trimEnd()).filter(Boolean) : null);
 function versionIn(tgz) {
   let version = null, entry = null;
   try { version = versionOf(fileInTarball(tgz, 'package.json')); } catch {}
   try { entry = version && changelogEntry(fileInTarball(tgz, 'CHANGELOG.md'), version); } catch {}
-  const changes = entry ? entry.split('\n').map((l) => l.replace(/\*\*(.+?)\*\*/g, '$1').trimEnd()).filter(Boolean) : null;
-  return { version, changes };
+  return { version, changes: asLines(entry) };
 }
 const installedVersion = (root) => { try { return versionOf(readFileSync(join(root, 'package.json'), 'utf8')); } catch { return null; } };
+
+// The installed version and its own changelog lines (`nuworq changes`, #436): { version, changes }, either may be null.
+export function installedChanges(root) {
+  const version = installedVersion(root);
+  let entry = null;
+  try { entry = version && changelogEntry(readFileSync(join(root, 'CHANGELOG.md'), 'utf8'), version); } catch {}
+  return { version, changes: asLines(entry) };
+}
+
+// What a background update installed, said once (#436). update() records it in update.json; the next interactive
+// command prints it (who "cli") and the MCP server's next checkin carries it (who "mcp"), each once.
+// Returns the record { from, to, changes } and marks it shown for who, or null when there is nothing new for who.
+export function takeNews(dir, who) {
+  const file = join(dir, 'update.json');
+  const state = readState(file);
+  const n = state.news;
+  if (!n || n.shown?.[who]) return null;
+  writeState(file, { ...state, news: { ...n, shown: { ...n.shown, [who]: true } } });
+  return { from: n.from, to: n.to, changes: n.changes ?? [] };
+}
+// The news in words, for stderr: the versions, then at most max changelog lines.
+export function describeNews(n, { max = 10 } = {}) {
+  const lines = n.changes ?? [];
+  const more = lines.length > max ? [`  … ${lines.length - max} more: nuworq changes`] : [];
+  return [`nuworq updated ${n.from} → ${n.to}:`, ...lines.slice(0, max).map((l) => `  ${l}`), ...more].join('\n');
+}
 
 const readState = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return {}; } };
 const writeState = (file, s) => { try { writeFileSync(file, JSON.stringify(s)); } catch {} };
@@ -194,9 +220,14 @@ export async function update({ root, hub, dir, env = process.env, force = false,
     const failed = await install(file);
     // By hand, the same verified file: downloading it again would skip the signature check.
     if (failed) return { status: 'failed', reason: `npm couldn't install it (${failed})`, from, to, command: `npm install -g ${file}` };
-    writeState(stateFile, { ...readState(stateFile), installed: to });
-    // The versions it moved between, and what changed in the new one (#400).
+    // The versions it moved between, and what changed in the new one (#400). Kept as news until it is said (#436);
+    // news nobody has seen yet keeps where it moved from.
     const { version, changes } = versionIn(tgz.body);
+    const latest = readState(stateFile);
+    const unseen = latest.news && !(latest.news.shown?.cli && latest.news.shown?.mcp) ? latest.news.from : null;
+    const short = (c) => (c ? c.slice(0, 7) : 'an unknown version');
+    const news = { from: unseen ?? fromVersion ?? short(from), to: version ?? short(to), changes: changes ?? [], at: now, shown: {} };
+    writeState(stateFile, { ...latest, installed: to, news });
     return { status: 'updated', from, to, from_version: fromVersion, to_version: version, changes };
   } finally { unlock(); }
 }

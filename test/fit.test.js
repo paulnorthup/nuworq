@@ -235,11 +235,20 @@ describe('workers report what their machine has', () => {
     const lines = [];
     output.on('data', (d) => lines.push(...String(d).split('\n').filter(Boolean).map((l) => JSON.parse(l))));
     try {
-      runMcp({ input, output, env: { NUWORQ_AGENT: 'w', NUWORQ_HAS: 'docker,macos' }, clientOpts: { url: `http://127.0.0.1:${server.address().port}`, project: 'fitp', token: '' } });
-      input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'checkin', arguments: {} } }) + '\n');
-      for (let i = 0; i < 100 && !lines.length; i++) await new Promise((r) => setTimeout(r, 20));
-      assert.ok(!lines[0].result.isError, lines[0].result.content[0].text);
+      // A background update left news (#436): the next checkin carries it, once.
+      const updateDir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-fit-upd-')));
+      writeFileSync(join(updateDir, 'update.json'), JSON.stringify({ news: { from: '0.3.0', to: '0.4.0', changes: ['- Releases tag themselves (#400)'], shown: { cli: true } } }));
+      runMcp({ input, output, updateDir, env: { NUWORQ_AGENT: 'w', NUWORQ_HAS: 'docker,macos' }, clientOpts: { url: `http://127.0.0.1:${server.address().port}`, project: 'fitp', token: '' } });
+      const checkin = async (id) => {
+        input.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'checkin', arguments: {} } }) + '\n');
+        for (let i = 0; i < 100 && !lines.some((l) => l.id === id); i++) await new Promise((r) => setTimeout(r, 20));
+        const { result } = lines.find((l) => l.id === id);
+        assert.ok(!result.isError, result.content[0].text);
+        return JSON.parse(result.content[0].text);
+      };
+      assert.deepEqual((await checkin(1)).updated, { from: '0.3.0', to: '0.4.0', changes: ['- Releases tag themselves (#400)'] });
       assert.deepEqual(view(hub, 'fitp').agents[0].has, ['docker', 'macos']);
+      assert.equal((await checkin(2)).updated, undefined, 'said once');
     } finally {
       server.close();
     }

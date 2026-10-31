@@ -3,16 +3,19 @@
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
+import { join } from 'node:path';
 import { createClient } from './client.js';
 import { tools, guide } from './protocol.js';
 import { slugify } from './text.js';
-import { envVar } from './names.js';
+import { envVar, dataDir } from './names.js';
 import { serverKeys } from './session.js';
+import { takeNews } from './update.js';
 
 const VERSIONS = ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25'];
 const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-export function runMcp({ input = process.stdin, output = process.stdout, env = process.env, clientOpts = {} } = {}) {
+// updateDir: where the self-update keeps its state (src/update.js), whose news checkin passes on once.
+export function runMcp({ input = process.stdin, output = process.stdout, env = process.env, clientOpts = {}, updateDir = join(dataDir(), 'update') } = {}) {
   // Its session's keys go with every call, so the listener beside it wakes it and no other session (#335).
   const client = createClient({ session: serverKeys({ env }), ...clientOpts });
   const { url } = client.settings;
@@ -89,9 +92,14 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
         args.machine ||= envVar('MACHINE', env) || hostname().split('.')[0];
       }
       try {
-        const result = await client.call(name, args, { agent, project });
+        let result = await client.call(name, args, { agent, project });
         // The hub resolved or routed us to a project: stay with it for the rest of the session.
         if (!project && result?.project) project = result.project;
+        // nuworq updated itself under this session (#436): said once, in the next checkin.
+        if (name === 'checkin' && result && typeof result === 'object') {
+          const updated = takeNews(updateDir, 'mcp');
+          if (updated) result = { ...result, updated };
+        }
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (e) {
         const body = { ok: false, error: e.message, ...(e.hint ? { hint: e.hint } : {}) };

@@ -9,7 +9,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
-import { update, describeUpdate, staleListener } from '../src/update.js';
+import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(BIN), '..');
@@ -1471,7 +1471,9 @@ ${bold('Setup')}
   update                               install the hub's newer nuworq now, if it is signed by the release key
                                          this install pinned (otherwise, or offline, it keeps this version and
                                          says why). Every command checks by itself at most every 10 minutes;
-                                         NUWORQ_NO_UPDATE=1 turns that off.
+                                         NUWORQ_NO_UPDATE=1 turns that off. After one updates it in the
+                                         background, the next command says once what changed.
+  changes                                this version's changelog lines again
   prompt [--as name]                     just the worker prompt text, for other agents
   seed                                   add the nuworq roadmap project to your hub's database
 
@@ -1523,9 +1525,10 @@ async function gitCredential(pos, flags) {
 }
 
 // The package's self-update (src/update.js). Never throws: offline, or anything else, keeps this version.
+const UPDATES = () => join(dataDir(), 'update');
 async function selfUpdate(flags, { force = false } = {}) {
   try {
-    return await update({ root: ROOT, hub: resolveSettings(flags).url, dir: join(dataDir(), 'update'), force, ...(force ? {} : { timeoutMs: 3000 }) });
+    return await update({ root: ROOT, hub: resolveSettings(flags).url, dir: UPDATES(), force, ...(force ? {} : { timeoutMs: 3000 }) });
   } catch (e) {
     return { status: 'skipped', reason: e.message };
   }
@@ -1540,13 +1543,31 @@ async function main() {
   if (cmd === 'update') {
     const r = await selfUpdate(flags, { force: true });
     console.log(describeUpdate(r));
+    // It just printed the changelog lines, so the next command doesn't say them again (#436).
+    if (r.status === 'updated') takeNews(UPDATES(), 'cli');
     if (['refused', 'failed'].includes(r.status)) process.exitCode = 1;
     return;
+  }
+  if (cmd === 'changes') {
+    const { version, changes } = installedChanges(ROOT);
+    if (!version) return console.log('This nuworq has no version, so no changelog entry to show.');
+    return console.log(changes?.length ? `nuworq ${version}:\n${changes.map((l) => `  ${l}`).join('\n')}` : `nuworq ${version} has no changelog entry.`);
+  }
+  // What a background update installed since the last command, said once (#436). An MCP server, the operator's
+  // listener and git's credential helper say nothing: no person reads them, so the news waits for one who does.
+  const quiet = ['mcp', 'wait', 'git-credential'].includes(cmd);
+  if (!quiet) {
+    const news = takeNews(UPDATES(), 'cli');
+    if (news) console.error(describeNews(news));
   }
   // A signed new version from the hub, at most every 10 minutes; it applies to the next run. A git
   // credential helper answers git right away. An MCP server checks in the background, for the next session.
   if (cmd !== 'git-credential') {
-    const pending = selfUpdate(flags).then((r) => { if (['updated', 'refused', 'failed'].includes(r.status)) console.error(`nuworq: ${describeUpdate(r)}`); });
+    const pending = selfUpdate(flags).then((r) => {
+      if (r.status === 'updated' && quiet) return;
+      if (['updated', 'refused', 'failed'].includes(r.status)) console.error(`nuworq: ${describeUpdate(r)}`);
+      if (r.status === 'updated') takeNews(UPDATES(), 'cli');
+    });
     if (cmd !== 'mcp') await pending;
   }
   if (cmd === 'mcp') {
