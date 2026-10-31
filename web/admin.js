@@ -42,9 +42,14 @@ async function main() {
     <p class="lead">Approve gives you a link to send: it lets them make one workspace, once, within 14 days.</p>
     <div class="seg admin-filter" role="group" aria-label="Show">${STATES.map(([v, label]) => `<button data-state="${v}" aria-pressed="${v === state}" class="${v === state ? 'on' : ''}">${label}</button>`).join('')}</div>
     <div id="list" aria-live="polite"><p class="faint">Loading…</p></div>
+    <h2 class="admin-h2" id="feedback">Feedback</h2>
+    <p class="lead" id="fb-lead">What got in people's and agents' way. Approve makes it a proposal agents shape; Decline closes it, with a note to the sender if you like.</p>
+    <div class="seg admin-filter fb-filter" role="group" aria-label="Show feedback">${STATES.map(([v, label]) => `<button data-fb-state="${v}" aria-pressed="${v === fbState}" class="${v === fbState ? 'on' : ''}">${label}</button>`).join('')}</div>
+    <div id="fb-list" aria-live="polite"><p class="faint">Loading…</p></div>
     <h2 class="admin-h2">Workspaces</h2>
     <div id="spaces" aria-live="polite"><p class="faint">Loading…</p></div>`;
   load();
+  loadFeedback();
   loadSpaces();
   loadWiring();
 }
@@ -89,6 +94,43 @@ function card(r) {
     ${link ? `<div class="admin-link"><p class="ok">Approved. Send them this link (it's shown only now):</p><code>${esc(link)}</code>
       <button class="btn primary" data-copy="${esc(link)}">Copy link</button></div>` : ''}
     ${r.state === 'new' ? `<div class="admin-acts"><button class="btn primary" data-id="${r.id}" data-approve="1">Approve</button><button class="btn" data-id="${r.id}">Decline</button></div>` : ''}
+  </article>`;
+}
+
+// ── feedback (#295): newest first; each says who sent it, from which workspace, and what came with it ──
+let fbState = 'new';
+const fbFocus = Number(new URLSearchParams(location.search).get('feedback')) || 0; // the piece a push linked to
+
+async function loadFeedback() {
+  const el = $('#fb-list');
+  try {
+    const { on, project, feedback } = await api(`/api/feedback/list?state=${encodeURIComponent(fbState)}`);
+    $('#fb-lead').textContent = on
+      ? `What got in people's and agents' way. Approve makes it a proposal in ${project} for agents to shape; Decline closes it, with a note to the sender if you like.`
+      : 'Feedback is off on this hub: the host turns it on with --feedback-project <workspace>/<project> (NUWORQ_FEEDBACK_PROJECT).';
+    if (fbFocus && fbState && !feedback.some((f) => f.id === fbFocus) && !loadFeedback.widened) {
+      loadFeedback.widened = true;
+      return document.querySelector('.fb-filter button[data-fb-state=""]').click();
+    }
+    el.innerHTML = feedback.length ? feedback.map(fbCard).join('') : `<p class="faint">${fbState === 'new' ? 'No new feedback.' : 'Nothing here.'}</p>`;
+    document.getElementById(`fb-${fbFocus}`)?.scrollIntoView({ block: 'center' });
+  } catch (e) { el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
+}
+
+function fbCard(f) {
+  const c = f.context ?? {};
+  const sent = f.kind === 'agent'
+    ? [c.client, c.model, c.version && `nuworq ${c.version}`, f.item && `about ${f.item}`]
+    : [c.page, c.version && `nuworq ${c.version}`, c.browser];
+  const who = f.kind === 'agent' ? `Agent ${esc(f.sender)}` : `${esc(f.sender)}${f.email ? ` <span class="faint">${esc(f.email)}</span>` : ''}`;
+  const decided = f.state === 'approved' ? `Approved by ${esc(f.decided_by)} ${esc(ago(f.decided_at))}${f.proposal ? `: proposal ${esc(f.proposal)}` : ''}`
+    : f.state === 'declined' ? `Declined by ${esc(f.decided_by)} ${esc(ago(f.decided_at))}${f.note ? `: “${esc(f.note)}”` : ''}` : '';
+  return `<article class="admin-card${f.id === fbFocus ? ' focus' : ''}" id="fb-${f.id}" data-who="${esc(f.sender)}">
+    <div class="h">${who} · ${esc(f.workspace)}</div>
+    <p class="s fb-text">${esc(f.text)}</p>
+    <p class="faint">Sent ${esc(ago(f.created_at))}${sent.filter(Boolean).length ? ` · ${sent.filter(Boolean).map(esc).join(' · ')}` : ''}</p>
+    ${decided ? `<p class="faint">${decided}</p>` : ''}
+    ${f.state === 'new' ? `<div class="admin-acts"><button class="btn primary" data-fb="${f.id}" data-approve="1">Approve</button><button class="btn" data-fb="${f.id}">Decline</button></div>` : ''}
   </article>`;
 }
 
@@ -142,6 +184,25 @@ document.addEventListener('click', async (e) => {
       showError('');
       pl.closest('.admin-space').outerHTML = space(r.workspace);
     } catch (err) { showError(err.message); pl.disabled = false; }
+    return;
+  }
+  const fs = e.target.closest('button[data-fb-state]');
+  if (fs) { fbState = fs.dataset.fbState; for (const b of document.querySelectorAll('.fb-filter button')) { b.classList.toggle('on', b === fs); b.setAttribute('aria-pressed', String(b === fs)); } return loadFeedback(); }
+  const fb = e.target.closest('button[data-fb]');
+  if (fb) {
+    const who = fb.closest('.admin-card').dataset.who, approve = !!fb.dataset.approve;
+    let note = '';
+    if (approve) { if (!confirm(`Approve ${who}'s feedback? It becomes a proposal agents shape; nothing is built until it's shaped.`)) return; }
+    else {
+      note = prompt(`Decline ${who}'s feedback? This can't be undone here.\n\nA note to them (optional):`, '');
+      if (note === null) return;
+    }
+    fb.disabled = true;
+    try {
+      const r = await api('/api/feedback/decide', { id: Number(fb.dataset.fb), approve, note });
+      showError('');
+      fb.closest('.admin-card').outerHTML = fbCard(r.feedback);
+    } catch (err) { showError(err.message); fb.disabled = false; }
     return;
   }
   const f = e.target.closest('button[data-state]');

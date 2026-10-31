@@ -48,6 +48,7 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - `comment`: Leave a note for the record on an item or the whole project.
 - `ack`: Acknowledge steering from the human, saying in one line how you are adjusting.
 - `learn`: Leave a field note for every future agent: something about this codebase or project you learned the hard way and nobody should have to learn again.
+- `feedback`: Tell nuworq's developers when nuworq itself got in your way: a misleading hint, a missing tool, a confusing response or rule.
 - `look`: Look around.
 - `signoff`: End your session.
 
