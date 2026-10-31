@@ -112,6 +112,22 @@ describe('workers route through llm-proxy: opencode with --model proxy/<model>, 
     assert.equal(codex.stdout, '', 'no command printed');
   });
 
+  test('claude and codex refuse a public llm-proxy hostname: provider routes need the LAN or tailnet address', async () => {
+    for (const agent of ['claude', 'codex']) {
+      const e = await fails(agent, { home: freshHome(), vars, extra: ['--proxy', 'https://llm.example.com'] });
+      assert.match(e.stderr, /https:\/\/llm\.example\.com is a public address[\s\S]*LAN or tailnet address/, agent);
+      assert.equal(e.stdout, '', 'no command printed');
+      const fromEnv = await fails(agent, { home: freshHome(), vars: { ...vars, NUWORQ_LLM_PROXY_URL: 'https://llm.example.com/v1' }, extra: ['--proxy'] });
+      assert.match(fromEnv.stderr, /is a public address/, `${agent}: NUWORQ_LLM_PROXY_URL is checked the same way`);
+    }
+    for (const url of ['http://studio:4100', 'http://studio.local:4100', 'http://studio.tail1234.ts.net:4100', 'http://100.101.5.6:4100', 'http://192.168.1.20:4100', 'http://10.0.0.5:4100', 'http://127.0.0.1:4100', 'http://[::1]:4100', 'http://[fd7a:115c::1]:4100']) {
+      assert.match(await workerCmd('codex', { home: freshHome(), vars, extra: ['--proxy', url] }), /model_provider="llmproxy"/, url);
+    }
+    for (const url of ['http://8.8.8.8:4100', 'http://100.200.1.1:4100', 'http://172.32.0.1:4100']) {
+      assert.match((await fails('claude', { home: freshHome(), vars, extra: ['--proxy', url] })).stderr, /is a public address/, url);
+    }
+  });
+
   test("NUWORQ_LLM_PROXY_URL alone (set for serve) doesn't change other workers", async () => {
     const vars = { NUWORQ_LLM_PROXY_URL: 'http://studio.local:8080', NUWORQ_LLM_PROXY_KEY: KEY };
     assert.match(await workerCmd('claude', { home: freshHome(), vars }), /claude -p/);
