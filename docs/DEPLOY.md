@@ -144,22 +144,33 @@ No open ports, and Cloudflare provides the certificate. The hub listens on loopb
 ```bash
 cloudflared tunnel login                         # once, as root: open the link, pick the zone
 cloudflared tunnel create nuworq
-cloudflared tunnel route dns nuworq nuworq.com   # an apex name works; Cloudflare flattens the CNAME
+cloudflared tunnel route dns nuworq app.nuworq.com   # the app
+cloudflared tunnel route dns nuworq nuworq.com       # the landing page; an apex name works (Cloudflare flattens the CNAME)
 install -d -m 700 /etc/cloudflared && install -m 600 ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/
 cat > /etc/cloudflared/config.yml <<EOF
 tunnel: <tunnel-id>
 credentials-file: /etc/cloudflared/<tunnel-id>.json
 ingress:
+  - hostname: app.nuworq.com
+    service: http://127.0.0.1:4747
   - hostname: nuworq.com
     service: http://127.0.0.1:4747
   - service: http_status:404
 EOF
-cloudflared service install && systemctl enable --now cloudflared
-# the hub: deploy/nuworq.service as is, plus --public-url https://nuworq.com (links in push messages)
+cloudflared tunnel ingress validate && cloudflared service install && systemctl enable --now cloudflared
+# the hub: deploy/nuworq.service as is, plus --public-url https://app.nuworq.com --site-host nuworq.com
 ```
 Verified: a valid certificate, 401 without login, a `Secure` session cookie, and the live stream (`/api/stream`) arriving unbuffered through Cloudflare.
 
 **The app on its own host, the landing page on the apex.** Start the hub with `--public-url https://app.nuworq.com --site-host nuworq.com` (`NUWORQ_SITE_HOST`), and route both hostnames to it. On the site host, `/` and `site/`'s files serve the landing page. Every other path (`/api/…`, `/login.html`, `/auth/…`, `/w/…`, `/agents.md`) gets a `308` to the same path and query on the public URL. Old links like `nuworq.com/#/p/<slug>/12` keep working: the fragment never reaches the server, so the landing page's one inline script (allowed by its hash in the CSP) sends them on to the public URL. Every link the hub builds uses the public URL.
+
+**Moving a running hub to the app host.** The `308` is for browsers. A client following it to another host drops its `Authorization` header (Node's fetch does, as the Fetch standard says), and GitHub doesn't follow redirects at all. So when `--site-host` takes over the address agents and GitHub already use:
+1. Route the app host first (DNS and tunnel entry above). Check: `curl -s https://app.nuworq.com/api/health` answers `200`.
+2. Point the GitHub App at the app host: on its settings page (`https://github.com/settings/apps/<slug>`, General), set Webhook URL to `https://app.nuworq.com/api/hooks/github-app` and Setup URL to `https://app.nuworq.com/#/`, then Save changes. (The hub never uses the App's Callback URL; leave it.) The webhook URL can also be set with the App's own key: `PATCH /app/hook/config` with `{"url": …}`. Check: Advanced → Recent Deliveries → Redeliver the last one answers `200`.
+3. Restart the hub with the two flags. Check: `curl -sI https://nuworq.com/api/info` is a `308` to `https://app.nuworq.com/api/info`.
+4. On each machine with agents: `nuworq connect https://app.nuworq.com` (or set `"url"` in `~/.nuworq/connect.json`), then restart its `nuworq run` and MCP sessions. Until then they get `401`s.
+
+Undo: restart the hub without `--site-host` (and with the old `--public-url`); nuworq.com serves the app again.
 
 ### Keeping a server up to date: it pulls, nothing pushes to it
 `serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. If the new hub doesn't come up healthy, it rolls back. No CI job reaches into your network, and the server only needs read access:
