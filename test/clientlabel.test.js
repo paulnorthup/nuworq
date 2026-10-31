@@ -54,7 +54,7 @@ describe('workers label their model traffic nuworq/<project>/<agent>', () => {
   });
 });
 
-describe('workers route through llm-proxy with --model proxy/<model>', () => {
+describe('workers route through llm-proxy: opencode with --model proxy/<model>, claude with --proxy', () => {
   const KEY = 'sk-secret-do-not-leak';
   const config = (out) => JSON.parse(out.match(/OPENCODE_CONFIG_CONTENT='([^']+)'/)[1]);
   const fails = (agent, opts) => workerCmd(agent, opts).then(() => assert.fail('expected the worker to refuse'), (e) => e);
@@ -70,18 +70,44 @@ describe('workers route through llm-proxy with --model proxy/<model>', () => {
     assert.deepEqual(config(fromEnv).provider, { proxy: want }, 'NUWORQ_LLM_PROXY_URL works the same, /v1 or not');
   });
 
-  test('claude and codex are refused before anything starts, naming the Chat Completions limit', async () => {
-    for (const agent of ['claude', 'codex']) {
-      const e = await fails(agent, { home: freshHome(), extra: ['--proxy', 'http://studio.local:8080'] });
-      assert.notEqual(e.code, 0);
-      assert.match(e.stderr, /can't go through llm-proxy[\s\S]*Chat Completions only/);
-      assert.equal(e.stdout, '', 'no command printed');
-    }
+  test("claude: --proxy points Claude Code at llm-proxy's Anthropic route, with the key from the environment", async () => {
+    const out = await workerCmd('claude', { home: freshHome(), vars: { NUWORQ_LLM_PROXY_KEY: KEY }, extra: ['--proxy', 'http://studio.local:8080/'] });
+    assert.match(out, /ANTHROPIC_BASE_URL='http:\/\/studio\.local:8080\/anthropic' ANTHROPIC_AUTH_TOKEN="\$NUWORQ_LLM_PROXY_KEY" \\\n\s+ANTHROPIC_CUSTOM_HEADERS='x-client-name: nuworq\/lab\/w-1' \\\n\s+claude -p/);
+    assert.ok(!out.includes(KEY), 'the key is never printed or in argv');
+    assert.doesNotMatch(out, /CF-Access/, 'no Access headers unless a service token is set');
+    const fromEnv = await workerCmd('claude', { home: freshHome(), vars: { NUWORQ_LLM_PROXY_URL: 'http://studio.local:8080/v1' }, extra: ['--proxy'] });
+    assert.match(fromEnv, /ANTHROPIC_BASE_URL='http:\/\/studio\.local:8080\/anthropic'/, '--proxy alone takes NUWORQ_LLM_PROXY_URL');
   });
 
-  test('proxy/<model> without an address, or --proxy without proxy/<model>, says what is missing', async () => {
+  test('behind Cloudflare Access: the service token goes with model traffic, expanded by the shell, never printed', async () => {
+    const vars = { NUWORQ_LLM_PROXY_KEY: KEY, NUWORQ_LLM_PROXY_ACCESS_ID: 'id.access', NUWORQ_LLM_PROXY_ACCESS_SECRET: 'cf-secret-do-not-leak' };
+    const claude = await workerCmd('claude', { home: freshHome(), vars, extra: ['--proxy', 'https://llm.example.com'] });
+    assert.ok(claude.includes(`ANTHROPIC_CUSTOM_HEADERS='x-client-name: nuworq/lab/w-1'"\nCF-Access-Client-Id: $NUWORQ_LLM_PROXY_ACCESS_ID\nCF-Access-Client-Secret: $NUWORQ_LLM_PROXY_ACCESS_SECRET" \\`));
+    const opencode = await workerCmd('opencode', { home: freshHome(), vars, extra: ['--model', 'proxy/gpt-5', '--proxy', 'https://llm.example.com'] });
+    assert.deepEqual(config(opencode).provider.proxy.options.headers, { 'x-client-name': 'nuworq/lab/w-1', 'CF-Access-Client-Id': '{env:NUWORQ_LLM_PROXY_ACCESS_ID}', 'CF-Access-Client-Secret': '{env:NUWORQ_LLM_PROXY_ACCESS_SECRET}' });
+    for (const out of [claude, opencode]) assert.ok(!out.includes('cf-secret-do-not-leak') && !out.includes('id.access'));
+    assert.doesNotMatch(await workerCmd('claude', { home: freshHome(), vars }), /CF-Access|ANTHROPIC_BASE_URL/, 'without --proxy nothing changes');
+  });
+
+  test('the headers the shell builds are what Claude Code gets', async () => {
+    const out = await workerCmd('claude', { home: freshHome(), vars: { NUWORQ_LLM_PROXY_ACCESS_ID: 'i', NUWORQ_LLM_PROXY_ACCESS_SECRET: 's' }, extra: ['--proxy', 'https://llm.example.com'] });
+    const assign = out.match(/(ANTHROPIC_CUSTOM_HEADERS=.*?) \\\n\s+claude -p/s)[1];
+    const { stdout } = await promisify(execFile)('/bin/sh', ['-c', `${assign}; printf %s "$ANTHROPIC_CUSTOM_HEADERS"`], { env: { NUWORQ_LLM_PROXY_ACCESS_ID: 'i', NUWORQ_LLM_PROXY_ACCESS_SECRET: 's' } });
+    assert.equal(stdout, 'x-client-name: nuworq/lab/w-1\nCF-Access-Client-Id: i\nCF-Access-Client-Secret: s');
+  });
+
+  test('codex is refused before anything starts, naming the Responses API', async () => {
+    const e = await fails('codex', { home: freshHome(), extra: ['--proxy', 'http://studio.local:8080'] });
+    assert.notEqual(e.code, 0);
+    assert.match(e.stderr, /codex can't go through llm-proxy yet[\s\S]*Responses API/);
+    assert.equal(e.stdout, '', 'no command printed');
+  });
+
+  test('a missing address, or a model the agent cannot take, says what is wrong', async () => {
     assert.match((await fails('opencode', { home: freshHome(), extra: ['--model', 'proxy/gpt-5'] })).stderr, /needs llm-proxy's address/);
     assert.match((await fails('opencode', { home: freshHome(), extra: ['--model', 'ollama/qwen3:8b', '--proxy', 'http://x:1'] })).stderr, /--proxy needs a proxy\/<model> model/);
+    assert.match((await fails('claude', { home: freshHome(), extra: ['--proxy'] })).stderr, /--proxy needs llm-proxy's address/);
+    assert.match((await fails('claude', { home: freshHome(), extra: ['--model', 'proxy/gpt-5', '--proxy', 'http://x:1'] })).stderr, /doesn't take a proxy\/<model> model/);
   });
 
   test("NUWORQ_LLM_PROXY_URL alone (set for serve) doesn't change other workers", async () => {

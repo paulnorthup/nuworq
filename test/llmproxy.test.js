@@ -7,12 +7,17 @@ import { proxyClient, proxyFromEnv, leaseWindows } from '../src/llmproxy.js';
 
 // A fake llm-proxy built from the contract nuworq reads (src/llmproxy.js): GET /_/api/requests?client=&from=&to=
 // with a bearer key, pages of 2 linked by `next`. mode: 'ok' | 'missing' (no read API: 404) | 'refused' (403).
-async function fakeProxy(byClient, { key = 'k' } = {}) {
+// access: { id, secret } puts it behind a fake Cloudflare Access, which sends anyone without them to a login.
+async function fakeProxy(byClient, { key = 'k', access = null } = {}) {
   const state = { mode: 'ok', calls: 0 };
   const server = createServer((req, res) => {
     state.calls++;
     const u = new URL(req.url, 'http://x');
     const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    if (access && (req.headers['cf-access-client-id'] !== access.id || req.headers['cf-access-client-secret'] !== access.secret)) {
+      res.writeHead(302, { location: 'https://team.cloudflareaccess.com/cdn-cgi/access/login' });
+      return res.end();
+    }
     if (u.pathname !== '/_/api/requests' || state.mode === 'missing') return send(404, { error: 'not_found' });
     if (state.mode === 'refused' || req.headers.authorization !== `Bearer ${key}`) return send(403, { error: 'forbidden' });
     const from = Number(u.searchParams.get('from')), to = Number(u.searchParams.get('to'));
@@ -135,6 +140,23 @@ describe('usage from llm-proxy', () => {
       assert.deepEqual(u.total, { input_tokens: 700, output_tokens: 70, cost_usd: 0.07, duration_ms: 1500, requests: 1, failures: 0, cold_loads: 0 });
       assert.match(notes().at(-1), /now comes from llm-proxy/);
       assert.equal(notes().length, 4);
+    } finally {
+      fake.close();
+    }
+  });
+
+  test('behind Cloudflare Access: the service token from the environment goes with every request', async () => {
+    const access = { id: 'abc.access', secret: 'shh' };
+    const fake = await fakeProxy({ 'nuworq/px/a': [req(10, 'claude-opus-5-5', 100, 10, 0.01, 500)] }, { access });
+    try {
+      const env = { NUWORQ_LLM_PROXY_URL: fake.url, NUWORQ_LLM_PROXY_KEY: 'k' };
+      const reqs = await proxyFromEnv({ ...env, NUWORQ_LLM_PROXY_ACCESS_ID: access.id, NUWORQ_LLM_PROXY_ACCESS_SECRET: access.secret }).requests({ client: 'nuworq/px/a', from: 0, to: 100 });
+      assert.equal(reqs.length, 1);
+      // Without it (or with half of it), Access answers with its login page, and the hub says what to set.
+      for (const extra of [{}, { NUWORQ_LLM_PROXY_ACCESS_ID: access.id }]) {
+        await assert.rejects(proxyFromEnv({ ...env, ...extra }).requests({ client: 'nuworq/px/a', from: 0, to: 100 }), /redirected to a login \(302\): set NUWORQ_LLM_PROXY_ACCESS_ID and NUWORQ_LLM_PROXY_ACCESS_SECRET/);
+      }
+      await assert.rejects(proxyClient({ url: fake.url, key: 'k', access: { id: access.id, secret: 'wrong' } }).requests({ client: 'nuworq/px/a', from: 0, to: 100 }), /Cloudflare Access refused the service token/);
     } finally {
       fake.close();
     }
