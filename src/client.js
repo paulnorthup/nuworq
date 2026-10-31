@@ -126,6 +126,8 @@ const RETRY_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'UND_ERR_SOC
 // 520-524 are Cloudflare's for an origin it can't reach, 530 for a tunnel with no connector.
 const GATEWAY = new Set([502, 503, 504, 520, 521, 522, 523, 524, 530]);
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+// Agent calls that only read, safe to send again (`next` too, when it doesn't claim).
+const READS = new Set(['checkin', 'look']);
 // A hub on this machine is back in a moment; one behind a proxy takes up to a minute (serve --follow on a VM).
 const RETRY_MS = 5000;
 const RESTART_MS = 60_000;
@@ -156,7 +158,9 @@ export function createClient(opts = {}) {
   // proxy in front of it answers 502/503/504 with a page of its own. Those are retried with backoff (a few
   // seconds on this machine, about a minute elsewhere), so a call made meanwhile just takes longer.
   // The hub's own answers (JSON), errors included, are never retried. Redirects come back unfollowed.
-  async function send(path, init) {
+  // A proxy's answer is retried only for a read: a write may have reached the hub before the proxy gave up
+  // (Cloudflare's 520 and 524 come after the hub got it), and sending it again could apply it twice.
+  async function send(path, init, { read = false } = {}) {
     const until = Date.now() + (opts.retryMs ?? (LOOPBACK_HOST.test(new URL(settings.url).hostname) ? RETRY_MS : RESTART_MS));
     for (let wait = 100; ; wait = Math.min(wait * 2, 5000)) {
       let res;
@@ -166,7 +170,7 @@ export function createClient(opts = {}) {
         if (!RETRY_CODES.has(e?.cause?.code) || Date.now() + wait > until) throw e;
       }
       if (res) {
-        if (!GATEWAY.has(res.status) || isJson(res) || Date.now() + wait > until) return res;
+        if (!read || !GATEWAY.has(res.status) || isJson(res) || Date.now() + wait > until) return res;
         await res.body?.cancel();
       }
       await new Promise((r) => setTimeout(r, wait));
@@ -215,14 +219,14 @@ export function createClient(opts = {}) {
     }
   }
 
-  async function once(method, path, { body, agent } = {}, hops = 0) {
+  async function once(method, path, { body, agent, read = method === 'GET' } = {}, hops = 0) {
     let res;
     try {
       res = await send(path, () => ({
         method,
         headers: headers(agent ? { agent } : {}),
         body: body === undefined ? undefined : JSON.stringify(body),
-      }));
+      }), { read });
     } catch (e) {
       throw new HubError(`nuworq hub not reachable at ${settings.url}; start it with: nuworq serve`, {
         hint: 'Or point at another hub with --url / NUWORQ_URL.',
@@ -245,13 +249,15 @@ export function createClient(opts = {}) {
       // What the saved connection says now: an address given outright (--url, NUWORQ_URL) still names the old
       // one, and must not send a failing call back there in a loop.
       seen = saved(resolveSettings(opts));
-      return once(method, path, { body, agent }, hops + 1);
+      return once(method, path, { body, agent, read }, hops + 1);
     }
     const text = await res.text();
     const host = new URL(settings.url).host;
     if (GATEWAY.has(res.status) && !isJson(res)) {
       throw new HubError(`nuworq hub at ${settings.url} is restarting or unreachable (HTTP ${res.status} from ${host})`, {
-        status: res.status, hint: 'Try again in a minute. If it lasts, whoever runs the hub should check that it is up.',
+        status: res.status,
+        hint: read ? 'Try again in a minute. If it lasts, whoever runs the hub should check that it is up.'
+          : 'It may have reached the hub anyway: in a minute, look before sending it again.',
       });
     }
     // A page (HTML), whatever its status, is never the hub's answer: something else stands in front of it.
@@ -290,7 +296,8 @@ export function createClient(opts = {}) {
     settings,
     call: (op, args = {}, { agent, project } = {}) => {
       const p = project || settings.project;
-      return request('POST', p ? `/api/p/${encodeURIComponent(p)}/agent/${op}` : `/api/agent/${op}`, { body: args, agent });
+      const read = READS.has(op) || (op === 'next' && args.claim === false);
+      return request('POST', p ? `/api/p/${encodeURIComponent(p)}/agent/${op}` : `/api/agent/${op}`, { body: args, agent, read });
     },
     // The project this folder belongs to, as far as the hub knows.
     where: () => request('GET', `/api/where?root=${encodeURIComponent(settings.root)}&remote=${encodeURIComponent(settings.remote)}`),

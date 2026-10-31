@@ -90,7 +90,7 @@ describe('the client rides out a hub restart', () => {
       const server = answering(status, 'text/html; charset=UTF-8', page);
       const port = await listen(server);
       try {
-        await assert.rejects(client(port, { retryMs: 0 }).call('next', {}, { agent: 'a' }), (e) => {
+        await assert.rejects(client(port, { retryMs: 0 }).call('look', {}, { agent: 'a' }), (e) => {
           assert.equal(e.message, `nuworq hub at http://127.0.0.1:${port} is restarting or unreachable (HTTP ${status} from 127.0.0.1:${port})`);
           assert.match(e.hint, /Try again in a minute/);
           return true;
@@ -100,6 +100,30 @@ describe('the client rides out a hub restart', () => {
       }
     });
   }
+
+  test('a proxy page is waited out for reads (checkin, look, next without claiming), never for writes', async () => {
+    const hits = {};
+    const server = createServer((req, res) => {
+      const op = req.url.split('/').pop();
+      hits[op] = (hits[op] ?? 0) + 1;
+      res.statusCode = 502; res.setHeader('content-type', 'text/html'); res.end(page);
+    });
+    const port = await listen(server);
+    const c = client(port, { retryMs: 400 });
+    try {
+      for (const [op, args] of [['comment', { headline: 'hi' }], ['submit', { item: '#1', headline: 'done' }], ['next', {}]]) {
+        await assert.rejects(c.call(op, args, { agent: 'a' }), (e) => e.status === 502 && /restarting or unreachable/.test(e.message) && /look before sending it again/.test(e.hint));
+      }
+      assert.deepEqual(hits, { comment: 1, submit: 1, next: 1 });
+      for (const [op, args] of [['checkin', {}], ['look', {}], ['next', { claim: false }]]) {
+        hits[op] = 0;
+        await assert.rejects(c.call(op, args, { agent: 'a' }), (e) => e.status === 502 && /Try again in a minute/.test(e.hint));
+        assert.ok(hits[op] > 1, `${op} was sent ${hits[op]} time(s)`);
+      }
+    } finally {
+      server.close();
+    }
+  });
 
   test('a web page at any other status, 200 included, is reported briefly, never echoed', async () => {
     for (const status of [200, 403, 404]) {
