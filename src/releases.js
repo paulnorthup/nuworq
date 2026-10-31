@@ -45,15 +45,15 @@ function contents(hub, p) {
 function changelog(hub, items, milestones) {
   const top = (it) => { let a = it; while (a.parent_id) a = hub.itemById(a.parent_id); return a; };
   const line = (it) => `- ${it.title} (#${it.seq})`;
+  // Each section a bold line, a blank line, then its list: what the drawer and a CHANGELOG both render.
   const out = [];
-  for (const m of milestones) {
-    out.push(`### ${m.title} (#${m.seq})`, ...items.filter((it) => it.id !== m.id && top(it).id === m.id).map(line), '');
-  }
+  const section = (head, lines) => out.push(`**${head}**\n\n${lines.join('\n')}`.trim());
+  for (const m of milestones) section(`${m.title} (#${m.seq})`, items.filter((it) => it.id !== m.id && top(it).id === m.id).map(line));
   const rest = items.filter((it) => !milestones.some((m) => m.id === it.id || top(it).id === m.id));
-  if (rest.length) out.push(milestones.length ? '### Also in this release' : '### In this release', ...rest.map(line), '');
+  if (rest.length) section(milestones.length ? 'Also in this release' : 'In this release', rest.map(line));
   const breaking = items.filter((it) => it.breaking);
-  if (breaking.length) out.push('### Upgrade notes', ...breaking.map((it) => `- ${it.breaking} (#${it.seq})`), '');
-  return out.join('\n').trim();
+  if (breaking.length) section('Upgrade notes', breaking.map((it) => `- ${it.breaking} (#${it.seq})`));
+  return out.join('\n\n');
 }
 
 // Draft the project's next release, or redraft the open one. An open release a worker has started is kept
@@ -78,7 +78,7 @@ export function draftRelease(hub, p, by = SYSTEM) {
   let summary = draft;
   if (open.summary !== open.release_draft) {
     const fresh = items.filter((it) => !open.summary.includes(`(#${it.seq})`));
-    summary = fresh.length ? `${open.summary}\n\n#### Landed since this was edited\n\n${changelog(hub, fresh, milestones.filter((m) => fresh.includes(m)))}` : open.summary;
+    summary = fresh.length ? `${open.summary}\n\nLanded since this was edited:\n\n${changelog(hub, fresh, milestones.filter((m) => fresh.includes(m)))}` : open.summary;
   }
   if (summary === open.summary && title === open.title) { hub.patch(open, { release_through: through }); return open; }
   hub.patch(open, { title, summary, release_draft: summary, release_through: through });

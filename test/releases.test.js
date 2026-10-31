@@ -71,7 +71,7 @@ describe('a finished milestone drafts the release (#399)', () => {
     assert.equal(r.title, 'Release v1.5.0', 'the newest tag wins over the version file');
     assert.equal(r.stage, 'ready');
     assert.match(r.summary, /^What landed since v1\.4\.2\./);
-    assert.match(r.summary, new RegExp(`### Faster search \\(#${m.slice(1)}\\)\\n- Index titles \\(#\\d+\\)\\n- Rank by recency \\(#\\d+\\)`));
+    assert.match(r.summary, new RegExp(`\\*\\*Faster search \\(#${m.slice(1)}\\)\\*\\*\\n\\n- Index titles \\(#\\d+\\)\\n- Rank by recency \\(#\\d+\\)`));
     assert.doesNotMatch(r.summary, /Not done yet|Upgrade notes/);
     assert.match(r.acceptance, /CHANGELOG\.md/);
   });
@@ -81,7 +81,7 @@ describe('a finished milestone drafts the release (#399)', () => {
     w.milestone('New API', [{ title: 'Drop /v1', breaking: 'Clients calling /v1 must move to /v2' }, 'Add /v2']);
     const [r] = w.releases();
     assert.equal(r.title, 'Release v2.0.0');
-    assert.match(r.summary, /### Upgrade notes\n- Clients calling \/v1 must move to \/v2 \(#\d+\)/);
+    assert.match(r.summary, /\*\*Upgrade notes\*\*\n\n- Clients calling \/v1 must move to \/v2 \(#\d+\)/);
   });
 
   test('0.x: breaking stays minor; with no tag, the version file is the last release', () => {
@@ -98,7 +98,7 @@ describe('a finished milestone drafts the release (#399)', () => {
     const [r] = w.releases();
     assert.equal(r.title, 'Release v0.1.0');
     assert.match(r.summary, /^What landed since the start\./);
-    assert.match(r.summary, /### Also in this release\n- Early fix/);
+    assert.match(r.summary, /\*\*Also in this release\*\*\n\n- Early fix/);
   });
 
   test('work done before the last tag is not in it', () => {
@@ -108,7 +108,7 @@ describe('a finished milestone drafts the release (#399)', () => {
     w.milestone('After', ['B']);
     const [r] = w.releases();
     assert.doesNotMatch(r.summary, /Shipped in 1\.0\.0/);
-    assert.match(r.summary, /### After/);
+    assert.match(r.summary, /\*\*After/);
   });
 
   test('two milestones before the first is released: one release item with both', () => {
@@ -118,7 +118,7 @@ describe('a finished milestone drafts the release (#399)', () => {
     const rs = w.releases();
     assert.equal(rs.length, 1);
     assert.equal(rs[0].title, 'Release v1.1.0');
-    assert.match(rs[0].summary, /### One[\s\S]*### Two/);
+    assert.match(rs[0].summary, /\*\*One[\s\S]*\*\*Two/);
     // A breaking part in a third makes the same item major.
     w.milestone('Three', [{ title: 'c', breaking: 'Run the migration' }]);
     assert.equal(w.releases().length, 1);
@@ -132,8 +132,8 @@ describe('a finished milestone drafts the release (#399)', () => {
     w.hub.humanOp('p', 'update', { item: `#${r.seq}`, summary: `${r.summary}\n\nThanks to everyone.` });
     w.milestone('Two', ['b']);
     const s = w.releases()[0].summary;
-    assert.match(s, /### One[\s\S]*Thanks to everyone\.\n\n#### Landed since this was edited\n\n### Two \(#\d+\)\n- b/);
-    assert.equal(s.match(/### One/g).length, 1, 'not repeated');
+    assert.match(s, /\*\*One[\s\S]*Thanks to everyone\.\n\nLanded since this was edited:\n\n\*\*Two \(#\d+\)\*\*\n\n- b/);
+    assert.equal(s.match(/\*\*One/g).length, 1, 'not repeated');
   });
 
   test('once the release is under way, later work goes in the next one', () => {
@@ -144,12 +144,12 @@ describe('a finished milestone drafts the release (#399)', () => {
     w.hub.agentOp('p', 'claim', 'a1', { item: `#${r.seq}` });
     w.milestone('Two', ['b']);
     assert.equal(w.releases().length, 1, 'the started one is kept as it was');
-    assert.doesNotMatch(w.releases()[0].summary, /### Two/);
+    assert.doesNotMatch(w.releases()[0].summary, /\*\*Two/);
     w.done(`#${r.seq}`); // it lands, and Two finished meanwhile: the next is drafted at once
     const next = w.releases()[1];
     assert.equal(next.title, 'Release v1.1.0', 'the tag is still v1.0.0 here; landing tags it (#400)');
-    assert.match(next.summary, /### Two/);
-    assert.doesNotMatch(next.summary, /### One/);
+    assert.match(next.summary, /\*\*Two/);
+    assert.doesNotMatch(next.summary, /\*\*One/);
   });
 
   test('releases off: a finished milestone drafts nothing', () => {
@@ -166,7 +166,7 @@ describe('asking for a release (#399)', () => {
     w.done(w.add('Fix the crash'));
     const r = w.hub.humanOp('p', 'release');
     assert.equal(r.title, 'Release v1.0.1');
-    assert.match(w.releases()[0].summary, /### In this release\n- Fix the crash/);
+    assert.match(w.releases()[0].summary, /\*\*In this release\*\*\n\n- Fix the crash/);
     assert.ok(PERSON_CAN.steward.includes('release'));
     assert.ok(!PERSON_CAN.member.includes('release'));
   });
