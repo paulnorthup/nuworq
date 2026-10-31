@@ -1,12 +1,21 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, writeFileSync, chmodSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { Hub } from '../src/core.js';
 import { Auth } from '../src/auth.js';
-import { mirrorPath } from '../src/git.js';
+import { mirrorPath, fetchMirror, sweepMirrors } from '../src/git.js';
 import { createServer } from '../src/server.js';
+
+// A mirror's removal waits for any fetch under way, so it may finish a moment after the delete.
+async function until(ok, what, ms = 10_000) {
+  for (const end = Date.now() + ms; !ok();) {
+    if (Date.now() > end) assert.fail(`timed out waiting: ${what}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 // Two projects with work and history in each: "gone" is removed, "kept" must not change.
 function twoProjects() {
@@ -59,7 +68,7 @@ describe('an owner removes a project', () => {
     assert.equal(hub.item(hub.project('gone'), '#1').holder, 'a1', 'work in flight is as it was');
   });
 
-  test('delete: only after typing its name; every row, the mirror and its place in tokens go; nothing else changes', () => {
+  test('delete: only after typing its name; every row, the mirror and its place in tokens go; nothing else changes', async () => {
     const { hub, repos, count } = twoProjects();
     const auth = new Auth(hub.db);
     const both = auth.createToken('both', 'agent', { projects: ['gone', 'kept'] });
@@ -76,7 +85,7 @@ describe('an owner removes a project', () => {
     assert.throws(() => hub.project('gone'), /No project "gone"/);
     assert.deepEqual(Object.values(count('gone')), Object.values(count('gone')).map(() => 0), 'no row left anywhere');
     assert.equal(hub.q("SELECT COUNT(*) AS n FROM acks WHERE note_id NOT IN (SELECT id FROM notes)").get().n, 0);
-    assert.ok(!existsSync(mirrorPath(repos, 'github.com/acme/gone')), 'its mirror is gone');
+    await until(() => !existsSync(mirrorPath(repos, 'github.com/acme/gone')), 'its mirror is gone');
     assert.ok(existsSync(mirrorPath(repos, 'github.com/acme/kept')), "the other project's mirror stays");
     assert.deepEqual(count('kept'), kept, 'the other project is untouched');
 
@@ -87,6 +96,66 @@ describe('an owner removes a project', () => {
     // The repository is free again.
     hub.tx(() => hub.project('again', { create: true }));
     assert.equal(hub.addRemote(hub.project('again'), 'github.com/acme/gone', 'you'), 'github.com/acme/gone');
+  });
+
+  test('delete while a fetch is still writing into the mirror: the delete succeeds, and the mirror goes once the fetch ends (#453)', async () => {
+    const repos = mkdtempSync(join(tmpdir(), 'nuworq-rm-'));
+    const remote = 'github.com/acme/busy', path = mirrorPath(repos, remote);
+    execFileSync('git', ['init', '-q', '--bare', path]);
+    // An "ssh" that keeps writing into the mirror for a while, then fails: git's fetch is under way all along.
+    // Removed while it writes, the mirror would come back; a failed fetch, unlike a clone, leaves it there.
+    const ssh = join(repos, 'slow-ssh.mjs');
+    writeFileSync(ssh, `import { mkdirSync, writeFileSync } from 'node:fs';
+const dir = process.env.NUWORQ_TEST_MIRROR + '/objects/pack', end = Date.now() + 400;
+let n = 0;
+setInterval(() => {
+  try { mkdirSync(dir, { recursive: true }); writeFileSync(dir + '/tmp-' + n++, 'x'); } catch {}
+  if (Date.now() > end) process.exit(1);
+}, 2);
+`);
+    const was = { cmd: process.env.GIT_SSH_COMMAND, at: process.env.NUWORQ_TEST_MIRROR };
+    process.env.GIT_SSH_COMMAND = `"${process.execPath}" "${ssh}"`;
+    process.env.NUWORQ_TEST_MIRROR = path;
+    const said = [], error = console.error;
+    console.error = (...a) => said.push(a.join(' '));
+    try {
+      const hub = new Hub({ repos });
+      hub.tx(() => hub.project('busy', { create: true }));
+      hub.addRemote(hub.project('busy'), remote, 'you');
+      const held = fetchMirror(repos, remote);
+      await until(() => existsSync(join(path, 'objects', 'pack', 'tmp-0')), 'the fetch is writing');
+      assert.equal(hub.humanOp('busy', 'delete', { confirm: 'busy' }).deleted, 'busy', 'the delete never fails on the mirror');
+      assert.throws(() => hub.project('busy'), /No project "busy"/);
+      await held;
+      await until(() => !existsSync(path), 'the mirror is removed once the fetch ended', 2000);
+      assert.deepEqual(said.filter((s) => /couldn't remove the mirror/.test(s)), [], 'it waited for the fetch, so removing never raced it');
+    } finally {
+      console.error = error;
+      for (const [k, v] of [['GIT_SSH_COMMAND', was.cmd], ['NUWORQ_TEST_MIRROR', was.at]]) v === undefined ? delete process.env[k] : process.env[k] = v;
+    }
+  });
+
+  test("a mirror that can't be removed doesn't fail the delete: it's logged, and the sweep removes it later", { skip: process.getuid?.() === 0 && 'root ignores folder permissions' }, () => {
+    const repos = mkdtempSync(join(tmpdir(), 'nuworq-rm-'));
+    const remote = 'github.com/acme/stuck', path = mirrorPath(repos, remote);
+    mkdirSync(join(path, 'objects'), { recursive: true });
+    writeFileSync(join(path, 'objects', 'x'), 'x');
+    const hub = new Hub({ repos });
+    hub.tx(() => hub.project('stuck', { create: true }));
+    hub.addRemote(hub.project('stuck'), remote, 'you');
+    const said = [], error = console.error;
+    console.error = (...a) => said.push(a.join(' '));
+    chmodSync(dirname(path), 0o555); // its folder can't be changed: removing the mirror fails
+    try {
+      assert.equal(hub.humanOp('stuck', 'delete', { confirm: 'stuck' }).deleted, 'stuck');
+      assert.ok(existsSync(path), 'still there');
+      assert.match(said.join('\n'), /couldn't remove the mirror .*stuck\.git.*the next sweep tries again/);
+    } finally {
+      chmodSync(dirname(path), 0o755);
+      console.error = error;
+    }
+    sweepMirrors();
+    assert.ok(!existsSync(path), 'the sweep removed it');
   });
 
   test('only an owner may archive or delete', async () => {

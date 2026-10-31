@@ -15,6 +15,7 @@ import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOw
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { freshen } from './freshness.js';
+import { sweepMirrors } from './git.js';
 import { walkthrough } from './walkthrough.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
 import { syncAlerts, accessOf } from './alerts.js';
@@ -286,6 +287,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   checkApp();
   const sweeper = setInterval(() => {
     checkApp();
+    sweepMirrors(); // mirrors are the process's, not one hub's
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
