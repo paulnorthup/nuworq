@@ -10,6 +10,7 @@ export const NEW = {
   milestones: '2026-10-31', // #269: groups are called milestones (the project's 30-second Milestones section)
   shortcuts: '2026-10-31', // #274: every keyboard shortcut, on ? (the rail's "? Shortcuts" hint)
   'group-progress': '2026-10-31', // #270: a bar beside each milestone's state, how far along it is (the first line's)
+  'phone-menu': '2026-10-31', // #114: on a phone, the rail's actions (New project, Notifications…) behind the top bar's Menu
 };
 
 const DAYS = 7;

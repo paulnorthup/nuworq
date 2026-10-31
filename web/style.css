@@ -88,6 +88,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .rail-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; padding-top: 16px; }
 .rail-foot .rail-item { color: var(--muted); }
+.rail-menu, .rail-break { display: none; }
 /* The sidebar in the phone top bar's terms (#141): chips for projects, the count beside its label, quiet actions. */
 @media (min-width: 861px) {
   .rail-item { padding: 8px 10px; border-radius: 8px; }
@@ -532,6 +533,13 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   .brand { padding: 0 8px 0 0; }
   .rail-label, .rail-foot { display: none; }
   .rail-item { width: auto; }
+  /* The rail's actions behind Menu (#114): a thumb-sized button across from the brand, the projects on the row below,
+     and the list full width under them. */
+  #rail .rail-menu { display: flex; margin-left: auto; min-height: 44px; padding: 10px 12px; color: var(--muted); font-weight: 500; }
+  .rail-break { display: block; flex-basis: 100%; height: 0; }
+  #rail.menu-open .rail-menu { background: var(--sunken); color: var(--ink); }
+  #rail.menu-open .rail-foot { display: flex; flex-basis: 100%; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+  #rail.menu-open .rail-foot .rail-item { width: 100%; min-height: 44px; }
   .org-switch { margin: 0; }
   #rail { overflow: visible; } /* so the workspace menu can drop over the page */
   .org-menu { right: auto; }
