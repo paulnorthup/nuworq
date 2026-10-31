@@ -67,3 +67,35 @@ describe('a "now" group stalled on a capability reaches Needs you (#201)', () =>
     assert.match(app, /a\.kind === 'unfit' && a\.operator\) acts = `<button class="btn ghost small" data-action="dismiss"/);
   });
 });
+
+// #214: the group's line under Groups follows the same rule as Needs you, not a second copy of it.
+describe('a group Needs you calls stalled says Stuck on its Groups line (#214)', () => {
+  test('stalled: Stuck, naming the step and the capability; once someone who has it checks in, back to Queued', () => {
+    const { hub, v, stalled, tick } = setup();
+    // An operator with the capability was here 5 hours ago: within the day, so the old rule said "ready for the next agent".
+    hub.agentOp('site', 'checkin', 'op', { has: ['operator', 'nuworq-infra'] });
+    tick(5 * HOUR);
+    hub.agentOp('site', 'checkin', 'w1', { has: ['macos'] });
+    const line = () => v().groups.find((g) => g.item === '#1');
+    assert.equal(stalled().length, 1, 'Needs you: stalled');
+    assert.equal(line().state, 'stuck');
+    assert.equal(line().reason, '#2 needs an operator (nuworq-infra); none has checked in for 4 hours');
+    hub.agentOp('site', 'checkin', 'op', { has: ['operator', 'nuworq-infra'] });
+    assert.deepEqual(stalled(), []);
+    assert.equal(line().state, 'queued');
+    assert.equal(line().reason, '#2 ready for the next agent');
+  });
+
+  test('stalled outranks moving: one agent busy elsewhere in the group doesn\'t make it look fine', () => {
+    const { hub, v, stalled, tick } = setup();
+    hub.humanOp('site', 'create', { title: 'Write the copy', acceptance: 'written', priority: 'soon', parent: '#1' });
+    hub.agentOp('site', 'checkin', 'ui', { has: ['browser'] });
+    hub.humanOp('site', 'create', { title: 'Check the form on a phone', acceptance: 'fits', priority: 'soon', parent: '#1', needs: ['browser'] });
+    tick(5 * HOUR);
+    hub.agentOp('site', 'claim', 'w1', { item: '#3' });
+    assert.equal(stalled().length, 1);
+    const line = v().groups.find((g) => g.item === '#1');
+    assert.equal(line.state, 'stuck', 'not "Moving": Needs you says it is stalled');
+    assert.match(line.reason, /^#2 needs an operator \(nuworq-infra\)/, 'the oldest stuck step, as in Needs you');
+  });
+});

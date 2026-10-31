@@ -366,18 +366,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
 
   // Work that needs something no agent seen in the last day has: it would wait forever unnoticed.
   const fitAgents = agents.filter((a) => t - a.last_seen < DAY).map((a) => json(a.has, []));
-  const fitLately = agents.filter((a) => t - a.last_seen < 4 * HOUR).map((a) => json(a.has, []));
-  const eff = hub.effectivePriorities(p);
-  const stalledGroups = new Map(); // group seq → its oldest step stuck on a capability, for a "now" group (#201)
+  const stalledGroups = stalledGroupsOf(hub, p, readyFree, { agents, t });
   for (const it of [...readyFree, ...shapeable]) {
     const missing = json(it.needs, []).filter((tag) => !fitAgents.some((has) => has.includes(tag)));
-    // A "now" group's next step that has waited 4 hours on what nobody connected in 4 hours has: it needs you.
-    const lately = json(it.needs, []).filter((tag) => !fitLately.some((has) => has.includes(tag)));
-    const e = eff.get(it.id);
-    if (lately.length && e?.priority === 'now' && it.stage === 'ready' && t - it.stage_since > 4 * HOUR) {
-      const group = e.from ?? it.seq;
-      if (!stalledGroups.has(group) || stalledGroups.get(group).it.stage_since > it.stage_since) stalledGroups.set(group, { it, missing: lately });
-    }
     if (!missing.length) continue;
     const forOperator = missing.some((tag) => OPERATOR_TAGS.includes(tag));
     push({
@@ -607,7 +598,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   return {
     project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), fresh: !!p.fresh, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
     pulse, since, attention, motion, flow,
-    ...groupsOf(hub, p, items, { agents, openQs, t }),
+    ...groupsOf(hub, p, items, { agents, openQs, t, stalled: stalledGroups }),
     queue, proposed, waiting, verifying, done,
     agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
     stages: STAGES,
@@ -697,10 +688,27 @@ function waitsOnYou(p, i, openQs) {
 
 const GROUP_STATE = { you: 0, stuck: 1, moving: 2, queued: 3 };
 
+// The "now" groups stalled on a capability (#201): a group's next step, ready for 4 hours, needs something no
+// agent connected in the last 4 hours has. Group seq → { it: its oldest such step, missing }. Needs you calls
+// such a group stalled, and its line under Groups says Stuck (#214): one rule, so they never disagree.
+export function stalledGroupsOf(hub, p, readyFree, { agents, t }) {
+  const fitLately = agents.filter((a) => t - a.last_seen < 4 * HOUR).map((a) => json(a.has, []));
+  const eff = hub.effectivePriorities(p);
+  const stalled = new Map();
+  for (const it of readyFree) {
+    const missing = json(it.needs, []).filter((tag) => !fitLately.some((has) => has.includes(tag)));
+    const e = eff.get(it.id);
+    if (!missing.length || e?.priority !== 'now' || it.stage !== 'ready' || t - it.stage_since <= 4 * HOUR) continue;
+    const group = e.from ?? it.seq;
+    if (!stalled.has(group) || stalled.get(group).it.stage_since > it.stage_since) stalled.set(group, { it, missing });
+  }
+  return stalled;
+}
+
 // The project's groups (#200), for the 30-second view: each top-level item with children and open work, as
 // one line: how far along it is, the priority it ranks at (#198), and whether it is moving, waiting on you,
 // stuck (with the one reason) or queued for the next agent. Plus how many open items are in no group.
-export function groupsOf(hub, p, items, { agents, openQs, t }) {
+export function groupsOf(hub, p, items, { agents, openQs, t, stalled = new Map() }) {
   const kids = new Map();
   for (const i of items) if (i.parent_id) kids.set(i.parent_id, [...(kids.get(i.parent_id) ?? []), i]);
   const under = (i, seen = new Set([i.id])) => (kids.get(i.id) ?? []).filter((c) => !seen.has(c.id) && seen.add(c.id))
@@ -718,6 +726,13 @@ export function groupsOf(hub, p, items, { agents, openQs, t }) {
     const e = eff.get(g.id) ?? { priority: g.priority, from: null };
     const line = { item: ref(g), title: g.title, priority: g.priority, effective: e.priority, from: e.from ? `#${e.from}` : null,
       done: all.filter((i) => i.stage === 'done').length, total: all.filter((i) => i.stage !== 'dropped').length };
+    // What Needs you calls stalled is Stuck here too, for the same step and capability, whatever else moves.
+    const st = stalled.get(g.seq);
+    if (st) {
+      return { ...line, state: 'stuck', reason: st.missing.some((tag) => OPERATOR_TAGS.includes(tag))
+        ? `${ref(st.it)} needs an operator (${st.missing.join(', ')}); none has checked in for 4 hours`
+        : `${ref(st.it)} needs ${st.missing.join(', ')}; no agent connected in 4 hours has it` };
+    }
     const yours = members.filter((i) => waitsOnYou(p, i, openQs));
     if (yours.length) return { ...line, state: 'you', reason: `${yours.map(ref).join(', ')} ${yours.length === 1 ? 'waits' : 'wait'} on you` };
     const busy = members.filter((i) => i.holder || ['active', 'landing', 'verifying'].includes(i.stage));
