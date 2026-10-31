@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
+import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, skill, planSkill, operatorSkill, operatorStart, TAG_ALIASES } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { update, describeUpdate } from '../src/update.js';
@@ -225,7 +225,7 @@ async function waitCmd(flags) {
   // --follow started beside a session that hasn't checked in yet: no operator on this token is "not yet"
   // for a couple of minutes, retried quietly. Any other refusal ends it at once.
   const settle = Number(flags['settle-ms']) || 120_000, until = Date.now() + settle;
-  // #342: the hub restarts on every merge to main. With --follow, a proxy's 502/503/504 or a refused, dropped
+  // #342: the hub restarts on every merge to main. With --follow, a proxy's 502/503/504 (or Cloudflare's 52x/530) or a refused, dropped
   // or timed-out connection is waited out with backoff (about 2 s doubling to 30 s), quietly and keeping
   // `since`, so nothing is lost or repeated. Away for long (10 minutes), it says so once and keeps trying.
   const first = Number(flags['retry-ms']) || 2000, cap = 15 * first, longMs = Number(flags['down-ms']) || 600_000;
@@ -235,7 +235,7 @@ async function waitCmd(flags) {
     try {
       r = await client.wait({ since, timeout: Number(flags.timeout) || undefined, all: !!flags['all-projects'] }, { agent });
     } catch (e) {
-      if (flags.follow && e instanceof HubError && [0, 502, 503, 504].includes(e.status)) {
+      if (flags.follow && e instanceof HubError && (e.status === 0 || GATEWAY.has(e.status))) {
         away ??= Date.now();
         if (!told && Date.now() - away >= longMs) {
           told = true;

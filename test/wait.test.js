@@ -341,34 +341,38 @@ describe('GET /api/wait and nuworq wait', () => {
       const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: '', NUWORQ_AGENT: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
       return { server, asked, env, close: () => { server.close(); server.closeAllConnections(); } };
     };
-    const gateway = (res) => res.writeHead(502, { 'content-type': 'text/html' }).end('<html>Bad gateway</html>');
+    const gateway = (res, status = 502) => res.writeHead(status, { 'content-type': 'text/html' }).end('<html>Bad gateway</html>');
     const event = (res, at) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ at, events: [{ kind: 'item', project: 'o', item: '#1' }] }));
-    // Runs the listener for ms, then stops it: what it printed, and whether it had exited on its own.
-    const listenFor = (env, ms, ...args) => new Promise((resolve) => {
-      const child = execFile(process.execPath, [bin, 'wait', '--operator', '--follow', '--retry-ms', '50', ...args], { env });
+    // Runs the listener until done(stdout) holds (or 10 s pass), then stops it: what it printed, and whether it
+    // had exited on its own. Waits for the outcome rather than a fixed time: on some Node versions each fetch
+    // after a 502 waits for undici's next 500 ms timer tick, so rounds take longer than the backoff alone.
+    const listenUntil = (hub, done, ...args) => new Promise((resolve) => {
+      const child = execFile(process.execPath, [bin, 'wait', '--operator', '--follow', '--retry-ms', '50', ...args], { env: hub.env });
       let stdout = '', stderr = '', exited = null;
-      child.stdout.on('data', (d) => { stdout += d; });
+      const check = () => { if (exited === null && done(stdout)) child.kill(); };
+      child.stdout.on('data', (d) => { stdout += d; check(); });
       child.stderr.on('data', (d) => { stderr += d; });
-      const timer = setTimeout(() => child.kill(), ms);
-      child.on('exit', (code) => { clearTimeout(timer); exited = code; });
+      const poll = setInterval(check, 20), timer = setTimeout(() => child.kill(), 10_000);
+      child.on('exit', (code) => { clearInterval(poll); clearTimeout(timer); exited = code; });
       child.on('close', () => resolve({ stdout, stderr, exited }));
     });
+    const line = 'nuworq: operator work waiting (#1 in o). Run next.\n';
 
-    test('a 502 twice, then an event: exactly that one line, the same since, and no exit', async () => {
-      const hub = await fake((n, _req, res) => (n <= 2 ? gateway(res) : n === 3 ? event(res, 5) : null));
+    test("a 502 twice (and Cloudflare's 530), then an event: exactly that one line, the same since, and no exit", async () => {
+      const hub = await fake((n, _req, res) => (n <= 2 ? gateway(res) : n === 3 ? gateway(res, 530) : n === 4 ? event(res, 5) : null));
       try {
-        const r = await listenFor(hub.env, 1500, '--as', 'op');
-        assert.equal(r.stdout, 'nuworq: operator work waiting (#1 in o). Run next.\n', r.stderr);
+        const r = await listenUntil(hub, (out) => out.includes(line) && hub.asked.length >= 5, '--as', 'op');
+        assert.equal(r.stdout, line, r.stderr);
         assert.equal(r.exited, null, 'still listening');
-        assert.deepEqual(hub.asked.slice(0, 4), ['0', '0', '0', '5'], 'since kept through the 502s, then moved on');
+        assert.deepEqual(hub.asked.slice(0, 5), ['0', '0', '0', '0', '5'], 'since kept through the 502s, then moved on');
       } finally { hub.close(); }
     });
 
     test('a dropped connection is waited out too', async () => {
       const hub = await fake((n, req, res) => (n === 1 ? req.socket.destroy() : n === 2 ? event(res, 5) : null));
       try {
-        const r = await listenFor(hub.env, 1000, '--as', 'op');
-        assert.equal(r.stdout, 'nuworq: operator work waiting (#1 in o). Run next.\n', r.stderr);
+        const r = await listenUntil(hub, (out) => out.includes(line), '--as', 'op');
+        assert.equal(r.stdout, line, r.stderr);
         assert.equal(r.exited, null);
       } finally { hub.close(); }
     });
@@ -376,7 +380,7 @@ describe('GET /api/wait and nuworq wait', () => {
     test('away for long, it says so once and keeps trying', async () => {
       const hub = await fake((_n, _req, res) => gateway(res));
       try {
-        const r = await listenFor(hub.env, 1500, '--as', 'op', '--down-ms', '300');
+        const r = await listenUntil(hub, (out) => /still trying/.test(out) && hub.asked.length >= 3, '--as', 'op', '--down-ms', '300');
         assert.match(r.stdout, /^nuworq: hub at http:\/\/127\.0\.0\.1:\d+ unreachable for 1 min; still trying\.\n$/);
         assert.equal(r.exited, null);
         assert.ok(hub.asked.length >= 3, 'kept asking');
@@ -388,7 +392,7 @@ describe('GET /api/wait and nuworq wait', () => {
       for (const [status, error, hint] of [[401, 'not logged in', 'Run nuworq connect.'], [403, "nobody isn't an operator here", 'Check in with has: ["operator"].']]) {
         const hub = await fake((_n, _req, res) => refuse(status, error, hint)(res));
         try {
-          const r = await listenFor(hub.env, 1000, '--as', 'nobody');
+          const r = await listenUntil(hub, () => false, '--as', 'nobody');
           assert.equal(r.exited, 1, `${status} exits`);
           assert.ok(r.stderr.includes(error) && r.stderr.includes(`hint: ${hint}`), r.stderr);
           assert.equal(hub.asked.length, 1);

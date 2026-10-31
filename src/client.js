@@ -124,7 +124,7 @@ export class HubError extends Error {
 const RETRY_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET']);
 // A proxy in front of a restarting hub (Cloudflare's tunnel) answers these with a page of its own:
 // 520-524 are Cloudflare's for an origin it can't reach, 530 for a tunnel with no connector.
-const GATEWAY = new Set([502, 503, 504, 520, 521, 522, 523, 524, 530]);
+export const GATEWAY = new Set([502, 503, 504, 520, 521, 522, 523, 524, 530]);
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 // Agent calls that only read, safe to send again (`next` too, when it doesn't claim).
 const READS = new Set(['checkin', 'look']);
