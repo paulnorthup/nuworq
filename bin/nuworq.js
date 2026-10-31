@@ -16,7 +16,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'early-access', 'install', 'uninstall']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'early-access', 'install', 'uninstall', 'operator']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -200,6 +200,32 @@ function operatorCmd(flags) {
 ${bold('Paste into')} an attended Claude Code session in ${project}'s folder:
 
 ${operatorLoop(project, has)}`);
+}
+
+// An operator waiting on the hub (#283): one line when there is something for it, then exit; --follow
+// keeps waiting and prints a line per event. Lines are the hub's ids and kinds, never what anyone wrote.
+async function waitCmd(flags) {
+  if (!flags.operator) throw new HubError('wait for what?', { hint: 'Only operators wait: nuworq wait --operator [--follow].' });
+  // Unnamed (a watcher beside the session can't know its name): the operators that checked in with this token.
+  const agent = flags.as || envVar('AGENT') || '';
+  const { describeEvent } = await import('../src/wait.js');
+  const client = createClient(flags);
+  // --follow started beside a session that hasn't checked in yet: no operator on this token is "not yet"
+  // for a couple of minutes, retried quietly. Any other refusal ends it at once.
+  const settle = Number(flags['settle-ms']) || 120_000, until = Date.now() + settle;
+  for (let since = 0; ;) {
+    let r;
+    try {
+      r = await client.wait({ since, timeout: Number(flags.timeout) || undefined }, { agent });
+    } catch (e) {
+      if (!flags.follow || agent || e.status !== 403 || !/^no operator has checked in/.test(e.message) || Date.now() >= until) throw e;
+      await new Promise((res) => setTimeout(res, Math.min(settle / 12, Math.max(0, until - Date.now()))));
+      continue;
+    }
+    since = r.at;
+    for (const e of r.events) console.log(describeEvent(e));
+    if (r.events.length && !flags.follow) return;
+  }
 }
 
 // A headless worker: ask the hub where work is waiting, give the worker its own git worktree there,
@@ -1306,6 +1332,9 @@ ${bold('Setup')}
   guide [--via cli|tools]                the agent guide
   operator [--project p] [--has tags]    print the tags an operator session declares and the /loop line
                                          to paste into Claude Code in the project folder (runs nothing)
+  wait --operator [--follow] [--as name] block until there is something for an operator (its work, a question
+                                         to it, an answer, steering) and print one line; --follow: one per event.
+                                         Without --as: the operators that checked in with this token
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
   worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags] [--browser]
                                          start a headless worker where work is waiting (the hub routes it),
@@ -1431,6 +1460,7 @@ async function main() {
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
   }
   if (cmd === 'operator') return operatorCmd(flags);
+  if (cmd === 'wait') return waitCmd(flags);
   if (cmd === 'skill' && flags.plugin) {
     // The Claude Code plugin (src/plugin.js): <dir> (default this checkout's plugin/), plus the marketplace
     // that lists it when it is this checkout's own.

@@ -24,6 +24,7 @@ import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState
 import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
+import { waitFor } from './wait.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
 import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
@@ -75,7 +76,7 @@ const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 const REPO_PAGE = 30; // repositories per page in "+ Project"
 
@@ -1270,6 +1271,20 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const results = await testChannels(hub.db, { baseUrl: (!spaces && publicUrl) || origin(req) + base, now: () => hub.now() });
         hub.emit('change', { project: null, at: hub.now() });
         return send(200, { ok: results.every((r) => r.ok), results });
+      }
+      // An idle operator session waits here (#283): it answers the moment something is there for it, with ids
+      // and kinds only, or empty after a few minutes. ?since= the last answer's at, so each event comes once.
+      if (req.method === 'GET' && path === '/api/wait') {
+        if (url.searchParams.get('for') !== 'operator') return deny(400, 'wait for what?', 'Only operators wait: GET /api/wait?for=operator.');
+        const done = new AbortController();
+        res.on('close', () => done.abort());
+        const timeout = Number(url.searchParams.get('timeout'));
+        const r = await waitFor(hub, header(req, 'agent'), {
+          since: Number(url.searchParams.get('since')) || 0, scope: caller.scope, tokenId: caller.token?.id ?? null, signal: done.signal,
+          ...(timeout > 0 ? { ms: timeout * 1000 } : {}),
+        });
+        if (!done.signal.aborted) send(200, r);
+        return;
       }
       if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', {
         runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null,

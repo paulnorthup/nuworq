@@ -283,6 +283,9 @@ export function createClient(opts = {}) {
     },
     // The project this folder belongs to, as far as the hub knows.
     where: () => request('GET', `/api/where?root=${encodeURIComponent(settings.root)}&remote=${encodeURIComponent(settings.remote)}`),
+    // An operator waiting for something to do (#283): resolves when the hub has it, or empty after a while.
+    wait: ({ since = 0, timeout } = {}, { agent } = {}) =>
+      request('GET', `/api/wait?for=operator&since=${since}${timeout ? `&timeout=${timeout}` : ''}`, { agent }),
     get: (path) => request('GET', path),
     post: (path, body) => request('POST', path, { body }),
   };
