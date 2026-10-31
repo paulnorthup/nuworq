@@ -147,6 +147,7 @@ No open ports, and Cloudflare provides the certificate. The hub listens on loopb
 cloudflared tunnel login                         # once, as root: open the link, pick the zone
 cloudflared tunnel create nuworq
 cloudflared tunnel route dns nuworq app.nuworq.com   # the app; nuworq.com itself is served from the nuworq-site repo, not the hub
+cloudflared tunnel route dns nuworq admin.nuworq.com # the owners' dashboard (--admin-host)
 install -d -m 700 /etc/cloudflared && install -m 600 ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/
 cat > /etc/cloudflared/config.yml <<EOF
 tunnel: <tunnel-id>
@@ -154,11 +155,34 @@ credentials-file: /etc/cloudflared/<tunnel-id>.json
 ingress:
   - hostname: app.nuworq.com
     service: http://127.0.0.1:4747
+  - hostname: admin.nuworq.com
+    service: http://127.0.0.1:4747
   - service: http_status:404
 EOF
 cloudflared tunnel ingress validate && cloudflared service install && systemctl enable --now cloudflared
-# the hub: deploy/nuworq.service as is, plus --public-url https://app.nuworq.com
 ```
+The hub, as nuworq.com runs it (since 2026-10-31, #205): `deploy/nuworq.service` with signups on. Its `ExecStart`:
+```
+/usr/local/bin/node /opt/nuworq/bin/nuworq.js serve --follow --host 127.0.0.1 --port 4747 \
+  --db /var/lib/nuworq/nuworq.db --auth --trust-proxy --public-url https://app.nuworq.com --site-host nuworq.com \
+  --workspaces --early-access --admin-host admin.nuworq.com
+```
+`--site-host` is left from before nuworq.com moved to nuworq-site; the hub now ignores it with one line at start (#164), and it can go at the next unit change.
+Its environment comes from drop-ins in `/etc/systemd/system/nuworq.service.d/`. The files they load are root-only (`chmod 600`), and their values never go in an item or a commit:
+```ini
+# github-oauth.conf: GitHub sign-in. The OAuth App matches callbacks exactly, so each host's is registered:
+# https://app.nuworq.com/auth/github/callback and https://admin.nuworq.com/auth/github/callback
+# The file holds NUWORQ_GITHUB_CLIENT_ID=… and NUWORQ_GITHUB_CLIENT_SECRET=…
+[Service]
+EnvironmentFile=/etc/nuworq/github-oauth.env
+
+# signups.conf: who owns the hub, and the request form's spam check.
+# The file holds NUWORQ_TURNSTILE_SITEKEY=… and NUWORQ_TURNSTILE_SECRET=… (a Managed widget for app.nuworq.com)
+[Service]
+Environment=NUWORQ_HUB_OWNERS=paul@paulnorthup.com
+EnvironmentFile=/etc/nuworq/turnstile.env
+```
+The single hub's database became the workspace `northup` (`nuworq workspace adopt northup --db /var/lib/nuworq/nuworq.db --data-dir /var/lib/nuworq`, see "From one hub to workspaces"). Agents and runners kept their saved address `https://app.nuworq.com`. `--db` stays in `ExecStart` so that undoing it is only a matter of removing the three flags. Backups from the switch: `/var/lib/nuworq/before-205.db`, `/root/nuworq.service.before-205`, `/root/nuworq.service.d.before-205/`, `/root/cloudflared-config.before-205.yml`.
 Verified: a valid certificate, 401 without login, a `Secure` session cookie, and the live stream (`/api/stream`) arriving unbuffered through Cloudflare.
 
 **The app on its own host; nuworq.com is not the hub's.** The hub lives at `--public-url https://app.nuworq.com`, and only the app's hostnames route to it. nuworq.com is served from the nuworq-site repo (Cloudflare Pages), which sends app paths (`/api/…`, `/login.html`, `/auth/…`, `/w/…`, `/agents.md`, and old `#/p/<slug>/12` links) on to the app with a `308`. Every link the hub builds uses the public URL. The site's early-access form calls the app cross-origin: `GET /api/early-access/config` and `POST /api/early-access` answer the public URL's parent domain over https (`https://nuworq.com` for `app.nuworq.com`, and only it) with `Access-Control-Allow-Origin`, without credentials. No flag is needed for it. Check: `curl -si -H 'Origin: https://nuworq.com' https://app.nuworq.com/api/early-access/config | grep -i access-control` shows `access-control-allow-origin: https://nuworq.com`.
