@@ -108,6 +108,7 @@ describe('the quick launcher (#290)', () => {
     assert.deepEqual(made[1].run.body, { body: 'Export to CSV' });
     for (const m of made) assert.ok(m.confirm);
     assert.ok(!rank(index(), 'Export', { current: null }).some((x) => x.kind === 'create'), 'nothing to create into on All projects');
+    assert.ok(!rank(index(), '120', { current: 'nuworq' }).some((x) => x.kind === 'create'), 'a number looks something up');
   });
 
   test("only what the viewer's role allows, and never removing or deleting anything", () => {

@@ -1367,7 +1367,7 @@ async function openLauncher() {
   const el = $('#launcher');
   Object.assign(L, { open: true, sel: 0, confirming: null });
   el.innerHTML = `<div class="ln-box" role="dialog" aria-label="Quick launcher">
-    <input id="ln-q" type="search" placeholder="A number, a few letters, or what to do…" autocomplete="off" spellcheck="false" role="combobox" aria-controls="ln-list" aria-expanded="true">
+    <input id="ln-q" type="text" enterkeyhint="go" placeholder="A number, a few letters, or what to do…" autocomplete="off" spellcheck="false" role="combobox" aria-controls="ln-list" aria-expanded="true">
     <div id="ln-list" class="ln-list" role="listbox"></div></div>`;
   el.hidden = false;
   $('#ln-q').focus();

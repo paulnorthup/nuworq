@@ -475,13 +475,6 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; border: 1px sol
 .ln-confirm p { margin: 0 0 12px; font-size: 15px; }
 .ln-keys { display: flex; gap: 8px; }
 .ln-keys kbd { margin-left: 6px; font-size: 11px; }
-@media (max-width: 860px) {
-  #rail .rail-search { margin: 0 0 0 auto; min-height: 44px; padding: 10px 14px; }
-  #rail .rail-search + .rail-menu { margin-left: 0; }
-  #launcher { padding: 8px; }
-  .ln-list { max-height: 70vh; }
-  .ln-keys .btn { min-height: 44px; padding: 10px 16px; }
-}
 .dialog .lead { color: var(--muted); margin: 0 0 14px; }
 .dialog h4 { margin: 16px 0 4px; font-size: 13px; }
 /* Where the hub's GitHub App stands: none, created (not installed), installed. */
@@ -571,6 +564,12 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   #rail.menu-open .rail-menu { background: var(--sunken); color: var(--ink); }
   #rail.menu-open .rail-foot { display: flex; flex-basis: 100%; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
   #rail.menu-open .rail-foot .rail-item { width: 100%; min-height: 44px; }
+  /* The quick launcher (#290): Search beside Menu, thumb-sized; its box the width of the screen. */
+  #rail .rail-search { margin: 0 0 0 auto; min-height: 44px; padding: 10px 14px; }
+  #rail .rail-search + .rail-menu { margin-left: 0; }
+  #launcher { padding: 8px; }
+  .ln-list { max-height: 70vh; }
+  .ln-keys .btn { min-height: 44px; padding: 10px 16px; }
   .org-switch { margin: 0; }
   #rail { overflow: visible; } /* so the workspace menu can drop over the page */
   .org-menu { right: auto; }

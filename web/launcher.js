@@ -157,7 +157,7 @@ export function rank(index, query, ctx = {}) {
     if (f) scored.push({ r: { ...c, hits: f.hits }, tier: 2, score: f.score });
   }
   scored.sort((a, b) => a.tier - b.tier || b.score - a.score);
-  const made = creates(q, { current, index, can });
+  const made = num ? [] : creates(q, { current, index, can }); // a number is looking something up, not writing
   return [...scored.slice(0, limit - made.length).map((s) => s.r), ...made];
 }
 
