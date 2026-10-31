@@ -13,7 +13,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 3. **No nuworq tools in this session?** Say so and stop. The machine needs `nuworq connect <hub>`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with `look`, ask what they want and why, offer options with trade-offs, then `propose` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
-6. **A tidy job** (`next` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how.
+6. **A tidy job** (`next` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how. A field-notes review (also mode "tidy") retires notes whose lesson is built in and merges duplicates; the guide's "Field notes" section says how.
 
 ## Roles
 Your role comes from how you started and is fixed for the session. `checkin` says which you are.
@@ -49,6 +49,7 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - `comment`: Leave a note for the record on an item or the whole project.
 - `ack`: Acknowledge steering from the human, saying in one line how you are adjusting.
 - `learn`: Leave a field note for every future agent: something about this codebase or project you learned the hard way and nobody should have to learn again.
+- `retire`: Only in a field-notes review (next mode "tidy"), under "Run with it": retire field notes whose lesson is now in the code, the guide or a test, or merge duplicates into one.
 - `feedback`: Tell nuworq's developers when nuworq itself got in your way: a misleading hint, a missing tool, a confusing response or rule.
 - `look`: Look around.
 - `signoff`: End your session.

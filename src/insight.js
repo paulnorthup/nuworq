@@ -612,8 +612,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
 
   const decisions = hub.decisions(p).map((d) => ({ id: d.id, body: d.body, ago: dur(t - d.at) }));
   const notes = hub.q(`SELECT n.*, i.seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
-      WHERE n.project_id = ? AND n.kind = 'learning' AND n.active = 1 ORDER BY n.at DESC`).all(p.id)
-    .map((n) => ({ id: n.id, body: n.body, by: n.author, item: n.seq ? `#${n.seq}` : null, ago: dur(t - n.at) }));
+      WHERE n.project_id = ? AND n.kind = 'learning' AND n.active = 1 ORDER BY n.always DESC, n.at DESC`).all(p.id)
+    .map((n) => ({ id: n.id, body: n.body, by: n.author, item: n.seq ? `#${n.seq}` : null, ago: dur(t - n.at), always: !!n.always }));
   const activity = hub.q(`SELECT e.*, i.seq AS item_seq FROM events e LEFT JOIN items i ON i.id = e.item_id
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 

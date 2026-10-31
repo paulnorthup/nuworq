@@ -33,6 +33,7 @@ export const NEW = {
   'present-agents': '2026-10-31', // #441: the agents here now as counts by role ("2 workers · 1 operator"), each opening to its names
   'finished-milestones': '2026-10-31', // #442: a finished milestone is one line in Recently finished, opening to its parts
   'show-dropped': '2026-10-31', // #442: dropped work leaves the board; All work's "Show dropped" at 30m brings it back
+  'always-show': '2026-10-31', // #443: Always show on a field note, so every agent gets it whatever it works on
 };
 
 const DAYS = 7;

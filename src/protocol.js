@@ -265,13 +265,23 @@ export const OPS = [
   },
   {
     name: 'learn',
-    description: "Leave a field note for every future agent: something about this codebase or project you learned the hard way and nobody should have to learn again. A command that works, a trap, a convention, where something lives. It appears in every agent's checkin. Not for status (use progress) or rules (only the human makes decisions).",
+    description: "Leave a field note for every future agent: something about this codebase or project you learned the hard way and nobody should have to learn again. A command that works, a trap, a convention, where something lives. Agents whose work it bears on get it at checkin and next. Not for status (use progress) or rules (only the human makes decisions).",
     params: {
       note: s('One or two lines. Concrete: "Run `npm run build` before `npm test`; tests import from dist/."'),
-      item: { ...ITEM, description: 'Optional. The item this came up on.' },
+      item: { ...ITEM, description: 'Optional. The item this came up on: agents working on it, its parent or its siblings see the note first.' },
       replaces: { type: 'integer', description: 'Optional. The id of an outdated field note this one replaces.' },
     },
     required: ['note'],
+  },
+  {
+    name: 'retire',
+    description: 'Only in a field-notes review (next mode "tidy"), under "Run with it": retire field notes whose lesson is now in the code, the guide or a test, or merge duplicates into one. Each goes on the record with your reason; a person can bring it back.',
+    params: {
+      notes: { type: 'array', items: { type: 'integer' }, description: 'The ids of the field notes to retire, as the review lists them.' },
+      reason: s('Where the lesson lives now (a file, the guide section, a test), in one line. For a merge: what the merged note carries.'),
+      into: { type: 'integer', description: 'Optional. For a merge: the id of the note you learned with the combined lesson.' },
+    },
+    required: ['notes', 'reason'],
   },
   {
     name: 'feedback',
@@ -284,8 +294,12 @@ export const OPS = [
   },
   {
     name: 'look',
-    description: 'Look around. With item: full context for that item. Without: the board grouped by stage, plus standing decisions.',
-    params: { item: { ...ITEM, description: 'Optional.' }, stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'done'] } },
+    description: 'Look around. With item: full context for that item. Without: the board grouped by stage, plus standing decisions and the field notes for your work.',
+    params: {
+      item: { ...ITEM, description: 'Optional.' },
+      stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'done'] },
+      notes: { type: 'string', enum: ['all'], description: 'Optional. "all": every active field note, not only the ten most relevant to your work.' },
+    },
   },
   {
     name: 'signoff',
@@ -330,7 +344,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 3. **No nuworq tools in this session?** Say so and stop. The machine needs \`nuworq connect <hub>\`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with \`look\`, ask what they want and why, offer options with trade-offs, then \`propose\` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
-6. **A tidy job** (\`next\` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how.
+6. **A tidy job** (\`next\` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how. A field-notes review (also mode "tidy") retires notes whose lesson is built in and merges duplicates; the guide's "Field notes" section says how.
 
 ## Roles
 Your role comes from how you started and is fixed for the session. \`checkin\` says which you are.
@@ -515,6 +529,15 @@ Milestones have to stay true. When they drift, ${c('next')} hands one agent a ti
 - **Change:** move an item with ${c('refine')} \`parent\` (\`""\` takes it out); merge two milestones by moving one's parts into the other; ${c('propose')} a parent for a cluster and move its parts in; ${c('submit')} or close a finished milestone; attach a stray pull request with ${c('refine')} \`pr\` (propose an item for it first if none fits). Give every change a one-line \`reason\`: it goes on both parents' history.
 - **Never touch:** a priority a person set (the hub refuses it) or a decision. If one looks wrong, say so in your submit.
 - **Finish:** ${c('submit')} the tidy job with what you changed and what you left alone on purpose. What it listed isn't raised again.
+
+## Field notes
+${c('checkin')}, ${c('next')} and ${c('look')} give you at most ten field notes: the ones about your item, its parent and siblings, the paths you touch and its words first, newest breaking ties. Up to three a person marked always-show come first. ${cli ? c('look', '--notes all') : `${c('look')} with \`notes: "all"\``} lists every one.
+Notes are reviewed so they stay few: when an item lands, the notes about it are due, and once a week every older one. ${c('next')} hands one agent a field-notes review (mode "tidy"); its summary lists the notes.
+- **Retire** a note whose lesson is now in the code, this guide or a test, with ${c('retire')} and a \`reason\` naming where it lives now.
+- **Merge** duplicates: ${c('learn')} the combined note, then ${c('retire')} the duplicates with \`into\` set to its id.
+- **Keep** a note whose lesson still saves the next agent time.
+- **Below "Run with it"** you retire nothing yourself: ${c('ask')} the person one question listing the notes and why.
+- **Finish:** ${c('submit')} the review with what you kept, merged and retired. A person can bring any note back.
 
 ## Freshness sweep
 Once a week the hub opens a "Keep <project> fresh" item (priority later: you get it only when nothing more urgent is ready). Do it on your machine with the project's own tools; the hub runs nothing.
