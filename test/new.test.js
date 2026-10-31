@@ -1,13 +1,42 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { NEW, isNew, seenNew, markSeen } from '../web/new.js';
+import { NEW, isNew, seenNew, markSeen, markNew, dismissNew } from '../web/new.js';
 
 const DAY = 864e5;
 const shipped = '2026-10-29';
 const at = Date.parse(shipped);
 const memory = () => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)) }; };
-const refusing = { getItem: () => { throw new Error('SecurityError'); }, setItem: () => { throw new Error('QuotaExceededError'); } };
+// Just enough DOM for markNew and dismissNew: a feature's button with its tagged label inside, in a row.
+class El {
+  constructor(tag, doc) {
+    Object.assign(this, { tagName: tag.toUpperCase(), ownerDocument: doc, children: [], parentNode: null, dataset: {}, attrs: {}, className: '' });
+    this.classList = Object.assign(new Set(), { toggle(c, on) { if (on) this.add(c); else this.delete(c); }, contains(c) { return this.has(c); } });
+    this.style = Object.assign(new Map(), { setProperty(k, v) { this.set(k, v); } });
+  }
+  append(...els) { for (const el of els) { el.parentNode = this; this.children.push(el); } return this; }
+  get nextElementSibling() { const s = this.parentNode.children; return s[s.indexOf(this) + 1] ?? null; }
+  get previousElementSibling() { const s = this.parentNode.children; return s[s.indexOf(this) - 1] ?? null; }
+  after(el) { const s = this.parentNode.children; s.splice(s.indexOf(this) + 1, 0, el); el.parentNode = this.parentNode; }
+  remove() { const s = this.parentNode.children; s.splice(s.indexOf(this), 1); this.parentNode = null; }
+  matches(sel) {
+    return sel.split(', ').some((s) => s.startsWith('.') ? this.classList.has(s.slice(1)) || this.className.split(' ').includes(s.slice(1)) : this.tagName === s.toUpperCase());
+  }
+  closest(sel) { for (let el = this; el instanceof El; el = el.parentNode) if (el.matches(sel)) return el; return null; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  focus() { this.ownerDocument.focused = this; }
+  *all() { for (const c of this.children) { yield c; yield* c.all(); } }
+}
+function page() {
+  const doc = { activeElement: null, focused: null, createElement: (t) => new El(t, doc) };
+  const row = new El('div', doc), btn = new El('button', doc), span = new El('span', doc);
+  btn.dataset.action = 'shortcuts';
+  span.dataset.new = 'home';
+  row.append(btn.append(span));
+  doc.querySelectorAll = () => [...row.all()].filter((el) => el.dataset.new);
+  return { doc, btn, span };
+}
+const refusing ={ getItem: () => { throw new Error('SecurityError'); }, setItem: () => { throw new Error('QuotaExceededError'); } };
 
 // #130: a tiny "new" tag for 7 days after a feature ships, until this viewer has used it.
 describe('what just shipped', () => {
@@ -49,9 +78,56 @@ describe('what just shipped', () => {
     }
   });
 
+  // #314: the tag is a button of its own; tapping it dismisses it and never reaches the feature it sits on.
+  test('a tag sits beside its feature (never inside a button or link) as a "Dismiss new tag" button', () => {
+    const { doc, btn, span } = page();
+    markNew(doc, { now: at, store: memory() });
+    assert.ok(span.classList.contains('is-new'));
+    const tag = btn.nextElementSibling;
+    assert.equal(tag?.tagName, 'BUTTON', 'right after the feature\'s button, not inside it');
+    assert.equal(tag.parentNode, btn.parentNode);
+    assert.equal(tag.className, 'new-tag');
+    assert.equal(tag.type, 'button');
+    assert.equal(tag.attrs['aria-label'], 'Dismiss new tag');
+    assert.equal(tag.title, 'Dismiss');
+    assert.equal(tag.textContent, 'new');
+    assert.equal(tag.style.get('position-anchor'), span.style.get('anchor-name'), 'anchored over the tagged element');
+    markNew(doc, { now: at, store: memory() });
+    assert.equal(btn.parentNode.children.filter((c) => c.className === 'new-tag').length, 1, 'redrawing adds no second tag');
+  });
+
+  test('tapping the tag retires it at once, without firing the feature\'s action', () => {
+    const { doc, btn, span } = page();
+    const store = memory();
+    markNew(doc, { now: at, store });
+    const tag = btn.nextElementSibling;
+    doc.activeElement = tag;
+    const fired = [];
+    const e = { target: tag, preventDefault: () => fired.push('prevented'), stopPropagation: () => fired.push('stopped') };
+    assert.equal(dismissNew(e, { root: doc, now: at, store }), true);
+    assert.deepEqual(fired, ['prevented', 'stopped'], 'the click goes no further: the data-action handler never sees it');
+    assert.deepEqual(seenNew(store), ['home']);
+    assert.ok(!span.classList.contains('is-new'));
+    assert.ok(!btn.parentNode.children.includes(tag), 'the tag is gone');
+    assert.equal(doc.focused, btn, 'the keyboard lands back on the feature');
+    // A click anywhere else is left alone, for the feature (and the use-retires-it rule) to handle.
+    assert.equal(dismissNew({ target: span }, { root: doc, now: at, store }), false);
+  });
+
+  test('after 7 days the tag goes, dismissed or not', () => {
+    const { doc, btn } = page();
+    markNew(doc, { now: at + 6 * DAY, store: memory() });
+    assert.equal(btn.nextElementSibling?.className, 'new-tag', 'day 6');
+    markNew(doc, { now: at + 7 * DAY, store: memory() });
+    assert.equal(btn.nextElementSibling, null, 'day 7: gone');
+  });
+
   test('the pill takes no room (absolutely positioned) and its text meets WCAG AA on its own background', () => {
     const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
-    assert.match(css, /\.is-new::after \{[^}]*position: absolute/);
+    assert.match(css, /\.new-tag \{[^}]*position: absolute/);
+    assert.match(css, /\.is-new::after \{[^}]*position: absolute/, 'the old pill, where anchors are missing');
+    assert.match(css, /@media \(pointer: coarse\) \{ \.new-tag::before \{ content: ''; position: absolute; inset: -30px -8px 0; \}/,
+      'on touch the target reaches 44px up and out, never down over the feature');
     const v = (name) => css.match(new RegExp(`--${name}: (#[0-9a-f]{6})`))[1];
     const lum = (hex) => {
       const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
