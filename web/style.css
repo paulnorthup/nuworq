@@ -262,8 +262,10 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .age { color: var(--muted); font-size: 12px; white-space: nowrap; flex: none; }
 
 /* ── agents ── */
-.agent { display: inline-flex; align-items: center; gap: 5px; font-weight: 550; font-size: 13px; white-space: nowrap; }
-.agent i { width: 7px; height: 7px; border-radius: 2px; background: var(--muted); transform: rotate(45deg); } /* unknown provider: no state color (#187) */
+/* An agent reads as a line ("Worker · Pauls-MacBook-Pro.local runner · claude-80e7", #240), longer than a phone row
+   leaves beside an age: it wraps under its marker rather than running under what sits next to it. */
+.agent { display: inline-flex; align-items: center; gap: 5px; font-weight: 550; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.agent i { flex: none; width: 7px; height: 7px; border-radius: 2px; background: var(--muted); transform: rotate(45deg); } /* unknown provider: no state color (#187) */
 .prov-anthropic i { background: var(--p-anthropic); }
 .prov-openai i { background: var(--p-openai); }
 .prov-openweight i { background: var(--p-open); }
@@ -365,6 +367,8 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 /* ── activity ── */
 .feed .row-item { padding: 8px 14px; }
 .feed .type { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); width: 74px; flex: none; padding-top: 2px; }
+/* Who did it, beside when: an agent's line can be long (#240), so it wraps in its column and leaves the headline room. */
+.feed .age { flex: 0 1 auto; max-width: 40%; white-space: normal; text-align: right; }
 .feed .expand { margin-top: 6px; font-size: 13px; }
 .feed .expand p { margin: 0 0 6px; }
 

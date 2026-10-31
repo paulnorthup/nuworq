@@ -11,6 +11,7 @@ import { missingProject } from './missing.js';
 import { mapParts } from './groupmap.js';
 import { ackList } from './acks.js';
 import { analyticsPage } from './analytics.js';
+import { agentLine } from './agentline.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
@@ -68,15 +69,27 @@ function providerOf(model = '') {
   if (/gemini/.test(m)) return 'Google';
   return 'Open-weight';
 }
-const modelOf = (name) => S.view?.agents.find((a) => a.name === name)?.model ?? '';
-function who(name, model) {
+const agentNamed = (name) => S.view?.agents.find((a) => a.name === name) ?? null;
+// An agent as it reads everywhere (#240, web/agentline.js): role and where it runs, e.g. "Worker · mac-mini runner",
+// plus what it is doing (job) where that isn't already the line's subject. Its id shows at 30m and in the tooltip.
+// presence: what the hub sent with the entry (Needs you, the home), else the project's agent of that name.
+function who(name, model, { job = false, presence } = {}) {
   if (!name) return '';
   if (name === 'you') return '<span class="you-chip">You</span>';
   if (name === 'nuworq' || name === 'trellis') return '<span class="sys-chip">nuworq</span>'; // trellis: events from before the rename
-  model ??= modelOf(name);
+  const known = agentNamed(name);
+  presence ??= known;
+  model ??= known?.model ?? '';
   const prov = providerOf(model);
-  return `<span class="agent prov-${prov.toLowerCase().replace(/[^a-z]/g, '')}" title="${esc([model, prov].filter(Boolean).join(' · '))}"><i></i>${esc(name)}</span>`;
+  return `<span class="agent prov-${prov.toLowerCase().replace(/[^a-z]/g, '')}" title="${esc([name, model, prov].filter(Boolean).join(' · '))}"><i></i>${esc(agentLine(presence, { name, job, id: z() >= 2 }))}</span>`;
 }
+// A line the hub wrote that names an agent ("claude-4e0a picked up #4"), with the agent said as who it is. Beside
+// the actor (the activity feed, a timeline), a line that opens with its name drops it: "Picked up #4".
+const named = (text, name, presence, { beside = false } = {}) => {
+  if (!name || ['you', 'nuworq', 'trellis'].includes(name)) return esc(text);
+  if (beside && text.startsWith(`${name} `)) { const rest = text.slice(name.length + 1); return esc(rest[0].toUpperCase() + rest.slice(1)); }
+  return esc(text).replace(esc(name), who(name, null, { presence }));
+};
 // An empty section: one line on why it's empty, and the one thing to do about it.
 const zero = (why, action = '') => `<div class="zero"><span class="check">→</span><div>${why}${action ? ` ${action}` : ''}</div></div>`;
 const refLink = (ref) => (ref ? `<a class="ref" data-action="open" data-item="${esc(ref)}">${esc(ref)}</a>` : '');
@@ -310,8 +323,7 @@ function overview() {
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div>
       ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div>
-    ${homePage(S.home, { z: z(), pulse, card, esc, plural, wide: WIDE.matches, gs: getStarted() })}`;
-}
+    ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, gs: getStarted() })}`;}
 
 // ── project ──
 function project(v) {
@@ -504,7 +516,7 @@ function card(a) {
       ${a.detail ? `<div class="label">Detail</div>${md(a.detail)}` : ''}
     </div>` : '';
   return `<article class="card kind-${a.kind}">
-    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${esc(a.sub)}</span></div>
+    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${named(a.sub, a.agent, a.presence)}</span></div>
     <h3>${esc(a.headline)}</h3>
     ${a.attempts?.length > 1 ? attemptsGrid(a.item, a.attempts) : `${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
     ${commits(a.git)}`}
@@ -695,7 +707,7 @@ function motion(v) {
     <div class="row-item clickable" data-action="open" data-item="${esc(m.item)}">
       <div class="body">
         <div class="h">${who(m.agent, m.model)} ${refLink(m.item)} <span>${esc(m.title)}</span>${repoTag(m)}${m.shaping ? '<span class="tag shaping">shaping</span>' : ''}${m.landing ? '<span class="tag shaping">landing</span>' : ''}${m.priority === 'now' ? '<span class="tag now">now</span>' : ''}${m.race ? `<span class="tag soon">race of ${m.race}</span>` : m.attempt > 1 ? `<span class="tag soon">attempt ${m.attempt}</span>` : ''}</div>
-        ${z() >= 1 && m.last ? `<div class="last ${m.quiet ? 'quiet' : ''}">${m.last.type === 'claimed' ? 'Just picked it up' : esc(m.last.headline)}</div>` : ''}
+        ${z() >= 1 && m.last ? `<div class="last ${m.quiet ? 'quiet' : ''}">${m.last.type === 'claimed' ? 'Just picked it up' : m.last.type === 'shaping' ? 'Started shaping it' : named(m.last.headline, m.agent, undefined, { beside: true })}</div>` : ''}
         ${z() >= 1 && m.touching?.length ? `<div class="touch">${m.touching.map((t) => `<code>${esc(t)}</code>`).join(' ')}</div>` : ''}
         ${z() >= 1 && m.heads_up ? `<div class="headsup">⚠ ${esc(m.heads_up.split('. ')[0])}</div>` : ''}
         ${z() >= 2 && m.last?.summary ? `<div class="s">${md(m.last.summary)}</div>` : ''}
@@ -859,11 +871,11 @@ function agents(v) {
     const live = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off');
     const away = v.agents.length - live.length;
     return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} active</span>${away ? `<span class="hint">${away} away</span>` : ''}</header>
-      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model)}<span class="st ${a.status.split(' ')[0]}">${esc(a.status)}${a.holding.length ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || `<span class="age">${plural(away, 'agent')} ${away === 1 ? 'is' : 'are'} away or signed off, so nothing moves until one comes back. <button class="link" data-action="connect">Start an agent</button></span>`}</div></section>`;
+      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model, { job: true })}<span class="st ${a.status.split(' ')[0]}">${esc(a.status)}${a.holding.length && !a.job ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || `<span class="age">${plural(away, 'agent')} ${away === 1 ? 'is' : 'are'} away or signed off, so nothing moves until one comes back. <button class="link" data-action="connect">Start an agent</button></span>`}</div></section>`;
   }
   return `<section class="sec"><header><h2>Agents</h2><span class="count">${v.agents.length}</span><span class="hint">first-class participants, each with a track record</span></header>
     <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
-      <div class="top">${who(a.name, a.model)}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
+      <div class="top">${who(a.name, a.model, { job: true })}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
       <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}${a.via ? ` · <span title="Who answers for this agent's token">${esc(a.via)}</span>` : ''}</div>
       ${a.tokens.length ? `<div class="model ${a.tokens.length > 1 ? 'warn' : ''}" title="${a.tokens.length > 1 ? 'More than one token has acted under this name' : 'The token this agent connects with'}">token: ${esc(a.tokens.join(', '))}</div>` : ''}
       ${a.has?.length ? `<div class="model" title="What this agent's machine can do (declared at checkin)">has: ${esc(a.has.join(', '))}</div>` : ''}
@@ -917,7 +929,7 @@ function activity(v) {
       const has = e.summary || e.detail || e.data?.evidence?.length;
       return `<div class="row-item ${has ? 'clickable' : ''}" ${has ? `data-action="toggle" data-key="${key}"` : ''}>
         <span class="type">${esc(e.type.replace('_', ' '))}</span>
-        <div class="body"><div class="h">${e.item ? refLink(e.item) + ' ' : ''}${esc(e.headline)}</div>
+        <div class="body"><div class="h">${e.item ? refLink(e.item) + ' ' : ''}${named(e.headline, e.actor, undefined, { beside: true })}</div>
           ${open ? `<div class="expand">${md(e.summary)}${e.data?.evidence?.length ? `<div class="evidence">${e.data.evidence.map((x) => `<span class="ev">${esc(x.label)}</span>`).join('')}</div>` : ''}${e.detail ? `<pre>${esc(e.detail)}</pre>` : ''}</div>` : ''}</div>
         <span class="age">${who(e.actor)} · ${esc(e.ago)}</span></div>`;
     }).join('')}</div></section>`;
@@ -944,7 +956,7 @@ function renderDrawer() {
   const holderLine = {
     proposed: it.holder
       ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
-      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${esc(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
+      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${who(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
     ready: `<b>Ready</b> for ${it.race > 1 ? `${it.race} agents at once (a race)` : 'any agent'} · waiting ${esc(it.in_stage)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
     active: it.race > 1
       ? `<b>Race of ${it.race}</b> · ${esc(it.in_stage)} so far · ${it.racers.map((r) => `${who(r.agent, r.model)} ${r.stage === 'active' ? `on it, lease ${esc(r.lease_left)} left` : esc(r.stage)}`).join(' · ') || 'no one yet'}`
@@ -1029,7 +1041,7 @@ function renderDrawer() {
     <div class="d-sec"><div class="label">Timeline <span class="count">${it.events.length} events</span></div><div class="timeline">
       ${it.events.map((e) => `<div class="tl t-${e.type} ${dotClass(e.type, courtOf)}">
         <div class="meta">${who(e.actor)}<span>${esc(e.type.replace('_', ' '))}</span><span>${esc(e.ago)} ago</span></div>
-        <div class="h">${esc(e.headline)}</div>
+        <div class="h">${named(e.headline, e.actor, undefined, { beside: true })}</div>
         ${e.summary ? `<div class="sm">${md(e.summary)}</div>` : ''}
         ${e.data?.evidence?.length ? `<div class="evidence">${e.data.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : ''}
         ${e.detail ? `<details><summary>Detail</summary><pre>${esc(e.detail)}</pre></details>` : ''}
