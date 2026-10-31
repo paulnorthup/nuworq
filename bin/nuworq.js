@@ -490,6 +490,8 @@ const browserServer = (name) => ({
 // servers; plugins come from settings, so every plugin installed on this machine is turned off for the worker.
 // Otherwise one installed for a checkout (--scope local) follows into every worktree of it, with its own MCP
 // server (a second, unscoped nuworq identity), skills and tool definitions in each worker's context.
+// Skills in ~/.claude/skills (nuworq-operator among them) aren't plugins: --disable-slash-commands keeps every
+// skill and command out (#368). A worker needs none: its task and the nuworq MCP server's instructions say it all.
 function workerSettings() {
   let plugins = {};
   try {
@@ -583,7 +585,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     // --proxy: Claude Code's traffic goes to llm-proxy's Anthropic route with the proxy's owner token (not the
     // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed.
     const via = flags.proxy === undefined ? '' : `ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN" \\\n  `;
-    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
