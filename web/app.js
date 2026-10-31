@@ -1167,6 +1167,9 @@ async function modelRouting(on) {
   $('#modal .switch')?.focus();
 }
 
+// A watchable project's public page (#358), beside this app: /live/<slug>, or /w/<workspace>/live/<slug>.
+const liveLink = (slug) => `${location.origin}${location.pathname.replace(/[^/]*$/, '')}live/${encodeURIComponent(slug)}`;
+
 // A project's settings (#213), changed about monthly, so one step from the header rather than in it. One row
 // each: a fixed name, what it does, one control. A switch shows on or off; a button says what it does.
 function settingsModal() {
@@ -1181,6 +1184,10 @@ function settingsModal() {
       sw('runner', !!P.runner, P.runner ? 'runner-off' : 'runner-on'))}
     ${row('fresh', 'Keep it fresh weekly', 'Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade.',
       sw('fresh', !!P.fresh, P.fresh ? 'fresh-off' : 'fresh-on'))}
+    <div data-new="live-view">${row('live', 'Anyone can watch', P.live
+    ? `On: anyone with <a href="${esc(liveLink(P.slug))}" target="_blank" rel="noopener">the link</a> sees item titles, agents, models, Flow and totals. Nothing else.`
+    : 'A public, read-only page of what agents are doing here. Off until you turn it on.',
+    sw('live', !!P.live, P.live ? 'live-off' : 'live-on'))}</div>
     ${row('github', 'GitHub', P.github ? 'Connected: pull requests and CI results link to items.' : 'Link pull requests and CI results to items.',
       `<button class="btn${P.github ? '' : ' primary'}" data-action="github">${P.github ? 'Manage' : 'Connect GitHub'}</button>`)}
     <h3>This project</h3>
@@ -1630,6 +1637,10 @@ const ACTIONS = {
   'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
   'fresh-on': () => setting({ fresh: true }, 'The weekly freshness sweep is on'),
+  'live-on': () => {
+    if (confirm(`Let anyone watch ${S.view.project.name}, without signing in?\n\nPublic at ${liveLink(S.view.project.slug)}: item numbers and titles, their stage, the agent and model on each, Flow, recently landed items, and totals (landed, sent back, median cycle time, cost per landed).\n\nNever public: summaries, details, evidence, field notes, questions, answers, steering, decisions, emails, tokens or machine names.\n\nYou can turn it off any time.`)) setting({ live: true }, 'Anyone with the link can watch this project');
+  },
+  'live-off': () => { if (confirm('Take the live view down? Its link stops working at once (copies a proxy cached expire within 15 seconds).')) setting({ live: false }, 'The live view is down'); },
   'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) setting({ fresh: false }, 'The weekly freshness sweep is off'); },
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
