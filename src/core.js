@@ -938,9 +938,11 @@ export class Hub extends EventEmitter {
     return e?.from ? `${e.priority} (from #${e.from})` : undefined;
   }
 
-  // Proposals an agent could claim to shape right now.
+  // Proposals an agent could claim to shape right now. An issue flagged stale waits for the human's
+  // "close these?" answer, not for shaping (Keep them all clears the flag).
   shapeable(p) {
-    return this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'proposed' AND holder IS NULL ORDER BY seq`).all(p.id)
+    return this.q(`SELECT * FROM items i WHERE project_id = ? AND stage = 'proposed' AND holder IS NULL
+      AND NOT EXISTS (SELECT 1 FROM issues s WHERE s.item_id = i.id AND s.stale != '' AND s.state = 'open') ORDER BY seq`).all(p.id)
       .filter((i) => !this.openQuestions(i, { blocking: true }).length)
       .filter((i) => !(p.autonomy === 'ask' && i.acceptance)); // shaped, waiting for the human's approval
   }
