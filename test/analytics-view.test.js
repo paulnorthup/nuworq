@@ -102,7 +102,9 @@ describe('analytics', () => {
     const rules = [...css.matchAll(/(^|\n)([^{}\n]*\.an-[^{}\n]*)\{([^}]*)\}/g)];
     assert.ok(rules.length >= 8);
     for (const r of rules) assert.doesNotMatch(r[3], /var\(--(you|agents|queue|ok|warn|bad)(-tint|-line)?\)/, r[2]);
-    for (const sel of ['.an-open', 'a.an-name', '.an-more']) assert.match(css, new RegExp(`${sel.replace('.', '\\.')} \\{[^}]*min-height: 44px;`), sel);
+    for (const sel of ['a.an-name', '.an-more']) assert.match(css, new RegExp(`${sel.replace('.', '\\.')} \\{[^}]*min-height: 44px;`), sel);
+    // The home's Analytics ends the Depth row (#394): the control's height with a mouse, thumb-sized on a phone.
+    assert.match(css, /@media \(max-width: 860px\) \{[^@]*\.ctl-row > \.btn \{[^}]*min-height: 44px;/);
   });
 
   test('owners open it from the home; #/analytics is its address', () => {

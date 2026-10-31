@@ -337,7 +337,7 @@ function renderRail() {
     <button class="rail-item rail-search" data-action="launcher" data-new="launcher" title="Quick launcher: go to an item, a project or a setting"><span>Search</span><kbd class="kbd-hint">${MAC ? '⌘K' : 'Ctrl K'}</kbd></button>
     <button class="rail-item rail-menu" data-action="rail-menu" aria-expanded="${!!S.railMenu}"><span data-new="phone-menu">${S.railMenu ? 'Close' : 'Menu'}</span></button><span class="rail-break"></span>
     <a class="rail-label rail-head ${!S.slug && !S.analytics ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${needYou(total)}">${total}</span>` : ''}</a>
-    ${projects || '<div class="rail-item" style="color:var(--muted)">No projects yet</div>'}
+    ${projects || '<div class="rail-item rail-empty">No projects yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
       <button class="rail-item" data-action="archived">Archived projects</button>
@@ -393,12 +393,12 @@ function overview() {
     const gs = getStarted();
     return `<div class="phead"><div class="titles"><h1>Welcome to nuworq</h1>
       <div class="mission">A hub where you facilitate and AI agents (Claude, OpenAI, open-weight) find, do and verify the work.</div></div></div>
-      ${gs || `<div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" style="padding:0;font-size:inherit;text-decoration:underline" data-action="new-project">create one now</button>.
-      <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`}`;
+      ${gs || `<div class="zero"><span class="check">→</span><div>No projects yet. Connect an agent and it will create one when it checks in, or <button class="link" data-action="new-project">create one now</button>.
+      <button class="btn primary" data-action="connect">Connect an agent</button></div></div>`}`;
   }
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
-      <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div>
-      ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div>
+      <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}
+      ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div></div>
     ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, gs: getStarted() })}`;}
 
 // ── project ──
@@ -422,8 +422,8 @@ function project(v) {
       <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
-        ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>
-        <button class="btn settings-btn" data-action="settings" data-new="project-settings" title="Staffing, freshness, GitHub, park or remove">Settings</button>` : ''}
+        ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}
+        <button class="btn settings-btn" data-action="settings" data-new="project-settings" title="Staffing, freshness, GitHub, park or remove">Settings</button></div>` : ''}
       </div>
     </div>
     ${!P.runner && P.staffing && !P.staffing.asked ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
@@ -464,7 +464,7 @@ function projectBody(v, empty) {
 function emptyProject() {
   return `<section class="sec"><div class="zero"><span class="check">→</span><div>
     <b>No work yet.</b> Add some above, or connect an agent and let it propose what matters.
-    <div style="margin-top:8px"><button class="btn primary small" data-action="connect">Connect an agent</button></div></div></div></section>`;
+    <button class="btn primary small" data-action="connect">Connect an agent</button></div></div></section>`;
 }
 
 function pulse(v) {
@@ -509,7 +509,7 @@ function composer(v) {
           <button class="btn primary small" data-action="compose-send">Send</button>
         </div>
       </div>
-      <button class="btn" data-action="toggle-add" style="height:40px" data-new="propose-work" aria-expanded="${!!S.addWork}">${S.addWork ? 'Close' : '+ Work'}</button>
+      <button class="btn" data-action="toggle-add"data-new="propose-work" aria-expanded="${!!S.addWork}">${S.addWork ? 'Close' : '+ Work'}</button>
     </div>
     ${S.addWork ? proposeForm({ more: S.addMore, priority: S.drafts['nw-priority'] ?? 'soon', autonomy: v?.project.autonomy }) : ''}`;
 }
@@ -749,7 +749,7 @@ function worthKnowing(v) {
     // "Got it" is for news; next to a real action, dismissing just hides it.
     else if (/data-action="(open|connect|notify)"/.test(acts)) acts = acts.replace('>Got it</button>', '>Hide</button>');
     return `<div class="row-item"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
-      ${z() >= 2 && a.why ? `<div class="s" style="margin-top:4px">${esc(a.why)}</div>` : ''}${a.how?.length ? howList(a.how) : ''}</div><div class="acts">${acts}</div></div>`;
+      ${z() >= 2 && a.why ? `<div class="s" style="margin-top:var(--sp-1)">${esc(a.why)}</div>` : ''}${a.how?.length ? howList(a.how) : ''}</div><div class="acts">${acts}</div></div>`;
   }).join('');
   return `<section class="sec"><header><h2>Worth knowing</h2><span class="count">${know.length}</span><span class="hint">agents carried on without you; glance and confirm, or redirect</span></header><div class="rows">${rows}</div></section>`;
 }
@@ -902,8 +902,8 @@ function steering(v) {
     <div class="acts"><span class="age">${esc(n.ago)} ago</span><button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button></div></div>`).join('');
   const sub = (label, hint) => `<div class="sublabel">${label}<span>${hint}</span></div>`;
   return `<section class="sec"><header><h2>Steering &amp; memory</h2><span class="hint">did your nudges land, and what every agent carries into every session</span></header>
-    ${steers ? `${sub('Your steering', 'acknowledged by')}<div class="rows" style="margin-bottom:14px">${steers}</div>` : ''}
-    ${decisions ? `${sub('Decisions', 'standing rules, from you')}<div class="rows" style="margin-bottom:14px">${decisions}</div>` : ''}
+    ${steers ? `${sub('Your steering', 'acknowledged by')}<div class="rows" style="margin-bottom:var(--sp-4)">${steers}</div>` : ''}
+    ${decisions ? `${sub('Decisions', 'standing rules, from you')}<div class="rows" style="margin-bottom:var(--sp-4)">${decisions}</div>` : ''}
     ${notes ? `${sub('Field notes', 'what agents learned the hard way, left for the next one')}<div class="rows">${notes}</div>
       ${v.notes.length > shownNotes.length ? `<div class="zoom-more">${v.notes.length} field notes in all; every one at 30m</div>` : ''}` : ''}
   </section>`;
@@ -944,7 +944,7 @@ function agents(v) {
         <div><b>${a.record.stalls}</b><span>stalls</span></div>
         <div><b>${a.record.handoffs}</b><span>handoffs</span></div>
       </div>
-      <div class="model" style="margin-top:6px">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${esc(a.last_seen)} ago</div>
+      <div class="model" style="margin-top:var(--sp-2)">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${esc(a.last_seen)} ago</div>
     </div>`).join('')}</div></section>`;
 }
 
@@ -1309,7 +1309,7 @@ async function connect() {
     <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}
     <h4>Any agent with a shell (no MCP needed)</h4>${commandBlocks(c.guide)}
-    <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>
+    <p class="lead" style="margin-top:var(--sp-2)">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>
     <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>x-nuworq-agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>`
       : '<p class="lead">Setting an agent tool up by hand, or your own agent loop? It\'s at <button class="link" data-action="connect-deep">depth 30m</button>.</p>'}
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
@@ -1470,7 +1470,7 @@ async function loadRepos(q, page) {
       ? `<div class="row-item"><div class="body"><div class="h">${esc(x.repo.replace('github.com/', ''))}</div><div class="s">already the project <a data-action="goto" data-slug="${esc(x.project)}">${esc(x.project)}</a></div></div></div>`
       : `<button class="row-item clickable pick-repo" data-action="pick-repo" data-repo="${esc(x.repo)}" data-desc="${esc(x.description)}"><div class="body"><div class="h">${esc(x.repo.replace('github.com/', ''))}${x.private ? ' <span class="tag">private</span>' : ''}</div>${x.description ? `<div class="s">${esc(x.description)}</div>` : ''}</div></button>`).join('');
     box.innerHTML = (page > 1 ? box.dataset.html ?? '' : '') + (rows ? `<div class="rows">${rows}</div>` : (page === 1 ? `<p class="faint">${q ? 'No repository matches.' : `The app is installed on no repositories yet. ${installLink('Install it on your repositories')}, then come back here.`}</p>` : ''))
-      + (rows && page === 1 && !q ? `<p class="faint" style="margin-top:8px">Not listed? ${installLink('Install the app on more repositories')}.</p>` : '');
+      + (rows && page === 1 && !q ? `<p class="faint" style="margin-top:var(--sp-2)">Not listed? ${installLink('Install the app on more repositories')}.</p>` : '');
     box.dataset.html = box.innerHTML;
     if (r.next_page) box.insertAdjacentHTML('beforeend', `<button class="btn ghost small" data-action="more-repos" data-q="${esc(q)}" data-page="${r.next_page}">More</button>`);
   } catch (e) { box.innerHTML = `<p class="faint">${errorHtml(e, esc)}</p>`; }

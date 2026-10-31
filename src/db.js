@@ -440,6 +440,10 @@ export function openDb(file) {
     "ALTER TABLE projects ADD COLUMN model_quality TEXT NOT NULL DEFAULT 'balanced'",
     "ALTER TABLE items ADD COLUMN route_why TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE items ADD COLUMN breaking TEXT NOT NULL DEFAULT ''", // who must do what when it lands; '' breaks nobody (#398)
+    // When an item's needs last changed, and when an agent last gained a tag (#406): a ready item that newly
+    // matches an operator is pushed to its listener once, from then.
+    'ALTER TABLE items ADD COLUMN needs_since INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE agents ADD COLUMN has_since INTEGER NOT NULL DEFAULT 0',
     // Releases (#399): 'milestone' proposes one when a milestone finishes; 'off' never does.
     "ALTER TABLE projects ADD COLUMN releases TEXT NOT NULL DEFAULT 'off'",
     'ALTER TABLE items ADD COLUMN release INTEGER NOT NULL DEFAULT 0', // 1: a "Release vX.Y.Z" item the hub drafted

@@ -2,7 +2,9 @@
 .login-card { width: min(400px, 100%); background: var(--panel); border: var(--rule) solid var(--line); border-radius: var(--r-m); padding: var(--sp-7) var(--sp-7) var(--sp-5); box-shadow: var(--e-1); display: flex; flex-direction: column; gap: var(--sp-3); }
 .login-card .brand { padding: 0; }
 .login-card .lead { margin: 0; color: var(--muted); }
-.login-card .btn { padding: var(--sp-2) var(--sp-3); }
+/* Every field and button thumb-sized (#394), like the rest of the app on a phone. */
+.login-card .btn, .login-card input { min-height: 44px; padding: var(--sp-2) var(--sp-3); }
+.login-card a.btn { display: flex; align-items: center; justify-content: center; }
 .login-card .hint { margin: var(--sp-1) 0 0; font-size: var(--fs-2); color: var(--muted); }
 .login-error { color: var(--bad); font-size: var(--fs-3); }
 .login-providers { display: flex; flex-direction: column; gap: var(--sp-2); padding-bottom: var(--sp-3); border-bottom: var(--rule) dashed var(--line); }

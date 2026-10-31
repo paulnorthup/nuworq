@@ -165,6 +165,48 @@ describe('an operator waits on the hub', () => {
     assert.deepEqual(strip(operatorEvents(hub, '', { since, session: fresh })), [], 'once its own operator checked in, only that one');
   });
 
+  // #406: an item already ready that newly matches the operator was never pushed: the wait keyed on stage_since.
+  test('a ready item that newly matches comes once: its needs changed, its last dependency finished, or the operator gained the tag', async () => {
+    const { hub, tick } = setup();
+    hub.humanOp('o', 'create', { title: 'Anyone for now', acceptance: 'x' });
+    hub.humanOp('o', 'create', { title: 'GitHub settings', acceptance: 'x', needs: ['github-admin'] });
+    hub.humanOp('o', 'create', { title: 'First', acceptance: 'x' });
+    hub.humanOp('o', 'create', { title: 'After it', acceptance: 'x', needs: ['infra'], depends_on: ['#3'] });
+    let since = hub.now();
+    tick(1);
+    assert.deepEqual(strip(operatorEvents(hub, 'op', { since })), [], 'nothing it can take yet');
+
+    const waiting = waitFor(hub, 'op', { since, ms: 5000 });
+    hub.agentOp('o', 'refine', 'w1', { item: '#1', needs: ['infra'] });
+    let r = await waiting;
+    assert.deepEqual(r.events, [{ kind: 'item', project: 'o', item: '#1' }], 'needs refined onto a tag it has');
+    since = r.at;
+    tick(1);
+    hub.move(hub.q('SELECT * FROM items WHERE seq = 3').get(), 'done', 'w1');
+    r = await waitFor(hub, 'op', { since, ms: 5000 });
+    assert.deepEqual(r.events, [{ kind: 'item', project: 'o', item: '#4' }], 'its dependency finished');
+    since = r.at;
+    tick(1);
+    hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] });
+    assert.deepEqual(strip(operatorEvents(hub, 'op', { since })), [], 'checking in again with the same tags pushes nothing');
+    hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra', 'github-admin'] });
+    r = await waitFor(hub, 'op', { since, ms: 5000 });
+    assert.deepEqual(r.events.map((e) => e.item).sort(), ['#1', '#2', '#4'], 'a tag gained: what it can take now, once');
+    assert.deepEqual(strip(operatorEvents(hub, 'op', { since: r.at })), [], 'once');
+  });
+
+  test("an item that became ready without a change event still reaches the next answer, not skipped by its since", async () => {
+    const { hub, tick } = setup();
+    const since = hub.now();
+    tick(1);
+    const waiting = waitFor(hub, 'op', { since, ms: 30 });
+    hub.emit = () => true; // a write path that forgot to announce itself
+    hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
+    delete hub.emit;
+    const r = await waiting;
+    assert.deepEqual(r.events, [{ kind: 'item', project: 'o', item: '#1' }], 'the last look before the empty answer finds it');
+  });
+
   test('a listening operator counts as connected: Needs you says none is only when none has been here', async () => {
     const { hub, tick } = setup();
     hub.agentOp('o', 'ask', 'w1', { question: 'Prod check?', to: 'operator' });
@@ -375,6 +417,59 @@ describe('GET /api/wait and nuworq wait', () => {
         assert.equal(r.stdout, line, r.stderr);
         assert.equal(r.exited, null);
       } finally { hub.close(); }
+    });
+
+    // #406: a wait that never answers (left hanging across a restart) is given up and asked again with the same since.
+    test('an answer long overdue is asked again with the same since', async () => {
+      const hub = await fake((n, _req, res) => (n === 1 ? null : n === 2 ? event(res, 5) : null));
+      try {
+        const r = await listenUntil(hub, (out) => out.includes(line), '--as', 'op', '--timeout', '0.2', '--grace-ms', '200');
+        assert.equal(r.stdout, line, r.stderr);
+        assert.equal(r.exited, null);
+        assert.deepEqual(hub.asked.slice(0, 2), ['0', '0']);
+      } finally { hub.close(); }
+    });
+
+    // #406: the listener waits on one hub process; the hub restarts (a new process on the same database and port,
+    // as serve --follow does it), then an item becomes ready there.
+    test('a real hub restarted under a waiting listener: the item that becomes ready on the new one reaches it', async () => {
+      const file = join(mkdtempSync(join(tmpdir(), 'nuworq-wait-')), 'hub.db');
+      const first = new Hub({ file });
+      first.tx(() => first.project('o', { create: true }));
+      first.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] });
+      let server = createServer(first);
+      const port = await listen(server);
+      const env = { ...process.env, NUWORQ_URL: `http://127.0.0.1:${port}`, NUWORQ_TOKEN: '', NUWORQ_AGENT: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
+      const child = execFile(process.execPath, [bin, 'wait', '--operator', '--follow', '--as', 'op', '--retry-ms', '50'], { env });
+      let stdout = '';
+      child.stdout.on('data', (d) => { stdout += d; });
+      const until = async (ok, what) => {
+        for (const end = Date.now() + 10_000; !ok();) {
+          if (Date.now() > end) throw new Error(`timed out waiting for ${what}; printed ${JSON.stringify(stdout)}`);
+          await new Promise((res) => setTimeout(res, 20));
+        }
+      };
+      let second;
+      try {
+        await until(() => first.listenerCount('change') > 0, 'the listener to wait on the first hub');
+        server.close();
+        server.closeAllConnections(); // the old process exits
+        first.db.close();
+        second = new Hub({ file });
+        server = createServer(second);
+        await new Promise((res) => server.listen(port, '127.0.0.1', res));
+        await until(() => second.listenerCount('change') > 0, 'the listener to wait on the new hub');
+        const ready = Date.now();
+        second.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
+        await until(() => stdout.includes(line), 'the line');
+        assert.equal(stdout, line);
+        assert.ok(Date.now() - ready < 1000, `within a second (${Date.now() - ready} ms)`);
+      } finally {
+        child.kill();
+        server.close();
+        server.closeAllConnections();
+        second?.db.close();
+      }
     });
 
     test('away for long, it says so once and keeps trying', async () => {
