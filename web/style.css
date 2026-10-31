@@ -461,7 +461,7 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 /* The hub's own pages (join, early access, requests): one narrow column. */
 main.narrow { max-width: 560px; margin: 0 auto; padding: 48px 20px 80px; }
 main.narrow h1 { margin-bottom: 14px; }
-main.narrow .faint, .setup .faint, .dialog .faint { color: var(--muted); font-size: 12.5px; }
+main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--muted); font-size: 12.5px; }
 .setup > :first-child, .dialog > :first-child { margin-top: 0; }
 .btn:disabled { opacity: .45; cursor: default; }
 .dialog .lead code { overflow-wrap: anywhere; } /* a long URL in a sentence wraps instead of widening a phone's dialog */
