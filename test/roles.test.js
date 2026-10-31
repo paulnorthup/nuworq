@@ -239,8 +239,8 @@ describe('claims, usage and presence carry the role', () => {
   });
 });
 
-// #241: the guide and both skills say how each role starts, what it may take and what it never does.
-describe('the guide and both skills describe the roles', () => {
+// #241: the guide, the worker skill and the shaper skill say how each role starts, what it may take and what it never does.
+describe('the guide and the worker and shaper skills describe the roles', () => {
   const texts = { guide: guide(), 'cli guide': guide({ via: 'cli' }), skill: skill(), 'shaper skill': shaperSkill() };
   test('each names Operator, Shaper and Worker and how each starts', () => {
     for (const [name, t] of Object.entries(texts)) {

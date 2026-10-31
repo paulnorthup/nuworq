@@ -21,7 +21,7 @@ export function connectCommands(info, page = null, slug = 'my-project') {
     // Keep workers going wherever work is waiting, across projects; one worker on its own.
     run: 'nuworq run --workers 3 --agent claude',
     worker: 'nuworq worker --agent claude --run',
-    // Optional, for Claude Code (#97): the MCP server and both skills as one plugin, as in the README.
+    // For Claude Code (#97, #432): the MCP server, /nuworq:shaper and /nuworq:operator as one plugin, as in the README.
     plugin: 'claude plugin marketplace add paulnorthup/nuworq\nclaude plugin install nuworq@nuworq',
     // By hand (what connect does for you): no token, no address, no path.
     claude: 'claude mcp add --scope user nuworq -- nuworq mcp',
