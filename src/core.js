@@ -1582,7 +1582,6 @@ export class Hub extends EventEmitter {
     // Each option carries the priority it ranks by: its group's or a dependent's when that is higher (#198).
     const eff = this.effectivePriorities(p);
     const ranked = (x) => ({ ...x, priority: eff.get(x.item.id)?.priority ?? x.item.priority });
-    // An operator session takes what only it can do before anything else (#137): anyone can do the rest.
     const operator = role === 'operator' || !!fit.has?.includes('operator');
     // A review waits while a reviewer's question on it is open (#259): for an operator's answer, only
     // operators get it meanwhile; for the human's, nobody does. An open operator question from its builder
@@ -1626,9 +1625,11 @@ export class Hub extends EventEmitter {
     const large = (x) => (fit.weak && x.item.size === 'large' ? 1 : 0);
     // Work that needs what this agent's machine has goes to it first: few agents can do it, anyone can do the rest.
     const own = (x) => (fit.has && json(x.item.needs, []).length ? 0 : 1);
-    const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].map(ranked).sort((a, b) =>
+    // An operator builds only what only it can do, the live steps (#137, #333): workers build the rest, and an
+    // attended session spent on a worker's build is one not answering operator questions. It may still claim one.
+    const mine = (x) => !operator || operatorOnly(x.item);
+    const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].filter(mine).map(ranked).sort((a, b) =>
       large(a) - large(b) ||
-      (operator ? own(a) - own(b) : 0) ||
       PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       (b.mode === 'tidy') - (a.mode === 'tidy') || // groups are how a person steers: true groups first, and it's quick (#202)
       own(a) - own(b) ||
@@ -2214,10 +2215,13 @@ const AGENT_OPS = {
       // Waiting on dependencies counts only work this token could take once they're done.
       const canBuild = !this.caller?.powers || this.caller.powers.includes('build');
       const blocked = canBuild ? open.filter((i) => !unfit.includes(i) && this.unmetDeps(i).length).length : 0;
+      // Ready work an operator leaves to workers (#333).
+      const workers = this.isOperator(p, agent) ? open.filter((i) => !operatorOnly(i) && !unfit.includes(i) && !this.unmetDeps(i).length) : [];
       return {
         mode: 'idle',
         hint: [
-          `Nothing is ready${unfit.length ? ' for you' : ''} or waiting to be shaped right now.`,
+          `Nothing is ready${unfit.length || workers.length ? ' for you' : ''} or waiting to be shaped right now.`,
+          workers.length ? `${workers.map((i) => `#${i.seq}`).join(', ')} ${workers.length === 1 ? 'is' : 'are'} ready, but workers build ${workers.length === 1 ? 'it' : 'them'}: an operator takes only the live steps. Go idle; claim one only if the person asks you to.` : '',
           gave.length ? `You handed off ${gave.map((i) => `#${i.seq}`).join(', ')}, so it's left for other agents for now (claim it if you really can do it now).` : '',
           unfit.length ? `${unfit.map((i) => `#${i.seq} needs ${json(i.needs, []).filter((t) => !has.includes(t)).join(', ')}`).join('; ')}, which you didn't declare at checkin (has). If your machine has it, check in again with has.` : '',
           blocked ? `${blocked} ready item(s) are waiting on dependencies or their own sub-items.` : '',

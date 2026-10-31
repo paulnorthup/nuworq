@@ -45,6 +45,8 @@ export function operatorStart(has = null) {
 }
 // The line an operator session listens to: one line per event, ids and kinds only (see `nuworq wait`).
 export const OPERATOR_WAIT = 'nuworq wait --operator --follow';
+// What an operator's next hands it (#333), in the same words for the operator skill and the guide.
+export const OPERATOR_NEXT = 'An operator\'s `next` hands it operator questions first, then reviews and landing, then operator-only items (the live steps). It never offers an operator ordinary work: workers build that, and an operator claims an item only when the person asks.';
 // When an operator asks the human (#312), in the same words for the skill, the operator skill and the guide:
 // keep work moving, and ask only for what only the human can do. t formats a tool name for the text it goes in.
 export const operatorAsks = (t = (op) => `\`${op}\``) => [
@@ -296,7 +298,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 
 ## Roles
 Your role comes from how you started and is fixed for the session. \`checkin\` says which you are.
-- **Operator:** started with the nuworq-operator skill (\`nuworq operator\` prints how), checks in with \`operator\` in \`has\`. Takes operator questions and operator-only work first, then anything else.
+- **Operator:** started with the nuworq-operator skill (\`nuworq operator\` prints how), checks in with \`operator\` in \`has\`. Takes operator questions, reviews and landing, and operator-only work; workers build the rest.
 - **Shaper:** started with the nuworq-plan skill (checkin role "shaper"). Takes only proposals to shape. Never builds, reviews or lands.
 - **Worker:** started by a runner (\`nuworq run\`). Builds, reviews and lands. Never builds operator-only work (it may review and land it) and never declares \`operator\`.
 - **Session:** any other agent, e.g. one a person opened. Takes any work but operator-only work.
@@ -379,7 +381,7 @@ argument-hint: <capabilities, e.g. macos,browser,claude-cli>
 The person started you as the operator: a trusted, attended session with their permissions and safety checks. Capabilities they gave you: $ARGUMENTS
 
 1. **Check in:** ${op('checkin')} with \`has\` = \`["operator"]\` plus each capability above, comma-separated (none given: just \`["operator"]\`). Declare nothing else. ${op('ack')} any steering.
-2. **Work until nothing waits:** take ${op('next')} again and again. It hands you operator questions first (mode answer: settle each and ${op('answer')} it), then operator-only work, then anything else. Stop when it says there is nothing for you.
+2. **Work until nothing waits:** take ${op('next')} again and again. Mode answer is an operator question: settle it and ${op('answer')} it. ${OPERATOR_NEXT} Stop when it says there is nothing for you.
 3. **Then go idle. Don't loop, poll or sleep:** end your turn. A listener runs \`${OPERATOR_WAIT}\`, which holds one open request to the hub and prints one line when something is there for you, e.g. "nuworq: operator work waiting (#219). Run next." Each line starts a new turn: ${op('checkin')} if it is an answer or steering, then ${op('next')} as in step 2, then go idle again.
    - **Check it is running before you trust it:** \`pgrep -lf -P "$PPID" "nuworq wait --operator"\`. The nuworq plugin should have started it when this skill ran, but it may not have (an older Claude Code, no workspace trust, or a feature flag). \`-P "$PPID"\` matches only this session's listener, not another operator session's on this machine. A line back means it is running: nothing to do.
    - **None running** (with or without the plugin): start it yourself with the Monitor tool, command \`${OPERATOR_WAIT}\`, description "nuworq operator listener". Re-arm it when it ends; that is the only time you act without a line.
@@ -451,8 +453,8 @@ Every session has one role, from how it started and fixed for its life. ${c('che
 ## Operators
 Some work needs a capable session more than a decision: running \`claude\`, the hub's own infrastructure, a homelab VM, GitHub admin, a real browser. That goes to an operator, not to the human.
 - **Who:** a trusted, attended Claude Code session in the project folder, running with the human's permissions and safety checks. Only an operator declares \`operator\` in \`has\`, plus the capabilities it really has: \`claude-cli\`, \`infra\` (the live infrastructure of the project it checked in to: servers and VMs, DNS, cloud accounts, deploys), \`github-admin\`, \`browser\`.
-- **Work:** an item whose \`needs\` include those tags is offered only to an agent that declared all of them, and an operator gets it before other work of any priority (reviews and landing still come first). Until an operator connects, it waits quietly: the human isn't asked to start an agent for it. Set \`needs\` when you ${c('propose')} work only an operator can do, and shape infra work in two parts (see **shape** above): what has code to change carries no operator tag.
-- **What an operator builds:** an item only when the item is the live step itself. Otherwise it answers operator questions and keeps the queue moving; workers build the rest.
+- **Work:** an item whose \`needs\` include those tags is offered only to an agent that declared all of them. Until an operator connects, it waits quietly: the human isn't asked to start an agent for it. Set \`needs\` when you ${c('propose')} work only an operator can do, and shape infra work in two parts (see **shape** above): what has code to change carries no operator tag.
+- **What an operator builds:** an item only when the item is the live step itself. ${OPERATOR_NEXT}
 - **Questions:** about running something, permissions, or verifying on real infrastructure? ${c('ask')} with \`to: "operator"\`, not the human. An operator's ${c('next')} first hands it these questions (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them; the answer reaches the asker at its next checkin.
 - **Asking the human:** an operator settles what it can. As the operator:
 ${operatorAsks(c).map((r) => `  - ${r}`).join('\n')}
