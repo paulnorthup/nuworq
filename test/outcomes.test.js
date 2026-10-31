@@ -81,10 +81,12 @@ describe('GET /api/p/<project>/outcomes', () => {
     assert.deepEqual(Object.keys(two).sort(), ['attempts', 'cycle_ms', 'done_at', 'escaped', 'fixed_by', 'human_actions', 'implementer', 'item', 'model', 'outcome', 'overturned', 'repo', 'reviewer', 'reviewer_model', 'sent_back', 'size', 'stalls', 'title', 'usage']);
     assert.deepEqual(two.usage, [{ agent: 'opus', model: 'claude-opus-5-5', source: 'agent', input_tokens: 1000, output_tokens: 100, cost_usd: 0.5 }]);
     assert.deepEqual(body.by_model, [
-      { model: 'claude-opus-5-5', landed: 1, dropped: 0, sent_back: 1, stalls: 0, escapes: 0, median_cycle_ms: 3 * HOUR, input_tokens: 1000, output_tokens: 100, cost_usd: 0.5 },
-      { model: 'qwen3:8b', landed: 1, dropped: 0, sent_back: 0, stalls: 1, escapes: 0, median_cycle_ms: 5 * HOUR, input_tokens: 5000, output_tokens: 500, cost_usd: null },
-      { model: null, landed: 0, dropped: 1, sent_back: 0, stalls: 0, escapes: 0, median_cycle_ms: null, input_tokens: 0, output_tokens: 0, cost_usd: null },
+      { model: 'claude-opus-5-5', landed: 1, dropped: 0, sent_back: 1, stalls: 0, escapes: 0, median_cycle_ms: 3 * HOUR, input_tokens: 1000, output_tokens: 100, cost_usd: 0.5, cost_per_landed: 0.5, escape_rate: 0 },
+      { model: 'qwen3:8b', landed: 1, dropped: 0, sent_back: 0, stalls: 1, escapes: 0, median_cycle_ms: 5 * HOUR, input_tokens: 5000, output_tokens: 500, cost_usd: null, cost_per_landed: null, escape_rate: 0 },
+      { model: null, landed: 0, dropped: 1, sent_back: 0, stalls: 0, escapes: 0, median_cycle_ms: null, input_tokens: 0, output_tokens: 0, cost_usd: null, cost_per_landed: null, escape_rate: null },
     ]);
+    // The same per implementing agent (#237).
+    assert.deepEqual(body.by_agent.map((a) => [a.agent, a.model, a.landed, a.cost_per_landed]), [['opus', 'claude-opus-5-5', 1, 0.5], ['qwen', 'qwen3:8b', 1, null], [null, null, 0, null]]);
   });
 
   test('since/until choose the window', async () => {

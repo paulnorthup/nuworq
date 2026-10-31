@@ -65,6 +65,10 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `median_cycle_ms` | number \| null | over its landed items |
 | `input_tokens`, `output_tokens` | number | summed over its items' usage, every agent included |
 | `cost_usd` | number \| null | null if any part is unpriced or there is no usage |
+| `cost_per_landed` | number \| null | `cost_usd / landed`, to the cent; null when either is unknown or nothing landed |
+| `escape_rate` | number \| null | `escapes / landed`, two decimals; null when nothing landed |
+
+`by_agent`: the same per implementing agent (`agent: null` for items nobody implemented), with that agent's `model`.
 
 `by_reviewer`: one row per peer reviewer's model (agents only; a person's verdicts aren't scored), over the landed items in the window.
 
@@ -87,6 +91,53 @@ An item names the landed work it repairs with `fixes` (on `propose` and `refine`
 | `median_wait_ms` | number \| null | how long what needed a person (an act-level Needs you entry) waited until a person resolved it, median over those resolved in the window. Each counts from when it reached them: a blocking question from when it was asked (a reporter's once `reporter_wait` passed; an operator's only as its escalation, from when it was escalated), a review from submission (unless agents review), a proposal under autonomy `ask` from when it was shaped. Entries an agent or operator resolved don't count |
 
 **Versioning.** Fields may be added within `version: 1`; read what you know and ignore the rest. Removing or changing the meaning of a field bumps `version`, and the old version stays served for a while, announced in this file.
+
+## Outcomes across the workspace
+
+```
+GET /api/outcomes?period=14d|90d|all
+Authorization: Bearer <token>
+```
+
+For an owner deciding where agents, money and attention go: which projects need more agents, which models are worth their cost, and whether they are the wait themselves. The same figures as the project outcomes above, for every project at once.
+
+**Auth.** As for project outcomes. An agent token covers only its own projects: the others are left out, not refused.
+
+**Period.** `14d` (default), `90d` or `all`: items that finished in the last 14 or 90 days up to now, or ever. For `14d` and `90d` each project also carries the same figures for the period just before (`previous`); for `all`, `previous` is null. Any other period gets `400`.
+
+**Response.**
+
+```json
+{
+  "version": 1,
+  "period": "14d",
+  "since": 1760692800000,
+  "until": 1761902400000,
+  "takeaway": "claude-opus-5-5 lands for $1.00 an item vs $3.00 for gpt-5, with as few escapes: prefer it.",
+  "summary": { "landed": 7, "median_cycle_ms": 14400000, "cost_usd": null, "cost_per_landed": null, "escapes": 0, "escape_rate": 0, "median_wait_ms": null, … },
+  "projects": [ … ],
+  "by_model": [ … ],
+  "by_agent": [ … ]
+}
+```
+
+`projects`: one per project.
+
+| field | type | meaning |
+|---|---|---|
+| `project`, `name` | string | its slug and name |
+| `landed` | number | items that reached done in the period |
+| `median_cycle_ms` | number \| null | first claim to done, over those; null when nothing landed |
+| `cost_usd` | number \| null | the usage of the items that finished in the period (landed or dropped); null if any part is unpriced or there is no usage |
+| `cost_per_landed` | number \| null | `cost_usd / landed`, to the cent |
+| `human_actions` | number | the owner's actions in the period (as `human_actions.total` above) |
+| `median_wait_ms` | number \| null | how long what needed a person waited (as `human_actions.median_wait_ms` above) |
+| `escapes` | number | its landed items that a later item repairs |
+| `previous` | object \| null | the same fields (without `project`, `name`) for the period before; null for `all` |
+
+`by_model`, `by_agent`: as in project outcomes, over every project's finished items in the period. `summary`: the same figures for all of them together, plus `median_wait_ms` across projects.
+
+`takeaway`: one sentence naming the decision the figures suggest, or null with fewer than 3 landed items or nothing worth deciding. It checks, in order: the owner's wait (median at least an hour and a quarter of the cycle time), escapes (a fifth or more of landed work), models (with 3 or more landed and priced each, the dearest costing at least 1.5 times the cheapest per landed item, while the cheapest escapes no more often, within 10 points), and a project that landed half or less of what it did the period before. Only the first that applies is said.
 
 ## Operators: answering what agents can't settle alone
 
