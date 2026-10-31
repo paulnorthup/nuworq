@@ -55,6 +55,8 @@ export const OPS = [
       model: s('Your model id, e.g. "claude-opus-5-5", "gpt-5", "qwen3-coder".'),
       client: s('The tool you run in, e.g. "claude-code", "codex", "opencode".'),
       status: s('Optional one-line status.'),
+      role: { type: 'string', enum: ['shaper'], description: 'Optional. "shaper" when you are planning with a person: you get only proposals to shape, never building, reviewing or landing. Workers and operators are known by how they started; a role is fixed for the session.' },
+      machine: s('Optional. The machine you run on, e.g. "Paul\'s Mac", so people can tell sessions apart. The MCP server sends its host name.'),
       has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others. Only an operator (an attended session with the human\'s permissions) declares "operator" and its capabilities: claude-cli, nuworq-infra, homelab-vm, github-admin, browser.' },
     },
   },

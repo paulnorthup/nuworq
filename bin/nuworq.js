@@ -134,6 +134,10 @@ async function status(flags) {
   });
   const know = v.attention.length - act.length;
   if (know) console.log(dim(`  + ${know} worth knowing`));
+  // Who is here (#238): role, where it runs, its current job.
+  for (const a of (v.agents ?? []).filter((x) => ['working', 'quiet', 'idle'].includes(x.status))) {
+    console.log(`  ${a.role[0].toUpperCase()}${a.role.slice(1)}${a.where ? ` · ${a.where}` : ''}${a.job ? ` — ${a.job}` : ''}  ${dim(a.name)}`);
+  }
   if (act.length || know) console.log(dim(`  ${url}/#/p/${encodeURIComponent(project)}`));
 }
 
@@ -446,6 +450,8 @@ function workerSetup(target, agent, flags, s, token = null) {
   const env = {
     NUWORQ_URL: s.url, NUWORQ_PROJECT: target.slug, NUWORQ_AGENT: name,
     ...(tags.length ? { NUWORQ_HAS: tags.join(',') } : {}),
+    // A worker nuworq run started says so at checkin, with its runner (#238); a runner's token says it too.
+    ...(flags.run ? { NUWORQ_ROLE: 'worker', NUWORQ_RUNNER: hostname() } : {}),
     ...(token ? { NUWORQ_TOKEN: token } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
   };
   const task = [
