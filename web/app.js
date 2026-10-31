@@ -1138,11 +1138,17 @@ function settingsModal() {
     ${row('remove', 'Remove', 'Archive it (history kept), or delete it for good.', '<button class="btn" data-action="remove-project">Remove…</button>')}
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
-// A setting changed from the dialog shows its new state there.
+// A setting changed from the dialog shows its new state there. The redraw replaces the control that changed it,
+// so focus goes back to that row's control: otherwise it falls behind the dialog, and the next Tab or a screen
+// reader starts over from the page.
 const settingsOpen = () => !!$('#modal [data-settings]');
 async function setting(body, msg) {
+  const row = document.activeElement?.closest?.('#modal .setting')?.querySelector('.h')?.id;
   const r = await human('settings', body, msg);
-  if (settingsOpen()) settingsModal();
+  if (settingsOpen()) {
+    settingsModal();
+    if (row) $(`#${row}`)?.closest('.setting')?.querySelector(':scope > button')?.focus();
+  }
   return r;
 }
 
@@ -1473,7 +1479,7 @@ const ACTIONS = {
   },
   'runner-on': () => setting({ runner: true }, '`nuworq run` may now start workers here'),
   'runner-off': () => { if (confirm('Stop nuworq run staffing this project? Runners start no new workers here; running ones finish. Work waits until an agent takes it or you turn it back on.')) setting({ runner: false }, '`nuworq run` will no longer start workers here'); },
-  'staff-not-now': () => human('settings', { runner: false }, "Not staffed. You can let nuworq run staff it later from the project's controls"),
+  'staff-not-now': () => human('settings', { runner: false }, 'Not staffed. You can let nuworq run staff it later from Settings'),
   staffing: () => staffingModal(),
   'staffing-from-settings': () => staffingModal(true),
   'staffing-save': async () => {

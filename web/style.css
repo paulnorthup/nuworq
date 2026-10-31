@@ -489,10 +489,12 @@ main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--
 /* A project's Settings (#213): one row per setting, its name and what it does, then one control a thumb can hit. */
 .setting { display: flex; align-items: center; gap: 14px; padding: 10px 0; }
 .setting + .setting { border-top: 1px solid var(--line); }
+.setting > .body { flex: 1; min-width: 0; }
 .setting .h { font-weight: 550; }
 .setting .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .setting .staff-words { display: block; margin-top: 4px; color: var(--ink); }
-.setting .staff-words .link { min-height: 44px; padding: 0 4px; font-size: inherit; text-decoration: underline; }
+/* Change is a 44px target whose negative margins keep its line as tall as the text around it. */
+.setting .staff-words .link { display: inline-flex; align-items: center; min-height: 44px; margin: -13px 0; padding: 0 4px; font-size: inherit; text-decoration: underline; vertical-align: middle; }
 .setting > .btn { flex: none; min-height: 44px; padding: 10px 16px; }
 .dialog .back { padding: 0; margin-bottom: 8px; }
 /* A switch: off, a grey track with the knob left; on, an ink track with it right. 44px tall for a thumb. */
