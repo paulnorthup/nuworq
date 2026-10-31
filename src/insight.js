@@ -726,8 +726,10 @@ export function groupsOf(hub, p, items, { agents, openQs, t, stalled = new Map()
     const e = eff.get(g.id) ?? { priority: g.priority, from: null };
     const line = { item: ref(g), title: g.title, priority: g.priority, effective: e.priority, from: e.from ? `#${e.from}` : null,
       done: all.filter((i) => i.stage === 'done').length, total: all.filter((i) => i.stage !== 'dropped').length };
-    // What Needs you calls stalled is Stuck here too, for the same step and capability, whatever else moves.
-    const st = stalled.get(g.seq);
+    // What Needs you calls stalled is Stuck here too, for the same step and capability, whatever else moves:
+    // by the step, so a "now" sub-group or a "now" dependent outside the group counts too (#266).
+    const st = [...stalled.values()].filter((s) => members.some((i) => i.id === s.it.id))
+      .sort((a, b) => a.it.stage_since - b.it.stage_since)[0];
     if (st) {
       return { ...line, state: 'stuck', reason: st.missing.some((tag) => OPERATOR_TAGS.includes(tag))
         ? `${ref(st.it)} needs an operator (${st.missing.join(', ')}); none has checked in for 4 hours`
