@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
-import { tools, guide, skill, planSkill, operatorSkill, operatorStart } from '../src/protocol.js';
+import { tools, guide, skill, planSkill, operatorSkill, operatorStart, TAG_ALIASES } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { update, describeUpdate } from '../src/update.js';
 
@@ -196,8 +196,12 @@ function operatorCmd(flags) {
   const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
     || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
   const detected = [{ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform], chrome && 'browser'].filter(Boolean);
-  const has = ['operator', ...new Set((flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase()).filter((t) => t !== 'operator'))];
-  console.log(`${bold('Declare:')} ${has.join(', ')}${flags.has ? '' : dim('  (detected; add what else this session can really do with --has, e.g. --has macos,browser,claude-cli,nuworq-infra)')}
+  const given = (flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase());
+  const has = ['operator', ...new Set(given.map((t) => TAG_ALIASES[t] ?? t).filter((t) => t !== 'operator'))];
+  const renamed = [...new Set(given.filter((t) => TAG_ALIASES[t]))].map((t) => `${t} is now ${TAG_ALIASES[t]}`);
+  if (renamed.length) console.log(dim(`Tag renamed: ${renamed.join(', ')}.`));
+  console.log(`${bold('Declare:')} ${has.join(', ')}${flags.has ? '' : dim('  (detected; add what else this session can really do with --has, e.g. --has macos,browser,claude-cli,infra)')}
+${dim('infra: the live infrastructure of the project the session checks in to (servers and VMs, DNS, cloud accounts, deploys).')}
 ${bold('Start it:')} open Claude Code in ${project}'s folder (the terminal or the desktop app's Code tab) and type:
 
 ${operatorStart(has)}
@@ -1335,7 +1339,9 @@ ${bold('Setup')}
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
   guide [--via cli|tools]                the agent guide
   operator [--project p] [--has tags]    print the tags an operator session declares and the line that starts it
-                                         to paste into Claude Code in the project folder (runs nothing)
+                                         to paste into Claude Code in the project folder (runs nothing). Operator
+                                         tags: claude-cli, infra (the project's live infrastructure: servers and
+                                         VMs, DNS, cloud accounts, deploys), github-admin, browser
   wait --operator [--follow] [--as name] block until there is something for an operator (its work, a question
                                          to it, an answer, steering) and print one line; --follow: one per event.
                                          Without --as: the operators that checked in with this token

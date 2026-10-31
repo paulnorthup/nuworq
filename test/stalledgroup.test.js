@@ -6,13 +6,13 @@ import { readFileSync } from 'node:fs';
 
 const DAY_PLUS = 25 * HOUR; // past a day: the Worth knowing line's window
 
-// "Signup website" (#1, a group) whose next step #2 needs nuworq-infra; the clock moves.
+// "Signup website" (#1, a group) whose next step #2 needs infra; the clock moves.
 function setup(priority = 'now') {
   let t = Date.UTC(2026, 10, 2, 9);
   const hub = new Hub({ clock: () => t });
   hub.tx(() => hub.project('site', { create: true, name: 'Site' }));
   hub.humanOp('site', 'create', { title: 'Signup website', acceptance: 'people can sign up', priority });
-  hub.humanOp('site', 'create', { title: 'Point the DNS at the hub', acceptance: 'resolves', priority: 'soon', parent: '#1', needs: ['nuworq-infra'] });
+  hub.humanOp('site', 'create', { title: 'Point the DNS at the hub', acceptance: 'resolves', priority: 'soon', parent: '#1', needs: ['infra'] });
   hub.agentOp('site', 'checkin', 'w1', { has: ['macos'] });
   const v = () => view(hub, 'site');
   const stalled = () => v().attention.filter((a) => a.kind === 'group-stalled');
@@ -27,11 +27,11 @@ describe('a "now" group stalled on a capability reaches Needs you (#201)', () =>
     tick(2 * MIN);
     const [a] = stalled();
     assert.equal(a.level, 'act');
-    assert.equal(a.headline, '"Signup website" is stalled: #2 needs nuworq-infra');
+    assert.equal(a.headline, '"Signup website" is stalled: #2 needs infra');
     assert.equal(a.group, '#1');
     assert.equal(a.item, '#2');
-    assert.deepEqual(a.missing, ['nuworq-infra']);
-    assert.deepEqual(a.how.map((s) => s.where), ['nuworq operator --project site --has nuworq-infra', 'claude']);
+    assert.deepEqual(a.missing, ['infra']);
+    assert.deepEqual(a.how.map((s) => s.where), ['nuworq operator --project site --has infra', 'claude']);
     assert.ok(a.how.every((s) => s.do && s.check));
     assert.equal(stalled().length, 1, 'one per group');
   });
@@ -40,7 +40,7 @@ describe('a "now" group stalled on a capability reaches Needs you (#201)', () =>
     const { hub, stalled, tick } = setup();
     tick(5 * HOUR);
     assert.equal(stalled().length, 1);
-    hub.agentOp('site', 'checkin', 'op', { has: ['operator', 'nuworq-infra'] });
+    hub.agentOp('site', 'checkin', 'op', { has: ['operator', 'infra'] });
     assert.deepEqual(stalled(), [], 'someone who can do it is here');
     tick(5 * HOUR);
     assert.equal(stalled().length, 1, 'gone quiet again');
@@ -73,14 +73,14 @@ describe('a group Needs you calls stalled says Stuck on its Groups line (#214)',
   test('stalled: Stuck, naming the step and the capability; once someone who has it checks in, back to Queued', () => {
     const { hub, v, stalled, tick } = setup();
     // An operator with the capability was here 5 hours ago: within the day, so the old rule said "ready for the next agent".
-    hub.agentOp('site', 'checkin', 'op', { has: ['operator', 'nuworq-infra'] });
+    hub.agentOp('site', 'checkin', 'op', { has: ['operator', 'infra'] });
     tick(5 * HOUR);
     hub.agentOp('site', 'checkin', 'w1', { has: ['macos'] });
     const line = () => v().groups.find((g) => g.item === '#1');
     assert.equal(stalled().length, 1, 'Needs you: stalled');
     assert.equal(line().state, 'stuck');
-    assert.equal(line().reason, '#2 needs an operator (nuworq-infra); none has checked in for 4 hours');
-    hub.agentOp('site', 'checkin', 'op', { has: ['operator', 'nuworq-infra'] });
+    assert.equal(line().reason, '#2 needs an operator (infra); none has checked in for 4 hours');
+    hub.agentOp('site', 'checkin', 'op', { has: ['operator', 'infra'] });
     assert.deepEqual(stalled(), []);
     assert.equal(line().state, 'queued');
     assert.equal(line().reason, '#2 ready for the next agent');
@@ -96,7 +96,7 @@ describe('a group Needs you calls stalled says Stuck on its Groups line (#214)',
     assert.equal(stalled().length, 1);
     const line = v().groups.find((g) => g.item === '#1');
     assert.equal(line.state, 'stuck', 'not "Moving": Needs you says it is stalled');
-    assert.match(line.reason, /^#2 needs an operator \(nuworq-infra\)/, 'the oldest stuck step, as in Needs you');
+    assert.match(line.reason, /^#2 needs an operator \(infra\)/, 'the oldest stuck step, as in Needs you');
   });
 });
 
@@ -125,6 +125,6 @@ describe('a Groups line is Stuck when its stalled step ranks "now" from a sub-gr
     assert.equal(stalled().length, 1, 'Needs you: #4 is stalled on #2');
     const line = v().groups.find((g) => g.item === '#1');
     assert.equal(line.state, 'stuck');
-    assert.equal(line.reason, '#2 needs an operator (nuworq-infra); none has checked in for 4 hours');
+    assert.equal(line.reason, '#2 needs an operator (infra); none has checked in for 4 hours');
   });
 });

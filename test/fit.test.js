@@ -126,11 +126,11 @@ describe('fit hints: what items need and what agents have', () => {
     const noAgents = () => att().find((a) => a.kind === 'no-agents');
     const act = () => att().filter((a) => a.level === 'act').length;
     const key = create({ title: 'Rotate the app key', needs: ['github-admin'] });
-    const vm = create({ title: 'Try it on a VM', needs: ['homelab-vm', 'docker'] });
+    const vm = create({ title: 'Try it on a VM', needs: ['infra', 'docker'] });
     assert.equal(noAgents(), undefined, 'no "start an agent" for operator-only work, act or know');
     assert.equal(act(), 0, 'nothing in Needs you');
     const lines = att().filter((a) => a.kind === 'unfit').map((a) => [a.level, a.headline]);
-    assert.deepEqual(lines, [['know', `${key} waits for the operator: needs github-admin`], ['know', `${vm} waits for the operator: needs homelab-vm, docker`]]);
+    assert.deepEqual(lines, [['know', `${key} waits for the operator: needs github-admin`], ['know', `${vm} waits for the operator: needs infra, docker`]]);
 
     create({ title: 'Plain work' });
     assert.equal(noAgents().headline, '1 item ready, but no agent is working', 'counts only what anyone can do');
@@ -204,7 +204,7 @@ describe('fit hints: what items need and what agents have', () => {
     assert.match(guide(), /`has`/);
     const ops = guide({ project: 'acme' });
     assert.match(ops, /## Operators/);
-    for (const tag of ['operator', 'claude-cli', 'nuworq-infra', 'homelab-vm', 'github-admin', 'browser']) {
+    for (const tag of ['operator', 'claude-cli', 'infra', 'github-admin', 'browser']) {
       assert.ok(ops.split('## Operators')[1].includes(`\`${tag}\``), tag);
       assert.match(tools().find((t) => t.name === 'checkin').inputSchema.properties.has.description, new RegExp(tag));
     }
@@ -213,7 +213,11 @@ describe('fit hints: what items need and what agents have', () => {
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     assert.match(readme, /### Operators/);
     assert.match(readme, /\/nuworq-operator <your capabilities>/);
-    for (const tag of ['claude-cli', 'nuworq-infra', 'homelab-vm', 'github-admin']) assert.ok(readme.includes(`\`${tag}\``), tag);
+    for (const tag of ['claude-cli', 'infra', 'github-admin']) assert.ok(readme.includes(`\`${tag}\``), tag);
+    for (const old of ['nuworq-infra', 'homelab-vm']) {
+      assert.ok(!guide().includes(old) && !ops.includes(old), `the guide no longer says ${old}`);
+      assert.ok(!tools().find((t) => t.name === 'checkin').description.includes(old) && !tools().find((t) => t.name === 'checkin').inputSchema.properties.has.description.includes(old), old);
+    }
     const { hub, op } = world();
     op('box', 'checkin', { has: 'Docker, linux' });
     assert.deepEqual(view(hub, 'p').agents.find((a) => a.name === 'box').has, ['docker', 'linux']);

@@ -15,7 +15,7 @@ function setup() {
   const hub = new Hub({ clock: () => now });
   hub.tx(() => hub.project('o', { create: true }));
   hub.tx(() => hub.project('other', { create: true }));
-  hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'nuworq-infra'] });
+  hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] });
   hub.agentOp('o', 'checkin', 'w1', { has: ['macos'] });
   return { hub, tick: (ms) => { now += ms; }, now: () => now };
 }
@@ -27,8 +27,8 @@ describe('an operator waits on the hub', () => {
     const waiting = waitFor(hub, 'op', { ms: 5000 });
     tick(1);
     hub.humanOp('o', 'create', { title: 'Anyone', acceptance: 'x' });
-    hub.humanOp('o', 'create', { title: 'On the homelab', acceptance: 'x', needs: ['homelab-vm'] });
-    hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['nuworq-infra'] });
+    hub.humanOp('o', 'create', { title: 'GitHub settings', acceptance: 'x', needs: ['github-admin'] });
+    hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
     const r = await waiting;
     assert.deepEqual(r.events, [{ kind: 'item', project: 'o', item: '#3' }]);
     assert.equal(describeEvent(r.events[0]), 'nuworq: operator work waiting (#3 in o). Run next.');
@@ -81,7 +81,7 @@ describe('an operator waits on the hub', () => {
     hub.q(`UPDATE agents SET token_id = 7 WHERE name = 'op'`).run();
     const since = hub.now();
     tick(1);
-    hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['nuworq-infra'] });
+    hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
     assert.deepEqual((await waitFor(hub, '', { since, tokenId: 7, ms: 50 })).events, [{ kind: 'item', project: 'o', item: '#1' }]);
     assert.deepEqual((await waitFor(hub, '', { since, ms: 50 })).events.length, 1, 'no token (no logins): every operator');
     assert.throws(() => waitFor(hub, '', { tokenId: 8 }), (e) => e.status === 403 && /no operator has checked in here with this token/.test(e.message) && /--as <name>/.test(e.hint));
@@ -105,8 +105,8 @@ describe('GET /api/wait and nuworq wait', () => {
 
   test("answers over HTTP, keeps to the token's projects, and refuses a worker", async () => {
     const { hub, tick } = setup();
-    hub.agentOp('other', 'checkin', 'op', { has: ['operator', 'nuworq-infra'] });
-    hub.humanOp('other', 'create', { title: 'Elsewhere', acceptance: 'x', needs: ['nuworq-infra'] });
+    hub.agentOp('other', 'checkin', 'op', { has: ['operator', 'infra'] });
+    hub.humanOp('other', 'create', { title: 'Elsewhere', acceptance: 'x', needs: ['infra'] });
     const server = createServer(hub, { auth: 'required' });
     const url = `http://127.0.0.1:${await listen(server)}`;
     try {
@@ -121,7 +121,7 @@ describe('GET /api/wait and nuworq wait', () => {
       const pending = get(`for=operator&since=${r.body.at}&timeout=5`, 'op');
       await new Promise((res) => setTimeout(res, 50));
       tick(1);
-      hub.humanOp('o', 'create', { title: 'Here', acceptance: 'x', needs: ['nuworq-infra'] });
+      hub.humanOp('o', 'create', { title: 'Here', acceptance: 'x', needs: ['infra'] });
       r = await pending;
       assert.deepEqual(r.body.events, [{ kind: 'item', project: 'o', item: '#1' }]);
 
@@ -138,7 +138,7 @@ describe('GET /api/wait and nuworq wait', () => {
 
   test('nuworq wait --operator prints one line and exits; a worker gets the hint and exit 1', async () => {
     const { hub } = setup();
-    hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['nuworq-infra'] });
+    hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
     const server = createServer(hub);
     const url = `http://127.0.0.1:${await listen(server)}`;
     const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
@@ -175,9 +175,9 @@ describe('GET /api/wait and nuworq wait', () => {
       const child = execFile(process.execPath, [bin, 'wait', '--operator', '--follow', '--settle-ms', '6000'], { env });
       const line = new Promise((resolve) => child.stdout.on('data', (d) => resolve(String(d))));
       await new Promise((res) => setTimeout(res, 700));
-      hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'nuworq-infra'] });
+      hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] });
       now += 1;
-      hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['nuworq-infra'] });
+      hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
       assert.equal(await line, 'nuworq: operator work waiting (#1 in o). Run next.\n');
       child.kill();
     } finally {

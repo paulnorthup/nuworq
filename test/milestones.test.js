@@ -14,13 +14,13 @@ const visible = (html) => [
   ...[...html.matchAll(/\b(?:placeholder|title|aria-label)="([^"]*)"/g)].map((m) => m[1]),
 ].map((s) => s.trim()).filter(Boolean);
 
-// A "now" milestone (#1) whose next step needs nuworq-infra, past 4 hours with nobody who has it, and one loose item.
+// A "now" milestone (#1) whose next step needs infra, past 4 hours with nobody who has it, and one loose item.
 function setup() {
   let t = Date.UTC(2026, 10, 2, 9);
   const hub = new Hub({ clock: () => t });
   hub.tx(() => hub.project('site', { create: true, name: 'Site' }));
   hub.humanOp('site', 'create', { title: 'Signup website', acceptance: 'people can sign up', priority: 'now' });
-  hub.humanOp('site', 'create', { title: 'Point the DNS at the hub', acceptance: 'resolves', priority: 'soon', parent: '#1', needs: ['nuworq-infra'] });
+  hub.humanOp('site', 'create', { title: 'Point the DNS at the hub', acceptance: 'resolves', priority: 'soon', parent: '#1', needs: ['infra'] });
   hub.humanOp('site', 'create', { title: 'Write the copy', acceptance: 'written', priority: 'soon', parent: '#1' });
   hub.humanOp('site', 'create', { title: 'Loose end', acceptance: 'tied', priority: 'soon' });
   hub.agentOp('site', 'checkin', 'w1', { has: ['macos'] });
