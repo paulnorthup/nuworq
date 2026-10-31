@@ -456,6 +456,25 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; border: 1px sol
 .shortcuts dd { margin: 0; }
 .kbd-hint { display: none !important; }
 @media (hover: hover) and (pointer: fine) { .kbd-hint { display: flex !important; } }
+/* The quick launcher (#290): one box at the top, the ranked list under it; on a phone, the width of the screen. */
+.rail-search { color: var(--muted); border: 1px solid var(--line) !important; background: var(--panel) !important; margin-bottom: 6px; }
+.rail-search kbd { margin-left: auto; font-size: 11px; color: var(--muted); }
+#launcher { position: fixed; inset: 0; z-index: 40; background: rgba(20,20,18,.3); padding: 12vh 16px 16px; }
+#launcher[hidden] { display: none; }
+.ln-box { background: var(--panel); border-radius: 14px; width: min(640px, 100%); margin: 0 auto; box-shadow: 0 20px 60px rgba(0,0,0,.25); overflow: hidden; }
+.ln-box input { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 16px; font-size: 16px; outline: none; }
+.ln-list { max-height: 60vh; overflow-y: auto; padding: 6px; }
+.ln-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 10px; border: 0; border-radius: 8px; background: none; text-align: left; }
+.ln-row.on { background: var(--sunken); }
+.ln-ref { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; flex: none; }
+.ln-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ln-label mark { background: none; color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+.ln-hint { font-size: 12px; color: var(--muted); white-space: nowrap; flex: none; }
+.ln-empty { padding: 14px 10px; color: var(--muted); }
+.ln-confirm { padding: 12px 10px; }
+.ln-confirm p { margin: 0 0 12px; font-size: 15px; }
+.ln-keys { display: flex; gap: 8px; }
+.ln-keys kbd { margin-left: 6px; font-size: 11px; }
 .dialog .lead { color: var(--muted); margin: 0 0 14px; }
 .dialog h4 { margin: 16px 0 4px; font-size: 13px; }
 /* Where the hub's GitHub App stands: none, created (not installed), installed. */
@@ -545,6 +564,12 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   #rail.menu-open .rail-menu { background: var(--sunken); color: var(--ink); }
   #rail.menu-open .rail-foot { display: flex; flex-basis: 100%; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
   #rail.menu-open .rail-foot .rail-item { width: 100%; min-height: 44px; }
+  /* The quick launcher (#290): Search beside Menu, thumb-sized; its box the width of the screen. */
+  #rail .rail-search { margin: 0 0 0 auto; min-height: 44px; padding: 10px 14px; }
+  #rail .rail-search + .rail-menu { margin-left: 0; }
+  #launcher { padding: 8px; }
+  .ln-list { max-height: 70vh; }
+  .ln-keys .btn { min-height: 44px; padding: 10px 16px; }
   .org-switch { margin: 0; }
   #rail { overflow: visible; } /* so the workspace menu can drop over the page */
   .org-menu { right: auto; }

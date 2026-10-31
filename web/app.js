@@ -18,6 +18,7 @@ import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
 import { shortcutFor, shortcutsHtml } from './shortcuts.js';
+import { rank, resultsHtml, confirmHtml } from './launcher.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -46,6 +47,7 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 const needYou = (n) => `${plural(n, 'thing')} ${n === 1 ? 'needs' : 'need'} you`;
+const MAC = /Mac|iP(hone|ad)/.test(navigator.platform);
 
 const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>');
 
@@ -257,6 +259,7 @@ function route() {
   S.linkRepo = null;
   S.slug = slug;
   if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; S.editPre = false; }
+  if (ref) remember(slug, ref);
   refresh({ force: true }).then(() => linking && $('#remote-in')?.focus());
 }
 const go = (slug, ref) => { location.hash = slug ? `#/p/${encodeURIComponent(slug)}${ref ? '/' + ref.replace('#', '') : ''}` : '#/'; };
@@ -272,6 +275,7 @@ function renderRail() {
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
+    <button class="rail-item rail-search" data-action="launcher" data-new="launcher" title="Quick launcher: go to an item, a project or a setting"><span>Search</span><kbd class="kbd-hint">${MAC ? '⌘K' : 'Ctrl K'}</kbd></button>
     <button class="rail-item rail-menu" data-action="rail-menu" aria-expanded="${!!S.railMenu}"><span data-new="phone-menu">${S.railMenu ? 'Close' : 'Menu'}</span></button><span class="rail-break"></span>
     <a class="rail-label rail-head ${!S.slug && !S.analytics ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${needYou(total)}">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--muted)">No projects yet</div>'}
@@ -1350,8 +1354,86 @@ async function loadRepos(q, page) {
   } catch (e) { box.innerHTML = `<p class="faint">${errorHtml(e, esc)}</p>`; }
 }
 
+// ── the quick launcher (#290, web/launcher.js): ⌘K or the rail's Search ──
+// Its index comes once per opening; every keystroke after that is matched here, with no request.
+const L = { open: false, index: null, sel: 0, results: [], confirming: null };
+const recent = () => { try { const r = JSON.parse(store.get('recent', '[]')); return Array.isArray(r) ? r : []; } catch { return []; } };
+// The items opened lately, newest first, for the launcher with nothing typed.
+function remember(slug, ref) {
+  const n = Number(ref.replace('#', ''));
+  store.set('recent', JSON.stringify([{ p: slug, n }, ...recent().filter((r) => r.p !== slug || r.n !== n)].slice(0, 8)));
+}
+async function openLauncher() {
+  const el = $('#launcher');
+  Object.assign(L, { open: true, sel: 0, confirming: null });
+  el.innerHTML = `<div class="ln-box" role="dialog" aria-label="Quick launcher">
+    <input id="ln-q" type="text" enterkeyhint="go" placeholder="A number, a few letters, or what to do…" autocomplete="off" spellcheck="false" role="combobox" aria-controls="ln-list" aria-expanded="true">
+    <div id="ln-list" class="ln-list" role="listbox"></div></div>`;
+  el.hidden = false;
+  $('#ln-q').focus();
+  $('#ln-q').addEventListener('input', () => { L.sel = 0; L.confirming = null; drawLauncher(); });
+  drawLauncher();
+  try { L.index = await api('/api/launcher'); } catch (e) { if (!L.index) { closeLauncher(); return toastError(e); } }
+  if (L.open) drawLauncher({ keep: true });
+}
+function drawLauncher({ keep = false } = {}) {
+  const list = $('#ln-list');
+  if (!list) return;
+  if (!L.index) { list.innerHTML = '<div class="ln-empty">Loading…</div>'; return; }
+  if (L.confirming) { list.innerHTML = confirmHtml(L.confirming, { esc }); return; }
+  // Moving through the list keeps it as it is; typing (or the index arriving) ranks it again.
+  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: !!S.billing?.owner, recent: recent() });
+  L.sel = Math.min(L.sel, Math.max(0, L.results.length - 1));
+  list.innerHTML = resultsHtml(L.results, { sel: L.sel, stages: L.index.stages, esc });
+  list.querySelector('.ln-row.on')?.scrollIntoView({ block: 'nearest' });
+}
+function closeLauncher() {
+  Object.assign(L, { open: false, confirming: null });
+  $('#launcher').hidden = true;
+  $('#launcher').innerHTML = '';
+}
+// Run what was picked. A change shows its confirmation first; the second Enter (or Apply) carries it out.
+async function runLauncher(r) {
+  if (!r) return;
+  if (r.confirm && L.confirming !== r) { L.confirming = r; drawLauncher(); $('#ln-q')?.focus(); return; }
+  closeLauncher();
+  const x = r.run;
+  if (x.go) location.hash = x.go;
+  else if (x.action) ACTIONS[x.action]();
+  else if (x.zoom) { S.zoom = x.zoom; store.set('zoom', S.zoom); render({ force: true }); toast(`Depth ${x.zoom}`); }
+  else if (x.open) openAt(x.open);
+  else if (x.human) {
+    try {
+      await api(`/api/p/${encodeURIComponent(x.slug)}/human/${x.human}`, { method: 'POST', body: JSON.stringify(x.body) });
+      toast(x.msg);
+      await refresh();
+    } catch (e) { toastError(e); }
+  }
+}
+// An item's flyout, with the box a command needs focused once it's drawn: its answer, or Send back's note.
+function openAt({ slug, item, focus }) {
+  if (focus === 'sendback') S.reveal.add('dsb');
+  const before = location.hash;
+  go(slug, item);
+  if (location.hash === before) render({ force: true });
+  if (!focus) return;
+  const id = focus === 'sendback' ? `sb:${item}` : focus;
+  let tries = 0;
+  const t = setInterval(() => {
+    const el = $(`#drawer [id="${id}"]`);
+    if (el || ++tries > 60) { clearInterval(t); el?.focus(); }
+  }, 50);
+}
+$('#launcher').addEventListener('click', (e) => {
+  if (e.target.id === 'launcher') return closeLauncher();
+  if (e.target.closest('[data-ln-apply]')) return runLauncher(L.confirming);
+  if (e.target.closest('[data-ln-back]')) { L.confirming = null; drawLauncher({ keep: true }); return $('#ln-q')?.focus(); }
+  const row = e.target.closest('[data-ln]');
+  if (row) { L.sel = Number(row.dataset.ln); runLauncher(L.results[L.sel]); }
+});
+
 // ── events ──
-const val = (id) => (document.getElementById(id)?.value ?? '').trim();
+const val =(id) => (document.getElementById(id)?.value ?? '').trim();
 const clearDraft = (...keys) => keys.forEach((k) => delete S.drafts[k]);
 
 const ACTIONS = {
@@ -1555,7 +1637,8 @@ const ACTIONS = {
   'connect-deep': () => { S.zoom = '30m'; store.set('zoom', S.zoom); render({ force: true }); connect(); },
   notify: () => notifySettings(),
   'rail-menu': () => { S.railMenu = !S.railMenu; renderRail(); },
-  shortcuts: () => modal(shortcutsHtml({ mac: /Mac|iP(hone|ad)/.test(navigator.platform) })),
+  shortcuts: () => modal(shortcutsHtml({ mac: MAC })),
+  launcher: () => (L.open ? closeLauncher() : openLauncher()),
   'workspace-settings': () => workspaceSettings(),
   'billing-portal': async (el) => {
     el.disabled = true;
@@ -1679,6 +1762,16 @@ document.addEventListener('input', (e) => {
 document.addEventListener('focusout', () => setTimeout(() => { if (S.pending && !typing()) render(); }, 150));
 // What each shortcut in SHORTCUTS (web/shortcuts.js) does; the two lists name the same ids.
 const KEYS = {
+  launcher: (e) => { e.preventDefault(); ACTIONS.launcher(); },
+  'ln-move': (e) => {
+    e.preventDefault();
+    const n = L.results.length;
+    if (L.confirming || !n) return;
+    L.sel = (L.sel + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+    drawLauncher({ keep: true });
+  },
+  'ln-run': (e) => { e.preventDefault(); runLauncher(L.confirming ?? L.results[L.sel]); },
+  'ln-close': () => { if (L.confirming) { L.confirming = null; drawLauncher({ keep: true }); $('#ln-q')?.focus(); } else closeLauncher(); },
   help: () => { if ($('#modal .shortcuts')) closeModal(); else if ($('#modal').hidden) ACTIONS.shortcuts(); },
   close: () => closeModal(),
   // 1, 2, 3 set the depth everywhere: a project, and All projects.
@@ -1699,7 +1792,7 @@ document.addEventListener('keydown', (e) => {
   const el = document.activeElement;
   const s = shortcutFor(e, {
     inField: /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName) || !!el?.isContentEditable,
-    input: el?.tagName === 'INPUT', compose: el?.id === 'compose', modal: !$('#modal').hidden, item: !!S.itemRef,
+    input: el?.tagName === 'INPUT', compose: el?.id === 'compose', modal: !$('#modal').hidden, item: !!S.itemRef, launcher: L.open,
   });
   if (s) KEYS[s.id](e);
 });
