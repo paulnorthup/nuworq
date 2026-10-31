@@ -729,6 +729,15 @@ main.admin { padding-top: 24px; }
 /* How far feedback goes on its own (#296): three levels, full width, thumb-sized. */
 .fb-level .seg { display: flex; width: 100%; margin: 8px 0 4px; }
 .fb-level .seg button { flex: 1; min-height: 44px; font-size: 13.5px; padding: 4px 6px; }
+/* Where they came from (#356): each source's funnel, one bar per step on a scale shared by every source. */
+.src-tag { font-weight: 400; font-size: 12.5px; color: var(--muted); background: var(--sunken); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.funnel { margin: 8px 0 0; display: grid; gap: 6px; }
+.funnel .step { display: grid; grid-template-columns: 8.5em 1fr 2.5em; align-items: center; gap: 8px; }
+.funnel dt { font-size: 13px; color: var(--muted); }
+.funnel dd { margin: 0; }
+.funnel dd:not(.n) { height: 10px; background: var(--sunken); border-radius: 5px; overflow: hidden; }
+.funnel .bar { display: block; height: 100%; background: var(--muted); border-radius: 5px; } /* a count, not a state: no state color */
+.funnel .n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 560; }
 /* Asked once per new project (#174): may nuworq run staff it? */
 .staff-ask { background: var(--you-tint); border: 1px solid var(--you-line); border-radius: var(--radius); padding: 12px 14px; margin: 0 0 14px; }
 .staff-ask .actions { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }

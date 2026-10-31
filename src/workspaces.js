@@ -174,6 +174,37 @@ export class Workspaces {
     return rows.sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0) || a.name.localeCompare(b.name));
   }
 
+  // How far each early-access source got (#356), for the owners' dashboard: per source (most requests first, ''
+  // for none), the requests made in the last `days` and all time, and of those: let in, with a workspace where an
+  // agent has connected, and with one where an item has landed.
+  sources({ days = 14 } = {}) {
+    const since = this.directory.now() - days * 24 * 60 * 60 * 1000;
+    const seen = new Map(); // workspace → { connected, landed }
+    const reached = (ws) => {
+      if (!seen.has(ws)) {
+        const hub = this.get(ws);
+        const n = (sql) => (hub ? hub.db.prepare(sql).get().n : 0);
+        seen.set(ws, { connected: n('SELECT COUNT(*) AS n FROM agents') > 0, landed: n("SELECT COUNT(*) AS n FROM items WHERE stage = 'done'") > 0 });
+      }
+      return seen.get(ws);
+    };
+    const zero = () => ({ requests: 0, let_in: 0, connected: 0, landed: 0 });
+    const by = new Map();
+    for (const r of this.directory.requestFunnel()) {
+      if (!by.has(r.source)) by.set(r.source, { source: r.source, recent: zero(), all: zero() });
+      const ws = r.workspaces.map(reached);
+      const add = (c) => {
+        c.requests++;
+        if (r.let_in) c.let_in++;
+        if (ws.some((w) => w.connected)) c.connected++;
+        if (ws.some((w) => w.landed)) c.landed++;
+      };
+      add(by.get(r.source).all);
+      if (r.created_at >= since) add(by.get(r.source).recent);
+    }
+    return { days, sources: [...by.values()].sort((a, b) => b.all.requests - a.all.requests || (a.source === '') - (b.source === '') || a.source.localeCompare(b.source)) };
+  }
+
   setPlan(slug, plan, by = '') {
     const s = Workspaces.check(slug);
     if (!this.has(s)) throw new UserError(`No workspace "${s}"`, { status: 404 });

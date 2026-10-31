@@ -20,6 +20,13 @@ export const ADMIN_SESSION_MS = 12 * 60 * 60 * 1000; // a sign-in to the admin h
 export const FEEDBACK_MAX = 4000, FEEDBACK_PER_DAY = 10; // characters a piece of feedback; pieces per sender a day
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// An early-access request's source (#356), e.g. "hn" or "news.ycombinator.com": lowercased, at most 64 characters
+// of a-z 0-9 . - _. Anything else is dropped (''), never refused: the request still counts.
+export function sourceOf(s) {
+  const v = String(s ?? '').trim().toLowerCase();
+  return /^[a-z0-9._-]{1,64}$/.test(v) ? v : '';
+}
+
 // Cloudflare Turnstile, checked on the hub (the secret never reaches a browser): resolves true when the
 // token a request form got from the widget is good. The only call early access makes to anyone else.
 export function turnstile(secret, { fetch: get = fetch } = {}) {
@@ -142,6 +149,8 @@ export class Directory {
     try { this.db.exec("ALTER TABLE feedback ADD COLUMN auto TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
     // The workspace a used grant made (#355): it starts on Unlimited.
     try { this.db.exec('ALTER TABLE org_grants ADD COLUMN workspace TEXT'); } catch { /* already there */ }
+    // Where an early-access request came from (#356): a ?ref= tag or the referring host, '' when unknown.
+    try { this.db.exec("ALTER TABLE access_requests ADD COLUMN source TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
   }
 
   // ── billing (#227) ──
@@ -265,22 +274,35 @@ export class Directory {
 
   // ── early access ──
 
-  // Ask to come in. The same email again is the same request, brought up to date.
-  request({ email, github = '', building = '', ip = '' }) {
+  // Ask to come in. The same email again is the same request, brought up to date; it keeps the first source it had.
+  request({ email, github = '', building = '', source = '', ip = '' }) {
     email = String(email ?? '').trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('a valid email is required');
     const t = this.now();
     const clip = (s, n) => String(s ?? '').trim().slice(0, n);
-    this.db.prepare(`INSERT INTO access_requests (email, github, building, ip_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+    this.db.prepare(`INSERT INTO access_requests (email, github, building, source, ip_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (email) DO UPDATE SET github = CASE WHEN excluded.github != '' THEN excluded.github ELSE github END,
-        building = CASE WHEN excluded.building != '' THEN excluded.building ELSE building END, ip_hash = excluded.ip_hash, updated_at = excluded.updated_at`)
-      .run(email, clip(github, 60).replace(/^@/, ''), clip(building, 2000), ip ? sha(ip).toString('hex') : '', t, t);
-    return this.db.prepare('SELECT id, email, state, created_at, updated_at FROM access_requests WHERE email = ?').get(email);
+        building = CASE WHEN excluded.building != '' THEN excluded.building ELSE building END,
+        source = CASE WHEN source = '' THEN excluded.source ELSE source END, ip_hash = excluded.ip_hash, updated_at = excluded.updated_at`)
+      .run(email, clip(github, 60).replace(/^@/, ''), clip(building, 2000), sourceOf(source), ip ? sha(ip).toString('hex') : '', t, t);
+    return this.db.prepare('SELECT id, email, source, state, created_at, updated_at FROM access_requests WHERE email = ?').get(email);
   }
 
   requests({ state = '' } = {}) {
-    return this.db.prepare(`SELECT id, email, github, building, state, created_at, updated_at, decided_by, decided_at FROM access_requests
+    return this.db.prepare(`SELECT id, email, github, building, source, state, created_at, updated_at, decided_by, decided_at FROM access_requests
       ${state ? 'WHERE state = ?' : ''} ORDER BY state = 'new' DESC, created_at DESC`).all(...(state ? [state] : []));
+  }
+
+  // Each request's source, when it was made, whether it was let in, and the workspaces its person created (#356).
+  requestFunnel() {
+    const rows = this.db.prepare(`SELECT r.id, r.source, r.state, r.created_at, m.workspace FROM access_requests r
+      LEFT JOIN identities i ON i.email = r.email LEFT JOIN memberships m ON m.identity_id = i.id AND m.created = 1 ORDER BY r.id`).all();
+    const out = new Map();
+    for (const r of rows) {
+      if (!out.has(r.id)) out.set(r.id, { source: r.source, created_at: r.created_at, let_in: r.state === 'approved', workspaces: [] });
+      if (r.workspace) out.get(r.id).workspaces.push(r.workspace);
+    }
+    return [...out.values()];
   }
 
   // Approve (returns { code }: the grant, shown once, for the link) or decline (mints nothing). Only a new

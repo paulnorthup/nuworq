@@ -533,6 +533,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       send(200, { requests: dir.requests({ state: url.searchParams.get('state') ?? '' }) });
       return true;
     }
+    // How far each source got (#356): requests, let in, an agent connected, an item landed.
+    if (req.method === 'GET' && path === '/api/early-access/sources') {
+      send(200, spaces.sources());
+      return true;
+    }
     if (req.method === 'POST' && path === '/api/early-access/decide') {
       const b = await body(req);
       const r = dir.decide(b.id, b.approve === true, me.email);
@@ -579,7 +584,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (req.method === 'GET' && path === '/api/oauth') return send(200, { providers: sso.list().map((p) => ({ ...p, start: `/auth/${p.name}/start` })) });
     const page = path === '/' ? '/admin.html' : path;
     if (req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/style.css'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
-    if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'POST /api/early-access/decide', 'GET /api/feedback/list', 'POST /api/feedback/decide', 'POST /api/feedback/autonomy', 'GET /api/workspaces', 'POST /api/workspaces/plan', 'GET /api/github/app/wiring'].includes(`${req.method} ${path}`)) {
+    if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'GET /api/early-access/sources', 'POST /api/early-access/decide', 'GET /api/feedback/list', 'POST /api/feedback/decide', 'POST /api/feedback/autonomy', 'GET /api/workspaces', 'POST /api/workspaces/plan', 'GET /api/github/app/wiring'].includes(`${req.method} ${path}`)) {
       return deny(404, 'the admin host serves only the admin dashboard', `Workspaces live at ${publicUrl || 'the hub\'s own address'}.`);
     }
     const dir = spaces.directory;
@@ -667,12 +672,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const b = await body(req);
       if (!(await earlyAccess.verify(b.turnstile, ip))) return deny(400, "the form's check didn't pass", 'Reload the page and try again.');
       let r;
-      try { r = dir.request({ email: b.email, github: b.github, building: b.building, ip }); } catch (e) { return deny(400, e.message, 'e.g. you@example.com'); }
+      try { r = dir.request({ email: b.email, github: b.github, building: b.building, source: b.source, ip }); } catch (e) { return deny(400, e.message, 'e.g. you@example.com'); }
       const created = r.created_at === r.updated_at;
       // A new request (not a repeat) reaches the owners, linking to it where they decide it. Not awaited.
       if (created && earlyAccess?.owners?.length) {
         const link = adminHost ? `${adminOrigin(req)}/?request=${r.id}` : `${authOrigin(req)}/requests.html`;
-        const asked = { email: r.email, github: String(b.github ?? '').trim().replace(/^@/, '').slice(0, 60), building: String(b.building ?? '') };
+        const asked = { email: r.email, github: String(b.github ?? '').trim().replace(/^@/, '').slice(0, 60), building: String(b.building ?? ''), source: r.source };
         notifyOwners(spaces, earlyAccess.owners, asked, link).catch((e) => console.error('notifying the owners failed', e));
       }
       return send(200, { ok: true, state: r.state, created });
@@ -689,7 +694,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     // With an admin host, the owners' request list and its APIs live there only.
     if (adminHost && req.method === 'GET' && (path === '/requests.html' || path === '/requests.js')) return toAdmin(req, res);
-    if (adminHost && (path === '/api/early-access' || path === '/api/early-access/decide')) {
+    if (adminHost && (path === '/api/early-access' || path === '/api/early-access/decide' || path === '/api/early-access/sources')) {
       return deny(403, 'early-access requests are decided on the admin host', `Open ${adminOrigin(req)}/ and sign in there with an owner's account.`);
     }
     if (['/api/feedback/list', '/api/feedback/decide', '/api/feedback/autonomy'].includes(path)) {
@@ -708,7 +713,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const sid = jarOf(req).get(HUB_COOKIE);
     const me = dir.verifySession(sid);
     const signIn = sso.enabled ? 'Sign in with GitHub or Google: see GET /api/oauth for where to start.' : 'This hub has no GitHub or Google sign-in set up (see DEPLOY.md).';
-    const known = ['/api/me', '/api/orgs', '/api/orgs/check', '/api/logout','/api/early-access', '/api/early-access/decide'].includes(path) || /^\/api\/orgs\/[^/]+\/enter$/.test(path);
+    const known = ['/api/me', '/api/orgs', '/api/orgs/check', '/api/logout','/api/early-access', '/api/early-access/decide', '/api/early-access/sources'].includes(path) || /^\/api\/orgs\/[^/]+\/enter$/.test(path);
     if (!known) return deny(404, 'this address names no workspace', `Use <workspace>.${baseDomain || '<base-domain>'} or /w/<workspace>/.`);
     if (!me) return deny(401, 'sign in required', signIn);
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
@@ -723,7 +728,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     // The hub's owners (by verified email) read and decide early-access requests.
     const owner = !!earlyAccess?.owners?.includes(me.email);
-    if (path === '/api/early-access' || path === '/api/early-access/decide') {
+    if (path === '/api/early-access' || path === '/api/early-access/decide' || path === '/api/early-access/sources') {
       if (!owner) return deny(403, 'only the hub\'s owners see early-access requests', 'The hub host lists them in NUWORQ_HUB_OWNERS.');
       if (await decideRequests(req, url, path, me, { send, deny })) return;
     }
