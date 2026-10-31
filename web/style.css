@@ -409,6 +409,7 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .feed .expand { margin-top: var(--sp-2); font-size: var(--fs-3); }
 .feed .expand p { margin: 0 0 var(--sp-2); }
 
+.work-scroll { overflow-x: auto; }
 table.work { width: 100%; border-collapse: collapse; background: var(--panel); border: var(--rule) solid var(--line); border-radius: var(--r-m); overflow: hidden; font-size: var(--fs-3); }
 table.work th { text-align: left; font-weight: 600; color: var(--muted); font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .05em; padding: var(--sp-2) var(--sp-3); border-bottom: var(--rule) solid var(--line); white-space: nowrap; }
 table.work td { padding: var(--sp-2) var(--sp-3); border-top: var(--rule) solid var(--line); vertical-align: top; }

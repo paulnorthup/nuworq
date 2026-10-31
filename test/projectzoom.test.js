@@ -16,6 +16,14 @@ test('at 30s a project shows the pulse, composer, Needs you, In motion and Flow'
   for (const s of ['activity', 'allWork']) assert.equal(at(s), '2', `${s} from 30m`);
 });
 
+// All work's headings stay on one line, and on a phone the table scrolls sideways instead of being cut off (#413).
+test('All work keeps its headings on one line and scrolls on a narrow screen', () => {
+  const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
+  assert.match(css, /table\.work th \{[^}]*white-space: nowrap/);
+  assert.match(css, /\.work-scroll \{[^}]*overflow-x: auto/);
+  assert.match(app, /<div class="work-scroll"><table class="work">/);
+});
+
 test("the 30s footer names what 5m adds", () => {
   const footer = app.match(/That's the 30-second view\.[^`]*`/)[0];
   for (const words of ['worth knowing', "what's next", 'what finished', 'agents']) assert.ok(footer.includes(words), words);
