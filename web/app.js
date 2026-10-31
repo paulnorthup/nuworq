@@ -13,7 +13,7 @@ import { mapParts } from './groupmap.js';
 import { milestonesSection, prioritySeg as milestonePriority } from './milestones.js';
 import { ackList } from './acks.js';
 import { analyticsPage } from './analytics.js';
-import { agentLine } from './agentline.js';
+import { agentLine, roleCounts } from './agentline.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen, dismissNew, keepNew } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
@@ -107,6 +107,9 @@ const named = (text, name, presence, { beside = false } = {}) => {
   if (beside && text.startsWith(`${name} `)) { const rest = text.slice(name.length + 1); return esc(rest[0].toUpperCase() + rest.slice(1)); }
   return esc(text).replace(esc(name), who(name, null, { presence }));
 };
+// The agents here now as counts by role, each opening to its agents (#441, web/agentline.js). scope keeps each page's open counts apart.
+const hereNow = (agents, scope) => roleCounts(agents, { scope, isOpen: (k) => S.open.has(k), esc,
+  who: (a) => `${who(a.name, a.model, { job: true, presence: a })}${a.project ? ` <span class="age">${esc(a.project.name)}</span>` : ''}` });
 // An empty section: one line on why it's empty, and the one thing to do about it.
 const zero = (why, action = '') => `<div class="zero"><span class="check">→</span><div>${why}${action ? ` ${action}` : ''}</div></div>`;
 const refLink = (ref) => (ref ? `<a class="ref" data-action="open" data-item="${esc(ref)}">${esc(ref)}</a>` : '');
@@ -483,9 +486,12 @@ function pulse(v) {
   // On the home, each finished item names its project, and its link opens it there.
   const list = z() >= 1 && v.since.finished.length
     ? `<div class="since-list">${v.since.finished.slice(0, 6).map((f) => `<div${f.project ? ` data-project="${esc(f.project.slug)}"` : ''}>✓ ${refLink(f.item)} ${esc(f.title)} <span class="age">${f.project ? `${esc(f.project.name)} · ` : ''}by ${esc(f.by === 'you' ? 'you' : f.by)}</span></div>`).join('')}</div>` : '';
+  // Who is here now, as counts by role (#441): on the home at every depth, on a project at 30s (5m on has its Agents section).
+  const here = v.home ? hereNow(v.agents ?? [], 'home') : z() === 0 ? hereNow(v.agents.filter((a) => a.present), S.slug) : '';
   return `<div class="pulse state-${v.pulse.state}">
       <div class="state-chip">${stateDot(v.pulse.state)}${label}</div>
       <div class="sentence">${esc(v.pulse.sentence)}</div>
+      ${here}
       ${v.project.parked ? `<div class="actions"><button class="btn primary small" data-action="unpark-project">Unpark</button></div>` : ''}
       <div class="since"><span>${since}</span><span class="spacer"></span>
         ${c.updates || !v.since.at ? `<button class="btn small" data-action="seen" title="Count from now: what changes after this shows as new next time. Nothing that needs you goes away.">Mark all seen</button>` : ''}
@@ -889,7 +895,7 @@ function finished(v) {
 function steering(v) {
   if (!v.steers.length && !v.decisions.length && !v.notes.length) return '';
   const steers = v.steers.map((s) => {
-    const expected = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off').map((a) => a.name);
+    const expected = v.agents.filter((a) => a.present).map((a) => a.name);
     const missing = s.item ? [] : expected.filter((n) => !s.acks.some((x) => x.agent === n));
     return `<div class="row-item steer-item" data-key="note:${s.id}"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>
       <div class="acks">${ackList({ acks: s.acks, missing, key: `acks:${s.id}`, open: S.open.has(`acks:${s.id}`), responses: z() >= 2 }, { esc })}</div></div>
@@ -925,14 +931,20 @@ function commits(g) {
 function agents(v) {
   if (!v.agents.length) return v.all.length ? `<section class="sec"><header><h2>Agents</h2></header>
     ${zero('<b>No agent has checked in here yet.</b> The work waits until one does.', '<button class="btn primary small" data-action="connect">Connect an agent</button>')}</section>` : '';
+  // Only the agents here now (#441): holding work, or seen in the last hour. The rest wait behind "Show earlier agents" at 30m.
+  const live = v.agents.filter((a) => a.present);
+  const nobody = `<span class="age">No agent has been here in the last hour, so nothing moves until one comes back. <button class="link" data-action="connect">Start an agent</button></span>`;
   if (z() < 2) {
-    const live = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off');
-    const away = v.agents.length - live.length;
-    return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} active</span>${away ? `<span class="hint">${away} away</span>` : ''}</header>
-      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model, { job: true })}<span class="st ${a.status.split(' ')[0]}">${esc(a.status)}${a.holding.length && !a.job ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || `<span class="age">${plural(away, 'agent')} ${away === 1 ? 'is' : 'are'} away or signed off, so nothing moves until one comes back. <button class="link" data-action="connect">Start an agent</button></span>`}</div></section>`;
+    return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} here</span></header>
+      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model, { job: true })}<span class="st ${a.status.split(' ')[0]}">${esc(a.status)}${a.holding.length && !a.job ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || nobody}</div></section>`;
   }
-  return `<section class="sec"><header><h2>Agents</h2><span class="count">${v.agents.length}</span><span class="hint">first-class participants, each with a track record</span></header>
-    <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
+  const gone = v.agents.filter((a) => !a.present);
+  const showGone = S.open.has(`earlier:${S.slug}`);
+  const earlier = gone.length ? `<button class="link earlier" data-action="toggle" data-key="earlier:${esc(S.slug)}" aria-expanded="${showGone}" data-new="present-agents">${showGone ? 'Hide earlier agents' : `Show earlier agents (${gone.length})`}</button>` : '';
+  const shown = showGone ? [...live, ...gone] : live;
+  return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} here</span><span class="hint">first-class participants, each with a track record</span></header>
+    ${shown.length ? '' : `<div class="agent-strip">${nobody}</div>`}
+    <div class="agent-grid">${shown.map((a) => `<div class="agent-card">
       <div class="top">${who(a.name, a.model, { job: true })}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
       <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}${a.via ? ` · <span title="Who answers for this agent's token">${esc(a.via)}</span>` : ''}</div>
       ${a.tokens.length ? `<div class="model ${a.tokens.length > 1 ? 'warn' : ''}" title="${a.tokens.length > 1 ? 'More than one token has acted under this name' : 'The token this agent connects with'}">token: ${esc(a.tokens.join(', '))}</div>` : ''}
@@ -945,7 +957,7 @@ function agents(v) {
         <div><b>${a.record.handoffs}</b><span>handoffs</span></div>
       </div>
       <div class="model" style="margin-top:var(--sp-2)">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${esc(a.last_seen)} ago</div>
-    </div>`).join('')}</div></section>`;
+    </div>`).join('')}</div>${earlier}</section>`;
 }
 
 // The machines running `nuworq run` for this project (#171), as each last said: up, paused, skipping this

@@ -68,7 +68,7 @@ describe('the hub says who an agent named in an entry is', () => {
 describe('the page uses one function for every agent', () => {
   const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
   test('who() builds every agent label with agentLine, its id at 30m', () => {
-    assert.match(app, /import \{ agentLine \} from '\.\/agentline\.js';/);
+    assert.match(app, /import \{ agentLine(, \w+)* \} from '\.\/agentline\.js';/);
     assert.match(app, /esc\(agentLine\(presence, \{ name, job, id: z\(\) >= 2 \}\)\)/);
     assert.match(app, /title="\$\{esc\(\[name, model, prov\]\.filter\(Boolean\)\.join\(' · '\)\)\}"/, 'its id in the tooltip at every depth');
   });

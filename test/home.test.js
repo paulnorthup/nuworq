@@ -139,7 +139,7 @@ describe('the home: what needs you across every project', () => {
     try {
       const h = await call(a, 'GET', '/api/home');
       assert.equal(h.status, 200);
-      assert.deepEqual(Object.keys(h.json).sort(), ['motion', 'needs', 'projects', 'pulse', 'worth_knowing']);
+      assert.deepEqual(Object.keys(h.json).sort(), ['agents', 'motion', 'needs', 'projects', 'pulse', 'worth_knowing']);
       assert.ok(h.json.pulse.since.counts.submitted >= 1 && h.json.pulse.since.counts.proposed >= 1, JSON.stringify(h.json.pulse.since.counts));
       assert.ok(!h.json.needs.some((n) => n.kind === 'question'), 'the answered question is gone');
       assert.equal(h.json.projects.length, 2);
