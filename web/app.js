@@ -19,6 +19,7 @@ import { preconditionSection, toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
 import { shortcutFor, shortcutsHtml } from './shortcuts.js';
 import { rank, resultsHtml, confirmHtml } from './launcher.js';
+import { feedbackForm, feedbackThanks, attached } from './feedback.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -285,6 +286,7 @@ function renderRail() {
       <button class="rail-item" data-action="connect">Connect an agent</button>
       <button class="rail-item" data-action="notify">Notifications</button>
       <button class="rail-item kbd-hint" data-action="shortcuts"><span data-new="shortcuts"><kbd>?</kbd> Shortcuts</span></button>
+      ${S.feedback?.on ? '<button class="rail-item" data-action="feedback"><span data-new="feedback">Feedback</span></button>' : ''}
       ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings"><span class="name">Workspace settings</span>${S.billing.plans?.length ? '<span class="tag now">Upgrade</span>' : ''}</button>` : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
@@ -723,9 +725,13 @@ function flow(v) {
   let detail = '';
   if (S.stage) {
     const st = f.stages.find((s) => s.stage === S.stage);
-    const items = v.all.filter((i) => i.stage === S.stage).slice(-25).reverse();
+    const here = v.all.filter((i) => i.stage === S.stage);
+    // Approved feedback about nuworq (#295) is marked, and can be shown on its own.
+    const fb = here.some((i) => i.feedback);
+    const items = here.filter((i) => !S.onlyFeedback || !fb || i.feedback).slice(-25).reverse();
     detail = `<div class="stage-detail"><div class="blurb"><b>${esc(st.label)}.</b> ${esc(st.blurb)} ${st.court ? `<i>Whose move: ${st.court === 'you' ? 'yours' : st.court === 'agents' ? "the agents'" : st.court === 'external' ? 'someone outside this hub' : 'nobody yet (waiting for an agent)'}.</i>` : ''} ${st.ms ? `Work spent ${esc(st.time)} here in the last 14 days.` : ''}</div>
-      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${esc(i.title)} <span class="age">${esc(i.ago)}</span></div>`).join('') : `<div class="age">${STAGE_EMPTY[S.stage] ?? 'Nothing here.'}</div>`}</div>`;
+      ${fb ? `<button class="chip fb-only ${S.onlyFeedback ? 'on' : ''}" data-action="only-feedback" aria-pressed="${!!S.onlyFeedback}">Feedback only</button>` : ''}
+      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${i.feedback ? '<span class="tag fb-tag">feedback</span> ' : ''}${esc(i.title)} <span class="age">${esc(i.ago)}</span></div>`).join('') : `<div class="age">${STAGE_EMPTY[S.stage] ?? 'Nothing here.'}</div>`}</div>`;
   }
   const c = f.court;
   const hasTime = c.agents + c.queue + c.you + (c.external ?? 0) > 0;
@@ -1640,6 +1646,21 @@ const ACTIONS = {
   shortcuts: () => modal(shortcutsHtml({ mac: MAC })),
   launcher: () => (L.open ? closeLauncher() : openLauncher()),
   'workspace-settings': () => workspaceSettings(),
+  feedback: () => {
+    S.feedbackCtx = attached({ href: location.href, version: S.feedback?.version, ua: navigator.userAgent });
+    modal(feedbackForm(S.feedbackCtx, esc));
+    $('#fb-text').focus();
+  },
+  'only-feedback': () => { S.onlyFeedback = !S.onlyFeedback; render({ force: true }); },
+  'feedback-send': async (el) => {
+    const text = val('fb-text');
+    if (!text) return toast('Say what happened first', true);
+    el.disabled = true;
+    try {
+      await api('/api/feedback', { method: 'POST', body: JSON.stringify({ text, ...S.feedbackCtx }) });
+      modal(feedbackThanks());
+    } catch (e) { el.disabled = false; toastError(e); }
+  },
   'billing-portal': async (el) => {
     el.disabled = true;
     try { location.href = (await api('/api/billing/portal', { method: 'POST', body: '{}' })).url; } catch (e) { el.disabled = false; toastError(e); }
@@ -1838,6 +1859,8 @@ function listen() {
   S.info = await api('/api/info').catch(() => null) ?? undefined;
   // Billing (#231): only a workspace hub that takes payments answers; its owners get Workspace settings.
   if (S.me?.org) S.billing = await api('/api/billing').catch(() => null);
+  // Feedback about nuworq (#295): only a hub that takes it shows the entry.
+  S.feedback = await api('/api/feedback').catch(() => null);
   await loadProjects().catch(() => {});
   if (fromGitHub) return void (route(), listen(), setInterval(() => refresh(), 30_000), backFromGitHub());
   if (fromStripe) return void (route(), listen(), setInterval(() => refresh(), 30_000), workspaceSettings());

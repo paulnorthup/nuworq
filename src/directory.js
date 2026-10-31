@@ -17,6 +17,8 @@ const sha = (s) => createHash('sha256').update(String(s)).digest();
 export const ORG_CAP = 5; // organizations one person may create, unless the host says otherwise
 export const GRANT_MS = 14 * 24 * 60 * 60 * 1000; // how long an early-access grant is good for
 export const ADMIN_SESSION_MS = 12 * 60 * 60 * 1000; // a sign-in to the admin host lasts a working day
+export const FEEDBACK_MAX = 4000, FEEDBACK_PER_DAY = 10; // characters a piece of feedback; pieces per sender a day
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Cloudflare Turnstile, checked on the hub (the secret never reaches a browser): resolves true when the
 // token a request form got from the widget is good. The only call early access makes to anyone else.
@@ -116,6 +118,24 @@ export class Directory {
     for (const col of ['failed_at INTEGER', 'pay_by INTEGER', 'paid_at INTEGER']) {
       try { this.db.exec(`ALTER TABLE billing ADD COLUMN ${col}`); } catch { /* already there */ }
     }
+    // Feedback about nuworq itself (#295), from people and agents in any workspace, for the hub's owners.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS feedback (
+        id         INTEGER PRIMARY KEY,
+        kind       TEXT NOT NULL,                 -- person | agent
+        sender     TEXT NOT NULL,                 -- "@handle", or the agent's name
+        email      TEXT NOT NULL DEFAULT '',      -- a person's, for the owners only: never in the proposal
+        workspace  TEXT NOT NULL,
+        text       TEXT NOT NULL,                 -- their words, untrusted
+        item       TEXT NOT NULL DEFAULT '',      -- the item an agent named, e.g. "api#12"
+        context    TEXT NOT NULL DEFAULT '{}',    -- JSON: page, version, browser; or client, model, version
+        state      TEXT NOT NULL DEFAULT 'new',   -- new | approved | declined
+        note       TEXT NOT NULL DEFAULT '',      -- a decline's note to the sender
+        proposal   TEXT NOT NULL DEFAULT '',      -- what Approve made: "<workspace>/<project>#<seq>"
+        created_at INTEGER NOT NULL,
+        decided_by TEXT NOT NULL DEFAULT '',
+        decided_at INTEGER
+      );`);
   }
 
   // ── billing (#227) ──
@@ -282,6 +302,41 @@ export class Directory {
   // Give a grant back when the organization it was used for couldn't be made after all.
   returnGrant(code) {
     this.db.prepare('UPDATE org_grants SET used_by = NULL, used_at = NULL WHERE hash = ?').run(sha(code));
+  }
+
+  // ── feedback (#295) ──
+
+  // Store a piece of feedback. Refused (an Error with status and hint) when it's empty or too long, or when its
+  // sender sent FEEDBACK_PER_DAY in the last day.
+  giveFeedback({ kind, sender, email = '', workspace, text, item = '', context = {} }) {
+    text = String(text ?? '').trim();
+    const no = (status, message, hint) => Object.assign(new Error(message), { status, hint });
+    if (!text) throw no(400, 'what happened?', 'Say what got in your way, or what didn\'t make sense, in a sentence or two.');
+    if (text.length > FEEDBACK_MAX) throw no(400, `feedback is at most ${FEEDBACK_MAX} characters (this is ${text.length})`, 'Say the one thing that got in your way; leave logs out.');
+    const t = this.now();
+    const sent = this.db.prepare('SELECT COUNT(*) AS n FROM feedback WHERE kind = ? AND sender = ? AND workspace = ? AND created_at > ?').get(kind, sender, workspace, t - DAY_MS).n;
+    if (sent >= FEEDBACK_PER_DAY) throw no(429, `${sender} sent ${FEEDBACK_PER_DAY} pieces of feedback today, the most a day allows`, 'Try again tomorrow, or add to one you sent.');
+    const r = this.db.prepare(`INSERT INTO feedback (kind, sender, email, workspace, text, item, context, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(kind, sender, String(email).toLowerCase(), workspace, text, String(item ?? '').slice(0, 80), JSON.stringify(context), t);
+    return this.feedbackById(Number(r.lastInsertRowid));
+  }
+
+  feedbackById(id) {
+    const f = this.db.prepare('SELECT * FROM feedback WHERE id = ?').get(Number(id));
+    return f ? { ...f, context: JSON.parse(f.context) } : null;
+  }
+
+  // Newest first; state: new | approved | declined, or '' for all.
+  feedbackList({ state = '' } = {}) {
+    return this.db.prepare(`SELECT id FROM feedback ${state ? 'WHERE state = ?' : ''} ORDER BY created_at DESC, id DESC`).all(...(state ? [state] : []))
+      .map((r) => this.feedbackById(r.id));
+  }
+
+  // Record an owner's decision on new feedback: approved (with the proposal it made) or declined (with an optional
+  // note to the sender). Returns false when it was already decided.
+  decideFeedback(id, { approve, by, note = '', proposal = '' }) {
+    return this.db.prepare(`UPDATE feedback SET state = ?, note = ?, proposal = ?, decided_by = ?, decided_at = ? WHERE id = ? AND state = 'new'`)
+      .run(approve ? 'approved' : 'declined', String(note ?? '').trim().slice(0, 1000), proposal, String(by), this.now(), Number(id)).changes === 1;
   }
 
   // The identity for a verified email, made on first sign-in.

@@ -549,6 +549,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     needs: json(it.needs, []), size: it.size || null, repo: repoTag(remotes, it), by: it.created_by, ago: dur(t - it.stage_since), summary: it.summary,
     blocked_by: unmet(it).map(ref), last_worker: it.last_worker, attempts: it.attempts,
     handoff: json(it.handoff, null),
+    ...(it.feedback ? { feedback: true } : {}), // approved feedback about nuworq (#295)
   });
   const rank = { now: 0, soon: 1, later: 2 };
   const queue = in_('ready').sort((a, b) => rank[a.priority] - rank[b.priority] || a.seq - b.seq).map(brief);

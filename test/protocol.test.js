@@ -199,7 +199,7 @@ describe('transports', () => {
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
 
       const list = await rpc('tools/list', {});
-      assert.equal(list.result.tools.length, 17);
+      assert.equal(list.result.tools.length, 18);
       assert.ok(list.result.tools.some((t) => t.name === 'withdraw'), 'the asker takes back its question (#184)');
       assert.ok(list.result.tools.some((t) => t.name === 'answer'), 'the operator tool (#133)');
 

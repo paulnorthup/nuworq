@@ -496,6 +496,16 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; border: 1px sol
 .dialog .form, .setup .form, .narrow .form { display: flex; flex-direction: column; gap: 10px; }
 .dialog .form label, .setup .form label, .narrow .form label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
 .dialog .foot, .setup .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+/* Feedback (#295): the box, then exactly what is sent with it. */
+.fb-label { display: block; font-weight: 600; margin: 4px 0 6px; }
+.fb-sent-with { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.fb-sent-with ul { margin: 6px 0 4px; padding-left: 18px; }
+.fb-sent-with code { overflow-wrap: anywhere; }
+.fb-sent-with p { margin: 0; }
+.fb-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tag.fb-tag { background: var(--you-tint); color: var(--you); }
+.fb-only { margin: 4px 0 8px; min-height: 36px; padding: 4px 12px; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--panel); font: inherit; cursor: pointer; }
+.fb-only.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .setup { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; max-width: 640px; }
 .setup .lead, .narrow .lead { color: var(--muted); margin: 0 0 14px; }
 .ok { color: var(--ok); font-size: 12.5px; margin-top: 4px; }
