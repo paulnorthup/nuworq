@@ -177,6 +177,7 @@ function space(w) {
   const why = w.source === 'owners' ? 'Always Unlimited: a hub owner is in it.'
     : w.source === 'set' ? `Set by ${esc(w.set_by || 'the host')} ${esc(ago(w.set_at))}.`
     : w.source === 'billing' ? 'Paid through Stripe.'
+    : w.source === 'early_access' ? 'Let in through early access: Unlimited, never charged.'
     : `The default: ${w.plan === 'free' ? 'someone signed up for it' : 'the host made it'}.`;
   // What Stripe last said (#227), e.g. "paid until 2026-12-01", "cancels 2026-12-01", "payment failed".
   const billing = w.billing?.line ? `<span class="${w.billing.line === 'payment failed' ? 'bad' : 'faint'}">${esc(w.billing.line)}</span>` : '';

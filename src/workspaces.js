@@ -134,15 +134,16 @@ export class Workspaces {
   }
 
   // free or unlimited. With plans off, every organization is unlimited; one the hub owner belongs to always
-  // is. Otherwise the plan the hub owner set; with none, free if someone signed up for it, and unlimited if
-  // the host made it (nuworq workspace create).
+  // is. Otherwise the plan the hub owner set; with none, unlimited if Stripe pays for it or an early-access
+  // grant made it, else free if someone signed up for it, and unlimited if the host made it (nuworq workspace create).
   planOf(slug) {
     return this.plans ? this.planInfo(slug).plan : 'unlimited';
   }
 
   // The plan the organization is on while plans are on, and why: source 'owners' (a hub owner belongs to it),
-  // 'set' (the hub owner set it: set_by, set_at), 'billing' (a Stripe subscription pays for it, #227) or 'default'
-  // (free if someone signed up for it, else unlimited). billing: its Stripe state, whatever the source, or null.
+  // 'set' (the hub owner set it: set_by, set_at), 'billing' (a Stripe subscription pays for it, #227),
+  // 'early_access' (an approved early-access grant made it, #355: never charged) or 'default' (free if someone
+  // signed up for it, else unlimited). billing: its Stripe state, whatever the source, or null.
   planInfo(slug) {
     const b = this.directory.billingOf(slug);
     const billing = b ? { status: b.status, period_end: b.period_end, cancel_at_period_end: b.cancel_at_period_end, plan: b.plan, line: billingLine(b, this.directory.now()) } : null;
@@ -150,6 +151,7 @@ export class Workspaces {
     const set = this.directory.planSet(slug);
     if (set) return { plan: set.plan, source: 'set', set_by: set.set_by || null, set_at: set.at, billing };
     if (paid(b, this.directory.now())) return { plan: 'unlimited', source: 'billing', set_by: null, set_at: null, billing };
+    if (this.directory.madeByGrant(slug)) return { plan: 'unlimited', source: 'early_access', set_by: null, set_at: null, billing };
     return { plan: this.directory.madeBySomeone(slug) ? 'free' : 'unlimited', source: 'default', set_by: null, set_at: null, billing };
   }
 

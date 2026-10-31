@@ -743,7 +743,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const free = spaces.plans ? spaces.freeCreatedBy(me) : [];
       if (free.length) return deny(402, `you already have a free workspace (${free[0]}); an account gets one`, `Use ${free[0]}, or upgrade it to Pro and then create more.`);
       // In early access, an organization takes an approved request's grant (its owners need none).
-      if (earlyAccess?.gate && !owner && !dir.useGrant(b.grant, me)) {
+      if (earlyAccess?.gate && !owner && !dir.useGrant(b.grant, me, slug)) {
         return deny(403, 'nuworq is in early access: making a workspace takes an invitation', 'Request access on nuworq.com; the link you get when you are let in makes your workspace.');
       }
       try { spaces.create(slug); } catch (e) { if (earlyAccess?.gate && !owner) dir.returnGrant(b.grant); throw e; }
