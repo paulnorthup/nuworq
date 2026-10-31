@@ -693,7 +693,11 @@ async function runCmd(flags) {
   const logs = join(dirname(HUB_FILE), 'logs');
   mkdirSync(logs, { recursive: true });
   const git = async (args) => (await promisify(execFile)('git', args, { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout;
-  const finished = async (slug) => new Set((await client.get(`/api/finished?project=${encodeURIComponent(slug)}`)).branches ?? []);
+  // The branches of a project's done and dropped items; merged: those whose PR merged (#455).
+  const finishedOf = async (slug) => {
+    const r = await client.get(`/api/finished?project=${encodeURIComponent(slug)}`);
+    return { finished: new Set(r.branches ?? []), merged: new Set(r.merged ?? []) };
+  };
 
   // The sweep (#444): every opted-in project's checkout on this machine, minus what running workers are in.
   // Weekly from the runner (when it last ran is kept in sweep.json), or now with --sweep (--dry-run: only say).
@@ -713,7 +717,7 @@ async function runCmd(flags) {
       if (home && existsSync(join(home, '.git')) && !homes.has(home)) homes.set(home, target);
     }
     for (const [home, target] of homes) {
-      const r = await sweep({ home, finished: await finished(target.slug), git, idle, keep: running.map((w) => w.worktree).filter(Boolean), dryRun });
+      const r = await sweep({ home, ...await finishedOf(target.slug), git, idle, keep: running.map((w) => w.worktree).filter(Boolean), dryRun });
       console.log(sweepLine(target.name ?? target.slug, r, { dryRun }));
       for (const k of r.kept) console.log(dim(`  kept ${k.what}: ${k.why}${k.detail ? ` (${k.detail})` : ''}`));
       if (dryRun) for (const w of [...r.worktrees.map((x) => `worktree ${x}`), ...r.branches.map((x) => `branch ${x}`)]) console.log(dim(`  ${w}`));
@@ -770,7 +774,7 @@ async function runCmd(flags) {
           const branch = (await git(['-C', worktree, 'symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim();
           const r = await cleanWorktree(worktree, git).catch((e) => ({ kept: true, why: `git couldn't remove it (${String(e.stderr || e.message).trim().split('\n')[0]})` }));
           if (r.kept) console.log(dim(`  kept ${name}'s worktree, ${worktree}: ${r.why}`));
-          else if (branch) await finished(target.slug).then((f) => cleanBranch(home, branch, f, git)).catch(() => false);
+          else if (branch) await finishedOf(target.slug).then((f) => cleanBranch(home, branch, f.finished, git, f.merged)).catch(() => false);
         }
         done(code ?? (sig ? `${sig}` : 1));
       })),

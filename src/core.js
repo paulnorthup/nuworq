@@ -827,6 +827,15 @@ export class Hub extends EventEmitter {
     return this.q(`SELECT branch FROM items WHERE project_id = ? AND stage IN ('done', 'dropped') AND branch != '' ORDER BY seq`).all(p.id).map((r) => r.branch);
   }
 
+  // Of those, the done items' branches whose pull request merged (#455): their work is on main even when a
+  // squash or a rebase left the local branch with commits origin never had.
+  mergedBranches(slug, { scope = null } = {}) {
+    if (scope && !scope.includes(slug)) return [];
+    const p = this.q('SELECT id FROM projects WHERE slug = ?').get(slug);
+    if (!p) return [];
+    return this.q(`SELECT DISTINCT i.branch FROM items i JOIN prs r ON r.item_id = i.id WHERE i.project_id = ? AND i.stage = 'done' AND i.branch != '' AND r.state = 'merged' ORDER BY i.seq`).all(p.id).map((r) => r.branch);
+  }
+
   // nuworq run says how it is on every poll (#171): workers running and its limit, projects it skips and
   // why, whether it paused itself and why, what it has spent. Bookkeeping, not an agent being present.
   // name: its token's runner name when it has one, else what it calls itself. scope: the slugs its token
