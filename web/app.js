@@ -349,17 +349,8 @@ function project(v) {
       <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
-        ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>` : ''}
-        ${z() >= 1 ? `<button class="link" data-action="github" title="Link pull requests and CI results to items through GitHub">${P.github ? 'GitHub: connected' : 'Connect GitHub'}</button>` : ''}
-        ${z() >= 1 && !P.parked ? `<button class="link" data-action="park" title="Pause the project: no new work starts and nothing asks for you here">Park this project</button>` : ''}
-        ${z() >= 2 ? `<button class="link" data-action="remove-project" title="Archive it (history kept) or delete it for good">Remove project</button>` : ''}
-        ${z() >= 1 ? (P.runner
-          ? `<button class="link" data-action="runner-off" title="nuworq run keeps headless workers on waiting work here. Click to stop it starting new ones.">Auto-staffed by nuworq run · stop</button>
-            <button class="link" data-action="staffing" title="Workers at once, a daily budget, pause">Staffing: ${esc(staffLine(P.staffing))}</button>`
-          : `<button class="link" data-action="runner-on" title="Let nuworq run start headless workers here whenever work is waiting">Let nuworq run staff this project</button>`) : ''}
-        ${z() >= 1 ? (P.fresh
-          ? `<button class="link" data-action="fresh-off" title="Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade. Click to stop it.">Kept fresh weekly · stop</button>`
-          : `<button class="link" data-action="fresh-on" title="Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade">Keep this project fresh weekly</button>`) : ''}
+        ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>
+        <button class="btn settings-btn" data-action="settings" title="Staffing, freshness, GitHub, park or remove">Settings</button>` : ''}
       </div>
     </div>
     ${!P.runner && P.staffing && !P.staffing.asked ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
@@ -373,6 +364,12 @@ function staffLine(s) {
   if (s.paused) return 'paused';
   if (s.stopped === 'budget') return `today's $${s.budget.toFixed(2)} spent`;
   return [s.workers ? `up to ${s.workers} at once` : 'runners decide how many', s.budget != null ? `$${s.budget.toFixed(2)}/day` : ''].filter(Boolean).join(' · ');
+}
+// The same as a sentence, for the Settings dialog (#213): the limit and the budget, both always said.
+function staffWords(s) {
+  if (!s) return '';
+  const said = `${s.workers ? `Up to ${s.workers} at once` : 'As many at once as each runner allows'}, ${s.budget != null ? `$${s.budget.toFixed(2)} a day` : 'no daily budget'}`;
+  return s.paused ? `${said}. Paused: no new workers start.` : s.stopped === 'budget' ? `${said}. Today's budget is spent.` : `${said}.`;
 }
 
 // The project's sections: one column on a phone; wide (#141), the work in the main column and the pulse,
@@ -416,7 +413,7 @@ function pulse(v) {
   return `<div class="pulse state-${v.pulse.state}">
       <div class="state-chip">${stateDot(v.pulse.state)}${label}</div>
       <div class="sentence">${esc(v.pulse.sentence)}</div>
-      ${v.project.parked ? `<div class="actions"><button class="btn primary small" data-action="unpark">Unpark</button></div>` : ''}
+      ${v.project.parked ? `<div class="actions"><button class="btn primary small" data-action="unpark-project">Unpark</button></div>` : ''}
       <div class="since"><span>${since}</span><span class="spacer"></span>
         ${c.updates || !v.since.at ? `<button class="btn small" data-action="seen" title="Count from now: what changes after this shows as new next time. Nothing that needs you goes away.">Mark all seen</button>` : ''}
         ${list}</div>
@@ -884,7 +881,9 @@ function agents(v) {
 function runners(v) {
   if (!v.project.runner) return '';
   const rs = v.runners ?? [];
-  if (!rs.length) return `<section class="sec"><header><h2>Runners</h2></header>
+  // The staffing in words beside the heading (#213), so it shows without opening Settings.
+  const staff = `<span class="right">${esc(staffLine(v.project.staffing))} <button class="link" data-action="staffing">Staffing</button></span>`;
+  if (!rs.length) return `<section class="sec"><header><h2>Runners</h2>${staff}</header>
     ${zero('<b>No runner has reported here.</b> Nothing starts workers until one does.', 'On a machine with a checkout: <code>nuworq run</code>')}</section>`;
   const why = (r) => r.state === 'down' ? `Silent since ${esc(r.last_seen)} ago${r.machine ? ` on ${esc(r.machine)}` : ''}.`
     : r.state === 'stopped' ? `Stopped ${esc(r.last_seen)} ago: ${esc(r.stopped)}.`
@@ -895,8 +894,8 @@ function runners(v) {
   const st = v.project.staffing;
   const held = st?.stopped === 'paused' ? 'Staffing is paused: no new workers start here; running ones finish.'
     : st?.stopped === 'budget' ? `Today's budget is spent ($${st.spent_today.toFixed(2)} of $${st.budget.toFixed(2)}): new workers start here again tomorrow (UTC).` : '';
-  return `<section class="sec"><header><h2>Runners</h2><span class="count">${up} up</span>${up < rs.length ? `<span class="hint">${rs.length - up} not starting work here</span>` : ''}</header>
-    ${held ? `<p class="warn">${held} <button class="link" data-action="staffing">Staffing</button></p>` : ''}
+  return `<section class="sec"><header><h2>Runners</h2><span class="count">${up} up</span>${up < rs.length ? `<span class="hint">${rs.length - up} not starting work here</span>` : ''}${staff}</header>
+    ${held ? `<p class="warn">${held}</p>` : ''}
     <div class="rows">${rs.map((r) => `<div class="row-item runner"><div class="body">
       <div class="h">${esc(r.name)}<span class="status runner-${r.state}">${esc(r.state)}</span></div>
       <div class="s">${why(r)}</div>
@@ -1106,14 +1105,45 @@ const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''
 
 // Staffing (#174): what nuworq run does here, set on the hub so it can change from a phone. Runners follow it at
 // their next poll. Pause is one tap and says what happens to running workers; the numbers are blank for "no limit".
-function staffingModal() {
+function staffingModal(back) {
   const s = S.view?.project?.staffing ?? {};
-  modal(`<h2>Staffing</h2>
+  modal(`${back ? '<button class="link back" data-action="settings">← Settings</button>' : ''}<h2>Staffing</h2>
     <p class="lead">What <code>nuworq run</code> does here. Runners follow it at their next poll.</p>
     <div class="form"><label>Workers at once<input id="st-workers" type="number" inputmode="numeric" min="1" max="100" placeholder="Each runner's own --workers" value="${s.workers ?? ''}"></label>
     <label>Daily budget, dollars (UTC days)<input id="st-budget" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="No budget" value="${s.budget ?? ''}"></label></div>
     <p class="faint">Spent here today: $${(s.spent_today ?? 0).toFixed(2)}. Once it reaches the budget, no new workers start until tomorrow.</p>
     <div class="foot"><button class="btn ghost" data-action="staffing-pause" data-paused="${s.paused ? 1 : 0}">${s.paused ? 'Resume' : 'Pause'}</button><button class="btn primary" data-action="staffing-save">Save</button></div>`);
+}
+
+// A project's settings (#213), changed about monthly, so one step from the header rather than in it. One row
+// each: a fixed name, what it does, one control. A switch shows on or off; a button says what it does.
+function settingsModal() {
+  const P = S.view?.project;
+  if (!P) return;
+  const row = (id, name, what, control) => `<div class="setting"><div class="body"><div class="h" id="set-${id}">${name}</div><div class="s">${what}</div></div>${control}</div>`;
+  const sw = (id, on, action) => `<button class="switch" role="switch" aria-checked="${on}" aria-labelledby="set-${id}" data-action="${action}"></button>`;
+  modal(`<h2 data-settings>Settings</h2>
+    <p class="lead">How ${esc(P.name)} is staffed, kept current and linked to GitHub.</p>
+    ${row('runner', 'Staff it with nuworq run', `Runners start headless workers here whenever work is waiting. They can cost money.${P.runner
+      ? `<span class="staff-words">${esc(staffWords(P.staffing))} <button class="link" data-action="staffing-from-settings">Change</button></span>` : ''}`,
+      sw('runner', !!P.runner, P.runner ? 'runner-off' : 'runner-on'))}
+    ${row('fresh', 'Keep it fresh weekly', 'Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade.',
+      sw('fresh', !!P.fresh, P.fresh ? 'fresh-off' : 'fresh-on'))}
+    ${row('github', 'GitHub', P.github ? 'Connected: pull requests and CI results link to items.' : 'Link pull requests and CI results to items.',
+      `<button class="btn${P.github ? '' : ' primary'}" data-action="github">${P.github ? 'Manage' : 'Connect GitHub'}</button>`)}
+    <h3>This project</h3>
+    ${P.parked
+      ? row('park', 'Park', 'Parked: no new work starts and nothing here asks for you.', '<button class="btn" data-action="unpark-project">Unpark</button>')
+      : row('park', 'Park', 'Pause it: no new work starts and nothing here asks for you until you unpark it.', '<button class="btn" data-action="park">Park</button>')}
+    ${row('remove', 'Remove', 'Archive it (history kept), or delete it for good.', '<button class="btn" data-action="remove-project">Remove…</button>')}
+    <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
+}
+// A setting changed from the dialog shows its new state there.
+const settingsOpen = () => !!$('#modal [data-settings]');
+async function setting(body, msg) {
+  const r = await human('settings', body, msg);
+  if (settingsOpen()) settingsModal();
+  return r;
 }
 
 async function connect() {
@@ -1399,8 +1429,9 @@ const ACTIONS = {
   approve: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Approved: ready for any agent'),
   needs: (el) => human('update', { item: el.dataset.item, needs: JSON.parse(el.dataset.needs || '[]') }, 'Any agent can take it now'),
   pick: (el) => human('pick', { item: el.dataset.item }, `Picked ${el.dataset.item}: the next agent shapes it first`),
-  park: () => { if (confirm('Park this project? No new work starts and nothing here will ask for you until you unpark it.')) human('settings', { parked: true }, 'Parked'); },
-  unpark: () => human('settings', { parked: false }, 'Unparked'),
+  park: () => { if (confirm('Park this project? No new work starts and nothing here will ask for you until you unpark it.')) setting({ parked: true }, 'Parked'); },
+  'unpark-project': () => setting({ parked: false }, 'Unparked'),
+  settings: () => settingsModal(),
   'remove-project': () => {
     const P = S.view.project;
     modal(`<h2>Remove ${esc(P.name)}</h2>
@@ -1440,17 +1471,18 @@ const ACTIONS = {
       refresh({ force: true }); // restored from its own (missing) page, the address doesn't change
     } catch (e) { toastError(e); }
   },
-  'runner-on': () => human('settings', { runner: true }, '`nuworq run` may now start workers here'),
-  'runner-off': () => human('settings', { runner: false }, '`nuworq run` will no longer start workers here'),
+  'runner-on': () => setting({ runner: true }, '`nuworq run` may now start workers here'),
+  'runner-off': () => { if (confirm('Stop nuworq run staffing this project? Runners start no new workers here; running ones finish. Work waits until an agent takes it or you turn it back on.')) setting({ runner: false }, '`nuworq run` will no longer start workers here'); },
   'staff-not-now': () => human('settings', { runner: false }, "Not staffed. You can let nuworq run staff it later from the project's controls"),
   staffing: () => staffingModal(),
+  'staffing-from-settings': () => staffingModal(true),
   'staffing-save': async () => {
     const r = await human('settings', { run_workers: val('st-workers'), run_budget: val('st-budget') }, 'Staffing saved: runners follow it at their next poll');
     if (r) closeModal();
   },
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
-  'fresh-on': () => human('settings', { fresh: true }, 'The weekly freshness sweep is on'),
-  'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) human('settings', { fresh: false }, 'The weekly freshness sweep is off'); },
+  'fresh-on': () => setting({ fresh: true }, 'The weekly freshness sweep is on'),
+  'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) setting({ fresh: false }, 'The weekly freshness sweep is off'); },
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
   'group-priority': (el) => human('update', { item: el.dataset.item, priority: el.dataset.p }, `${el.dataset.item} is ${el.dataset.p}: everything in the milestone ranks at least ${el.dataset.p}`),

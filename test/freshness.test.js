@@ -108,8 +108,11 @@ describe('the weekly freshness sweep (#181)', () => {
 
   test('the settings control confirms before turning it off', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    // The switch lives in the Settings dialog (#213), and is wired to the same two actions.
+    const dialog = app.slice(app.indexOf('function settingsModal('), app.indexOf('\n}\n', app.indexOf('function settingsModal(')));
+    assert.match(dialog, /sw\('fresh', !!P\.fresh, P\.fresh \? 'fresh-off' : 'fresh-on'\)/);
     assert.match(app, /'fresh-off': \(\) => \{ if \(confirm\('Turn off the weekly freshness sweep\? This project will stop being kept current/);
-    assert.match(app, /'fresh-on': \(\) => human\('settings', \{ fresh: true \}/);
+    assert.match(app, /'fresh-on': \(\) => setting\(\{ fresh: true \}/);
   });
 
   test('the guide has a Freshness sweep section, and the skill points to it', () => {

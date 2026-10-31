@@ -486,6 +486,21 @@ main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--
 .btn:disabled { opacity: .45; cursor: default; }
 .dialog .lead code { overflow-wrap: anywhere; } /* a long URL in a sentence wraps instead of widening a phone's dialog */
 .dialog h3 { margin: 24px 0 4px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 15px; }
+/* A project's Settings (#213): one row per setting, its name and what it does, then one control a thumb can hit. */
+.setting { display: flex; align-items: center; gap: 14px; padding: 10px 0; }
+.setting + .setting { border-top: 1px solid var(--line); }
+.setting .h { font-weight: 550; }
+.setting .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.setting .staff-words { display: block; margin-top: 4px; color: var(--ink); }
+.setting .staff-words .link { min-height: 44px; padding: 0 4px; font-size: inherit; text-decoration: underline; }
+.setting > .btn { flex: none; min-height: 44px; padding: 10px 16px; }
+.dialog .back { padding: 0; margin-bottom: 8px; }
+/* A switch: off, a grey track with the knob left; on, an ink track with it right. 44px tall for a thumb. */
+.switch { flex: none; position: relative; width: 56px; height: 44px; border: 0; padding: 0; background: none; cursor: pointer; }
+.switch::before { content: ''; position: absolute; left: 2px; right: 2px; top: 7px; height: 30px; border-radius: 15px; background: var(--muted); transition: background .15s; }
+.switch::after { content: ''; position: absolute; left: 5px; top: 10px; width: 24px; height: 24px; border-radius: 50%; background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
+.switch[aria-checked="true"]::before { background: var(--ink); }
+.switch[aria-checked="true"]::after { transform: translateX(22px); }
 /* Notifications' add row (#155): the kind as wide as its words, the address taking the rest. */
 .notify-add select { width: auto; flex: none; }
 .notify-add input { flex: 1; min-width: 0; }
@@ -521,6 +536,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   #main { padding: 18px 16px 60px; }
   .phead { flex-direction: column; gap: 10px; }
   .controls { align-items: flex-start; }
+  .settings-btn { min-height: 44px; padding: 10px 16px; }
   .pulse .sentence { font-size: 18px; }
   .stage { min-width: 60px; }
   .arrow { display: none; }
@@ -575,13 +591,12 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   .col-side .get-started li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 10px; }
   .col-side .get-started li > :not(.tick) { grid-column: 2; justify-self: start; margin-left: 0; }
   .col-side .get-started li .link { padding: 0; font-size: 12px; }
-  /* The project header's links in one row, so the work starts right under the title. */
+  /* The project header's controls beside the title, so the work starts right under it. */
   .phead { flex-wrap: wrap; }
   .phead .titles { flex: 1 1 420px; }
   .composer .box { min-width: 0; }
   .phead .controls { flex: 0 1 auto; margin-left: auto; flex-direction: row; flex-wrap: wrap; justify-content: flex-end; column-gap: 14px; row-gap: 6px; max-width: 560px; }
   .phead .controls .ctl-row { flex-basis: 100%; justify-content: flex-end; }
-  .phead .controls .link { padding: 2px 0; }
   .col-side .flow { padding: 14px; }
   .col-side .stage { min-width: 54px; padding: 6px 4px 4px; }
   .col-side .stage .n { font-size: 17px; }
