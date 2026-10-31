@@ -34,6 +34,79 @@ export async function cleanWorktree(worktree, git) {
   return { kept: false };
 }
 
+// A worker's branch, once it has gone with its worktree (#444): deleted when its item is done or dropped and
+// every commit on it is on origin. Returns whether it was deleted.
+export async function cleanBranch(home, branch, finished, git) {
+  if (!branch || !finished.has(branch)) return false;
+  if ((await git(['-C', home, 'rev-list', '-n1', `refs/heads/${branch}`, '--not', '--remotes'])).trim()) return false;
+  await git(['-C', home, 'branch', '-D', branch]);
+  return true;
+}
+
+export const SWEEP_EVERY_MS = 7 * 24 * 3600_000;
+// A worktree with no branch (a reviewer's, or one never used) is only swept once nothing touched it for a day:
+// another runner's worker may be in it.
+const DETACHED_IDLE_MS = 24 * 3600_000;
+
+// The weekly sweep (#444) of one checkout, home: the worktrees nuworq made for it (each directly in a folder
+// named <checkout>.worktrees, also one from before the checkout was renamed) and its nuworq/* branches, where
+// their item is done or dropped (finished: a Set of branch names), and nothing would be lost: no uncommitted
+// changes, no commits origin lacks. A worktree with no branch goes when it is clean, on origin, and idle a day.
+// Never home itself, never another branch, never one in keep (running workers' worktrees).
+// idle(path): ms since that worktree's HEAD last moved. dryRun: only say what would go.
+// Returns { worktrees, branches, pruned, kept: [{ what, why }] }.
+export async function sweep({ home, finished, git, idle, keep = [], dryRun = false }) {
+  const out = { worktrees: [], branches: [], pruned: 0, kept: [] };
+  const ours = (path) => /\.worktrees\/[^/]+$/.test(path);
+  const name = (path) => path.split('/').slice(-2).join('/');
+  // Worktrees made before the checkout moved can't find it until repaired (their .git names the old path).
+  if (!dryRun) await git(['-C', home, 'worktree', 'repair']).catch(() => '');
+  const trees = [];
+  for (const block of (await git(['-C', home, 'worktree', 'list', '--porcelain'])).split(/\n\n+/)) {
+    const path = block.match(/^worktree (.+)$/m)?.[1];
+    if (!path) continue;
+    trees.push({ path, branch: block.match(/^branch refs\/heads\/(.+)$/m)?.[1] ?? null, prunable: /^prunable/m.test(block) });
+  }
+  // Records of worktrees whose folder is gone.
+  out.pruned = trees.filter((t) => t.prunable).length;
+  if (out.pruned && !dryRun) await git(['-C', home, 'worktree', 'prune']);
+  const left = new Set(trees.map((t) => t.branch).filter(Boolean)); // branches still checked out somewhere
+  for (const t of trees) {
+    if (!ours(t.path) || keep.includes(t.path) || t.prunable || t.branch && !finished.has(t.branch)) continue;
+    try {
+      if (!t.branch && await idle(t.path) < DETACHED_IDLE_MS) continue;
+      // --no-optional-locks: looking doesn't rewrite its index, so the worktree stays as idle as it was.
+      if ((await git(['--no-optional-locks', '-C', t.path, 'status', '--porcelain'])).trim()) { out.kept.push({ what: name(t.path), why: 'uncommitted changes' }); continue; }
+      if ((await git(['-C', t.path, 'rev-list', '-n1', 'HEAD', '--not', '--remotes'])).trim()) { out.kept.push({ what: name(t.path), why: 'commits origin lacks' }); continue; }
+      if (!dryRun) await git(['-C', home, 'worktree', 'remove', t.path]);
+    } catch (e) {
+      out.kept.push({ what: name(t.path), why: "git can't read it", detail: String(e.stderr || e.message).trim().split('\n')[0] });
+      continue;
+    }
+    out.worktrees.push(name(t.path));
+    if (t.branch) left.delete(t.branch);
+  }
+  for (const branch of (await git(['-C', home, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/nuworq/'])).split('\n').filter(Boolean)) {
+    if (!finished.has(branch) || left.has(branch)) continue;
+    if ((await git(['-C', home, 'rev-list', '-n1', `refs/heads/${branch}`, '--not', '--remotes'])).trim()) { out.kept.push({ what: branch, why: 'commits origin lacks' }); continue; }
+    if (!dryRun) await git(['-C', home, 'branch', '-D', branch]);
+    out.branches.push(branch);
+  }
+  return out;
+}
+
+// The sweep's one line, e.g. "Swept nuworq: removed 3 worktrees and 5 branches, pruned 1 stale record; kept 2 (1 uncommitted
+// changes, 1 commits origin lacks)".
+export function sweepLine(name, r, { dryRun = false } = {}) {
+  const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
+  const did = [r.worktrees.length && n(r.worktrees.length, 'worktree'), r.branches.length && n(r.branches.length, 'branch').replace(/branchs$/, 'branches')].filter(Boolean);
+  const parts = [did.length ? `${dryRun ? 'would remove' : 'removed'} ${did.join(' and ')}` : 'nothing to remove',
+    r.pruned && `${dryRun ? 'would prune' : 'pruned'} ${n(r.pruned, 'stale record')}`].filter(Boolean);
+  const why = new Map();
+  for (const k of r.kept) why.set(k.why, (why.get(k.why) ?? 0) + 1);
+  return `${dryRun ? 'Sweep (dry run)' : 'Swept'} ${name}: ${parts.join(', ')}${r.kept.length ? `; kept ${r.kept.length} (${[...why].map(([w, k]) => `${k} ${w}`).join(', ')})` : ''}`;
+}
+
 const FAST_FAIL_MS = 15_000;
 const FAST_FAILS = 3;
 // Clean exits this soon without claiming anything: the hub routed a worker to work it couldn't take.
@@ -54,8 +127,9 @@ const KILL_GRACE_MS = 10_000;
 // maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
 // report(state): tells the hub how this runner is, once per poll and once more when it stops (#171); a
 // report that fails is let go (the hub shows the runner down until one gets through).
+// sweep(running): the weekly sweep (#444), run once sweptAt (when it last ran) is a week old; it says what it removed.
 export async function run({
-  routes, launch, claimed = async () => true, log = console.log, report = async () => {},
+  routes, launch, claimed = async () => true, log = console.log, report = async () => {}, sweep, sweptAt = 0,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
@@ -126,6 +200,11 @@ export async function run({
       } else if (w.killedAt && t - w.killedAt > KILL_GRACE_MS) {
         w.kill('SIGKILL');
       }
+    }
+
+    if (sweep && !stopping && t - sweptAt >= SWEEP_EVERY_MS) {
+      sweptAt = t;
+      await Promise.resolve().then(() => sweep(running)).catch((e) => log(`The sweep failed: ${e.message}`));
     }
 
     let list = null;

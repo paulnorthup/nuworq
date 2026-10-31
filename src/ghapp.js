@@ -316,6 +316,13 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
       }
       throw new Error(`GitHub didn't tag ${sha.slice(0, 7)} as ${tag} (${said(r)})`);
     },
+    // Delete a landed item's branch (#444). Already gone (422/404) is fine.
+    async deleteBranch({ repo, branch }) {
+      const [owner, name] = parts(repo);
+      const r = await app.call('DELETE', `/repos/${owner}/${name}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`, null, await tokenFor(repo));
+      if (r.status === 204 || r.status === 422 || r.status === 404) return { deleted: r.status === 204 };
+      throw new Error(`GitHub didn't delete ${branch} (${said(r)})`);
+    },
     // The PR as GitHub has it now: { state: open | merged | closed, mergeable_state (clean: it can merge as
     // it is; dirty: it conflicts with its base), auto_merge, base, sha (of the merge, once merged) }.
     async pull({ repo, number }) {

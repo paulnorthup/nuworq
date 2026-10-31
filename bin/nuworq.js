@@ -16,7 +16,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -631,7 +631,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     lines.push(`codex exec${json}${model ? ` -m ${sq(model)}` : ''} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
   }
   return {
-    name, worktree, main: origin ? `origin/${main}` : main, origin, cwd,
+    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd,
     checkout: setup.join(' && '), start: lines.join(' && \\\n'), cmd: [...setup, ...lines].join(' && \\\n'),
   };
 }
@@ -688,9 +688,39 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine } = await import('../src/runner.js');
   const logs = join(dirname(HUB_FILE), 'logs');
   mkdirSync(logs, { recursive: true });
+  const git = async (args) => (await promisify(execFile)('git', args, { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout;
+  const finished = async (slug) => new Set((await client.get(`/api/finished?project=${encodeURIComponent(slug)}`)).branches ?? []);
+
+  // The sweep (#444): every opted-in project's checkout on this machine, minus what running workers are in.
+  // Weekly from the runner (when it last ran is kept in sweep.json), or now with --sweep (--dry-run: only say).
+  const SWEPT = join(dirname(HUB_FILE), 'sweep.json');
+  const sweepAll = async (running = [], dryRun = false) => {
+    const { statSync } = await import('node:fs');
+    // Since its HEAD last moved (a checkout, commit or switch); its index changes on any git status, even ours.
+    const idle = async (path) => {
+      const dir = (await git(['-C', path, 'rev-parse', '--absolute-git-dir'])).trim();
+      const at = Math.max(...['HEAD', 'logs/HEAD'].map((f) => { try { return statSync(join(dir, f)).mtimeMs; } catch { return 0; } }));
+      return Date.now() - at;
+    };
+    const homes = new Map();
+    for (const target of await hubProjects(client)) {
+      let home;
+      try { home = homeOf(target, {}); } catch { continue; }
+      if (home && existsSync(join(home, '.git')) && !homes.has(home)) homes.set(home, target);
+    }
+    for (const [home, target] of homes) {
+      const r = await sweep({ home, finished: await finished(target.slug), git, idle, keep: running.map((w) => w.worktree).filter(Boolean), dryRun });
+      console.log(sweepLine(target.name ?? target.slug, r, { dryRun }));
+      for (const k of r.kept) console.log(dim(`  kept ${k.what}: ${k.why}${k.detail ? ` (${k.detail})` : ''}`));
+      if (dryRun) for (const w of [...r.worktrees.map((x) => `worktree ${x}`), ...r.branches.map((x) => `branch ${x}`)]) console.log(dim(`  ${w}`));
+    }
+    if (!dryRun) writeFileSync(SWEPT, `${JSON.stringify({ at: Date.now() })}\n`);
+  };
+  if (flags.sweep) return sweepAll([], !!flags['dry-run']);
+  const sweptAt = (() => { try { return Number(JSON.parse(readFileSync(SWEPT, 'utf8')).at) || 0; } catch { return 0; } })();
 
   const launch = async (r) => {
     const projects = await hubProjects(client);
@@ -708,7 +738,7 @@ async function runCmd(flags) {
       if (e instanceof HubError) e.skip = true;
       throw e;
     }
-    const { name, worktree, cwd, checkout, start } = setup;
+    const { name, home, worktree, cwd, checkout, start } = setup;
     const log = join(logs, `${name}.log`);
     // Its worktree, at the latest main. When git can't do that (e.g. it can't reach origin), the agent never
     // starts: the runner leaves the project alone for a while and the others go on.
@@ -728,16 +758,18 @@ async function runCmd(flags) {
     const usage = await tapUsage(child, agent, { ...flags, ...routed }, (l) => out.write(`${l}\n`));
     child.stderr.pipe(out, { end: false });
     return {
-      name, project: target.slug, where: dim(`${worktree ?? cwd}  log: ${log}`),
+      name, project: target.slug, worktree, where: dim(`${worktree ?? cwd}  log: ${log}`),
       kill: (sig) => { try { process.kill(-child.pid, sig); } catch {} },
       exited: new Promise((done) => child.on('close', async (code, sig) => {
         out.end();
         await reportUsage(s, token, target.slug, name, usage());
-        // Its worktree goes with it, unless something there would be lost.
+        // Its worktree goes with it, unless something there would be lost; and its branch, once its item is
+        // done or dropped and all of it is on origin (#444).
         if (worktree) {
-          const git = async (args) => (await promisify(execFile)('git', args, { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout;
+          const branch = (await git(['-C', worktree, 'symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim();
           const r = await cleanWorktree(worktree, git).catch((e) => ({ kept: true, why: `git couldn't remove it (${String(e.stderr || e.message).trim().split('\n')[0]})` }));
           if (r.kept) console.log(dim(`  kept ${name}'s worktree, ${worktree}: ${r.why}`));
+          else if (branch) await finished(target.slug).then((f) => cleanBranch(home, branch, f, git)).catch(() => false);
         }
         done(code ?? (sig ? `${sig}` : 1));
       })),
@@ -752,7 +784,7 @@ async function runCmd(flags) {
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`),
-    launch, workers,
+    launch, workers, sweep: (running) => sweepAll(running), sweptAt,
     // How this runner is, on every poll (#171), with the workers' agent token: a runner token names the runner.
     report: (state) => reporter.post('/api/runner', { name: hostname(), machine: hostname(), ...state }),
     // Asked of the hub, not the routes: a quick worker can claim and exit between two polls. A minute
@@ -1463,6 +1495,11 @@ ${bold('Setup')}
                                          --browser: each worker gets a browser, as with worker --browser.
                                          A worker's worktree is removed when it exits, unless it holds
                                          uncommitted changes or commits on no branch (then it says where).
+                                         Its branch goes too once its item is done or dropped and on origin.
+  run --sweep [--dry-run]                remove leftovers now (the runner does it weekly): worktrees and
+                                         nuworq/* branches of done or dropped items, idle worktrees with
+                                         no branch, and stale worktree records. Never your checkout, never
+                                         uncommitted or unpushed work. --dry-run lists what would go.
   run --install [run flags] | run --uninstall
                                          the same runner as a service: a LaunchAgent (macOS) or systemd
                                          user unit (Linux) that survives closed terminals and reboots;
