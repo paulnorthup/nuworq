@@ -440,6 +440,10 @@ export function openDb(file) {
     "ALTER TABLE projects ADD COLUMN model_quality TEXT NOT NULL DEFAULT 'balanced'",
     "ALTER TABLE items ADD COLUMN route_why TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE items ADD COLUMN breaking TEXT NOT NULL DEFAULT ''", // who must do what when it lands; '' breaks nobody (#398)
+    // When an item's needs last changed, and when an agent last gained a tag (#406): a ready item that newly
+    // matches an operator is pushed to its listener once, from then.
+    'ALTER TABLE items ADD COLUMN needs_since INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE agents ADD COLUMN has_since INTEGER NOT NULL DEFAULT 0',
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,

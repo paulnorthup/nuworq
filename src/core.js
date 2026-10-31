@@ -2384,7 +2384,13 @@ const AGENT_OPS = {
     }
     const last = this.q('SELECT last_checkin FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.last_checkin ?? 0;
     this.q('UPDATE agents SET last_checkin = ? WHERE project_id = ? AND name = ?').run(this.now(), p.id, agent);
-    if (args.has != null) this.q('UPDATE agents SET has = ? WHERE project_id = ? AND name = ?').run(JSON.stringify(normTags(args.has)), p.id, agent);
+    if (args.has != null) {
+      // A tag it didn't have (#406): operator work it couldn't take before reaches its listener.
+      const had = json(this.q('SELECT has FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.has, []);
+      const has = normTags(args.has), gained = has.some((t) => !had.includes(t));
+      this.q(`UPDATE agents SET has = ?${gained ? ', has_since = ?' : ''} WHERE project_id = ? AND name = ?`)
+        .run(JSON.stringify(has), ...(gained ? [this.now()] : []), p.id, agent);
+    }
     return this.briefing(p, agent, last);
   },
 
@@ -2879,6 +2885,7 @@ Object.assign(Hub.prototype, {
     }
     if (args.needs != null && JSON.stringify(normTags(args.needs)) !== item.needs) {
       set.needs = JSON.stringify(normTags(args.needs));
+      set.needs_since = this.now();
       changed.push(`needs → ${normTags(args.needs).join(', ') || 'nothing'}`);
     }
     if (args.size != null && (SIZES.includes(args.size) || args.size === '') && args.size !== item.size) { set.size = args.size; changed.push(`size → ${args.size || 'unset'}`); }

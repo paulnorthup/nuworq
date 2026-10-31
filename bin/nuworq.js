@@ -226,14 +226,14 @@ async function waitCmd(flags) {
   // for a couple of minutes, retried quietly. Any other refusal ends it at once.
   const settle = Number(flags['settle-ms']) || 120_000, until = Date.now() + settle;
   // #342: the hub restarts on every merge to main. With --follow, a proxy's 502/503/504 (or Cloudflare's 52x/530) or a refused, dropped
-  // or timed-out connection is waited out with backoff (about 2 s doubling to 30 s), quietly and keeping
+  // or timed-out connection (#406: an answer long overdue counts as one) is waited out with backoff (about 2 s doubling to 30 s), quietly and keeping
   // `since`, so nothing is lost or repeated. Away for long (10 minutes), it says so once and keeps trying.
   const first = Number(flags['retry-ms']) || 2000, cap = 15 * first, longMs = Number(flags['down-ms']) || 600_000;
   let away = null, told = false;
   for (let since = 0, backoff = first; ;) {
     let r;
     try {
-      r = await client.wait({ since, timeout: Number(flags.timeout) || undefined, all: !!flags['all-projects'] }, { agent });
+      r = await client.wait({ since, timeout: Number(flags.timeout) || undefined, all: !!flags['all-projects'], ...(flags['grace-ms'] ? { grace: Number(flags['grace-ms']) } : {}) }, { agent });
     } catch (e) {
       if (flags.follow && e instanceof HubError && (e.status === 0 || GATEWAY.has(e.status))) {
         away ??= Date.now();

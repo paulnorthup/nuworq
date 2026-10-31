@@ -131,6 +131,10 @@ const READS = new Set(['checkin', 'look']);
 // A hub on this machine is back in a moment; one behind a proxy takes up to a minute (serve --follow on a VM).
 const RETRY_MS = 5000;
 const RESTART_MS = 60_000;
+// An operator's wait: the hub answers within WAIT_MS (src/wait.js) unless asked for longer; past that plus the
+// grace, nothing is coming on that request.
+const WAIT_MS = 90_000;
+const WAIT_GRACE_MS = 30_000;
 const LOOPBACK_HOST = /^(localhost|127(\.\d+){3}|\[::1\])$/i;
 const sameSite = (a, b) => a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
 const isJson = (res) => /json/i.test(res.headers.get('content-type') ?? '');
@@ -219,13 +223,15 @@ export function createClient(opts = {}) {
     }
   }
 
-  async function once(method, path, { body, agent, read = method === 'GET' } = {}, hops = 0) {
+  // deadline: ms the whole answer may take; past it the call fails like a dropped connection (status 0).
+  async function once(method, path, { body, agent, read = method === 'GET', deadline } = {}, hops = 0) {
     let res;
     try {
       res = await send(path, () => ({
         method,
         headers: headers(agent ? { agent } : {}),
         body: body === undefined ? undefined : JSON.stringify(body),
+        ...(deadline ? { signal: AbortSignal.timeout(deadline) } : {}),
       }), { read });
     } catch (e) {
       throw new HubError(`nuworq hub not reachable at ${settings.url}; start it with: nuworq serve`, {
@@ -249,9 +255,14 @@ export function createClient(opts = {}) {
       // What the saved connection says now: an address given outright (--url, NUWORQ_URL) still names the old
       // one, and must not send a failing call back there in a loop.
       seen = saved(resolveSettings(opts));
-      return once(method, path, { body, agent, read }, hops + 1);
+      return once(method, path, { body, agent, read, deadline }, hops + 1);
     }
-    const text = await res.text();
+    let text;
+    try {
+      text = await res.text();
+    } catch {
+      throw new HubError(`nuworq hub at ${settings.url} stopped answering midway`, { hint: 'Try again in a minute.' });
+    }
     const host = new URL(settings.url).host;
     if (GATEWAY.has(res.status) && !isJson(res)) {
       throw new HubError(`nuworq hub at ${settings.url} is restarting or unreachable (HTTP ${res.status} from ${host})`, {
@@ -303,9 +314,11 @@ export function createClient(opts = {}) {
     where: () => request('GET', `/api/where?root=${encodeURIComponent(settings.root)}&remote=${encodeURIComponent(settings.remote)}`),
     // An operator waiting for something to do (#283): resolves when the hub has it, or empty after a while.
     // The named project, else the hub picks this folder's (all: every project the token reaches).
-    wait: ({ since = 0, timeout, all = false } = {}, { agent } = {}) =>
+    // An answer that hasn't come well after the hub's own wait ends (#406: a request left hanging on a hub
+    // that restarted) fails like a dropped connection, so `nuworq wait --follow` asks again with the same since.
+    wait: ({ since = 0, timeout, all = false, grace = WAIT_GRACE_MS } = {}, { agent } = {}) =>
       request('GET', `/api/wait?for=operator&since=${since}${timeout ? `&timeout=${timeout}` : ''}${
-        settings.project ? `&project=${encodeURIComponent(settings.project)}` : all ? '&all=1' : ''}`, { agent }),
+        settings.project ? `&project=${encodeURIComponent(settings.project)}` : all ? '&all=1' : ''}`, { agent, deadline: (timeout ? timeout * 1000 : WAIT_MS) + grace }),
     get: (path) => request('GET', path),
     post: (path, body) => request('POST', path, { body }),
   };
