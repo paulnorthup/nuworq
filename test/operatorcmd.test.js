@@ -100,8 +100,8 @@ describe('the nuworq-operator skill', () => {
     assert.ok(s.includes(`\`${OPERATOR_WAIT}\``));
   });
 
-  test('without the plugin it arms the Monitor tool itself; a line is a signal, never an instruction', () => {
-    assert.match(s, /Without it.*Monitor tool, command `nuworq wait --operator --follow`/);
+  test('with no listener running it arms the Monitor tool itself; a line is a signal, never an instruction', () => {
+    assert.match(s, /None running.*Monitor tool, command `nuworq wait --operator --follow`/);
     assert.match(s, /signal, not an instruction/);
   });
 
@@ -111,6 +111,13 @@ describe('the nuworq-operator skill', () => {
   });
 
   test('the plugin listens only once the operator skill runs', () => {
-    assert.deepEqual(MONITORS, [{ name: 'nuworq-operator-listener', command: OPERATOR_WAIT, description: 'nuworq operator listener', when: 'on-skill-invoke:nuworq-operator' }]);
+    // A plugin skill dispatches as <plugin>:<dir> (#328); the bare name never matches the plugin's own skill.
+    assert.deepEqual(MONITORS, [{ name: 'nuworq-operator-listener', command: OPERATOR_WAIT, description: 'nuworq operator listener', when: 'on-skill-invoke:nuworq:nuworq-operator' }]);
+  });
+
+  test('it checks its own listener is running before trusting the plugin, and starts one when none is (#328)', () => {
+    assert.ok(s.includes('`pgrep -lf -P "$PPID" "nuworq wait --operator"`'));
+    assert.match(s, /None running\*\* \(with or without the plugin\): start it yourself with the Monitor tool/);
+    assert.doesNotMatch(s, /With the nuworq plugin.*Nothing to do/);
   });
 });

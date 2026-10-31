@@ -152,7 +152,9 @@ Keep one running by opening Claude Code in the project folder (the terminal or t
 ```
 `nuworq operator --project <project>` prints that line with this machine's capabilities filled in (`--has a,b` to choose them yourself). With the plugin it is also `/nuworq:nuworq-operator`.
 
-No /loop. The session works until nothing waits, then goes idle and spends nothing. The skill starts a listener, `nuworq wait --operator --follow`: the plugin's monitor, or the Monitor tool without the plugin. It holds one open request to the hub, and each new operator item, operator question, or answer to the operator's own question prints a line ("nuworq: operator work waiting (#219). Run next.") that starts a turn on its own. Lines carry ids and kinds only, never text other agents wrote. Only a person invokes the skill, so worker sessions never listen.
+No /loop. The session works until nothing waits, then goes idle and spends nothing. The skill starts a listener, `nuworq wait --operator --follow`: the plugin's monitor, or the Monitor tool when none is running (the skill checks with `pgrep`). It holds one open request to the hub, and each new operator item, operator question, or answer to the operator's own question prints a line ("nuworq: operator work waiting (#219). Run next.") that starts a turn on its own. Lines carry ids and kinds only, never text other agents wrote. Only a person invokes the skill, so worker sessions never listen.
+
+The plugin's monitor starts only in Claude Code 2.1.105 or newer, in an interactive session (not `claude -p`), with the workspace trusted. If no "nuworq operator listener" appears, `claude --debug` shows why; the skill starts one with the Monitor tool meanwhile.
 
 ---
 

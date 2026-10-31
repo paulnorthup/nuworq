@@ -8,11 +8,14 @@ import { skill, planSkill, operatorSkill, OPERATOR_WAIT } from './protocol.js';
 // The operator's listener (#284): a monitor that starts only when a person invokes the nuworq-operator skill,
 // so worker and ordinary sessions never listen. What it prints reaches the idle session and starts a turn;
 // between lines it is one open request to the hub and no model calls.
+// Claude Code matches `when` against the skill's name as dispatched, and a plugin skill dispatches as
+// <plugin>:<dir> (#328): the bare `nuworq-operator` only ever matched the user-level skill from `nuworq skill`.
+// Entries keep exactly these four keys; Claude Code rejects an unknown one and then loads none of the plugin.
 export const MONITORS = [{
   name: 'nuworq-operator-listener',
   command: OPERATOR_WAIT,
   description: 'nuworq operator listener',
-  when: 'on-skill-invoke:nuworq-operator',
+  when: 'on-skill-invoke:nuworq:nuworq-operator',
 }];
 
 // { relative path: contents } for the plugin folder.
