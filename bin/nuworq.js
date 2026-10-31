@@ -994,10 +994,16 @@ ${dim(`  Give someone a login: nuworq token create <name> --role human --workspa
     // A single hub's database becomes a workspace (#204): see "From one hub to workspaces" in DEPLOY.md.
     if (sub === 'adopt') {
       const r = spaces.adopt(need(name, '<name>'), resolve(dbPath(flags)));
-      return console.log(`${green('Adopted')} ${dbPath(flags)} as workspace ${bold(r.workspace)} (${r.file}).
-  The original is untouched; a copy from now: ${r.backup}
-  Next: restart the hub with --workspaces (same --data-dir). Agents, runners and the CLI that saved its root
+      console.log(`${green('Adopted')} ${dbPath(flags)} as workspace ${bold(r.workspace)} (${r.file}).
+  The original is untouched; a copy from now: ${r.backup}`);
+      await adoptInstallations(spaces, r.workspace, flags);
+      return console.log(`  Next: restart the hub with --workspaces (same --data-dir). Agents, runners and the CLI that saved its root
   address keep working there; people find it at /w/${r.workspace}/${dim(' (or its subdomain with --base-domain)')}.`);
+    }
+    // A GitHub App installation's deliveries reach the workspace it is bound to (#226).
+    if (sub === 'bind-installation') {
+      const ws = need(pos[2], '<workspace>');
+      return reportBinding(spaces.bindInstallations(ws, [need(name, '<id>')]), ws);
     }
     if (sub === 'list') {
       const names = spaces.list();
@@ -1019,7 +1025,29 @@ ${dim(`  Give someone a login: nuworq token create <name> --role human --workspa
   } catch (e) {
     throw e.hint || e.status ? new HubError(e.message, { hint: e.hint }) : e;
   }
-  throw new HubError('usage: nuworq workspace create <name> | adopt <name> [--db file] | list | remove <name> | plan <name> <free|unlimited>');
+  throw new HubError('usage: nuworq workspace create <name> | adopt <name> [--db file] | bind-installation <id> <workspace> | list | remove <name> | plan <name> <free|unlimited>');
+}
+
+// The single hub's GitHub App keeps working after adopt (#226): every installation of it is bound to the
+// adopted workspace, so its webhooks reach it there. Without an app, or GitHub, it says how to bind one later.
+async function adoptInstallations(spaces, ws, flags) {
+  const { appFromEnv, appFromFile, GitHubApp } = await import('../src/ghapp.js');
+  const later = `nuworq workspace bind-installation <id> ${ws}`;
+  const conf = appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json'));
+  if (!conf) return console.log(dim(`  No GitHub App on this hub. If one sends it webhooks, bind each installation: ${later}`));
+  let ids;
+  try {
+    ids = (await new GitHubApp(conf).installations()).map((i) => i.id);
+  } catch (e) {
+    return console.log(amber(`  Couldn't list the GitHub App's installations (${e.message}). Bind each one (its id ends https://github.com/settings/installations/<id>): ${later}`));
+  }
+  if (!ids.length) return console.log(dim(`  The GitHub App isn't installed anywhere yet. Once it is: ${later}`));
+  reportBinding(spaces.bindInstallations(ws, ids), ws);
+}
+
+function reportBinding({ bound, elsewhere }, ws) {
+  if (bound.length) console.log(`${green('Bound')} GitHub App installation${bound.length > 1 ? 's' : ''} ${bound.join(', ')} to ${bold(ws)}: their webhooks reach it.`);
+  for (const e of elsewhere) console.log(amber(`  Installation ${e.id} is bound to workspace ${e.workspace}, so it stays there.`));
 }
 
 // People (the humans, each with a role) are managed on the hub host too, like tokens.
@@ -1199,7 +1227,9 @@ ${bold('Human')}
                                          dashboard; early-access requests are decided only there
   workspace create|remove <name> | list  manage workspaces on the hub host
   workspace adopt <name> [--db file]     turn a single hub's database into workspace <name> (a copy is kept);
-                                         tokens saved with the hub's root address keep working there
+                                         tokens saved with the hub's root address keep working there, and
+                                         its GitHub App's installations are bound to it
+  workspace bind-installation <id> <workspace>   GitHub App deliveries for installation <id> reach <workspace>
   notify add ntfy|slack|webhook <url> [--person bea]   push one batched message when something new needs you
                                          (--person: a channel for bea, only what bea owns)
   notify list | remove <id> | test       see, remove or test push channels (run on the hub host)
