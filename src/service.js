@@ -72,6 +72,10 @@ export function serviceFor({ platform, home, uid }) {
       kind: 'LaunchAgent', file, text: launchdPlist,
       load: [['launchctl', 'bootstrap', `gui/${uid}`, file]],
       unload: [['launchctl', 'bootout', `gui/${uid}/${LABEL}`]],
+      // bootout returns before launchd has torn the job down; bootstrap meanwhile fails with "5: Input/output
+      // error" (#250). print fails once it's gone, and shows the pid once it's up.
+      status: ['launchctl', 'print', `gui/${uid}/${LABEL}`], waitGone: true,
+      up: (out) => /\bpid = \d+/.test(out),
     };
   }
   if (platform === 'linux') {
@@ -81,6 +85,9 @@ export function serviceFor({ platform, home, uid }) {
       load: [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', '--now', UNIT]],
       unload: [['systemctl', '--user', 'disable', '--now', UNIT]],
       after: [['systemctl', '--user', 'daemon-reload']],
+      // disable --now waits for the stop itself, so there's nothing to wait out before loading.
+      status: ['systemctl', '--user', 'is-active', UNIT],
+      up: (out) => out.trim() === 'active',
     };
   }
   return null;
@@ -88,18 +95,32 @@ export function serviceFor({ platform, home, uid }) {
 
 const shown = (cmd) => cmd.map((x) => (/^[\w./:@=-]+$/.test(x) ? x : `'${String(x).replace(/'/g, "'\\''")}'`)).join(' ');
 
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+// What a failed command said: its stderr (launchd's own words) rather than node's "Command failed: …".
+const said = (e) => String(e?.stderr ?? '').trim() || e.message;
+
 // Write the definition and load it; one already there is unloaded and replaced. exec(cmd, args) runs a
-// command and rejects when it fails. Returns { file, kind, uninstall }: uninstall is the exact command to remove it.
-export async function install({ platform, home, uid, command, env, log, cwd, exec, fs = { mkdirSync, writeFileSync } }) {
+// command, resolves with { stdout } and rejects when it fails; sleep(ms) waits. Waits for the old job to be gone,
+// retries a failed load once, then waits up to ~10s for the runner to be up (#250).
+// Returns { file, kind, log, up, status, uninstall }: up is false when it didn't start in time; status and uninstall
+// are the exact commands to check on it and to remove it.
+export async function install({ platform, home, uid, command, env, log, cwd, exec, sleep = pause, fs = { mkdirSync, writeFileSync } }) {
   const s = serviceFor({ platform, home, uid });
   if (!s) throw Object.assign(new Error(`--install knows macOS (launchd) and Linux (systemd), not ${platform}`), { hint: 'Run nuworq run under your own supervisor instead.' });
+  const status = () => exec(s.status[0], s.status.slice(1)).then((r) => ({ ok: true, out: String(r?.stdout ?? '') }), () => ({ ok: false, out: '' }));
   for (const [cmd, ...args] of s.unload) await exec(cmd, args).catch(() => {}); // not loaded yet: fine
+  if (s.waitGone) for (let i = 0; i < 40 && (await status()).ok; i++) await sleep(250); // ~10s, then try anyway
   fs.mkdirSync(dirname(s.file), { recursive: true });
   fs.mkdirSync(dirname(log), { recursive: true });
   // 0600: the flags and NUWORQ_* it carries may include a token.
   fs.writeFileSync(s.file, s.text({ command, env, log, cwd }), { mode: 0o600 });
-  for (const [cmd, ...args] of s.load) await exec(cmd, args);
-  return { file: s.file, kind: s.kind, log, uninstall: `${shown(command.slice(0, 3))} --uninstall` };
+  const load = async () => { for (const [cmd, ...args] of s.load) await exec(cmd, args); };
+  await load().catch(async () => { await sleep(2000); await load(); }).catch((e) => {
+    throw Object.assign(new Error(`Couldn't load the ${s.kind}: ${said(e)}`), { hint: `Load it yourself with: ${shown(s.load.at(-1))}` });
+  });
+  let up = false;
+  for (let i = 0; !(up = s.up((await status()).out)) && i < 20; i++) await sleep(500);
+  return { file: s.file, kind: s.kind, log, up, status: shown(s.status), uninstall: `${shown(command.slice(0, 3))} --uninstall` };
 }
 
 // Stop it and remove the definition. Returns { file, removed }: removed is false when nothing was installed.
