@@ -104,7 +104,7 @@ describe('groups at a glance (#200)', () => {
   test('the page: groups right below Needs you; one tap sets priority; the map opens in the drawer', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.match(app, /'needs', 'groups'/, 'right below Needs you, phone and wide');
-    assert.match(app, /data-action="group-priority"/);
+    assert.match(readFileSync(new URL('../web/milestones.js', import.meta.url), 'utf8'), /data-action="group-priority"/);
     assert.doesNotMatch(app.match(/'group-priority': [^\n]*/)[0], /confirm\(/, 'no dialog: it is reversible');
     assert.match(app, /function groupMap\(/);
   });

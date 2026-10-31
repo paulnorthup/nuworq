@@ -51,7 +51,7 @@ export function drift(hub, p) {
   // Loose work counts only once the project steers by groups: until then nothing is out of place.
   for (const i of groups.length ? items : []) {
     if (['ready', 'proposed'].includes(i.stage) && !i.parent_id && !kids.has(i.id)) {
-      out.push({ key: `ungrouped:${i.seq}:${i.stage}`, kind: 'ungrouped', text: `#${i.seq} "${i.title}" (${i.stage}) is in no group: move it into one (refine parent), or start a group for it and its kin.` });
+      out.push({ key: `ungrouped:${i.seq}:${i.stage}`, kind: 'ungrouped', text: `#${i.seq} "${i.title}" (${i.stage}) is in no milestone: move it into one (refine parent), or start a milestone for it and its kin.` });
     }
   }
   return out;
@@ -60,10 +60,11 @@ export function drift(hub, p) {
 // The project's open tidy item, if any.
 export const openTidy = (hub, p) => hub.q(`SELECT * FROM items WHERE project_id = ? AND tidy != '' AND ${OPEN} LIMIT 1`).get(p.id);
 
-const SUMMARY = (found) => `The groups drifted. Put them right:\n${found.map((d) => `- ${d.text}`).join('\n')}`;
+// People read "milestone" for a group (#269), so what the hub writes on the tidy item says it too.
+const SUMMARY = (found) => `The milestones drifted. Put them right:\n${found.map((d) => `- ${d.text}`).join('\n')}`;
 const ACCEPTANCE = [
   '- Each drift listed is fixed, or left alone on purpose with the reason in your submit.',
-  '- Every change is made with refine and a one-line reason (reason), so the affected groups\' history says why.',
+  '- Every change is made with refine and a one-line reason (reason), so the affected milestones\' history says why.',
   '- No priority a person set is changed, and no decision is touched.',
 ].join('\n');
 
@@ -86,7 +87,7 @@ export function tidyUp(hub, p) {
     return cur;
   }
   if (!found.length) return null;
-  const it = hub.createItem(p, SYSTEM, { title: `Keep ${p.name}'s groups true`, summary: SUMMARY(found), acceptance: ACCEPTANCE, priority: 'soon' });
+  const it = hub.createItem(p, SYSTEM, { title: `Keep ${p.name}'s milestones true`, summary: SUMMARY(found), acceptance: ACCEPTANCE, priority: 'soon' });
   hub.patch(it, { tidy: JSON.stringify(keys) });
   if (it.stage !== 'ready') hub.move(it, 'ready', SYSTEM);
   return it;

@@ -9,6 +9,7 @@ import { checkChip } from './checks.js';
 import { dotClass } from './timeline.js';
 import { missingProject } from './missing.js';
 import { mapParts } from './groupmap.js';
+import { milestonesSection, prioritySeg as milestonePriority } from './milestones.js';
 import { ackList } from './acks.js';
 import { analyticsPage } from './analytics.js';
 import { agentLine } from './agentline.js';
@@ -459,25 +460,11 @@ function needsYou(v) {
     ${act.length ? '<span class="hint">oldest first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
 }
 
-// ── 30s: the groups (#200): is what I care about moving, and is anything stuck? One line each; a tap opens its map. ──
-const GROUP_STATE = { you: 'Waits on you', stuck: 'Stuck', moving: 'Moving', queued: 'Queued' };
-function groups(v) {
-  if (!v.groups?.length) return '';
-  return `<section class="sec"><header><h2>Groups</h2><span class="count">${v.groups.length}</span><span class="hint">tap one for its map</span></header>
-    <div class="groups">${v.groups.map((g) => `<div class="group g-${g.state}">
-      <button class="g-main" data-action="open" data-item="${esc(g.item)}">
-        <span class="g-head"><span class="g-state">${GROUP_STATE[g.state]}</span><span class="g-title">${esc(g.title)}</span></span>
-        <span class="g-meta">${g.done} of ${g.total} done · ${esc(g.reason)}${g.from ? ` · ranks ${esc(g.effective)} (from ${esc(g.from)})` : ''}</span>
-      </button>
-      ${prioritySeg(g.item, g.priority)}</div>`).join('')}
-    ${v.ungrouped ? `<div class="group-none">Not in a group (${v.ungrouped})</div>` : ''}</div></section>`;
-}
+// ── 30s: the milestones (web/milestones.js): one line each; a tap opens its map. ──
+const groups = (v) => milestonesSection(v, { esc });
+const prioritySeg = (item, priority) => milestonePriority(item, priority, { esc });
 
-// A group's own priority, set in one tap (#198 carries it to everything in it). Reversible, so no dialog.
-const prioritySeg = (item, priority) => `<div class="seg g-prio" role="group" aria-label="Priority of ${esc(item)}">${['now', 'soon', 'later'].map((p) =>
-  `<button class="${priority === p ? 'on' : ''}" aria-pressed="${priority === p}" data-action="group-priority" data-item="${esc(item)}" data-p="${p}">${p}</button>`).join('')}</div>`;
-
-// A group's map in the drawer: the nested tree, each item with its stage, who holds it, what it waits on,
+// A milestone's map in the drawer: the nested tree, each item with its stage, who holds it, what it waits on,
 // its pull requests and open questions, and a mark on what needs you. At each level what's left comes first,
 // and the done parts fold behind one line until tapped (#215).
 function groupMap(n) {
@@ -500,7 +487,7 @@ function mapLine(n) {
 // What each Needs you card is, in plain words: one per kind the hub puts at level "act" (test/cardlabels.test.js).
 const CARD_LABELS = {
   question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction',
-  'no-agents': 'Nobody is working', 'group-stalled': 'A "now" group is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
+  'no-agents': 'Nobody is working', 'group-stalled': 'A "now" milestone is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
   'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked', 'app-wiring': 'GitHub App setup', 'payment-failed': 'Payment failed',
   'plan-limit': 'Free plan limit',
 };
@@ -1018,7 +1005,7 @@ function renderDrawer() {
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
       <textarea data-draft="ei-summary" id="ei-summary" placeholder="Summary">${esc(it.summary)}</textarea>
       <textarea data-draft="ei-acceptance" id="ei-acceptance" placeholder="Done means…">${esc(it.acceptance)}</textarea>
-      <label class="field-label">Part of <input data-draft="ei-parent" id="ei-parent" value="${esc(it.parent?.item ?? '')}" placeholder="e.g. #12: the group it belongs to; empty for none" inputmode="numeric"></label>
+      <label class="field-label">Part of <input data-draft="ei-parent" id="ei-parent" value="${esc(it.parent?.item ?? '')}" placeholder="e.g. #12: the milestone it belongs to; empty for none" inputmode="numeric"></label>
       <label class="field-label">Fixes a landed item <input data-draft="ei-fixes" id="ei-fixes" value="${esc(it.fixes?.item ?? '')}" placeholder="e.g. #12: the landed item this repairs (counts as an escape)" inputmode="numeric"></label>
       <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['ei-priority'] ?? it.priority) === p ? 'on' : ''}" data-action="ei-priority" data-p="${p}">${p}</button>`).join('')}</div>
       ${it.stage !== 'active' ? `<div class="seg" title="Race: how many agents attempt it at once, each on its own; you keep the best">${[1, 2, 3].map((n) => `<button class="${+(S.drafts['ei-race'] ?? it.race) === n ? 'on' : ''}" data-action="ei-race" data-n="${n}">${n === 1 ? '1 agent' : `race ${n}`}</button>`).join('')}</div>` : ''}
@@ -1049,7 +1036,7 @@ function renderDrawer() {
     </div></div>` : '';
 
   d.innerHTML = `
-    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${it.effective_priority ? ` <span class="tag ${esc(it.effective_priority.split(' ')[0])}" title="Agents take it at this priority: its group, or work waiting on it, ranks higher">ranks ${esc(it.effective_priority)}</span>` : ''}${repoTag(it)}${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
+    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${it.effective_priority ? ` <span class="tag ${esc(it.effective_priority.split(' ')[0])}" title="Agents take it at this priority: its milestone, or work waiting on it, ranks higher">ranks ${esc(it.effective_priority)}</span>` : ''}${repoTag(it)}${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
       <button class="btn ghost small x" data-action="close" title="Close (Esc)">✕</button></div>
     <h2 class="title">${esc(it.title)}</h2>
     <div class="d-now">${holderLine}</div>
@@ -1464,7 +1451,7 @@ const ACTIONS = {
   'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) human('settings', { fresh: false }, 'The weekly freshness sweep is off'); },
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
-  'group-priority': (el) => human('update', { item: el.dataset.item, priority: el.dataset.p }, `${el.dataset.item} is ${el.dataset.p}: everything in it ranks at least ${el.dataset.p}`),
+  'group-priority': (el) => human('update', { item: el.dataset.item, priority: el.dataset.p }, `${el.dataset.item} is ${el.dataset.p}: everything in the milestone ranks at least ${el.dataset.p}`),
   clarify: (el) => {
     const k = `cl:${el.dataset.item}`;
     const body = val(k);

@@ -2183,7 +2183,7 @@ const AGENT_OPS = {
         : pick.mode === 'shape' && args.claim !== false
           ? SHAPE_HINT(pick.item, p, this.remotesOf(p))
         : pick.mode === 'tidy' && args.claim !== false
-          ? `You hold #${pick.item.seq}, a tidy job, for ${dur(LEASE_MS)}: its summary lists what drifted. No branch: fix each with refine and a one-line reason (parent moves an item, "" takes it out; pr attaches a pull request), propose a parent for a cluster, submit a group whose parts are all done. Never change a priority a person set or touch a decision. Then submit #${pick.item.seq} with what you changed; that finishes it.`
+          ? `You hold #${pick.item.seq}, a tidy job, for ${dur(LEASE_MS)}: its summary lists what drifted. No branch: fix each with refine and a one-line reason (parent moves an item, "" takes it out; pr attaches a pull request), propose a parent for a cluster, submit a milestone whose parts are all done. Never change a priority a person set or touch a decision. Then submit #${pick.item.seq} with what you changed; that finishes it.`
           : args.claim === false
           ? `Not claimed. Claim #${pick.item.seq} to start.`
           : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${this.workHint(p, this.itemById(pick.item.id))} ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`.replace(/  +/g, ' '),
@@ -2340,7 +2340,7 @@ const AGENT_OPS = {
     // A tidy job (#202) is bookkeeping, already on the record change by change: submitting finishes it.
     if (item.tidy) {
       this.move(item, 'done', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
-      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} tidied the groups: ${headline}`, summary, detail, data: { evidence } });
+      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} tidied the milestones: ${headline}`, summary, detail, data: { evidence } });
       return { ok: true, hint: `#${item.seq} is done. Call next for more work.` };
     }
     const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
@@ -2608,15 +2608,15 @@ Object.assign(Hub.prototype, {
       if ((to?.id ?? null) !== item.parent_id) {
         for (let a = to; a; a = this.itemById(a.parent_id)) {
           if (a.id === item.id) {
-            throw new UserError(to.id === item.id ? `#${item.seq} can't be part of itself` : `#${to.seq} is part of #${item.seq}, so #${item.seq} can't go under it`, { hint: `Pick a group outside #${item.seq}, or move #${to.seq} out first.` });
+            throw new UserError(to.id === item.id ? `#${item.seq} can't be part of itself` : `#${to.seq} is part of #${item.seq}, so #${item.seq} can't go under it`, { hint: `Pick a parent outside #${item.seq}, or move #${to.seq} out first.` });
           }
         }
         if (to && ['done', 'dropped'].includes(to.stage)) {
-          throw new UserError(`#${to.seq} is ${to.stage}`, { hint: `Pick an open group for #${item.seq}, or reopen #${to.seq} first.` });
+          throw new UserError(`#${to.seq} is ${to.stage}`, { hint: `Pick an open parent for #${item.seq}, or reopen #${to.seq} first.` });
         }
         regroup = { from: this.itemById(item.parent_id), to };
         set.parent_id = to?.id ?? null;
-        changed.push(to ? `part of #${to.seq}` : 'in no group');
+        changed.push(to ? `part of #${to.seq}` : 'in no milestone');
       }
     }
     // A pull request no item tracked (#202), linked here: it lands with this item as usual.
