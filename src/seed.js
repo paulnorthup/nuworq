@@ -12,7 +12,7 @@ export async function seed(hub) {
     at(8);
     hub.tx(() => hub.project(P, { create: true, name: 'nuworq' }));
     You('settings', { mission: 'A hub where AI agents are first-class participants and the human is a facilitator. Everything follows 0-30-5-30: silence when things are fine, 30 seconds to know what needs you, 5 minutes to understand it, 30 minutes for the whole story.' });
-    You('decide', { body: 'Zero runtime dependencies: Node 22.13+ and its built-in SQLite only.' });
+    You('decide', { body: 'Zero runtime dependencies: Node 24+ and its built-in SQLite only.' });
     You('decide', { body: 'Design for agents as the primary users of the protocol: low ceremony, small responses, forgiving inputs, every error carries a hint.' });
 
     let h = 7.5;

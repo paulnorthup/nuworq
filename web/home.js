@@ -23,7 +23,7 @@ export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(n
       <div class="body"><b>${esc(p.name)}</b> <span class="s">${esc(short(p.pulse.sentence) || p.pulse.state)}</span>
         ${z >= 2 && p.mission ? `<div class="m">${esc(p.mission)}</div>` : ''}
         ${z >= 2 ? `<div class="m">${[p.remotes?.length ? esc(p.remotes.join(', ')) : 'No repo linked', p.runner ? 'nuworq run staffs it' : 'nuworq run leaves it alone'].join(' · ')}</div>` : ''}</div>
-      ${p.needs ? `<span class="badge" title="${plural(p.needs, 'thing')} need you">${p.needs}</span>` : ''}
+      ${p.needs ? `<span class="badge" title="${plural(p.needs, 'thing')} ${p.needs === 1 ? 'needs' : 'need'} you">${p.needs}</span>` : ''}
     </div>`;
   const projects = `<section class="sec home-projects"><header><h2>Projects</h2></header><div class="ov-lines">
       ${(z >= 1 ? [...live, ...parked] : live).map(line).join('')}

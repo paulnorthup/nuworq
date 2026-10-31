@@ -23,6 +23,8 @@ const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
 const WIDE = matchMedia('(min-width: 1024px)');
 WIDE.addEventListener('change', () => render());
+// A keyboard, a mouse and room: only then does a keyboard hint fit in the copy (cf. .kbd-hint in style.css).
+const KEYBOARD = matchMedia('(hover: hover) and (pointer: fine) and (min-width: 421px)');
 // Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
 const store = {
   get: (k, d) => { try { return localStorage.getItem('nuworq:' + k) ?? localStorage.getItem('trellis:' + k) ?? d; } catch { return d; } },
@@ -43,6 +45,7 @@ const z = () => Z[S.zoom];
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+const needYou = (n) => `${plural(n, 'thing')} ${n === 1 ? 'needs' : 'need'} you`;
 
 const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>');
 
@@ -263,14 +266,14 @@ function renderRail() {
   const projects = S.projects.map((p) => `
     <a class="rail-item ${p.slug === S.slug ? 'on' : ''}" href="#/p/${encodeURIComponent(p.slug)}">
       ${stateDot(p.pulse.state)}<span class="name">${esc(p.name)}</span>
-      ${p.needs ? `<span class="badge" title="${plural(p.needs, 'thing')} need you">${p.needs}</span>` : ''}
+      ${p.needs ? `<span class="badge" title="${needYou(p.needs)}">${p.needs}</span>` : ''}
     </a>`).join('');
   const total = S.projects.reduce((n, p) => n + p.needs, 0);
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
     <button class="rail-item rail-menu" data-action="rail-menu" aria-expanded="${!!S.railMenu}"><span data-new="phone-menu">${S.railMenu ? 'Close' : 'Menu'}</span></button><span class="rail-break"></span>
-    <a class="rail-label rail-head ${!S.slug && !S.analytics ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
+    <a class="rail-label rail-head ${!S.slug && !S.analytics ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${needYou(total)}">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--muted)">No projects yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
@@ -434,7 +437,7 @@ function composer() {
   const kinds = { steer: 'Steer', decision: 'Decision', note: 'Note' };
   return `<div class="composer">
       <div class="box">
-        <textarea id="compose" data-draft="compose" placeholder="Say something to your agents… (⌘↵ to send)"></textarea>
+        <textarea id="compose" data-draft="compose" placeholder="Say something to your agents…${KEYBOARD.matches ? ' (⌘↵ to send)' : ''}"></textarea>
         <div class="row">
           <div class="seg">${Object.entries(kinds).map(([k, l]) => `<button class="${S.composeKind === k ? 'on' : ''}" data-action="compose-kind" data-kind="${k}">${l}</button>`).join('')}</div>
           <span class="hint">${hints[S.composeKind]}</span>
@@ -1031,7 +1034,7 @@ function renderDrawer() {
       </dl></div>
     ${it.detail ? `<div class="d-sec"><div class="label">Detail</div>${md(it.detail)}</div>` : ''}
     ${it.usage ? usageTable(it.usage) : ''}
-    <div class="d-sec"><div class="label">Timeline <span class="count">${it.events.length} events</span></div><div class="timeline">
+    <div class="d-sec"><div class="label">Timeline <span class="count">${plural(it.events.length, 'event')}</span></div><div class="timeline">
       ${it.events.map((e) => `<div class="tl t-${e.type} ${dotClass(e.type, courtOf)}">
         <div class="meta">${who(e.actor)}<span>${esc(e.type.replace('_', ' '))}</span><span>${esc(e.ago)} ago</span></div>
         <div class="h">${named(e.headline, e.actor, undefined, { beside: true })}</div>

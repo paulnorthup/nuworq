@@ -38,6 +38,7 @@ describe('the home page', () => {
     assert.ok(pulse >= 0 && pulse < needs && needs < projects, 'in that order');
     assert.match(html, /<div class="home-card" data-project="p2"><a class="proj-tag" href="#\/p\/p2">p2<\/a><!--card:question:#1-->/, 'each card sits in its project');
     assert.equal((html.match(/data-action="goto" data-slug="p\d"/g) ?? []).length, 2, 'a line per project');
+    assert.match(html, /title="1 thing needs you"/, 'the badge agrees in number (#289)');
   });
 
   test('parked projects fold into one line at 30s and show at 5m; 5m adds worth knowing and motion; 30m the details', () => {
