@@ -115,11 +115,11 @@ describe('the admin host lists workspaces and sets their plans', () => {
     assert.deepEqual(r.json.workspaces.map((w) => w.name), ['acme', 'quiet'], 'sorted by last activity; quiet has none');
     const [acme, quiet] = r.json.workspaces;
     assert.deepEqual({ ...acme, last_active: typeof acme.last_active }, {
-      name: 'acme', plan: 'free', source: 'default', set_by: null, set_at: null,
+      name: 'acme', plan: 'free', source: 'default', set_by: null, set_at: null, billing: null,
       creator: { email: 'ann@acme.test', github: 'ann-gh' },
       people: 2, projects: 1, working: ['a1'], last_active: 'number',
     });
-    assert.deepEqual(quiet, { name: 'quiet', plan: 'unlimited', source: 'default', set_by: null, set_at: null, creator: null, people: 0, projects: 0, working: [], last_active: null });
+    assert.deepEqual(quiet, { name: 'quiet', plan: 'unlimited', source: 'default', set_by: null, set_at: null, billing: null, creator: null, people: 0, projects: 0, working: [], last_active: null });
   });
 
   test('a non-owner gets 403, and the app host refuses the API with a hint naming the admin host', async () => {

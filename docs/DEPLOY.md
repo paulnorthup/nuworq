@@ -253,6 +253,13 @@ A release precondition (`{ kind: "release", repo: "acme/api", min: "2.1.0" }`) r
   3. **GitHub, GitHub App** (user sign-in): under Callback URL, click Add callback URL and enter `https://admin.example.com/auth/github/callback`.
   4. Route `admin.example.com` to the hub like the app's host (Caddy site block or tunnel hostname), restart with `--admin-host admin.example.com`, and open `https://admin.example.com/`. Check: it offers Sign in, and after signing in with an owner's email it lists the requests. To undo, remove `--admin-host` and restart: `/requests.html` works on the app again.
 
+### Billing with Stripe (workspaces hubs)
+Off unless set, and set from the environment only: `NUWORQ_STRIPE_WEBHOOK_SECRET` (the endpoint's signing secret, `whsec_…`), `NUWORQ_STRIPE_SECRET_KEY` (`sk_…`) and `NUWORQ_STRIPE_PRICES` (`plan=price id` pairs, e.g. `pro=price_123,team=price_456`). Without the webhook secret, `POST /api/stripe/webhook` answers 404 and plans behave as before.
+- **What the hub trusts.** Only Stripe's signed webhook, never the redirect back from Checkout. It checks `Stripe-Signature` (HMAC-SHA256 over `t.body`, any `v1`, `t` within 5 minutes); a bad or stale one is a 400 and changes nothing. An event id it has seen is acknowledged (200) and ignored.
+- **What it keeps.** Per subscription, in the directory: its workspace (from `checkout.session.completed`'s `client_reference_id`), customer, status, period end and `cancel_at_period_end`, from `customer.subscription.created/updated/deleted`. With prices set, a subscription to none of them is ignored.
+- **The plan.** A hub owner in the workspace, then a plan set by hand, win as before. Otherwise an `active`, `trialing` or `past_due` subscription, or a cancelled one until its period ends, makes it Unlimited (`source: "billing"`). The admin dashboard shows Stripe's state on each workspace ("paid until 2026-12-01", "cancels 2026-12-01", "payment failed"); `GET /api/workspaces` carries it as `billing`.
+- **Set it up.** 1. In Stripe → Developers → **Webhooks** (https://dashboard.stripe.com/webhooks), click Add endpoint, URL `https://<app host>/api/stripe/webhook`, events `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`. 2. Copy its Signing secret into `NUWORQ_STRIPE_WEBHOOK_SECRET` on the hub host and restart the hub. 3. Click Send test webhook. Check: the delivery shows 200. To undo, unset the variable and restart: the endpoint answers 404 again.
+
 ### Backups
 Everything lives in one SQLite file, plus its `-wal` and `-shm` files while running.
 ```bash

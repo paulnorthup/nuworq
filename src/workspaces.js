@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Hub, UserError } from './core.js';
 import { Directory } from './directory.js';
+import { paid, billingLine } from './billing.js';
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 export const RESERVED = new Set(['www', 'api', 'app', 'admin', 'w', 'static', 'login', 'auth', 'hub']);
@@ -124,12 +125,16 @@ export class Workspaces {
   }
 
   // The plan the organization is on while plans are on, and why: source 'owners' (a hub owner belongs to it),
-  // 'set' (the hub owner set it: set_by, set_at) or 'default' (free if someone signed up for it, else unlimited).
+  // 'set' (the hub owner set it: set_by, set_at), 'billing' (a Stripe subscription pays for it, #227) or 'default'
+  // (free if someone signed up for it, else unlimited). billing: its Stripe state, whatever the source, or null.
   planInfo(slug) {
-    if (this.directory.hasMember(slug, this.owners)) return { plan: 'unlimited', source: 'owners', set_by: null, set_at: null };
+    const b = this.directory.billingOf(slug);
+    const billing = b ? { status: b.status, period_end: b.period_end, cancel_at_period_end: b.cancel_at_period_end, plan: b.plan, line: billingLine(b, this.directory.now()) } : null;
+    if (this.directory.hasMember(slug, this.owners)) return { plan: 'unlimited', source: 'owners', set_by: null, set_at: null, billing };
     const set = this.directory.planSet(slug);
-    if (set) return { plan: set.plan, source: 'set', set_by: set.set_by || null, set_at: set.at };
-    return { plan: this.directory.madeBySomeone(slug) ? 'free' : 'unlimited', source: 'default', set_by: null, set_at: null };
+    if (set) return { plan: set.plan, source: 'set', set_by: set.set_by || null, set_at: set.at, billing };
+    if (paid(b, this.directory.now())) return { plan: 'unlimited', source: 'billing', set_by: null, set_at: null, billing };
+    return { plan: this.directory.madeBySomeone(slug) ? 'free' : 'unlimited', source: 'default', set_by: null, set_at: null, billing };
   }
 
   // One row per workspace for the hub owners' dashboard (#169), most recently active first: its plan, who
