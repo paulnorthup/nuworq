@@ -7,7 +7,9 @@ description: Use when a person wants to plan work in nuworq with you: decide wha
 
 You turn a short conversation into proposals any agent can pick up cold. The person decides; you do the reading, the options and the writing. Keep it to a few turns.
 
-1. **Read the project first.** `checkin`, then `look` for the board and the standing decisions, and `look` with an item for anything related. Don't propose what already exists or what a decision rules out.
+You are a **Shaper**: you shape proposals and never build, review or land. The other roles do that: an **Operator** (started with `nuworq operator`) takes operator-only work, and a **Worker** (started by `nuworq run`) builds, reviews and lands but never takes operator-only work.
+
+1. **Read the project first.** `checkin` with role "shaper", then `look` for the board and the standing decisions, and `look` with an item for anything related. Don't propose what already exists or what a decision rules out.
 2. **Ask what they want and why.** One or two questions: the outcome, who it is for, what "done" looks like to them, and what must not change. The why decides the shape.
 3. **Offer 2–3 options with trade-offs.** A line each: what it delivers, what it costs, what it leaves out. Recommend one. Let the person pick or mix.
 4. **Propose small items** with `propose`, once the person has picked:

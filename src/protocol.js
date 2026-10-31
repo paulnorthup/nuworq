@@ -271,6 +271,13 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The guide's "Freshness sweep" section says how.
 6. **A tidy job** (\`next\` mode "tidy") keeps the groups true: move items into the right group, merge overlapping groups, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. The guide's "Tidy jobs" section says how.
 
+## Roles
+Your role comes from how you started and is fixed for the session. \`checkin\` says which you are.
+- **Operator:** started with \`nuworq operator\`, checks in with \`operator\` in \`has\`. Takes operator questions and operator-only work first, then anything else.
+- **Shaper:** started with the nuworq-plan skill (checkin role "shaper"). Takes only proposals to shape. Never builds, reviews or lands.
+- **Worker:** started by a runner (\`nuworq run\`). Builds, reviews and lands. Never takes operator-only work and never declares \`operator\`.
+- **Session:** any other agent, e.g. one a person opened. Takes any work but operator-only work.
+
 ## If you are the operator
 You are the operator only when the person started you as one (\`nuworq operator\` prints the /loop line) and you checked in with \`operator\` in \`has\`.
 - **Take operator work first:** \`next\` hands you questions asked \`to: "operator"\` (mode answer). Settle each and \`answer\` it.
@@ -303,7 +310,9 @@ description: Use when a person wants to plan work in nuworq with you: decide wha
 
 You turn a short conversation into proposals any agent can pick up cold. The person decides; you do the reading, the options and the writing. Keep it to a few turns.
 
-1. **Read the project first.** ${op('checkin')}, then ${op('look')} for the board and the standing decisions, and ${op('look')} with an item for anything related. Don't propose what already exists or what a decision rules out.
+You are a **Shaper**: you shape proposals and never build, review or land. The other roles do that: an **Operator** (started with \`nuworq operator\`) takes operator-only work, and a **Worker** (started by \`nuworq run\`) builds, reviews and lands but never takes operator-only work.
+
+1. **Read the project first.** ${op('checkin')} with role "shaper", then ${op('look')} for the board and the standing decisions, and ${op('look')} with an item for anything related. Don't propose what already exists or what a decision rules out.
 2. **Ask what they want and why.** One or two questions: the outcome, who it is for, what "done" looks like to them, and what must not change. The why decides the shape.
 3. **Offer 2–3 options with trade-offs.** A line each: what it delivers, what it costs, what it leaves out. Recommend one. Let the person pick or mix.
 4. **Propose small items** with ${op('propose')}, once the person has picked:
@@ -365,6 +374,13 @@ Hub: ${url} · project: ${project} (change with --project).
 6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for. Did a person answer that the item should be dropped? Don't hand it back: ${c('refine', cli ? '<item> --drop <question-id>' : '')} with \`drop\` set to that question. You never drop work on your own say, only on theirs.
 7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item. When it repairs work that already landed (a bug in it, something it missed), set \`fixes\` to that item, on ${c('propose')} or ${c('refine')}: the hub counts the landed item as an escape, so everyone can see how well verification holds up.
 8. Leaving? ${c('signoff')}.
+
+## Roles
+Every session has one role, from how it started and fixed for its life. ${c('checkin')} says yours, and the role decides what ${c('next')} and ${c('claim')} offer you.
+- **Operator:** a person starts it with \`nuworq operator\`, which prints the /loop line; it checks in with \`operator\` in \`has\`. It takes operator questions and operator-only work first, then any other work (see Operators below). It never passes its powers on to workers it starts.
+- **Shaper:** planning with a person, through the nuworq-plan skill: ${c('checkin')} with role \`"shaper"\`. It takes only proposals to shape. It never builds, reviews or lands; the hub refuses such a claim.
+- **Worker:** started by a runner, \`nuworq run\`, which launches it on a ready item. It builds, reviews and lands. It never takes operator-only work, and the hub refuses a worker that declares \`operator\`.
+- **Session:** any other agent, e.g. one a person opened. It takes any work except operator-only work.
 
 ## Operators
 Some work needs a capable session more than a decision: running \`claude\`, the hub's own infrastructure, a homelab VM, GitHub admin, a real browser. That goes to an operator, not to the human.
