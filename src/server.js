@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, normRemote, slugify } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, normRemote, slugify, MIN, HOUR, DAY } from './core.js';
 import { view, itemView, projectList, homeView } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
@@ -16,6 +16,7 @@ import { runChecks } from './precondition.js';
 import { freshen } from './freshness.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
 import { syncAlerts, accessOf } from './alerts.js';
+import { checkWiring, wiringEntry } from './appwiring.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP, ADMIN_SESSION_MS } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
@@ -106,7 +107,7 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // early-access request list and its APIs are no longer served anywhere else.
 // billing (workspaces mode): src/billing.js billingFromEnv(): { webhookSecret, secretKey, prices }. null: billing
 // is off, and POST /api/stripe/webhook answers 404.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   siteHost = String(siteHost).toLowerCase();
   if (siteHost && !publicUrl) throw new Error('a site host needs the public URL the app lives at (--public-url)');
@@ -135,6 +136,33 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }).catch(() => {});
   };
   freshSlug();
+  // Whether the app hears and may do what the hub handles (#220): on start, then once a day (hourly while something
+  // is missing; GitHub not answering: again in 10 minutes, keeping what it said last). Events only matter when
+  // GitHub can deliver them: the hub has the app's webhook secret and isn't loopback-only.
+  let wiring = { app: null, next: 0, found: null };
+  const checkApp = () => {
+    if (!app || (wiring.app === app && Date.now() < wiring.next)) return;
+    const was = wiring.app === app ? wiring.found : null;
+    wiring = { app, next: Date.now() + Math.min(appCheckMs, 10 * MIN), found: was };
+    const events = !!app.webhookSecret && !/^https?:\/\/(localhost|127\.|\[::1\])/i.test(publicUrl);
+    const mine = wiring;
+    checkWiring(app, { events }).then((r) => {
+      if (!r || wiring !== mine) return;
+      const same = was?.gaps && r.gaps && JSON.stringify(was.gaps) === JSON.stringify(r.gaps);
+      mine.found = r.gaps ? { ...r, since: same ? was.since : Date.now() } : null;
+      mine.next = Date.now() + (r.gaps ? Math.min(appCheckMs, HOUR) : appCheckMs);
+      if (!!was !== !!mine.found || !same) for (const hub of hubs()) for (const p of hub.projects()) hub.changed(p);
+    });
+  };
+  // Only the hub's owners see it: on a shared hub, the owners (by email) in the organizations they belong to; on a
+  // single hub, whoever runs it (local mode) or its owners.
+  const wiringFor = (hub) => (viewer) => {
+    const found = wiring.app === app ? wiring.found : null;
+    if (!found) return null;
+    const who = viewer ? hub.q('SELECT role, email FROM people WHERE handle = ?').get(String(viewer).replace(/^@/, '').toLowerCase()) : null;
+    if (spaces) return who?.email && spaces.owners.includes(who.email.toLowerCase()) ? found : null;
+    return !viewer || !who || who.role === 'owner' ? found : null;
+  };
   // Whether the app reaches anything (Get started): installed anywhere on a single hub; on a workspaces hub,
   // on one of the workspace's own repositories, through an installation bound to it. Asked of GitHub at most
   // once a minute per hub.
@@ -231,7 +259,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return s;
   };
   const hubs = () => (spaces ? spaces.hubs() : [target]);
+  checkApp();
   const sweeper = setInterval(() => {
+    checkApp();
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); } catch (e) { console.error('sweep failed', e); }
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
@@ -415,7 +445,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (req.method === 'GET' && path === '/api/oauth') return send(200, { providers: sso.list().map((p) => ({ ...p, start: `/auth/${p.name}/start` })) });
     const page = path === '/' ? '/admin.html' : path;
     if (req.method === 'GET' && ['/admin.html', '/admin.js', '/style.css'].includes(page)) return send(200, readFileSync(join(WEB, page.slice(1)), 'utf8'), TYPES[extname(page)]);
-    if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'POST /api/early-access/decide', 'GET /api/workspaces', 'POST /api/workspaces/plan'].includes(`${req.method} ${path}`)) {
+    if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'POST /api/early-access/decide', 'GET /api/workspaces', 'POST /api/workspaces/plan', 'GET /api/github/app/wiring'].includes(`${req.method} ${path}`)) {
       return deny(404, 'the admin host serves only the admin dashboard', `Workspaces live at ${publicUrl || 'the hub\'s own address'}.`);
     }
     const dir = spaces.directory;
@@ -433,6 +463,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!owner) return deny(403, `${me.email} isn't one of this hub's owners`, "Only the emails the hub host lists in NUWORQ_HUB_OWNERS (--owners) get in. Sign out, then sign in with an owner's account.");
     // Workspaces and their plans (#169). Plans are stored either way; only --plans enforces them.
     if (path === '/api/workspaces') return send(200, { enforced: spaces.plans, workspaces: spaces.overview() });
+    // What the hub's GitHub App is missing (#220), as the Needs you entry has it; null when nothing is.
+    if (path === '/api/github/app/wiring') {
+      const found = wiring.app === app ? wiring.found : null;
+      return send(200, { app: !!app, missing: found ? wiringEntry(found) : null });
+    }
     if (path === '/api/workspaces/plan') {
       const b = await body(req);
       if (!b.workspace) return deny(400, 'workspace is required', 'e.g. { "workspace": "acme", "plan": "unlimited" }');
@@ -641,6 +676,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       const { authz, devices, clients } = scopeOf(hub);
       adopt(hub, req, base);
+      hub.appWiring ??= wiringFor(hub);
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.

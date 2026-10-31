@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, generateKeyPairSync } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtempSync, realpathSync } from 'node:fs';
@@ -10,10 +10,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Workspaces } from '../src/workspaces.js';
 import { createServer } from '../src/server.js';
+import { manifest } from '../src/ghapp.js';
 
 const ADMIN = 'admin.example.test', APP = 'app.example.test';
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 const PAUL = 'paul@example.com';
+const PEM = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
 
 function request(port, method, path, { host = APP, headers = {}, body } = {}) {
   const data = body === undefined ? null : JSON.stringify(body);
@@ -52,6 +54,8 @@ function provider() {
     }
     const email = tokens.get(String(req.headers.authorization ?? '').replace('Bearer ', ''));
     if (email && req.url === '/user/emails') return json(200, [{ email, primary: true, verified: true }]);
+    // The hub's GitHub App, as GitHub describes it: subscribed to no events (#220).
+    if (req.url === '/app') return json(200, { id: 1, slug: 'nuworq', owner: { login: 'nuworq', type: 'Organization' }, permissions: manifest('https://x.test', 'n').default_permissions, events: [] });
     json(401, {});
   });
   return {
@@ -94,9 +98,29 @@ describe('the admin host lists workspaces and sets their plans', () => {
       publicUrl: `http://${APP}`, adminHost: ADMIN,
       oauth: { github: { id: 'gh', secret: 'shh', authorize: `${stub}/authorize`, token: `${stub}/token`, api: stub } },
       earlyAccess: { owners: [PAUL], verify: async () => true, gate: true },
+      githubApp: { id: 1, key: PEM, webhook_secret: 's', api: stub },
     });
     port = await listen(server);
     owner = await signIn(PAUL);
+  });
+
+  test('what the hub\'s GitHub App is missing shows on the dashboard, and in Needs you only for the hub\'s owners (#220)', async () => {
+    let r;
+    for (const end = Date.now() + 3000; Date.now() < end; await new Promise((ok) => setTimeout(ok, 20))) {
+      r = await request(port, 'GET', '/api/github/app/wiring', { host: ADMIN, headers: { cookie: owner } });
+      if (r.json?.missing) break;
+    }
+    assert.equal(r.status, 200, r.text);
+    assert.match(r.json.missing.headline, /missing 7 events/);
+    assert.equal(r.json.missing.how[0].where, 'https://github.com/organizations/nuworq/settings/apps/nuworq/permissions');
+    assert.equal((await request(port, 'GET', '/api/github/app/wiring', { host: ADMIN, headers: { cookie: await signIn('zed@example.com') } })).status, 403);
+    // In a workspace: Ann owns acme but not the hub, so it isn't hers to fix; Paul, a hub owner, sees it there.
+    await request(port, 'GET', '/w/acme/api/health');
+    const acme = spaces.get('acme');
+    assert.equal(acme.appWiring('@ann'), null);
+    acme.db.prepare("INSERT INTO people (handle, email, role, created_at) VALUES ('paul', ?, 'member', 0)").run(PAUL);
+    assert.ok(acme.appWiring('@paul')?.gaps.events.length);
+    acme.db.prepare("DELETE FROM people WHERE handle = 'paul'").run();
   });
   after(() => { for (const s of [server, p.server]) { s.close(); s.closeAllConnections(); } spaces.close(); });
 
