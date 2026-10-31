@@ -225,7 +225,7 @@ async function waitCmd(flags) {
   for (let since = 0; ;) {
     let r;
     try {
-      r = await client.wait({ since, timeout: Number(flags.timeout) || undefined }, { agent });
+      r = await client.wait({ since, timeout: Number(flags.timeout) || undefined, all: !!flags['all-projects'] }, { agent });
     } catch (e) {
       if (!flags.follow || agent || e.status !== 403 || !/^no operator has checked in/.test(e.message) || Date.now() >= until) throw e;
       await new Promise((res) => setTimeout(res, Math.min(settle / 12, Math.max(0, until - Date.now()))));
@@ -1347,9 +1347,11 @@ ${bold('Setup')}
                                          to paste into Claude Code in the project folder (runs nothing). Operator
                                          tags: claude-cli, infra (the project's live infrastructure: servers and
                                          VMs, DNS, cloud accounts, deploys), github-admin, browser
-  wait --operator [--follow] [--as name] block until there is something for an operator (its work, a question
+  wait --operator [--follow] [--as name] [--project p | --all-projects]
+                                         block until there is something for an operator (its work, a question
                                          to it, an answer, steering) and print one line; --follow: one per event.
-                                         Without --as: the operators that checked in with this token
+                                         Without --as: the operators that checked in with this token.
+                                         Only this folder's project, unless --project or --all-projects.
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
   worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags] [--browser]
                                          start a headless worker where work is waiting (the hub routes it),

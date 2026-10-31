@@ -62,7 +62,9 @@ function eventsFor(hub, p, agent, since) {
   for (const q of hub.q(`SELECT * FROM questions WHERE project_id = ? AND audience = 'operator' AND status = 'open' AND asked_by != ? AND at > ? ORDER BY at`).all(p.id, agent, since)) {
     out.push({ at: q.at, kind: 'question', project: p.slug, question: q.id, ...(q.item_id ? { item: `#${seq(q.item_id)}` } : {}) });
   }
-  for (const q of hub.q(`SELECT * FROM questions WHERE project_id = ? AND asked_by = ? AND status IN ('answered', 'confirmed') AND answered_at > ? ORDER BY answered_at`).all(p.id, agent, since)) {
+  // Only answers the asker hasn't had yet (#329): one checkin already delivered isn't worth a wake, so a
+  // fresh listener (since 0) doesn't replay every answer of the last day.
+  for (const q of hub.q(`SELECT * FROM questions WHERE project_id = ? AND asked_by = ? AND status IN ('answered', 'confirmed') AND seen_by_asker = 0 AND answered_at > ? ORDER BY answered_at`).all(p.id, agent, since)) {
     out.push({ at: q.answered_at, kind: 'answer', project: p.slug, question: q.id, ...(q.item_id ? { item: `#${seq(q.item_id)}` } : {}) });
   }
   for (const s of hub.pendingSteers(p, agent)) {
