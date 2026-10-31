@@ -1145,13 +1145,14 @@ export class Hub extends EventEmitter {
   }
 
   // Steering an agent has not acknowledged: recent project-wide steers, plus steers on items it holds.
+  // A steer with a target goes to that agent alone, and nobody is steered by their own words.
   pendingSteers(p, agent) {
     return this.q(`SELECT n.*, i.seq AS item_seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
-      WHERE n.project_id = ? AND n.kind = 'steer' AND n.active = 1
+      WHERE n.project_id = ? AND n.kind = 'steer' AND n.active = 1 AND n.author != ?
         AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.note_id = n.id AND a.agent = ?)
-        AND ((n.item_id IS NULL AND n.target IS NULL AND n.at > ?) OR i.holder = ? OR n.target = ?
-          OR EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = n.item_id AND a.agent = ? AND a.stage = 'active' AND a.closed = 0))
-      ORDER BY n.at`).all(p.id, agent, this.now() - STEER_TTL, agent, agent, agent)
+        AND (n.target = ? OR (n.target IS NULL AND ((n.item_id IS NULL AND n.at > ?) OR i.holder = ?
+          OR EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = n.item_id AND a.agent = ? AND a.stage = 'active' AND a.closed = 0))))
+      ORDER BY n.at`).all(p.id, agent, agent, agent, this.now() - STEER_TTL, agent, agent)
       .map((n) => ({ steer: n.id, about: n.item_seq ? `#${n.item_seq}` : 'whole project', from: n.author, body: n.body, ago: dur(this.now() - n.at) }));
   }
 
@@ -1247,7 +1248,8 @@ export class Hub extends EventEmitter {
         ORDER BY at DESC LIMIT 8`).all(item.id).reverse();
     const questions = this.q('SELECT * FROM questions WHERE item_id = ? ORDER BY at').all(item.id);
     const steers = this.q(`SELECT n.* FROM notes n WHERE n.item_id = ? AND n.kind = 'steer' AND n.active = 1
-        AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.note_id = n.id AND a.agent = ?) ORDER BY n.at`).all(item.id, agent ?? '');
+        AND (n.target IS NULL OR n.target = ?) AND n.author != ?
+        AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.note_id = n.id AND a.agent = ?) ORDER BY n.at`).all(item.id, agent ?? '', agent ?? '', agent ?? '');
     const handoff = json(item.handoff, null);
     const lease = this.leaseOf(item, agent);
     const touching = this.touchingOf(item, agent);
@@ -2820,14 +2822,18 @@ const HUMAN_OPS = {
     if (orig) HUMAN_OPS.answer.call(this, p, { question: orig.id, answer: text }, by);
     this.q(`UPDATE questions SET status = 'answered', answer = ?, answered_by = ?, answered_at = ?, seen_by_asker = 0 WHERE id = ?`)
       .run(text, by, this.now(), q.id);
+    const overrides = !q.blocking && q.status === 'open';
     this.event(p, {
       item, actor: by, type: 'answered',
       headline: `${You(by)} answered${item ? ` on #${item.seq}` : ''}: ${clip(text)}`,
-      summary: `${q.asked_by} asked: ${q.question}`, data: { question: q.id },
+      summary: `${q.asked_by} asked: ${q.question}${overrides ? `\nThey assumed "${q.assumption}"; this answer changes course.` : ''}`, data: { question: q.id },
     });
-    if (!q.blocking && q.status === 'open') {
-      // Overriding an assumption the agent already acted on: tell whoever is on it now.
-      this.addNote(p, 'steer', `Change of course${item ? ` on #${item.seq}` : ''}: you assumed "${q.assumption}". Instead: ${text}`, item, null, by);
+    // Overriding an assumption the asker already acted on: steer the asker, if it is still around and isn't the
+    // one answering. A gone asker's successor reads the change of course in the item's history instead.
+    const asker = overrides && q.asked_by !== by && this.q(`SELECT 1 FROM agents WHERE project_id = ? AND name = ? AND signed_off = 0 AND last_seen > ?`)
+      .get(p.id, q.asked_by, this.now() - 30 * MIN);
+    if (asker) {
+      this.addNote(p, 'steer', `Change of course${item ? ` on #${item.seq}` : ''}: you assumed "${q.assumption}". Instead: ${text}`, item, q.asked_by, by);
     }
     // The question an 'ask' precondition put: answering it is what passes the precondition.
     if (item && json(item.last_check, {}).question === q.id) {
