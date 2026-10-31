@@ -153,6 +153,19 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.match(admin, /<b class="working">\$\{w\.working\.length\} working<\/b>/, 'a workspace\'s working agents are drawn as agents, not as done');
   });
 
+  test('an error or a failure is red, never amber (#187): admin errors, a failed payment, a failing channel, join', () => {
+    const web = (f) => readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8');
+    assert.match(web('admin.html'), /<p id="error" class="bad" role="alert" hidden>/);
+    const admin = web('admin.js');
+    assert.doesNotMatch(admin, /class="warn">\$\{esc\(e\.message\)\}/, 'an error from the hub is not amber');
+    assert.equal(admin.match(/class="bad">\$\{esc\(e\.message\)\}/g)?.length, 2);
+    assert.match(admin, /'payment failed' \? 'bad'/);
+    assert.match(web('app.js'), /<span class="bad">⚠ failing: \$\{esc\(c\.last_error\)\}/);
+    assert.doesNotMatch(web('join.js'), /className = [^;]*'warn'/, 'join shows the hub\'s refusals and errors in red');
+    // What can still go wrong stays amber: missing evidence, a name used by two tokens, a git warning.
+    assert.match(web('app.js'), /<div class="warn">⚠ No evidence attached<\/div>/);
+  });
+
   test('a token change that brings two meanings too close fails', () => {
     assert.ok(dE('#c4520f', '#b42318') < 30, 'today\'s --bad next to --you would fail the state rule');
     assert.ok(dE('#c96442', '#c4520f') < 30, 'the old Anthropic mark next to --you would fail the provider rule');
