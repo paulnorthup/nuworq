@@ -5,7 +5,8 @@ import { SHORTCUTS, shortcutFor, shortcutsHtml } from '../web/shortcuts.js';
 
 const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
 const key = (k, mods = {}) => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
-const none = { inField: false, input: false, compose: false, modal: false, item: false };
+const none = { inField: false, input: false, compose: false, modal: false, item: false, launcher: false };
+const launcher = { ...none, inField: true, input: true, launcher: true }; // focus in the launcher's box
 
 describe('keyboard shortcuts come from one list (#274)', () => {
   test("the handler's KEYS and SHORTCUTS name the same shortcuts", () => {
@@ -42,10 +43,30 @@ describe('keyboard shortcuts come from one list (#274)', () => {
     assert.equal(shortcutFor(key('Enter'), { ...none, inField: true, input: true })?.id, 'press');
   });
 
+  test('the quick launcher (#290): ⌘K or Ctrl+K opens it except in a text box, and its keys win while it is open', () => {
+    assert.equal(shortcutFor(key('k', { metaKey: true }), none)?.id, 'launcher');
+    assert.equal(shortcutFor(key('k', { ctrlKey: true }), { ...none, item: true, modal: true })?.id, 'launcher');
+    assert.equal(shortcutFor(key('K', { metaKey: true, shiftKey: true }), none)?.id, 'launcher');
+    assert.equal(shortcutFor(key('k', { metaKey: true }), { ...none, inField: true, input: true }), null, 'a text box keeps its own ⌘K');
+    assert.equal(shortcutFor(key('k', { metaKey: true }), launcher)?.id, 'launcher', 'again closes it');
+    assert.equal(shortcutFor(key('k'), none), null);
+    assert.equal(shortcutFor(key('ArrowDown'), launcher)?.id, 'ln-move');
+    assert.equal(shortcutFor(key('ArrowUp'), launcher)?.id, 'ln-move');
+    assert.equal(shortcutFor(key('ArrowDown'), none), null);
+    assert.equal(shortcutFor(key('Enter'), launcher)?.id, 'ln-run', "not the field's press");
+    assert.equal(shortcutFor(key('Escape'), { ...launcher, modal: true, item: true })?.id, 'ln-close', 'Esc closes the launcher before anything under it');
+    const html = shortcutsHtml({ mac: true });
+    assert.ok(html.includes('<h4>The quick launcher</h4>'));
+    assert.match(html, /<kbd>⌘<\/kbd> \+ <kbd>K<\/kbd><\/dt><dd>Open the quick launcher/);
+    assert.match(html, /<kbd>↑<\/kbd> <kbd>↓<\/kbd><\/dt>/);
+    assert.match(shortcutsHtml({ mac: false }), /<kbd>Ctrl<\/kbd> \+ <kbd>K<\/kbd>/);
+  });
+
   test('every entry fires on its own keys somewhere', () => {
-    const places = [none, { ...none, modal: true }, { ...none, item: true }, { ...none, inField: true }, { ...none, inField: true, input: true }, { ...none, inField: true, compose: true }];
+    const places = [none, { ...none, modal: true }, { ...none, item: true }, { ...none, inField: true }, { ...none, inField: true, input: true }, { ...none, inField: true, compose: true }, launcher];
+    const named = { Esc: 'Escape', '↑': 'ArrowUp', '↓': 'ArrowDown' };
     for (const s of SHORTCUTS) {
-      const k = s.keys.at(-1) === 'Esc' ? 'Escape' : s.keys.at(-1);
+      const k = named[s.keys.at(-1)] ?? s.keys.at(-1);
       const mods = s.keys.includes('mod') ? { metaKey: true } : {};
       assert.ok(places.some((c) => shortcutFor(key(k, mods), c)?.id === s.id), `${s.id} fires on ${s.keys.join('+')}`);
     }

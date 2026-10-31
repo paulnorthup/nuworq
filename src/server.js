@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, normRemote, slugify, MIN, HOUR, DAY } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, PERSON_CAN, STAGES, normRemote, slugify, MIN, HOUR, DAY } from './core.js';
 import { view, itemView, projectList, homeView, withEntry } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
@@ -986,6 +986,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
       }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
+      // The quick launcher's index (#290): every item the viewer can see, light (project, number, title, stage,
+      // priority), what needs them, and what their role may do. Fetched when ⌘K opens; the browser does the matching.
+      if (req.method === 'GET' && path === '/api/launcher') {
+        if (who.role === 'agent') return deny(403, 'the launcher is for people', 'Agents find work with next.');
+        const ps = hub.projects();
+        const items = ps.flatMap((p) => hub.q('SELECT seq, title, stage, priority FROM items WHERE project_id = ? ORDER BY seq').all(p.id)
+          .map((i) => ({ p: p.slug, n: i.seq, t: i.title, s: i.stage, pr: i.priority })));
+        const needs = homeView(hub, { viewer }).needs.map((a) => ({ key: a.key, kind: a.kind, item: a.item ?? null, headline: a.headline, project: a.project?.slug ?? null, question: a.question?.id ?? null }));
+        return send(200, { projects: ps.map((p) => ({ slug: p.slug, name: p.name })), items, needs, can: PERSON_CAN[personRole] ?? [],
+          stages: Object.fromEntries(Object.entries(STAGES).map(([k, s]) => [k, { label: s.label, court: s.court }])) });
+      }
       // The home (#124): what needs the viewer across every project, in one request; Mark all seen for all of them.
       if (path === '/api/home' || path === '/api/home/seen') {
         if (who.role === 'agent') return deny(403, 'the home is for people', 'Agents start with checkin; workers list projects with GET /api/projects.');

@@ -4,6 +4,11 @@
 const plain = (e) => !e.metaKey && !e.ctrlKey && !e.altKey;
 
 export const SHORTCUTS = [
+  // The quick launcher (#290) first: its box is a text field, and its keys mean the launcher's, not the field's.
+  { id: 'launcher', where: 'Everywhere', keys: ['mod', 'K'], does: 'Open the quick launcher; again to close it', match: (e, c) => e.key?.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey) && !e.altKey && (!c.inField || c.launcher) },
+  { id: 'ln-move', where: 'The quick launcher', keys: ['↑', '↓'], does: 'Move through the results', match: (e, c) => (e.key === 'ArrowUp' || e.key === 'ArrowDown') && c.launcher },
+  { id: 'ln-run', where: 'The quick launcher', keys: ['Enter'], does: 'Open it, or run it; a change asks for a second Enter', match: (e, c) => e.key === 'Enter' && c.launcher },
+  { id: 'ln-close', where: 'The quick launcher', keys: ['Esc'], does: 'Back out of a change, or close the launcher', match: (e, c) => e.key === 'Escape' && c.launcher },
   { id: 'help', where: 'Everywhere', keys: ['?'], does: 'Show these shortcuts', match: (e, c) => e.key === '?' && plain(e) && !c.inField },
   { id: 'close', where: 'Everywhere', keys: ['Esc'], does: 'Close the open dialog', match: (e, c) => e.key === 'Escape' && c.modal },
   { id: 'depth', where: 'A project or All projects', keys: ['1', '2', '3'], does: 'Depth 30s, 5m, 30m', match: (e, c) => ['1', '2', '3'].includes(e.key) && plain(e) && !c.inField },
@@ -13,7 +18,7 @@ export const SHORTCUTS = [
   { id: 'blur', where: 'While typing', keys: ['Esc'], does: 'Leave the text box', match: (e, c) => e.key === 'Escape' && c.inField },
 ];
 
-// The shortcut a key press means here. c says where focus is: { inField, input, compose, modal, item }.
+// The shortcut a key press means here. c says where focus is: { inField, input, compose, modal, item, launcher }.
 export const shortcutFor = (e, c) => SHORTCUTS.find((s) => s.match(e, c)) ?? null;
 
 const cap = (k, mac) => `<kbd>${k === 'mod' ? (mac ? '⌘' : 'Ctrl') : k}</kbd>`;
@@ -22,5 +27,5 @@ const cap = (k, mac) => `<kbd>${k === 'mod' ? (mac ? '⌘' : 'Ctrl') : k}</kbd>`
 export function shortcutsHtml({ mac = false } = {}) {
   const groups = [...new Set(SHORTCUTS.map((s) => s.where))];
   return `<h2>Keyboard shortcuts</h2>${groups.map((g) => `<h4>${g}</h4><dl class="shortcuts">${SHORTCUTS.filter((s) => s.where === g)
-    .map((s) => `<div><dt>${s.keys.map((k) => cap(k, mac)).join(s.id === 'depth' ? ' ' : ' + ')}</dt><dd>${s.does}</dd></div>`).join('')}</dl>`).join('')}`;
+    .map((s) => `<div><dt>${s.keys.map((k) => cap(k, mac)).join(['depth', 'ln-move'].includes(s.id) ? ' ' : ' + ')}</dt><dd>${s.does}</dd></div>`).join('')}</dl>`).join('')}`;
 }
