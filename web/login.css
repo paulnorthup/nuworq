@@ -13,3 +13,6 @@
 .ask-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
 .ask-card #said:empty, .ask-card #check:empty { display: none; }
 .ask-card .thanks { color: var(--ink); }
+/* What asking agrees to (#232): a quiet line above the button, wrapping on a narrow phone. */
+.ask-card .terms { margin: 0; overflow-wrap: anywhere; }
+.ask-card .terms a { color: inherit; text-decoration: underline; }
