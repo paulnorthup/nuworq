@@ -8,6 +8,7 @@ import { credit } from './credit.js';
 import { checkChip } from './checks.js';
 import { dotClass } from './timeline.js';
 import { missingProject } from './missing.js';
+import { mapParts } from './groupmap.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
@@ -453,9 +454,17 @@ const prioritySeg = (item, priority) => `<div class="seg g-prio" role="group" ar
   `<button class="${priority === p ? 'on' : ''}" aria-pressed="${priority === p}" data-action="group-priority" data-item="${esc(item)}" data-p="${p}">${p}</button>`).join('')}</div>`;
 
 // A group's map in the drawer: the nested tree, each item with its stage, who holds it, what it waits on,
-// its pull requests and open questions, and a mark on what needs you.
+// its pull requests and open questions, and a mark on what needs you. At each level what's left comes first,
+// and the done parts fold behind one line until tapped (#215).
 function groupMap(n) {
-  const kids = (x) => (x.children.length ? `<ul>${x.children.map((c) => `<li>${mapLine(c)}${kids(c)}</li>`).join('')}</ul>` : '');
+  const li = (c) => `<li>${mapLine(c)}${kids(c)}</li>`;
+  const kids = (x) => {
+    if (!x.children.length) return '';
+    const { open, folded, label } = mapParts(x.children);
+    const key = `mapdone:${x.item}`, shown = S.open.has(key);
+    const fold = folded.length ? `<li class="m-fold"><button class="link" data-action="toggle" data-key="${esc(key)}" aria-expanded="${shown}">${shown ? `Hide ${label}` : label}</button></li>` : '';
+    return `<ul>${open.map(li).join('')}${fold}${shown ? folded.map(li).join('') : ''}</ul>`;
+  };
   return `<div class="map">${kids(n)}</div>`;
 }
 function mapLine(n) {
