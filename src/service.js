@@ -6,6 +6,8 @@ import { dirname, join, delimiter } from 'node:path';
 
 export const LABEL = 'com.nuworq.run';
 export const UNIT = 'nuworq-run.service';
+// The release signer (scripts/signer.js, #430): its own service beside the runner, installed the same way.
+export const SIGNER = { label: 'com.nuworq.signer', unit: 'nuworq-signer.service', description: 'nuworq release signer: signs each release tag on main' };
 
 const xml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 // One systemd word: quoted, with what systemd would expand ($, %, \, ") kept literal.
@@ -13,7 +15,8 @@ const word = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').re
 
 // command: [node, bin, 'run', ...flags]. env: what the runner needs from this shell (PATH, NUWORQ_*). log: one file.
 // cwd: where it was installed from; the runner starts there, so it finds the checkouts `nuworq run` would (#225).
-export function launchdPlist({ command, env = {}, log, cwd }) {
+// label: the job's name, the runner's unless given (the signer's is SIGNER.label).
+export function launchdPlist({ command, env = {}, log, cwd, label = LABEL }) {
   const strings = (xs) => xs.map((x) => `    <string>${xml(x)}</string>`).join('\n');
   const vars = Object.entries(env).map(([k, v]) => `    <key>${xml(k)}</key>\n    <string>${xml(v)}</string>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -21,7 +24,7 @@ export function launchdPlist({ command, env = {}, log, cwd }) {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>${LABEL}</string>
+  <string>${xml(label)}</string>
   <key>ProgramArguments</key>
   <array>
 ${strings(command)}
@@ -45,9 +48,9 @@ ${vars}
 `;
 }
 
-export function systemdUnit({ command, env = {}, log, cwd }) {
+export function systemdUnit({ command, env = {}, log, cwd, description = 'nuworq run: workers on waiting work' }) {
   return `[Unit]
-Description=nuworq run: workers on waiting work
+Description=${description}
 After=network-online.target
 Wants=network-online.target
 
@@ -64,29 +67,29 @@ WantedBy=default.target
 `;
 }
 
-// Where the definition lives, and the commands that load and unload it.
-export function serviceFor({ platform, home, uid }) {
+// Where the definition lives, and the commands that load and unload it. label, unit: the runner's unless given.
+export function serviceFor({ platform, home, uid, label = LABEL, unit = UNIT }) {
   if (platform === 'darwin') {
-    const file = join(home, 'Library', 'LaunchAgents', `${LABEL}.plist`);
+    const file = join(home, 'Library', 'LaunchAgents', `${label}.plist`);
     return {
-      kind: 'LaunchAgent', file, text: launchdPlist,
+      kind: 'LaunchAgent', file, text: (o) => launchdPlist({ ...o, label }),
       load: [['launchctl', 'bootstrap', `gui/${uid}`, file]],
-      unload: [['launchctl', 'bootout', `gui/${uid}/${LABEL}`]],
+      unload: [['launchctl', 'bootout', `gui/${uid}/${label}`]],
       // bootout returns before launchd has torn the job down; bootstrap meanwhile fails with "5: Input/output
       // error" (#250). print fails once it's gone, and shows the pid once it's up.
-      status: ['launchctl', 'print', `gui/${uid}/${LABEL}`], waitGone: true,
+      status: ['launchctl', 'print', `gui/${uid}/${label}`], waitGone: true,
       up: (out) => /\bpid = \d+/.test(out),
     };
   }
   if (platform === 'linux') {
-    const file = join(home, '.config', 'systemd', 'user', UNIT);
+    const file = join(home, '.config', 'systemd', 'user', unit);
     return {
       kind: 'systemd user unit', file, text: systemdUnit,
-      load: [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', '--now', UNIT]],
-      unload: [['systemctl', '--user', 'disable', '--now', UNIT]],
+      load: [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', '--now', unit]],
+      unload: [['systemctl', '--user', 'disable', '--now', unit]],
       after: [['systemctl', '--user', 'daemon-reload']],
       // disable --now waits for the stop itself, so there's nothing to wait out before loading.
-      status: ['systemctl', '--user', 'is-active', UNIT],
+      status: ['systemctl', '--user', 'is-active', unit],
       up: (out) => out.trim() === 'active',
     };
   }
@@ -104,8 +107,9 @@ const said = (e) => String(e?.stderr ?? '').trim() || e.message;
 // retries a failed load once, then waits up to ~10s for the runner to be up (#250).
 // Returns { file, kind, log, up, status, uninstall }: up is false when it didn't start in time; status and uninstall
 // are the exact commands to check on it and to remove it.
-export async function install({ platform, home, uid, command, env, log, cwd, exec, sleep = pause, fs = { mkdirSync, writeFileSync } }) {
-  const s = serviceFor({ platform, home, uid });
+// label, unit, description: whose service it is, the runner's unless given (SIGNER for the release signer).
+export async function install({ platform, home, uid, command, env, log, cwd, exec, sleep = pause, fs = { mkdirSync, writeFileSync }, label, unit, description }) {
+  const s = serviceFor({ platform, home, uid, label, unit });
   if (!s) throw Object.assign(new Error(`--install knows macOS (launchd) and Linux (systemd), not ${platform}`), { hint: 'Run nuworq run under your own supervisor instead.' });
   const status = () => exec(s.status[0], s.status.slice(1)).then((r) => ({ ok: true, out: String(r?.stdout ?? '') }), () => ({ ok: false, out: '' }));
   for (const [cmd, ...args] of s.unload) await exec(cmd, args).catch(() => {}); // not loaded yet: fine
@@ -113,7 +117,7 @@ export async function install({ platform, home, uid, command, env, log, cwd, exe
   fs.mkdirSync(dirname(s.file), { recursive: true });
   fs.mkdirSync(dirname(log), { recursive: true });
   // 0600: the flags and NUWORQ_* it carries may include a token.
-  fs.writeFileSync(s.file, s.text({ command, env, log, cwd }), { mode: 0o600 });
+  fs.writeFileSync(s.file, s.text({ command, env, log, cwd, description }), { mode: 0o600 });
   const load = async () => { for (const [cmd, ...args] of s.load) await exec(cmd, args); };
   await load().catch(async () => { await sleep(2000); await load(); }).catch((e) => {
     throw Object.assign(new Error(`Couldn't load the ${s.kind}: ${said(e)}`), { hint: `Load it yourself with: ${shown(s.load.at(-1))}` });
@@ -124,8 +128,8 @@ export async function install({ platform, home, uid, command, env, log, cwd, exe
 }
 
 // Stop it and remove the definition. Returns { file, removed }: removed is false when nothing was installed.
-export async function uninstall({ platform, home, uid, exec, fs = { rmSync, existsSync } }) {
-  const s = serviceFor({ platform, home, uid });
+export async function uninstall({ platform, home, uid, exec, fs = { rmSync, existsSync }, label, unit }) {
+  const s = serviceFor({ platform, home, uid, label, unit });
   if (!s) throw Object.assign(new Error(`--uninstall knows macOS (launchd) and Linux (systemd), not ${platform}`), { hint: 'Stop it with your own supervisor.' });
   const was = fs.existsSync(s.file);
   for (const [cmd, ...args] of s.unload) await exec(cmd, args).catch(() => {});

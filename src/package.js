@@ -71,6 +71,16 @@ export function newestSigned(dir, key, seen = new Map()) {
   return best;
 }
 
+// Write the package of commit in root's repository to file: what the hub serves, and what the release signer
+// (scripts/signer.js) builds from GitHub's copy to sign, so both get the same bytes. Rejects when git fails.
+export async function archive(root, commit, file) {
+  const listed = new Set((await run(['-C', root, 'ls-tree', '--name-only', commit])).split('\n'));
+  const tmp = `${file}.${process.pid}`;
+  rmSync(tmp, { force: true });
+  await run(['-C', root, 'archive', '--format=tar.gz', '--prefix=package/', '-o', tmp, commit, '--', ...RUNS.filter((f) => listed.has(f))]);
+  renameSync(tmp, file);
+}
+
 // Build (or find) the package of root's commit in dir. Resolves { file, sha256, commit }, or null when
 // root isn't a git checkout. Never rejects: a failed build resolves null too, and says why on stderr.
 export async function buildPackage(root, dir) {
@@ -80,11 +90,7 @@ export async function buildPackage(root, dir) {
     const file = join(dir, `nuworq-${commit}.tgz`);
     if (!existsSync(file)) {
       mkdirSync(dir, { recursive: true });
-      const listed = new Set((await run(['-C', root, 'ls-tree', '--name-only', commit])).split('\n'));
-      const tmp = `${file}.${process.pid}`;
-      rmSync(tmp, { force: true });
-      await run(['-C', root, 'archive', '--format=tar.gz', '--prefix=package/', '-o', tmp, commit, '--', ...RUNS.filter((f) => listed.has(f))]);
-      renameSync(tmp, file);
+      await archive(root, commit, file);
     }
     return { file, commit, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') };
   } catch (e) {
