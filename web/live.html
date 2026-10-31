@@ -7,36 +7,36 @@
 <link rel="icon" href="<!--favicon-->">
 <link rel="stylesheet" href="/style.css">
 <style>
-  .live { max-width: 960px; margin: 0 auto; padding: 16px; }
-  .live header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-  .live h1 { font-size: 1.35rem; margin: 0; }
-  .live .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--queue); flex: none; }
-  .live .dot.flowing { background: var(--agents); animation: beat 2s ease-in-out infinite; }
-  @keyframes beat { 50% { opacity: .35; } }
-  .live .sentence { font-size: 1.15rem; margin: 6px 0 16px; }
-  .live section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; margin-bottom: 14px; }
-  .live h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  /* Built from style.css's tokens (#391): no raw sizes, and no animation (a flowing dot is blue, not pulsing). */
+  .live { max-width: 960px; margin: 0 auto; padding: var(--sp-4); }
+  .live header { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-1); }
+  .live h1 { font-size: var(--fs-6); line-height: var(--lh-6); margin: 0; }
+  .live .dot { width: 10px; height: 10px; border-radius: var(--r-full); background: var(--queue); flex: none; }
+  .live .dot.flowing { background: var(--agents); }
+  .live .sentence { font-size: var(--fs-5); line-height: var(--lh-5); margin: var(--sp-2) 0 var(--sp-4); }
+  .live section { background: var(--panel); border: var(--rule) solid var(--line); border-radius: var(--r-m); box-shadow: var(--e-1); padding: var(--sp-4); margin-bottom: var(--sp-4); }
+  .live h2 { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 var(--sp-3); }
   .live ul { list-style: none; margin: 0; padding: 0; }
-  .live li { padding: 8px 0; border-top: 1px solid var(--line); }
+  .live li { padding: var(--sp-2) 0; border-top: var(--rule) solid var(--line); }
   .live li:first-child { border-top: 0; padding-top: 0; }
   .live .t { display: block; }
-  .live .meta { color: var(--muted); font-size: .85rem; }
-  .live .doing { font-size: .75rem; padding: 1px 7px; border-radius: 999px; background: var(--agents-tint); color: var(--agents); margin-right: 6px; }
-  .live .totals { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .live .num { font-size: 1.6rem; font-weight: 600; line-height: 1.1; }
-  .live .bar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--sunken); margin: 4px 0 8px; }
+  .live .meta { color: var(--muted); font-size: var(--fs-3); }
+  .live .doing { font-size: var(--fs-2); padding: var(--sp-h) var(--sp-2); border-radius: var(--r-full); background: var(--agents-tint); color: var(--agents); margin-right: var(--sp-2); }
+  .live .totals { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-3); }
+  .live .num { font-size: var(--fs-6); font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .live .bar { display: flex; height: 14px; border-radius: var(--r-s); overflow: hidden; background: var(--sunken); margin: var(--sp-1) 0 var(--sp-2); }
   .live .bar span { display: block; height: 100%; }
   .live .agents { background: var(--agents); } .live .queue { background: var(--queue); }
   .live .you { background: var(--you); } .live .external { background: var(--hatch); }
-  .live .key { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .85rem; color: var(--muted); }
-  .live .key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
-  .live .days { display: flex; align-items: flex-end; gap: 3px; height: 48px; margin-top: 12px; }
-  .live .days span { flex: 1; background: var(--ok); border-radius: 2px 2px 0 0; min-height: 2px; }
-  .live .cta { display: block; text-align: center; padding: 14px; border-radius: var(--radius); background: var(--ink); color: #fff; font-weight: 600; text-decoration: none; margin: 18px 0 8px; }
+  .live .key { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); font-size: var(--fs-3); color: var(--muted); }
+  .live .key i { display: inline-block; width: 10px; height: 10px; border-radius: var(--r-s); margin-right: var(--sp-1); vertical-align: -1px; }
+  .live .days { display: flex; align-items: flex-end; gap: var(--sp-h); height: 48px; margin-top: var(--sp-3); }
+  .live .days span { flex: 1; background: var(--ok); border-radius: var(--r-s) var(--r-s) 0 0; min-height: 2px; }
+  .live .cta { display: block; text-align: center; padding: var(--sp-4); border-radius: var(--r-m); background: var(--ink); color: #fff; font-weight: 600; text-decoration: none; margin: var(--sp-5) 0 var(--sp-2); }
   @media (min-width: 760px) {
-    .live .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+    .live .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
     .live .totals { grid-template-columns: repeat(4, 1fr); }
-    .live .cta { display: inline-block; padding: 12px 24px; }
+    .live .cta { display: inline-block; padding: var(--sp-3) var(--sp-6); }
   }
 </style>
 </head>

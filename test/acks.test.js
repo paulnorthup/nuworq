@@ -31,7 +31,7 @@ describe('who acknowledged a steer', () => {
     const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
     assert.match(css, /\.ack-all\.rows \{ columns: auto; \}/, 'a response runs to a few hundred characters: no columns');
     assert.match(css, /\.ack-all \{[^}]*columns: 6\.5em;/, 'two columns of names in a 205px steering body at 375px');
-    assert.match(css, /\.more-acks \{[^}]*min-height: 44px;[^}]*margin: -13px 0;/, 'a thumb-sized "+N more" that keeps its line short');
+    assert.match(css, /\.more-acks \{[^}]*min-height: 44px;[^}]*margin: calc\(-1 \* var\(--sp-3\)\) 0;/, 'a thumb-sized "+N more" that keeps its line short');
   });
 
   test('active agents who haven\'t acknowledged are never hidden, and come before the count', () => {

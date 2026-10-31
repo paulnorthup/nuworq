@@ -1,16 +1,16 @@
-.login { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
-.login-card { width: min(400px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px 26px 20px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; }
+.login { min-height: 100vh; display: grid; place-items: center; padding: var(--sp-4); }
+.login-card { width: min(400px, 100%); background: var(--panel); border: var(--rule) solid var(--line); border-radius: var(--r-m); padding: var(--sp-7) var(--sp-7) var(--sp-5); box-shadow: var(--e-1); display: flex; flex-direction: column; gap: var(--sp-3); }
 .login-card .brand { padding: 0; }
 .login-card .lead { margin: 0; color: var(--muted); }
-.login-card .btn { padding: 8px 12px; }
-.login-card .hint { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
-.login-error { color: var(--bad); font-size: 13px; }
-.login-providers { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; border-bottom: 1px dashed var(--line); }
+.login-card .btn { padding: var(--sp-2) var(--sp-3); }
+.login-card .hint { margin: var(--sp-1) 0 0; font-size: var(--fs-2); color: var(--muted); }
+.login-error { color: var(--bad); font-size: var(--fs-3); }
+.login-providers { display: flex; flex-direction: column; gap: var(--sp-2); padding-bottom: var(--sp-3); border-bottom: var(--rule) dashed var(--line); }
 .login-providers .btn, .login-card a.btn { text-align: center; text-decoration: none; }
 /* The early-access request (#121): the same card, a little wider for the form, its fields labelled above. */
 .ask-card { width: min(460px, 100%); }
-.ask-card h1 { font-size: 19px; margin: 0; }
-.ask-card label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.ask-card h1 { font-size: var(--fs-6); margin: 0; }
+.ask-card label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-2); color: var(--muted); }
 .ask-card #said:empty, .ask-card #check:empty { display: none; }
 .ask-card .thanks { color: var(--ink); }
 /* What asking agrees to (#232): a quiet line above the button, wrapping on a narrow phone. */
