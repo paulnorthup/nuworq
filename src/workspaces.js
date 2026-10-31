@@ -109,6 +109,22 @@ export class Workspaces {
     return { workspace: s, file: this.file(s), backup };
   }
 
+  // Bind GitHub App installations to a workspace (#226), so the app's deliveries for them reach it: a single
+  // hub's installations once it is adopted, or one by hand. One already bound elsewhere stays there.
+  // Returns { bound: [id], elsewhere: [{ id, workspace }] }.
+  bindInstallations(slug, ids) {
+    const s = Workspaces.check(slug);
+    if (!existsSync(this.file(s))) throw new UserError(`No workspace "${s}"`, { status: 404, hint: 'See them with: nuworq workspace list' });
+    const out = { bound: [], elsewhere: [] };
+    for (const raw of ids) {
+      const id = Number(raw);
+      if (!Number.isSafeInteger(id) || id <= 0) throw new UserError(`"${raw}" is not an installation id`, { hint: "It's the number at the end of the installation's settings URL, e.g. https://github.com/settings/installations/176604514." });
+      if (this.directory.bindInstallation(id, s)) out.bound.push(id);
+      else out.elsewhere.push({ id, workspace: this.directory.installation(id) });
+    }
+    return out;
+  }
+
   // ── plans (#113): Free runs one agent at a time; Pro and Team are unlimited ──
 
   static checkPlan(plan) {

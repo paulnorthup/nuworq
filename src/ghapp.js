@@ -16,6 +16,19 @@ export const CLONE_PERMISSIONS = { contents: 'read', metadata: 'read' };
 
 const b64 = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
 
+// Every page of a GitHub list, 100 at a time (at most 50 pages). what: what is listed, for the error.
+async function pages(what, get, pick) {
+  const out = [];
+  for (let page = 1; page <= 50; page++) {
+    const r = await get(`per_page=100&page=${page}`);
+    if (r.status !== 200) throw new UserError(`GitHub didn't list the app's ${what} (${r.status}${r.json?.message ? `: ${r.json.message}` : ''})`, { status: 502, hint: 'Check the app id and private key the hub uses; try again in a minute.' });
+    const batch = pick(r.json) ?? [];
+    out.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return out;
+}
+
 // NUWORQ_GITHUB_APP_ID and the key: NUWORQ_GITHUB_APP_KEY (PEM) or NUWORQ_GITHUB_APP_KEY_FILE. null when unset.
 export function appFromEnv(env = process.env) {
   const id = envVar('GITHUB_APP_ID', env);
@@ -145,24 +158,18 @@ export class GitHubApp {
     return tok.json.token;
   }
 
+  // Every installation of the app, as GitHub lists them to the app itself: [{ id, account: { login } }, ...].
+  async installations(what = 'installations') {
+    return pages(what, (q) => this.call('GET', `/app/installations?${q}`), (j) => j);
+  }
+
   // Every repository the app's installations can see: [{ repo: "github.com/o/r", name, description, private }].
   async repos() {
-    const pages = async (get, pick) => {
-      const out = [];
-      for (let page = 1; page <= 50; page++) {
-        const r = await get(`per_page=100&page=${page}`);
-        if (r.status !== 200) throw new UserError(`GitHub didn't list the app's repositories (${r.status}${r.json?.message ? `: ${r.json.message}` : ''})`, { status: 502, hint: 'Check the app id and private key the hub uses; try again in a minute.' });
-        const batch = pick(r.json) ?? [];
-        out.push(...batch);
-        if (batch.length < 100) break;
-      }
-      return out;
-    };
-    const installs = await pages((q) => this.call('GET', `/app/installations?${q}`), (j) => j);
+    const installs = await this.installations('repositories');
     const all = [];
     for (const inst of installs) {
       const token = await this.installationToken(inst.id);
-      const list = await pages(async (q) => {
+      const list = await pages('repositories', async (q) => {
         const r = await fetch(`${this.api}/installation/repositories?${q}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'nuworq' }, signal: AbortSignal.timeout(10_000) });
         return { status: r.status, json: await r.json().catch(() => ({})) };
       }, (j) => j.repositories);

@@ -1,6 +1,8 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
+import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -51,6 +53,7 @@ describe('a single hub moves into workspaces mode (#204)', () => {
     tokens = singleHub(db);
     const out = await cli('adopt', 'main');
     assert.match(out.stdout, /Adopted .* as workspace main/);
+    assert.match(out.stdout, /No GitHub App on this hub\. .*nuworq workspace bind-installation <id> main/, 'without an app it says how to bind one later');
     server = createServer(new Workspaces({ dir: join(dataDir, 'workspaces') }), {});
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${server.address().port}`;
@@ -105,11 +108,86 @@ describe('a single hub moves into workspaces mode (#204)', () => {
     assert.match(enter.headers.get('location'), /\/w\/main\/api\/oauth\/finish\?ticket=/);
   });
 
+  test('bind-installation binds one installation by hand; a bad id or a missing workspace is refused', async () => {
+    const out = await cli('bind-installation', '99', 'main');
+    assert.match(out.stdout, /Bound GitHub App installation 99 to main/);
+    assert.equal(new Workspaces({ dir: join(dataDir, 'workspaces') }).directory.installation(99), 'main');
+    await assert.rejects(cli('bind-installation', 'abc', 'main'), /not an installation id/);
+    await assert.rejects(cli('bind-installation', '99', 'nope'), /No workspace "nope"/);
+  });
+
   test('an old link to #/p/<slug>/<n> at the root reaches the item in the workspace', async () => {
     const root = await (await call('GET', '/api/root')).json();
     assert.deepEqual(root, { workspace: 'main', address: `${base}/w/main` });
     const join = readFileSync(new URL('../web/join.js', import.meta.url), 'utf8');
     assert.match(join, /location\.hash\.startsWith\('#\/p\/'\)/);
     assert.match(join, /location\.replace\(`\$\{address\}\/\$\{location\.hash\}`\)/);
+  });
+});
+
+describe("adopting a hub with a GitHub App keeps the app's webhooks reaching it (#226)", () => {
+  const WHS = 'app-webhook-secret';
+  const PEM = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const home = mkdtempSync(join(tmpdir(), 'nuworq-adopt-app-'));
+  const dataDir = join(home, 'data'), db = join(home, 'hub.db');
+  const cli = (a, file = db) => promisify(execFile)(process.execPath, [BIN, 'workspace', ...a, '--db', file, '--data-dir', dataDir], { env: { HOME: home, PATH: process.env.PATH, NO_COLOR: '1', NUWORQ_NO_UPDATE: '1' } });
+  // GitHub as the app sees it: two installations, listed only to the app's own JWT.
+  const asked = [];
+  const github = createHttpServer((req, res) => {
+    asked.push(`${req.method} ${req.url}`);
+    const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    if (req.url.startsWith('/app/installations?') && /^Bearer ey/.test(req.headers.authorization ?? '')) return json(200, [{ id: 41, account: { login: 'paul' } }, { id: 42, account: { login: 'acme' } }]);
+    json(404, { message: 'Not Found' });
+  });
+  let api, spaces, server;
+
+  before(async () => {
+    await new Promise((r) => github.listen(0, '127.0.0.1', r));
+    api = `http://127.0.0.1:${github.address().port}`;
+    const hub = new Hub({ file: db });
+    hub.tx(() => hub.project('nuworq', { create: true }));
+    hub.addRemote(hub.project('nuworq'), 'github.com/paul/nuworq', 'you');
+    hub.db.close();
+    // Installation 42 was already installed for another workspace on this hub: it stays there.
+    const before = new Workspaces({ dir: join(dataDir, 'workspaces') });
+    before.create('other');
+    before.directory.bindInstallation(42, 'other');
+    before.close();
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'github-app.json'), JSON.stringify({ id: '7', key: PEM, webhook_secret: WHS, api }));
+  });
+  after(() => { server?.close(); server?.closeAllConnections(); spaces?.close(); github.close(); github.closeAllConnections(); });
+
+  test('adopt binds every installation of the app to the workspace, and names one bound elsewhere', async () => {
+    const out = await cli(['adopt', 'main']);
+    assert.match(out.stdout, /Bound GitHub App installation 41 to main/);
+    assert.match(out.stdout, /Installation 42 is bound to workspace other, so it stays there/);
+    assert.ok(asked.some((a) => a.startsWith('GET /app/installations?')));
+    spaces = new Workspaces({ dir: join(dataDir, 'workspaces') });
+    assert.equal(spaces.directory.installation(41), 'main');
+    assert.equal(spaces.directory.installation(42), 'other');
+  });
+
+  test("a delivery for the adopted hub's installation reaches the workspace as a proposal", async () => {
+    server = createServer(spaces, { githubApp: { id: '7', key: PEM, webhook_secret: WHS, api }, sweepMs: 3600_000 });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const raw = JSON.stringify({ action: 'opened', installation: { id: 41 }, issue: { number: 121, title: 'Webhook check', state: 'open', html_url: 'https://github.com/paul/nuworq/issues/121' }, repository: { full_name: 'paul/nuworq' } });
+    const r = await fetch(`http://127.0.0.1:${server.address().port}/api/hooks/github-app`, {
+      method: 'POST', body: raw,
+      headers: { 'content-type': 'application/json', 'x-github-event': 'issues', 'x-hub-signature-256': 'sha256=' + createHmac('sha256', WHS).update(raw).digest('hex') },
+    });
+    assert.equal(r.status, 200);
+    assert.deepEqual((await r.json()).projects.map((p) => [p.project, p.created]), [['nuworq', true]]);
+    const v = view(spaces.get('main'), 'nuworq');
+    assert.deepEqual(v.all.map((i) => [i.title, i.stage]), [['Webhook check', 'proposed']]);
+  });
+
+  test("without GitHub, adopt still works and says how to bind an installation later", async () => {
+    github.close(); github.closeAllConnections();
+    const other = join(home, 'other.db');
+    new Hub({ file: other }).db.close();
+    const out = await cli(['adopt', 'again'], other);
+    assert.match(out.stdout, /Adopted .* as workspace again/);
+    assert.match(out.stdout, /Couldn't list the GitHub App's installations .*nuworq workspace bind-installation <id> again/);
   });
 });
