@@ -12,8 +12,9 @@ const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } cat
 const pathOf = (t) => String(t ?? '').split(' (')[0].trim().replace(/^\.\//, '');
 const isDoc = (path) => /^docs\//.test(path) || /\.md$/i.test(path) || /^CHANGELOG/i.test(path.split('/').pop());
 const OPEN = "stage NOT IN ('done', 'dropped')";
-// The hub's own work items aren't anyone's to group.
-const OWN = "sweep = 0 AND tidy = ''";
+// The hub's own work items aren't anyone's to group: sweeps, tidy jobs, and releases, which span every
+// milestone and stay top-level (#425).
+const OWN = "sweep = 0 AND tidy = '' AND release = 0";
 
 // What drifted in this project now: [{ key, kind, text }], most actionable first.
 export function drift(hub, p) {

@@ -40,6 +40,25 @@ describe('agents keep the groups true (#202)', () => {
     assert.equal(tidies().length, 1);
   });
 
+  test('a release spans every milestone: at the top level it is no drift, but loose work still is (#425)', () => {
+    const { hub, human, agent, tidies } = setup();
+    human('create', { title: 'Quick fix', acceptance: 'x' }); // #3
+    human('update', { item: '#3', stage: 'done' });
+    human('release'); // #4 "Release v0.0.1", drafted by the hub
+    const rel = hub.q('SELECT * FROM items WHERE release = 1').get();
+    assert.equal(rel.seq, 4);
+    assert.equal(rel.stage, 'ready');
+    assert.equal(rel.parent_id, null);
+    assert.deepEqual(drift(hub, hub.project('p')), []);
+    assert.notEqual(agent('next', 'w1', { claim: false }).mode, 'tidy');
+    assert.equal(tidies().length, 0);
+    human('create', { title: 'Loose end', acceptance: 'x' }); // #5
+    const r = agent('next', 'w1');
+    assert.equal(r.mode, 'tidy');
+    assert.match(r.summary, /#5 "Loose end" \(ready\) is in no milestone/);
+    assert.doesNotMatch(r.summary, /#4/);
+  });
+
   test('a group whose parts are all done, while it is still open', () => {
     const { human, agent } = setup();
     human('update', { item: '#2', stage: 'done' });
