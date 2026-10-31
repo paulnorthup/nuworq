@@ -650,3 +650,5 @@ main.admin { padding-top: 24px; }
 .m-line.you .m-title { color: var(--you); font-weight: 560; }
 .m-line .ref { min-height: 32px; display: inline-flex; align-items: center; }
 .m-q { font-size: 13px; color: var(--muted); padding-left: 4px; }
+/* The folded done parts (#215): one line, a 44px target. */
+.m-fold .link { min-height: 44px; padding: 0 4px; margin: -6px 0 -6px -4px; color: var(--muted); text-decoration: underline; }
