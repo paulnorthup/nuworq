@@ -555,8 +555,8 @@ main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--
 .dialog .back { padding: 0; margin-bottom: 8px; }
 /* A switch: off, a grey track with the knob left; on, an ink track with it right. 44px tall for a thumb. */
 .switch { flex: none; position: relative; width: 56px; height: 44px; border: 0; padding: 0; background: none; cursor: pointer; }
-.switch::before { content: ''; position: absolute; left: 2px; right: 2px; top: 7px; height: 30px; border-radius: 15px; background: var(--muted); transition: background .15s; }
-.switch::after { content: ''; position: absolute; left: 5px; top: 10px; width: 24px; height: 24px; border-radius: 50%; background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
+.switch::before { content: ''; position: absolute; left: 2px; right: 2px; top: 7px; height: 30px; border-radius: 15px; background: var(--muted); }
+.switch::after { content: ''; position: absolute; left: 5px; top: 10px; width: 24px; height: 24px; border-radius: 50%; background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
 .switch[aria-checked="true"]::before { background: var(--ink); }
 .switch[aria-checked="true"]::after { transform: translateX(22px); }
 /* Notifications' add row (#155): the kind as wide as its words, the address taking the rest. */
@@ -822,3 +822,28 @@ a.an-name { display: flex; align-items: center; min-height: 44px; margin: -10px 
 .an-cal .step { grid-template-columns: 7.5em 1fr 4em; }
 .an-cal dt .s { font-size: 12px; font-variant-numeric: tabular-nums; margin-left: 2px; }
 .an-more { min-height: 44px; padding: 0 4px; margin-top: 4px; color: var(--ink); text-decoration: underline; }
+
+/* ── control states (#393) ── Every control answers on the same frame as the input, and nothing animates. Hover
+   firms it up, pressed sinks it, a keyboard focus rings it, disabled greys it out and stops answering. */
+:where(button, a, summary, [data-action], [tabindex]):focus-visible { outline: 2px solid var(--agents); outline-offset: 2px; }
+:where(input, textarea, select):hover:not(:focus):not(:disabled) { border-color: var(--faint); }
+.btn:active:not(:disabled) { background: var(--sunken); border-color: var(--muted); transform: translateY(1px); }
+.btn.primary:hover { opacity: 1; background: color-mix(in srgb, var(--ink) 84%, var(--panel)); }
+.btn.primary:active:not(:disabled) { background: color-mix(in srgb, var(--ink) 70%, var(--panel)); border-color: var(--ink); }
+.btn.ghost:active:not(:disabled) { background: var(--line); color: var(--ink); }
+.seg button:hover:not(.on):not(:disabled) { color: var(--ink); background: color-mix(in srgb, var(--panel) 50%, transparent); }
+.seg button:active:not(:disabled) { background: var(--line); color: var(--ink); }
+.rail-item:active, .org-item:active, .org-switch summary:active, .row-item.clickable:active, button.row-item:active,
+table.work tr:active td, .step-tick:active, .opt:active, .pick:active, .ov-line:active { background: var(--line); }
+a:not([class]):active, a.step-where:active, .link:active, .ref:active, .zoom-more button:active { color: var(--muted); text-decoration-color: var(--muted); }
+:where(button, input, textarea, select):disabled, .btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--line-strong); }
+.btn.primary:disabled:hover { background: var(--ink); }
+.btn.ghost:disabled:hover, .seg button:disabled:hover { background: none; color: var(--muted); }
+/* Where content is on its way: quiet blocks the size of what comes, never a loading line. */
+.ph { display: block; background: var(--sunken); border-radius: 6px; height: 14px; margin: 10px 0; }
+.ph.h { height: 22px; width: 60%; margin-bottom: 16px; }
+.ph.s { width: 85%; }
+.ph.xs { width: 40%; }
+.ph-block { padding: 24px; }
+.ph-row { height: 44px; margin: 6px 0; border-radius: 8px; }
