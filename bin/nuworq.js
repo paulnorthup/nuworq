@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
-import { tools, guide, skill, planSkill, operatorSkill, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
+import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { update, describeUpdate, staleListener } from '../src/update.js';
 
@@ -16,7 +16,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'early-access', 'install', 'uninstall', 'operator']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -188,7 +188,7 @@ function detectHas(flags) {
 }
 
 // An operator session (see Operators in the guide): the tags to declare and the line that starts an attended
-// Claude Code session in the project folder as the operator (the nuworq-operator skill, which starts its
+// Claude Code session in the project folder as the operator (the plugin's operator skill, which starts its
 // listener; no /loop). It prints them and starts nothing. Detected: the platform, and browser when a Chrome or
 // Chromium is installed; --has replaces what was detected.
 // First, one line when this CLI's listener is below what the hub expects (#419): updating the plugin never
@@ -219,7 +219,7 @@ ${bold('Start it:')} open Claude Code in ${project}'s folder (the terminal or th
 ${operatorStart(has)}
 
 It works until nothing waits, then stays idle and listens: each new operator item, operator question or answer
-starts a turn on its own. No /loop.${dim(' (With the nuworq plugin it is also /nuworq:nuworq-operator.)')}`);
+starts a turn on its own. No /loop.${dim(` (Without the nuworq plugin: ${operatorStart(has, { plugin: false })}.)`)}`);
 }
 
 // An operator waiting on the hub (#283): one line when there is something for it, then exit; --follow
@@ -855,6 +855,7 @@ async function connect(pos, flags) {
   // Connecting again replaces the old token: revoke it first. The tools set up last time stay recorded.
   const old = readConnection();
   const notes = [old?.token && old.token !== token ? await revokeSaved(old) : null];
+  if (!flags['no-mcp']) notes.push(await offerPlugin(flags));
   const { registerMcp } = await import('../src/connect.js');
   const mcp = flags['no-mcp'] ? { added: old?.added ?? [], lines: [] } : registerMcp({ bin: BIN, home: homedir(), kept: old?.added ?? [], url });
   // Written whole with mode 600 and moved into place, so the token is never in a file others can read.
@@ -866,6 +867,24 @@ async function connect(pos, flags) {
   console.log(`${green('Connected')} to ${bold(url)}${me.auth === 'required' ? ` as ${me.name} (${me.role} token)` : dim(' (it needs no login)')}.
 ${[...notes.filter(Boolean), ...mcp.lines.map((l) => `  ${l}`)].join('\n')}${notes.some(Boolean) || mcp.lines.length ? '\n' : ''}${dim(`Saved in ${CONNECT_FILE}, readable only by you. The CLI, the MCP server and nuworq run on this machine use it
 now; NUWORQ_URL and NUWORQ_TOKEN still win. Undo all of it: nuworq disconnect`)}`);
+}
+
+// Claude Code takes nuworq as its plugin (#432): one copy of the skills, shown as /nuworq:shaper and
+// /nuworq:operator. Without it, connect asks a person at the terminal to install it, and writes the MCP server
+// and the skills itself only when they decline (or the install fails). With no one to ask, or --skills, it
+// writes them as before and says how to get the plugin.
+async function offerPlugin(flags) {
+  const { pluginInstalled, claudeCode, installPlugin, PLUGIN_INSTALL } = await import('../src/connect.js');
+  if (!claudeCode() || pluginInstalled(homedir())) return null;
+  const how = PLUGIN_INSTALL.map((a) => `claude ${a.join(' ')}`).join(' && ');
+  if (flags.skills || !process.stdin.isTTY) return dim(`Claude Code takes nuworq best as its plugin, with /nuworq:shaper and /nuworq:operator: ${how}, then connect again.`);
+  const { createInterface } = await import('node:readline');
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const said = await new Promise((resolve) => rl.question('Install the nuworq plugin for Claude Code (its MCP server, /nuworq:shaper and /nuworq:operator)? [Y/n] ', resolve));
+  rl.close();
+  if (/^\s*n/i.test(said)) return null;
+  const failed = installPlugin();
+  return failed ? amber(`${failed}. Added the server and skills to Claude Code directly instead.`) : `  Claude Code: installed the ${bold('nuworq')} plugin (${how}).`;
 }
 
 // nuworq disconnect: revoke the saved token on its hub, remove the MCP entries connect added (only
@@ -1389,14 +1408,16 @@ ${bold('Agents')}  (every command takes --as <name>, --project, --url)
 
 ${bold('Setup')}
   init [--force]                         write .nuworq.json; print MCP config for Claude Code, Codex, opencode
-  connect <url> | <workspace> --hub <url> [--token t|-] [--no-browser] [--no-mcp]
+  connect <url> | <workspace> --hub <url> [--token t|-] [--no-browser] [--no-mcp] [--skills]
                                          use that hub from this machine: log in through the browser (a code
                                          you approve), save it in ~/.nuworq/connect.json (only you can read it),
                                          and add the nuworq MCP server to Claude Code, Codex and opencode here.
+                                         Claude Code without the nuworq plugin: it offers to install it first;
+                                         --skills writes the server and skills instead without asking.
                                          --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
   disconnect                             revoke that token, remove what connect added, forget the hub
-  skill [--dir d]                        write the nuworq, nuworq-plan and nuworq-operator skills for Claude (generated; connect does them too)
-  skill --plugin [dir]                   write the Claude Code plugin (MCP server + both skills; default: plugin/)
+  skill [--dir d]                        write the nuworq, nuworq-shaper and nuworq-operator skills for Claude (generated; connect does them without the plugin)
+  skill --plugin [dir]                   write the Claude Code plugin (MCP server, skills, listener; default: plugin/)
   mcp                                    run the stdio MCP server (one per agent session)
   git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
                                          <name> holds, from the hub's GitHub App (workers set it up themselves)
@@ -1559,14 +1580,13 @@ async function main() {
     return;
   }
   if (cmd === 'skill') {
-    // The nuworq skills for Claude, generated from the protocol: <dir>/nuworq/SKILL.md, <dir>/nuworq-plan/SKILL.md
-    // and <dir>/nuworq-operator/SKILL.md (default ~/.claude/skills).
+    // The nuworq skills for Claude, generated from the protocol: <dir>/nuworq/SKILL.md, <dir>/nuworq-shaper/SKILL.md
+    // and <dir>/nuworq-operator/SKILL.md (default ~/.claude/skills). The plugin carries them as shaper and operator.
     const dir = resolve(String(flags.dir || join(homedir(), '.claude', 'skills')));
-    const url = resolveSettings(flags).url;
-    for (const [name, make] of [['nuworq', skill], ['nuworq-plan', planSkill], ['nuworq-operator', operatorSkill]]) {
+    for (const [name, text] of Object.entries(userSkills({ url: resolveSettings(flags).url }))) {
       const file = join(dir, name, 'SKILL.md');
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, make({ url }));
+      writeFileSync(file, text);
       console.log(`${green('Wrote')} ${file}`);
     }
     return;

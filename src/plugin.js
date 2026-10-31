@@ -3,20 +3,22 @@
 // protocol. The plugin serves any hub, so its skills name none; the MCP server finds the hub and token in connect.json.
 // It starts the server as `nuworq mcp` (the installed package, #101): Claude Code copies a plugin into its
 // own cache, so a path back into this checkout wouldn't survive the install.
-import { skill, planSkill, operatorSkill, OPERATOR_WAIT } from './protocol.js';
+import { skill, shaperSkill, operatorSkill, OPERATOR_WAIT, PLUGIN_SKILLS } from './protocol.js';
 
-// The operator's listener (#284): a monitor that starts only when a person invokes the nuworq-operator skill,
+// The operator's listener (#284): a monitor that starts only when a person invokes the operator skill,
 // so worker and ordinary sessions never listen. What it prints reaches the idle session and starts a turn;
 // between lines it is one open request to the hub and no model calls.
 // Claude Code matches `when` against the skill's name as dispatched, and a plugin skill dispatches as
-// <plugin>:<dir> (#328): the bare `nuworq-operator` only ever matched the user-level skill from `nuworq skill`.
+// <plugin>:<dir> (#328), so /nuworq:operator matches it and a copy in ~/.claude/skills never does.
 // Entries keep exactly these four keys; Claude Code rejects an unknown one and then loads none of the plugin.
 export const MONITORS = [{
   name: 'nuworq-operator-listener',
   command: OPERATOR_WAIT,
   description: 'nuworq operator listener',
-  when: 'on-skill-invoke:nuworq:nuworq-operator',
+  when: `on-skill-invoke:nuworq:${PLUGIN_SKILLS.operator}`,
 }];
+
+const WHAT = 'The nuworq MCP server, the /nuworq:shaper and /nuworq:operator commands, the skill workers load on their own, and the operator\'s listener.';
 
 // { relative path: contents } for the plugin folder.
 // No version, here or in the marketplace entry (#364): Claude Code then takes it from the installed commit, so
@@ -26,16 +28,16 @@ export function pluginFiles() {
   return {
     '.claude-plugin/plugin.json': json({
       name: 'nuworq',
-      description: 'nuworq: claim, build, review and land work on a nuworq hub. The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator\'s listener.',
+      description: `nuworq: claim, build, review and land work on a nuworq hub. ${WHAT}`,
       author: { name: 'nuworq', url: 'https://nuworq.com' },
       homepage: 'https://nuworq.com',
       license: 'MIT',
     }),
     '.mcp.json': json({ mcpServers: { nuworq: { command: 'nuworq', args: ['mcp'] } } }),
     'monitors/monitors.json': json(MONITORS),
-    'skills/nuworq/SKILL.md': skill(),
-    'skills/nuworq-plan/SKILL.md': planSkill(),
-    'skills/nuworq-operator/SKILL.md': operatorSkill(),
+    [`skills/${PLUGIN_SKILLS.worker}/SKILL.md`]: skill(),
+    [`skills/${PLUGIN_SKILLS.shaper}/SKILL.md`]: shaperSkill(),
+    [`skills/${PLUGIN_SKILLS.operator}/SKILL.md`]: operatorSkill(),
   };
 }
 
@@ -46,6 +48,6 @@ export function marketplace() {
     name: 'nuworq',
     owner: { name: 'nuworq' },
     metadata: { description: 'The Claude Code plugin for nuworq, the work hub where AI agents claim, build, review and land work.' },
-    plugins: [{ name: 'nuworq', source: './plugin', description: 'The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator\'s listener.' }],
+    plugins: [{ name: 'nuworq', source: './plugin', description: WHAT }],
   }, null, 2)}\n`;
 }

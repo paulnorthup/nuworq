@@ -209,10 +209,10 @@ describe('fit hints: what items need and what agents have', () => {
       assert.match(tools().find((t) => t.name === 'checkin').inputSchema.properties.has.description, new RegExp(tag));
     }
     assert.match(ops, /to: "operator"/);
-    assert.match(ops, /\/nuworq-operator <your capabilities>/);
+    assert.match(ops, /\/nuworq:operator <your capabilities>/);
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     assert.match(readme, /### Operators/);
-    assert.match(readme, /\/nuworq-operator <your capabilities>/);
+    assert.match(readme, /\/nuworq:operator <your capabilities>/);
     for (const tag of ['claude-cli', 'infra', 'github-admin']) assert.ok(readme.includes(`\`${tag}\``), tag);
     for (const old of ['nuworq-infra', 'homelab-vm']) {
       assert.ok(!guide().includes(old) && !ops.includes(old), `the guide no longer says ${old}`);

@@ -7,7 +7,8 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
-import { skill, planSkill, operatorSkill, OPS } from '../src/protocol.js';
+import { skill, shaperSkill, operatorSkill, userSkills, OPS } from '../src/protocol.js';
+import { installPlugin as installWithClaude, PLUGIN_INSTALL } from '../src/connect.js';
 import { Auth } from '../src/auth.js';
 import { Workspaces } from '../src/workspaces.js';
 import { createServer } from '../src/server.js';
@@ -155,13 +156,15 @@ describe('nuworq connect', () => {
       assert.ok(saved.token.startsWith('nwq_'));
       assert.deepEqual(saved.added.map((a) => a.tool), ['claude', 'codex', 'opencode', 'skill']);
       assert.ok(!out.stdout.includes(saved.token), 'the token is never printed');
-      // The nuworq skill, generated, pointing at this hub's guide.
+      // No plugin and no one at a terminal to ask (#432): it says how to get the plugin, and writes the skills,
+      // generated, pointing at this hub's guide, under names that keep clear of a person's own.
+      assert.match(out.stdout, /Claude Code takes nuworq best as its plugin, with \/nuworq:shaper and \/nuworq:operator: claude plugin marketplace add paulnorthup\/nuworq && claude plugin install nuworq@nuworq/);
       const skillFile = join(m.home, '.claude', 'skills', 'nuworq', 'SKILL.md');
-      const planFile = join(m.home, '.claude', 'skills', 'nuworq-plan', 'SKILL.md');
+      const planFile = join(m.home, '.claude', 'skills', 'nuworq-shaper', 'SKILL.md');
       assert.equal(readFileSync(skillFile, 'utf8'), skill({ url }));
-      assert.equal(readFileSync(planFile, 'utf8'), planSkill({ url }));
-      assert.equal(readFileSync(join(m.home, '.claude', 'skills', 'nuworq-operator', 'SKILL.md'), 'utf8'), operatorSkill({ url }));
-      assert.match(out.stdout, /Claude Code skill: wrote the nuworq, nuworq-plan and nuworq-operator skills/);
+      assert.equal(readFileSync(planFile, 'utf8'), shaperSkill({ url, name: 'nuworq-shaper' }));
+      assert.equal(readFileSync(join(m.home, '.claude', 'skills', 'nuworq-operator', 'SKILL.md'), 'utf8'), operatorSkill({ url, name: 'nuworq-operator' }));
+      assert.match(out.stdout, /Claude Code skill: wrote the nuworq, nuworq-shaper and nuworq-operator skills/);
 
       // Each tool got nuworq and kept everything else; no config holds the token.
       assert.deepEqual(m.read.claude(), ['mcp get nuworq', `mcp add --scope user nuworq -- node ${BIN} mcp`]);
@@ -188,7 +191,7 @@ describe('nuworq connect', () => {
       assert.deepEqual(m.read.opencode(), m.oc, 'opencode config has its own entries and nothing else');
       assert.equal(m.read.claude().at(-1), 'mcp remove --scope user nuworq');
       assert.ok(!existsSync(skillFile) && !existsSync(dirname(skillFile)), 'the skill is gone too');
-      assert.ok(!existsSync(planFile) && !existsSync(dirname(planFile)), 'and the planning skill');
+      assert.ok(!existsSync(planFile) && !existsSync(dirname(planFile)), 'and the shaper skill');
 
       const again = await cli(['disconnect'], { env: m.env });
       assert.equal(again.code, 0, again.stderr);
@@ -251,22 +254,54 @@ describe('nuworq connect', () => {
       installPlugin(fresh.home);
       const r = await cli(['connect', url, '--token', token()], { env: fresh.env });
       assert.equal(r.code, 0, r.stderr);
-      assert.match(r.stdout, /Claude Code: left to the nuworq plugin, which brings the MCP server and both skills\n/);
+      assert.match(r.stdout, /Claude Code: left to the nuworq plugin, which brings the MCP server and the \/nuworq:shaper and \/nuworq:operator commands\n/);
+      assert.doesNotMatch(r.stdout, /takes nuworq best as its plugin/, 'nothing to suggest');
       assert.deepEqual(fresh.read.claude(), [], 'no second MCP server');
       assert.ok(!existsSync(skillDir(fresh.home)), 'no second copy of the skills');
       assert.deepEqual(JSON.parse(readFileSync(fresh.file, 'utf8')).added.map((a) => a.tool), ['codex', 'opencode']);
 
-      // Connected before the plugin: connecting again removes the server and skills it added.
+      // Connected before the plugin: connecting again removes the server and skills it added, and says so.
       const before = machine();
       await cli(['connect', url, '--token', token()], { env: before.env });
       assert.ok(existsSync(skillDir(before.home)));
       installPlugin(before.home);
       const again = await cli(['connect', url, '--token', token()], { env: before.env });
       assert.equal(again.code, 0, again.stderr);
-      assert.match(again.stdout, /left to the nuworq plugin.*; removed what an earlier connect added/);
+      assert.match(again.stdout, /left to the nuworq plugin.*; removed what an earlier connect added: its MCP server and the nuworq, nuworq-shaper and nuworq-operator skills in \S+\.claude\/skills/);
       assert.equal(before.read.claude().at(-1), 'mcp remove --scope user nuworq');
-      assert.ok(!existsSync(skillDir(before.home)) && !existsSync(join(before.home, '.claude', 'skills', 'nuworq-plan')));
+      for (const name of Object.keys(userSkills())) assert.ok(!existsSync(join(before.home, '.claude', 'skills', name)), `${name} is gone`);
       assert.deepEqual(JSON.parse(readFileSync(before.file, 'utf8')).added.map((a) => a.tool), ['codex', 'opencode']);
+    } finally {
+      server.close();
+    }
+  });
+
+  // #432: the plugin is the one place for nuworq in Claude Code; the skills in ~/.claude/skills are the fallback.
+  test('without the plugin, connect removes skills it wrote under old names; a yes installs the plugin with claude', async () => {
+    const hub = new Hub();
+    const server = createServer(hub, { auth: 'required' });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    try {
+      // What a connect before #432 left: the planning skill, recorded for disconnect.
+      const m = machine();
+      const old = join(m.home, '.claude', 'skills', 'nuworq-plan', 'SKILL.md');
+      mkdirSync(dirname(old), { recursive: true });
+      writeFileSync(old, 'old');
+      mkdirSync(dirname(m.file), { recursive: true });
+      writeFileSync(m.file, JSON.stringify({ url, token: '', added: [{ tool: 'skill', files: [join(m.home, '.claude', 'skills', 'nuworq', 'SKILL.md'), old] }] }));
+      const r = await cli(['connect', url, '--token', server.auth.createToken('t', 'agent'), '--skills'], { env: m.env });
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /Claude Code skill: removed the old nuworq-plan skill \(/);
+      assert.ok(!existsSync(dirname(old)), 'its folder is gone');
+      assert.ok(existsSync(join(m.home, '.claude', 'skills', 'nuworq-shaper', 'SKILL.md')), 'the shaper took its place');
+      assert.deepEqual(JSON.parse(readFileSync(m.file, 'utf8')).added.find((a) => a.tool === 'skill').files.map((f) => f.split('/').at(-2)), Object.keys(userSkills()));
+
+      // Said yes at the prompt: Claude Code's own CLI adds the marketplace and installs the plugin.
+      const yes = machine();
+      assert.equal(installWithClaude(yes.env), null);
+      assert.deepEqual(yes.read.claude(), PLUGIN_INSTALL.map((a) => a.join(' ')));
+      assert.deepEqual(PLUGIN_INSTALL, [['plugin', 'marketplace', 'add', 'paulnorthup/nuworq'], ['plugin', 'install', 'nuworq@nuworq']]);
     } finally {
       server.close();
     }
@@ -312,7 +347,7 @@ describe('nuworq connect', () => {
 describe('the nuworq skill is generated from the protocol', () => {
   test('it names exactly the operations the hub has, points at the guide, and stays short', () => {
     const text = skill({ url: 'https://hub.test/' });
-    const fm = text.match(/^---\nname: nuworq\ndescription: (.+)\n---\n/);
+    const fm = text.match(/^---\nname: nuworq\ndescription: (.+)\n(?:[a-z-]+: .+\n)*---\n/);
     assert.ok(fm && fm[1].length > 40, 'frontmatter with a name and a real description');
     const named = [...text.matchAll(/^- `([a-z]+)`: /gm)].map((m) => m[1]);
     assert.deepEqual(named, OPS.map((o) => o.name), 'every operation, and nothing that is not one');
@@ -321,9 +356,14 @@ describe('the nuworq skill is generated from the protocol', () => {
     assert.ok(text.split('\n').length <= 60, `${text.split('\n').length} lines`);
   });
 
-  test('the planning skill names only real operations, the ones planning needs, and points at the guide', () => {
-    const text = planSkill({ url: 'https://hub.test/' });
-    const fm = text.match(/^---\nname: nuworq-plan\ndescription: (.+)\n---\n/);
+  test('it stays out of the slash menu but loads on its own (#432)', () => {
+    assert.match(skill(), /^---\nname: nuworq\ndescription: .+\nuser-invocable: false\n---\n/);
+    assert.doesNotMatch(skill(), /disable-model-invocation/, 'the model must still be able to load it');
+  });
+
+  test('the shaper skill names only real operations, the ones shaping needs, and points at the guide', () => {
+    const text = shaperSkill({ url: 'https://hub.test/' });
+    const fm = text.match(/^---\nname: shaper\ndescription: (.+)\n---\n/);
     assert.ok(fm && fm[1].length > 40, 'frontmatter with a name and a real description');
     const ops = new Set(OPS.map((o) => o.name));
     // Every one-word code span is a tool name.
@@ -339,8 +379,21 @@ describe('the nuworq skill is generated from the protocol', () => {
     assert.ok(text.split('\n').length <= 60, `${text.split('\n').length} lines`);
   });
 
-  test('the planning skill drafts decisions and asks; it never tells the agent to make one', () => {
-    const text = planSkill();
+  // Paul's words for the role, and the lessons from the 2026-10-31 shaping session (#432).
+  test('the shaper skill says what a shaper does, asks before proposing, and carries the lessons', () => {
+    const text = shaperSkill();
+    assert.match(text, /interview the person, ask questions, hone the idea, and build milestones with their parts to submit to the hub/);
+    assert.match(text, /`checkin` with role "shaper"/);
+    assert.match(text, /never build, review or land/);
+    assert.match(text, /Explain and recommend/);
+    assert.match(text, /Nothing goes to the hub until the person says to propose it\. Once they have, propose all of it without asking again/);
+    assert.match(text, /interrupted.*may have gone through anyway\. `look` at the board before proposing it again/);
+    assert.match(text, /`look` at the parent first \(another agent may already have split it\), then propose its missing parts at once/);
+    assert.equal(shaperSkill({ name: 'nuworq-shaper' }).split('\n')[1], 'name: nuworq-shaper', 'the copy in ~/.claude/skills keeps nuworq- in front');
+  });
+
+  test('the shaper skill drafts decisions and asks; it never tells the agent to make one', () => {
+    const text = shaperSkill();
     const about = text.split(/(?<=[.:!?])\s+|\n/).filter((s) => /\bdecisions?\b/i.test(s));
     assert.ok(about.length, 'it talks about decisions');
     for (const s of about) {
@@ -351,11 +404,14 @@ describe('the nuworq skill is generated from the protocol', () => {
     assert.ok(!OPS.some((o) => /decide|decision/.test(o.name)), 'agents have no operation that writes a decision');
   });
 
-  test('`nuworq skill --dir d` writes both skills', async () => {
+  test('`nuworq skill --dir d` writes the three skills under their new names', async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-skill-')));
     const r = await cli(['skill', '--dir', dir], { env: envFor(dir, { NUWORQ_URL: 'http://127.0.0.1:9' }) });
     assert.equal(r.code, 0, r.stderr);
-    assert.equal(readFileSync(join(dir, 'nuworq', 'SKILL.md'), 'utf8'), skill({ url: 'http://127.0.0.1:9' }));
-    assert.equal(readFileSync(join(dir, 'nuworq-plan', 'SKILL.md'), 'utf8'), planSkill({ url: 'http://127.0.0.1:9' }));
+    const url = 'http://127.0.0.1:9';
+    assert.equal(readFileSync(join(dir, 'nuworq', 'SKILL.md'), 'utf8'), skill({ url }));
+    assert.equal(readFileSync(join(dir, 'nuworq-shaper', 'SKILL.md'), 'utf8'), shaperSkill({ url, name: 'nuworq-shaper' }));
+    assert.equal(readFileSync(join(dir, 'nuworq-operator', 'SKILL.md'), 'utf8'), operatorSkill({ url, name: 'nuworq-operator' }));
+    assert.ok(!existsSync(join(dir, 'nuworq-plan')));
   });
 });

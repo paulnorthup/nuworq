@@ -1,6 +1,6 @@
 {
   "name": "nuworq",
-  "description": "nuworq: claim, build, review and land work on a nuworq hub. The nuworq MCP server, the nuworq, nuworq-plan and nuworq-operator skills, and the operator's listener.",
+  "description": "nuworq: claim, build, review and land work on a nuworq hub. The nuworq MCP server, the /nuworq:shaper and /nuworq:operator commands, the skill workers load on their own, and the operator's listener.",
   "author": {
     "name": "nuworq",
     "url": "https://nuworq.com"

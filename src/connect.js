@@ -2,16 +2,18 @@
 // remember exactly what was added, so disconnect removes that and nothing else. No token goes into
 // any tool's config: the MCP server reads the saved connection (connect.json) itself.
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, realpathSync } from 'node:fs';
-import { join, dirname, delimiter } from 'node:path';
+import { join, dirname, basename, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { skill, planSkill, operatorSkill } from './protocol.js';
+import { userSkills } from './protocol.js';
 
 const NAME = 'nuworq';
-const SKILLS = { [NAME]: skill, [`${NAME}-plan`]: planSkill, [`${NAME}-operator`]: operatorSkill };
+// How a person installs the plugin, and the `claude` arguments connect runs when they say yes (#432).
+export const PLUGIN_INSTALL = [['plugin', 'marketplace', 'add', 'paulnorthup/nuworq'], ['plugin', 'install', `${NAME}@${NAME}`]];
 
 const which = (cmd, env) => (env.PATH ?? '').split(delimiter).map((d) => d && join(d, cmd)).find((f) => f && existsSync(f)) ?? null;
 const onPath = (cmd, env) => !!which(cmd, env);
 const real = (f) => { try { return realpathSync(f); } catch { return f; } };
+const list = (names) => names.join(', ').replace(/, ([^,]+)$/, ' and $1');
 
 // How the tools start the MCP server: `nuworq mcp` when the nuworq on PATH is this very copy (installed
 // as a package), so their configs hold no folder paths and keep working when it updates; otherwise
@@ -46,18 +48,18 @@ const codexSection = (text) => text.match(new RegExp(`^\\[mcp_servers\\.${NAME}\
 // Each tool: where it keeps MCP servers, whether nuworq is there already, how to add and remove it.
 // add() returns the record to keep (what disconnect needs), or a reason it was left alone.
 const TOOLS = {
-  // The nuworq skills (generated from the protocol; see skill() and planSkill() in src/protocol.js).
-  // Rewritten on every connect, so they follow the hub's tools; disconnect removes them.
+  // The nuworq skills (generated from the protocol; see userSkills() in src/protocol.js), only for a Claude Code
+  // without the plugin. Rewritten on every connect, so they follow the hub's tools; disconnect removes them.
   skill: {
     label: 'Claude Code skill',
     refresh: true,
     where: ({ home }) => join(home, '.claude', 'skills'),
     present: ({ env }) => onPath('claude', env),
     add(ctx) {
-      const files = Object.entries(SKILLS).map(([name, make]) => {
+      const files = Object.entries(userSkills({ url: ctx.url })).map(([name, text]) => {
         const file = join(TOOLS.skill.where(ctx), name, 'SKILL.md');
         mkdirSync(dirname(file), { recursive: true });
-        writeFileSync(file, make({ url: ctx.url }));
+        writeFileSync(file, text);
         return file;
       });
       return { record: { files } };
@@ -170,9 +172,19 @@ const TOOLS = {
   },
 };
 
-// The nuworq Claude Code plugin (plugin/, see src/plugin.js) brings the MCP server and both skills
+// The nuworq Claude Code plugin (plugin/, see src/plugin.js) brings the MCP server and the skills
 // itself. Claude Code lists installed plugins as "<plugin>@<marketplace>" in installed_plugins.json.
 const CLAUDE_TOOLS = ['claude', 'skill'];
+export const claudeCode = (env = process.env) => onPath('claude', env);
+// Install the plugin with Claude Code's own CLI. Returns null, or what went wrong in one line.
+export function installPlugin(env = process.env) {
+  for (const args of PLUGIN_INSTALL) {
+    const r = run('claude', args, env);
+    // Adding a marketplace that is already there isn't a failure.
+    if (!r.ok && !/already/i.test(r.out)) return `claude ${args.join(' ')} failed: ${r.out.split('\n')[0]}`;
+  }
+  return null;
+}
 export function pluginInstalled(home) {
   try {
     const { plugins = {} } = JSON.parse(readFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
@@ -193,11 +205,21 @@ export function registerMcp({ bin, home, env = process.env, kept = [], url = '' 
   // With the plugin, Claude Code is the plugin's: a second server and second copies of the skills
   // would only compete with it, so what an earlier connect added there goes.
   const plugin = pluginInstalled(home);
+  const skillsOf = (recs) => recs.filter((k) => k.tool === 'skill').flatMap((k) => k.files ?? [k.file]).map((f) => basename(dirname(f)));
   if (plugin) {
     const old = kept.filter((k) => CLAUDE_TOOLS.includes(k.tool));
     for (const rec of old) TOOLS[rec.tool].remove(ctx, rec);
     added = added.filter((k) => !CLAUDE_TOOLS.includes(k.tool));
-    lines.push(`Claude Code: left to the ${NAME} plugin, which brings the MCP server and both skills${old.length ? '; removed what an earlier connect added' : ''}`);
+    const gone = [old.some((k) => k.tool === 'claude') && 'its MCP server', skillsOf(old).length && `the ${list(skillsOf(old))} skills in ${TOOLS.skill.where(ctx)}`].filter(Boolean);
+    lines.push(`Claude Code: left to the ${NAME} plugin, which brings the MCP server and the /${NAME}:shaper and /${NAME}:operator commands${gone.length ? `; removed what an earlier connect added: ${gone.join(' and ')}` : ''}`);
+  } else {
+    // Skills an earlier connect wrote under names this one no longer uses (the planning skill before #432) go.
+    const now = new Set(Object.keys(userSkills()));
+    const stale = kept.filter((k) => k.tool === 'skill').flatMap((k) => k.files ?? [k.file]).filter((f) => !now.has(basename(dirname(f))));
+    if (stale.length) {
+      TOOLS.skill.remove(ctx, { files: stale });
+      lines.push(`${TOOLS.skill.label}: removed the old ${list(stale.map((f) => basename(dirname(f))))} skill${stale.length > 1 ? 's' : ''} (${TOOLS.skill.where(ctx)})`);
+    }
   }
   // What is rewritten every time comes last, so the record reads the same after each connect.
   for (const [tool, t] of Object.entries(TOOLS).sort(([, a], [, b]) => !!a.refresh - !!b.refresh)) {
@@ -217,7 +239,7 @@ export function registerMcp({ bin, home, env = process.env, kept = [], url = '' 
     const r = t.add(ctx);
     if (r.record) {
       added.push({ tool, ...r.record });
-      lines.push(tool === 'skill' ? `${t.label}: wrote the ${Object.keys(SKILLS).join(', ').replace(/, ([^,]+)$/, ' and $1')} skills (${t.where(ctx)})`: `${t.label}: added the ${NAME} MCP server (${t.where(ctx)})`);
+      lines.push(tool === 'skill' ? `${t.label}: wrote the ${list(Object.keys(userSkills()))} skills (${t.where(ctx)})`: `${t.label}: added the ${NAME} MCP server (${t.where(ctx)})`);
     } else {
       lines.push(`${t.label}: left alone, ${r.skip}`);
     }
