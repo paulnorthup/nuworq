@@ -596,7 +596,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', admin: true });
     if (req.method === 'GET' && path === '/api/oauth') return send(200, { providers: sso.list().map((p) => ({ ...p, start: `/auth/${p.name}/start` })) });
     const page = path === '/' ? '/admin.html' : path;
-    if (req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/style.css'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
+    if (req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/instant.js', '/style.css'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
     if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'GET /api/early-access/sources', 'POST /api/early-access/decide', 'GET /api/feedback/list', 'POST /api/feedback/decide', 'POST /api/feedback/autonomy', 'GET /api/workspaces', 'POST /api/workspaces/plan', 'GET /api/github/app/wiring'].includes(`${req.method} ${path}`)) {
       return deny(404, 'the admin host serves only the admin dashboard', `Workspaces live at ${publicUrl || 'the hub\'s own address'}.`);
     }

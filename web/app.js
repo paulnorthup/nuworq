@@ -26,6 +26,7 @@ import { isTextBox, saveFocus, restoreFocus } from './focus.js';
 import { keepScroll } from './scroll.js';
 import { morph } from './morph.js';
 import { liveGate } from './pace.js';
+import { predict, placeholder } from './instant.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -46,6 +47,8 @@ const S = {
   open: new Set(), reveal: new Set(), drafts: {},
   composeKind: 'steer', stage: null, addWork: false, editMission: false, editItem: false,
   feedAll: false, pending: false,
+  sending: 0, // actions on their way to the hub, already shown (#393)
+  prefetched: new Map(), // ref → { at, item } fetched when the pointer rested on it (#393)
 };
 const z = () => Z[S.zoom];
 
@@ -121,9 +124,9 @@ function toast(msg, err = false, undo = null) {
   toast.t = setTimeout(() => (t.hidden = true), undo ? 8000 : err ? 5000 : 2200);
 }
 // A failed request, as a person reads it: the error and what to do about it, with any place it names linked (#151).
-function toastError(e) {
-  toast(errorText(e), true);
-  $('#toast').innerHTML = errorHtml(e, esc);
+function toastError(e, lead = '') {
+  toast(lead + errorText(e), true);
+  $('#toast').innerHTML = esc(lead) + errorHtml(e, esc);
   // Following the place it names leaves the dialog the error came from.
   for (const a of $('#toast').querySelectorAll('a')) a.addEventListener('click', () => { closeModal(); $('#toast').hidden = true; });
 }
@@ -172,16 +175,31 @@ async function api(path, opts = {}) {
   return j;
 }
 // On the open project, or on the home the project of the card clicked (S.actSlug); with neither, the home's own.
+// What's predictable shows on the same frame as the tap (#393, web/instant.js). If the hub refuses, the screen
+// goes back to what it was, and the toast says so and why.
 async function human(action, body = {}, msg) {
+  const before = { view: S.view, home: S.home, item: S.item };
+  const shown = foresee(action, body);
+  S.sending++;
   try {
     const slug = S.slug ?? S.actSlug;
     const r = await api(slug ? `/api/p/${encodeURIComponent(slug)}/human/${action}` : `/api/home/${action}`, { method: 'POST', body: JSON.stringify(body) });
+    S.sending--;
     if (msg) toast(msg);
     await refresh();
     return r;
   } catch (e) {
-    toastError(e);
+    S.sending--;
+    if (shown) { Object.assign(S, before); render({ force: true }); scheduleRefresh(); }
+    toastError(e, shown ? 'Not changed, so it is back as it was: ' : '');
   }
+}
+function foresee(action, body) {
+  const next = { view: predict(S.view, action, body), home: predict(S.home, action, body), item: predict(S.item, action, body) };
+  if (!next.view && !next.home && !next.item) return false;
+  for (const [k, v] of Object.entries(next)) if (v) S[k] = v;
+  render({ force: true });
+  return true;
 }
 
 // Archive or delete the open project, then leave it: it is no longer in the list.
@@ -202,6 +220,8 @@ async function loadProjects() {
   S.projects = await api('/api/projects');
 }
 async function refresh({ force = false } = {}) {
+  // While an action is on its way, a live update would show the screen from before it: the action's own refresh follows.
+  if (S.sending && !force) return;
   try {
     if (S.slug || S.analytics) await loadProjects();
     S.missing = null;
@@ -267,10 +287,40 @@ function route() {
   if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = linking; }
   S.linkRepo = null;
   S.slug = slug;
-  if (ref !== S.itemRef) { S.itemRef = ref; S.item = null; S.deep = z() >= 2; S.editItem = false; S.editPre = false; }
+  if (ref !== S.itemRef) { S.itemRef = ref; S.item = prefetched(slug, ref); S.deep = z() >= 2; S.editItem = false; S.editPre = false; }
   if (ref) remember(slug, ref);
+  // An item opens on this frame: from what was fetched as the pointer rested on it, else as a placeholder.
+  if (ref && S.view?.project.slug === slug) render({ force: true });
   refresh({ force: true }).then(() => linking && $('#remote-in')?.focus());
 }
+// Opening an item (#393): fetched when the pointer rests on its link, or as a finger lands on it, so it opens
+// without a wait. Kept a few seconds; the open refreshes it from the hub all the same.
+const PREFETCH_FOR = 15_000;
+function prefetch(slug, ref) {
+  const key = `${slug} ${ref}`;
+  const had = S.prefetched.get(key);
+  if (!slug || !ref || (had && Date.now() - had.at < PREFETCH_FOR)) return;
+  const entry = { at: Date.now(), item: null };
+  S.prefetched.set(key, entry);
+  api(`/api/p/${encodeURIComponent(slug)}/items/${encodeURIComponent(ref.replace('#', ''))}`)
+    .then((it) => { entry.item = it; })
+    .catch(() => S.prefetched.delete(key));
+}
+function prefetched(slug, ref) {
+  const had = ref && S.prefetched.get(`${slug} ${ref}`);
+  return had?.item && Date.now() - had.at < PREFETCH_FOR ? had.item : null;
+}
+const openTarget = (e) => {
+  const el = e.target.closest?.('[data-action="open"][data-item]');
+  return el && { slug: el.closest('[data-project]')?.dataset.project ?? S.slug, ref: el.dataset.item };
+};
+let restTimer;
+document.addEventListener('pointerover', (e) => {
+  const t = openTarget(e);
+  clearTimeout(restTimer);
+  if (t && e.pointerType === 'mouse') restTimer = setTimeout(() => prefetch(t.slug, t.ref), 60);
+});
+document.addEventListener('touchstart', (e) => { const t = openTarget(e); if (t) prefetch(t.slug, t.ref); }, { passive: true });
 const go = (slug, ref) => { location.hash = slug ? `#/p/${encodeURIComponent(slug)}${ref ? '/' + ref.replace('#', '') : ''}` : '#/'; };
 
 // ── rail ──
@@ -355,8 +405,8 @@ function overview() {
 function project(v) {
   const P = v.project;
   const zoomSeg = zoomControl();
-  const autoSeg = `<div class="seg">${Object.entries(P.autonomy_options).map(([k, o]) =>
-    `<button class="${P.autonomy === k ? 'on' : ''}" data-action="autonomy" data-level="${k}" title="${esc(o.human)}">${esc(o.label)}</button>`).join('')}</div>`;
+  const autoSeg = `<div class="seg" role="group" aria-label="Autonomy" data-new="instant-actions">${Object.entries(P.autonomy_options).map(([k, o]) =>
+    `<button class="${P.autonomy === k ? 'on' : ''}" aria-pressed="${P.autonomy === k}" data-action="autonomy" data-level="${k}" title="${esc(o.human)}">${esc(o.label)}</button>`).join('')}</div>`;
   const mission = S.editMission
     ? `<div class="inline-form"><input data-draft="mission" id="mission-in" placeholder="What is this project for? Agents read this first." value="${esc(P.mission)}"><button class="btn primary small" data-action="save-mission">Save</button><button class="btn ghost small" data-action="cancel-mission">Cancel</button></div>`
     : `<div class="mission ${P.mission ? '' : 'empty'}" data-action="edit-mission" title="Click to edit. Every agent reads the mission at checkin.">${esc(P.mission || 'Add a mission: the north star every agent reads at checkin')}</div>`;
@@ -961,7 +1011,7 @@ function renderDrawer() {
   if (d.hidden === show) d.hidden = $('#scrim').hidden = !show; // untouched when it stays as it is (#392)
   if (!show) return;
   const it = S.item;
-  if (!it) { paint(d, '<div class="loading">Loading…</div>'); return; }
+  if (!it) { paint(d, placeholder(4)); return; }
   const holderLine = {
     proposed: it.holder
       ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
@@ -972,6 +1022,7 @@ function renderDrawer() {
       : `<b>${who(it.holder)}</b> is on it · ${esc(it.in_stage)} so far · lease ${esc(it.lease_left)} left`,
     waiting: `<b>Waiting on you</b> for ${esc(it.in_stage)}: an agent parked it to ask a question.`,
     verifying: `<b>Verifying</b> · ${who(it.implementer)} finished it ${esc(it.in_stage)} ago${it.holder ? ` · ${who(it.holder)} is reviewing` : ''}`,
+    landing: `<b>Landing</b> · accepted; ${it.holder ? `${who(it.holder)} is putting it on main` : 'the next free agent puts it on main'}`,
     done: `<b>Done</b> ${esc(it.in_stage)} ago${it.implementer ? ` · ${credit({ implementer: it.implementer }, who)}` : ''}`,
     dropped: `<b>Dropped</b> ${esc(it.in_stage)} ago`,
   }[it.stage];
@@ -1204,11 +1255,15 @@ function settingsModal() {
 const settingsOpen = () => !!$('#modal [data-settings]');
 async function setting(body, msg) {
   const row = document.activeElement?.closest?.('#modal .setting')?.querySelector('.h')?.id;
-  const r = await human('settings', body, msg);
-  if (settingsOpen()) {
+  const redraw = () => {
+    if (!settingsOpen()) return;
     settingsModal();
     if (row) $(`#${row}`)?.closest('.setting')?.querySelector(':scope > button')?.focus();
-  }
+  };
+  const sent = human('settings', body, msg);
+  redraw(); // the switch shows its new state at once (#393), and goes back if the hub refuses
+  const r = await sent;
+  redraw();
   return r;
 }
 
@@ -1378,7 +1433,7 @@ function newProject() {
     : !gh ? 'With the hub\'s GitHub App, you could pick a repository here instead; an owner creates it from Connect an agent.' : '';
   modal(`<h2>New project</h2>
     ${picker ? `<p class="lead">Pick a repository the nuworq GitHub App is installed on. Install it on more from GitHub to see them here.</p>
-      <div class="form"><label>Search<input id="np-q" placeholder="owner/name"></label></div><div id="np-repos" class="repo-list"><p class="faint">Loading…</p></div>
+      <div class="form"><label>Search<input id="np-q" placeholder="owner/name"></label></div><div id="np-repos" class="repo-list">${placeholder(4, { head: false })}</div>
       <details><summary>Or add one by name</summary>` : `<p class="lead">${why} Agents also create projects when they check in to a new name.</p>`}
     <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
     <label>Repository (optional): its git remote, so agents in a clone find the project<input id="np-remote" placeholder="e.g. github.com/acme/llm-proxy"></label>
@@ -1439,7 +1494,7 @@ async function openLauncher() {
 function drawLauncher({ keep = false } = {}) {
   const list = $('#ln-list');
   if (!list) return;
-  if (!L.index) { list.innerHTML = '<div class="ln-empty">Loading…</div>'; return; }
+  if (!L.index) { list.innerHTML = placeholder(3, { head: false }); return; }
   if (L.confirming) { list.innerHTML = confirmHtml(L.confirming, { esc }); return; }
   // Moving through the list keeps it as it is; typing (or the index arriving) ranks it again.
   if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: !!S.billing?.owner, recent: recent() });
@@ -1530,9 +1585,11 @@ const ACTIONS = {
     const kind = S.composeKind;
     clearDraft('compose');
     $('#compose').value = '';
-    if (kind === 'note') await human('comment', { body }, 'Noted');
-    else if (kind === 'decision') await human('decide', { body }, 'Decision recorded: every agent will carry it');
-    else await human('steer', { body }, 'Steer sent: agents will acknowledge it');
+    const r = kind === 'note' ? await human('comment', { body }, 'Noted')
+      : kind === 'decision' ? await human('decide', { body }, 'Decision recorded: every agent will carry it')
+      : await human('steer', { body }, 'Steer sent: agents will acknowledge it');
+    // Refused: what they wrote goes back in the box, so nothing is lost.
+    if (!r && !$('#compose').value) { S.drafts.compose = body; $('#compose').value = body; }
   },
   'toggle-add': () => { S.addWork = !S.addWork; if (!S.addWork) S.addMore = false; render({ force: true }); if (S.addWork) setTimeout(() => $('#nw-title')?.focus(), 0); },
   'nw-priority': (el) => { S.drafts['nw-priority'] = el.dataset.p; render({ force: true }); },

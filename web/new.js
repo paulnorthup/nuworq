@@ -27,6 +27,7 @@ export const NEW = {
   'copy-each-command': '2026-10-31', // #379: several commands in a step, each with its own Copy that copies clean
   'live-view': '2026-10-31', // #358: Settings → Anyone can watch, the project's public live page
   'propose-work': '2026-10-31', // #389: propose work from a project's board, one field first, the rest on demand
+  'instant-actions': '2026-10-31', // #393: actions show their result on the tap, and go back if the hub refuses (the Autonomy switch)
 };
 
 const DAYS = 7;

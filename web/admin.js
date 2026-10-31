@@ -3,6 +3,7 @@
 // Then the workspaces (#169): one row each, most recently active first; tap a row for who and what is in it,
 // and to switch its plan between Free and Unlimited (that asks first too, saying what changes).
 import { markNew, dismissNew } from './new.js';
+import { placeholder } from './instant.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -43,18 +44,18 @@ async function main() {
     <h2>Early access</h2>
     <p class="lead">Approve gives you a link to send: it lets them make one workspace, once, within 14 days.</p>
     <div class="seg admin-filter" role="group" aria-label="Show">${STATES.map(([v, label]) => `<button data-state="${v}" aria-pressed="${v === state}" class="${v === state ? 'on' : ''}">${label}</button>`).join('')}</div>
-    <div id="list" aria-live="polite"><p class="faint">Loading…</p></div>
+    <div id="list" aria-live="polite">${placeholder(3, { head: false })}</div>
     <h2 class="admin-h2" data-new="ea-sources">Where they came from</h2>
     <p class="lead">How far the people from each source got. A source is the ?ref= tag on nuworq.com's link, or the site they came from.</p>
     <div class="seg admin-filter src-filter" role="group" aria-label="Count">${SPANS.map(([v, label]) => `<button data-span="${v}" aria-pressed="${v === span}" class="${v === span ? 'on' : ''}">${label}</button>`).join('')}</div>
-    <div id="sources" aria-live="polite"><p class="faint">Loading…</p></div>
+    <div id="sources" aria-live="polite">${placeholder(3, { head: false })}</div>
     <h2 class="admin-h2" id="feedback">Feedback</h2>
     <p class="lead" id="fb-lead">What got in people's and agents' way. Approve makes it a proposal agents shape; Decline closes it, with a note to the sender if you like.</p>
     <div id="fb-level"></div>
     <div class="seg admin-filter fb-filter" role="group" aria-label="Show feedback">${STATES.map(([v, label]) => `<button data-fb-state="${v}" aria-pressed="${v === fbState}" class="${v === fbState ? 'on' : ''}">${label}</button>`).join('')}</div>
-    <div id="fb-list" aria-live="polite"><p class="faint">Loading…</p></div>
+    <div id="fb-list" aria-live="polite">${placeholder(3, { head: false })}</div>
     <h2 class="admin-h2">Workspaces</h2>
-    <div id="spaces" aria-live="polite"><p class="faint">Loading…</p></div>`;
+    <div id="spaces" aria-live="polite">${placeholder(3, { head: false })}</div>`;
   load();
   loadSources();
   loadFeedback();

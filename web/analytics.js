@@ -3,7 +3,9 @@
 // then a period switch, then one line per project, then models and agents compared on cost per landed item,
 // cycle time and escapes. Figures carry no state color (web/style.css's map); a change says itself with a sign
 // or a word ("+4", "−20m", "same"). Pure: the page hands in esc, dur and its two-column layout.
-export const PERIODS = ['14d', '90d', 'all'];
+import { placeholder } from './instant.js';
+
+export const PERIODS =['14d', '90d', 'all'];
 const AGENTS_SHOWN = 5;
 const MIN_LANDED = 3; // src/outcomes.js suggests nothing below this many landed
 
@@ -27,7 +29,7 @@ export function analyticsPage(o, { esc, dur, period = o?.period ?? '14d', open =
   const seg = `<div class="seg an-period" role="group" aria-label="Period">${PERIODS.map((p) =>
     `<button class="${p === period ? 'on' : ''}" aria-pressed="${p === period}" data-action="an-period" data-p="${p}">${p === 'all' ? 'All time' : `Last ${p.replace('d', ' days')}`}</button>`).join('')}</div>`;
   // The switch stays while the figures load, so it doesn't vanish for a moment on every switch.
-  if (!o) return `${head}<div class="an-switch">${seg}</div><div class="loading">Loading the figures…</div>`;
+  if (!o) return `${head}<div class="an-switch">${seg}</div>${placeholder(4)}`;
 
   // No takeaway means too little landed, or enough landed and nothing calls for a change: say which.
   const quiet = (o.summary?.landed ?? 0) < MIN_LANDED
