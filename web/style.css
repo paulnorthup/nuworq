@@ -438,7 +438,6 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 .get-started li.next { color: var(--ink); font-weight: 500; }
 /* A long label wraps beside its tick, so its action stays on the row with the others' (#289). */
 .get-started li > .label { flex: 0 1 auto; min-width: 0; }
-@media (max-width: 420px) { .get-started li > .label { flex: 1 1 0; } }
 .get-started li.done .label { text-decoration: line-through; color: var(--muted); }
 .get-started .tick { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 11px; flex: none; }
 .get-started li.done .tick { background: var(--ok-tint); border-color: transparent; color: var(--ok); }
@@ -577,6 +576,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   #main { padding: 14px 12px 60px; overflow-x: hidden; }
   .notify-add { flex-wrap: wrap; } .notify-add select { flex: 1 1 100%; } /* notifications: kind, then address + Add */
   .cards, .ov-lines, .home-card { min-width: 0; max-width: 100%; }
+  .get-started li > .label { flex: 1 1 0; }
   .card .actions, .answer-row, .opts { flex-wrap: wrap; }
   .card .btn, .card .opt, .card .pick, .answer-row input, .pulse .btn, .ov-line, .get-started .btn, .seg button { min-height: 44px; }
   .card .btn, .card .opt { padding: 10px 14px; }
