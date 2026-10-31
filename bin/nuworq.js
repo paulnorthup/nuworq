@@ -218,7 +218,9 @@ async function waitCmd(flags) {
   // Unnamed (a watcher beside the session can't know its name): the operators that checked in with this token.
   const agent = flags.as || envVar('AGENT') || '';
   const { describeEvent } = await import('../src/wait.js');
-  const client = createClient(flags);
+  // Unnamed, it says which session started it (#335), so it wakes that session's operator, not every one on the token.
+  const { listenerKeys } = await import('../src/session.js');
+  const client = createClient({ ...flags, session: agent ? [] : listenerKeys() });
   // --follow started beside a session that hasn't checked in yet: no operator on this token is "not yet"
   // for a couple of minutes, retried quietly. Any other refusal ends it at once.
   const settle = Number(flags['settle-ms']) || 120_000, until = Date.now() + settle;
@@ -1350,7 +1352,8 @@ ${bold('Setup')}
   wait --operator [--follow] [--as name] [--project p | --all-projects]
                                          block until there is something for an operator (its work, a question
                                          to it, an answer, steering) and print one line; --follow: one per event.
-                                         Without --as: the operators that checked in with this token.
+                                         Without --as: the operator of the Claude Code session that started
+                                         it (else the operators that checked in with this token).
                                          Only this folder's project, unless --project or --all-projects.
   tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
   worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags] [--browser]

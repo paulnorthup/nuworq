@@ -1370,7 +1370,7 @@ export class Hub extends EventEmitter {
   // token: the calling token's identity (required mode): its name is recorded on the agent; an agent
   // token also brings its powers (none means every power) and provenance.
   // remote: the agent's repository (normalized origin remote), which finds the project on any machine.
-  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null } = {}) {
+  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [] } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     refuseSecrets(args);
@@ -1426,6 +1426,8 @@ export class Hub extends EventEmitter {
       }
       this.noteToken(p, agent, token?.name);
       if (token?.role === 'agent') this.q('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ?').run(token.id, p.id, agent);
+      // Its session's keys (#335): the listener beside it sends the same, and wakes it alone.
+      if (op === 'checkin' && session.length) this.q('UPDATE agents SET session = ? WHERE project_id = ? AND name = ?').run(session.join(','), p.id, agent);
       const need = powers && this.powerFor(p, op, args ?? {});
       if (need && !powers.includes(need)) {
         throw new UserError(`This agent's token can't ${need} (its powers: ${powers.join(', ')})`, {

@@ -16,15 +16,23 @@ const json = (s, d) => { try { return JSON.parse(s) ?? d; } catch { return d; } 
 // Who waits, as { p, agent } per project, within the token's scope. Named: that agent wherever it is an
 // operator. Unnamed (a watcher started beside the session, which can't know the session's name): the
 // operators that checked in with this token in the last day and haven't signed off, or with no token
-// (a hub without logins) every such operator. Refuses everyone else.
-export function operatorsOf(hub, agent, { scope = null, tokenId = null } = {}) {
+// (a hub without logins) every such operator. session: the watcher's session keys (src/session.js, #335):
+// then only the operators whose checkin said one of them, so two operator sessions on one token don't
+// wake each other. With none of those yet, the ones that said no keys (an older nuworq) still count, so
+// they keep their listener. Refuses everyone else.
+export function operatorsOf(hub, agent, { scope = null, tokenId = null, session = [] } = {}) {
   const name = String(agent ?? '').trim();
   const ps = hub.projects().filter((p) => !scope || scope.includes(p.slug));
-  const found = name
+  let found = name
     ? ps.filter((p) => hub.isOperator(p, name)).map((p) => ({ p, agent: name }))
-    : ps.flatMap((p) => hub.q(`SELECT name FROM agents WHERE project_id = ? AND role = 'operator' AND signed_off = 0 AND last_seen > ?
+    : ps.flatMap((p) => hub.q(`SELECT name, session FROM agents WHERE project_id = ? AND role = 'operator' AND signed_off = 0 AND last_seen > ?
         ${tokenId != null ? 'AND token_id = ?' : ''} ORDER BY name`).all(p.id, hub.now() - DAY, ...(tokenId != null ? [tokenId] : []))
-      .map((a) => ({ p, agent: a.name })));
+      .map((a) => ({ p, agent: a.name, session: a.session })));
+  if (!name && session.length) {
+    const mine = found.filter((o) => o.session.split(',').some((k) => session.includes(k)));
+    found = mine.length ? mine : found.filter((o) => !o.session);
+  }
+  found = found.map(({ p, agent: a }) => ({ p, agent: a }));
   if (!found.length) {
     throw new UserError(name ? `${name} isn't an operator here, so there is nothing for it to wait for` : 'no operator has checked in here with this token in the last day', {
       status: 403,
@@ -37,8 +45,8 @@ export function operatorsOf(hub, agent, { scope = null, tokenId = null } = {}) {
 }
 
 // Everything for these operators newer than since (ms; 0: everything there now), oldest first, each once.
-export function operatorEvents(hub, agent, { since = 0, scope = null, tokenId = null } = {}) {
-  return collect(hub, operatorsOf(hub, agent, { scope, tokenId }), since);
+export function operatorEvents(hub, agent, { since = 0, scope = null, tokenId = null, session = [] } = {}) {
+  return collect(hub, operatorsOf(hub, agent, { scope, tokenId, session }), since);
 }
 
 function collect(hub, operators, since) {
@@ -80,10 +88,11 @@ function seen(hub, operators) {
 }
 
 // Waits until there is something, or ms pass. Resolves { events, at }: pass at as since next time.
-// agent: the operator's name, or '' for this token's operators. signal: the caller went away.
+// agent: the operator's name, or '' for this token's operators (session: the ones of the caller's session).
+// signal: the caller went away.
 // Refusals throw before any waiting.
-export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, ms = WAIT_MS, signal } = {}) {
-  const operators = operatorsOf(hub, agent, { scope, tokenId });
+export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, session = [], ms = WAIT_MS, signal } = {}) {
+  const operators = operatorsOf(hub, agent, { scope, tokenId, session });
   seen(hub, operators);
   ms = Math.min(Math.max(0, ms), MAX_WAIT_MS);
   return new Promise((resolve) => {

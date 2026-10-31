@@ -25,6 +25,7 @@ import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { waitFor } from './wait.js';
+import { parseKeys } from './session.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
 import { LOGO, FAVICON, withLogo } from '../web/logo.js';
@@ -1284,7 +1285,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         delete b.agent;
         if (m[2] === 'feedback') return send(200, agentFeedback(req, hub, ws, decodeURIComponent(m[1]), agent, b, caller));
         if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
-        return send(200, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller })));
+        return send(200, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller })));
       }
       // git asks for a credential (nuworq git-credential): a token for the repository of the item this
       // agent holds, minted by the GitHub App for that one repository and an hour. On the record, never shown.
@@ -1356,7 +1357,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         delete b.agent;
         if (m[1] === 'feedback') return send(200, agentFeedback(req, hub, ws, '', agent, b, caller));
         if (DECIDES.agent.includes(m[1])) await hub.prefetch('', b, { remote: remoteOf(req), root: rootOf(req), scope: caller.scope });
-        return send(200, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), ...caller })));
+        return send(200, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller })));
       }
       // Push channels: hub-wide (or workspace-wide) ones, and personal ones that get only what that person owns.
       // Agent tokens never reach these. An owner manages them all; a person manages their own.
@@ -1409,7 +1410,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const only = named ? slugify(named) : here?.slug;
         const scope = only ? (caller.scope && !caller.scope.includes(only) ? [] : [only]) : caller.scope;
         const r = await waitFor(hub, header(req, 'agent'), {
-          since: Number(url.searchParams.get('since')) || 0, scope, tokenId: caller.token?.id ?? null, signal: done.signal,
+          since: Number(url.searchParams.get('since')) || 0, scope, tokenId: caller.token?.id ?? null, session: sessionOf(req), signal: done.signal,
           ...(timeout > 0 ? { ms: timeout * 1000 } : {}),
         });
         if (!done.signal.aborted) send(200, r);
@@ -1463,6 +1464,7 @@ function siteOf(publicUrl) {
 const header = (req, name) => req.headers[`x-nuworq-${name}`] ?? req.headers[`x-trellis-${name}`];
 const rootOf = (req) => { try { return decodeURIComponent(header(req, 'root') ?? ''); } catch { return ''; } };
 const remoteOf = (req) => { try { return decodeURIComponent(header(req, 'remote') ?? ''); } catch { return ''; } };
+const sessionOf = (req) => parseKeys(header(req, 'session')); // the caller's Claude Code session (#335)
 
 const TOO_BIG = () => new UserError('Request body too large (limit 1MB)', { status: 413, hint: 'Keep detail to what a person would read; put long logs in the repo and reference them.' });
 
