@@ -171,6 +171,16 @@ Verified: a valid certificate, 401 without login, a `Secure` session cookie, and
 
 Undo: restart the hub with the old `--public-url`.
 
+**A GitHub App made before its hub was reachable hears nothing.** The one-click app asks GitHub for its events and turns its webhook on only when the hub's address is public (docs/GITHUB.md). One made while the hub was on localhost or a private address has no events, its webhook may be off, and an older one also lacks the Dependabot alerts permission. GitHub then sends it only pings and installation events: issues don't come in, reviews and CI results go unseen, and Dependabot alerts never become items. Landing still works, because the hub's sweep looks at landing pull requests itself.
+- Check, on the hub host, with the App's own key: `GET /app` (any script that signs a JWT with the App's key, e.g. a 10-line `node` one). Its `events` must list `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `check_suite`, `check_run` and `dependabot_alert`, and its `permissions` must include `vulnerability_alerts: read`. `GET /app/installations` shows the same for each installation.
+- Fix: GitHub only lets a person change these, on the App's settings pages.
+  1. Open `https://github.com/settings/apps/<slug>` (General). Under Webhook, tick **Active** and check the URL is `https://<hub>/api/hooks/github-app`. Click **Save changes** if you changed anything.
+  2. Open `https://github.com/settings/apps/<slug>/permissions`. Under Repository permissions, set **Dependabot alerts** to Read-only.
+  3. On the same page, under Subscribe to events, tick **Check run**, **Check suite**, **Dependabot alert**, **Issue comment**, **Issues**, **Pull request** and **Pull request review**. *Dependabot alert* appears only after step 2. Click **Save changes**, and confirm the permission change.
+  4. Each installation has to accept the new permission. Open `https://github.com/settings/installations/<id>` (or `https://github.com/organizations/<org>/settings/installations/<id>`), then click **Review request** and **Accept new permissions**.
+  5. Check: `GET /app` lists the seven events. Advanced → Recent Deliveries shows `pull_request` and `check_suite` deliveries answered `200` after the next push to a pull request. An issue opened on a linked repository appears on the hub as a proposal within a minute.
+  A `200` alone doesn't prove the hub took a delivery: open it and read the response. `"projects": [{ "project": "<slug>", … }]` means it reached the project. `"projects": []` means it reached none. On a hub of workspaces, that is an installation bound to no workspace: bind it (`nuworq workspace bind-installation <id> <workspace>`, see adopt above), then click **Redeliver** on the delivery.
+
 ### Keeping a server up to date: it pulls, nothing pushes to it
 `serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. If the new hub doesn't come up healthy, it rolls back. No CI job reaches into your network, and the server only needs read access:
 ```bash
