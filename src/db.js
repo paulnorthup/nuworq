@@ -318,6 +318,23 @@ CREATE TABLE IF NOT EXISTS get_started (
 );
 `;
 
+// One record per pull request (#261). The hub records a PR it opens under the normalized remote
+// (github.com/o/r), and GitHub's webhook one it doesn't know yet under o/r. When "opened" arrives while the land
+// step still awaits GitHub, both get written. Fold the o/r twin into the hub's record, keeping the newest head
+// and state and a blocked reason either has, then drop it. Run at start and after the land step writes.
+export const PR_TWINS = [
+  `UPDATE prs AS g SET
+     head_ref = CASE WHEN s.updated_at > g.updated_at THEN s.head_ref ELSE g.head_ref END,
+     head_sha = CASE WHEN s.updated_at > g.updated_at THEN s.head_sha ELSE g.head_sha END,
+     state = CASE WHEN s.updated_at > g.updated_at THEN s.state ELSE g.state END,
+     blocked = CASE WHEN g.blocked != '' THEN g.blocked ELSE s.blocked END,
+     updated_at = MAX(g.updated_at, s.updated_at)
+   FROM prs AS s
+   WHERE s.project_id = g.project_id AND s.number = g.number AND lower(g.repo) = 'github.com/' || lower(s.repo)`,
+  `DELETE FROM prs WHERE EXISTS (SELECT 1 FROM prs g WHERE g.project_id = prs.project_id AND g.number = prs.number
+     AND lower(g.repo) = 'github.com/' || lower(prs.repo))`,
+];
+
 export function openDb(file) {
   if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
@@ -399,6 +416,7 @@ export function openDb(file) {
     "ALTER TABLE usage ADD COLUMN role TEXT NOT NULL DEFAULT ''",
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
+    ...PR_TWINS,
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }

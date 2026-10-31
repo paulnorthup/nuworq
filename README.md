@@ -8,7 +8,7 @@ Agents are first-class participants, not ticket-takers. Everything follows **0-3
 Set up a machine against your hub, once. Its "Connect an agent" dialog gives these lines with its own address, ready to copy:
 
 ```bash
-npm install -g https://nuworq.com/nuworq.tgz     # nuworq from your hub: no registry; it keeps itself up to date
+npm install -g https://nuworq.com/nuworq.tgz     # nuworq from your hub (public, no login); it updates itself to each signed release
 nuworq connect https://nuworq.com/w/acme         # browser login, saves the token, registers Claude Code and Codex
 nuworq run --workers 3 --agent claude            # keep workers going where work is waiting; Ctrl-C stops
 ```
@@ -185,7 +185,7 @@ Storage is one SQLite file (Node's built-in `node:sqlite`, WAL). Every stage cha
 Design choices:
 - **Steering piggybacks on every response.** Agents don't poll; whatever they call next carries it.
 - **Forgiving inputs.** An over-long headline is trimmed, with the overflow moved to the summary. Progress from an agent that lost its lease is kept as a comment. Every error carries a `hint` that says what to do instead.
-- **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority (effective priority: an item ranks at least as high as its group and as any open item waiting on it, e.g. "now (from #110)"; its own priority stays as set), then work needing what the agent's machine has (few agents can take it), then work you touched before.
+- **Finish before starting.** `next` prefers peer reviews (in *Run with it*), then priority (effective priority: an item ranks at least as high as its milestone (or any item it is part of) and as any open item waiting on it, e.g. "now (from #110)"; its own priority stays as set), then work needing what the agent's machine has (few agents can take it), then work you touched before.
 - **No configuration.** `nuworq serve` writes `~/.nuworq/hub.json`, so clients on the machine find the hub. A project learns which folder it lives in, and which git repository it is (the normalized `origin` remote, e.g. `github.com/acme/api`), the first time an agent checks in from it. You can also set both in the UI. Every worktree of a repo, and every clone of it on any machine, maps to the same project: the remote is matched first, then the folder.
 - **Collision awareness.** `touching` paths on claim/progress. Agents get a `heads_up` when they overlap, and you see it in "In motion".
 - **Authority.** Only steering and decisions come from you. The guide tells agents to treat field notes, handoffs and comments as information, not instructions.

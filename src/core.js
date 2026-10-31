@@ -2,7 +2,7 @@
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
 import { rmSync } from 'node:fs';
-import { openDb } from './db.js';
+import { openDb, PR_TWINS } from './db.js';
 import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, mirrorPath, originOf, refetch } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
@@ -13,6 +13,8 @@ import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
 import { OPERATOR_TAGS } from './protocol.js';
+import { slugify, normRemote } from './text.js';
+export { slugify, normRemote };
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
@@ -192,26 +194,9 @@ function refuseSecrets(args) {
   }
 }
 
-// A git remote in the one form every clone shares: host/owner/repo. ssh, scp-style and https forms
-// of the same repository compare equal (git@github.com:Acme/api.git → github.com/acme/api). A path
-// (a repository on this machine) keeps its case: unlike GitHub, a filesystem may care.
-export function normRemote(url) {
-  let s = str(url);
-  if (!s) return '';
-  const scp = !/^[a-z][a-z0-9+.-]*:\/\//i.test(s) && s.match(/^(?:[^@/]+@)?([^:/]+):(?!\/)(.+)$/);
-  if (scp) s = `${scp[1]}/${scp[2]}`;
-  else s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^[^@/]+@/, '').replace(/^([^/:]+):\d*(?=\/|$)/, '$1');
-  s = s.replace(/\/+$/, '').replace(/\.git$/i, '').replace(/\/+$/, '');
-  return s.startsWith('/') ? s : s.toLowerCase();
-}
-
 // What to give git clone for a normalized remote: https for host/owner/repo, a path as it is.
 export function cloneUrl(remote) {
   return remote.startsWith('/') ? remote : `https://${remote}.git`;
-}
-
-export function slugify(s) {
-  return str(s).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
 
 export class Hub extends EventEmitter {
@@ -483,14 +468,20 @@ export class Hub extends EventEmitter {
     ]);
   }
 
-  checkPlan(agent) {
+  // p: the project it asked in. A refusal is remembered (planRefused), so the workspace's owners hear of it in
+  // Needs you with Upgrade (#228); upgradeUrl (set by the server while billing is on) is where they upgrade.
+  checkPlan(agent, p = null) {
     const limit = this.planLimit?.();
     if (!limit) return;
     const working = this.working();
     if (working.has(agent) || working.size < limit) return;
+    const was = this.planRefused;
+    this.planRefused = { agent, working: [...working], at: this.now(), project: p?.id ?? null };
+    if (p && (was?.agent !== agent || was?.project !== p.id)) this.changed(p);
+    const upgrade = this.upgradeUrl?.();
     throw new UserError(`The Free plan runs ${limit} agent at a time, and ${[...working].join(', ')} is working now`, {
       status: 402,
-      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. To run agents side by side, upgrade the workspace to Pro.`,
+      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. To run agents side by side, the workspace's owner can upgrade it to Pro${upgrade ? `: ${upgrade}` : ''}.`,
     });
   }
 
@@ -1067,10 +1058,12 @@ export class Hub extends EventEmitter {
     return item.holder === agent || (this.racing(item) && !!this.attemptOf(item, agent));
   }
 
-  // Racers can't review the race they ran.
+  // Racers can't review the race they ran, nor an agent the conflicts it resolved while landing (#264).
   implementedBy(item, agent) {
     return item.implementer === agent ||
-      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent = ? AND stage = 'submitted' AND closed = 0`).get(item.id, agent);
+      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent = ? AND stage = 'submitted' AND closed = 0`).get(item.id, agent) ||
+      !!this.q(`SELECT 1 FROM events WHERE item_id = ? AND actor = ? AND type = 'rebased' AND at >= ? AND json_extract(data, '$.conflicts') = 1`)
+        .get(item.id, agent, item.stage_since);
   }
 
   leaseOf(item, agent) {
@@ -1423,7 +1416,7 @@ export class Hub extends EventEmitter {
           status: 403, hint: `Call next: it only offers work this token may do. A token with ${need} comes from: nuworq token create <name> --powers ${need}.`,
         });
       }
-      if (op === 'claim' || (op === 'next' && args?.claim !== false)) this.checkPlan(agent);
+      if (op === 'claim' || (op === 'next' && args?.claim !== false)) this.checkPlan(agent, p);
       this.caller = { powers, remote };
       // Checked before the op runs, so a malformed usage changes nothing.
       const usage = USAGE_OPS.includes(op) ? normUsage(args?.usage) : null;
@@ -1561,17 +1554,32 @@ export class Hub extends EventEmitter {
     const may = (power) => !powers || powers.includes(power);
     const fit = this.fit(p, agent, has);
     const inRepo = repo && this.remotesOf(p).includes(repo) ? (i) => this.repoOf(p, i) === repo : () => true;
-    // A worker never gets operator-only work, whatever its machine has.
+    // A worker never gets operator-only work to build, whatever its machine has.
     const ok = (i) => (!fit.has || json(i.needs, []).every((t) => fit.has.includes(t))) && inRepo(i) && !(role === 'worker' && operatorOnly(i));
+    // Reviewing operator-only work is reading the code and the live output its builder recorded (#271):
+    // anyone may, workers included. Other needs (a browser, say) still gate the review.
+    const reviewable = (i) => (!fit.has || json(i.needs, []).every((t) => OPERATOR_TAGS.includes(t) || fit.has.includes(t))) && inRepo(i);
     const gave = this.handedOff(p, agent);
     const fresh = (i) => !gave.has(i.id) && ok(i); // not just handed off, doable on this machine, in this clone
     // Each option carries the priority it ranks by: its group's or a dependent's when that is higher (#198).
     const eff = this.effectivePriorities(p);
     const ranked = (x) => ({ ...x, priority: eff.get(x.item.id)?.priority ?? x.item.priority });
+    // An operator session takes what only it can do before anything else (#137): anyone can do the rest.
+    const operator = role === 'operator' || !!fit.has?.includes('operator');
+    // A review waits while a reviewer's question on it is open (#259): for an operator's answer, only
+    // operators get it meanwhile; for the human's, nobody does. And a reviewer who handed it off doesn't
+    // get it back until something new arrives on it: an answer, a new submission or a comment.
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
         AND COALESCE(implementer, '') != ?
         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
-      ORDER BY stage_since`).all(p.id, agent, agent).filter(fresh).map((item) => ({ mode: 'review', item }));
+        AND NOT EXISTS (SELECT 1 FROM events r WHERE r.item_id = items.id AND r.actor = ? AND r.type = 'rebased' AND r.at >= items.stage_since
+          AND json_extract(r.data, '$.conflicts') = 1)
+        AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.item_id = items.id AND q.status = 'open' AND q.at >= items.stage_since
+          AND q.asked_by != COALESCE(items.implementer, '') AND (q.audience != 'operator' OR ? = 0))
+        AND NOT EXISTS (SELECT 1 FROM events h WHERE h.item_id = items.id AND h.actor = ? AND h.type = 'handoff' AND h.at >= items.stage_since
+          AND NOT EXISTS (SELECT 1 FROM events n WHERE n.item_id = items.id AND n.at > h.at AND n.actor != h.actor
+            AND n.type IN ('answered', 'assumption_confirmed', 'question_withdrawn', 'submitted', 'comment')))
+      ORDER BY stage_since`).all(p.id, agent, agent, agent, operator ? 1 : 0, agent ?? '').filter(reviewable).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
     // An open pull request lands it: GitHub's merge marks it done. Unless it conflicts with main: then an
@@ -1598,8 +1606,6 @@ export class Hub extends EventEmitter {
     const large = (x) => (fit.weak && x.item.size === 'large' ? 1 : 0);
     // Work that needs what this agent's machine has goes to it first: few agents can do it, anyone can do the rest.
     const own = (x) => (fit.has && json(x.item.needs, []).length ? 0 : 1);
-    // An operator session takes what only it can do before anything else (#137): anyone can do the rest.
-    const operator = role === 'operator' || !!fit.has?.includes('operator');
     const all = [...(may('build') ? [...ready, ...racing] : []), ...(may('shape') ? shape : [])].map(ranked).sort((a, b) =>
       large(a) - large(b) ||
       (operator ? own(a) - own(b) : 0) ||
@@ -1636,9 +1642,10 @@ export class Hub extends EventEmitter {
         status: 403, hint: 'Call next for a proposal to shape, or propose new work with the person you are planning with. Workers (nuworq run) and other sessions build, review and land.',
       });
     }
-    // Landing is a rebase, the checks and a push: any worker may land operator-only work once it's accepted.
-    if (role === 'worker' && operatorOnly(item) && item.stage !== 'landing') {
-      throw new UserError(`#${item.seq} is operator-only work (it needs ${json(item.needs, []).filter((x) => OPERATOR_TAGS.includes(x)).join(', ')}), and workers never take it`, {
+    // Landing is a rebase, the checks and a push, and reviewing is reading the code and the recorded live
+    // output (#271): any worker may land or review operator-only work. Building it stays an operator's.
+    if (role === 'worker' && operatorOnly(item) && !['landing', 'verifying'].includes(item.stage)) {
+      throw new UserError(`#${item.seq} is operator-only work (it needs ${json(item.needs, []).filter((x) => OPERATOR_TAGS.includes(x)).join(', ')}), and workers never build it`, {
         status: 403, hint: 'An operator session takes it (nuworq operator prints how to start one). Pick other work with next.',
       });
     }
@@ -1767,15 +1774,19 @@ export class Hub extends EventEmitter {
     return this.submittedGit(item)?.branch ?? '';
   }
 
-  // What git found when the latest submission came in (#24), or null.
+  // What git found when the latest submission came in (#24), or a rebase that resolved conflicts after it (#264), or null.
   submittedGit(item) {
-    const e = this.q(`SELECT data FROM events WHERE item_id = ? AND type = 'submitted' ORDER BY at DESC LIMIT 1`).get(item.id);
+    const e = this.q(`SELECT data FROM events WHERE item_id = ? AND (type = 'submitted' OR (type = 'rebased' AND json_extract(data, '$.git') IS NOT NULL))
+      ORDER BY at DESC, id DESC LIMIT 1`).get(item.id);
     return json(e?.data, {}).git ?? null;
   }
 
-  // A reviewer's hint, led by anything git found wrong with the submission.
+  // A reviewer's hint, led by anything git found wrong with the submission. For operator-only work, the
+  // reviewer reads the live output its builder recorded, and asks an operator for anything to recheck (#271).
   reviewHint(item, hint) {
     const warn = item.race > 1 ? null : gitWarning(this.submittedGit(item));
+    const live = json(item.needs, []).filter((t) => OPERATOR_TAGS.includes(t));
+    if (live.length) hint += ` Its ${live.join(', ')} part was verified live by its builder or an operator: check the code, and the live output in the submission's evidence. If you need something checked on real infrastructure, ask to: "operator" with the exact command and how to check it, and don't accept until it's answered.`;
     return warn ? `${warn}: check it before you accept. ${hint}` : hint;
   }
 
@@ -1897,6 +1908,8 @@ async function openPr(p, id) {
     this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
         ON CONFLICT (project_id, repo, number) DO UPDATE SET item_id = excluded.item_id, url = excluded.url, state = 'open', updated_at = excluded.updated_at`)
       .run(p.id, repo, pr.number, id, pr.url ?? '', item.title, pr.head_ref ?? item.branch, pr.head_sha ?? '', this.now());
+    // GitHub's "opened" delivery may have come in while this awaited it, and recorded the PR as o/r: one record.
+    for (const sql of PR_TWINS) this.db.exec(sql);
     row = this.q('SELECT * FROM prs WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, repo, pr.number);
     release();
     this.event(p, {
@@ -1956,10 +1969,14 @@ function mergeFailed(p, row, why) {
 function finishLanding(p, agent, item, { headline, summary, detail, conflicts }) {
   const reviewer = p.autonomy === 'full' ? 'Another agent reviews it again' : 'The human verifies it again';
   if (conflicts) {
+    // The resolution is this agent's work now: it doesn't review it (#264), and the review sees the branch it pushed.
     this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent });
-    this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased #${item.seq} and had to resolve conflicts; it needs another look`, summary: conflicts, detail });
+    const event = this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased #${item.seq} and had to resolve conflicts; it needs another look`, summary: conflicts, detail, data: { conflicts: true } });
     this.setStatus(p, agent, `Sent #${item.seq} back for review after a rebase`);
-    return { ok: true, hint: `#${item.seq} is verifying again with your note on the conflicts. ${reviewer}, then it lands. Call next.` };
+    return {
+      ok: true, hint: `#${item.seq} is verifying again with your note on the conflicts. ${reviewer}, then it lands. Call next.`,
+      [GIT_CHECK]: { event, about: item.id, branch: item.branch, claim: { headline, summary: conflicts, evidence: [] } },
+    };
   }
   const land = this.toLand(p, item, item.branch, { fresh: true });
   const remote = this.remoteMode(p, item);
@@ -2173,7 +2190,7 @@ const AGENT_OPS = {
         : pick.mode === 'shape' && args.claim !== false
           ? SHAPE_HINT(pick.item, p, this.remotesOf(p))
         : pick.mode === 'tidy' && args.claim !== false
-          ? `You hold #${pick.item.seq}, a tidy job, for ${dur(LEASE_MS)}: its summary lists what drifted. No branch: fix each with refine and a one-line reason (parent moves an item, "" takes it out; pr attaches a pull request), propose a parent for a cluster, submit a group whose parts are all done. Never change a priority a person set or touch a decision. Then submit #${pick.item.seq} with what you changed; that finishes it.`
+          ? `You hold #${pick.item.seq}, a tidy job, for ${dur(LEASE_MS)}: its summary lists what drifted. No branch: fix each with refine and a one-line reason (parent moves an item, "" takes it out; pr attaches a pull request), propose a parent for a cluster, submit a milestone whose parts are all done. Never change a priority a person set or touch a decision. Then submit #${pick.item.seq} with what you changed; that finishes it.`
           : args.claim === false
           ? `Not claimed. Claim #${pick.item.seq} to start.`
           : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${this.workHint(p, this.itemById(pick.item.id))} ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`.replace(/  +/g, ' '),
@@ -2330,7 +2347,7 @@ const AGENT_OPS = {
     // A tidy job (#202) is bookkeeping, already on the record change by change: submitting finishes it.
     if (item.tidy) {
       this.move(item, 'done', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
-      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} tidied the groups: ${headline}`, summary, detail, data: { evidence } });
+      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} tidied the milestones: ${headline}`, summary, detail, data: { evidence } });
       return { ok: true, hint: `#${item.seq} is done. Call next for more work.` };
     }
     const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
@@ -2598,15 +2615,15 @@ Object.assign(Hub.prototype, {
       if ((to?.id ?? null) !== item.parent_id) {
         for (let a = to; a; a = this.itemById(a.parent_id)) {
           if (a.id === item.id) {
-            throw new UserError(to.id === item.id ? `#${item.seq} can't be part of itself` : `#${to.seq} is part of #${item.seq}, so #${item.seq} can't go under it`, { hint: `Pick a group outside #${item.seq}, or move #${to.seq} out first.` });
+            throw new UserError(to.id === item.id ? `#${item.seq} can't be part of itself` : `#${to.seq} is part of #${item.seq}, so #${item.seq} can't go under it`, { hint: `Pick a parent outside #${item.seq}, or move #${to.seq} out first.` });
           }
         }
         if (to && ['done', 'dropped'].includes(to.stage)) {
-          throw new UserError(`#${to.seq} is ${to.stage}`, { hint: `Pick an open group for #${item.seq}, or reopen #${to.seq} first.` });
+          throw new UserError(`#${to.seq} is ${to.stage}`, { hint: `Pick an open parent for #${item.seq}, or reopen #${to.seq} first.` });
         }
         regroup = { from: this.itemById(item.parent_id), to };
         set.parent_id = to?.id ?? null;
-        changed.push(to ? `part of #${to.seq}` : 'in no group');
+        changed.push(to ? `part of #${to.seq}` : 'in no milestone');
       }
     }
     // A pull request no item tracked (#202), linked here: it lands with this item as usual.

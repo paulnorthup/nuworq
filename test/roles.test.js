@@ -131,6 +131,35 @@ describe('the role decides what next and claim offer', () => {
     const n = a('w', 'next', {}, RUNNER);
     assert.deepEqual([n.mode, n.item], ['land', '#2']);
   });
+
+  test('a worker may review operator-only work it may not build, but not work needing a tag it lacks (#271)', () => {
+    const { a, human, item } = setup();
+    human('create', { title: 'Check the UI', acceptance: 'x', needs: ['browser'] }); // #4
+    a('w', 'checkin', { has: ['macos'] }, RUNNER);
+    // Before it's submitted: no build offer, and a claim is refused.
+    assert.ok(!a('w', 'next', { claim: false }, RUNNER).item.match(/#2|#4/));
+    assert.throws(() => a('w', 'claim', { item: '#2' }, RUNNER), (e) => e.status === 403 && /operator-only/.test(e.message));
+    a('op', 'checkin', { has: ['operator', 'nuworq-infra', 'browser'] });
+    for (const n of [2, 4]) {
+      a('op', 'claim', { item: `#${n}` });
+      a('op', 'submit', { item: `#${n}`, headline: 'Done', evidence: [{ label: 'systemctl status nuworq: active (running)' }] });
+    }
+    assert.equal(item(2).stage, 'verifying');
+    // The worker is offered #2's review (not #4's: it has no browser), with a hint on the live part.
+    const n = a('w', 'next', {}, RUNNER);
+    assert.deepEqual([n.mode, n.item], ['review', '#2']);
+    assert.match(n.hint, /operator, nuworq-infra part was verified live by its builder or an operator/);
+    assert.match(n.hint, /ask to: "operator" with the exact command and how to check it, and don't accept until it's answered/);
+    assert.equal(item(2).holder, 'w');
+    a('w', 'review', { item: '#2', verdict: 'accept', headline: 'Code and live output check out' }, RUNNER);
+    assert.notEqual(item(2).stage, 'verifying');
+    assert.notEqual(a('w', 'next', { claim: false }, RUNNER).item, '#4');
+    // A browser-capable worker gets #4's review; its hint has no operator note.
+    a('w2', 'checkin', { has: ['browser'] }, RUNNER);
+    const m = a('w2', 'next', {}, RUNNER);
+    assert.deepEqual([m.mode, m.item], ['review', '#4']);
+    assert.doesNotMatch(m.hint, /verified live/);
+  });
 });
 
 describe('claims, usage and presence carry the role', () => {
@@ -196,7 +225,7 @@ describe('the guide and both skills describe the roles', () => {
   test('each says what a shaper and a worker never do', () => {
     for (const [name, t] of Object.entries(texts)) {
       assert.match(t, /never builds?, reviews? or lands?/i, `${name}: the shaper`);
-      assert.match(t, /Worker[^\n]*never takes operator-only work/i, `${name}: the worker`);
+      assert.match(t, /Worker[^\n]*never builds operator-only work/i, `${name}: the worker`);
     }
   });
 

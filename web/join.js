@@ -52,7 +52,7 @@ function createOrg(me) {
     ok = !!r?.ok;
     // The address the name suggests: the hub's when it answered with one, else the same rule here (src/core.js slugify).
     if (!edited) $('#slug').value = j?.slug ?? name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-    $('#check').className = ok ? 'ok' : 'warn';
+    $('#check').className = ok ? 'ok' : 'bad';
     $('#check').textContent = ok ? `✓ ${j.address.replace(/^https?:\/\//, '')} is free` : `${j?.error ?? 'The hub did not answer'}${j?.hint ? `. ${j.hint}` : ''}`;
     $('#make').disabled = !ok || !name;
   };
@@ -64,7 +64,7 @@ function createOrg(me) {
     $('#make').disabled = true;
     const r = await fetch('/api/orgs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('#name').value.trim(), slug: $('#slug').value.trim(), grant }) });
     const j = await r.json();
-    if (!r.ok) { $('#check').className = 'warn'; $('#check').textContent = j.error + (j.hint ? `. ${j.hint}` : ''); $('#make').disabled = false; return; }
+    if (!r.ok) { $('#check').className = 'bad'; $('#check').textContent = j.error + (j.hint ? `. ${j.hint}` : ''); $('#make').disabled = false; return; }
     localStorage.removeItem(KEY);
     location.href = j.enter;
   });

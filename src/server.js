@@ -10,7 +10,7 @@ import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
-import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, setWeekly } from './notify.js';
+import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, requestChannels, setWeekly } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { freshen } from './freshness.js';
@@ -22,11 +22,11 @@ import { ORG_CAP, ADMIN_SESSION_MS } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
-import { buildPackage, signatureOf } from './package.js';
-import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed } from './billing.js';
+import { buildPackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
+import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -60,14 +60,6 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
   'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
-// The landing page (site/), for the site host. Its one inline script sends old app links (nuworq.com/#/p/…) on
-// to the app; CSP allows exactly that script, by hash. Nothing else runs, and nothing is fetched from elsewhere.
-const SITE = join(ROOT, 'site');
-const SITE_APP = 'https://app.nuworq.com'; // the app's address as site/ is written; served as the hub's public URL
-const siteCsp = (html) => {
-  const hashes = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`);
-  return `default-src 'self'; img-src 'self' data:; style-src 'self'; script-src ${hashes.join(' ') || "'none'"}; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`;
-};
 // A page of the Connect GitHub flow that the hub serves itself: the sign-in card's look (style.css,
 // login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
 const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -100,26 +92,38 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // earlyAccess (workspaces mode): { owners: [emails], verify: async (token, ip) => bool, gate: bool }. owners
 // decide requests; verify checks the form's Turnstile token (src/directory.js turnstile); gate: making an
 // organization takes an approved request's grant. null: no early access.
-// siteHost: the marketing host (e.g. nuworq.com), when the app lives at publicUrl (app.nuworq.com): it serves
-// the landing page (site/) and sends every other path to the same path on publicUrl. Its https origin may also
-// call the public early-access APIs cross-origin (nuworq.com's own form, #245).
 // adminHost (workspaces mode): the admin host (e.g. admin.nuworq.com). It serves the admin dashboard, its own
 // sign-in and the admin APIs, and nothing else; only earlyAccess.owners get past sign-in. With it set, the
 // early-access request list and its APIs are no longer served anywhere else.
 // billing (workspaces mode): src/billing.js billingFromEnv(): { webhookSecret, secretKey, prices }. null: billing
 // is off, and POST /api/stripe/webhook answers 404.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
-  siteHost = String(siteHost).toLowerCase();
-  if (siteHost && !publicUrl) throw new Error('a site host needs the public URL the app lives at (--public-url)');
   adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
   // The links it hands out (an approved request's grant) go to the app, so it must know the app's address.
   if (adminHost && !publicUrl) throw new Error('an admin host needs the public URL the app lives at (--public-url)');
-  if (adminHost && [new URL(publicUrl).hostname, siteHost].includes(hostname(adminHost))) throw new Error('the admin host must be a host of its own, not the app\'s or the site\'s');
+  if (adminHost && new URL(publicUrl).hostname === hostname(adminHost)) throw new Error('the admin host must be a host of its own, not the app\'s');
+  // The marketing site (nuworq.com, served from the nuworq-site repo) is the app's parent domain, over https:
+  // app.nuworq.com's is https://nuworq.com. Its early-access form calls the form's two APIs cross-origin (#245).
+  const siteOrigin = siteOf(publicUrl);
   // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
   let built = null;
   const pkg = buildPackage(source, packageDir).then((b) => (built = b));
+  // The newest signed release in packageDir, whichever commit the hub runs now (#254). Checked against the
+  // release key this checkout pins; installs check it again against their own.
+  const releases = new Map();
+  const release = () => {
+    let key = null;
+    try { key = readFileSync(join(source, 'release-key.pub'), 'utf8').trim() || null; } catch {}
+    return newestSigned(packageDir, key, releases);
+  };
+  // /api/info's package: the running commit's, and release: the newest signed one, which installs update to.
+  const packageInfo = (at) => {
+    const r = release();
+    return { url: `${at}/nuworq.tgz`, sha256: built.sha256, commit: built.commit.slice(0, 7),
+      release: r ? { url: `${at}/nuworq-${r.commit}.tgz`, sha256: r.sha256, commit: r.commit, time: r.time } : null };
+  };
   const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
   let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, web: gh.web, ...githubApp }) : githubApp;
   // The app as a hub may use it: on a shared hub, only the installations bound to that organization
@@ -332,25 +336,6 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const deviceCode = (s) => (/^[A-Z]{4}-[A-Z]{4}$/i.test(String(s ?? '')) ? String(s).toUpperCase() : '');
   const redirect = (res, location) => { res.writeHead(302, { location, 'cache-control': 'no-store' }); res.end(); };
 
-  // The site host: its own files from site/, and every app path (/api, /login.html, /w/…, /agents.md) on to the app.
-  const sitePage = async (req, res, url) => {
-    const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-    let body = null;
-    if (['GET', 'HEAD'].includes(req.method) && /^[a-z0-9-]+\.(html|css)$/.test(file)) {
-      try { body = await readFile(join(SITE, file), 'utf8'); } catch { /* not the site's: the app's */ }
-    }
-    if (body == null) {
-      res.writeHead(308, { location: `${publicUrl}${url.pathname}${url.search}`, 'cache-control': 'no-store' });
-      return res.end();
-    }
-    body = body.replaceAll(SITE_APP, publicUrl.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`));
-    res.writeHead(200, {
-      'content-type': TYPES[extname(file)], 'cache-control': 'no-cache',
-      ...(file.endsWith('.html') ? { 'content-security-policy': siteCsp(body) } : {}),
-    });
-    res.end(req.method === 'HEAD' ? undefined : body);
-  };
-
   // GET /auth/<provider>/start?ws=<workspace> and /auth/<provider>/callback: hub-wide, whatever the host.
   async function signIn(req, res, url, provider, step, { send, deny }) {
     if (!required) return deny(400, 'this hub has no logins', 'Sign-in is for hubs that require login (--auth or --workspaces).');
@@ -519,7 +504,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     // credentials: these calls neither set nor read cookies. Any other origin, and the owners' list, get no CORS headers.
     if ((path === '/api/early-access' && ['POST', 'OPTIONS'].includes(req.method)) || (path === '/api/early-access/config' && req.method === 'GET')) {
       res.setHeader('vary', 'Origin');
-      if (siteHost && req.headers.origin === `https://${siteHost}`) {
+      if (siteOrigin && req.headers.origin === siteOrigin) {
         res.setHeader('access-control-allow-origin', req.headers.origin);
         if (req.method === 'OPTIONS' && path === '/api/early-access') {
           res.writeHead(204, { 'access-control-allow-methods': 'POST', 'access-control-allow-headers': 'content-type', 'access-control-max-age': '600' });
@@ -648,7 +633,6 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
       if (onAdmin(req)) return await adminRoot(req, res, url, path, { send, deny });
-      if (siteHost && hostname(hostOf(req)) === siteHost) return await sitePage(req, res, url);
       let am;
       if (req.method === 'GET' && (am = path.match(/^\/auth\/([a-z]+)\/(start|callback)$/))) return await signIn(req, res, url, am[1], am[2], { send, deny });
       // nuworq itself, as an npm package of the commit this hub runs: public, the same for every workspace.
@@ -664,6 +648,29 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!sig) return deny(404, "this hub's package isn't signed", 'Installed copies keep their version until a signed release is served (docs/DEPLOY.md, "Signed releases").');
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
         return res.end(`${sig}\n`);
+      }
+      // What the packages are, for installs deciding whether to update (src/update.js) and for signing one
+      // (scripts/sign-release.js): /api/info's package with its newest signed release, plus the running commit in
+      // full and whether it is signed. Public like the packages themselves: /api/info needs a sign-in on most hubs.
+      if (req.method === 'GET' && path === '/api/package') {
+        const b = await pkg;
+        return send(200, { package: b ? { ...packageInfo((!spaces && publicUrl) || origin(req)), commit: b.commit, signed: !!signatureOf(b) } : null });
+      }
+      // A package by its full commit, and its signature: only the packages this hub built and kept, so an
+      // install can fetch the release /api/info names after the hub has moved on to newer commits.
+      let pm;
+      if (req.method === 'GET' && (pm = path.slice(1).replace(/\.sig$/, '').match(PACKAGE_NAME))) {
+        await pkg;
+        const b = packageAt(packageDir, pm[1]);
+        if (!b) return deny(404, `this hub has no package of ${pm[1].slice(0, 7)}`, 'GET /api/info names the packages it serves: package.url and package.release.url.');
+        if (path.endsWith('.sig')) {
+          const sig = signatureOf(b);
+          if (!sig) return deny(404, `the package of ${pm[1].slice(0, 7)} isn't signed`, 'Installed copies update only to a signed release (docs/DEPLOY.md, "Signed releases").');
+          res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
+          return res.end(`${sig}\n`);
+        }
+        res.writeHead(200, { 'content-type': 'application/gzip', etag: `"${b.sha256}"`, 'cache-control': 'no-cache', 'content-disposition': `attachment; filename="nuworq-${pm[1]}.tgz"` });
+        return res.end(await readFile(b.file));
       }
       // GitHub's app deliveries name no workspace: the signature is their credential (as for project webhooks below).
       if (req.method === 'POST' && path === '/api/hooks/github-app') return await appHook(req, send, deny);
@@ -693,6 +700,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const { authz, devices, clients } = scopeOf(hub);
       adopt(hub, req, base);
       hub.appWiring ??= wiringFor(hub);
+      // Where Free's limit points its owners (#228): the workspace's settings, where Upgrade is, while it sells.
+      if (spaces && canSell(billing) && !hub.upgradeUrl) {
+        const page = `${homeOf(req, ws)}/#/settings`;
+        hub.upgradeUrl = () => page;
+      }
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.
@@ -960,7 +972,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'GET' && path === '/api/info') {
         return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: ((!spaces && publicUrl) || origin(req)) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo(),
-          package: built ? { url: `${(!spaces && publicUrl) || origin(req)}/nuworq.tgz`, sha256: built.sha256, commit: built.commit.slice(0, 7) } : null });
+          package: built ? packageInfo((!spaces && publicUrl) || origin(req)) : null });
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
       const viewer = who.person ? by : undefined;
@@ -986,20 +998,39 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         for (const p of hub.projects()) hub.humanOp(p.slug, 'seen', {}, by);
         return send(200, { ok: true });
       }
-      // Billing (#231): the workspace's plan in plain words, and Stripe's portal for its owners. 404 with billing off.
-      if (path === '/api/billing' || path === '/api/billing/portal') {
+      // Billing (#231): the workspace's plan in plain words, Stripe's portal for its owners, and Checkout to
+      // upgrade a Free one (#228), one button per plan on sale. 404 with billing off.
+      if (path === '/api/billing' || path === '/api/billing/portal' || path === '/api/billing/checkout') {
         if (!spaces || !billing) return deny(404, 'this hub takes no payments', 'Billing is off: it needs workspaces and NUWORQ_STRIPE_WEBHOOK_SECRET.');
         const owner = personRole === 'owner';
+        const owners = hub.db.prepare("SELECT handle FROM people WHERE role = 'owner' ORDER BY id").all().map((p) => `@${p.handle}`);
         const b = spaces.directory.billingOf(ws);
+        const plan = spaces.planOf(ws);
         if (req.method === 'GET' && path === '/api/billing') {
-          if (!owner) return send(200, { on: true, owner: false });
-          return send(200, { on: true, owner, plan: spaces.planInfo(ws).plan, state: billingState(b, hub.now()), failing: failing(b), manage: !!b?.customer });
+          if (!owner) return send(200, { on: true, owner: false, owners });
+          return send(200, {
+            on: true, owner, plan, state: billingState(b, hub.now()), failing: failing(b), manage: !!b?.customer,
+            plans: plan === 'free' && canSell(billing) ? plansOf(billing).map(({ plan, label }) => ({ plan, label })) : [],
+            terms: TERMS, privacy: PRIVACY,
+          });
         }
-        if (req.method !== 'POST' || path !== '/api/billing/portal') return deny(405, path === '/api/billing' ? 'use GET' : 'use POST');
-        if (!owner) {
-          const owners = hub.db.prepare("SELECT handle FROM people WHERE role = 'owner' ORDER BY id").all().map((p) => `@${p.handle}`);
-          return deny(403, "only the workspace's owner manages its billing", `Ask ${owners.join(' or ') || 'an owner'}.`);
+        if (req.method === 'POST' && path === '/api/billing/checkout') {
+          if (!canSell(billing)) return deny(404, 'this hub sells no plans', 'The hub host sets NUWORQ_STRIPE_SECRET_KEY and NUWORQ_STRIPE_PRICES (see DEPLOY.md).');
+          if (!owner) return deny(403, "only the workspace's owner can upgrade it", `Ask ${owners.join(' or ') || 'an owner'} to upgrade it.`);
+          if (plan !== 'free') return deny(409, `${ws} is already on ${plan === 'unlimited' ? 'a paid plan' : plan}`, 'Nothing to upgrade.');
+          const want = (await body(req)).plan;
+          const plans = plansOf(billing);
+          if (!plans.some((p) => p.plan === want)) return deny(400, `"${want ?? ''}" is not a plan you can buy here`, `One of: ${plans.map((p) => p.plan).join(', ')}.`);
+          const email = who.person ? hub.q('SELECT email FROM people WHERE handle = ?').get(who.person.handle)?.email : null;
+          try {
+            const session = await checkout(billing, { workspace: ws, plan: want, home: homeOf(req, ws), email, customer: b?.customer ?? null });
+            return send(200, { ok: true, url: session.url });
+          } catch (e) {
+            return deny(502, `Stripe didn't open Checkout: ${e.message}`, 'Try again in a minute. If it keeps failing, the hub host checks NUWORQ_STRIPE_SECRET_KEY and NUWORQ_STRIPE_PRICES.');
+          }
         }
+        if (req.method !== 'POST' || path === '/api/billing') return deny(405, path === '/api/billing' ? 'use GET' : 'use POST');
+        if (!owner) return deny(403, "only the workspace's owner manages its billing", `Ask ${owners.join(' or ') || 'an owner'}.`);
         if (!b?.customer) return deny(409, 'this workspace has no Stripe subscription yet', 'Upgrade it first; then Manage billing opens Stripe\'s billing page.');
         if (!billing.secretKey) return deny(503, "this hub can't open Stripe's billing page", 'The hub host sets NUWORQ_STRIPE_SECRET_KEY (see DEPLOY.md).');
         try {
@@ -1206,7 +1237,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Push channels: hub-wide (or workspace-wide) ones, and personal ones that get only what that person owns.
       // Agent tokens never reach these. An owner manages them all; a person manages their own.
       const own = who.person && personRole !== 'owner' ? by : null; // null: every channel
-      if (req.method === 'GET' && path === '/api/notify') return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null });
+      if (req.method === 'GET' && path === '/api/notify') {
+        // One of the hub's owners: which channels here hear about early-access requests (#251), maybe none.
+        const email = who.person && spaces && hub.db.prepare('SELECT email FROM people WHERE handle = ?').get(who.person.handle)?.email?.toLowerCase();
+        const requests = email && earlyAccess?.owners?.includes(email) ? requestChannels(hub.db, who.person.handle).map((c) => c.id) : null;
+        return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null, requests });
+      }
       if (req.method === 'POST' && path.startsWith('/api/notify') && personRole !== 'owner' && !(own && ['/api/notify', '/api/notify/remove', '/api/notify/weekly'].includes(path))) {
         return deny(403, 'only an owner manages hub-wide push channels', 'Add one for yourself instead: it gets only what needs you.');
       }
@@ -1268,6 +1304,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 
 function hostname(host) {
   try { return new URL(`http://${host}`).hostname; } catch { return ''; }
+}
+
+// The https origin of a public URL's parent domain (https://app.nuworq.com → https://nuworq.com), or '' when it
+// has none: no public URL, an IP address, or a host like localhost or nuworq.com.
+function siteOf(publicUrl) {
+  if (!publicUrl) return '';
+  const host = new URL(publicUrl).hostname;
+  const labels = host.split('.');
+  return /^[\d.]+$|:/.test(host) || labels.length < 3 ? '' : `https://${labels.slice(1).join('.')}`;
 }
 
 // x-nuworq-<name>, else the old x-trellis-<name> that clients from before the rename send.

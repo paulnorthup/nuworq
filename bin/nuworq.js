@@ -113,6 +113,10 @@ const tty = process.stdout.isTTY;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const bold = c('1'), dim = c('2'), amber = c('33'), green = c('32'), grey = c('90');
 const stateColor = (s) => ({ 'needs-you': amber, flowing: green, stalled: amber }[s] ?? grey);
+// --site-host (NUWORQ_SITE_HOST) once had the hub serve the landing page; old units may still pass it (#164).
+const ignoreSiteHost = (flags) => {
+  if (flags['site-host'] || envVar('SITE_HOST')) console.warn(amber('--site-host is ignored: nuworq.com is served from nuworq-site now, not by the hub.'));
+};
 
 async function status(flags) {
   const client = createClient(flags);
@@ -563,7 +567,10 @@ async function runService(flags) {
   const env = svc.serviceEnv(process.env, { repos: besideOf(cwd) });
   const r = await svc.install({ ...where, command: [svc.stableNode(process.execPath), BIN, 'run', ...args], env, log, cwd })
     .catch((e) => { throw new HubError(e.message, { hint: e.hint ?? 'Run it without --install to see what goes wrong.' }); });
-  console.log(`${green('●')} Installed ${bold('nuworq run')} as a ${r.kind}: it starts now, after every reboot, and again if it stops.
+  // Loaded isn't running (#250): only report success once the runner is up.
+  if (!r.up) process.exitCode = 1;
+  console.log(`${r.up ? `${green('●')} Installed ${bold('nuworq run')} as a ${r.kind}, and the runner is up: it runs now, after every reboot, and again if it stops.`
+    : `${amber('!')} Installed ${bold('nuworq run')} as a ${r.kind}, but the runner isn't up after 10 seconds. Check on it with: ${r.status}\n  and read the log below for why it stopped.`}
   Runs in: ${cwd}  ${dim(`(checkouts: ${env.NUWORQ_REPOS ?? env.TRELLIS_REPOS})`)}
   Wrote:   ${r.file}
   Log:     ${r.log}
@@ -884,8 +891,8 @@ async function serve(flags) {
   hub.llmProxy = (await import('../src/llmproxy.js')).proxyFromEnv();
   // The GitHub App: from the environment, else the one the hub created for itself (Create GitHub App).
   const appFile = join(dataHome(flags), 'github-app.json');
-  const siteHost = String(flags['site-host'] || envVar('SITE_HOST') || '');
-  const server = createServer(hub, { auth, trustProxy, publicUrl, siteHost, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package') });
+  ignoreSiteHost(flags);
+  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package') });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -980,13 +987,13 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const earlyAccess = flags['early-access'] || secret || owners.length
     ? { owners, verify: secret ? turnstile(secret) : null, sitekey: envVar('TURNSTILE_SITEKEY') ?? '', gate: !!flags['early-access'] }
     : null;
-  const siteHost = String(flags['site-host'] || envVar('SITE_HOST') || '');
+  ignoreSiteHost(flags);
   // The admin host (e.g. admin.nuworq.com): the owners' dashboard, signed in on its own address.
   const adminHost = String(flags['admin-host'] || envVar('ADMIN_HOST') || '');
   if (adminHost && !owners.length) console.warn(amber(`--admin-host ${adminHost} has no owners, so nobody can get in: set --owners or NUWORQ_HUB_OWNERS.`));
   // Billing (#227): Stripe, from the environment only; off unless NUWORQ_STRIPE_WEBHOOK_SECRET is set.
   const { billingFromEnv } = await import('../src/billing.js');
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, siteHost, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv() });
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv() });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();
@@ -1224,8 +1231,6 @@ ${bold('Human')}
                                          run the hub and web UI. Loopback: no login.
                                          Any other host (or --auth): tokens required.
                                          --follow: keep the hub on the latest main that passes its tests
-                                         --site-host nuworq.com (with --public-url): that host serves the
-                                         landing page (site/) and sends app paths on to the public URL
   token create <name> --role human|agent [--project a,b]
                                          create a token (shown once); run on the hub host.
                                          --project limits an agent token to those projects

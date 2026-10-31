@@ -40,9 +40,19 @@ describe('nuworq run --install (#172)', () => {
     ]) {
       const home = mkdtempSync(join(tmpdir(), 'nuworq-svc-'));
       const ran = [];
-      const exec = async (cmd, args) => { ran.push([cmd, ...args]); if (args.includes('bootout') || args.includes('disable')) throw new Error('not loaded'); };
+      let loaded = false;
+      const exec = async (cmd, args) => {
+        if (args.includes('print') || args.includes('is-active')) {
+          if (!loaded) throw new Error('Could not find service');
+          return { stdout: platform === 'darwin' ? 'state = running\n\tpid = 42\n' : 'active\n' };
+        }
+        ran.push([cmd, ...args]);
+        if (args.includes('bootout') || args.includes('disable')) { if (!loaded) throw new Error('not loaded'); loaded = false; }
+        if (args.includes('bootstrap') || args.includes('enable')) loaded = true;
+      };
       const log = join(home, '.nuworq', 'logs', 'run.log');
-      const r = await install({ platform, home, uid: 501, command, env, log, exec });
+      const r = await install({ platform, home, uid: 501, command, env, log, exec, sleep: async () => {} });
+      assert.equal(r.up, true, platform);
       assert.equal(r.file, join(home, file));
       assert.equal(statSync(r.file).mode & 0o777, 0o600, platform);
       assert.match(readFileSync(r.file, 'utf8'), /--workers/);
@@ -51,7 +61,7 @@ describe('nuworq run --install (#172)', () => {
       assert.deepEqual(ran.slice(0, unload.length), unload, platform);
       assert.deepEqual(ran.slice(unload.length).map((c) => c.slice(0, load[0].length)), load.map((c) => c.slice(0, load[0].length)), platform);
       // Installing again replaces it.
-      await install({ platform, home, uid: 501, command: [...command.slice(0, 3), '--workers', '1'], env, log, exec });
+      await install({ platform, home, uid: 501, command: [...command.slice(0, 3), '--workers', '1'], env, log, exec, sleep: async () => {} });
       assert.doesNotMatch(readFileSync(r.file, 'utf8'), /claude/);
       ran.length = 0;
       const gone = await uninstall({ platform, home, uid: 501, exec });
@@ -63,10 +73,57 @@ describe('nuworq run --install (#172)', () => {
     await assert.rejects(install({ platform: 'win32', home: tmpdir(), uid: 0, command, env, log: 'x', exec: async () => {} }), /macOS \(launchd\) and Linux \(systemd\)/);
   });
 
-  test('a load that fails is an error, not a silent success', async () => {
+  test('a load that fails twice is an error with launchd\'s words and the command that loads it, not a silent success', async () => {
     const home = mkdtempSync(join(tmpdir(), 'nuworq-svc-'));
-    const exec = async (cmd, args) => { if (args[0] === 'bootstrap') throw new Error('Bootstrap failed: 5: Input/output error'); };
-    await assert.rejects(install({ platform: 'darwin', home, uid: 501, command, env, log: join(home, 'run.log'), exec }), /Bootstrap failed/);
+    const ran = [];
+    const exec = async (cmd, args) => {
+      ran.push(args[0]);
+      if (args[0] === 'print') throw new Error('Could not find service');
+      if (args[0] === 'bootstrap') throw Object.assign(new Error('Command failed: launchctl bootstrap'), { stderr: 'Bootstrap failed: 5: Input/output error\n' });
+    };
+    const err = await install({ platform: 'darwin', home, uid: 501, command, env, log: join(home, 'run.log'), exec, sleep: async () => {} }).catch((e) => e);
+    assert.match(err.message, /Couldn't load the LaunchAgent: Bootstrap failed: 5: Input\/output error$/);
+    assert.equal(err.hint, `Load it yourself with: launchctl bootstrap gui/501 ${join(home, 'Library', 'LaunchAgents', `${LABEL}.plist`)}`);
+    assert.deepEqual(ran.filter((a) => a === 'bootstrap'), ['bootstrap', 'bootstrap'], 'retried once');
+  });
+
+  test('reinstalling on macOS waits for the old job to be gone before bootstrap, and retries a bootstrap that fails once (#250)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-svc-'));
+    const ran = [];
+    let lingering = 3; // prints that still find the old job after bootout
+    let refusals = 1; // bootstraps launchd refuses
+    let pid = false;
+    const exec = async (cmd, args) => {
+      ran.push(args[0]);
+      if (args[0] === 'print') {
+        if (lingering-- > 0) return { stdout: 'state = exiting\n' };
+        if (!pid) throw new Error('Could not find service');
+        return { stdout: 'state = running\n\tpid = 4242\n' };
+      }
+      if (args[0] === 'bootstrap') { if (refusals-- > 0) throw new Error('Bootstrap failed: 5: Input/output error'); pid = true; }
+    };
+    const r = await install({ platform: 'darwin', home, uid: 501, command, env, log: join(home, 'run.log'), exec, sleep: async (ms) => ran.push(`sleep ${ms}`) });
+    assert.equal(r.up, true);
+    assert.equal(r.status, `launchctl print gui/501/${LABEL}`);
+    const first = ran.indexOf('bootstrap');
+    assert.deepEqual(ran.slice(0, first), ['bootout', 'print', 'sleep 250', 'print', 'sleep 250', 'print', 'sleep 250', 'print'], 'bootstrap only after print fails');
+    assert.deepEqual(ran.slice(first), ['bootstrap', 'sleep 2000', 'bootstrap', 'print'], 'one retry, then up');
+  });
+
+  test('a runner that is loaded but not up within ~10s is reported as not up (macOS and Linux)', async () => {
+    for (const platform of ['darwin', 'linux']) {
+      const home = mkdtempSync(join(tmpdir(), 'nuworq-svc-'));
+      let waited = 0, loaded = false;
+      const exec = async (cmd, args) => {
+        if (args[0] === 'bootstrap') loaded = true;
+        if (args[0] === 'print') { if (loaded) return { stdout: 'state = spawn scheduled\n' }; throw new Error('Could not find service'); }
+        if (args[1] === 'is-active') throw Object.assign(new Error('Command failed'), { stdout: 'failed\n' });
+      };
+      const r = await install({ platform, home, uid: 501, command, env, log: join(home, 'run.log'), exec, sleep: async (ms) => { waited += ms; } });
+      assert.equal(r.up, false, platform);
+      assert.equal(waited, 10000, `${platform}: gave it 10s`);
+      if (platform === 'linux') assert.equal(r.status, `systemctl --user is-active ${UNIT}`);
+    }
   });
 
   test('the flags it keeps, the ones it refuses, and the environment it carries', () => {

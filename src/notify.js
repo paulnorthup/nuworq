@@ -285,17 +285,25 @@ export function composeRequest({ email, github = '', building = '' }, url = '') 
 }
 
 // The owners' own channels: in each workspace where a person has an owner's verified email, that person's
-// personal channels. Never a workspace's hub-wide channels, which others there read. Each URL once.
+// personal channels. A workspace's hub-wide channels only where the owner is its only person (#251):
+// otherwise others there read them. Each URL once.
 export function ownerChannels(spaces, owners) {
   const dir = spaces.directory, out = new Map();
   for (const email of owners) {
     const id = dir.identity(email);
     for (const m of id ? dir.orgsOf(id, spaces) : []) {
       const db = spaces.get(m.workspace)?.db;
-      for (const c of db?.prepare('SELECT * FROM channels WHERE person = ? ORDER BY id').all(`@${m.handle}`) ?? []) if (!out.has(c.url)) out.set(c.url, { db, c });
+      for (const c of db ? requestChannels(db, m.handle) : []) if (!out.has(c.url)) out.set(c.url, { db, c });
     }
   }
   return [...out.values()];
+}
+
+// In one workspace, the channels that hear an owner's request pushes: their personal ones, and the hub-wide
+// ones too when they are its only person, since nobody else reads them.
+export function requestChannels(db, handle) {
+  const alone = db.prepare('SELECT COUNT(*) AS n FROM people').get().n === 1;
+  return db.prepare(`SELECT * FROM channels WHERE person = ?${alone ? " OR person = ''" : ''} ORDER BY id`).all(`@${handle}`);
 }
 
 // Push one new request to the owners. Never throws: a channel that fails is recorded on it, as for any push.

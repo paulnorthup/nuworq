@@ -119,8 +119,9 @@ describe('early access', () => {
 
   test("nuworq.com's form may call the form's APIs cross-origin (#245); no other origin or endpoint may", async () => {
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
+    // The site is the app's parent domain (#164): no flag names it.
     const server = createServer(spaces, {
-      publicUrl: 'http://app.example.test', siteHost: 'nuworq.com',
+      publicUrl: 'https://app.nuworq.com',
       earlyAccess: { owners: ['paul@example.com'], verify: async (t) => t === 'good', gate: true, sitekey: '0xSITEKEY' },
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -165,6 +166,19 @@ describe('early access', () => {
         assert.deepEqual(cors(r), [], `${method} ${path}`);
       }
     } finally { server.close(); }
+  });
+
+  test('an app with no parent domain (nuworq.com itself, localhost, an IP) lets no site call cross-origin', async () => {
+    for (const publicUrl of ['https://nuworq.com', 'http://localhost:4747', 'http://10.0.0.5:4747', '']) {
+      const server = createServer(new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) }), { publicUrl, earlyAccess: { owners: [], verify: async () => true, sitekey: 'k' } });
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
+      try {
+        for (const origin of ['https://com', 'https://nuworq.com', 'https://0.0.5']) {
+          const r = await fetch(`http://127.0.0.1:${server.address().port}/api/early-access/config`, { headers: { origin } });
+          assert.equal(r.headers.get('access-control-allow-origin'), null, `${publicUrl} ${origin}`);
+        }
+      } finally { server.close(); }
+    }
   });
 
   test('a request is decided once', async () => {
@@ -232,6 +246,49 @@ describe('early access', () => {
       assert.equal((await post({ email: 'ann@example.com', building: 'more' })).status, 200);
       await new Promise((r) => setTimeout(r, 300));
       assert.equal(got.length, 0, 'a repeat (merged) sends nothing');
+    } finally { server.close(); sink.close(); spaces.close(); }
+  });
+
+  test("an owner alone in their workspace hears requests on its hub-wide channels (#251); a second person stops that; a URL hears it once", async () => {
+    const got = [];
+    const sink = http.createServer(async (req, res) => { for await (const _ of req); got.push(req.url); res.end('ok'); });
+    await new Promise((r) => sink.listen(0, '127.0.0.1', r));
+    const to = (path) => `http://127.0.0.1:${sink.address().port}${path}`;
+    const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
+    const dir = spaces.directory;
+    // paul is the only person in each workspace. northup's only channel is hub-wide; acme's hub-wide channel has
+    // the same URL as his personal one in globex.
+    for (const ws of ['northup', 'acme', 'globex']) {
+      spaces.create(ws);
+      new Auth(spaces.get(ws).db).addPerson('paul', 'owner', { email: 'paul@example.com' });
+    }
+    dir.identify('paul@example.com', 'github');
+    for (const ws of ['northup', 'acme', 'globex']) dir.join('paul@example.com', ws);
+    addChannel(spaces.get('northup').db, 'webhook', to('/northup-everyone'), Date.now());
+    addChannel(spaces.get('acme').db, 'webhook', to('/shared'), Date.now());
+    addChannel(spaces.get('globex').db, 'webhook', to('/shared'), Date.now(), { person: '@paul' });
+    const auth = new Auth(spaces.get('northup').db);
+    const token = auth.createToken('paul-web', 'human', { person: 'paul' });
+    const server = createServer(spaces, { earlyAccess: { owners: ['paul@example.com'], verify: async () => true } });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const post = (email) => fetch(`${base}/api/early-access`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, turnstile: 't' }) });
+    const settle = async (n) => { for (let i = 0; i < 100 && got.length < n; i++) await new Promise((r) => setTimeout(r, 20)); await new Promise((r) => setTimeout(r, 100)); };
+    const notify = async () => (await fetch(`${base}/w/northup/api/notify`, { headers: { authorization: `Bearer ${token}` } })).json();
+    try {
+      assert.equal((await post('ann@example.com')).status, 200);
+      await settle(2);
+      assert.deepEqual(got.sort(), ['/northup-everyone', '/shared'], 'the lone workspace\'s hub-wide channel; the shared URL once');
+      const n = await notify();
+      assert.deepEqual(n.requests, n.channels.map((c) => c.id), 'the modal is told this channel hears requests');
+
+      // A second person in northup reads its hub-wide channel too: the push stops going there.
+      auth.addPerson('mate', 'member', { email: 'mate@example.com' });
+      got.length = 0;
+      assert.equal((await post('bob@example.com')).status, 200);
+      await settle(1);
+      assert.deepEqual(got, ['/shared']);
+      assert.deepEqual((await notify()).requests, [], 'the modal is told nothing here hears requests');
     } finally { server.close(); sink.close(); spaces.close(); }
   });
 

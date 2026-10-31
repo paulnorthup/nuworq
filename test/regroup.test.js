@@ -48,7 +48,7 @@ describe('moving an item to another group, or out of one (#199)', () => {
     const { refine } = setup();
     refine({ item: '#2', parent: '#1' });
     for (const [item, parent, msg] of [['#1', '#1', /can't be part of itself/], ['#1', '#3', /#3 is part of #1, so #1 can't go under it/], ['#2', '#3', /#3 is part of #2/]]) {
-      assert.throws(() => refine({ item, parent }), (e) => e.status === 400 && msg.test(e.message) && /Pick a group outside/.test(e.hint));
+      assert.throws(() => refine({ item, parent }), (e) => e.status === 400 && msg.test(e.message) && /Pick a parent outside/.test(e.hint));
     }
   });
 
@@ -58,7 +58,7 @@ describe('moving an item to another group, or out of one (#199)', () => {
     refine({ item: '#4', parent: '#1' });
     assert.equal(view(4).parent.item, '#1');
     human('update', { item: '#2', stage: 'dropped' });
-    assert.throws(() => refine({ item: '#4', parent: '#2' }), (e) => e.status === 400 && /#2 is dropped/.test(e.message) && /Pick an open group/.test(e.hint));
+    assert.throws(() => refine({ item: '#4', parent: '#2' }), (e) => e.status === 400 && /#2 is dropped/.test(e.message) && /Pick an open parent/.test(e.hint));
     human('update', { item: '#1', stage: 'done' });
     assert.throws(() => hub.humanOp('p', 'update', { item: '#3', parent: '#1' }), /#1 is done/);
   });
@@ -72,6 +72,6 @@ describe('moving an item to another group, or out of one (#199)', () => {
     assert.match(app, /Part of <input data-draft="ei-parent"/);
     assert.match(app, /parent: val\('ei-parent'\)/);
     assert.match(guide(), /refine`? it with `parent`/);
-    assert.match(tools().find((t) => t.name === 'refine').inputSchema.properties.parent.description, /"" takes it out of its group/);
+    assert.match(tools().find((t) => t.name === 'refine').inputSchema.properties.parent.description, /"" makes it top-level/);
   });
 });

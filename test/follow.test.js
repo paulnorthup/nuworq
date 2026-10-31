@@ -190,8 +190,9 @@ describe('the hub follows main', () => {
   test("the supervisor's own code is the CLI and follow.js with their static imports, not the hub's modules", () => {
     const root = join(import.meta.dirname, '..');
     const own = importGraph((f) => (existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8') : null));
-    for (const f of ['bin/nuworq.js', 'src/follow.js', 'src/client.js', 'src/core.js', 'src/names.js']) assert.ok(own.has(f), f);
-    for (const f of ['src/insight.js', 'src/server.js', 'web/app.js']) assert.ok(!own.has(f), f);
+    for (const f of ['bin/nuworq.js', 'src/follow.js', 'src/client.js', 'src/text.js', 'src/names.js']) assert.ok(own.has(f), f);
+    // The hub's own modules run in the child: core.js too, since the client side takes its names from text.js (#257).
+    for (const f of ['src/core.js', 'src/insight.js', 'src/server.js', 'web/app.js']) assert.ok(!own.has(f), f);
   });
 
   test('a hub that stops by itself is started again on the same commit', async () => {
@@ -368,7 +369,8 @@ describe('reading npm test output', () => {
     assert.equal(firstFailure(spec), 'routing › picking › picks work');
     assert.equal(firstFailure('✖ test/broken.test.js (12ms)\n'), 'test/broken.test.js');
     const tap = 'TAP version 13\n# Subtest: routing\n    # Subtest: picks work\n    not ok 2 - picks work\n      ---\nnot ok 1 - routing\n';
-    assert.equal(firstFailure(tap), 'picks work');
+    assert.equal(firstFailure(tap), 'routing › picks work', 'the same name as the spec reporter gives (#257: Node 22 pipes TAP)');
+    assert.equal(firstFailure('TAP version 13\n# Subtest: test/broken.test.js\nnot ok 1 - test/broken.test.js\n'), 'test/broken.test.js');
     assert.equal(firstFailure('npm ERR! missing script: test'), null);
   });
 });
