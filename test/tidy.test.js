@@ -5,6 +5,7 @@ import { Hub } from '../src/core.js';
 import { itemView, view } from '../src/insight.js';
 import { receive, prsOf } from '../src/github.js';
 import { guide, skill } from '../src/protocol.js';
+import { drift } from '../src/tidy.js';
 
 // A project that steers by groups: #1 "Workers" with its part #2.
 function setup() {
@@ -51,13 +52,60 @@ describe('agents keep the groups true (#202)', () => {
     const { human, agent } = setup();
     human('create', { title: 'Runners', acceptance: 'x' }); // #3
     human('create', { title: 'Report state', acceptance: 'x', parent: '#3' }); // #4
-    agent('claim', 'w1', { item: '#2', touching: ['src/runner.js', 'src/a.js'] });
+    agent('claim', 'w1', { item: '#2', touching: ['src/runner.js', 'src/a.js', 'src/b.js'] });
     agent('checkin', 'w2');
-    agent('claim', 'w2', { item: '#4', touching: ['src/runner.js'] });
+    agent('claim', 'w2', { item: '#4', touching: ['src/runner.js', 'src/b.js (its state)'] });
     agent('checkin', 'w3');
     const r = agent('next', 'w3');
     assert.equal(r.mode, 'tidy');
-    assert.match(r.summary, /#1 "Workers" and #3 "Runners" both change src\/runner\.js/);
+    assert.match(r.summary, /#1 "Workers" and #3 "Runners" both change src\/b\.js, src\/runner\.js/);
+  });
+
+  test('docs every group adds to, or one source file in common, are no overlap (#243)', () => {
+    const { human, agent } = setup();
+    human('create', { title: 'Runners', acceptance: 'x' }); // #3
+    human('create', { title: 'Report state', acceptance: 'x', parent: '#3' }); // #4
+    agent('claim', 'w1', { item: '#2', touching: ['docs/DEPLOY.md', 'README.md', 'CHANGELOG', 'src/server.js', 'src/a.js'] });
+    agent('checkin', 'w2');
+    agent('claim', 'w2', { item: '#4', touching: ['docs/DEPLOY.md', 'README.md', 'CHANGELOG', 'src/server.js (billing routes)', 'src/b.js'] });
+    agent('checkin', 'w3');
+    assert.notEqual(agent('next', 'w3').mode, 'tidy');
+  });
+
+  test('a finished group waiting on others is no drift: submitted (verifying), or parked on a question (#243)', () => {
+    const { hub, human, agent, tidies } = setup();
+    human('update', { item: '#2', stage: 'done' });
+    const finished = () => drift(hub, hub.project('p')).filter((d) => d.kind === 'finished').length;
+    const stage = (s) => hub.q('UPDATE items SET stage = ? WHERE seq = 1').run(s); // as if submitted, then sent back
+    stage('verifying');
+    assert.equal(finished(), 0, 'already submitted');
+    stage('ready');
+    assert.equal(finished(), 1, 'ready, nothing in the way: drift');
+    hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'How should this be proven?', blocking: true });
+    stage('ready'); // even if it were offered again, the open blocking question still holds it
+    assert.equal(finished(), 0, 'parked on a person');
+    assert.notEqual(agent('next', 'w1').mode, 'tidy');
+    assert.equal(tidies().length, 0);
+  });
+
+  test('what a finished tidy job left alone is not listed again beside new drift, until it changes (#243)', () => {
+    const { human, agent, tidies } = setup();
+    human('update', { item: '#2', stage: 'done' }); // #1 is finished
+    const first = agent('next', 'w1');
+    assert.equal(first.mode, 'tidy');
+    agent('submit', 'w1', { item: first.item, headline: '#1 waits on its live check, left alone' });
+    human('create', { title: 'Loose end', acceptance: 'x' }); // new drift
+    const second = agent('next', 'w1');
+    assert.equal(second.mode, 'tidy');
+    assert.match(second.summary, /"Loose end"/);
+    assert.doesNotMatch(second.summary, /#1 "Workers"/, 'already looked at');
+    agent('submit', 'w1', { item: second.item, headline: 'Left the loose end alone' });
+    // #1 changes (a new part, done too): it is a different picture, so it is listed again.
+    human('create', { title: 'Check it live', acceptance: 'x', parent: '#1' });
+    human('update', { item: `#${tidies().at(-1).seq + 1}`, stage: 'done' });
+    const third = agent('next', 'w1');
+    assert.equal(third.mode, 'tidy');
+    assert.match(third.summary, /#1 "Workers" is still ready/);
   });
 
   test('a pull request no item tracks is on record, shows in the tidy job, and attaching it links it to the item', () => {

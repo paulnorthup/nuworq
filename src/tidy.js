@@ -1,14 +1,16 @@
 // Agents keep the groups true (#202). The hub notices drift and opens one "tidy" item per project, which next
 // offers as mode "tidy" at priority soon, one at a time. Drift is: open work in no group (once the project has
 // groups at all), two groups whose open
-// parts touch the same files, a group whose parts are all finished while it is still open, and a pull request
-// no item tracks. The agent moves items (refine parent), merges or creates groups, closes finished ones, and
-// attaches stray pull requests (refine pr); it never changes a priority a person set. Submitting the tidy job
-// finishes it. What an agent looked at and left alone isn't raised again: a new tidy job opens only for drift
-// the last one didn't already list.
+// parts touch two or more of the same source files, a group someone could submit whose parts are all finished,
+// and a pull request no item tracks. The agent moves items (refine parent), merges or creates groups, closes
+// finished ones, and attaches stray pull requests (refine pr); it never changes a priority a person set.
+// Submitting the tidy job finishes it. What an agent looked at and left alone isn't raised again until it
+// changes: a new tidy job lists only drift no finished one already listed.
 import { SYSTEM } from './core.js';
 
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+const pathOf = (t) => String(t ?? '').split(' (')[0].trim().replace(/^\.\//, '');
+const isDoc = (path) => /^docs\//.test(path) || /\.md$/i.test(path) || /^CHANGELOG/i.test(path.split('/').pop());
 const OPEN = "stage NOT IN ('done', 'dropped')";
 // The hub's own work items aren't anyone's to group.
 const OWN = "sweep = 0 AND tidy = ''";
@@ -22,19 +24,24 @@ export function drift(hub, p) {
   const groups = items.filter((i) => open(i) && kids.has(i.id));
   const out = [];
 
+  // Each key says what the drift looked like, so a tidy job's "left alone" holds until that changes (#243).
   for (const g of groups) {
+    // Only a group someone could submit: one already submitted (verifying) or parked on a person's question waits on others.
+    if (!['ready', 'active'].includes(g.stage) || hub.q("SELECT 1 FROM questions WHERE item_id = ? AND status = 'open' AND blocking = 1").get(g.id)) continue;
     if (kids.get(g.id).every((k) => !open(k))) {
-      out.push({ key: `finished:${g.seq}`, kind: 'finished', text: `#${g.seq} "${g.title}" is still ${g.stage}, but all its parts are done or dropped: submit it or close it.` });
+      out.push({ key: `finished:${g.seq}:${g.stage}:${kids.get(g.id).length}`, kind: 'finished', text: `#${g.seq} "${g.title}" is still ${g.stage}, but all its parts are done or dropped: submit it or close it.` });
     }
   }
-  // Files each group's open parts are changing (what their holders said in progress touching).
-  const touched = groups.map((g) => ({ g, paths: new Set(kids.get(g.id).filter(open).flatMap((k) => json(k.touching, []))) }));
+  // Source files each group's open parts are changing (what their holders said in progress touching, without
+  // notes like "src/server.js (billing routes)"). Docs every group adds to, and one hot file in common, aren't
+  // shared work: two groups overlap when they share two source files or more.
+  const touched = groups.map((g) => ({ g, paths: new Set(kids.get(g.id).filter(open).flatMap((k) => json(k.touching, [])).map(pathOf).filter((x) => x && !isDoc(x))) }));
   for (let a = 0; a < touched.length; a++) {
     for (let b = a + 1; b < touched.length; b++) {
-      const both = [...touched[a].paths].filter((x) => touched[b].paths.has(x));
-      if (both.length) {
+      const both = [...touched[a].paths].filter((x) => touched[b].paths.has(x)).sort();
+      if (both.length >= 2) {
         const [x, y] = [touched[a].g, touched[b].g];
-        out.push({ key: `overlap:${x.seq}:${y.seq}`, kind: 'overlap', text: `#${x.seq} "${x.title}" and #${y.seq} "${y.title}" both change ${both.slice(0, 3).join(', ')}${both.length > 3 ? ', …' : ''}: merge them, or move the shared work into one.` });
+        out.push({ key: `overlap:${x.seq}:${y.seq}:${both.join(',')}`, kind: 'overlap', text: `#${x.seq} "${x.title}" and #${y.seq} "${y.title}" both change ${both.slice(0, 3).join(', ')}${both.length > 3 ? ', …' : ''}: merge them, or move the shared work into one.` });
       }
     }
   }
@@ -44,7 +51,7 @@ export function drift(hub, p) {
   // Loose work counts only once the project steers by groups: until then nothing is out of place.
   for (const i of groups.length ? items : []) {
     if (['ready', 'proposed'].includes(i.stage) && !i.parent_id && !kids.has(i.id)) {
-      out.push({ key: `ungrouped:${i.seq}`, kind: 'ungrouped', text: `#${i.seq} "${i.title}" (${i.stage}) is in no group: move it into one (refine parent), or start a group for it and its kin.` });
+      out.push({ key: `ungrouped:${i.seq}:${i.stage}`, kind: 'ungrouped', text: `#${i.seq} "${i.title}" (${i.stage}) is in no group: move it into one (refine parent), or start a group for it and its kin.` });
     }
   }
   return out;
@@ -64,7 +71,10 @@ const ACCEPTANCE = [
 // before next picks work, so a seeded drift is offered at once. Returns the open tidy item, if any.
 export function tidyUp(hub, p) {
   if (p.parked) return null;
-  const found = drift(hub, p);
+  // What a finished tidy job listed was looked at: fixed, or left alone on purpose. It comes back only once it
+  // looks different (its key changes), never alongside new drift (#243).
+  const handled = new Set(hub.q(`SELECT tidy FROM items WHERE project_id = ? AND tidy != '' AND stage = 'done'`).all(p.id).flatMap((r) => json(r.tidy, [])));
+  const found = drift(hub, p).filter((d) => !handled.has(d.key));
   const keys = found.map((d) => d.key);
   const cur = openTidy(hub, p);
   if (cur) {
@@ -76,9 +86,6 @@ export function tidyUp(hub, p) {
     return cur;
   }
   if (!found.length) return null;
-  const last = hub.q(`SELECT tidy FROM items WHERE project_id = ? AND tidy != '' ORDER BY id DESC LIMIT 1`).get(p.id);
-  const seen = new Set(json(last?.tidy, []));
-  if (keys.every((k) => seen.has(k))) return null;
   const it = hub.createItem(p, SYSTEM, { title: `Keep ${p.name}'s groups true`, summary: SUMMARY(found), acceptance: ACCEPTANCE, priority: 'soon' });
   hub.patch(it, { tidy: JSON.stringify(keys) });
   if (it.stage !== 'ready') hub.move(it, 'ready', SYSTEM);
