@@ -466,7 +466,7 @@ function mapLine(n) {
 const CARD_LABELS = {
   question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction',
   'no-agents': 'Nobody is working', 'group-stalled': 'A "now" group is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
-  'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked',
+  'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked', 'app-wiring': 'GitHub App setup',
 };
 
 function card(a) {

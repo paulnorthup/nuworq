@@ -9,6 +9,7 @@ import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
 import { humanCost, verification } from './outcomes.js';
 import { OPERATOR_TAGS } from './protocol.js';
+import { wiringEntry } from './appwiring.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -35,7 +36,9 @@ export function homeView(hub, { viewer } = {}) {
   const rows = hub.projects().map((p) => ({ p, v: view(hub, p.slug, { light: true, viewer }) }));
   const tag = (p) => ({ slug: p.slug, name: p.name });
   const live = rows.filter(({ p }) => !p.parked);
+  const once = new Set();
   const needs = rows.flatMap(({ p, v }) => v.attention.filter((a) => a.level === 'act').map((a) => ({ ...a, project: tag(p) })))
+    .filter((a) => !a.hubwide || (!once.has(a.key) && once.add(a.key)))
     .sort((a, b) => a.at - b.at);
   const state = needs.length ? 'needs-you' : URGENCY.find((s) => live.some(({ v }) => v.pulse.state === s)) ?? 'idle';
   const across = (n) => (n > 1 ? ` across ${plural(n, 'project')}` : '');
@@ -202,6 +205,11 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       why: `${trouble.hint ? `${trouble.hint} ` : ''}Meanwhile accepted work there lands by hand instead of through a pull request, and the hub fetches it with a deploy key, if it has one; without either, it can't tell when work there reaches main.`,
     });
   }
+
+  // The hub's GitHub App is missing events or permissions the hub handles (#220): its owners, with the steps.
+  // The same entry on every project; the home shows it once (hubwide).
+  const wiring = hub.appWiring?.(viewer);
+  if (wiring) push({ ...wiringEntry(wiring), level: 'act', kind: 'app-wiring', hubwide: true });
 
   // Agents keep arriving and leaving with nothing: routed here for work they can't take.
   const churnSince = t - CHURN_WINDOW;

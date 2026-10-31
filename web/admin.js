@@ -37,7 +37,8 @@ async function main() {
       <p class="faint">Sign out, then sign in with an owner's account. The hub host lists the owners in NUWORQ_HUB_OWNERS.</p>`;
     return;
   }
-  $('#view').innerHTML = `<h2>Early access</h2>
+  $('#view').innerHTML = `<div id="wiring"></div>
+    <h2>Early access</h2>
     <p class="lead">Approve gives you a link to send: it lets them make one workspace, once, within 14 days.</p>
     <div class="seg admin-filter" role="group" aria-label="Show">${STATES.map(([v, label]) => `<button data-state="${v}" aria-pressed="${v === state}" class="${v === state ? 'on' : ''}">${label}</button>`).join('')}</div>
     <div id="list" aria-live="polite"><p class="faint">Loading…</p></div>
@@ -45,6 +46,18 @@ async function main() {
     <div id="spaces" aria-live="polite"><p class="faint">Loading…</p></div>`;
   load();
   loadSpaces();
+  loadWiring();
+}
+
+// What the hub's GitHub App is missing (#220), first on the page, with the steps; nothing when it has it all.
+async function loadWiring() {
+  const { missing } = await api('/api/github/app/wiring').catch(() => ({}));
+  if (!missing) return;
+  $('#wiring').innerHTML = `<article class="admin-card focus">
+    <div class="h">${esc(missing.headline)}</div>
+    <p class="faint">${esc(missing.sub)}</p>
+    <ol>${missing.how.map((s) => `<li>${esc(s.do)}${s.where ? `<br><a href="${esc(s.where)}" target="_blank" rel="noopener">${esc(s.where)}</a>` : ''}${s.check ? `<br><small class="faint">${esc(s.check)}.</small>` : ''}</li>`).join('')}</ol>
+  </article>`;
 }
 
 async function signIn() {
