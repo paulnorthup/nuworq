@@ -23,6 +23,7 @@ export const NEW = {
   'ea-sources': '2026-10-31', // #356: on the admin dashboard, how far the people from each early-access source got
   'copy-each-command': '2026-10-31', // #379: several commands in a step, each with its own Copy that copies clean
   'live-view': '2026-10-31', // #358: Settings → Anyone can watch, the project's public live page
+  'propose-work': '2026-10-31', // #389: propose work from a project's board, one field first, the rest on demand
 };
 
 const DAYS = 7;
