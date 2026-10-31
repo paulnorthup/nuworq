@@ -105,6 +105,7 @@ const AGENT_CMDS = {
     return { item, headline: need(rest(p, item ? 1 : 0), '<headline>'), ...layers(f) };
   },
   ack: (p) => ({ steer: need(p[0], '<steer-id>'), response: rest(p, 1) }),
+  feedback: (p, f) => ({ text: need(text(rest(p, 0) ?? f.text), '<what happened>'), item: f.item }),
   look: (p, f) => ({ item: p[0], stage: f.stage }),
   signoff: (p, f) => ({ headline: rest(p, 0), summary: text(f.summary) }),
 };
@@ -1025,9 +1026,11 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   // The admin host (e.g. admin.nuworq.com): the owners' dashboard, signed in on its own address.
   const adminHost = String(flags['admin-host'] || envVar('ADMIN_HOST') || '');
   if (adminHost && !owners.length) console.warn(amber(`--admin-host ${adminHost} has no owners, so nobody can get in: set --owners or NUWORQ_HUB_OWNERS.`));
+  // Feedback about nuworq (#295): where the owners' approved feedback becomes a proposal; off without one.
+  const feedbackProject = String(flags['feedback-project'] || envVar('FEEDBACK_PROJECT') || '');
   // Billing (#227): Stripe, from the environment only; off unless NUWORQ_STRIPE_WEBHOOK_SECRET is set.
   const { billingFromEnv } = await import('../src/billing.js');
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv() });
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
     const names = spaces.list();
@@ -1289,6 +1292,8 @@ ${bold('Human')}
                                          NUWORQ_TURNSTILE_SITEKEY, checked with NUWORQ_TURNSTILE_SECRET)
                                          [--admin-host admin.example.com] (with --public-url): the owners'
                                          dashboard; early-access requests are decided only there
+                                         [--feedback-project <workspace>/<project>] (with --admin-host): feedback
+                                         about nuworq is on; approving a piece proposes it there
   workspace create|remove <name> | list  manage workspaces on the hub host
   workspace adopt <name> [--db file]     turn a single hub's database into workspace <name> (a copy is kept);
                                          tokens saved with the hub's root address keep working there, and

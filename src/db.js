@@ -414,6 +414,7 @@ export function openDb(file) {
     "ALTER TABLE agents ADD COLUMN runner TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agents ADD COLUMN machine TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE usage ADD COLUMN role TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE items ADD COLUMN feedback INTEGER', // the hub directory's feedback id an owner approved into this proposal (#295)
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,

@@ -239,6 +239,15 @@ export const OPS = [
     required: ['note'],
   },
   {
+    name: 'feedback',
+    description: "Tell nuworq's developers when nuworq itself got in your way: a misleading hint, a missing tool, a confusing response or rule. It reaches the hub's owners as feedback. Not for the project's own knowledge (learn) or work (propose).",
+    params: {
+      text: s('What happened and what you expected, in a few lines. The hub adds your name, client, model and its version.'),
+      item: { ...ITEM, description: 'Optional. The item you were on when it happened.' },
+    },
+    required: ['text'],
+  },
+  {
     name: 'look',
     description: 'Look around. With item: full context for that item. Without: the board grouped by stage, plus standing decisions.',
     params: { item: { ...ITEM, description: 'Optional.' }, stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'done'] } },
@@ -427,8 +436,9 @@ Hub: ${url} · project: ${project} (change with --project).
    - The answer came another way (quote who said it, e.g. "Paul, in a planning session: he is the only admin"), or the question no longer matters? ${c('withdraw')} it with a one-line reason, so it stops asking. Only you can withdraw your own.
 5. Done? ${c('submit')} with evidence the reviewer can check fast: the tests you ran and their results, commits, PR links. Someone else verifies it. Every item has its own branch, cut from the latest main (the claim names it), so it can land on its own. If you're told main moved, rebase early.
 6. Can't finish? ${c('handoff')}: what's done, what's next, what to watch out for. Did a person answer that the item should be dropped? Don't hand it back: ${c('refine', cli ? '<item> --drop <question-id>' : '')} with \`drop\` set to that question. You never drop work on your own say, only on theirs.
-7. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item. When it repairs work that already landed (a bug in it, something it missed), set \`fixes\` to that item, on ${c('propose')} or ${c('refine')}: the hub counts the landed item as an escape, so everyone can see how well verification holds up.
-8. Leaving? ${c('signoff')}.
+7. Did nuworq itself get in your way (a misleading hint, a missing tool, a confusing response or rule)? Send ${c('feedback', cli ? '"<what happened>"' : '')}: it reaches nuworq's developers. What you learned about the project goes in ${c('learn')}, and the project's own work in ${c('propose')}.
+8. Noticed other work? ${c('propose')} it with acceptance criteria (and \`needs\`, e.g. docker, if not every machine can do it). Don't grow your current item. When it repairs work that already landed (a bug in it, something it missed), set \`fixes\` to that item, on ${c('propose')} or ${c('refine')}: the hub counts the landed item as an escape, so everyone can see how well verification holds up.
+9. Leaving? ${c('signoff')}.
 
 ## Roles
 Every session has one role, from how it started and fixed for its life. ${c('checkin')} says yours, and the role decides what ${c('next')} and ${c('claim')} offer you.

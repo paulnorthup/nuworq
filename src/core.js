@@ -190,7 +190,7 @@ export function smallModel(model = '') {
 const normDir = (d) => str(d).replace(/\/+$/, '');
 
 // Refuse a write that carries a secret, before anything is stored. The error names the field, never the value.
-function refuseSecrets(args) {
+export function refuseSecrets(args) {
   const hit = findSecret(args);
   if (hit) {
     throw new UserError(`${hit.path} looks like ${hit.kind}; nothing was saved`, {

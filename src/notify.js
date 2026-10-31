@@ -312,6 +312,20 @@ export async function notifyOwners(spaces, owners, request, url, opts = {}) {
   return Promise.all(ownerChannels(spaces, owners).map(({ db, c }) => deliver(db, c, msg, opts)));
 }
 
+// New feedback about nuworq (#295), batched into one push: who sent each piece from which workspace, the start of
+// it, and the link to the admin dashboard's Feedback section.
+export function composeFeedback(list, url = '') {
+  const title = list.length === 1 ? 'nuworq: feedback' : `nuworq: ${list.length} pieces of feedback`;
+  const lines = list.slice(0, 5).map(({ sender, workspace, text }) => `${sender} (${workspace}): ${clip(text, 140)}`);
+  if (list.length > 5) lines.push(`and ${list.length - 5} more`);
+  return { title, url, text: [title, ...lines, url && `→ ${url}`].filter(Boolean).join('\n'), entries: [] };
+}
+
+export async function notifyFeedback(spaces, owners, list, url, opts = {}) {
+  const msg = composeFeedback(list, url);
+  return Promise.all(ownerChannels(spaces, owners).map(({ db, c }) => deliver(db, c, msg, opts)));
+}
+
 // A workspace's address, for links in pushes: its subdomain of baseDomain, else /w/<name>/ under the hub.
 export function workspaceUrl(name, { baseDomain = '', publicUrl = '', url = '' } = {}) {
   const base = (publicUrl || url).replace(/\/+$/, '');
