@@ -45,7 +45,7 @@ test("the Runners section's header gives the staffing in words, with a Staffing 
 test('a change made from the dialog keeps focus on the control that made it, after the redraw', () => {
   const s = app.slice(app.indexOf('async function setting('), app.indexOf('\n}\n', app.indexOf('async function setting(')));
   assert.match(s, /const row = document\.activeElement\?\.closest\?\.\('#modal \.setting'\)\?\.querySelector\('\.h'\)\?\.id;/, 'the row is noted before the change');
-  assert.ok(s.indexOf('const row') < s.indexOf("await human('settings'"), 'before the change, while its control still has focus');
+  assert.ok(s.indexOf('const row') < s.indexOf("human('settings'"), 'before the change, while its control still has focus');
   assert.match(s, /settingsModal\(\);\s*if \(row\) \$\(`#\$\{row\}`\)\?\.closest\('\.setting'\)\?\.querySelector\(':scope > button'\)\?\.focus\(\);/, 'and focused again after the redraw');
   // Every row's control is the row's own button, so the row finds it: switches, GitHub, Park or Unpark, Remove.
   assert.match(dialog, /<div class="setting"><div class="body"><div class="h" id="set-\$\{id\}">\$\{name\}<\/div><div class="s">\$\{what\}<\/div><\/div>\$\{control\}<\/div>/);

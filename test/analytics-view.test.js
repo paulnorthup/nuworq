@@ -84,7 +84,8 @@ describe('analytics', () => {
 
   test('the period switch stays while the figures load', () => {
     const html = page(null, { period: '90d' });
-    assert.match(html, /Loading the figures/);
+    assert.match(html, /class="ph-block" aria-busy="true"/, 'a quiet placeholder where the figures go (#393)');
+    assert.doesNotMatch(html.replace(/aria-label="Loading"/g, ''), /Loading/);
     assert.match(html, /data-action="an-period" data-p="90d"/);
     assert.match(html, /class="on" aria-pressed="true" data-action="an-period" data-p="90d"/);
   });
