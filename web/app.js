@@ -20,6 +20,7 @@ import { billingSection } from './billing.js';
 import { shortcutFor, shortcutsHtml } from './shortcuts.js';
 import { rank, resultsHtml, confirmHtml } from './launcher.js';
 import { feedbackForm, feedbackThanks, attached } from './feedback.js';
+import { LOGO } from './logo.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -103,7 +104,6 @@ const zero = (why, action = '') => `<div class="zero"><span class="check">→</s
 const refLink = (ref) => (ref ? `<a class="ref" data-action="open" data-item="${esc(ref)}">${esc(ref)}</a>` : '');
 const stagePill = (stage, court) => `<span class="stage-pill ${stage === 'done' ? 'done' : `court-${court ?? ''}`}">${esc(S.view?.stages?.[stage]?.label ?? stage)}</span>`;
 const courtOf = (stage) => S.view?.flow.stages.find((s) => s.stage === stage)?.court;
-const LOGO = `<svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="var(--brand)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/></svg>`;
 
 // undo: { action, note } for a button that reverses what just happened; the toast then stays 8s to give time to use it.
 function toast(msg, err = false, undo = null) {
