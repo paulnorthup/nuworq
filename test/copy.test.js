@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { copyBlock, copyText } from '../web/copy.js';
+import { copyBlock, commandBlocks, copyText } from '../web/copy.js';
 import { connectCommands } from '../web/connect.js';
 
 // A document just big enough for the synchronous copy: execCommand('copy') copies the selected textarea.
@@ -62,12 +62,13 @@ describe('copy buttons (#89)', () => {
       { bin: '/Users/me/nuworq/bin/nuworq.js', url: 'http://127.0.0.1:4747', auth: 'local' },
       { bin: '/Users/me/nuworq/bin/nuworq.js', url: 'http://127.0.0.1:4747', auth: 'required' },
     ];
-    const used = [...app.matchAll(/copyBlock\((?:c\.)?(\w+)\)/g)].map((m) => m[1]);
-    assert.ok(used.length >= 8, `found the copyBlock calls: ${used}`);
+    // Commands go through commandBlocks (#379), one Copy each; configs and URLs through copyBlock, verbatim.
+    const used = [...app.matchAll(/(copyBlock|commandBlocks)\((?:c\.)?(\w+)\)/g)].map((m) => [m[1], m[2]]);
+    assert.ok(used.length >= 8, `found the copyBlock and commandBlocks calls: ${used}`);
     for (const info of infos) {
       const c = connectCommands(info, null, 'demo');
-      for (const k of used.filter((k) => k in c)) {
-        const html = c[k] == null ? '' : copyBlock(c[k]);
+      for (const [fn, k] of used.filter(([, k]) => k in c)) {
+        const html = c[k] == null ? '' : (fn === 'copyBlock' ? copyBlock : commandBlocks)(c[k]);
         // null fields are only rendered behind a check, so they show no block; anything rendered has text.
         if (html) assert.ok(dataText(html).trim(), `${info.url} ${info.auth}: ${k}`);
       }

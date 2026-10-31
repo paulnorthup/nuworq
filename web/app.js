@@ -1,7 +1,7 @@
 // nuworq UI. No framework: state → HTML strings → one delegated event handler.
 // Zoom levels mirror 0-30-5-30: what isn't relevant at a level simply isn't rendered.
 import { connectCommands } from './connect.js';
-import { copyBlock, copyText } from './copy.js';
+import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
 import { homePage, columns, stateDot, STATE_LABELS } from './home.js';
 import { credit } from './credit.js';
@@ -534,13 +534,18 @@ function card(a) {
 // exact place and how to see it worked. Not a question, so nothing to tick.
 function howList(how) {
   return `<div class="steps"><ol>${how.map((s, i) => `<li>
-      <div class="step-tick" style="cursor:default"><span class="box" aria-hidden="true">${i + 1}</span><span class="do">${esc(s.do)}</span></div>
-      ${s.where || s.check ? `<div class="step-more">${s.where ? (/^https?:\/\//i.test(s.where) ? `<a class="step-where" href="${esc(s.where)}" target="_blank" rel="noopener">${esc(s.where)}</a>` : copyBlock(s.where)) : ''}${s.check ? `<div class="step-check">${esc(s.check)}</div>` : ''}</div>` : ''}
+      <div class="step-tick" style="cursor:default"><span class="box" aria-hidden="true">${i + 1}</span><span class="do">${inline(s.do)}</span></div>
+      ${s.where || s.check ? `<div class="step-more">${stepWhere(s.where)}${s.check ? `<div class="step-check">${inline(s.check)}</div>` : ''}</div>` : ''}
     </li>`).join('')}</ol></div>`;
 }
 
+// A step's place: a URL opens in a new tab; commands each get their own Copy, joined by their words (#379).
+const stepWhere = (where) => (!where ? '' : /^https?:\/\/\S+$/i.test(where.trim())
+  ? `<a class="step-where" href="${esc(where.trim())}" target="_blank" rel="noopener">${esc(where.trim())}</a>`
+  : commandBlocks(where));
+
 // A question's steps as a checklist the person ticks off (#162), shown at every depth. The row is the tick target;
-// a URL opens in a new tab, a command gets a Copy button. Ticks are the viewer's own and survive a reload.
+// a URL opens in a new tab, each command gets a Copy button. Ticks are the viewer's own and survive a reload.
 function stepList(a) {
   const done = new Set(a.ticked ?? []);
   const q = a.question.id;
@@ -549,13 +554,11 @@ function stepList(a) {
     <ol>${a.steps.map((s, i) => {
       const n = i + 1;
       const on = done.has(n);
-      const where = !s.where ? '' : /^https?:\/\//i.test(s.where)
-        ? `<a class="step-where" href="${esc(s.where)}" target="_blank" rel="noopener">${esc(s.where)}</a>`
-        : copyBlock(s.where);
+      const where = stepWhere(s.where);
       return `<li class="${on ? 'on' : ''}">
         <button class="step-tick" data-action="step" data-q="${q}" data-step="${n}" data-done="${on ? '' : '1'}" aria-pressed="${on}">
-          <span class="box" aria-hidden="true">${on ? '✓' : n}</span><span class="do">${esc(s.do)}</span></button>
-        ${where || s.check ? `<div class="step-more">${where}${s.check ? `<div class="step-check">${esc(s.check)}</div>` : ''}</div>` : ''}
+          <span class="box" aria-hidden="true">${on ? '✓' : n}</span><span class="do">${inline(s.do)}</span></button>
+        ${where || s.check ? `<div class="step-more">${where}${s.check ? `<div class="step-check">${inline(s.check)}</div>` : ''}</div>` : ''}
       </li>`;
     }).join('')}</ol>
   </div>`;
@@ -1107,9 +1110,9 @@ function connectStep(r) {
   modal(`<p class="faint">Step 3 of 3 · connect a machine</p>
     <h2>${esc(r.name)} is ready</h2>
     ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
-    ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${copyBlock(c.clone)}` : ''}
-    <h4>Connect it to ${esc(S.me.org)}</h4><p class="lead">It signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code and Codex if they're installed.</p>${copyBlock(c.connect ?? c.guide)}
-    <h4>Start a worker in a clone of the repository</h4>${copyBlock(c.worker)}
+    ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${commandBlocks(c.clone)}` : ''}
+    <h4>Connect it to ${esc(S.me.org)}</h4><p class="lead">It signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code and Codex if they're installed.</p>${commandBlocks(c.connect ?? c.guide)}
+    <h4>Start a worker in a clone of the repository</h4>${commandBlocks(c.worker)}
     <div class="foot"><button class="btn primary" data-action="goto-new" data-slug="${esc(r.slug)}">Open the board</button></div>`);
 }
 
@@ -1202,19 +1205,19 @@ async function connect() {
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
     <h4>1. Install nuworq (once)</h4>
-    ${c.install ? `<p class="lead">From this hub: Node 24+, no other dependencies, and it keeps itself up to date.</p>${copyBlock(c.install)}`
+    ${c.install ? `<p class="lead">From this hub: Node 24+, no other dependencies, and it keeps itself up to date.</p>${commandBlocks(c.install)}`
       : '<p class="lead">This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed.</p>'}
-    <h4>2. Connect this machine (once)</h4><p class="lead">It logs you in through the browser, saves this machine's token, and registers nuworq with Claude Code, Codex and opencode if they're installed. <code>nuworq disconnect</code> undoes it all.</p>${copyBlock(c.connect)}
-    <h4>3. Keep workers going</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${copyBlock(c.run)}
-    <p class="lead">One worker on its own, wherever work is waiting:</p>${copyBlock(c.worker)}
-    <h4>Optional: the Claude Code plugin</h4><p class="lead">The MCP server and both nuworq skills in one install, instead of <code>claude mcp add</code> and copying the skills by hand. Connect this machine (step 2) all the same: the plugin holds no token.</p>${copyBlock(c.plugin)}
+    <h4>2. Connect this machine (once)</h4><p class="lead">It logs you in through the browser, saves this machine's token, and registers nuworq with Claude Code, Codex and opencode if they're installed. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.connect)}
+    <h4>3. Keep workers going</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${commandBlocks(c.run)}
+    <p class="lead">One worker on its own, wherever work is waiting:</p>${commandBlocks(c.worker)}
+    <h4>Optional: the Claude Code plugin</h4><p class="lead">The MCP server and both nuworq skills in one install, instead of <code>claude mcp add</code> and copying the skills by hand. Connect this machine (step 2) all the same: the plugin holds no token.</p>${commandBlocks(c.plugin)}
     ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
     ${z() >= 2 ? `<h3>Setting up by hand</h3><p class="lead">What <code>nuworq connect</code> does for you. No token or address goes in these: connect saved both, and <code>nuworq mcp</code> reads them.</p>
-    <h4>Claude Code</h4>${copyBlock(c.claude)}
+    <h4>Claude Code</h4>${commandBlocks(c.claude)}
     <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}
-    <h4>Any agent with a shell (no MCP needed)</h4>${copyBlock(c.guide)}
+    <h4>Any agent with a shell (no MCP needed)</h4>${commandBlocks(c.guide)}
     <p class="lead" style="margin-top:6px">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>
     <h4>Your own agent loop</h4><p class="lead">Tool schemas: <a href="api/tools?format=openai" target="_blank">OpenAI</a> · <a href="api/tools?format=anthropic" target="_blank">Anthropic</a> · <a href="api/tools?format=mcp" target="_blank">MCP</a>. POST to <code>${esc(url)}/api/p/${esc(slug)}/agent/&lt;tool&gt;</code> with header <code>x-nuworq-agent: &lt;name&gt;</code>. The agent guide: <a href="agents.md?project=${encodeURIComponent(slug)}" target="_blank">/agents.md</a></p>`
       : '<p class="lead">Setting an agent tool up by hand, or your own agent loop? It\'s at <button class="link" data-action="connect-deep">depth 30m</button>.</p>'}
@@ -1288,7 +1291,7 @@ async function backFromGitHub() {
 // Whether each repository's Dependabot alerts come in as items (#180): green when they do; otherwise what
 // to do, as numbered steps with the exact place, and how to see it worked.
 function alertLines(alerts = []) {
-  return alerts.map((a) => `<div class="app-status alerts ${a.state === 'on' ? 'installed' : 'created'}"><span class="dot"></span><div><p>${esc(a.line)}</p>${a.steps ? `<ol>${a.steps.map((s) => `<li>${esc(s.do)}${s.where ? `: <a href="${esc(s.where)}" target="_blank" rel="noopener">${esc(s.where)}</a>` : ''}${s.check ? `<br><small>${esc(s.check)}.</small>` : ''}</li>`).join('')}</ol>` : ''}</div></div>`).join('');
+  return alerts.map((a) => `<div class="app-status alerts ${a.state === 'on' ? 'installed' : 'created'}"><span class="dot"></span><div><p>${esc(a.line)}</p>${a.steps ? `<ol>${a.steps.map((s) => `<li>${inline(s.do)}${s.where ? `: ${stepWhere(s.where)}` : ''}${s.check ? `<br><small>${inline(s.check)}.</small>` : ''}</li>`).join('')}</ol>` : ''}</div></div>`).join('');
 }
 
 async function githubSettings() {
