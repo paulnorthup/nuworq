@@ -14,7 +14,7 @@ import { ackList } from './acks.js';
 import { analyticsPage } from './analytics.js';
 import { agentLine } from './agentline.js';
 import { errorText, errorHtml } from './errors.js';
-import { markNew, markSeen } from './new.js';
+import { markNew, markSeen, dismissNew } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
 import { shortcutFor, shortcutsHtml } from './shortcuts.js';
@@ -1704,7 +1704,8 @@ document.addEventListener('keydown', (e) => {
   if (s) KEYS[s.id](e);
 });
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
-// Using a feature tagged "new" (#130) retires its tag for this viewer.
+// Using a feature tagged "new" (#130) retires its tag for this viewer, and so does tapping the tag itself (#314).
+document.addEventListener('click', (e) => dismissNew(e), true);
 for (const type of ['click', 'focusin']) {
   document.addEventListener(type, (e) => {
     const el = e.target.closest?.('.is-new');

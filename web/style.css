@@ -537,6 +537,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   .rail-label, .rail-foot { display: none; }
   #rail a.rail-head { gap: 8px; }
   #rail a.rail-head .is-new::after { right: 50%; transform: translateX(50%); bottom: 100%; } /* clear of the label and its badge (#289) */
+  #rail a.rail-head + .new-tag { right: auto; left: anchor(center, -9999px); translate: -50%; bottom: anchor(top, 9999px); }
   .rail-item { width: auto; }
   /* The rail's actions behind Menu (#114): a thumb-sized button across from the brand, the projects on the row below,
      and the list full width under them. */
@@ -636,11 +637,26 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 .where:hover { color: var(--ink); }
 .where .faint { color: var(--muted); font-style: italic; }
 
-/* What just shipped (#130, web/new.js): a quiet pill over the corner, so it takes no room and moves nothing. */
-.is-new { position: relative; }
-.is-new::after { content: 'new'; position: absolute; bottom: calc(100% - 3px); right: -6px; z-index: 1; pointer-events: none;
-  font: 650 10px/1 var(--font); letter-spacing: .02em; text-transform: lowercase; padding: 2px 5px; border-radius: 999px;
+/* What just shipped (#130, web/new.js): a quiet pill over the corner, so it takes no room and moves nothing.
+   The pill is a button beside the feature (#314), anchored over its corner: tapping it dismisses it. */
+.new-tag, .is-new::after { font: 650 10px/1 var(--font); letter-spacing: .02em; text-transform: lowercase; padding: 2px 5px; border-radius: 999px;
   color: var(--ink); background: var(--sunken); box-shadow: 0 0 0 1.5px var(--panel); }
+.new-tag { display: none; }
+@supports (anchor-name: --a) {
+  /* A feature that isn't drawn (e.g. the phone's Menu on a desktop) has no anchor: new.js hides its tag, and until
+     it does, the fallbacks keep the tag off the top-left, out of sight. */
+  .new-tag { display: block; position: absolute; bottom: calc(anchor(top, 9999px) - 3px); right: calc(anchor(right, 9999px) - 6px); z-index: 1;
+    position-visibility: anchors-visible; border: 0; margin: 0; cursor: pointer; }
+  .new-tag[hidden] { display: none; }
+  .new-tag:hover { background: var(--line); }
+  /* A thumb-sized target (Fitts's law): it reaches up and out, away from the feature, never over its label. */
+  @media (pointer: coarse) { .new-tag::before { content: ''; position: absolute; inset: -30px -8px 0; } }
+}
+/* A browser without anchor positioning keeps the old pill: the tag can't be dismissed, but using the feature retires it. */
+@supports not (anchor-name: --a) {
+  .is-new { position: relative; }
+  .is-new::after { content: 'new'; position: absolute; bottom: calc(100% - 3px); right: -6px; z-index: 1; pointer-events: none; }
+}
 
 /* The admin host (#166, web/admin.js): one column on every screen, every target at least 44px tall. */
 main.admin { padding-top: 24px; }

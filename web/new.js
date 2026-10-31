@@ -31,8 +31,49 @@ export function markSeen(key, store) {
   try { (store ?? globalThis.localStorage).setItem(KEY, JSON.stringify([...new Set([...seenNew(store), key])])); } catch { /* not kept: the tag shows again next time */ }
 }
 
-// Tag (or untag) every [data-new] element under root.
+// Tag (or untag) every [data-new] element under root. The tag is a button of its own (#314), so tapping it can
+// dismiss it: it can't sit inside the feature's button or link, so it goes right after that, and CSS anchors it
+// over the tagged element's corner.
+const INTERACTIVE = 'a, button, label, summary, select';
+// A feature that isn't drawn (the phone's Menu on a desktop, the rail's foot behind a closed Menu) hides its tag,
+// so the keyboard and screen readers never reach a tag nobody can see. Watched, since a breakpoint can change it.
+const drawn = globalThis.ResizeObserver && new ResizeObserver((entries) => {
+  for (const { target: el } of entries) if (el.newTag) el.newTag.hidden = !el.getClientRects().length;
+});
 export function markNew(root, { now = Date.now(), store } = {}) {
   const seen = seenNew(store);
-  for (const el of root.querySelectorAll('[data-new]')) el.classList.toggle('is-new', isNew(el.dataset.new, { now, seen }));
+  for (const el of root.querySelectorAll('[data-new]')) {
+    const key = el.dataset.new, on = isNew(key, { now, seen });
+    el.classList.toggle('is-new', on);
+    const host = el.closest(INTERACTIVE) ?? el, next = host.nextElementSibling;
+    const tag = next?.dataset?.newTag === key ? next : null;
+    if (on && !tag) host.after(newTag(el, key));
+    if (!on && tag) { tag.remove(); drawn?.unobserve(el); }
+  }
+}
+function newTag(el, key) {
+  const anchor = `--new-${key.replace(/[^\w-]/g, '-')}`;
+  el.style.setProperty('anchor-name', anchor);
+  const tag = el.ownerDocument.createElement('button');
+  Object.assign(tag, { type: 'button', className: 'new-tag', title: 'Dismiss', textContent: 'new' });
+  tag.dataset.newTag = key;
+  tag.setAttribute('aria-label', 'Dismiss new tag');
+  tag.style.setProperty('position-anchor', anchor);
+  el.newTag = tag;
+  drawn?.observe(el);
+  return tag;
+}
+
+// A click on a tag dismisses it for this viewer and does nothing else: it never reaches the feature's action.
+// Run it as a capturing listener on the document, so it comes before every other click handler.
+export function dismissNew(e, { root = e.target.ownerDocument, now, store } = {}) {
+  const tag = e.target.closest?.('.new-tag');
+  if (!tag) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  const host = tag.previousElementSibling, focused = root.activeElement === tag;
+  markSeen(tag.dataset.newTag, store);
+  markNew(root, { now, store });
+  if (focused) host?.focus?.({ preventScroll: true }); // the keyboard stays where it was, not back at the page's top
+  return true;
 }
