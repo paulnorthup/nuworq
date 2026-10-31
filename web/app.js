@@ -21,6 +21,7 @@ import { shortcutFor, shortcutsHtml } from './shortcuts.js';
 import { rank, resultsHtml, confirmHtml } from './launcher.js';
 import { feedbackForm, feedbackThanks, feedbackMine, attached } from './feedback.js';
 import { LOGO } from './logo.js';
+import { isTextBox, saveFocus, restoreFocus } from './focus.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -226,13 +227,12 @@ async function refresh({ force = false } = {}) {
   render({ force });
 }
 
-let typing = () => {
-  const a = document.activeElement;
-  return a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && a.type !== 'checkbox')) && a.value;
-};
+// A focused box counts as typing even while empty (#374): live updates wait until focus leaves it.
+const typing = () => isTextBox(document.activeElement);
 function render({ force = false } = {}) {
   if (!force && typing()) { S.pending = true; return; }
   S.pending = false;
+  const writing = saveFocus(document); // a forced redraw puts the person back where they were writing
   const drawerScroll = $('#drawer').scrollTop;
   renderRail();
   $('#main').innerHTML = S.analytics ? analytics() : S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
@@ -243,6 +243,7 @@ function render({ force = false } = {}) {
     if (v == null) continue;
     if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
   }
+  restoreFocus(document, writing);
   markNew(document); // what just shipped (#130), redrawn with everything else
 }
 
