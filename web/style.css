@@ -655,8 +655,13 @@ main.admin { padding-top: 24px; }
 .group.g-stuck { border-left-color: var(--warn); }
 .group.g-moving { border-left-color: var(--agents); }
 .g-main { flex: 1 1 240px; min-height: 44px; border: 0; background: none; padding: 0; text-align: left; display: flex; flex-direction: column; gap: 2px; cursor: pointer; font: inherit; color: inherit; min-width: 0; }
-.g-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.g-state { font-size: 12px; font-weight: 600; color: var(--queue); }
+/* #270: the state, a bar and the count on one row; fixed widths line the bars up down the list. The bar is an
+   amount, not a state: --muted on --sunken (5.3:1). */
+.g-top { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.g-state { font-size: 12px; font-weight: 600; color: var(--queue); flex: none; width: 7.5em; }
+.g-bar { flex: none; width: 96px; height: 6px; border-radius: 3px; background: var(--sunken); overflow: hidden; }
+.g-bar i { display: block; height: 100%; background: var(--muted); }
+.g-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .g-you .g-state { color: var(--you); }
 .g-stuck .g-state { color: var(--warn); }
 .g-moving .g-state { color: var(--agents); }
