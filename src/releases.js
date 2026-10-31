@@ -110,20 +110,21 @@ export function tagRelease(hub, p, item, sha) {
   if (!item.release || !version) return '';
   const tag = `v${version}`, short = String(sha ?? '').slice(0, 7);
   const byHand = `Tag it: git fetch origin, then git tag ${tag} ${sha || 'origin/main'}, then git push origin ${tag}.`;
-  const record = (headline, summary = '') => hub.event(p, { item, actor: SYSTEM, type: 'tagged', headline, summary, data: { tag, sha } });
+  // tagged, or tag_failed: someone tags it by hand.
+  const record = (headline, summary = '', type = 'tagged') => hub.event(p, { item, actor: SYSTEM, type, headline, summary, data: { tag, sha } });
   if (sha && hub.localFor(p, item)) {
     if (tagAt(p.path, tag, sha)) { record(`nuworq tagged ${short} ${tag}`); return ''; }
-    record(`The hub couldn't tag ${short} ${tag} in ${p.path}`, byHand);
+    record(`The hub couldn't tag ${short} ${tag} in ${p.path}`, byHand, 'tag_failed');
     return byHand;
   }
   const repo = hub.repoOf(p, item);
   if (!sha || !hub.github?.tag || !hub.github.covers(repo)) {
-    record(`#${item.seq} landed; ${tag} needs tagging by hand`, `The hub can't write tags to ${repo || 'its repository'}. ${byHand}`);
+    record(`#${item.seq} landed; ${tag} needs tagging by hand`, `The hub can't write tags to ${repo || 'its repository'}. ${byHand}`, 'tag_failed');
     return byHand;
   }
   const run = hub.github.tag({ repo, tag, sha }).then(
     () => hub.tx(() => record(`nuworq tagged ${short} ${tag} on ${repo}`)),
-    (e) => hub.tx(() => record(`The hub couldn't tag ${short} ${tag} on ${repo}: ${e.message}`, byHand)),
+    (e) => hub.tx(() => record(`The hub couldn't tag ${short} ${tag} on ${repo}: ${e.message}`, byHand, 'tag_failed')),
   ).then(() => hub.changed(p), (e) => console.error('tagging a release failed', e));
   const all = tagging.get(hub) ?? new Set();
   tagging.set(hub, all.add(run));

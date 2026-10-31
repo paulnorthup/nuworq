@@ -235,7 +235,7 @@ describe('a release that lands is tagged with its version (#400)', () => {
     hub.github = null;
     const hint = hub.tx(() => tagRelease(hub, p, hub.item(p, it), sha));
     assert.equal(hint, `Tag it: git fetch origin, then git tag v0.3.0 ${sha}, then git push origin v0.3.0.`);
-    assert.match(hub.q(`SELECT summary FROM events WHERE item_id = ? AND type = 'tagged' ORDER BY id DESC`).get(item.id).summary, /can't write tags to github\.com\/acme\/api/);
+    assert.match(hub.q(`SELECT summary FROM events WHERE item_id = ? AND type = 'tag_failed'`).get(item.id).summary, /can't write tags to github\.com\/acme\/api/);
     // Only release items are tagged.
     assert.equal(hub.tx(() => tagRelease(hub, p, { ...hub.item(p, it), release: 0 }, sha)), '');
   });
