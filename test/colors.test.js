@@ -46,19 +46,47 @@ describe('the color map keeps meanings apart (#188)', () => {
     for (const [a, b] of pairs(PROVIDER)) assert.ok(dE(root[a], root[b]) >= 30, `${a} vs ${b}`);
   });
 
-  test('the logo is the brand, not a state: the mark in ink on the citron tile (#319)', () => {
-    // Every logo the hub draws, including the flow pages the server renders itself (src/server.js flowPage).
-    for (const f of ['web/app.js', 'web/login.html', 'web/device.html', 'web/invite.html', 'web/early-access.html', 'src/server.js']) {
-      const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
-      assert.match(src, /rx="8" fill="var\(--brand\)"\/><path d="[^"]*" stroke="var\(--ink\)"/, f);
-      assert.doesNotMatch(src, /rx="8" fill="var\(--agents\)"/, f);
-    }
-    // A favicon can't read CSS variables, so it carries the same two colors as hexes.
-    const [brand, ink] = [root['--brand'], root['--ink']].map((h) => `%23${h.slice(1)}`);
+  test('the logo is the brand, not a state: the q in ink on the citron tile, from one source (#319, #322)', async () => {
+    const { LOGO, FAVICON, BRAND, INK, withLogo } = await import('../web/logo.js');
+    const q = '<circle cx="15" cy="14.5" r="5.5"/><path d="M20.5 9.5V23.5q0 2 2 2h1"/>';
+    assert.ok(LOGO.includes(`rx="8" fill="var(--brand)"/><g fill="none" stroke="var(--ink)" stroke-width="3.2" stroke-linecap="round">${q}</g>`), 'the mark: the q in --ink on --brand');
+    // A favicon can't read CSS variables, so it carries the same two colors as hexes, and a heavier stroke for 16px.
+    assert.deepEqual([BRAND, INK], [root['--brand'], root['--ink']], 'logo.js keeps the hexes of --brand and --ink');
+    const icon = decodeURIComponent(FAVICON.replace('data:image/svg+xml,', ''));
+    assert.ok(icon.includes(`rx="8" fill="${BRAND}"/><g fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round">${q}</g>`), 'the favicon is the same q on --brand');
+    // Every logo the hub draws uses that one source; no page keeps its own copy.
+    const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+    assert.match(read('web/app.js'), /import \{ LOGO \} from '\.\/logo\.js';/);
+    assert.match(read('src/server.js'), /<link rel="icon" href="\$\{FAVICON\}">[^`]*<div class="brand">\$\{LOGO\}<span>nuworq<\/span>/, 'the flow pages');
     for (const f of ['index.html', 'login.html', 'device.html', 'invite.html', 'early-access.html']) {
-      const icon = readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8').match(/<link rel="icon" href="([^"]*)"/)[1];
-      assert.ok(icon.includes(`rx='8' fill='${brand}'`) && icon.includes(`stroke='${ink}'`), `${f}'s favicon is the ink mark on --brand`);
+      const html = read(`web/${f}`);
+      assert.match(html, /<link rel="icon" href="<!--favicon-->">/, `${f}'s favicon`);
+      if (f !== 'index.html') assert.match(html, /<div class="brand">\s*<!--logo-->\s*<span>nuworq<\/span>/, `${f}'s logo`);
+      assert.ok(withLogo(html).includes(FAVICON) && !withLogo(html).includes('<!--'), `${f} is filled in`);
     }
+    for (const dir of ['web', 'src']) {
+      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n) && n !== 'logo.js')) {
+        const src = read(`${dir}/${f}`);
+        assert.doesNotMatch(src, /<svg viewBox="0 0 32 32"|rx="8" fill=|rx='8'/, `${dir}/${f} draws its own mark`);
+        assert.ok(!src.includes('M8 24L24 8'), `${dir}/${f} still has the lattice`);
+      }
+    }
+  });
+
+  test('the hub serves its pages with the logo and favicon filled in (#322)', async () => {
+    const { Hub } = await import('../src/core.js');
+    const { createServer } = await import('../src/server.js');
+    const { LOGO, FAVICON } = await import('../web/logo.js');
+    const server = createServer(new Hub());
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      for (const page of ['/', '/login.html', '/device.html', '/invite.html']) {
+        const html = await (await fetch(`http://127.0.0.1:${server.address().port}${page}`)).text();
+        assert.ok(html.includes(`<link rel="icon" href="${FAVICON}">`), `${page} has the favicon`);
+        if (page !== '/') assert.ok(html.includes(LOGO), `${page} has the logo`);
+        assert.ok(!html.includes('<!--logo-->') && !html.includes('<!--favicon-->'), `${page} is filled in`);
+      }
+    } finally { server.close(); }
   });
 
   test('the citron brand stands apart from every meaning, carries a readable mark, and is never text (#319)', () => {

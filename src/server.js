@@ -27,6 +27,7 @@ import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { waitFor } from './wait.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
+import { LOGO, FAVICON, withLogo } from '../web/logo.js';
 import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
@@ -64,8 +65,8 @@ const SECURITY_HEADERS = {
 // A page of the Connect GitHub flow that the hub serves itself: the sign-in card's look (style.css,
 // login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
 const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nuworq · ${title}</title><link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/login.css"></head>
-<body><main class="login"><div class="login-card flow-card"><div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--brand)"/><path d="M8 24L24 8M8 16l8-8M16 24l8-8M8 8l16 16M8 16l8 8M16 8l8 8" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/></svg><span>nuworq</span></div>
+<title>nuworq · ${title}</title><link rel="icon" href="${FAVICON}"><link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/login.css"></head>
+<body><main class="login"><div class="login-card flow-card"><div class="brand">${LOGO}<span>nuworq</span></div>
 <h1>${title}</h1>${body}</div></main></body></html>`;
 const COOKIE = 'nuworq_session';
 const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
@@ -632,7 +633,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         res.setHeader('content-security-policy', SECURITY_HEADERS['content-security-policy']
           .replace("script-src 'self'", `script-src 'self' ${TURNSTILE}`).replace("default-src 'self'", `default-src 'self'; frame-src ${TURNSTILE}`).replace("connect-src 'self'", `connect-src 'self' ${TURNSTILE}`));
       }
-      return send(200, readFileSync(join(WEB, path === '/early-access' ? 'early-access.html' : 'early-access.js'), 'utf8'), path === '/early-access' ? TYPES['.html'] : TYPES['.js']);
+      return send(200, withLogo(readFileSync(join(WEB, path === '/early-access' ? 'early-access.html' : 'early-access.js'), 'utf8')), path === '/early-access' ? TYPES['.html'] : TYPES['.js']);
     }
     // With an admin host, the owners' request list and its APIs live there only.
     if (adminHost && req.method === 'GET' && (path === '/requests.html' || path === '/requests.js')) return toAdmin(req, res);
@@ -936,7 +937,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (file.includes('..')) return send(404, 'not found', 'text/plain');
         if (adminHost && ['requests.html', 'requests.js', 'admin.html', 'admin.js'].includes(file)) return toAdmin(req, res);
         try {
-          return send(200, await readFile(join(WEB, file)), TYPES[extname(file)] ?? 'application/octet-stream');
+          const body = await readFile(join(WEB, file));
+          return send(200, extname(file) === '.html' ? withLogo(body.toString('utf8')) : body, TYPES[extname(file)] ?? 'application/octet-stream');
         } catch {
           return send(404, 'not found', 'text/plain');
         }
