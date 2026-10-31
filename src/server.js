@@ -25,7 +25,7 @@ import { writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
-import { buildPackage, signatureOf } from './package.js';
+import { buildPackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
 import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
@@ -110,6 +110,20 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
   let built = null;
   const pkg = buildPackage(source, packageDir).then((b) => (built = b));
+  // The newest signed release in packageDir, whichever commit the hub runs now (#254). Checked against the
+  // release key this checkout pins; installs check it again against their own.
+  const releases = new Map();
+  const release = () => {
+    let key = null;
+    try { key = readFileSync(join(source, 'release-key.pub'), 'utf8').trim() || null; } catch {}
+    return newestSigned(packageDir, key, releases);
+  };
+  // /api/info's package: the running commit's, and release: the newest signed one, which installs update to.
+  const packageInfo = (at) => {
+    const r = release();
+    return { url: `${at}/nuworq.tgz`, sha256: built.sha256, commit: built.commit.slice(0, 7),
+      release: r ? { url: `${at}/nuworq-${r.commit}.tgz`, sha256: r.sha256, commit: r.commit, time: r.time } : null };
+  };
   const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
   let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, web: gh.web, ...githubApp }) : githubApp;
   // The app as a hub may use it: on a shared hub, only the installations bound to that organization
@@ -635,11 +649,28 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
         return res.end(`${sig}\n`);
       }
-      // What the package is, for installs deciding whether to update (src/update.js) and for signing it
-      // (scripts/sign-release.js). Public like the package itself: /api/info needs a sign-in on most hubs.
+      // What the packages are, for installs deciding whether to update (src/update.js) and for signing one
+      // (scripts/sign-release.js): /api/info's package with its newest signed release, plus the running commit in
+      // full and whether it is signed. Public like the packages themselves: /api/info needs a sign-in on most hubs.
       if (req.method === 'GET' && path === '/api/package') {
         const b = await pkg;
-        return send(200, { package: b ? { commit: b.commit, sha256: b.sha256, signed: !!signatureOf(b) } : null });
+        return send(200, { package: b ? { ...packageInfo((!spaces && publicUrl) || origin(req)), commit: b.commit, signed: !!signatureOf(b) } : null });
+      }
+      // A package by its full commit, and its signature: only the packages this hub built and kept, so an
+      // install can fetch the release /api/info names after the hub has moved on to newer commits.
+      let pm;
+      if (req.method === 'GET' && (pm = path.slice(1).replace(/\.sig$/, '').match(PACKAGE_NAME))) {
+        await pkg;
+        const b = packageAt(packageDir, pm[1]);
+        if (!b) return deny(404, `this hub has no package of ${pm[1].slice(0, 7)}`, 'GET /api/info names the packages it serves: package.url and package.release.url.');
+        if (path.endsWith('.sig')) {
+          const sig = signatureOf(b);
+          if (!sig) return deny(404, `the package of ${pm[1].slice(0, 7)} isn't signed`, 'Installed copies update only to a signed release (docs/DEPLOY.md, "Signed releases").');
+          res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
+          return res.end(`${sig}\n`);
+        }
+        res.writeHead(200, { 'content-type': 'application/gzip', etag: `"${b.sha256}"`, 'cache-control': 'no-cache', 'content-disposition': `attachment; filename="nuworq-${pm[1]}.tgz"` });
+        return res.end(await readFile(b.file));
       }
       // GitHub's app deliveries name no workspace: the signature is their credential (as for project webhooks below).
       if (req.method === 'POST' && path === '/api/hooks/github-app') return await appHook(req, send, deny);
@@ -936,7 +967,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'GET' && path === '/api/info') {
         return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: ((!spaces && publicUrl) || origin(req)) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo(),
-          package: built ? { url: `${(!spaces && publicUrl) || origin(req)}/nuworq.tgz`, sha256: built.sha256, commit: built.commit.slice(0, 7) } : null });
+          package: built ? packageInfo((!spaces && publicUrl) || origin(req)) : null });
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
       const viewer = who.person ? by : undefined;

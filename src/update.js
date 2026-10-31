@@ -108,11 +108,19 @@ export async function update({ root, hub, dir, env = process.env, force = false,
     return { status: 'unreachable', reason: `the hub at ${base} didn't answer (${e.cause?.code ?? e.name}); carrying on with the installed version` };
   }
   if (!pkg?.commit || !pkg.sha256) return { status: 'current', reason: 'the hub serves no package of itself', from };
-  const to = String(pkg.commit);
-  if (!/^[0-9a-f]{7,40}$/.test(to)) return { status: 'refused', reason: `the hub names its version "${to.slice(0, 40)}", which isn't a commit. Kept the installed version.`, from };
+  // The newest signed release the hub keeps (#254), served by its commit, whichever commit the hub runs now.
+  // A hub from before that names only the package of the commit it runs.
+  const named = pkg.release?.commit && pkg.release.sha256 ? pkg.release : null;
+  const to = String(named ? named.commit : pkg.commit);
+  if (!/^[0-9a-f]{7,40}$/.test(to) || (named && to.length !== 40)) return { status: 'refused', reason: `the hub names its version "${to.slice(0, 40)}", which isn't a commit. Kept the installed version.`, from };
   if (from && (from.startsWith(to) || to.startsWith(from))) return { status: 'current', from };
-  // Not a release until someone signs it (docs/DEPLOY.md, "Signed releases"): nothing to fetch, nothing to say.
-  if (pkg.signed === false) return { status: 'current', reason: `the hub's ${to.slice(0, 7)} isn't a signed release yet`, from, to };
+  // With no signed release named, the running package isn't one until someone signs it (docs/DEPLOY.md, "Signed
+  // releases"): nothing to fetch, nothing to say.
+  if (!named && pkg.signed === false) return { status: 'current', reason: `the hub's ${to.slice(0, 7)} isn't a signed release yet`, from, to };
+  // What the hub says of the release's time only saves a download; the signed package's own time decides.
+  const mine = running(root);
+  if (named && mine?.time != null && Number.isInteger(named.time) && named.time <= mine.time) return { status: 'current', reason: `the newest signed release, ${to.slice(0, 7)}, isn't newer`, from };
+  const [tgzPath, sha256] = named ? [`/nuworq-${to}.tgz`, named.sha256] : ['/nuworq.tgz', pkg.sha256];
 
   const unlock = lock(join(dir, 'update.lock'), now);
   if (!unlock) return { status: 'skipped', reason: 'another nuworq on this machine is updating it now' };
@@ -122,14 +130,14 @@ export async function update({ root, hub, dir, env = process.env, force = false,
     if (readState(stateFile).installed === to) return { status: 'current', from, to };
     let tgz, sig;
     try {
-      tgz = await ask('/nuworq.tgz');
-      sig = await ask('/nuworq.tgz.sig');
+      tgz = await ask(tgzPath);
+      sig = await ask(`${tgzPath}.sig`);
     } catch (e) {
       return { status: 'unreachable', reason: `the download from ${base} broke off (${e.cause?.code ?? e.name}); carrying on with the installed version` };
     }
-    if (tgz.status !== 200) return refused(`the hub answered ${tgz.status} for /nuworq.tgz`);
-    if (sig.status !== 200) return refused(`the hub serves no signature for ${to} (/nuworq.tgz.sig answered ${sig.status}), so it isn't a signed release`);
-    if (createHash('sha256').update(tgz.body).digest('hex') !== pkg.sha256) return refused('the download doesn\'t match the sha256 the hub gave: it was changed or cut short on the way');
+    if (tgz.status !== 200) return refused(`the hub answered ${tgz.status} for ${tgzPath}`);
+    if (sig.status !== 200) return refused(`the hub serves no signature for ${to} (${tgzPath}.sig answered ${sig.status}), so it isn't a signed release`);
+    if (createHash('sha256').update(tgz.body).digest('hex') !== sha256) return refused('the download doesn\'t match the sha256 the hub gave: it was changed or cut short on the way');
     const pinned = pinnedKey(root);
     let ok = false;
     try { ok = verify(null, tgz.body, createPublicKey(pinned), Buffer.from(sig.body.toString('utf8').trim(), 'base64')); } catch {}
@@ -142,7 +150,6 @@ export async function update({ root, hub, dir, env = process.env, force = false,
     let rel = null;
     try { rel = releaseOf(fileInTarball(tgz.body, 'src/commit.txt')); } catch {}
     if (!rel || !(rel.commit.startsWith(to) || to.startsWith(rel.commit))) return refused(`the signed package says it is ${rel ? rel.commit.slice(0, 7) : 'no version'}, not ${to.slice(0, 7)} as the hub said`);
-    const mine = running(root);
     if (mine?.time != null) {
       const when = (s) => new Date(s * 1000).toISOString().slice(0, 16).replace('T', ' ');
       if (rel.time == null) return refused(`${to.slice(0, 7)} doesn't say when it was made, so it can't be shown newer than the installed ${from.slice(0, 7)} (${when(mine.time)} UTC)`);
