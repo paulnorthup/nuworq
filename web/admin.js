@@ -77,7 +77,7 @@ async function load() {
     }
     list.innerHTML = requests.length ? requests.map(card).join('') : `<p class="faint">${state === 'new' ? 'No new requests.' : 'Nothing here.'}</p>`;
     document.getElementById(`request-${focus}`)?.scrollIntoView({ block: 'center' });
-  } catch (e) { list.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
+  } catch (e) { list.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
 }
 
 function card(r) {
@@ -105,7 +105,7 @@ async function loadSpaces() {
     const { enforced, workspaces } = await api('/api/workspaces');
     el.innerHTML = `${enforced ? '' : '<p class="faint">Plans aren\'t enforced on this hub (start it with --plans): changes are stored and apply once they are.</p>'}
       ${workspaces.length ? workspaces.map(space).join('') : '<p class="faint">No workspaces yet.</p>'}`;
-  } catch (e) { el.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
+  } catch (e) { el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
 }
 
 function space(w) {
@@ -115,10 +115,10 @@ function space(w) {
     : w.source === 'billing' ? 'Paid through Stripe.'
     : `The default: ${w.plan === 'free' ? 'someone signed up for it' : 'the host made it'}.`;
   // What Stripe last said (#227), e.g. "paid until 2026-12-01", "cancels 2026-12-01", "payment failed".
-  const billing = w.billing?.line ? `<span class="${w.billing.line === 'payment failed' ? 'warn' : 'faint'}">${esc(w.billing.line)}</span>` : '';
+  const billing = w.billing?.line ? `<span class="${w.billing.line === 'payment failed' ? 'bad' : 'faint'}">${esc(w.billing.line)}</span>` : '';
   return `<details class="admin-card admin-space" data-name="${esc(w.name)}"${expanded.has(w.name) ? ' open' : ''}>
     <summary><span class="h">${esc(w.name)}</span><span class="plan plan-${esc(w.plan)}">${PLAN[w.plan]}</span>${billing}
-      <span class="faint">${w.working.length ? `<b class="ok">${w.working.length} working</b>` : 'idle'} · ${w.last_active ? esc(ago(w.last_active)) : 'never active'}</span></summary>
+      <span class="faint">${w.working.length ? `<b class="working">${w.working.length} working</b>` : 'idle'} · ${w.last_active ? esc(ago(w.last_active)) : 'never active'}</span></summary>
     <p>Made by ${w.creator ? `${esc(w.creator.email)}${w.creator.github ? ` · <a href="https://github.com/${esc(w.creator.github)}" target="_blank" rel="noopener">@${esc(w.creator.github)}</a>` : ''}` : 'the host'}</p>
     <p class="s">${w.people} ${w.people === 1 ? 'person' : 'people'} · ${w.projects} ${w.projects === 1 ? 'project' : 'projects'}${w.working.length ? ` · working: ${w.working.map(esc).join(', ')}` : ''}</p>
     <p class="faint">${why}</p>
