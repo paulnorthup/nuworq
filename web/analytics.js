@@ -81,9 +81,9 @@ export function routingSection(r, { esc }) {
     : r.saved_usd >= 0 ? `Routing saved ${money(r.saved_usd)} against running each job on its dearest model.`
       : `Routing cost ${money(-r.saved_usd)} more than running each job on its dearest model: the cheaper models needed rework.`;
   const cell = (c) => `<div class="an-line"><span class="an-name">${esc(JOBS[c.job] ?? c.job)} <span class="s">${esc(c.difficulty)} items</span></span>
-    <dl class="funnel an-cal">${c.models.map((m) => `<div class="step${m.attempts < 20 ? ' faint' : ''}"><dt>${esc(m.model)} <span class="s">${m.attempts}</span></dt>
+    <dl class="funnel an-cal">${c.models.map((m) => `<div class="step${m.attempts < 20 ? ' faint' : ''}"><dt>${esc(m.model)} <span class="s">${m.attempts}${m.cost_per_clean == null ? '' : ` · ${money(m.cost_per_clean)}`}</span></dt>
       <dd><span class="bar" style="width:${Math.max(m.rate ? 2 : 0, Math.round(m.rate * 100))}%"></span></dd>
-      <dd class="n">${pct(m.rate)}${m.cost_per_clean == null ? '' : ` · ${money(m.cost_per_clean)}`}</dd></div>`).join('')}</dl></div>`;
+      <dd class="n">${pct(m.rate)}</dd></div>`).join('')}</dl></div>`;
   return `<section class="sec" data-new="model-routing-results"><header><h2>Model routing</h2><span class="hint">clean rate per model, by kind of job</span></header>
     <p class="an-verdict">${esc(saved)}</p>
     <div class="an-lines">${r.cells.map(cell).join('')}</div></section>`;

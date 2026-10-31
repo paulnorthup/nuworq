@@ -1136,8 +1136,8 @@ function staffingModal(back) {
     <div class="form"><label>Workers at once<input id="st-workers" type="number" inputmode="numeric" min="1" max="100" placeholder="Each runner's own --workers" value="${s.workers ?? ''}"></label>
     <label>Daily budget, dollars (UTC days)<input id="st-budget" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="No budget" value="${s.budget ?? ''}"></label></div>
     <p class="faint">Spent here today: $${(s.spent_today ?? 0).toFixed(2)}. Once it reaches the budget, no new workers start until tomorrow.</p>
-    <div class="setting" data-new="model-routing"><div class="body"><div class="h" id="set-models">Cheaper models for rote jobs</div>
-      <div class="s">${m.on ? 'On: landing and tidying start on the cheapest model below, and step up one when an attempt fails. Reviews and shaping use the top one; so does building, but for the share set below that tries a cheaper one.' :'Off: every worker runs on its runner\'s own model.'}</div></div>
+    <div class="setting" data-new="model-routing"><div class="body"><div class="h" id="set-models">Cheaper models where they do as well</div>
+      <div class="s">${m.on ? 'On: building starts on the top model below and landing and tidying on the cheapest, until results show a cheaper one meets the quality bar. A failed attempt steps up one. Reviews and shaping always use the top one.' :'Off: every worker runs on its runner\'s own model.'}</div></div>
       <button class="switch" role="switch" aria-checked="${m.on}" aria-labelledby="set-models" data-action="${m.on ? 'models-off' : 'models-on'}"></button></div>
     <div class="form">${tier('claude', 'Claude models, cheapest first')}
     <details><summary>Codex and opencode</summary>${tier('codex', 'Codex models, cheapest first')}${tier('opencode', 'opencode models (provider/model), cheapest first')}</details>

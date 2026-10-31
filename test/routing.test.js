@@ -38,7 +38,8 @@ describe('picking a model', () => {
     const thin = { [HAIKU]: { attempts: 40, clean: 40 }, [OPUS]: { attempts: MIN_ATTEMPTS - 1, clean: MIN_ATTEMPTS - 1 } };
     const w = pickModel(LIST, { mode: 'work', stats: thin, difficulty: 'rote' });
     assert.equal(LIST[w.start], OPUS, 'the top tier is not measured yet, so nothing is known to be close to it');
-    assert.match(w.why, /the top tier until claude-opus-5-5 has 20 finished rote builds to compare against \(1 to go\)/);
+    assert.equal(w.why, 'claude-opus-5-5: the top tier, until it has 20 finished rote builds to compare cheaper models against (1 to go)');
+    assert.match(pickModel(LIST, { mode: 'land', stats: {} }).why, /^claude-haiku-5-5: rote jobs start on the cheapest tier until claude-opus-5-5 has 20 finished standard landings/);
     assert.equal(LIST[pickModel(LIST, { mode: 'land', stats: {} }).start], HAIKU);
     assert.equal(LIST[pickModel(LIST, { mode: 'work', stats: {} }).start], OPUS);
     assert.equal(LIST[pickModel(LIST, { mode: 'review', stats: cell({ [HAIKU]: 1, [OPUS]: 0.5 }) }).start], OPUS);

@@ -58,7 +58,11 @@ export function pickModel(list, { mode, difficulty = 'standard', stats = {}, qua
   const fallback = ROTE.includes(mode) ? 0 : last;
   if (!measured.includes(top)) {
     const short = MIN_ATTEMPTS - (stats[top]?.attempts ?? 0);
-    return { start: fallback, why: `${list[fallback]}: ${ROTE.includes(mode) ? 'rote jobs start on the cheapest tier' : 'the top tier'} until ${top} has ${MIN_ATTEMPTS} finished ${what} to compare against (${short} to go)` };
+    return {
+      start: fallback,
+      why: ROTE.includes(mode) ? `${list[fallback]}: rote jobs start on the cheapest tier until ${top} has ${MIN_ATTEMPTS} finished ${what} to compare against (${short} to go)`
+        : `${top}: the top tier, until it has ${MIN_ATTEMPTS} finished ${what} to compare cheaper models against (${short} to go)`,
+    };
   }
   const best = measured.reduce((a, m) => (rate(m) > rate(a) ? m : a));
   const bar = (QUALITY[quality] ?? QUALITY.balanced).bar;

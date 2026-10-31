@@ -398,7 +398,7 @@ fieldset.quality { border: 0; padding: 0; margin: 14px 0 0; display: flex; flex-
 fieldset.quality legend { font-weight: 600; font-size: 13.5px; padding: 0; margin-bottom: 4px; }
 fieldset.quality .check-label { display: flex; align-items: flex-start; min-height: 44px; padding: 8px 0; font-size: 13px; color: var(--muted); }
 fieldset.quality .check-label b { color: var(--ink); font-weight: 600; }
-fieldset.quality input { margin-top: 3px; }
+fieldset.quality input { width: auto; flex: none; margin: 3px 0 0; }
 .an-cal .step.faint .bar { opacity: .4; } /* a model with fewer than 20 attempts in its kind: routing doesn't count it yet */
 .d-model { margin-top: 4px; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; } /* which model, and why (#349) */
 .d-sec { margin-top: 22px; }
