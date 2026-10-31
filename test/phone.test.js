@@ -21,4 +21,16 @@ describe('on a phone', () => {
     assert.match(phone, /#drawer \.d-sec \.inline-form \{ flex-wrap: wrap; \}/);
     assert.match(phone, /#drawer \.d-sec \.inline-form input \{ flex: 1 1 100%; \}/);
   });
+
+  test('an item without done_means wraps its fallback line instead of scrolling the drawer sideways (#256)', () => {
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const fallback = app.match(/<p class="([^"]+)">No acceptance criteria yet\./);
+    assert.ok(fallback, 'the Done means fallback is still there');
+    assert.notEqual(fallback[1], 'age', '.age is nowrap, for timestamps');
+    assert.equal(fallback[1], 'faint');
+    const faint = css.match(/^([^{\n]*\.d-sec \.faint[^{\n]*)\{([^}]*)\}/m);
+    assert.ok(faint, '.faint is styled inside the drawer');
+    assert.match(faint[2], /color: var\(--muted\)/);
+    assert.doesNotMatch(faint[2], /nowrap/);
+  });
 });

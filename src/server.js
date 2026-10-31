@@ -26,7 +26,7 @@ import { randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
-import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed } from './billing.js';
+import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -700,6 +700,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const { authz, devices, clients } = scopeOf(hub);
       adopt(hub, req, base);
       hub.appWiring ??= wiringFor(hub);
+      // Where Free's limit points its owners (#228): the workspace's settings, where Upgrade is, while it sells.
+      if (spaces && canSell(billing) && !hub.upgradeUrl) {
+        const page = `${homeOf(req, ws)}/#/settings`;
+        hub.upgradeUrl = () => page;
+      }
       const cookiePath = `${base}/`;
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.
@@ -993,20 +998,39 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         for (const p of hub.projects()) hub.humanOp(p.slug, 'seen', {}, by);
         return send(200, { ok: true });
       }
-      // Billing (#231): the workspace's plan in plain words, and Stripe's portal for its owners. 404 with billing off.
-      if (path === '/api/billing' || path === '/api/billing/portal') {
+      // Billing (#231): the workspace's plan in plain words, Stripe's portal for its owners, and Checkout to
+      // upgrade a Free one (#228), one button per plan on sale. 404 with billing off.
+      if (path === '/api/billing' || path === '/api/billing/portal' || path === '/api/billing/checkout') {
         if (!spaces || !billing) return deny(404, 'this hub takes no payments', 'Billing is off: it needs workspaces and NUWORQ_STRIPE_WEBHOOK_SECRET.');
         const owner = personRole === 'owner';
+        const owners = hub.db.prepare("SELECT handle FROM people WHERE role = 'owner' ORDER BY id").all().map((p) => `@${p.handle}`);
         const b = spaces.directory.billingOf(ws);
+        const plan = spaces.planOf(ws);
         if (req.method === 'GET' && path === '/api/billing') {
-          if (!owner) return send(200, { on: true, owner: false });
-          return send(200, { on: true, owner, plan: spaces.planInfo(ws).plan, state: billingState(b, hub.now()), failing: failing(b), manage: !!b?.customer });
+          if (!owner) return send(200, { on: true, owner: false, owners });
+          return send(200, {
+            on: true, owner, plan, state: billingState(b, hub.now()), failing: failing(b), manage: !!b?.customer,
+            plans: plan === 'free' && canSell(billing) ? plansOf(billing).map(({ plan, label }) => ({ plan, label })) : [],
+            terms: TERMS, privacy: PRIVACY,
+          });
         }
-        if (req.method !== 'POST' || path !== '/api/billing/portal') return deny(405, path === '/api/billing' ? 'use GET' : 'use POST');
-        if (!owner) {
-          const owners = hub.db.prepare("SELECT handle FROM people WHERE role = 'owner' ORDER BY id").all().map((p) => `@${p.handle}`);
-          return deny(403, "only the workspace's owner manages its billing", `Ask ${owners.join(' or ') || 'an owner'}.`);
+        if (req.method === 'POST' && path === '/api/billing/checkout') {
+          if (!canSell(billing)) return deny(404, 'this hub sells no plans', 'The hub host sets NUWORQ_STRIPE_SECRET_KEY and NUWORQ_STRIPE_PRICES (see DEPLOY.md).');
+          if (!owner) return deny(403, "only the workspace's owner can upgrade it", `Ask ${owners.join(' or ') || 'an owner'} to upgrade it.`);
+          if (plan !== 'free') return deny(409, `${ws} is already on ${plan === 'unlimited' ? 'a paid plan' : plan}`, 'Nothing to upgrade.');
+          const want = (await body(req)).plan;
+          const plans = plansOf(billing);
+          if (!plans.some((p) => p.plan === want)) return deny(400, `"${want ?? ''}" is not a plan you can buy here`, `One of: ${plans.map((p) => p.plan).join(', ')}.`);
+          const email = who.person ? hub.q('SELECT email FROM people WHERE handle = ?').get(who.person.handle)?.email : null;
+          try {
+            const session = await checkout(billing, { workspace: ws, plan: want, home: homeOf(req, ws), email, customer: b?.customer ?? null });
+            return send(200, { ok: true, url: session.url });
+          } catch (e) {
+            return deny(502, `Stripe didn't open Checkout: ${e.message}`, 'Try again in a minute. If it keeps failing, the hub host checks NUWORQ_STRIPE_SECRET_KEY and NUWORQ_STRIPE_PRICES.');
+          }
         }
+        if (req.method !== 'POST' || path === '/api/billing') return deny(405, path === '/api/billing' ? 'use GET' : 'use POST');
+        if (!owner) return deny(403, "only the workspace's owner manages its billing", `Ask ${owners.join(' or ') || 'an owner'}.`);
         if (!b?.customer) return deny(409, 'this workspace has no Stripe subscription yet', 'Upgrade it first; then Manage billing opens Stripe\'s billing page.');
         if (!billing.secretKey) return deny(503, "this hub can't open Stripe's billing page", 'The hub host sets NUWORQ_STRIPE_SECRET_KEY (see DEPLOY.md).');
         try {

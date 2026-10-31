@@ -31,6 +31,12 @@ const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mis
 // but what it already asked of you (a blocking question, work to verify) still needs you, so it counts here as
 // it does on its own line and badge (#152). Parking only stops new asks: direction and staffing.
 const URGENCY = ['needs-you', 'stalled', 'flowing', 'idle'];
+// An agent's role, where it runs and its job (core.js presenceOf), by name; null for a name the hub doesn't know.
+function presenceNamed(hub, p, name) {
+  const a = name ? hub.q('SELECT * FROM agents WHERE project_id = ? AND name = ?').get(p.id, name) : null;
+  return a ? hub.presenceOf(p, a) : null;
+}
+
 export function homeView(hub, { viewer } = {}) {
   const t = hub.now();
   const rows = hub.projects().map((p) => ({ p, v: view(hub, p.slug, { light: true, viewer }) }));
@@ -57,7 +63,7 @@ export function homeView(hub, { viewer } = {}) {
   const motion = rows.flatMap(({ p }) => hub.q(`SELECT seq, title, stage, holder AS agent FROM items WHERE project_id = ? AND holder IS NOT NULL AND holder != '' AND stage IN ('active', 'proposed', 'landing')
       UNION ALL SELECT i.seq, i.title, i.stage, a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND i.stage = 'active' AND a.stage = 'active' AND a.closed = 0
       ORDER BY seq`).all(p.id, p.id)
-    .map((r) => ({ agent: r.agent, item: `#${r.seq}`, title: r.title, stage: r.stage, project: tag(p) })));
+    .map((r) => ({ agent: r.agent, presence: presenceNamed(hub, p, r.agent), item: `#${r.seq}`, title: r.title, stage: r.stage, project: tag(p) })));
   return {
     pulse: {
       state, sentence, act: needs.length, working, active: inFlight,
@@ -100,6 +106,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const lastEvent = (i, types) => hub.q(`SELECT * FROM events WHERE item_id = ? AND type IN (${types.map(() => '?').join(',')}) ORDER BY at DESC, id DESC LIMIT 1`).get(i.id, ...types);
 
   const in_ = (stage) => items.filter((i) => i.stage === stage);
+  // Who an agent named in an entry is, for the page to say "Worker · mac-mini runner" rather than its id (#240).
+  const presence = (name) => presenceNamed(hub, p, name);
   const active = in_('active');
   const shaping = in_('proposed').filter((i) => i.holder);
   const landing = in_('landing');
@@ -130,6 +138,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       why: [orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
+      agent: q.asked_by, presence: presence(q.asked_by),
       steps: json(q.steps, []),
       // The steps this viewer has ticked (#162), counting from 1; each person ticks their own.
       ticked: hub.q('SELECT step FROM step_ticks WHERE question_id = ? AND person = ? ORDER BY step').all(q.id, viewer ?? HUMAN).map((r) => r.step),
@@ -220,6 +229,20 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const wiring = hub.appWiring?.(viewer);
   if (wiring) push({ ...wiringEntry(wiring), level: 'act', kind: 'app-wiring', hubwide: true });
 
+  // Free's limit stopped a second agent here (#228): the workspace's owners can upgrade, while billing is on.
+  // Gone once the plan isn't Free, the agent got work, or an hour has passed without another refusal.
+  const refused = hub.planRefused;
+  const upgrade = refused?.project === p.id && t - refused.at < HOUR && hub.planLimit?.() && hub.upgradeUrl?.();
+  if (upgrade && !hub.working().has(refused.agent)) {
+    push({
+      key: `plan-limit:${refused.agent}`, level: 'act', kind: 'plan-limit', at: refused.at, upgrade,
+      headline: `${refused.agent} is waiting: the Free plan runs one agent at a time, and ${refused.working.join(', ')} is working`,
+      sub: `refused ${dur(t - refused.at)} ago`,
+      why: `On Free, a second agent waits until the first finishes or hands off. Pro runs any number side by side. Upgrade opens Stripe Checkout; the plan changes within a minute once Stripe confirms the payment.`,
+      owners: hub.q("SELECT handle FROM people WHERE role = 'owner' ORDER BY handle").all().map((r) => `@${r.handle}`),
+    });
+  }
+
   // Agents keep arriving and leaving with nothing: routed here for work they can't take.
   const churnSince = t - CHURN_WINDOW;
   const arrivals = hub.q(`SELECT actor, MIN(id) AS first FROM events WHERE project_id = ? AND type = 'checkin' AND at >= ? GROUP BY actor ORDER BY first`).all(p.id, churnSince);
@@ -244,7 +267,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
         why: sub?.summary, detail: sub?.detail,
         acceptance: it.acceptance, evidence, git,
         warn: [evidence.length ? null : 'No evidence attached', gitWarning(git)].filter(Boolean).join(' · ') || null,
-        item: ref(it),
+        item: ref(it), agent: it.implementer, presence: presence(it.implementer),
         attempts: it.race > 1 ? hub.submissions(it) : undefined, // a race: compare and keep one
       });
     }
@@ -352,18 +375,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
 
   // Work that needs something no agent seen in the last day has: it would wait forever unnoticed.
   const fitAgents = agents.filter((a) => t - a.last_seen < DAY).map((a) => json(a.has, []));
-  const fitLately = agents.filter((a) => t - a.last_seen < 4 * HOUR).map((a) => json(a.has, []));
-  const eff = hub.effectivePriorities(p);
-  const stalledGroups = new Map(); // group seq → its oldest step stuck on a capability, for a "now" group (#201)
+  const stalledGroups = stalledGroupsOf(hub, p, readyFree, { agents, t });
   for (const it of [...readyFree, ...shapeable]) {
     const missing = json(it.needs, []).filter((tag) => !fitAgents.some((has) => has.includes(tag)));
-    // A "now" group's next step that has waited 4 hours on what nobody connected in 4 hours has: it needs you.
-    const lately = json(it.needs, []).filter((tag) => !fitLately.some((has) => has.includes(tag)));
-    const e = eff.get(it.id);
-    if (lately.length && e?.priority === 'now' && it.stage === 'ready' && t - it.stage_since > 4 * HOUR) {
-      const group = e.from ?? it.seq;
-      if (!stalledGroups.has(group) || stalledGroups.get(group).it.stage_since > it.stage_since) stalledGroups.set(group, { it, missing: lately });
-    }
     if (!missing.length) continue;
     const forOperator = missing.some((tag) => OPERATOR_TAGS.includes(tag));
     push({
@@ -455,7 +469,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const bySeq = new Map(items.map((i) => [ref(i), i]));
     for (const a of attention.filter((x) => x.level === 'act')) {
       // Work kept parked is the parker's to release.
-      a.owners = a.parked_by?.startsWith('@') ? [a.parked_by] : hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
+      // Some are the workspace owners' alone (an upgrade).
+      a.owners ??= a.parked_by?.startsWith('@') ? [a.parked_by] : hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
       if (viewer && !a.owners.includes(viewer)) {
         a.level = 'know';
         a.sub = [a.owners.length ? `needs ${a.owners.join(', ')}` : 'needs a steward (none set)', a.sub].filter(Boolean).join(' · ');
@@ -592,7 +607,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   return {
     project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), fresh: !!p.fresh, autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
     pulse, since, attention, motion, flow,
-    ...groupsOf(hub, p, items, { agents, openQs, t }),
+    ...groupsOf(hub, p, items, { agents, openQs, t, stalled: stalledGroups }),
     queue, proposed, waiting, verifying, done,
     agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
     stages: STAGES,
@@ -682,10 +697,27 @@ function waitsOnYou(p, i, openQs) {
 
 const GROUP_STATE = { you: 0, stuck: 1, moving: 2, queued: 3 };
 
+// The "now" groups stalled on a capability (#201): a group's next step, ready for 4 hours, needs something no
+// agent connected in the last 4 hours has. Group seq → { it: its oldest such step, missing }. Needs you calls
+// such a group stalled, and its line under Groups says Stuck (#214): one rule, so they never disagree.
+export function stalledGroupsOf(hub, p, readyFree, { agents, t }) {
+  const fitLately = agents.filter((a) => t - a.last_seen < 4 * HOUR).map((a) => json(a.has, []));
+  const eff = hub.effectivePriorities(p);
+  const stalled = new Map();
+  for (const it of readyFree) {
+    const missing = json(it.needs, []).filter((tag) => !fitLately.some((has) => has.includes(tag)));
+    const e = eff.get(it.id);
+    if (!missing.length || e?.priority !== 'now' || it.stage !== 'ready' || t - it.stage_since <= 4 * HOUR) continue;
+    const group = e.from ?? it.seq;
+    if (!stalled.has(group) || stalled.get(group).it.stage_since > it.stage_since) stalled.set(group, { it, missing });
+  }
+  return stalled;
+}
+
 // The project's groups (#200), for the 30-second view: each top-level item with children and open work, as
 // one line: how far along it is, the priority it ranks at (#198), and whether it is moving, waiting on you,
 // stuck (with the one reason) or queued for the next agent. Plus how many open items are in no group.
-export function groupsOf(hub, p, items, { agents, openQs, t }) {
+export function groupsOf(hub, p, items, { agents, openQs, t, stalled = new Map() }) {
   const kids = new Map();
   for (const i of items) if (i.parent_id) kids.set(i.parent_id, [...(kids.get(i.parent_id) ?? []), i]);
   const under = (i, seen = new Set([i.id])) => (kids.get(i.id) ?? []).filter((c) => !seen.has(c.id) && seen.add(c.id))
@@ -703,6 +735,15 @@ export function groupsOf(hub, p, items, { agents, openQs, t }) {
     const e = eff.get(g.id) ?? { priority: g.priority, from: null };
     const line = { item: ref(g), title: g.title, priority: g.priority, effective: e.priority, from: e.from ? `#${e.from}` : null,
       done: all.filter((i) => i.stage === 'done').length, total: all.filter((i) => i.stage !== 'dropped').length };
+    // What Needs you calls stalled is Stuck here too, for the same step and capability, whatever else moves:
+    // by the step, so a "now" sub-group or a "now" dependent outside the group counts too (#266).
+    const st = [...stalled.values()].filter((s) => members.some((i) => i.id === s.it.id))
+      .sort((a, b) => a.it.stage_since - b.it.stage_since)[0];
+    if (st) {
+      return { ...line, state: 'stuck', reason: st.missing.some((tag) => OPERATOR_TAGS.includes(tag))
+        ? `${ref(st.it)} needs an operator (${st.missing.join(', ')}); none has checked in for 4 hours`
+        : `${ref(st.it)} needs ${st.missing.join(', ')}; no agent connected in 4 hours has it` };
+    }
     const yours = members.filter((i) => waitsOnYou(p, i, openQs));
     if (yours.length) return { ...line, state: 'you', reason: `${yours.map(ref).join(', ')} ${yours.length === 1 ? 'waits' : 'wait'} on you` };
     const busy = members.filter((i) => i.holder || ['active', 'landing', 'verifying'].includes(i.stage));

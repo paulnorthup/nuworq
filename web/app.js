@@ -8,9 +8,15 @@ import { credit } from './credit.js';
 import { checkChip } from './checks.js';
 import { dotClass } from './timeline.js';
 import { missingProject } from './missing.js';
+import { mapParts } from './groupmap.js';
+import { milestonesSection, prioritySeg as milestonePriority } from './milestones.js';
+import { ackList } from './acks.js';
+import { analyticsPage } from './analytics.js';
+import { agentLine } from './agentline.js';
 import { errorText, errorHtml } from './errors.js';
 import { markNew, markSeen } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
+import { billingSection } from './billing.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -23,6 +29,7 @@ const store = {
 };
 const S = {
   projects: [], slug: null, view: null, info: null,
+  analytics: false, period: '14d', outcomes: null, person: null, // the workspace's analytics (#239)
   itemRef: null, item: null, deep: false,
   zoom: store.get('zoom', '30s'),
   open: new Set(), reveal: new Set(), drafts: {},
@@ -63,15 +70,27 @@ function providerOf(model = '') {
   if (/gemini/.test(m)) return 'Google';
   return 'Open-weight';
 }
-const modelOf = (name) => S.view?.agents.find((a) => a.name === name)?.model ?? '';
-function who(name, model) {
+const agentNamed = (name) => S.view?.agents.find((a) => a.name === name) ?? null;
+// An agent as it reads everywhere (#240, web/agentline.js): role and where it runs, e.g. "Worker · mac-mini runner",
+// plus what it is doing (job) where that isn't already the line's subject. Its id shows at 30m and in the tooltip.
+// presence: what the hub sent with the entry (Needs you, the home), else the project's agent of that name.
+function who(name, model, { job = false, presence } = {}) {
   if (!name) return '';
   if (name === 'you') return '<span class="you-chip">You</span>';
   if (name === 'nuworq' || name === 'trellis') return '<span class="sys-chip">nuworq</span>'; // trellis: events from before the rename
-  model ??= modelOf(name);
+  const known = agentNamed(name);
+  presence ??= known;
+  model ??= known?.model ?? '';
   const prov = providerOf(model);
-  return `<span class="agent prov-${prov.toLowerCase().replace(/[^a-z]/g, '')}" title="${esc([model, prov].filter(Boolean).join(' · '))}"><i></i>${esc(name)}</span>`;
+  return `<span class="agent prov-${prov.toLowerCase().replace(/[^a-z]/g, '')}" title="${esc([name, model, prov].filter(Boolean).join(' · '))}"><i></i>${esc(agentLine(presence, { name, job, id: z() >= 2 }))}</span>`;
 }
+// A line the hub wrote that names an agent ("claude-4e0a picked up #4"), with the agent said as who it is. Beside
+// the actor (the activity feed, a timeline), a line that opens with its name drops it: "Picked up #4".
+const named = (text, name, presence, { beside = false } = {}) => {
+  if (!name || ['you', 'nuworq', 'trellis'].includes(name)) return esc(text);
+  if (beside && text.startsWith(`${name} `)) { const rest = text.slice(name.length + 1); return esc(rest[0].toUpperCase() + rest.slice(1)); }
+  return esc(text).replace(esc(name), who(name, null, { presence }));
+};
 // An empty section: one line on why it's empty, and the one thing to do about it.
 const zero = (why, action = '') => `<div class="zero"><span class="check">→</span><div>${why}${action ? ` ${action}` : ''}</div></div>`;
 const refLink = (ref) => (ref ? `<a class="ref" data-action="open" data-item="${esc(ref)}">${esc(ref)}</a>` : '');
@@ -172,13 +191,16 @@ async function loadProjects() {
 }
 async function refresh({ force = false } = {}) {
   try {
-    if (S.slug) await loadProjects();
+    if (S.slug || S.analytics) await loadProjects();
     S.missing = null;
+    if (S.analytics) S.outcomes = await api(`/api/outcomes?period=${encodeURIComponent(S.period)}`);
     if (S.slug && !S.projects.some((p) => p.slug === S.slug)) {
       // A stale link, or a renamed or archived project: say so, rather than quietly showing the home (#143).
       const archived = await api('/api/projects?archived=1').catch(() => []);
       S.view = null;
       S.missing = { slug: S.slug, archived: archived.find((p) => p.slug === S.slug) ?? null };
+    } else if (S.analytics) {
+      S.view = null;
     } else if (S.slug) {
       S.view = await api(`/api/p/${encodeURIComponent(S.slug)}/view`);
       if (S.itemRef) S.item = await api(`/api/p/${encodeURIComponent(S.slug)}/items/${encodeURIComponent(S.itemRef.replace('#', ''))}`).catch(() => null);
@@ -206,7 +228,7 @@ function render({ force = false } = {}) {
   S.pending = false;
   const drawerScroll = $('#drawer').scrollTop;
   renderRail();
-  $('#main').innerHTML = S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
+  $('#main').innerHTML = S.analytics ? analytics() : S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
   renderDrawer();
   $('#drawer').scrollTop = drawerScroll;
   for (const el of document.querySelectorAll('[data-draft]')) {
@@ -220,6 +242,7 @@ function render({ force = false } = {}) {
 // ── routing ──
 function route() {
   if (!$('#modal').hidden) closeModal(); // a dialog belongs to the page it was opened on (#155)
+  S.analytics = location.hash.startsWith('#/analytics');
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
   const ref = m?.[2] ? `#${m[2]}` : null;
@@ -244,14 +267,14 @@ function renderRail() {
   $('#rail').innerHTML = `
     <div class="brand">${LOGO}<span>nuworq</span></div>
     ${orgSwitcher()}
-    <a class="rail-label rail-head ${!S.slug ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
+    <a class="rail-label rail-head ${!S.slug && !S.analytics ? 'on' : ''}" href="#/" title="All projects"><span data-new="home">Projects</span>${total ? `<span class="badge" title="${plural(total, 'thing')} need you">${total}</span>` : ''}</a>
     ${projects || '<div class="rail-item" style="color:var(--muted)">No projects yet</div>'}
     <div class="rail-foot">
       <button class="rail-item" data-action="new-project">+ New project</button>
       <button class="rail-item" data-action="archived">Archived projects</button>
       <button class="rail-item" data-action="connect">Connect an agent</button>
       <button class="rail-item" data-action="notify">Notifications</button>
-      ${S.billing?.owner ? '<button class="rail-item" data-action="workspace-settings">Workspace settings</button>' : ''}
+      ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings">Workspace settings${S.billing.plans?.length ? ' · <b>Upgrade</b>' : ''}</button>` : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${versionLine()}
     </div>`;
@@ -282,6 +305,10 @@ function zoomControl() {
     `<button class="${S.zoom === k ? 'on' : ''}" data-action="zoom" data-zoom="${k}">${k}</button>`).join('')}</div>`;
 }
 
+// Analytics (#239, web/analytics.js): the workspace's figures, for its owners, from the home.
+const owner = () => S.person?.role === 'owner';
+const analytics = () => analyticsPage(S.outcomes, { esc, dur, period: S.period, open: S.open.has('an-agents'), wide: WIDE.matches, columns });
+
 // The home, across every project (web/home.js): the pulse, what needs you, a line per project.
 const getStarted = () => getStartedCard(S.gs, { worker: S.info ? connectCommands(S.info, location).worker : '' });
 function overview() {
@@ -295,9 +322,9 @@ function overview() {
       <div style="margin-top:8px"><button class="btn primary" data-action="connect">Connect an agent</button></div></div></div>`}`;
   }
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
-      <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div></div></div>
-    ${homePage(S.home, { z: z(), pulse, card, esc, plural, wide: WIDE.matches, gs: getStarted() })}`;
-}
+      <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}</div>
+      ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div>
+    ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, gs: getStarted() })}`;}
 
 // ── project ──
 function project(v) {
@@ -433,28 +460,22 @@ function needsYou(v) {
     ${act.length ? '<span class="hint">oldest first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
 }
 
-// ── 30s: the groups (#200): is what I care about moving, and is anything stuck? One line each; a tap opens its map. ──
-const GROUP_STATE = { you: 'Waits on you', stuck: 'Stuck', moving: 'Moving', queued: 'Queued' };
-function groups(v) {
-  if (!v.groups?.length) return '';
-  return `<section class="sec"><header><h2>Groups</h2><span class="count">${v.groups.length}</span><span class="hint">tap one for its map</span></header>
-    <div class="groups">${v.groups.map((g) => `<div class="group g-${g.state}">
-      <button class="g-main" data-action="open" data-item="${esc(g.item)}">
-        <span class="g-head"><span class="g-state">${GROUP_STATE[g.state]}</span><span class="g-title">${esc(g.title)}</span></span>
-        <span class="g-meta">${g.done} of ${g.total} done · ${esc(g.reason)}${g.from ? ` · ranks ${esc(g.effective)} (from ${esc(g.from)})` : ''}</span>
-      </button>
-      ${prioritySeg(g.item, g.priority)}</div>`).join('')}
-    ${v.ungrouped ? `<div class="group-none">Not in a group (${v.ungrouped})</div>` : ''}</div></section>`;
-}
+// ── 30s: the milestones (web/milestones.js): one line each; a tap opens its map. ──
+const groups = (v) => milestonesSection(v, { esc });
+const prioritySeg = (item, priority) => milestonePriority(item, priority, { esc });
 
-// A group's own priority, set in one tap (#198 carries it to everything in it). Reversible, so no dialog.
-const prioritySeg = (item, priority) => `<div class="seg g-prio" role="group" aria-label="Priority of ${esc(item)}">${['now', 'soon', 'later'].map((p) =>
-  `<button class="${priority === p ? 'on' : ''}" aria-pressed="${priority === p}" data-action="group-priority" data-item="${esc(item)}" data-p="${p}">${p}</button>`).join('')}</div>`;
-
-// A group's map in the drawer: the nested tree, each item with its stage, who holds it, what it waits on,
-// its pull requests and open questions, and a mark on what needs you.
+// A milestone's map in the drawer: the nested tree, each item with its stage, who holds it, what it waits on,
+// its pull requests and open questions, and a mark on what needs you. At each level what's left comes first,
+// and the done parts fold behind one line until tapped (#215).
 function groupMap(n) {
-  const kids = (x) => (x.children.length ? `<ul>${x.children.map((c) => `<li>${mapLine(c)}${kids(c)}</li>`).join('')}</ul>` : '');
+  const li = (c) => `<li>${mapLine(c)}${kids(c)}</li>`;
+  const kids = (x) => {
+    if (!x.children.length) return '';
+    const { open, folded, label } = mapParts(x.children);
+    const key = `mapdone:${x.item}`, shown = S.open.has(key);
+    const fold = folded.length ? `<li class="m-fold"><button class="link" data-action="toggle" data-key="${esc(key)}" aria-expanded="${shown}">${shown ? `Hide ${label}` : label}</button></li>` : '';
+    return `<ul>${open.map(li).join('')}${fold}${shown ? folded.map(li).join('') : ''}</ul>`;
+  };
   return `<div class="map">${kids(n)}</div>`;
 }
 function mapLine(n) {
@@ -466,8 +487,9 @@ function mapLine(n) {
 // What each Needs you card is, in plain words: one per kind the hub puts at level "act" (test/cardlabels.test.js).
 const CARD_LABELS = {
   question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction',
-  'no-agents': 'Nobody is working', 'group-stalled': 'A "now" group is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
+  'no-agents': 'Nobody is working', 'group-stalled': 'A "now" milestone is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
   'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked', 'app-wiring': 'GitHub App setup', 'payment-failed': 'Payment failed',
+  'plan-limit': 'Free plan limit',
 };
 
 function card(a) {
@@ -481,7 +503,7 @@ function card(a) {
       ${a.detail ? `<div class="label">Detail</div>${md(a.detail)}` : ''}
     </div>` : '';
   return `<article class="card kind-${a.kind}">
-    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${esc(a.sub)}</span></div>
+    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${named(a.sub, a.agent, a.presence)}</span></div>
     <h3>${esc(a.headline)}</h3>
     ${a.attempts?.length > 1 ? attemptsGrid(a.item, a.attempts) : `${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
     ${commits(a.git)}`}
@@ -580,6 +602,9 @@ function cardActions(a, hasMore, open, key) {
   if (a.kind === 'payment-failed') {
     return `<div class="actions"><button class="btn primary" data-action="billing-portal">Manage billing</button>${moreBtn}</div>`;
   }
+  if (a.kind === 'plan-limit') {
+    return `<div class="actions"><button class="btn primary" data-action="workspace-settings">Upgrade</button><button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}</div>`;
+  }
   if (a.kind === 'kept-parked') {
     return `<div class="actions"><button class="btn primary" data-action="unpark" data-item="${esc(a.item)}">Unpark</button><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}</div>`;
   }
@@ -669,7 +694,7 @@ function motion(v) {
     <div class="row-item clickable" data-action="open" data-item="${esc(m.item)}">
       <div class="body">
         <div class="h">${who(m.agent, m.model)} ${refLink(m.item)} <span>${esc(m.title)}</span>${repoTag(m)}${m.shaping ? '<span class="tag shaping">shaping</span>' : ''}${m.landing ? '<span class="tag shaping">landing</span>' : ''}${m.priority === 'now' ? '<span class="tag now">now</span>' : ''}${m.race ? `<span class="tag soon">race of ${m.race}</span>` : m.attempt > 1 ? `<span class="tag soon">attempt ${m.attempt}</span>` : ''}</div>
-        ${z() >= 1 && m.last ? `<div class="last ${m.quiet ? 'quiet' : ''}">${m.last.type === 'claimed' ? 'Just picked it up' : esc(m.last.headline)}</div>` : ''}
+        ${z() >= 1 && m.last ? `<div class="last ${m.quiet ? 'quiet' : ''}">${m.last.type === 'claimed' ? 'Just picked it up' : m.last.type === 'shaping' ? 'Started shaping it' : named(m.last.headline, m.agent, undefined, { beside: true })}</div>` : ''}
         ${z() >= 1 && m.touching?.length ? `<div class="touch">${m.touching.map((t) => `<code>${esc(t)}</code>`).join(' ')}</div>` : ''}
         ${z() >= 1 && m.heads_up ? `<div class="headsup">⚠ ${esc(m.heads_up.split('. ')[0])}</div>` : ''}
         ${z() >= 2 && m.last?.summary ? `<div class="s">${md(m.last.summary)}</div>` : ''}
@@ -796,9 +821,7 @@ function steering(v) {
     const expected = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off').map((a) => a.name);
     const missing = s.item ? [] : expected.filter((n) => !s.acks.some((x) => x.agent === n));
     return `<div class="row-item steer-item"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>
-      <div class="acks">${s.acks.map((a) => `<span class="ack" title="${esc(a.response)}">${esc(a.agent)}${z() >= 2 && a.response ? `: ${esc(a.response)}` : ''}</span>`).join('')}
-      ${missing.map((n) => `<span class="unacked">${esc(n)} hasn't acknowledged</span>`).join('')}
-      ${!s.acks.length && !missing.length ? '<span class="unacked">not seen yet</span>' : ''}</div></div>
+      <div class="acks">${ackList({ acks: s.acks, missing, key: `acks:${s.id}`, open: S.open.has(`acks:${s.id}`), responses: z() >= 2 }, { esc })}</div></div>
       <div class="acts"><span class="age">${esc(dur(Date.now() - s.at))} ago</span><button class="btn ghost small" data-action="retire" data-note="${s.id}" title="Stop delivering it">Retire</button></div></div>`;
   }).join('');
   const decisions = v.decisions.map((d) => `<div class="row-item"><div class="body"><div class="h">${inline(d.body)}</div></div>
@@ -835,11 +858,11 @@ function agents(v) {
     const live = v.agents.filter((a) => a.status !== 'away' && a.status !== 'signed off');
     const away = v.agents.length - live.length;
     return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} active</span>${away ? `<span class="hint">${away} away</span>` : ''}</header>
-      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model)}<span class="st ${a.status.split(' ')[0]}">${esc(a.status)}${a.holding.length ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || `<span class="age">${plural(away, 'agent')} ${away === 1 ? 'is' : 'are'} away or signed off, so nothing moves until one comes back. <button class="link" data-action="connect">Start an agent</button></span>`}</div></section>`;
+      <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model, { job: true })}<span class="st ${a.status.split(' ')[0]}">${esc(a.status)}${a.holding.length && !a.job ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || `<span class="age">${plural(away, 'agent')} ${away === 1 ? 'is' : 'are'} away or signed off, so nothing moves until one comes back. <button class="link" data-action="connect">Start an agent</button></span>`}</div></section>`;
   }
   return `<section class="sec"><header><h2>Agents</h2><span class="count">${v.agents.length}</span><span class="hint">first-class participants, each with a track record</span></header>
     <div class="agent-grid">${v.agents.map((a) => `<div class="agent-card">
-      <div class="top">${who(a.name, a.model)}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
+      <div class="top">${who(a.name, a.model, { job: true })}<span class="status ${a.status.split(' ')[0]}">${esc(a.status)}</span></div>
       <div class="model">${esc([a.model, a.client, a.provider].filter(Boolean).join(' · ') || 'model unknown')}${a.via ? ` · <span title="Who answers for this agent's token">${esc(a.via)}</span>` : ''}</div>
       ${a.tokens.length ? `<div class="model ${a.tokens.length > 1 ? 'warn' : ''}" title="${a.tokens.length > 1 ? 'More than one token has acted under this name' : 'The token this agent connects with'}">token: ${esc(a.tokens.join(', '))}</div>` : ''}
       ${a.has?.length ? `<div class="model" title="What this agent's machine can do (declared at checkin)">has: ${esc(a.has.join(', '))}</div>` : ''}
@@ -893,7 +916,7 @@ function activity(v) {
       const has = e.summary || e.detail || e.data?.evidence?.length;
       return `<div class="row-item ${has ? 'clickable' : ''}" ${has ? `data-action="toggle" data-key="${key}"` : ''}>
         <span class="type">${esc(e.type.replace('_', ' '))}</span>
-        <div class="body"><div class="h">${e.item ? refLink(e.item) + ' ' : ''}${esc(e.headline)}</div>
+        <div class="body"><div class="h">${e.item ? refLink(e.item) + ' ' : ''}${named(e.headline, e.actor, undefined, { beside: true })}</div>
           ${open ? `<div class="expand">${md(e.summary)}${e.data?.evidence?.length ? `<div class="evidence">${e.data.evidence.map((x) => `<span class="ev">${esc(x.label)}</span>`).join('')}</div>` : ''}${e.detail ? `<pre>${esc(e.detail)}</pre>` : ''}</div>` : ''}</div>
         <span class="age">${who(e.actor)} · ${esc(e.ago)}</span></div>`;
     }).join('')}</div></section>`;
@@ -920,7 +943,7 @@ function renderDrawer() {
   const holderLine = {
     proposed: it.holder
       ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
-      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${esc(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
+      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${who(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
     ready: `<b>Ready</b> for ${it.race > 1 ? `${it.race} agents at once (a race)` : 'any agent'} · waiting ${esc(it.in_stage)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
     active: it.race > 1
       ? `<b>Race of ${it.race}</b> · ${esc(it.in_stage)} so far · ${it.racers.map((r) => `${who(r.agent, r.model)} ${r.stage === 'active' ? `on it, lease ${esc(r.lease_left)} left` : esc(r.stage)}`).join(' · ') || 'no one yet'}`
@@ -976,13 +999,13 @@ function renderDrawer() {
     </div>`).join('')}</div>` : '';
 
   const steers = it.steers.length ? `<div class="d-sec"><div class="label">Your steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
-      <div class="meta">${esc(s.ago)} ago · ${s.acks.length ? s.acks.map((a) => `<span class="ack">${esc(a.agent)}${a.response ? `: ${esc(a.response)}` : ''}</span>`).join(' ') : '<span class="unacked">not acknowledged yet</span>'}</div></div>`).join('')}</div>` : '';
+      <div class="meta">${esc(s.ago)} ago</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
 
   const edit = S.editItem ? `<div class="d-sec"><div class="label">Edit</div><div class="add-work" style="margin:0">
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
       <textarea data-draft="ei-summary" id="ei-summary" placeholder="Summary">${esc(it.summary)}</textarea>
       <textarea data-draft="ei-acceptance" id="ei-acceptance" placeholder="Done means…">${esc(it.acceptance)}</textarea>
-      <label class="field-label">Part of <input data-draft="ei-parent" id="ei-parent" value="${esc(it.parent?.item ?? '')}" placeholder="e.g. #12: the group it belongs to; empty for none" inputmode="numeric"></label>
+      <label class="field-label">Part of <input data-draft="ei-parent" id="ei-parent" value="${esc(it.parent?.item ?? '')}" placeholder="e.g. #12: the milestone it belongs to; empty for none" inputmode="numeric"></label>
       <label class="field-label">Fixes a landed item <input data-draft="ei-fixes" id="ei-fixes" value="${esc(it.fixes?.item ?? '')}" placeholder="e.g. #12: the landed item this repairs (counts as an escape)" inputmode="numeric"></label>
       <div class="row"><div class="seg">${['now', 'soon', 'later'].map((p) => `<button class="${(S.drafts['ei-priority'] ?? it.priority) === p ? 'on' : ''}" data-action="ei-priority" data-p="${p}">${p}</button>`).join('')}</div>
       ${it.stage !== 'active' ? `<div class="seg" title="Race: how many agents attempt it at once, each on its own; you keep the best">${[1, 2, 3].map((n) => `<button class="${+(S.drafts['ei-race'] ?? it.race) === n ? 'on' : ''}" data-action="ei-race" data-n="${n}">${n === 1 ? '1 agent' : `race ${n}`}</button>`).join('')}</div>` : ''}
@@ -1005,7 +1028,7 @@ function renderDrawer() {
     <div class="d-sec"><div class="label">Timeline <span class="count">${it.events.length} events</span></div><div class="timeline">
       ${it.events.map((e) => `<div class="tl t-${e.type} ${dotClass(e.type, courtOf)}">
         <div class="meta">${who(e.actor)}<span>${esc(e.type.replace('_', ' '))}</span><span>${esc(e.ago)} ago</span></div>
-        <div class="h">${esc(e.headline)}</div>
+        <div class="h">${named(e.headline, e.actor, undefined, { beside: true })}</div>
         ${e.summary ? `<div class="sm">${md(e.summary)}</div>` : ''}
         ${e.data?.evidence?.length ? `<div class="evidence">${e.data.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : ''}
         ${e.detail ? `<details><summary>Detail</summary><pre>${esc(e.detail)}</pre></details>` : ''}
@@ -1013,7 +1036,7 @@ function renderDrawer() {
     </div></div>` : '';
 
   d.innerHTML = `
-    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${it.effective_priority ? ` <span class="tag ${esc(it.effective_priority.split(' ')[0])}" title="Agents take it at this priority: its group, or work waiting on it, ranks higher">ranks ${esc(it.effective_priority)}</span>` : ''}${repoTag(it)}${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
+    <div class="d-top">${refLink(it.item)} ${stagePill(it.stage, it.court)} <span class="tag ${it.priority}">${it.priority}</span>${it.effective_priority ? ` <span class="tag ${esc(it.effective_priority.split(' ')[0])}" title="Agents take it at this priority: its milestone, or work waiting on it, ranks higher">ranks ${esc(it.effective_priority)}</span>` : ''}${repoTag(it)}${it.size ? ` <span class="tag" title="Large work waits while small models have other work">${esc(it.size)}</span>` : ''}${(it.needs ?? []).map((n) => ` <span class="tag" title="Only agents that have this get it">needs ${esc(n)}</span>`).join('')}
       <button class="btn ghost small x" data-action="close" title="Close (Esc)">✕</button></div>
     <h2 class="title">${esc(it.title)}</h2>
     <div class="d-now">${holderLine}</div>
@@ -1024,7 +1047,7 @@ function renderDrawer() {
       <div class="lifebar">${lifebar}</div>
       <div class="life-steps">${life.map((l) => `<span><b>${esc(l.label)}</b> ${esc(l.time)}${l.court === 'agents' && l.actor ? ` (${esc(l.actor)})` : ''}</span>`).join('<span>→</span>')}</div></div>` : ''}
     ${it.summary ? `<div class="d-sec"><div class="label">Summary</div>${md(it.summary)}</div>` : ''}
-    <div class="d-sec"><div class="label">Done means</div>${it.acceptance ? md(it.acceptance) : '<p class="age">No acceptance criteria yet. Agents are asked to write them before submitting.</p>'}</div>
+    <div class="d-sec"><div class="label">Done means</div>${it.acceptance ? md(it.acceptance) : '<p class="faint">No acceptance criteria yet. Agents are asked to write them before submitting.</p>'}</div>
     ${preconditionSection(it, { editing: S.editPre })}
     ${it.submissions?.length ? `<div class="d-sec"><div class="label">The race <span class="count">${it.submissions.length} submitted</span></div>${attemptsGrid(it.item, it.submissions, { keep: it.stage === 'verifying' })}</div>` : ''}
     ${it.submission && it.stage === 'verifying' && !it.submissions?.length ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
@@ -1124,7 +1147,7 @@ async function notifySettings() {
   let n;
   try { n = await api('/api/notify'); } catch (e) { return toastError(e); }
   S.notifyPerson = n.person; // who "only what needs me" means
-  const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> <span class="faint">${c.person ? `${c.person === n.person ? 'you' : esc(c.person)}: only what they own` : 'everyone'}${n.requests?.includes(c.id) ? ' · early-access requests reach you here' : ''}</span> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
+  const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> <span class="faint">${c.person ? `${c.person === n.person ? 'you' : esc(c.person)}: only what they own` : 'everyone'}${n.requests?.includes(c.id) ? ' · early-access requests reach you here' : ''}</span> ${c.failing ? `<span class="bad">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
     <button class="btn ghost small" data-action="notify-weekly" data-id="${c.id}" data-on="${c.weekly ? 0 : 1}" aria-pressed="${c.weekly}" title="Once a week, one line per project: items landed, your actions, cost, escapes">Weekly line: ${c.weekly ? 'on' : 'off'}</button>
     <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
   modal(`<h2>Notifications</h2>
@@ -1148,18 +1171,17 @@ async function notifySettings() {
   help();
 }
 
-// The workspace's settings (#231), for its owners while the hub takes payments: billing in one plain line, and
-// Stripe's own page to change the card, see invoices or cancel. A failed payment leads, in warning color.
-// Stripe sends the owner back to #/settings, which opens this again.
-async function workspaceSettings() {
+// The workspace's settings (#231), for its owners while the hub takes payments: billing in one plain line,
+// Upgrade while Free (#228), and Stripe's own page to change the card, see invoices or cancel. A failed payment
+// leads, in warning color. Stripe sends the owner back to #/settings, which opens this again.
+async function workspaceSettings({ again = false } = {}) {
+  if (again && !$('#ws-settings')) return; // closed meanwhile
   let b;
-  try { b = S.billing = await api('/api/billing'); } catch (e) { return toastError(e); }
-  const state = b.state ?? 'Free: one agent works at a time';
-  modal(`<h2>Workspace settings</h2>
-    <h4>Billing</h4>
-    <p class="lead"${b.failing ? ' style="color:var(--warn)"' : ''}>${b.failing ? '⚠ ' : ''}<b>${esc(state)}</b></p>
-    ${b.manage ? `<p class="lead faint">Stripe's billing page: change the card, see and download invoices, or cancel. Cancelling keeps the paid plan until the period ends; then the workspace goes back to Free.</p>` : ''}
-    <div class="foot">${b.manage ? `<button class="btn${b.failing ? ' primary' : ''}" data-action="billing-portal">Manage billing</button>` : ''}<button class="btn${b.failing ? '' : ' primary'}" data-action="close-modal">Done</button></div>`);
+  try { b = S.billing = await api('/api/billing'); } catch (e) { return again || toastError(e); }
+  modal(`<h2 id="ws-settings">Workspace settings</h2>${billingSection(b, { esc, done: S.checkoutDone })}`);
+  // Back from Checkout: look again soon, until the webhook has made it paid.
+  if (S.checkoutDone && b.plan === 'free') setTimeout(() => workspaceSettings({ again: true }), 5000);
+  else S.checkoutDone = false;
 }
 
 // Where the hub's GitHub App stands (/api/github/app), one line and its next step, so a person who closed a
@@ -1287,6 +1309,7 @@ const val = (id) => (document.getElementById(id)?.value ?? '').trim();
 const clearDraft = (...keys) => keys.forEach((k) => delete S.drafts[k]);
 
 const ACTIONS = {
+  'an-period': (el) => { S.period = el.dataset.p; S.outcomes = null; render({ force: true }); refresh({ force: true }); },
   zoom: (el) => { S.zoom = el.dataset.zoom; store.set('zoom', S.zoom); render({ force: true }); },
   goto: (el) => go(el.dataset.slug),
   open: (el) => go(S.slug ?? S.actSlug, el.dataset.item),
@@ -1428,7 +1451,7 @@ const ACTIONS = {
   'fresh-off': () => { if (confirm('Turn off the weekly freshness sweep? This project will stop being kept current: no agent updates its dependencies, runtime or CI actions until you turn it back on.')) human('settings', { fresh: false }, 'The weekly freshness sweep is off'); },
   drop: (el) => { if (confirm(`Drop ${el.dataset.item}? It stays on the record.`)) human('update', { item: el.dataset.item, stage: 'dropped' }, 'Dropped'); },
   reopen: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Back in Ready'),
-  'group-priority': (el) => human('update', { item: el.dataset.item, priority: el.dataset.p }, `${el.dataset.item} is ${el.dataset.p}: everything in it ranks at least ${el.dataset.p}`),
+  'group-priority': (el) => human('update', { item: el.dataset.item, priority: el.dataset.p }, `${el.dataset.item} is ${el.dataset.p}: everything in the milestone ranks at least ${el.dataset.p}`),
   clarify: (el) => {
     const k = `cl:${el.dataset.item}`;
     const body = val(k);
@@ -1461,6 +1484,17 @@ const ACTIONS = {
   'remove-pre': (el) => human('update', { item: el.dataset.item, precondition: {} }, 'Removed: it no longer waits'),
   'check-now': (el) => human('check', { item: el.dataset.item }, 'The hub checks it on its next sweep'),
   dismiss: (el) => human('dismiss', { key: el.dataset.key }),
+  // Stripe Checkout for the plan (#228): the hub opens the session, the browser goes there.
+  upgrade: async (el) => {
+    el.disabled = true;
+    try {
+      const r = await api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan: el.dataset.plan }) });
+      location.href = r.url;
+    } catch (e) {
+      el.disabled = false;
+      toastError(e);
+    }
+  },
   // One click retires; the toast's Undo brings the same note back (#146).
   retire: async (el) => {
     const note = Number(el.dataset.note);
@@ -1640,11 +1674,14 @@ function listen() {
   // GitHub returns to the app's setup_url (#/) with ?installation_id=…&setup_action=install, before or in the hash.
   const fromGitHub = /[?&]setup_action=(install|update)\b/.test(location.search + location.hash);
   if (fromGitHub) history.replaceState(null, '', `${location.pathname}#/`);
-  // Back from Stripe's billing page (#231): the workspace's settings again, over the home.
+  // Back from Stripe's billing page (#231) or Checkout (#228), or sent by Free's limit: the workspace's settings,
+  // over the home. From Checkout (?checkout=done) they say what happens next.
   const fromStripe = location.hash === '#/settings';
+  S.checkoutDone = fromStripe && /[?&]checkout=done\b/.test(location.search);
   if (fromStripe) history.replaceState(null, '', `${location.pathname}#/`);
   window.addEventListener('hashchange', route);
   S.me = await api('/api/me').catch(() => null);
+  S.person = await api('/api/people/me').catch(() => null);
   S.info = await api('/api/info').catch(() => null) ?? undefined;
   // Billing (#231): only a workspace hub that takes payments answers; its owners get Workspace settings.
   if (S.me?.org) S.billing = await api('/api/billing').catch(() => null);

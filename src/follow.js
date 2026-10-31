@@ -112,8 +112,9 @@ export function importGraph(read, roots = SELF_ROOTS) {
 // the hub itself (and without NODE_TEST_CONTEXT, so they report normally even when this runs under node --test).
 const testEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ_|TRELLIS_|NODE_TEST_CONTEXT$)/.test(k)));
 
-// The first failing test in `npm test` output: "suite › test" from node --test's spec reporter,
-// or the test name from TAP (what Node 22 prints when its output is piped). null if none is named.
+// The first failing test in `npm test` output, "suite › test" either way: from node --test's spec reporter,
+// or from TAP (what Node 22 prints when its output is piped), whose suites are the "# Subtest:" lines above it
+// at a smaller indent. null if none is named.
 export function firstFailure(out) {
   const lines = String(out).split('\n');
   const at = lines.findIndex((l) => /^\s*✖ /.test(l) && !/✖ failing tests:/.test(l));
@@ -127,7 +128,15 @@ export function firstFailure(out) {
     }
     return path.join(' › ');
   }
-  return lines.map((l) => l.match(/^\s*not ok \d+ - (.+?)(?:\s+#.*)?$/)?.[1]).find(Boolean) ?? null;
+  const k = lines.findIndex((l) => /^\s*not ok \d+ - /.test(l));
+  if (k < 0) return null;
+  const path = [lines[k].match(/^\s*not ok \d+ - (.+?)(?:\s+#.*)?$/)[1]];
+  let indent = lines[k].search(/\S/);
+  for (let i = k - 1; i >= 0 && indent > 0; i--) {
+    const m = lines[i].match(/^(\s*)# Subtest: (.+)$/);
+    if (m && m[1].length < indent) { path.unshift(m[2]); indent = m[1].length; }
+  }
+  return path.join(' › ');
 }
 
 async function answers(url) {

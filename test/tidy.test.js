@@ -33,7 +33,7 @@ describe('agents keep the groups true (#202)', () => {
     const r = agent('next', 'w1');
     assert.equal(r.mode, 'tidy');
     assert.equal(r.priority, 'soon');
-    assert.match(r.summary, /#3 "Loose end" \(ready\) is in no group/);
+    assert.match(r.summary, /#3 "Loose end" \(ready\) is in no milestone/);
     assert.match(r.hint, /Never change a priority a person set/);
     human('create', { title: 'Another loose end', acceptance: 'x' });
     assert.notEqual(agent('next', 'w2').mode, 'tidy', 'one tidy job at a time');
@@ -150,16 +150,16 @@ describe('agents keep the groups true (#202)', () => {
     const done = agent('submit', 'w1', { item: r.item, headline: 'Moved #4 and #5 under #1; #3 stays loose on purpose' });
     assert.match(done.hint, /is done/);
     assert.deepEqual(view(hub, 'p').attention.filter((a) => a.kind === 'tidied').map((a) => [a.level, a.headline]),
-      [['know', 'w1 tidied the groups: Moved #4 and #5 under #1; #3 stays loose on purpose']], 'worth knowing sums it up in one line');
+      [['know', 'w1 tidied the milestones: Moved #4 and #5 under #1; #3 stays loose on purpose']], 'worth knowing sums it up in one line');
     assert.notEqual(agent('next', 'w1').mode, 'tidy', 'what it listed and left alone is not raised again');
   });
 
   test('the guide describes the tidy job, and the skill includes it', () => {
     const g = guide();
     assert.match(g, /## Tidy jobs/);
-    assert.match(g, /\*\*Look for:\*\* open work in no group; two groups changing the same files/);
+    assert.match(g, /\*\*Look for:\*\* open work in no milestone; two milestones changing the same files/);
     assert.match(g, /\*\*Never touch:\*\* a priority a person set/);
-    assert.match(g, /- \*\*tidy\*\*: the groups drifted/);
+    assert.match(g, /- \*\*tidy\*\*: the milestones drifted/);
     assert.match(skill(), /A tidy job/);
   });
 });
