@@ -444,6 +444,11 @@ export function openDb(file) {
     // matches an operator is pushed to its listener once, from then.
     'ALTER TABLE items ADD COLUMN needs_since INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE agents ADD COLUMN has_since INTEGER NOT NULL DEFAULT 0',
+    // Releases (#399): 'milestone' proposes one when a milestone finishes; 'off' never does.
+    "ALTER TABLE projects ADD COLUMN releases TEXT NOT NULL DEFAULT 'off'",
+    'ALTER TABLE items ADD COLUMN release INTEGER NOT NULL DEFAULT 0', // 1: a "Release vX.Y.Z" item the hub drafted
+    "ALTER TABLE items ADD COLUMN release_draft TEXT NOT NULL DEFAULT ''", // the summary as the hub last drafted it
+    'ALTER TABLE items ADD COLUMN release_through INTEGER NOT NULL DEFAULT 0', // the draft covers work done up to then
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,

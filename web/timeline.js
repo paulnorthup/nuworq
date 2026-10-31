@@ -10,6 +10,7 @@ export const DOT = {
   question: 'you', kept_parked: 'you',
   // back in the queue for any agent
   answered: 'queue', sent_back: 'queue', handoff: 'queue', stepped_up: 'queue', trial: 'queue',unparked: 'queue', race_finished: 'queue', precondition_passed: 'queue',
+  release: 'queue', // the hub drafted or redrafted a release (#399): it waits in Ready
   // depends on the project's autonomy
   submitted: 'verifying', shaped: 'proposed',
   // finished, at risk, failed

@@ -52,6 +52,23 @@ export function changedUnder(repo, from, to, paths) {
   return { files: files.split('\n').filter(Boolean), subjects: subjects.split('\n').filter(Boolean) };
 }
 
+// The last release (#399): the highest vX.Y.Z tag, with when its commit was made; else the version file on
+// main (package.json's version, or a VERSION file), with at 0. null when the repository says neither.
+const SEMVER = /^v?(\d+)\.(\d+)\.(\d+)$/;
+export function lastRelease(repo) {
+  if (!isRepo(repo)) return null;
+  for (const line of (git(repo, 'tag', '--list', 'v*', '--sort=-v:refname', '--format=%(refname:short) %(creatordate:unix)') ?? '').split('\n')) {
+    const [tag, at] = line.split(' ');
+    if (SEMVER.test(tag ?? '')) return { version: tag.slice(1), tag, at: Number(at) * 1000 || 0 };
+  }
+  const base = baseOf(repo);
+  if (!base) return null;
+  let version = '';
+  try { version = String(JSON.parse(git(repo, 'show', `${base}:package.json`) ?? '{}').version ?? ''); } catch {}
+  if (!SEMVER.test(version)) version = git(repo, 'show', `${base}:VERSION`) ?? '';
+  return SEMVER.test(version) ? { version: version.replace(/^v/, ''), tag: null, at: 0 } : null;
+}
+
 // Each item is built on its own branch, cut from the latest main, so it can land on its own.
 export function itemBranch(item) {
   const words = String(item.title ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');

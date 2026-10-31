@@ -188,6 +188,7 @@ export const OPS = [
       size: SIZE,
       repo: REPO,
       precondition: PRECONDITION,
+      release: { type: 'boolean', description: 'Optional. True when a person asks for a release now, e.g. a patch for an urgent fix: the hub drafts "Release vX.Y.Z" from what landed since the last one (or redrafts the open one) and ignores the other fields. Title it "Release".' },
     },
     required: ['title'],
   },
