@@ -1805,12 +1805,15 @@ export class Hub extends EventEmitter {
 
 // Open-weight models (and others) skipped progress entirely until told when the first one is due.
 const TOUCHING_HINT = 'As soon as you know which files you will change, post progress with a headline and touching, so other agents steer clear.';
+// Infra work is built by workers; only its live step needs the operator (#272).
+const INFRA_SPLIT = (item) => `#${item.seq} needs ${json(item.needs, []).filter((t) => OPERATOR_TAGS.includes(t)).join(', ')}, so only the operator can take it. If it has code, docs or tests to change, split it: drop the operator tag (refine needs) so any worker builds it, and make the step on real infrastructure an ask to: "operator" with steps (the exact command, how to check), whose answer is the evidence. Keep the tag only on a small child item when that live step is all there is.`;
 // repos: the project's repositories; with several, each item lands in one of them.
 const SHAPE_HINT = (item, p, repos = []) => [
   `You're shaping #${item.seq}, not building it yet. You hold it for ${dur(LEASE_MS)}.`,
   'Read the relevant code, then refine it: a sharp title and summary, and acceptance criteria (checkable, so a reviewer knows what done means).',
   `If it's big, split it: propose sub-items with parent #${item.seq}, each with acceptance criteria. #${item.seq} then waits for them.`,
   repos.length > 1 ? `Each item lands in one repository (${repos.join(', ')}): set repo when you refine or propose. Work that spans repositories becomes one sub-item per repository, with depends_on giving the order (e.g. the API before the client that calls it).` : '',
+  operatorOnly(item) ? INFRA_SPLIT(item) : '',
   'If the intent is unclear, ask with an assumption.',
   `Finish with submit (headline: the shape you chose). ${p.autonomy === 'ask' ? 'The human then approves it.' : 'It becomes ready for any agent, including you.'}`,
 ].filter(Boolean).join(' ');
@@ -2413,8 +2416,12 @@ const AGENT_OPS = {
   refine(p, agent, args) {
     const item = this.item(p, args.item);
     if (args.drop != null && args.drop !== '') return this.dropAsAnswered(p, agent, item, args.drop);
+    const wasOperatorOnly = operatorOnly(item);
     const changed = this.refineItem(p, agent, item, args);
-    return { ok: true, item: `#${item.seq}`, stage: item.stage, changed };
+    // Newly operator-only: a nudge to split, never a refusal, since the shaper decides (#272).
+    const now = this.itemById(item.id);
+    const hint = !wasOperatorOnly && operatorOnly(now) ? INFRA_SPLIT(now) : undefined;
+    return { ok: true, item: `#${item.seq}`, stage: now.stage, changed, hint };
   },
 
   review(p, agent, args) {
