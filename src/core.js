@@ -1170,7 +1170,7 @@ export class Hub extends EventEmitter {
     // Work that landed since this agent started, unless its branch already has it: rebase while conflicts are small.
     if (item.stage === 'active' && item.branch) {
       const landed = this.q(`SELECT DISTINCT i.seq FROM events e JOIN items i ON i.id = e.item_id
-        WHERE e.project_id = ? AND e.type = 'landed' AND e.at > ? AND i.id != ? ORDER BY i.seq`).all(p.id, item.stage_since, item.id);
+        WHERE e.project_id = ? AND e.type = 'landed' AND json_extract(e.data, '$.nocode') IS NULL AND e.at > ? AND i.id != ? ORDER BY i.seq`).all(p.id, item.stage_since, item.id);
       const repo = landed.length ? this.repoFor(p, item) : null;
       const base = repo ? baseOf(repo.path) : null;
       if (base && branchExists(repo.path, item.branch) && !contains(repo.path, item.branch, base)) {
@@ -1736,6 +1736,17 @@ export class Hub extends EventEmitter {
     return { base, pending: !contains(repo.path, base, branch), head: headOf(repo.path, base) };
   }
 
+  // Accepted work with no code of its own (#280): a group whose parts are done, or work whose evidence is
+  // all live checks. The hub can read the repository and it has no such branch, the item has no pull
+  // request, and its submission names no commit the repository lacks (that would be work never pushed).
+  // Asked right after toLand, so the mirror is already fresh.
+  noCode(p, item, branch) {
+    const repo = this.repoFor(p, item);
+    if (!repo || (branch && branchExists(repo.path, branch))) return false;
+    if (this.q('SELECT 1 FROM prs WHERE item_id = ?').get(item.id)) return false;
+    return !(this.submittedGit(item)?.missing ?? []).some((h) => !branchExists(repo.path, h));
+  }
+
   // The land job's hint: the base as git says it, and a push first when the hub can't see the branch.
   landHint(p, item) {
     const remote = this.remoteMode(p, item);
@@ -1983,6 +1994,18 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   }
   const land = this.toLand(p, item, item.branch, { fresh: true });
   const remote = this.remoteMode(p, item);
+  // A land job for work with no code (accepted before #280): nothing to put on main, so it is done.
+  if (!land && remote && this.noCode(p, item, item.branch)) {
+    this.move(item, 'done', agent, { holder: null, lease_until: null, touching: '[]' });
+    this.event(p, {
+      item, actor: agent, type: 'landed',
+      headline: `${agent} closed #${item.seq}: it had no code to land`,
+      summary: `${item.branch || 'Its branch'} isn't on origin, it has no pull request, and its evidence names no commit origin lacks.`,
+      detail, data: { branch: item.branch, nocode: true },
+    });
+    this.setStatus(p, agent, `Closed #${item.seq}: no code to land`);
+    return { ok: true, hint: `#${item.seq} had no code to land, so it is done. Call next.` };
+  }
   if (!land) {
     throw new UserError(`The hub can't see ${item.branch || 'a branch for this item'} in ${remote ? this.repoOf(p, item) : p.path || 'a repository it can reach'}`, {
       status: 409,
@@ -2715,7 +2738,10 @@ Object.assign(Hub.prototype, {
       const land = this.toLand(p, item, branch, { fresh: true });
       // Done means on main. Remote mode: work with a branch the hub can't see in its mirror (never pushed,
       // or the remote can't be read right now) still lands. The lander pushes it; finishLanding checks.
-      const unseen = !land && !!branch && !!this.repos && this.remoteMode(p, item);
+      // Unless it has no code at all (#280): then there is nothing to land, and it is done now.
+      const absent = !land && !!branch && !!this.repos && this.remoteMode(p, item);
+      const nocode = absent && this.noCode(p, item, branch);
+      const unseen = absent && !nocode;
       const landing = !!land?.pending || unseen;
       this.move(item, landing ? 'landing' : 'done', actor, {
         holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
@@ -2729,12 +2755,13 @@ Object.assign(Hub.prototype, {
           unseen && viaPr ? `${branch} lands through a pull request: the hub can't see it on origin yet, so an agent pushes it, then the hub opens the PR.` : '',
           land?.pending && !viaPr ? `${branch} lands on ${land.base} next: an agent rebases it, runs the checks and fast-forwards ${land.base}.` : '',
           unseen && !viaPr ? `${branch} lands next: the hub can't see it on origin yet, so the lander pushes it first, then rebases it, runs the checks and pushes it to main.` : '',
-          kept && !land && !unseen ? `Merge ${merge}${kept.branch ? '' : ' (the worker branch convention; check the evidence)'}.` : '',
+          nocode ? `#${item.seq} had no code to land: ${branch} isn't on origin, it has no pull request, and its evidence names no commit origin lacks. So it is done.` : '',
+          kept && !land && !unseen && !nocode ? `Merge ${merge}${kept.branch ? '' : ' (the worker branch convention; check the evidence)'}.` : '',
           summary,
         ].filter(Boolean).join('\n\n'),
         detail, data: {
           ...(kept ? { kept: kept.agent, merge } : {}),
-          ...(land ? { branch, base: land.base, landing: land.pending } : unseen ? { branch, landing: true, unseen: true } : {}),
+          ...(land ? { branch, base: land.base, landing: land.pending } : unseen ? { branch, landing: true, unseen: true } : nocode ? { branch, nocode: true } : {}),
         },
       });
       if (land && !land.pending) {

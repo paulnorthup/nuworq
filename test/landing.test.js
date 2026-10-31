@@ -365,9 +365,9 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     const job = op('a1', 'next');
     const mac = clone('mac');
     build(mac, job.branch, 'thing');
-    op('a1', 'submit', { item: '#1', headline: 'Done' });
+    op('a1', 'submit', { item: '#1', headline: 'Done', evidence: [{ label: `Commit ${git(mac, 'rev-parse', 'HEAD')}` }] });
     hub.humanOp('demo', 'accept', { item: '#1' });
-    assert.equal(item(1).stage, 'landing', "the mirror lacks the branch: that isn't done, it isn't on main");
+    assert.equal(item(1).stage, 'landing', "the mirror lacks the branch and the commit the evidence names: that isn't done, it isn't on main");
     assert.equal(item(1).branch, 'nuworq/1-thing');
     assert.match(hub.q(`SELECT summary FROM events WHERE type = 'accepted'`).get().summary, /can't see it on origin yet, so the lander pushes it first/);
     assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE type = 'landed'`).get().n, 0);
@@ -386,6 +386,46 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     op('a1', 'submit', { item: '#1', headline: 'Landed' });
     assert.equal(item(1).stage, 'done');
     assert.equal(git(origin, 'rev-parse', 'main'), git(mac, 'rev-parse', job.branch));
+  });
+
+  test('an accepted group with no code of its own is done at once; a part with a branch still lands (#280)', () => {
+    const { hub, clone, op, build, push, item } = remote();
+    hub.humanOp('demo', 'create', { title: 'Group', acceptance: 'parts done, live check passes' });
+    hub.humanOp('demo', 'create', { title: 'Part', acceptance: 'x', parent: '#1' });
+    const part = op('a1', 'next');
+    assert.equal(part.item, '#2');
+    const mac = clone('mac');
+    build(mac, part.branch, 'part');
+    push(mac, part.branch);
+    op('a1', 'submit', { item: '#2', headline: 'Done' });
+    hub.humanOp('demo', 'accept', { item: '#2' });
+    assert.equal(item(2).stage, 'landing', 'a branch on origin lands as before');
+
+    // Its parts done, the group is claimed, named a branch, and submitted on live checks alone.
+    hub.q(`UPDATE items SET branch = 'nuworq/1-group' WHERE seq = 1`).run();
+    hub.tx(() => hub.move(item(1), 'verifying', 'a2'));
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    assert.equal(item(1).stage, 'done', 'nothing on origin, no PR, no commit named: nothing to land');
+    const accepted = hub.q(`SELECT summary, data FROM events WHERE type = 'accepted' AND item_id = ?`).get(item(1).id);
+    assert.match(accepted.summary, /^#1 had no code to land: .* isn't on origin, it has no pull request/);
+    assert.equal(JSON.parse(accepted.data).nocode, true);
+  });
+
+  test('a land job already open for work with no code is submitted without a branch, and that finishes it (#280)', () => {
+    const { hub, op, item } = remote();
+    hub.humanOp('demo', 'create', { title: 'Live check', acceptance: 'the live URL answers' });
+    op('a1', 'next');
+    op('a1', 'submit', { item: '#1', headline: 'Checked live', evidence: [{ label: 'curl https://example.com: 200' }] });
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    assert.equal(item(1).stage, 'done');
+    // Accepted before #280: it went to landing for a branch that never existed.
+    hub.tx(() => hub.move(item(1), 'landing', 'you'));
+    const land = op('a1', 'next');
+    assert.equal(land.mode, 'land');
+    const r = op('a1', 'submit', { item: '#1', headline: 'Nothing to land' });
+    assert.match(r.hint, /^#1 had no code to land, so it is done/);
+    assert.equal(item(1).stage, 'done');
+    assert.equal(JSON.parse(hub.q(`SELECT data FROM events WHERE type = 'landed'`).get().data).nocode, true);
   });
 
   test("with the remote unreachable, accepted work with a branch waits in landing; the hub says why once", () => {
