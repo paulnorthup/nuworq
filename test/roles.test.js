@@ -229,6 +229,30 @@ describe('the guide and both skills describe the roles', () => {
     }
   });
 
+  // #272: infra work is built by workers; the operator runs only the live step.
+  test('the guide shapes infra work in two parts, with an example, and the operator builds only the live step', () => {
+    for (const t of [texts.guide, texts['cli guide']]) {
+      assert.match(t, /\*\*Infra work\*\*[^\n]*carries no operator tag[^\n]*ask[^\n]*to: "operator"[^\n]*steps[^\n]*small child item[^\n]*E\.g\./);
+      assert.match(t, /\*\*What an operator builds:\*\* an item only when the item is the live step/);
+    }
+    assert.match(texts.skill, /\*\*Build only the live step:\*\*/);
+  });
+
+  test('the shape hint for operator-only work, and refine adding an operator tag, say to split it; refine still applies it', () => {
+    const { a, item } = setup();
+    a('sh', 'checkin', { role: 'shaper' });
+    const split = /needs nuworq-infra[^.]*\. If it has code, docs or tests to change, split it: drop the operator tag[^.]*ask to: "operator" with steps/;
+    const r = a('sh', 'refine', { item: '#3', needs: ['nuworq-infra'] });
+    assert.match(r.hint, split);
+    assert.deepEqual(JSON.parse(item(3).needs), ['nuworq-infra']);
+    assert.doesNotMatch(a('sh', 'refine', { item: '#3', title: 'Renamed' }).hint ?? '', split, 'only when the tag is new');
+    assert.doesNotMatch(a('sh', 'refine', { item: '#1', needs: ['docker'] }).hint ?? '', split, 'not for other tags');
+    assert.match(a('sh', 'claim', { item: '#3' }).hint, split);
+    // A proposal without an operator tag gets the usual hint.
+    a('h', 'propose', { title: 'Another idea' });
+    assert.doesNotMatch(a('sh', 'claim', { item: '#4' }).hint ?? '', split);
+  });
+
   test('the planning skill checks in as a shaper', () => {
     assert.match(planSkill(), /`checkin` with role "shaper"/);
     assert.match(guide(), /`checkin` with role `"shaper"`/);
