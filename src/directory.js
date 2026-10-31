@@ -112,6 +112,10 @@ export class Directory {
         updated_at   INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS stripe_events (id TEXT PRIMARY KEY, at INTEGER NOT NULL);`);
+    // Payments (#231): the failed renewal not yet paid (failed_at, and pay_by: Stripe's next retry), and the last paid one.
+    for (const col of ['failed_at INTEGER', 'pay_by INTEGER', 'paid_at INTEGER']) {
+      try { this.db.exec(`ALTER TABLE billing ADD COLUMN ${col}`); } catch { /* already there */ }
+    }
   }
 
   // ── billing (#227) ──
@@ -144,6 +148,17 @@ export class Directory {
           .run(...(fill ? [status, subscription] : [status, period_end, cancel_at_period_end ? 1 : 0, plan, at, subscription]));
       }
     }
+    return this.billingRow(subscription);
+  }
+
+  // An invoice for a subscription the hub keeps (#231): failed (pay_by: Stripe's next retry) or paid, which clears
+  // the failure. A retry that fails again keeps the first failed_at (one failure, until it's paid). An invoice
+  // older than the last one applied changes nothing. null: no such subscription.
+  setPayment(subscription, { at = this.now(), failed = false, pay_by = null } = {}) {
+    const row = this.billingRow(subscription);
+    if (!row) return null;
+    if (failed && at >= (row.paid_at ?? 0)) this.db.prepare('UPDATE billing SET failed_at = COALESCE(failed_at, ?), pay_by = ?, updated_at = ? WHERE subscription = ?').run(at, pay_by, this.now(), subscription);
+    if (!failed && at >= (row.failed_at ?? 0)) this.db.prepare('UPDATE billing SET failed_at = NULL, pay_by = NULL, paid_at = ?, updated_at = ? WHERE subscription = ?').run(at, this.now(), subscription);
     return this.billingRow(subscription);
   }
 

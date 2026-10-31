@@ -70,6 +70,15 @@ export function homeView(hub, { viewer } = {}) {
   };
 }
 
+// The home with one more act entry that belongs to the workspace, not a project (#231: a failed payment): first
+// in Needs you (project null), counted in the pulse and its sentence.
+export function withEntry(h, entry) {
+  const needs = [{ ...entry, project: null }, ...h.needs];
+  const sentence = h.pulse.sentence.replace(/^(Nothing needs you\.|\d+ things?( across \d+ projects)? needs? you\.)/,
+    `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you.`);
+  return { ...h, needs, pulse: { ...h.pulse, state: 'needs-you', act: needs.length, sentence } };
+}
+
 // The repository an item lands in, short (acme/api), when the project has several; null with one.
 function repoTag(remotes, it) {
   return remotes.length > 1 ? (it.repo || remotes[0]).split('/').slice(-2).join('/') : null;

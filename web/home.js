@@ -13,7 +13,9 @@ export function homePage(h, { z, pulse, card, esc, plural, wide = false, gs = ''
   const tag = (p) => `<a class="proj-tag" href="#/p/${encodeURIComponent(p.slug)}">${esc(p.name)}</a>`;
   const needs = h.needs.length ? `<section class="sec home-needs"><header><h2>Needs you</h2><span class="count">${h.needs.length}</span>
       <span class="hint">oldest first, across projects</span></header>
-      <div class="cards">${h.needs.map((a) => `<div class="home-card" data-project="${esc(a.project.slug)}">${tag(a.project)}${card(a)}</div>`).join('')}</div></section>` : '';
+      <div class="cards">${h.needs.map((a) => (a.project
+        ? `<div class="home-card" data-project="${esc(a.project.slug)}">${tag(a.project)}${card(a)}</div>`
+        : `<div class="home-card">${card(a)}</div>`)).join('')}</div></section>` : ''; // project null: the workspace's own (#231)
 
   const live = h.projects.filter((p) => !p.parked), parked = h.projects.filter((p) => p.parked);
   const line = (p) => `<div class="ov-line state-${p.pulse.state} ${p.parked ? 'parked' : ''}" data-action="goto" data-slug="${esc(p.slug)}">

@@ -161,7 +161,7 @@ describe("Stripe's signed webhook puts a workspace on a paid plan (#227)", () =>
   test("a subscription to some other product isn't ours; other events are acknowledged", async () => {
     const other = sub('sub_x', { items: { data: [{ price: { id: 'price_other' } }] }, metadata: { workspace: 'acme' } });
     assert.equal((await deliver(other)).json.ignored, 'not a nuworq price');
-    assert.equal((await deliver({ id: 'evt_inv', type: 'invoice.paid', created: created(), data: { object: {} } })).json.ignored, 'invoice.paid');
+    assert.equal((await deliver({ id: 'evt_inv', type: 'invoice.created', created: created(), data: { object: {} } })).json.ignored, 'invoice.created');
     assert.equal((await deliver(checkout('nope', 'sub_n'))).json.ignored, 'no workspace or subscription');
   });
 
