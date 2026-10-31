@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { readFileSync } from 'node:fs';
-import { proposeForm, proposal } from '../web/propose.js';
+import { proposeForm, proposal, sentToast } from '../web/propose.js';
 import { NEW } from '../web/new.js';
 import { STEPS } from '../src/userguide.js';
 
@@ -51,6 +51,15 @@ describe('propose from the board', () => {
   test('it says what happens next, by the project\'s autonomy', () => {
     assert.match(proposeForm({ autonomy: 'full' }), /shapes it into work, then it gets built/);
     assert.match(proposeForm({ autonomy: 'ask' }), /waits for your OK/);
+  });
+
+  test('the toast says what it became: Propose with Waits on is still a proposal (#403)', () => {
+    assert.equal(sentToast(), 'Proposed: an agent shapes it next');
+    assert.equal(sentToast({ waits: true }), 'Proposed: an agent shapes it next, and once it\'s ready it waits until that holds');
+    assert.equal(sentToast({ ready: true }), 'Added to Ready');
+    assert.equal(sentToast({ ready: true, waits: true }), 'Added; it waits until that holds');
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    assert.match(app, /human\('create', body, sentToast\(\{ ready, waits: !!pre \}\)\)/);
   });
 
   test('it always sends a proposal; no title, nothing to send', () => {

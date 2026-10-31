@@ -20,6 +20,13 @@ export function proposeForm({ more = false, priority = 'soon', autonomy = '' } =
     </div>`;
 }
 
+// What the toast says once it's sent (#403). Propose makes a proposal even with Waits on, so it says so; only Add to
+// Ready puts it in the queue, where Waits on holds it.
+export function sentToast({ ready = false, waits = false } = {}) {
+  if (ready) return waits ? 'Added; it waits until that holds' : 'Added to Ready';
+  return waits ? 'Proposed: an agent shapes it next, and once it\'s ready it waits until that holds' : 'Proposed: an agent shapes it next';
+}
+
 // What the board sends to the human create op: a proposal, or with ready, work straight into the queue (the hub
 // holds it outside or waiting while a precondition is unmet). No title: nothing to send.
 export function proposal({ title, acceptance, summary, priority, precondition, ready = false } = {}) {
