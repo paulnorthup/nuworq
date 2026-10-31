@@ -125,7 +125,8 @@ export function outcomes(hub, slug, { since, until } = {}) {
     // No model from checkin in this project (#306): the one the implementer's own usage rows name, if just one.
     const reported = [...new Set(usage.filter((r) => r.agent === it.implementer && r.model).map((r) => r.model))];
     return {
-      item: `#${it.seq}`, title: it.title, size: it.size || null, repo: hub.repoOf(p, it) || null,
+      item: `#${it.seq}`, title: it.title, size: it.size || null, difficulty: it.difficulty || 'standard', rated: !!it.difficulty,
+      repo: hub.repoOf(p, it) || null,
       outcome: it.stage === 'done' ? 'landed' : 'dropped',
       done_at: it.stage_since,
       cycle_ms: claimed != null ? it.stage_since - claimed : null,
@@ -145,7 +146,80 @@ export function outcomes(hub, slug, { since, until } = {}) {
   const by_reviewer = v.by_model.filter((m) => m.reviewed || m.overturned).map((m) => ({ model: m.model, reviewed: m.reviewed, escapes: m.reviewed_escaped, overturned: m.overturned }));
   const cost = humanCost(hub, p, from, to);
   const human_actions = { total: cost.actions, landed: cost.landed, per_landed: cost.per_landed, median_wait_ms: cost.median_wait_ms };
-  return { version: OUTCOMES_VERSION, project: p.slug, since: from, until: to, items, by_model, by_agent, by_reviewer, human_actions };
+  return { version: OUTCOMES_VERSION, project: p.slug, since: from, until: to, items, by_model, by_agent, by_reviewer, human_actions, jobs: jobsTaken(hub, p, from, to) };
+}
+
+// ── Each job an agent took (#348): what it was, on what, and how it came out ──
+
+// The events that end a job, per job: its taker finished it.
+const FINISHED = { work: ['submitted'], review: ['accepted', 'sent_back'], shape: ['shaped'], land: ['landed', 'pushed', 'rebased', 'submitted'], tidy: ['submitted'] };
+const TAKES = ['claimed', 'shaping', 'review_started', 'landing'];
+
+// Every job taken in [from, to], oldest first: { item, job, agent, model, difficulty, trial, at, result }.
+// A building job's result: landed (without being sent back), escaped (landed, and a later item repairs it), sent
+// back, not chosen (a race kept another attempt), stalled (handed off, or its lease lapsed), or open (still going,
+// or accepted and not landed yet). Any other job: done, stalled or open.
+export function jobsTaken(hub, p, from, to = hub.now()) {
+  const takes = hub.q(`SELECT e.*, i.seq, i.stage AS item_stage FROM events e JOIN items i ON i.id = e.item_id
+    WHERE e.project_id = ? AND e.type IN (${TAKES.map(() => '?').join(', ')}) AND e.at >= ? AND e.at <= ? ORDER BY e.at, e.id`).all(p.id, ...TAKES, from, to);
+  const escaped = new Map();
+  return takes.map((e) => {
+    const d = JSON.parse(e.data || '{}');
+    const job = d.job ?? { shaping: 'shape', review_started: 'review', landing: 'land' }[e.type] ?? 'work';
+    const after = hub.q(`SELECT type, actor, data FROM events WHERE item_id = ? AND id > ? ORDER BY id`).all(e.item_id, e.id);
+    const mine = (x) => x.actor === e.actor;
+    const lapsed = (x) => x.type === 'lease_expired' && (JSON.parse(x.data || '{}').agent ?? (job === 'review' ? e.actor : null)) === e.actor;
+    let result = 'open';
+    const end = after.findIndex((x) => (mine(x) && (FINISHED[job].includes(x.type) || x.type === 'handoff')) || lapsed(x));
+    if (end >= 0) {
+      const x = after[end];
+      if (x.type === 'handoff' || x.type === 'lease_expired') result = 'stalled';
+      else if (job !== 'work') result = 'done';
+      else {
+        // Built and submitted: the verdict that follows decides it.
+        const verdict = after.slice(end + 1).find((v) => v.type === 'accepted' || v.type === 'sent_back');
+        const kept = verdict && JSON.parse(verdict.data || '{}').kept;
+        if (verdict?.type === 'sent_back') result = 'sent_back';
+        else if (verdict && kept && kept !== e.actor) result = 'not_chosen';
+        else if (verdict && e.item_stage === 'done') {
+          if (!escaped.has(e.item_id)) escaped.set(e.item_id, !!hub.q('SELECT 1 FROM items WHERE fixes = ?').get(e.item_id));
+          result = escaped.get(e.item_id) ? 'escaped' : 'landed';
+        }
+      }
+    }
+    return { item: `#${e.seq}`, job, agent: e.actor, model: d.model || null, difficulty: d.difficulty ?? 'standard', trial: d.trial ?? null, at: e.at, result };
+  });
+}
+
+// ── Calibration (#348): does difficulty predict what an item costs and how many attempts it takes, better than size? ──
+
+// Over landed items (outcomes().items): per difficulty and per size, how many, the median cost and the mean attempts;
+// and for each, the spread: the dearest group's median cost over the cheapest's (groups of MIN_LANDED or more,
+// priced). predicts: 'difficulty' or 'size' when one spreads cost at least 1.25 times as much as the other, 'neither'
+// when they spread about the same, null when there is too little to tell.
+export function calibration(items) {
+  const landed = items.filter((i) => i.outcome === 'landed');
+  const costOf = (i) => (i.usage.length && i.usage.every((r) => r.cost_usd != null) ? i.usage.reduce((a, r) => a + r.cost_usd, 0) : null);
+  const group = (key, order) => order.map((k) => {
+    const list = landed.filter((i) => key(i) === k);
+    const cost = median(list.map(costOf));
+    return {
+      key: k, landed: list.length, rated: list.filter((i) => i.rated).length,
+      median_cost: cost == null ? null : Math.round(cost * 100) / 100,
+      mean_attempts: list.length ? Math.round((10 * list.reduce((a, i) => a + Math.max(i.attempts, 1), 0)) / list.length) / 10 : null,
+    };
+  });
+  const spread = (rows, field) => {
+    const known = rows.filter((r) => r.landed >= MIN_LANDED && r[field] != null && r[field] > 0).map((r) => r[field]);
+    return known.length >= 2 ? Math.round((100 * Math.max(...known)) / Math.min(...known)) / 100 : null;
+  };
+  const by_difficulty = group((i) => i.difficulty, ['rote', 'standard', 'hard']);
+  const by_size = group((i) => i.size ?? 'small', ['small', 'large']);
+  const d = { cost: spread(by_difficulty, 'median_cost'), attempts: spread(by_difficulty, 'mean_attempts') };
+  const s = { cost: spread(by_size, 'median_cost'), attempts: spread(by_size, 'mean_attempts') };
+  const predicts = d.cost == null || s.cost == null ? (d.cost != null && d.cost >= 1.25 ? 'difficulty' : null)
+    : d.cost >= 1.25 * s.cost ? 'difficulty' : s.cost >= 1.25 * d.cost ? 'size' : 'neither';
+  return { landed: landed.length, rated: landed.filter((i) => i.rated).length, by_difficulty, by_size, spread: { difficulty: d, size: s }, predicts };
 }
 
 // Finished items (outcomes().items) grouped by key(item): [[key or null, items]], in first-seen order.
@@ -224,7 +298,7 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
   return {
     version: OUTCOMES_VERSION, period, since: from, until: to,
     takeaway: takeaway({ summary, projects, by_model }),
-    summary, projects, by_model, by_agent,
+    summary, projects, by_model, by_agent, calibration: calibration(items),
   };
 }
 

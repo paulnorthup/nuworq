@@ -422,6 +422,14 @@ export function openDb(file) {
     'ALTER TABLE projects ADD COLUMN model_routing INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE projects ADD COLUMN model_tiers TEXT NOT NULL DEFAULT '{}'",
     'ALTER TABLE items ADD COLUMN tier_up INTEGER NOT NULL DEFAULT 0',
+    // Difficulty and trials (#348): how hard an item is ('' counts as standard) and why, rated when shaped; the
+    // trial its building got ('': not decided yet, 'none', 'down': one tier down, 'race': cheaper against top);
+    // and the share of eligible jobs (whole percents) that try one tier down and that race.
+    "ALTER TABLE items ADD COLUMN difficulty TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE items ADD COLUMN difficulty_why TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE items ADD COLUMN trial TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE projects ADD COLUMN model_trial INTEGER NOT NULL DEFAULT 10',
+    'ALTER TABLE projects ADD COLUMN model_race INTEGER NOT NULL DEFAULT 0',
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,

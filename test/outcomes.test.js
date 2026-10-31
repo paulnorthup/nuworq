@@ -79,7 +79,9 @@ describe('GET /api/p/<project>/outcomes', () => {
       ['#4', 'dropped', 0, 0, null, null, null],
     ], 'the item finished 40 days ago is outside the window');
     const two = body.items[0];
-    assert.deepEqual(Object.keys(two).sort(), ['attempts', 'cycle_ms', 'done_at', 'escaped', 'fixed_by', 'human_actions', 'implementer', 'item', 'model', 'outcome', 'overturned', 'repo', 'reviewer', 'reviewer_model', 'sent_back', 'size', 'stalls', 'title', 'usage']);
+    assert.deepEqual(Object.keys(two).sort(), ['attempts', 'cycle_ms', 'difficulty', 'done_at', 'escaped', 'fixed_by', 'human_actions', 'implementer', 'item', 'model', 'outcome', 'overturned', 'rated', 'repo', 'reviewer', 'reviewer_model', 'sent_back', 'size', 'stalls', 'title', 'usage']);
+    assert.deepEqual([two.difficulty, two.rated], ['standard', false], 'unrated counts as standard (#348)');
+    assert.ok(Array.isArray(body.jobs), 'each job taken, with its result (#348)');
     assert.deepEqual(two.usage, [{ agent: 'opus', model: 'claude-opus-5-5', source: 'agent', input_tokens: 1000, output_tokens: 100, cost_usd: 0.5 }]);
     assert.deepEqual(body.by_model, [
       { model: 'claude-opus-5-5', landed: 1, dropped: 0, sent_back: 1, stalls: 0, escapes: 0, median_cycle_ms: 3 * HOUR, input_tokens: 1000, output_tokens: 100, cost_usd: 0.5, cost_per_landed: 0.5, escape_rate: 0 },

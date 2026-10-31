@@ -15,7 +15,8 @@ export function plan(routes, running, { workers = 1, maxRuns = Infinity, launche
     const idle = running.filter((w) => w.project === r.project && !held.has(w.name)).length;
     const room = r.limit == null ? Infinity : r.limit - held.size - idle;
     const n = Math.min(slots, (r.claimable ?? 1) - idle, room);
-    for (let i = 0; i < n; i++) out.push(r);
+    // A raced trial (#348) names a model per open slot: each worker started takes the next one.
+    for (let i = 0; i < n; i++) out.push(r.models?.[idle + i] ? { ...r, model: r.models[idle + i] } : r);
     slots -= Math.max(n, 0);
   }
   return out;

@@ -12,7 +12,7 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
-import { AGENTS, modelFor, modeAt, parseTiers } from './models.js';
+import { AGENTS, DIFFICULTIES, difficultyOf, modelFor, modeAt, nextTrial, parseShare, parseTiers, trialEligible } from './models.js';
 import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
 import { commandParts } from '../web/commands.js';
@@ -200,6 +200,29 @@ export function preconditionOut(item) {
 }
 // Work only an operator can do: it needs something only an attended session with the human's permissions has.
 const operatorOnly = (i) => json(i.needs, []).some((t) => OPERATOR_TAGS.includes(t));
+
+// The difficulty args set on item (#348), as fields to save, noting the change in changed: a level and a one-line
+// reason, both required when the level changes; the reason alone can be sharpened. "" clears it (standard).
+function rateDifficulty(item, { difficulty, difficulty_why: why }, changed) {
+  const level = difficulty == null ? null : str(difficulty).toLowerCase();
+  const reason = why == null ? null : clip(str(why), 200);
+  if (level == null && reason == null) return {};
+  if (level != null && level !== '' && !DIFFICULTIES.includes(level)) {
+    throw new UserError(`difficulty must be one of ${DIFFICULTIES.join(', ')}`, { hint: 'rote: mechanical, a cheap model could do it; standard: ordinary work; hard: needs the strongest model (judgment, subtle bugs, wide changes).' });
+  }
+  if (level === '') {
+    if (!item.difficulty) return {};
+    changed.push('difficulty → unrated (standard)');
+    return { difficulty: '', difficulty_why: '' };
+  }
+  const next = { difficulty: level ?? item.difficulty, difficulty_why: reason ?? item.difficulty_why };
+  if (!next.difficulty || !next.difficulty_why) {
+    throw new UserError('Rate difficulty with a one-line reason', { hint: 'Pass difficulty (rote, standard or hard) and difficulty_why, e.g. "rote: renames one setting and its tests".' });
+  }
+  if (next.difficulty === item.difficulty && next.difficulty_why === item.difficulty_why) return {};
+  changed.push(`difficulty → ${next.difficulty} (${next.difficulty_why})`);
+  return next;
+}
 const fmtOther = (o) => `${o.agent} → ${o.item} ${o.title}${o.touching ? ` (changing ${o.touching.join(', ')})` : ''}`;
 
 // Paths an agent says it is changing. Normalised so "src/db/**", "./src/db/" and "src/db" all compare equal.
@@ -640,6 +663,8 @@ export class Hub extends EventEmitter {
       // A runner on duty here (#185): the project page knows a worker is coming before one checks in.
       if (runner) this.q('UPDATE projects SET runner_polled_at = ? WHERE id = ?').run(this.now(), p.id);
       const all = this.claimable(p, agent, { powers, has });
+      // A building trial (#348) is decided before the count: a raced one takes two workers.
+      if (runner && kind && p.model_routing && all[0]?.mode === 'work') this.decideTrial(p, all[0].item, kind, model, all[0].priority);
       // A race with open slots can take that many workers at once.
       if (all.length) options.push({ p, ...all[0], claimable: all.reduce((n, o) => n + (this.racing(o.item) ? this.openSlots(o.item) : 1), 0) });
     }
@@ -657,13 +682,51 @@ export class Hub extends EventEmitter {
       ...(runner ? { holders: this.q(`SELECT holder FROM items WHERE project_id = ? AND holder IS NOT NULL
           UNION SELECT a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND a.stage = 'active' AND a.closed = 0`)
         .all(o.p.id, o.p.id).map((h) => h.holder), limit: o.p.run_workers ?? null } : {}),
-      ...(runner && kind ? { model: this.jobModel(o.p, o.item, o.mode, kind, model) ?? undefined } : {}),
+      ...(runner && kind ? this.jobModels(o.p, o.item, o.mode, kind, model) : {}),
     }));
   }
 
   // The model a job on item runs on with agent kind (#347), or null: routing is off, or there is nothing to choose from.
+  // A building trial (#348) runs one tier down; a raced one is two slots, the top tier and one down (jobModels).
   jobModel(p, item, mode, kind, top = '') {
-    return p.model_routing ? modelFor(json(p.model_tiers, {}), kind, mode, item.tier_up ?? 0, top) : null;
+    if (!p.model_routing) return null;
+    return modelFor(json(p.model_tiers, {}), kind, mode, item.tier_up ?? 0, top, mode === 'work' && item.trial === 'down' ? 1 : 0);
+  }
+
+  // What a runner hears about models for a job: { model }, and for a raced trial the models of its open slots in
+  // order ({ models }), so each worker it starts takes one.
+  jobModels(p, item, mode, kind, top) {
+    if (!p.model_routing) return {};
+    const model = this.jobModel(p, item, mode, kind, top) ?? undefined;
+    if (mode !== 'work' || item.trial !== 'race' || !this.racing(item)) return { model };
+    const tiers = json(p.model_tiers, {});
+    const want = [modelFor(tiers, kind, mode, item.tier_up, top), modelFor(tiers, kind, mode, item.tier_up, top, 1)];
+    for (const a of this.attemptsOf(item).filter((x) => x.stage !== 'abandoned')) {
+      const i = want.indexOf(a.model);
+      want.splice(i >= 0 ? i : 0, 1);
+    }
+    return { model: want[0] ?? model, models: want.length > 1 ? want : undefined };
+  }
+
+  // A building job's trial (#348), decided once per item, the first time a runner that routes models is offered it
+  // while it is eligible and its agent has a cheaper tier to try. A race makes it a two-slot race.
+  decideTrial(p, item, kind, top, priority) {
+    if (item.trial || item.stage !== 'ready') return item;
+    if ((json(p.model_tiers, {})[kind]?.length ?? (top ? 1 : 0)) < 2) return item;
+    const overBudget = this.staffing(p).stopped === 'budget';
+    if (!trialEligible(item, { priority, operatorOnly: operatorOnly(item), overBudget })) return item;
+    const counts = Object.fromEntries(this.q(`SELECT trial, COUNT(*) AS n FROM items WHERE project_id = ? AND trial != '' GROUP BY trial`).all(p.id).map((r) => [r.trial, r.n]));
+    const trial = nextTrial(counts, { down: p.model_trial ?? 10, race: p.model_race ?? 0 });
+    this.patch(item, { trial, ...(trial === 'race' && item.race <= 1 ? { race: 2 } : {}) });
+    if (trial !== 'none') {
+      this.event(p, {
+        item, actor: SYSTEM, type: 'trial',
+        headline: trial === 'race' ? `#${item.seq} is raced to learn what a cheaper model can do: one worker on the top tier, one a tier down`
+          : `#${item.seq} tries a cheaper model, to learn what it can do: one tier down; if it fails, the next attempt steps back up`,
+        data: { trial },
+      });
+    }
+    return item;
   }
 
   // An attempt on item failed (sent back, stalled, handed off, lease lost): its next one goes up a tier (#347). With
@@ -671,12 +734,15 @@ export class Hub extends EventEmitter {
   stepUp(p, item, why) {
     const it = this.itemById(item.id);
     const up = it.tier_up ?? 0;
-    this.patch(it, { tier_up: up + 1 });
+    // A raced trial (#348) that comes back to the queue was the experiment; its next attempt is one worker.
+    const unrace = it.trial === 'race' && it.race === 2 && it.stage === 'ready';
+    this.patch(it, { tier_up: up + 1, ...(unrace ? { race: 1 } : {}) });
     if (!p.model_routing) return;
     const mode = modeAt(it);
     const tiers = json(p.model_tiers, {});
+    const down = mode === 'work' && it.trial === 'down' ? 1 : 0;
     const next = AGENTS.filter((k) => tiers[k]?.length)
-      .map((k) => [modelFor(tiers, k, mode, up), modelFor(tiers, k, mode, up + 1)])
+      .map((k) => [modelFor(tiers, k, mode, up, '', down), modelFor(tiers, k, mode, up + 1, '', down)])
       .filter(([was, now]) => was !== now).map(([, now]) => now);
     if (next.length) this.event(p, { item: it, actor: SYSTEM, type: 'stepped_up', headline: `#${it.seq} ${why}, so its next attempt steps up a tier: ${next.join(', ')}` });
   }
@@ -692,7 +758,8 @@ export class Hub extends EventEmitter {
       workers: p.run_workers ?? null, paused: !!p.run_paused, budget, spent_today: Math.round(spent * 100) / 100,
       stopped: p.run_paused ? 'paused' : budget != null && spent >= budget ? 'budget' : null,
       asked: !!p.staff_asked,
-      models: { on: !!p.model_routing, tiers: json(p.model_tiers, {}) }, // model routing (#347)
+      // Model routing (#347), and the shares of building jobs that try a cheaper model (#348).
+      models: { on: !!p.model_routing, tiers: json(p.model_tiers, {}), trial: p.model_trial ?? 10, race: p.model_race ?? 0 },
     };
   }
 
@@ -785,7 +852,9 @@ export class Hub extends EventEmitter {
     if (CLAIM_TYPES.includes(type)) {
       const model = this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, actor)?.model ?? '';
       const job = { claimed: item?.tidy ? 'tidy' : 'work', shaping: 'shape', review_started: 'review', landing: 'land' }[type];
-      data = { role: this.roleOf(p, actor), model, job, ...data };
+      // Its difficulty, and the trial it is part of (#348), so what each model can do is told per kind of item.
+      const trial = job === 'work' && ['down', 'race'].includes(item?.trial) ? item.trial : undefined;
+      data = { role: this.roleOf(p, actor), model, job, difficulty: difficultyOf(item), ...(trial ? { trial } : {}), ...data };
     }
     const r = this.q(`INSERT INTO events (project_id, item_id, actor, type, headline, summary, detail, data, at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, actor, type, headline, summary, detail, JSON.stringify(data), this.now());
@@ -1313,7 +1382,7 @@ export class Hub extends EventEmitter {
     const children = this.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(item.id);
     const history = this.q(`SELECT * FROM events WHERE item_id = ?
         AND type IN ('handoff','sent_back','lease_expired','answered','assumption_confirmed','submitted','shaped','picked','comment','steer','refined',
-          'accepted','pr_failed','pr_blocked','rebased','issue_close_failed','stepped_up')
+          'accepted','pr_failed','pr_blocked','rebased','issue_close_failed','stepped_up','trial')
         ORDER BY at DESC LIMIT 8`).all(item.id).reverse();
     const questions = this.q('SELECT * FROM questions WHERE item_id = ? ORDER BY at').all(item.id);
     const steers = this.q(`SELECT n.* FROM notes n WHERE n.item_id = ? AND n.kind = 'steer' AND n.active = 1
@@ -1334,6 +1403,10 @@ export class Hub extends EventEmitter {
       effective_priority: this.effectiveLabel(p, item), // "now (from #110)" when its group or a dependent ranks it higher
       needs: json(item.needs, []).length ? json(item.needs, []) : undefined,
       size: item.size || undefined,
+      // How hard it is (#348), rated when it's shaped; unrated counts as standard.
+      difficulty: item.difficulty ? `${item.difficulty}${item.difficulty_why ? `: ${item.difficulty_why}` : ''}` : 'standard (not rated yet)',
+      trial: item.stage === 'active' && ['down', 'race'].includes(item.trial)
+        ? (item.trial === 'race' ? 'Raced against the top model, to learn what a cheaper one can do.' : 'Started a tier down, to learn what a cheaper model can do. Work as usual.') : undefined,
       summary: item.summary || undefined,
       detail: item.detail || undefined,
       precondition: preconditionOut(item),
@@ -2147,8 +2220,11 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   return { ok: true, hint: `#${item.seq} is on ${land.base} and done. You can delete the branch: git branch -d ${item.branch}. Call next.` };
 }
 
-function finishShaping(p, agent, item, { headline, summary, detail, acceptance }) {
+function finishShaping(p, agent, item, { headline, summary, detail, acceptance, difficulty, difficulty_why }) {
   if (str(acceptance)) this.patch(item, { acceptance: str(acceptance) });
+  // Its difficulty (#348), rated here or with refine; unrated, it counts as standard and the hint says so.
+  const rated = rateDifficulty(item, { difficulty, difficulty_why }, []);
+  if (Object.keys(rated).length) this.patch(item, rated);
   const kids = this.q(`SELECT COUNT(*) AS n FROM items WHERE parent_id = ?`).get(item.id).n;
   if (!item.acceptance && !kids) {
     throw new UserError(`#${item.seq} has no acceptance criteria yet`, { status: 409, hint: `Say what done means (refine #${item.seq} with acceptance, or pass acceptance to submit), or split it into sub-items.` });
@@ -2157,13 +2233,14 @@ function finishShaping(p, agent, item, { headline, summary, detail, acceptance }
   const toReady = !waitsForOk(p, item);
   if (toReady) this.move(item, 'ready', agent, { holder: null, lease_until: null, last_worker: agent });
   else this.patch(item, { holder: null, lease_until: null, last_worker: agent });
-  this.event(p, { item, actor: agent, type: 'shaped', headline: `${agent} shaped #${item.seq}: ${headline}`, summary, detail });
+  this.event(p, { item, actor: agent, type: 'shaped', headline: `${agent} shaped #${item.seq}: ${headline}`, summary, detail, data: { difficulty: difficultyOf(item) } });
   this.setStatus(p, agent, `Shaped #${item.seq}`);
+  const unrated = item.difficulty ? '' : ` It has no difficulty yet, so it counts as standard: refine #${item.seq} with difficulty (rote, standard or hard) and difficulty_why.`;
   return {
     ok: true, stage: item.stage,
-    hint: toReady
+    hint: (toReady
       ? `#${item.seq} is ready${kids ? ` (it waits for its ${kids} sub-item(s))` : ''}. Call next: you may well get to build it.`
-      : `#${item.seq} is shaped and waiting for the human to approve it. Call next for other work.`,
+      : `#${item.seq} is shaped and waiting for the human to approve it. Call next for other work.`) + unrated,
   };
 }
 
@@ -2489,7 +2566,7 @@ const AGENT_OPS = {
   submit(p, agent, args) {
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
     const item = this.heldItem(p, agent, args.item, 'submit');
-    if (item.stage === 'proposed') return finishShaping.call(this, p, agent, item, { headline, summary, detail, acceptance: args.acceptance });
+    if (item.stage === 'proposed') return finishShaping.call(this, p, agent, item, { headline, summary, detail, acceptance: args.acceptance, difficulty: args.difficulty, difficulty_why: args.difficulty_why });
     if (item.stage === 'landing') return finishLanding.call(this, p, agent, item, { headline, summary, detail, conflicts: str(args.conflicts) });
     if (item.stage !== 'active') throw new UserError(`#${item.seq} is ${item.stage}; only active work can be submitted`, { status: 409 });
     const evidence = evidenceList(args.evidence);
@@ -2615,7 +2692,8 @@ const AGENT_OPS = {
     const eff = this.effectivePriorities(p);
     for (const s of stages) {
       const rows = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = ? ORDER BY seq`).all(p.id, s);
-      if (rows.length) out[s] = rows.map((i) => `#${i.seq} [${this.effectiveLabel(p, i, eff) ?? i.priority}] ${i.title}${i.holder ? ` (${i.holder})` : ''}`);
+      // Its difficulty (#348) beside its priority, once rated.
+      if (rows.length) out[s] = rows.map((i) => `#${i.seq} [${this.effectiveLabel(p, i, eff) ?? i.priority}${i.difficulty ? `, ${i.difficulty}` : ''}] ${i.title}${i.holder ? ` (${i.holder})` : ''}`);
     }
     const recent = this.q(`SELECT seq, title FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? ORDER BY stage_since DESC LIMIT 10`)
       .all(p.id, this.now() - 3 * DAY);
@@ -2760,6 +2838,7 @@ Object.assign(Hub.prototype, {
       changed.push(`needs → ${normTags(args.needs).join(', ') || 'nothing'}`);
     }
     if (args.size != null && (SIZES.includes(args.size) || args.size === '') && args.size !== item.size) { set.size = args.size; changed.push(`size → ${args.size || 'unset'}`); }
+    Object.assign(set, rateDifficulty(item, args, changed));
     if (args.fixes != null) {
       const fixes = this.fixesOf(p, args.fixes, item);
       if ((fixes?.id ?? null) !== item.fixes) { set.fixes = fixes?.id ?? null; changed.push(fixes ? `fixes #${fixes.seq}` : 'fixes nothing'); }
@@ -3148,8 +3227,18 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race }, by) {
     const changes = [];
+    // Trials (#348): the shares of eligible building jobs that try one tier down, and that race a cheaper model.
+    for (const [key, v, said] of [['model_trial', model_trial, 'try a cheaper model'], ['model_race', model_race, 'race a cheaper model against the top one']]) {
+      if (v === undefined || v === null || v === '') continue; // left blank: unchanged
+      let n;
+      try { n = parseShare(v, key); } catch (e) { throw new UserError(e.message, { hint: '0 turns it off; 10 means one in ten eligible building jobs.' }); }
+      if (n === (p[key] ?? (key === 'model_trial' ? 10 : 0))) continue;
+      this.q(`UPDATE projects SET ${key} = ? WHERE id = ?`).run(n, p.id);
+      p[key] = n;
+      this.event(p, { actor: by, type: 'runner', headline: n ? `${You(by)} set ${n}% of eligible building jobs to ${said}` : `${You(by)} set no building jobs to ${said}` });
+    }
     // Model routing (#347): the tiers per agent, cheapest first; blank for an agent: the runner's --model.
     if (model_tiers !== undefined) {
       let tiers;

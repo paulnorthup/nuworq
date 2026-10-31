@@ -37,6 +37,8 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `item` | string | `#<n>` within the project |
 | `title` | string | the item's title |
 | `size` | `"small"` \| `"large"` \| null | as shaped |
+| `difficulty` | `"rote"` \| `"standard"` \| `"hard"` | as rated when shaped (`refine`'s `difficulty`); unrated counts as `"standard"` |
+| `rated` | boolean | whether it was rated (false: `difficulty` is the unrated default) |
 | `repo` | string \| null | the repository it lands in (`github.com/acme/api`) |
 | `outcome` | `"landed"` \| `"dropped"` | done (on main) or dropped |
 | `done_at` | number (ms) | when it reached that outcome |
@@ -80,6 +82,19 @@ For tools that learn from results: a router choosing models, a dashboard, a cost
 | `overturned` | number | its accepts a person overturned: sent back afterwards, or escaped |
 
 An item names the landed work it repairs with `fixes` (on `propose` and `refine`, or in the item's Edit for people); only an item that reached done can be named.
+
+`jobs`: every job an agent took in the window (by when it was taken), oldest first, and how it came out.
+
+| field | type | meaning |
+|---|---|---|
+| `item` | string | `#<n>` |
+| `job` | `"work"` \| `"review"` \| `"shape"` \| `"land"` \| `"tidy"` | what it was taken for |
+| `agent` | string | who took it |
+| `model` | string \| null | the model it said at checkin, when it took the job |
+| `difficulty` | string | the item's difficulty when it was taken |
+| `trial` | `"down"` \| `"race"` \| null | a building job that tried a cheaper model: one tier down, or raced against the top tier |
+| `at` | number (ms) | when it was taken |
+| `result` | string | building: `landed` (accepted and on main), `escaped` (landed, and a later item repairs it), `sent_back`, `not_chosen` (a race kept another attempt), `stalled` (handed off, or its lease lapsed) or `open` (still going, or accepted and not landed yet). Any other job: `done`, `stalled` or `open` |
 
 `human_actions`: what the work cost people over the same window, on any item or none.
 
@@ -136,6 +151,8 @@ For an owner deciding where agents, money and attention go: which projects need 
 | `previous` | object \| null | the same fields (without `project`, `name`) for the period before; null for `all` |
 
 `by_model`, `by_agent`: as in project outcomes, over every project's finished items in the period. `summary`: the same figures for all of them together, plus `median_wait_ms` across projects.
+
+`calibration`: whether an item's difficulty foretells its cost and attempts better than its size does, over the landed items in the period. `by_difficulty` (rote, standard, hard) and `by_size` (small, which includes unsized, and large) each give per group `{ key, landed, rated, median_cost, mean_attempts }` (`median_cost` over priced items, null when none). `spread.difficulty` and `spread.size` give `{ cost, attempts }`: the largest group's figure over the smallest's, among groups with 3 or more landed (null with fewer than two such groups). `predicts`: `"difficulty"` or `"size"` when one spreads cost at least 1.25 times as much as the other, `"neither"` when they spread about the same, null when there is too little to tell. `landed`, `rated`: how many landed, and how many of those were rated.
 
 `takeaway`: one sentence naming the decision the figures suggest, or null with fewer than 3 landed items or nothing worth deciding. It checks, in order: the owner's wait (median at least an hour and a quarter of the cycle time), escapes (a fifth or more of landed work), models (with 3 or more landed and priced each, the dearest costing at least 1.5 times the cheapest per landed item, while the cheapest escapes no more often, within 10 points), and a project that landed half or less of what it did the period before. Only the first that applies is said.
 

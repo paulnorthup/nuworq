@@ -1142,22 +1142,27 @@ function staffingModal(back) {
     <label>Daily budget, dollars (UTC days)<input id="st-budget" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="No budget" value="${s.budget ?? ''}"></label></div>
     <p class="faint">Spent here today: $${(s.spent_today ?? 0).toFixed(2)}. Once it reaches the budget, no new workers start until tomorrow.</p>
     <div class="setting" data-new="model-routing"><div class="body"><div class="h" id="set-models">Cheaper models for rote jobs</div>
-      <div class="s">${m.on ? 'On: landing and tidying start on the cheapest model below, and step up one when an attempt fails. Building, reviews and shaping use the top one.' : 'Off: every worker runs on its runner\'s own model.'}</div></div>
+      <div class="s">${m.on ? 'On: landing and tidying start on the cheapest model below, and step up one when an attempt fails. Reviews and shaping use the top one; so does building, but for the share set below that tries a cheaper one.' :'Off: every worker runs on its runner\'s own model.'}</div></div>
       <button class="switch" role="switch" aria-checked="${m.on}" aria-labelledby="set-models" data-action="${m.on ? 'models-off' : 'models-on'}"></button></div>
     <div class="form">${tier('claude', 'Claude models, cheapest first')}
-    <details><summary>Codex and opencode</summary>${tier('codex', 'Codex models, cheapest first')}${tier('opencode', 'opencode models (provider/model), cheapest first')}</details></div>
+    <details><summary>Codex and opencode</summary>${tier('codex', 'Codex models, cheapest first')}${tier('opencode', 'opencode models (provider/model), cheapest first')}</details>
+    <label data-new="model-trials">Building jobs that try one model down, percent<input id="st-trial" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.trial ?? 10}"></label>
+    <label>Building jobs raced against the top model, percent<input id="st-race" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.race ?? 0}"></label></div>
+    <p class="faint">Trials teach nuworq what each model can do. Only rote and standard items that aren't "now" or operator-only, while there's budget left today. 0 turns one off.</p>
     <div class="foot"><button class="btn ghost" data-action="staffing-pause" data-paused="${s.paused ? 1 : 0}">${s.paused ? 'Resume' : 'Pause'}</button><button class="btn primary" data-action="staffing-save">Save</button></div>`);
 }
 const tiersTyped = () => Object.fromEntries(['claude', 'codex', 'opencode'].map((a) => [a, val(`st-tiers-${a}`)]));
 // The switch redraws the dialog in its new state, keeping what was typed and not yet saved.
 async function modelRouting(on) {
   const back = !!$('#modal [data-staffing]')?.dataset.back;
-  const typed = { workers: val('st-workers'), budget: val('st-budget') };
+  const typed = { workers: val('st-workers'), budget: val('st-budget'), trial: val('st-trial'), race: val('st-race') };
   const r = await human('settings', { model_routing: on, model_tiers: tiersTyped() }, on ? 'Cheaper models are on: runners pick each job\'s model at their next poll' : 'Cheaper models are off');
   if (!r || !$('#modal [data-staffing]')) return;
   staffingModal(back);
   $('#st-workers').value = typed.workers ?? '';
   $('#st-budget').value = typed.budget ?? '';
+  $('#st-trial').value = typed.trial ?? '';
+  $('#st-race').value = typed.race ?? '';
   $('#modal .switch')?.focus();
 }
 
@@ -1615,7 +1620,7 @@ const ACTIONS = {
   staffing: () => staffingModal(),
   'staffing-from-settings': () => staffingModal(true),
   'staffing-save': async () => {
-    const r = await human('settings', { run_workers: val('st-workers'), run_budget: val('st-budget'), model_tiers: tiersTyped() }, 'Staffing saved: runners follow it at their next poll');
+    const r = await human('settings', { run_workers: val('st-workers'), run_budget: val('st-budget'), model_tiers: tiersTyped(), model_trial: val('st-trial'), model_race: val('st-race') }, 'Staffing saved: runners follow it at their next poll');
     if (r) closeModal();
   },
   'models-on': () => {
