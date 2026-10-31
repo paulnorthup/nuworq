@@ -86,6 +86,12 @@ describe('the color map keeps meanings apart (#188)', () => {
     for (const r of now) for (const t of STATE) assert.doesNotMatch(r.body, new RegExp(`var\\(${t}(-tint)?\\)`), `${r.sel} uses ${t}`);
   });
 
+  test('the feedback tag is a label, not the person\'s move: no magenta on the board (#336)', () => {
+    const fb = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => /\.fb-tag\b/.test(m[1]));
+    assert.ok(fb.length, '.tag.fb-tag exists');
+    for (const [, sel, body] of fb) assert.doesNotMatch(body, /var\(--you(-tint|-line)?\)/, `${sel.trim()} uses --you`);
+  });
+
   test('buttons show emphasis, not state, and peer choices look alike (#193)', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     for (const [f, src] of [['web/style.css', css], ['web/app.js', app]]) assert.doesNotMatch(src, /btn[ .](go|you)\b/, `${f} has no .btn.go or .btn.you`);

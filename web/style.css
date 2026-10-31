@@ -503,7 +503,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; border: 1px sol
 .fb-sent-with code { overflow-wrap: anywhere; }
 .fb-sent-with p { margin: 0; }
 .fb-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.tag.fb-tag { background: var(--you-tint); color: var(--you); }
+.tag.fb-tag { background: var(--panel); color: var(--muted); border: 1px solid var(--line); } /* a label, not a move: magenta is the person's (#336); --panel because the stage list is --sunken */
 .fb-only { margin: 4px 0 8px; min-height: 36px; padding: 4px 12px; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--panel); font: inherit; cursor: pointer; }
 .fb-only.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 .setup { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; max-width: 640px; }
