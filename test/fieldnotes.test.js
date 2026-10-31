@@ -111,6 +111,7 @@ describe('a tidy job reviews the field notes (#443)', () => {
     const r = agent('next', 'a2');
     assert.equal(r.mode, 'tidy');
     const merged = agent('learn', 'a2', { note: 'Storage timeouts and retries: see src/export.js.', item: r.item }).note;
+    tick(60 * 1000);
     agent('submit', 'a2', { item: r.item, headline: 'Merged 1, kept the rest' });
     assert.notEqual(agent('next', 'a2', { claim: false }).mode, 'tidy', 'no review of the note it just wrote');
     tick(8 * DAY);
