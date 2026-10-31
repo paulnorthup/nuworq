@@ -714,11 +714,14 @@ async function connect(pos, flags) {
     workspace = target.toLowerCase();
     target = `${String(flags.hub).replace(/\/+$/, '')}/w/${encodeURIComponent(workspace)}`;
   }
-  const url = target.replace(/\/+$/, '');
+  let url = target.replace(/\/+$/, '');
   if (!/^https?:\/\/[^/]/i.test(url)) throw new HubError(`"${url}" isn't a hub address`, { hint: 'e.g. nuworq connect https://acme.nuworq.com, or nuworq connect acme --hub https://nuworq.com' });
   workspace ??= url.match(/\/w\/([^/]+)$/)?.[1] ?? null;
-  const health = await createClient({ url, token: '', retryMs: 0 }).get('/api/health').catch(() => null);
+  const probe = createClient({ url, token: '', retryMs: 0 });
+  const health = await probe.get('/api/health').catch(() => null);
   if (!health?.ok) throw new HubError(`No nuworq hub answers at ${url}`, { hint: 'Check the address (it is what you open in the browser) and that the hub is running.' });
+  // A hub that moved to a subdomain (nuworq.com → app.nuworq.com) is saved at its new address.
+  url = probe.settings.url;
   const open = await createClient({ url, token: '', retryMs: 0 }).get('/api/me');
   // --token -: read it from stdin (pasted at a hidden prompt, or piped).
   const given = typeof flags.token === 'string' ? (flags.token === '-' ? await readSecretLine('Token (not shown): ') : flags.token) : envVar('TOKEN');
