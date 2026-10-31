@@ -350,7 +350,7 @@ function project(v) {
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}</div>
-        <button class="btn settings-btn" data-action="settings" title="Staffing, freshness, GitHub, park or remove">Settings</button>` : ''}
+        <button class="btn settings-btn" data-action="settings" data-new="project-settings" title="Staffing, freshness, GitHub, park or remove">Settings</button>` : ''}
       </div>
     </div>
     ${!P.runner && P.staffing && !P.staffing.asked ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
