@@ -39,6 +39,18 @@ export const originOf = (repo) => git(repo, 'remote', 'get-url', 'origin');
 // Does `into` already contain every commit of `ref`?
 export const contains = (repo, into, ref) => git(repo, 'merge-base', '--is-ancestor', ref, into) !== null;
 const count = (repo, range) => Number(git(repo, 'rev-list', '--count', range) ?? 0);
+// The full commit a ref points at; null when there is none.
+export const shaOf = (repo, ref) => git(repo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+// Whether a file is in the tree at ref.
+export const hasFile = (repo, ref, file) => git(repo, 'cat-file', '-e', `${ref}:${file}`) !== null;
+// Files under paths that differ between two commits, and the subjects of the commits that changed them
+// (newest first). null when git can't say, e.g. `from` is gone after a force-push.
+export function changedUnder(repo, from, to, paths) {
+  const files = git(repo, 'diff', '--name-only', from, to, '--', ...paths);
+  if (files === null) return null;
+  const subjects = git(repo, 'log', '--format=%s', `${from}..${to}`, '--', ...paths) ?? '';
+  return { files: files.split('\n').filter(Boolean), subjects: subjects.split('\n').filter(Boolean) };
+}
 
 // Each item is built on its own branch, cut from the latest main, so it can land on its own.
 export function itemBranch(item) {
