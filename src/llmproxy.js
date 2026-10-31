@@ -15,12 +15,26 @@ import { SYSTEM } from './core.js'; // used only at call time, so the import cyc
 export class Unavailable extends Error {}
 
 // NUWORQ_LLM_PROXY_URL (e.g. http://studio.local:8080) and NUWORQ_LLM_PROXY_KEY. null when unset.
+// Behind Cloudflare Access (llm-proxy's public hostname), also NUWORQ_LLM_PROXY_ACCESS_ID and _SECRET:
+// a service token, sent as CF-Access-Client-Id / CF-Access-Client-Secret.
 export function proxyFromEnv(env = process.env) {
-  const url = String(envVar('LLM_PROXY_URL', env) ?? '').trim().replace(/\/+$/, '');
-  return url ? proxyClient({ url, key: String(envVar('LLM_PROXY_KEY', env) ?? '').trim() }) : null;
+  const val = (k) => String(envVar(k, env) ?? '').trim();
+  const url = val('LLM_PROXY_URL').replace(/\/+$/, '');
+  return url ? proxyClient({ url, key: val('LLM_PROXY_KEY'), access: accessFromEnv(env) }) : null;
 }
 
-export function proxyClient({ url, key = '', fetch: get = fetch, timeoutMs = 10_000 }) {
+// The Cloudflare Access service token for llm-proxy's public hostname, or null when either half is unset.
+export function accessFromEnv(env = process.env) {
+  const id = String(envVar('LLM_PROXY_ACCESS_ID', env) ?? '').trim();
+  const secret = String(envVar('LLM_PROXY_ACCESS_SECRET', env) ?? '').trim();
+  return id && secret ? { id, secret } : null;
+}
+
+export function proxyClient({ url, key = '', access = null, fetch: get = fetch, timeoutMs = 10_000 }) {
+  const headers = {
+    ...(key ? { authorization: `Bearer ${key}` } : {}),
+    ...(access ? { 'cf-access-client-id': access.id, 'cf-access-client-secret': access.secret } : {}),
+  };
   return {
     url,
     // Every request one client made in [from, to] (ms), following `next` across pages.
@@ -31,9 +45,13 @@ export function proxyClient({ url, key = '', fetch: get = fetch, timeoutMs = 10_
         const q = new URLSearchParams({ client, from: String(from), to: String(to), ...(cursor ? { cursor } : {}) });
         let res;
         try {
-          res = await get(`${url}/_/api/requests?${q}`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(timeoutMs) });
+          res = await get(`${url}/_/api/requests?${q}`, { headers, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
         } catch (e) {
           throw new Unavailable(`llm-proxy at ${url} is unreachable (${e.cause?.code ?? e.name ?? e.message})`);
+        }
+        // Cloudflare Access sends a request without a valid service token to its login page.
+        if (res.status >= 300 && res.status < 400) {
+          throw new Unavailable(`llm-proxy at ${url} redirected to a login (${res.status}): ${access ? 'Cloudflare Access refused the service token' : 'set NUWORQ_LLM_PROXY_ACCESS_ID and NUWORQ_LLM_PROXY_ACCESS_SECRET to a Cloudflare Access service token'}`);
         }
         if ([401, 403].includes(res.status)) throw new Unavailable(`llm-proxy refused the key (${res.status}): it needs a key that may read request history`);
         if (res.status === 404) throw new Unavailable(`llm-proxy at ${url} has no request history API yet (404)`);

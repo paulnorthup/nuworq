@@ -272,20 +272,18 @@ function agentOf(flags) {
   if (flags.browser && agent !== 'claude') {
     throw new HubError('--browser is for Claude workers only', { hint: 'Use --agent claude --browser, or leave out --browser.' });
   }
-  // Through llm-proxy (--model proxy/<model>): it serves OpenAI Chat Completions only (its docs/API.md), so
-  // only opencode can go through it. Claude Code speaks Anthropic Messages, Codex only the Responses API.
+  // Through llm-proxy: opencode with --model proxy/<model> (its OpenAI Chat Completions, /v1, with a personal key),
+  // Claude Code and Codex with --proxy (its provider routes, /anthropic and /openai). Provider routes answer only
+  // the proxy's owner token, and only on its LAN or tailnet address: on its public hostname they answer 403.
   const proxied = String(flags.model ?? '').startsWith('proxy/');
   if (flags.proxy === undefined && !proxied) return agent;
-  const unsupported = {
-    claude: 'Claude Code speaks the Anthropic Messages API',
-    codex: 'Codex speaks only the Responses API (it dropped wire_api = "chat")',
-  }[agent];
-  if (unsupported) {
-    throw new HubError(`--agent ${agent} can't go through llm-proxy`, { hint: `llm-proxy serves OpenAI Chat Completions only (POST /v1/chat/completions), and ${unsupported}. Leave out --proxy, or use --agent opencode --model proxy/<model>.` });
-  }
-  if (!proxied) throw new HubError('--proxy needs a proxy/<model> model', { hint: 'e.g. --agent opencode --model proxy/gpt-5 --proxy http://studio.local:8080' });
+  if (agent !== 'opencode' && proxied) throw new HubError(`--agent ${agent} doesn't take a proxy/<model> model`, { hint: `Give --agent ${agent} --proxy http://host:4100: it goes through llm-proxy's ${agent === 'claude' ? 'Anthropic' : 'OpenAI'} route with its own models.` });
+  if (agent === 'opencode' && !proxied) throw new HubError('--proxy needs a proxy/<model> model', { hint: 'e.g. --agent opencode --model proxy/gpt-5 --proxy http://studio.local:8080' });
   if (!/^https?:\/\/[^/]/.test(proxyUrl(flags))) {
-    throw new HubError("--model proxy/<model> needs llm-proxy's address", { hint: 'Give --proxy http://host:port (or set NUWORQ_LLM_PROXY_URL), and its key in NUWORQ_LLM_PROXY_KEY.' });
+    throw new HubError(`${proxied ? '--model proxy/<model>' : '--proxy'} needs llm-proxy's address`, {
+      hint: proxied ? 'Give --proxy http://host:port (or set NUWORQ_LLM_PROXY_URL), and its key in NUWORQ_LLM_PROXY_KEY.'
+        : "Give --proxy with llm-proxy's LAN or tailnet address (e.g. http://studio.local:4100), and its owner token in NUWORQ_LLM_PROXY_TOKEN.",
+    });
   }
   return agent;
 }
@@ -582,7 +580,10 @@ function workerSetup(target, agent, flags, s, token = null) {
   const label = clientLabel(target.slug, name);
   if (agent === 'claude') {
     const headers = [process.env.ANTHROPIC_CUSTOM_HEADERS, `x-client-name: ${label}`].filter(Boolean).join('\n');
-    lines.push(`ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    // --proxy: Claude Code's traffic goes to llm-proxy's Anthropic route with the proxy's owner token (not the
+    // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed.
+    const via = flags.proxy === undefined ? '' : `ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN" \\\n  `;
+    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
@@ -603,8 +604,12 @@ function workerSetup(target, agent, flags, s, token = null) {
   } else {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
     // Codex's built-in openai provider takes no headers; a custom one (how traffic reaches llm-proxy) does.
-    const provider = codexProvider(flags);
-    const named = provider ? ` \\\n  -c ${sq(`model_providers.${provider}.http_headers={"x-client-name"=${JSON.stringify(label)}}`)}` : '';
+    // --proxy: a provider of its own for llm-proxy's OpenAI route (Responses), keyed by the owner token from the
+    // worker's environment (env_key), so the token is never in argv or printed.
+    const provider = flags.proxy === undefined ? codexProvider(flags) : null;
+    const named = flags.proxy !== undefined
+      ? ` \\\n  -c ${sq('model_provider="llmproxy"')} \\\n  -c ${sq(`model_providers.llmproxy={name="llm-proxy",base_url=${JSON.stringify(`${proxyUrl(flags)}/openai/v1`)},env_key="NUWORQ_LLM_PROXY_TOKEN",wire_api="responses",http_headers={"x-client-name"=${JSON.stringify(label)}}}`)}`
+      : provider ? ` \\\n  -c ${sq(`model_providers.${provider}.http_headers={"x-client-name"=${JSON.stringify(label)}}`)}` : '';
     lines.push(`codex exec${json} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
   }
   return {
@@ -1392,7 +1397,10 @@ ${bold('Setup')}
                                          --run it prints the command instead. opencode needs --model,
                                          e.g. ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is set up for you).
                                          --model proxy/<model> --proxy <url> (or NUWORQ_LLM_PROXY_URL) routes
-                                         opencode through llm-proxy, key from NUWORQ_LLM_PROXY_KEY (also on run).
+                                         opencode through llm-proxy, key from NUWORQ_LLM_PROXY_KEY (also on run);
+                                         --agent claude|codex --proxy <url> sends Claude Code or Codex through its
+                                         Anthropic or OpenAI route: <url> is its LAN or tailnet address, and the
+                                         key its owner token, from NUWORQ_LLM_PROXY_TOKEN.
                                          On a hub with login, --run needs --agent-token (or
                                          NUWORQ_AGENT_TOKEN): workers never get your own token.
                                          It reports what this machine has (macos/linux, docker, gpu;
@@ -1427,7 +1435,9 @@ Env: NUWORQ_URL (default ${DEFAULT_URL}), NUWORQ_PROJECT, NUWORQ_AGENT, NUWORQ_M
      NUWORQ_TOKEN (a token the CLI and MCP server send to a hub that requires login),
      NUWORQ_PUBLIC_URL (the hub's address as you reach it, used for links in push messages),
      NUWORQ_LLM_PROXY_URL and NUWORQ_LLM_PROXY_KEY (serve: measured usage for agents that send
-     x-client-name: nuworq/<project>/<agent> through llm-proxy)
+     x-client-name: nuworq/<project>/<agent> through llm-proxy; a read-only key), and behind Cloudflare
+     Access NUWORQ_LLM_PROXY_ACCESS_ID and NUWORQ_LLM_PROXY_ACCESS_SECRET (a service token; serve only),
+     NUWORQ_LLM_PROXY_TOKEN (llm-proxy's owner token, for Claude and Codex workers with --proxy)
 Deploying on a VM or the internet: docs/DEPLOY.md`;
 
 // git's credential helper protocol (git help credential): for "get" on github.com, a token from the hub's

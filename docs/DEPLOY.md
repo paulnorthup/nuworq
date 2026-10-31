@@ -184,7 +184,17 @@ EnvironmentFile=/etc/nuworq/github-oauth.env
 [Service]
 Environment=NUWORQ_HUB_OWNERS=paul@paulnorthup.com
 EnvironmentFile=/etc/nuworq/turnstile.env
+
+# llm-proxy.conf: usage measured by llm-proxy for workers whose model traffic goes through it (#346).
+# The file holds NUWORQ_LLM_PROXY_URL=… (llm-proxy's public hostname, https), NUWORQ_LLM_PROXY_KEY=…
+# (a key that may read request history), and, because that hostname sits behind Cloudflare Access,
+# NUWORQ_LLM_PROXY_ACCESS_ID=… and NUWORQ_LLM_PROXY_ACCESS_SECRET=… (a service token, llm-proxy docs/API.md)
+[Service]
+EnvironmentFile=/etc/nuworq/llm-proxy.env
 ```
+Check llm-proxy from the hub host, with the file's values loaded: `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $NUWORQ_LLM_PROXY_KEY" -H "CF-Access-Client-Id: $NUWORQ_LLM_PROXY_ACCESS_ID" -H "CF-Access-Client-Secret: $NUWORQ_LLM_PROXY_ACCESS_SECRET" "$NUWORQ_LLM_PROXY_URL/_/api/requests?client=x&from=0&to=1"` prints `200`. A `302` means Access refused the service token, `401`/`403` the key. On the hub, the project's events say "Usage from llm-proxy is off: <why>" until it answers, and "Usage now comes from llm-proxy" once it does; an item a worker went through the proxy for then lists usage with source `llm-proxy`.
+
+Workers reach llm-proxy another way, with other credentials, on the machine that runs them. On its public hostname, provider routes answer 403. So `nuworq run --agent claude --proxy <url>` (Claude Code, through `/anthropic`) and `--agent codex --proxy <url>` (Codex, through `/openai/v1`, the Responses API) need llm-proxy's LAN or tailnet address (e.g. `http://studio.local:4100`), and its owner token in `NUWORQ_LLM_PROXY_TOKEN` in the runner's environment. That token spends money: keep it off the hub. Workers send no Access token. `--agent opencode --model proxy/<model>` goes to `/v1` with a personal key in `NUWORQ_LLM_PROXY_KEY`. Every worker labels its traffic `x-client-name: nuworq/<project>/<agent>`, which is how the hub's read-only key finds it.
 The single hub's database became the workspace `northup` (`nuworq workspace adopt northup --db /var/lib/nuworq/nuworq.db --data-dir /var/lib/nuworq`, see "From one hub to workspaces"). Agents and runners kept their saved address `https://app.nuworq.com`. `--db` stays in `ExecStart` so that undoing it is only a matter of removing the three flags. Backups from the switch: `/var/lib/nuworq/before-205.db`, `/root/nuworq.service.before-205`, `/root/nuworq.service.d.before-205/`, `/root/cloudflared-config.before-205.yml`.
 Verified: a valid certificate, 401 without login, a `Secure` session cookie, and the live stream (`/api/stream`) arriving unbuffered through Cloudflare.
 
