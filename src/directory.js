@@ -138,6 +138,8 @@ export class Directory {
       );`);
     // When its sender was told it's fixed (#297): once, never again.
     try { this.db.exec('ALTER TABLE feedback ADD COLUMN told_at INTEGER'); } catch { /* already there */ }
+    // The level that proposed a piece at once, without an owner's decision (#296): balanced | full; '' when decided.
+    try { this.db.exec("ALTER TABLE feedback ADD COLUMN auto TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
   }
 
   // ── billing (#227) ──
@@ -352,9 +354,20 @@ export class Directory {
 
   // Record an owner's decision on new feedback: approved (with the proposal it made) or declined (with an optional
   // note to the sender). Returns false when it was already decided.
-  decideFeedback(id, { approve, by, note = '', proposal = '' }) {
-    return this.db.prepare(`UPDATE feedback SET state = ?, note = ?, proposal = ?, decided_by = ?, decided_at = ? WHERE id = ? AND state = 'new'`)
-      .run(approve ? 'approved' : 'declined', String(note ?? '').trim().slice(0, 1000), proposal, String(by), this.now(), Number(id)).changes === 1;
+  // auto: the feedback autonomy that proposed it at once, with no owner deciding (by is then '').
+  decideFeedback(id, { approve, by, note = '', proposal = '', auto = '' }) {
+    return this.db.prepare(`UPDATE feedback SET state = ?, note = ?, proposal = ?, decided_by = ?, decided_at = ?, auto = ? WHERE id = ? AND state = 'new'`)
+      .run(approve ? 'approved' : 'declined', String(note ?? '').trim().slice(0, 1000), proposal, String(by), this.now(), auto, Number(id)).changes === 1;
+  }
+
+  // How far feedback goes on its own (#296), as a project's autonomy: ask (each piece waits for Approve or
+  // Decline, the default), balanced (proposed at once; shaped items wait for an owner's OK) or full.
+  feedbackAutonomy() {
+    return this.db.prepare("SELECT value FROM settings WHERE key = 'feedback_autonomy'").get()?.value ?? 'ask';
+  }
+
+  setFeedbackAutonomy(level) {
+    this.db.prepare("INSERT INTO settings (key, value) VALUES ('feedback_autonomy', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(level);
   }
 
   // The identity for a verified email, made on first sign-in.

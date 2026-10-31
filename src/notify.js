@@ -313,10 +313,11 @@ export async function notifyOwners(spaces, owners, request, url, opts = {}) {
 }
 
 // New feedback about nuworq (#295), batched into one push: who sent each piece from which workspace, the start of
-// it, and the link to the admin dashboard's Feedback section.
+// it, the proposal it already became under Keep moving or Run with it (#296), and the link to the admin
+// dashboard's Feedback section.
 export function composeFeedback(list, url = '') {
   const title = list.length === 1 ? 'nuworq: feedback' : `nuworq: ${list.length} pieces of feedback`;
-  const lines = list.slice(0, 5).map(({ sender, workspace, text }) => `${sender} (${workspace}): ${clip(text, 140)}`);
+  const lines = list.slice(0, 5).map(({ sender, workspace, text, auto, proposal }) => `${sender} (${workspace}): ${clip(text, 140)}${auto && proposal ? ` (proposed as ${proposal})` : ''}`);
   if (list.length > 5) lines.push(`and ${list.length - 5} more`);
   return { title, url, text: [title, ...lines, url && `→ ${url}`].filter(Boolean).join('\n'), entries: [] };
 }

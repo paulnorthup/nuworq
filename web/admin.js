@@ -2,6 +2,8 @@
 // New requests first; Approve and Decline each ask first; an approval's link (shown once) has a Copy button.
 // Then the workspaces (#169): one row each, most recently active first; tap a row for who and what is in it,
 // and to switch its plan between Free and Unlimited (that asks first too, saying what changes).
+import { markNew, dismissNew } from './new.js';
+
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ago = (t) => {
@@ -44,6 +46,7 @@ async function main() {
     <div id="list" aria-live="polite"><p class="faint">Loading…</p></div>
     <h2 class="admin-h2" id="feedback">Feedback</h2>
     <p class="lead" id="fb-lead">What got in people's and agents' way. Approve makes it a proposal agents shape; Decline closes it, with a note to the sender if you like.</p>
+    <div id="fb-level"></div>
     <div class="seg admin-filter fb-filter" role="group" aria-label="Show feedback">${STATES.map(([v, label]) => `<button data-fb-state="${v}" aria-pressed="${v === fbState}" class="${v === fbState ? 'on' : ''}">${label}</button>`).join('')}</div>
     <div id="fb-list" aria-live="polite"><p class="faint">Loading…</p></div>
     <h2 class="admin-h2">Workspaces</h2>
@@ -104,10 +107,12 @@ const fbFocus = Number(new URLSearchParams(location.search).get('feedback')) || 
 async function loadFeedback() {
   const el = $('#fb-list');
   try {
-    const { on, project, feedback } = await api(`/api/feedback/list?state=${encodeURIComponent(fbState)}`);
+    const { on, project, autonomy, feedback } = await api(`/api/feedback/list?state=${encodeURIComponent(fbState)}`);
     $('#fb-lead').textContent = on
-      ? `What got in people's and agents' way. Approve makes it a proposal in ${project} for agents to shape; Decline closes it, with a note to the sender if you like.`
+      ? `What got in people's and agents' way, for ${project}.`
       : 'Feedback is off on this hub: the host turns it on with --feedback-project <workspace>/<project> (NUWORQ_FEEDBACK_PROJECT).';
+    $('#fb-level').innerHTML = on ? fbLevel(autonomy) : '';
+    markNew($('#fb-level'));
     if (fbFocus && fbState && !feedback.some((f) => f.id === fbFocus) && !loadFeedback.widened) {
       loadFeedback.widened = true;
       return document.querySelector('.fb-filter button[data-fb-state=""]').click();
@@ -123,7 +128,8 @@ function fbCard(f) {
     ? [c.client, c.model, c.version && `nuworq ${c.version}`, f.item && `about ${f.item}`]
     : [c.page, c.version && `nuworq ${c.version}`, c.browser];
   const who = f.kind === 'agent' ? `Agent ${esc(f.sender)}` : `${esc(f.sender)}${f.email ? ` <span class="faint">${esc(f.email)}</span>` : ''}`;
-  const decided = f.state === 'approved' ? `Approved by ${esc(f.decided_by)} ${esc(ago(f.decided_at))}${f.proposal ? `: proposal ${esc(f.proposal)}` : ''}`
+  const decided = f.auto ? `Proposed at once (${LEVELS[f.auto]?.label ?? esc(f.auto)}) ${esc(ago(f.decided_at))}${f.proposal ? `: proposal ${esc(f.proposal)}` : ''}`
+    : f.state === 'approved' ? `Approved by ${esc(f.decided_by)} ${esc(ago(f.decided_at))}${f.proposal ? `: proposal ${esc(f.proposal)}` : ''}`
     : f.state === 'declined' ? `Declined by ${esc(f.decided_by)} ${esc(ago(f.decided_at))}${f.note ? `: “${esc(f.note)}”` : ''}` : '';
   return `<article class="admin-card${f.id === fbFocus ? ' focus' : ''}" id="fb-${f.id}" data-who="${esc(f.sender)}">
     <div class="h">${who} · ${esc(f.workspace)}</div>
@@ -132,6 +138,22 @@ function fbCard(f) {
     ${decided ? `<p class="faint">${decided}</p>` : ''}
     ${f.state === 'new' ? `<div class="admin-acts"><button class="btn primary" data-fb="${f.id}" data-approve="1">Approve</button><button class="btn" data-fb="${f.id}">Decline</button></div>` : ''}
   </article>`;
+}
+
+// How far feedback goes on its own (#296): the project autonomy levels, each with the one line on what it does.
+const LEVELS = {
+  ask: { label: 'Check with me', does: 'Each piece waits here for you to Approve or Decline it.' },
+  balanced: { label: 'Keep moving', does: 'Each piece becomes a proposal at once and agents shape it; you approve each shaped item before it\'s built.' },
+  full: { label: 'Run with it', does: 'Agents shape, build and land it under the project\'s own autonomy; you see it in the project and here.' },
+};
+
+function fbLevel(level) {
+  return `<div class="admin-card fb-level" data-level="${esc(level)}">
+    <p class="h" data-new="feedback-autonomy">How far it goes on its own</p>
+    <div class="seg" role="group" aria-label="How far feedback goes on its own">${Object.entries(LEVELS).map(([v, l]) => `<button data-fb-level="${v}" aria-pressed="${v === level}" class="${v === level ? 'on' : ''}">${l.label}</button>`).join('')}</div>
+    <p class="s">${esc(LEVELS[level]?.does)}</p>
+    <p class="faint">At every level, asking for a new feature, a pricing or policy change, or removing something comes to you as a question.</p>
+  </div>`;
 }
 
 const PLAN = { free: 'Free', unlimited: 'Unlimited' };
@@ -168,6 +190,8 @@ function space(w) {
   </details>`;
 }
 
+document.addEventListener('click', (e) => dismissNew(e), true);
+
 document.addEventListener('toggle', (e) => {
   const d = e.target.closest?.('.admin-space');
   if (d) d.open ? expanded.add(d.dataset.name) : expanded.delete(d.dataset.name);
@@ -185,6 +209,15 @@ document.addEventListener('click', async (e) => {
       pl.closest('.admin-space').outerHTML = space(r.workspace);
     } catch (err) { showError(err.message); pl.disabled = false; }
     return;
+  }
+  const lv = e.target.closest('button[data-fb-level]');
+  if (lv) {
+    const level = lv.dataset.fbLevel;
+    if (lv.closest('.fb-level').dataset.level === level) return;
+    if (!confirm(`Switch feedback to ${LEVELS[level].label}?\n\n${LEVELS[level].does}\n\nOnly feedback that comes in from now on. You can switch it back here.`)) return;
+    lv.disabled = true;
+    try { await api('/api/feedback/autonomy', { level }); showError(''); } catch (err) { showError(err.message); }
+    return loadFeedback();
   }
   const fs = e.target.closest('button[data-fb-state]');
   if (fs) { fbState = fs.dataset.fbState; for (const b of document.querySelectorAll('.fb-filter button')) { b.classList.toggle('on', b === fs); b.setAttribute('aria-pressed', String(b === fs)); } return loadFeedback(); }

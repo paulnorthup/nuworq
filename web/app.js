@@ -962,7 +962,7 @@ function renderDrawer() {
   const holderLine = {
     proposed: it.holder
       ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
-      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${S.view?.project.autonomy === 'ask' && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${who(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
+      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${it.waits_for_ok && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${who(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
     ready: `<b>Ready</b> for ${it.race > 1 ? `${it.race} agents at once (a race)` : 'any agent'} · waiting ${esc(it.in_stage)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
     active: it.race > 1
       ? `<b>Race of ${it.race}</b> · ${esc(it.in_stage)} so far · ${it.racers.map((r) => `${who(r.agent, r.model)} ${r.stage === 'active' ? `on it, lease ${esc(r.lease_left)} left` : esc(r.stage)}`).join(' · ') || 'no one yet'}`
@@ -982,7 +982,7 @@ function renderDrawer() {
   }
   // Only "Check with me" waits on you; otherwise this is an optional shortcut, so it mustn't look like a request.
   // One primary per drawer (#193): when Approve moves it on, "Make it next" steps back.
-  const approves = S.view?.project.autonomy === 'ask' && it.acceptance;
+  const approves = it.waits_for_ok && it.acceptance;
   if (it.stage === 'proposed' && it.priority !== 'now') actions.push(`<button class="btn${approves ? '' : ' primary'}" data-action="pick" data-item="${it.item}" title="Agents shape and build this first">Make it next</button>`);
   if (it.stage === 'proposed') actions.push(approves
     ? `<button class="btn primary" data-action="approve" data-item="${it.item}" title="It becomes ready as written">Approve</button>`
