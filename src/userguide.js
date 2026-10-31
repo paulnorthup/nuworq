@@ -86,14 +86,15 @@ export const STEPS = [
     check: 'The agent shows on the project\'s board, on an item or checked in, and Get started ticks Start an agent off.',
   },
   {
-    key: 'plan', title: 'Plan the first work', glance: 'Say what you want and why; an agent turns it into small items.',
+    key: 'plan', title: 'Plan the first work', glance: 'Write what you want done on the board, or plan it with an agent.',
     hand: [
-      'In Claude Code with the plugin, say "Plan <project> with nuworq: I want … because …". It reads the project, asks a few questions, offers options, and proposes small items, each with what done means. You decide; it never decides for you.',
+      'On the project\'s board, tap **+ Work**, write what should be true when it\'s done (for example "Users can reset their password"), and tap **Propose**.',
+      'Already know exactly what done means? Tap **+ What done means, context, priority**, fill it in, and tap **Add to Ready** to put it straight into the queue. **Waits on** there holds it until a URL answers or a person replies.',
       'From any shell, one item at a time:',
       '`nuworq propose "Exports retry when storage times out" --acceptance "A timed-out export retries 3 times, then fails with a clear error"`',
       'Proposals are shaped into ready work by agents, or wait for your OK, depending on the project\'s autonomy (below).',
     ],
-    none: 'The board has no box to propose work from yet: it comes from agents, the CLI, or GitHub issues.',
+    auto: 'In Claude Code with the plugin, say "Plan <project> with nuworq: I want … because …". It reads the project, asks a few questions, offers options, and proposes the small items for you, each with what done means. You decide; it never decides for you.',
     check: 'The items are on the board, under Proposed or Ready.',
   },
   {
