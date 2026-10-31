@@ -2,7 +2,7 @@
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
 import { rmSync } from 'node:fs';
-import { openDb } from './db.js';
+import { openDb, PR_TWINS } from './db.js';
 import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, mirrorPath, originOf, refetch } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
@@ -1890,6 +1890,8 @@ async function openPr(p, id) {
     this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
         ON CONFLICT (project_id, repo, number) DO UPDATE SET item_id = excluded.item_id, url = excluded.url, state = 'open', updated_at = excluded.updated_at`)
       .run(p.id, repo, pr.number, id, pr.url ?? '', item.title, pr.head_ref ?? item.branch, pr.head_sha ?? '', this.now());
+    // GitHub's "opened" delivery may have come in while this awaited it, and recorded the PR as o/r: one record.
+    for (const sql of PR_TWINS) this.db.exec(sql);
     row = this.q('SELECT * FROM prs WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, repo, pr.number);
     release();
     this.event(p, {
