@@ -12,7 +12,8 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
-import { AGENTS, DIFFICULTIES, difficultyOf, modelFor, modeAt, nextTrial, parseShare, parseTiers, trialEligible } from './models.js';
+import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
+import { jobsTaken } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
 import { commandParts } from '../web/commands.js';
@@ -299,6 +300,10 @@ export class Hub extends EventEmitter {
     // `nuworq serve` from NUWORQ_LLM_PROXY_URL; tests set a fake. null: reported usage only.
     this.llmProxy = null;
     this._measuring = new Map(); // item id → its measurement in flight
+    // Routing by results (#349): each local model's readiness as llm-proxy last said ({ ready, state, why, at };
+    // checkLocalModels in src/llmproxy.js), and each project's results per cell, recounted when events move on.
+    this.localReady = new Map();
+    this._cells = new Map(); // project id → { last: its newest event id, cells }
     // Questions left open on work that had already landed or been dropped (before #182) close the same way.
     for (const it of this.q(`SELECT * FROM items WHERE stage IN ('done', 'dropped') AND id IN (SELECT item_id FROM questions WHERE status = 'open')`).all()) this.settleQuestions(it, it.stage);
     // Renamed tags (#325): stored needs and declared has move to the new names, quietly (no events).
@@ -686,26 +691,62 @@ export class Hub extends EventEmitter {
     }));
   }
 
+  // Where a job on item starts with agent kind (#347, #349): { list, start, why }, list being the models it may run
+  // on (cheapest first, local ones only while ready), or null: routing is off, or there is nothing to choose from.
+  routePlan(p, item, mode, kind, top = '') {
+    if (!p.model_routing) return null;
+    const tiers = json(p.model_tiers, {});
+    const difficulty = difficultyOf(item);
+    const list = candidates(tiers[kind]?.length ? tiers[kind] : top ? [top] : [], {
+      difficulty, local: (m) => providerOf(m) === 'Open-weight', ready: (m) => !!this.localReady.get(m)?.ready,
+    });
+    if (!list.length) return null;
+    const plan = pickModel(list, { mode, difficulty, stats: this.cellStats(p)[`${mode} ${difficulty}`], quality: p.model_quality });
+    return { list, ...plan };
+  }
+
+  // Each cell's results (#349): { 'work standard': { model: { attempts, clean } } } over the last 90 days of jobs,
+  // where clean is a build that landed without being sent back or escaping, or any other job finished. Jobs still
+  // going, and raced attempts not chosen, don't count. Recounted only when the project's events have moved on.
+  cellStats(p) {
+    const last = this.q('SELECT MAX(id) AS id FROM events WHERE project_id = ?').get(p.id).id ?? 0;
+    const hit = this._cells.get(p.id);
+    if (hit?.last === last) return hit.cells;
+    const cells = {};
+    for (const j of jobsTaken(this, p, this.now() - 90 * DAY)) {
+      if (!j.model || j.result === 'open' || j.result === 'not_chosen') continue;
+      const s = ((cells[`${j.job} ${j.difficulty}`] ??= {})[j.model] ??= { attempts: 0, clean: 0 });
+      s.attempts++;
+      if (j.result === 'landed' || j.result === 'done') s.clean++;
+    }
+    this._cells.set(p.id, { last, cells });
+    return cells;
+  }
+
   // The model a job on item runs on with agent kind (#347), or null: routing is off, or there is nothing to choose from.
   // A building trial (#348) runs one tier down; a raced one is two slots, the top tier and one down (jobModels).
   jobModel(p, item, mode, kind, top = '') {
-    if (!p.model_routing) return null;
-    return modelFor(json(p.model_tiers, {}), kind, mode, item.tier_up ?? 0, top, mode === 'work' && item.trial === 'down' ? 1 : 0);
+    const plan = this.routePlan(p, item, mode, kind, top);
+    return plan && modelAt(plan.list, plan.start, item.tier_up ?? 0, mode === 'work' && item.trial === 'down' ? 1 : 0);
   }
 
   // What a runner hears about models for a job: { model }, and for a raced trial the models of its open slots in
-  // order ({ models }), so each worker it starts takes one.
+  // order ({ models }), so each worker it starts takes one. The item keeps the line on which model and why (#349).
   jobModels(p, item, mode, kind, top) {
-    if (!p.model_routing) return {};
+    const plan = this.routePlan(p, item, mode, kind, top);
+    if (!plan) return {};
     const model = this.jobModel(p, item, mode, kind, top) ?? undefined;
-    if (mode !== 'work' || item.trial !== 'race' || !this.racing(item)) return { model };
-    const tiers = json(p.model_tiers, {});
-    const want = [modelFor(tiers, kind, mode, item.tier_up, top), modelFor(tiers, kind, mode, item.tier_up, top, 1)];
+    const planned = plan.list[plan.start];
+    const why = model === planned ? plan.why
+      : `${model}, ${item.tier_up && model !== modelAt(plan.list, plan.start, 0, 1) ? `stepped up after ${item.tier_up} failed attempt${item.tier_up === 1 ? '' : 's'}` : 'a trial one tier down'}. Planned: ${plan.why}`;
+    if (item.route_why !== why) this.patch(item, { route_why: why });
+    if (mode !== 'work' || item.trial !== 'race' || !this.racing(item)) return { model, why };
+    const want = [modelAt(plan.list, plan.start, item.tier_up), modelAt(plan.list, plan.start, item.tier_up, 1)];
     for (const a of this.attemptsOf(item).filter((x) => x.stage !== 'abandoned')) {
       const i = want.indexOf(a.model);
       want.splice(i >= 0 ? i : 0, 1);
     }
-    return { model: want[0] ?? model, models: want.length > 1 ? want : undefined };
+    return { model: want[0] ?? model, models: want.length > 1 ? want : undefined, why };
   }
 
   // A building job's trial (#348), decided once per item, the first time a runner that routes models is offered it
@@ -741,8 +782,8 @@ export class Hub extends EventEmitter {
     const mode = modeAt(it);
     const tiers = json(p.model_tiers, {});
     const down = mode === 'work' && it.trial === 'down' ? 1 : 0;
-    const next = AGENTS.filter((k) => tiers[k]?.length)
-      .map((k) => [modelFor(tiers, k, mode, up, '', down), modelFor(tiers, k, mode, up + 1, '', down)])
+    const next = AGENTS.filter((k) => tiers[k]?.length).map((k) => this.routePlan(p, it, mode, k)).filter(Boolean)
+      .map(({ list, start }) => [modelAt(list, start, up, down), modelAt(list, start, up + 1, down)])
       .filter(([was, now]) => was !== now).map(([, now]) => now);
     if (next.length) this.event(p, { item: it, actor: SYSTEM, type: 'stepped_up', headline: `#${it.seq} ${why}, so its next attempt steps up a tier: ${next.join(', ')}` });
   }
@@ -759,7 +800,7 @@ export class Hub extends EventEmitter {
       stopped: p.run_paused ? 'paused' : budget != null && spent >= budget ? 'budget' : null,
       asked: !!p.staff_asked,
       // Model routing (#347), and the shares of building jobs that try a cheaper model (#348).
-      models: { on: !!p.model_routing, tiers: json(p.model_tiers, {}), trial: p.model_trial ?? 10, race: p.model_race ?? 0 },
+      models: { on: !!p.model_routing, tiers: json(p.model_tiers, {}), trial: p.model_trial ?? 10, race: p.model_race ?? 0, quality: p.model_quality || 'balanced', qualities: QUALITY },
     };
   }
 
@@ -1405,6 +1446,8 @@ export class Hub extends EventEmitter {
       size: item.size || undefined,
       // How hard it is (#348), rated when it's shaped; unrated counts as standard.
       difficulty: item.difficulty ? `${item.difficulty}${item.difficulty_why ? `: ${item.difficulty_why}` : ''}` : 'standard (not rated yet)',
+      // Which model routing picked for its job and why (#349), when a runner that routes was offered it.
+      model: item.route_why || undefined,
       trial: item.stage === 'active' && ['down', 'race'].includes(item.trial)
         ? (item.trial === 'race' ? 'Raced against the top model, to learn what a cheaper one can do.' : 'Started a tier down, to learn what a cheaper model can do. Work as usual.') : undefined,
       summary: item.summary || undefined,
@@ -3227,8 +3270,18 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
     const changes = [];
+    // The quality bar routing keeps to (#349): how close to the best model's results a cheaper one must come.
+    if (model_quality != null && model_quality !== '') {
+      const q = str(model_quality).toLowerCase();
+      if (!QUALITY[q]) throw new UserError(`model_quality is one of ${Object.keys(QUALITY).join(', ')}`, { hint: Object.entries(QUALITY).map(([k, v]) => `${k}: ${v.means}`).join('; ') + '.' });
+      if (q !== (p.model_quality || 'balanced')) {
+        this.q('UPDATE projects SET model_quality = ? WHERE id = ?').run(q, p.id);
+        p.model_quality = q;
+        this.event(p, { actor: by, type: 'runner', headline: `${You(by)} set the quality bar to ${QUALITY[q].label}: jobs run on ${QUALITY[q].means}, once there are results to compare` });
+      }
+    }
     // Trials (#348): the shares of eligible building jobs that try one tier down, and that race a cheaper model.
     for (const [key, v, said] of [['model_trial', model_trial, 'try a cheaper model'], ['model_race', model_race, 'race a cheaper model against the top one']]) {
       if (v === undefined || v === null || v === '') continue; // left blank: unchanged

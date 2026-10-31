@@ -61,14 +61,15 @@ export function verification(hub, landed, modelOf) {
 // so is the answer an escalation's answer gives the operator question it carried up.
 export const HUMAN_ACTIONS = ['answered', 'accepted', 'sent_back', 'steer', 'decision', 'comment', 'assumption_confirmed'];
 const PERSON = (col = 'actor') => `(${col} = '${HUMAN}' OR ${col} LIKE '@%')`;
-const ACTIONS = `e.type IN (${HUMAN_ACTIONS.map((t) => `'${t}'`).join(', ')}) AND ${PERSON('e.actor')}
+// Built when first used: core.js imports this file (#349), so its exports aren't there while this one loads.
+const ACTIONS = () => `e.type IN (${HUMAN_ACTIONS.map((t) => `'${t}'`).join(', ')}) AND ${PERSON('e.actor')}
   AND NOT (e.type = 'steer' AND e.headline LIKE '%: Change of course%'
     AND EXISTS (SELECT 1 FROM events a WHERE a.type = 'answered' AND a.actor = e.actor AND a.at = e.at AND a.project_id = e.project_id))
   AND NOT (e.type = 'answered'
     AND EXISTS (SELECT 1 FROM questions x WHERE x.escalates = json_extract(e.data, '$.question') AND x.answered_at = e.at))`;
 
 // A person's actions on one item, ever.
-export const humanActionsOn = (hub, item) => hub.q(`SELECT COUNT(*) AS n FROM events e WHERE e.item_id = ? AND ${ACTIONS}`).get(item.id).n;
+export const humanActionsOn = (hub, item) => hub.q(`SELECT COUNT(*) AS n FROM events e WHERE e.item_id = ? AND ${ACTIONS()}`).get(item.id).n;
 
 // How long act-level Needs you entries (src/insight.js) waited until a person resolved them, for those resolved
 // in (from, to], each from when it reached you: a blocking question to you (a reporter's once the hub asks you
@@ -102,7 +103,7 @@ function waitsForYou(hub, p, from, to) {
 // Over (from, to]: the person actions, the items that landed, actions per landed item, and the median wait of
 // what needed you until you resolved it.
 export function humanCost(hub, p, from, to = hub.now()) {
-  const actions = hub.q(`SELECT COUNT(*) AS n FROM events e WHERE e.project_id = ? AND e.at > ? AND e.at <= ? AND ${ACTIONS}`).get(p.id, from, to).n;
+  const actions = hub.q(`SELECT COUNT(*) AS n FROM events e WHERE e.project_id = ? AND e.at > ? AND e.at <= ? AND ${ACTIONS()}`).get(p.id, from, to).n;
   const landed = hub.q(`SELECT COUNT(DISTINCT t.item_id) AS n FROM transitions t JOIN items i ON i.id = t.item_id
     WHERE i.project_id = ? AND t.stage = 'done' AND t.at > ? AND t.at <= ?`).get(p.id, from, to).n;
   const waits = waitsForYou(hub, p, from, to);
@@ -283,9 +284,10 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
   const to = hub.now();
   const span = PERIODS[period];
   const from = span == null ? 0 : to - span;
-  const items = [], waits = [];
+  const items = [], waits = [], jobs = [];
   const projects = hub.projects().filter((p) => !scope || scope.includes(p.slug)).map((p) => {
     const now = projectFigures(hub, p, from, to);
+    jobs.push(...pricedJobs(hub, p, from, to));
     items.push(...now.items);
     waits.push(...now.waits);
     const before = span == null ? null : projectFigures(hub, p, from - span, from - 1).figures;
@@ -298,8 +300,63 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
   return {
     version: OUTCOMES_VERSION, period, since: from, until: to,
     takeaway: takeaway({ summary, projects, by_model }),
-    summary, projects, by_model, by_agent, calibration: calibration(items),
+    summary, projects, by_model, by_agent, calibration: calibration(items), routing: routingResults(jobs),
   };
+}
+
+// ── Model routing (#349): each model's results per cell (job and difficulty), and what routing saved ──
+
+// Every finished job in [from, to] that names its model, with what it cost: the usage its agent recorded on the
+// item, shared evenly among that agent's jobs there. cost_usd null: not known (a local model, or nothing recorded).
+export function pricedJobs(hub, p, from, to) {
+  const jobs = jobsTaken(hub, p, from, to).filter((j) => j.model && j.result !== 'open' && j.result !== 'not_chosen');
+  // Where llm-proxy measured an agent on an item, its rows stand in for what was reported, so nothing counts twice.
+  const spent = new Map();
+  for (const r of hub.q('SELECT u.agent, u.cost_usd, u.source, i.seq FROM usage u JOIN items i ON i.id = u.item_id WHERE u.project_id = ?').all(p.id)) {
+    const k = `#${r.seq} ${r.agent}`;
+    const s = spent.get(k) ?? { measured: { usd: 0, known: true, any: false }, reported: { usd: 0, known: true, any: false } };
+    const to = r.source === 'llm-proxy' ? s.measured : s.reported;
+    to.any = true;
+    if (r.cost_usd == null) to.known = false; else to.usd += r.cost_usd;
+    spent.set(k, s);
+  }
+  for (const [k, s] of spent) spent.set(k, s.measured.any ? s.measured : s.reported);
+  const share = new Map();
+  for (const j of jobs) share.set(`${j.item} ${j.agent}`, (share.get(`${j.item} ${j.agent}`) ?? 0) + 1);
+  return jobs.map((j) => {
+    const s = spent.get(`${j.item} ${j.agent}`);
+    return { ...j, clean: j.result === 'landed' || j.result === 'done', cost_usd: s?.known ? s.usd / share.get(`${j.item} ${j.agent}`) : null };
+  });
+}
+
+// Per cell, each model's attempts, clean ones, clean rate and full cost per clean job (everything its attempts
+// cost, rework included, over the clean ones; null unless every attempt is priced), best rate first. saved_usd:
+// against running each cell's clean jobs on its dearest model per clean job, what the cheaper ones saved.
+export function routingResults(jobs) {
+  const cells = new Map();
+  for (const j of jobs) {
+    const key = `${j.job} ${j.difficulty}`;
+    const models = cells.get(key) ?? new Map();
+    const m = models.get(j.model) ?? { model: j.model, attempts: 0, clean: 0, usd: 0, priced: true };
+    m.attempts++;
+    if (j.clean) m.clean++;
+    if (j.cost_usd == null) m.priced = false; else m.usd += j.cost_usd;
+    models.set(j.model, m);
+    cells.set(key, models);
+  }
+  let saved = 0, priced = false;
+  const out = [...cells].map(([key, models]) => {
+    const [job, difficulty] = key.split(' ');
+    const rows = [...models.values()].map((m) => ({
+      model: m.model, attempts: m.attempts, clean: m.clean, rate: Math.round((100 * m.clean) / m.attempts) / 100,
+      cost_per_clean: m.priced && m.clean ? Math.round((100 * m.usd) / m.clean) / 100 : null,
+    })).sort((a, b) => b.rate - a.rate || b.attempts - a.attempts);
+    const known = rows.filter((r) => r.cost_per_clean != null);
+    const dear = known.reduce((a, r) => (!a || r.cost_per_clean > a.cost_per_clean ? r : a), null);
+    for (const r of known) if (r !== dear) { saved += r.clean * (dear.cost_per_clean - r.cost_per_clean); priced = true; }
+    return { job, difficulty, models: rows };
+  }).sort((a, b) => b.models.reduce((n, m) => n + m.attempts, 0) - a.models.reduce((n, m) => n + m.attempts, 0));
+  return { cells: out, saved_usd: priced ? Math.round(saved * 100) / 100 : null };
 }
 
 const usd = (n) => `$${n.toFixed(2)}`;

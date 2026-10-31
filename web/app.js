@@ -1058,6 +1058,7 @@ function renderDrawer() {
       <button class="btn ghost small x" data-action="close" title="Close (Esc)">✕</button></div>
     <h2 class="title">${esc(it.title)}</h2>
     <div class="d-now">${holderLine}</div>
+    ${it.model_why && z() >= 1 ? `<div class="d-model" data-new="model-why">Model: ${esc(it.model_why)}</div>` : ''}
     <div class="actions">${actions.join('')}</div>
     ${it.map ? `<div class="d-sec"><div class="label">Map</div>${prioritySeg(it.item, it.priority)}${groupMap(it.map)}</div>` : ''}
     ${edit}
@@ -1143,6 +1144,9 @@ function staffingModal(back) {
     <label data-new="model-trials">Building jobs that try one model down, percent<input id="st-trial" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.trial ?? 10}"></label>
     <label>Building jobs raced against the top model, percent<input id="st-race" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.race ?? 0}"></label></div>
     <p class="faint">Trials teach nuworq what each model can do. Only rote and standard items that aren't "now" or operator-only, while there's budget left today. 0 turns one off.</p>
+    <fieldset class="quality" data-new="model-quality"><legend>Quality bar</legend>
+      ${Object.entries(m.qualities ?? {}).map(([k, q]) => `<label class="check-label"><input type="radio" name="st-quality" value="${k}" ${(m.quality ?? 'balanced') === k ? 'checked' : ''}> <span><b>${esc(q.label)}</b>: ${esc(q.means)}</span></label>`).join('')}
+      <p class="faint">Once a model has 20 finished jobs of a kind (building standard items, say), and so has the top one, each job of that kind runs on the cheapest model that meets the bar. Until then: the top model for building, the cheapest for landing and tidying.</p></fieldset>
     <div class="foot"><button class="btn ghost" data-action="staffing-pause" data-paused="${s.paused ? 1 : 0}">${s.paused ? 'Resume' : 'Pause'}</button><button class="btn primary" data-action="staffing-save">Save</button></div>`);
 }
 const tiersTyped = () => Object.fromEntries(['claude', 'codex', 'opencode'].map((a) => [a, val(`st-tiers-${a}`)]));
@@ -1627,7 +1631,7 @@ const ACTIONS = {
   staffing: () => staffingModal(),
   'staffing-from-settings': () => staffingModal(true),
   'staffing-save': async () => {
-    const r = await human('settings', { run_workers: val('st-workers'), run_budget: val('st-budget'), model_tiers: tiersTyped(), model_trial: val('st-trial'), model_race: val('st-race') }, 'Staffing saved: runners follow it at their next poll');
+    const r = await human('settings', { run_workers: val('st-workers'), run_budget: val('st-budget'), model_tiers: tiersTyped(), model_trial: val('st-trial'), model_race: val('st-race'), model_quality: $('#modal input[name="st-quality"]:checked')?.value }, 'Staffing saved: runners follow it at their next poll');
     if (r) closeModal();
   },
   'models-on': () => {

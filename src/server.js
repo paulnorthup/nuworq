@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, STAGES, normRemote, slugify, refuseSecrets, MIN, HOUR, DAY } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, STAGES, normRemote, slugify, refuseSecrets, providerOf, MIN, HOUR, DAY } from './core.js';
+import { checkLocalModels } from './llmproxy.js';
 import { view, itemView, projectList, homeView, withEntry } from './insight.js';
 import { tools, guide } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
@@ -292,6 +293,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Landing work's pull requests, as GitHub has them (no webhook may reach the hub): ready ones merge,
       // merged ones land, closed or conflicting ones become land jobs. At most once a minute.
       if (hub.github) hub.mergeReady().catch((e) => console.error('checking pull requests failed', e));
+      // Whether each local model a routing project lists can take work, as llm-proxy says (#349). At most once a minute.
+      if (!spaces && Date.now() - (hub._localChecked ?? 0) >= MIN) {
+        hub._localChecked = Date.now();
+        checkLocalModels(hub, (m) => providerOf(m) === 'Open-weight').catch((e) => console.error('checking local models failed', e));
+      }
       // Issues whose work has landed close on GitHub (a hub that has served a request knows its public address).
       if (app && hub._app === app) for (const p of hub.projects()) closeLanded(hub, p, hub.github.app).catch((e) => console.error('closing issues failed', e));
       // Questions to issue reporters that GitHub refused when asked go out again.

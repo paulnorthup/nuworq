@@ -64,7 +64,49 @@ export function proxyClient({ url, key = '', access = null, fetch: get = fetch, 
       }
       return out;
     },
+    // Whether a model can take work now (#349): GET /_/api/models?model=<name>, its entry's readiness (in aliases
+    // for a proxy name like studio, in models for a provider's own). { ready, state, why }.
+    async readiness(model) {
+      let res;
+      try {
+        res = await get(`${url}/_/api/models?${new URLSearchParams({ model })}`, { headers, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+      } catch (e) {
+        throw new Unavailable(`llm-proxy at ${url} is unreachable (${e.cause?.code ?? e.name ?? e.message})`);
+      }
+      if (!res.ok) throw new Unavailable(`llm-proxy answered ${res.status} for its models`);
+      const body = await res.json().catch(() => null);
+      const entry = body?.aliases?.find((a) => a.name === model) ?? body?.models?.find((m) => m.model === model);
+      return readyFrom(entry?.readiness);
+    },
   };
+}
+
+// llm-proxy's readiness, as a yes or no (its docs' "Before you start work"): unavailable or unknown is no, and so is
+// one failing more than half of a few recent requests; warm, cold (it loads first) and up are yes.
+export function readyFrom(r) {
+  if (!r) return { ready: false, state: 'unknown', why: "llm-proxy doesn't list it" };
+  if (!['warm', 'cold', 'up'].includes(r.state)) return { ready: false, state: r.state, why: `llm-proxy says it is ${r.state}` };
+  if ((r.requests15m ?? 0) >= 4 && (r.failRate15m ?? 0) > 0.5) return { ready: false, state: r.state, why: `${Math.round(r.failRate15m * 100)}% of its last ${r.requests15m} requests failed` };
+  return { ready: true, state: r.state, why: '' };
+}
+
+// Every local model a routing project lists, checked with llm-proxy (#349): hub.localReady holds { ready, state,
+// why, at } per model, which routing reads. Without llm-proxy, or when it can't answer, none is ready.
+export async function checkLocalModels(hub, local) {
+  const wanted = new Set();
+  for (const p of hub.projects()) {
+    if (!p.model_routing) continue;
+    for (const list of Object.values(JSON.parse(p.model_tiers || '{}'))) for (const m of list) if (local(m)) wanted.add(m);
+  }
+  for (const m of wanted) {
+    let r;
+    try {
+      r = hub.llmProxy?.readiness ? await hub.llmProxy.readiness(m) : { ready: false, state: 'unknown', why: 'no llm-proxy is set (NUWORQ_LLM_PROXY_URL)' };
+    } catch (e) {
+      r = { ready: false, state: 'unreachable', why: e.message };
+    }
+    hub.localReady.set(m, { ...r, at: hub.now() });
+  }
 }
 
 export const clientName = (p, agent) => `nuworq/${p.slug}/${agent}`;

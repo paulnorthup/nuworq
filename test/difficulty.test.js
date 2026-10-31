@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, LEASE_MS } from '../src/core.js';
 import { view } from '../src/insight.js';
-import { nextTrial, trialEligible, parseShare } from '../src/models.js';
+import { nextTrial, trialEligible, parseShare, QUALITY } from '../src/models.js';
 import { outcomes, calibration, workspaceOutcomes } from '../src/outcomes.js';
 import { plan } from '../src/runner.js';
 import { calibrationSection } from '../web/analytics.js';
@@ -84,7 +84,7 @@ describe('trials', () => {
   test('a trial builds a tier down, the claim records it, and a failed one steps back up to the top', () => {
     const { hub, set, op, row, route, create } = world();
     set({ model_routing: true, model_tiers: TIERS, model_trial: 100 });
-    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, trial: 100, race: 0 });
+    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, trial: 100, race: 0, quality: 'balanced', qualities: QUALITY });
     create('Build', { priority: 'now' });
     assert.equal(route().model, 'claude-opus-5-5', '"now" work never tries a cheaper model');
     assert.equal(row(1).trial, '', 'and nothing is decided for it');

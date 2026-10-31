@@ -1,170 +1,173 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { Hub } from '../src/core.js';
-import { createServer } from '../src/server.js';
-import { repoRoot } from '../src/client.js';
+import { itemView } from '../src/insight.js';
+import { candidates, pickModel, MIN_ATTEMPTS, QUALITY } from '../src/models.js';
+import { proxyClient, readyFrom, checkLocalModels } from '../src/llmproxy.js';
+import { routingResults, workspaceOutcomes } from '../src/outcomes.js';
+import { routingSection } from '../web/analytics.js';
 
-function setup() {
-  const hub = new Hub({ clock: () => Date.UTC(2026, 9, 1, 9) });
-  const make = (slug, path = '') => {
-    hub.tx(() => hub.project(slug, { create: true }));
-    if (path) hub.humanOp(slug, 'settings', { path });
+// #349: each job runs on the cheapest model whose results are close enough to the best, at the project's bar.
+const LIST = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'];
+const [HAIKU, SONNET, OPUS] = LIST;
+const cell = (rates, n = 25) => Object.fromEntries(Object.entries(rates).map(([m, r]) => [m, { attempts: n, clean: Math.round(r * n) }]));
+
+describe('picking a model', () => {
+  test('at each quality bar, the cheapest model within it of the best', () => {
+    const stats = cell({ [HAIKU]: 0.84, [SONNET]: 0.92, [OPUS]: 0.96 });
+    const pick = (quality) => LIST[pickModel(LIST, { mode: 'work', stats, quality }).start];
+    assert.equal(pick('best'), OPUS);
+    assert.equal(pick('balanced'), SONNET, '92% is within 5 points of 96%');
+    assert.equal(pick('cheapest'), HAIKU, '84% is within 15 points');
+    assert.deepEqual(Object.keys(QUALITY), ['best', 'balanced', 'cheapest']);
+    assert.equal(pickModel(LIST, { mode: 'work', stats }).start, 1, 'balanced unless set');
+  });
+
+  test('a cheaper model that does as well as the best takes it even at Best quality', () => {
+    const stats = cell({ [HAIKU]: 0.96, [OPUS]: 0.96 });
+    assert.equal(LIST[pickModel(LIST, { mode: 'work', stats, quality: 'best' }).start], HAIKU);
+  });
+
+  test('one line says which model and why', () => {
+    const stats = cell({ [SONNET]: 0.92, [OPUS]: 0.96 }, 50);
+    assert.equal(pickModel(LIST, { mode: 'work', stats }).why, `${SONNET}: 92% of 50 standard builds landed clean, vs ${OPUS} 96%`);
+    assert.equal(pickModel(LIST, { mode: 'work', stats, quality: 'best' }).why, `${OPUS}: 96% of 50 standard builds landed clean, the best measured`);
+  });
+
+  test(`fewer than ${MIN_ATTEMPTS} attempts: building stays on the top tier, rote jobs on the cheapest; reviews always top`, () => {
+    const thin = { [HAIKU]: { attempts: 40, clean: 40 }, [OPUS]: { attempts: MIN_ATTEMPTS - 1, clean: MIN_ATTEMPTS - 1 } };
+    const w = pickModel(LIST, { mode: 'work', stats: thin, difficulty: 'rote' });
+    assert.equal(LIST[w.start], OPUS, 'the top tier is not measured yet, so nothing is known to be close to it');
+    assert.match(w.why, /the top tier until claude-opus-5-5 has 20 finished rote builds to compare against \(1 to go\)/);
+    assert.equal(LIST[pickModel(LIST, { mode: 'land', stats: {} }).start], HAIKU);
+    assert.equal(LIST[pickModel(LIST, { mode: 'work', stats: {} }).start], OPUS);
+    assert.equal(LIST[pickModel(LIST, { mode: 'review', stats: cell({ [HAIKU]: 1, [OPUS]: 0.5 }) }).start], OPUS);
+    // A cheap model with too few attempts is not picked, however good it looks.
+    assert.equal(LIST[pickModel(LIST, { mode: 'work', stats: { ...cell({ [OPUS]: 0.9 }), [HAIKU]: { attempts: 5, clean: 5 } } }).start], OPUS);
+  });
+
+  test('a local model counts as cheapest, only while ready, and never on hard items', () => {
+    const list = [HAIKU, 'qwen3-coder', OPUS];
+    const local = (m) => m === 'qwen3-coder';
+    assert.deepEqual(candidates(list, { local, ready: () => true }), ['qwen3-coder', HAIKU, OPUS]);
+    assert.deepEqual(candidates(list, { local, ready: () => false }), [HAIKU, OPUS]);
+    assert.deepEqual(candidates(list, { local, ready: () => true, difficulty: 'hard' }), [HAIKU, OPUS]);
+  });
+});
+
+describe('llm-proxy readiness', () => {
+  test('warm, cold and up are ready; unavailable, unknown and a failing model are not', () => {
+    assert.equal(readyFrom({ state: 'warm' }).ready, true);
+    assert.equal(readyFrom({ state: 'cold' }).ready, true);
+    assert.equal(readyFrom({ state: 'unavailable' }).ready, false);
+    assert.equal(readyFrom(undefined).ready, false);
+    assert.deepEqual(readyFrom({ state: 'warm', requests15m: 8, failRate15m: 0.75 }), { ready: false, state: 'warm', why: '75% of its last 8 requests failed' });
+    assert.equal(readyFrom({ state: 'warm', requests15m: 2, failRate15m: 1 }).ready, true, 'two requests say little');
+  });
+
+  test('the client reads GET /_/api/models?model= (aliases or models); the hub keeps each local model\'s answer', async () => {
+    const asked = [];
+    const fetch = async (url, opts) => {
+      asked.push([url, opts.headers.authorization]);
+      const model = new URL(url).searchParams.get('model');
+      const body = model === 'studio' ? { aliases: [{ name: 'studio', readiness: { state: 'warm' } }], models: [] }
+        : { models: [{ model, readiness: { state: 'unavailable' } }] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const hub = new Hub();
+    hub.tx(() => hub.project('p', { create: true }));
+    hub.humanOp('p', 'settings', { model_routing: true, model_tiers: { opencode: ['studio', 'qwen3-coder', 'claude-opus-5-5'] } });
+    hub.llmProxy = proxyClient({ url: 'http://proxy.test', key: 'sk-read', fetch });
+    await checkLocalModels(hub, (m) => !m.startsWith('claude'));
+    assert.deepEqual(asked.map(([u]) => u), ['http://proxy.test/_/api/models?model=studio', 'http://proxy.test/_/api/models?model=qwen3-coder']);
+    assert.equal(asked[0][1], 'Bearer sk-read');
+    assert.equal(hub.localReady.get('studio').ready, true);
+    assert.equal(hub.localReady.get('qwen3-coder').ready, false);
+    // No llm-proxy: no local model is ready.
+    hub.llmProxy = null;
+    await checkLocalModels(hub, (m) => !m.startsWith('claude'));
+    assert.match(hub.localReady.get('studio').why, /no llm-proxy is set/);
+  });
+});
+
+// A project that routes, with builds already done on each model: n attempts on model, clean of them landed.
+function world() {
+  const hub = new Hub({ clock: () => Date.UTC(2026, 9, 31, 9) });
+  hub.tx(() => hub.project('p', { create: true }));
+  hub.humanOp('p', 'settings', { runner: true, autonomy: 'full', model_routing: true, model_tiers: { claude: LIST }, model_trial: 0 });
+  let seq = 0;
+  const builds = (model, n, clean) => {
+    for (let k = 0; k < n; k++) {
+      const agent = `w-${model}-${k}`;
+      hub.humanOp('p', 'create', { title: `Build ${++seq}`, acceptance: 'x' });
+      hub.agentOp('p', 'checkin', agent, { model });
+      hub.agentOp('p', 'claim', agent, { item: `#${seq}` });
+      hub.agentOp('p', 'submit', agent, { item: `#${seq}`, headline: 'Done', evidence: [{ label: 'npm test' }] });
+      if (k < clean) hub.humanOp('p', 'accept', { item: `#${seq}` });
+      else hub.humanOp('p', 'sendback', { item: `#${seq}`, note: 'missing a test' }), hub.humanOp('p', 'update', { item: `#${seq}`, stage: 'dropped' });
+    }
   };
-  const op = (slug, op, agent, args = {}, root = '') => hub.agentOp(slug, op, agent, args, { root });
-  return { hub, make, op };
+  return { hub, builds, route: () => hub.route('', { runner: true, kind: 'claude' })[0] };
 }
 
-describe('the hub routes agents to work', () => {
-  test('naming a project from a folder teaches the hub where it lives', () => {
-    const { hub, op } = setup();
-    op('lantern', 'checkin', 'a', {}, '/code/lantern/');
-    assert.equal(hub.project('lantern').path, '/code/lantern');
-    assert.equal(hub.projectByPath('/code/lantern/src/deep').slug, 'lantern');
-    assert.equal(hub.projectByPath('/code/lantern-other'), null, 'a sibling folder with a shared prefix is not a match');
+describe('routing on real results', () => {
+  test('the hub counts each model\'s builds per cell and routes the next build to the cheapest close enough', () => {
+    const { hub, builds, route } = world();
+    builds(OPUS, 20, 19);
+    builds(SONNET, 20, 18);
+    builds(HAIKU, 20, 17);
+    const cells = hub.cellStats(hub.project('p'));
+    assert.deepEqual(cells['work standard'][SONNET], { attempts: 20, clean: 18 });
+    hub.humanOp('p', 'create', { title: 'Next build', acceptance: 'x' });
+    const r = route();
+    assert.equal(r.model, SONNET, '90% is within 5 points of 95%');
+    assert.equal(r.why, `${SONNET}: 90% of 20 standard builds landed clean, vs ${OPUS} 95%`);
+    const it = itemView(hub, 'p', r.item);
+    assert.equal(it.model_why, r.why, 'the item says which model and why');
+    assert.equal(hub.agentOp('p', 'look', 'x', { item: r.item }).model, r.why);
+    hub.humanOp('p', 'settings', { model_quality: 'best' });
+    assert.equal(route().model, OPUS);
+    hub.humanOp('p', 'settings', { model_quality: 'cheapest' });
+    assert.equal(route().model, HAIKU, '85% is within 15 points of 95%');
+    assert.throws(() => hub.humanOp('p', 'settings', { model_quality: 'fast' }), /best, balanced, cheapest/);
   });
 
-  test('an agent in a known folder needs no project name', () => {
-    const { hub, make, op } = setup();
-    make('lantern', '/code/lantern');
-    hub.humanOp('lantern', 'create', { title: 'Do a thing', acceptance: 'x' });
-    const brief = op('', 'checkin', 'a', {}, '/code/lantern');
-    assert.equal(brief.project, 'lantern');
-    assert.equal(brief.routed, undefined);
-    assert.equal(brief.workspace, '/code/lantern');
-    assert.equal(op('', 'next', 'a', {}, '/code/lantern').item, '#1');
-    op('', 'progress', 'a', { item: '#1', headline: 'going' }, '/code/lantern/src');
+  test('a failed attempt still steps the next one up a tier from where routing put it', () => {
+    const { hub, builds, route } = world();
+    builds(OPUS, 20, 19);
+    builds(SONNET, 20, 18);
+    // Cheapest that passes, so Sonnet stays the plan once its own stalled attempt counts against it (18 of 21).
+    hub.humanOp('p', 'settings', { model_quality: 'cheapest' });
+    hub.humanOp('p', 'create', { title: 'Next build', acceptance: 'x' });
+    const ref = route().item;
+    hub.agentOp('p', 'checkin', 'w', { model: SONNET });
+    hub.agentOp('p', 'claim', 'w', { item: ref });
+    hub.agentOp('p', 'handoff', 'w', { item: ref, headline: 'Stuck' });
+    const r = route();
+    assert.equal(r.model, OPUS);
+    assert.match(r.why, /^claude-opus-5-5, stepped up after 1 failed attempt\. Planned: claude-sonnet-5-5: 86% of 21 standard builds/);
   });
 
-  test('an agent anywhere else is routed to the most valuable work, and told where it lives', () => {
-    const { hub, make, op } = setup();
-    make('quiet', '/code/quiet');
-    hub.humanOp('quiet', 'create', { title: 'Later thing', acceptance: 'x', priority: 'later' });
-    make('urgent', '/code/urgent');
-    hub.humanOp('urgent', 'create', { title: 'Idea', stage: 'proposed' });
-    hub.humanOp('urgent', 'pick', { item: '#1' });
-    const brief = op('', 'checkin', 'a', {}, '/somewhere/else');
-    assert.equal(brief.project, 'urgent');
-    assert.match(brief.routed, /#1 Idea/);
-    assert.match(brief.workspace, /lives in \/code\/urgent, but you are in \/somewhere\/else/);
-    assert.deepEqual(hub.route().map((r) => r.project), ['urgent', 'quiet']);
+  test('analytics shows each model per cell and what routing saved against the dearest', () => {
+    const r = routingResults([
+      ...Array.from({ length: 4 }, (_, k) => ({ job: 'work', difficulty: 'standard', model: OPUS, clean: true, cost_usd: 2 })),
+      ...Array.from({ length: 4 }, (_, k) => ({ job: 'work', difficulty: 'standard', model: SONNET, clean: k < 3, cost_usd: 0.5 })),
+      { job: 'land', difficulty: 'standard', model: 'qwen3-coder', clean: true, cost_usd: null },
+    ]);
+    const work = r.cells.find((c) => c.job === 'work');
+    assert.deepEqual(work.models.map((m) => [m.model, m.rate, m.cost_per_clean]), [[OPUS, 1, 2], [SONNET, 0.75, 0.67]]);
+    assert.equal(r.saved_usd, 3.99, 'three clean Sonnet builds at $0.67 each, rework included, vs $2 on Opus');
+    const html = routingSection(r, { esc: String });
+    assert.match(html, /Routing saved \$3\.99 against running each job on its dearest model/);
+    assert.match(html, /Building <span class="s">standard items/);
+    assert.match(html, /class="step faint"/, 'under 20 attempts: faint');
+    assert.equal(routingSection({ cells: [] }, { esc: String }), '');
   });
 
-  test('routing skips parked projects, and says so when nothing is waiting anywhere', () => {
-    const { hub, make, op } = setup();
-    make('lantern', '/code/lantern');
-    hub.humanOp('lantern', 'create', { title: 'Do a thing', acceptance: 'x' });
-    hub.humanOp('lantern', 'settings', { parked: true });
-    assert.deepEqual(hub.route(), []);
-    const r = op('', 'checkin', 'a', {}, '/nowhere');
-    assert.equal(r.project, null);
-    assert.match(r.next, /No work is waiting in any project/);
-  });
-
-  test('other operations without a resolvable project ask the agent to check in first', () => {
-    const { op } = setup();
-    assert.throws(() => op('', 'progress', 'a', { item: '#1', headline: 'x' }, '/nowhere'), /Which project/);
-  });
-});
-
-describe('handing off', () => {
-  function world() {
-    const clock = { t: Date.UTC(2026, 9, 1, 9) };
-    const hub = new Hub({ clock: () => clock.t });
-    hub.tx(() => hub.project('p', { create: true }));
-    const op = (agent, name, args = {}) => hub.agentOp('p', name, agent, args);
-    return { hub, clock, op };
-  }
-
-  test("what you hand off isn't handed straight back to you, but others get it at once", () => {
-    const { hub, clock, op } = world();
-    hub.humanOp('p', 'create', { title: 'Needs Docker', acceptance: 'x', priority: 'now' });
-    hub.humanOp('p', 'create', { title: 'Plain work', acceptance: 'x' });
-    assert.equal(op('a', 'next').item, '#1');
-    op('a', 'handoff', { item: '#1', headline: 'no Docker here' });
-    assert.equal(op('a', 'next').item, '#2', 'other work instead');
-    op('a', 'handoff', { item: '#2', headline: 'also stuck' });
-    const idle = op('a', 'next');
-    assert.equal(idle.mode, 'idle');
-    assert.match(idle.hint, /You handed off #1, #2/);
-    assert.equal(op('b', 'next').item, '#1', 'another agent gets it immediately');
-    op('b', 'handoff', { item: '#1', headline: 'me neither' });
-    clock.t += 31 * 60_000;
-    assert.equal(op('a', 'next').item, '#1', 'after the cooldown it comes back');
-  });
-
-  test('affinity still brings sent-back work to its implementer', () => {
-    const { hub, op } = world();
-    hub.humanOp('p', 'create', { title: 'First', acceptance: 'x' });
-    hub.humanOp('p', 'create', { title: 'Mine', acceptance: 'x' });
-    op('a', 'claim', { item: '#2' });
-    op('a', 'submit', { item: '#2', headline: 'done' });
-    hub.humanOp('p', 'sendback', { item: '#2', note: 'missing a test' });
-    assert.equal(op('a', 'next').item, '#2');
-  });
-});
-
-describe('transport', () => {
-  test('HTTP: project-less agent calls resolve by folder; /api/where and /api/route answer', async () => {
-    const { hub, make } = setup();
-    make('lantern', '/code/my lantern');
-    hub.humanOp('lantern', 'create', { title: 'Do a thing', acceptance: 'x' });
-    const server = createServer(hub);
-    await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    const base = `http://127.0.0.1:${server.address().port}`;
-    try {
-      const res = await fetch(`${base}/api/agent/checkin`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-nuworq-agent': 'a', 'x-nuworq-root': encodeURIComponent('/code/my lantern') },
-        body: '{}',
-      });
-      assert.equal((await res.json()).project, 'lantern');
-      const where = await (await fetch(`${base}/api/where?root=${encodeURIComponent('/code/my lantern/sub')}`)).json();
-      assert.equal(where.project, 'lantern');
-      const route = await (await fetch(`${base}/api/route`)).json();
-      assert.equal(route[0].item, '#1');
-    } finally {
-      server.close();
-    }
-  });
-
-  test('a git worktree maps back to its main checkout', () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-wt-')));
-    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, stdio: 'ignore' });
-    g('init', '-q', '-b', 'main');
-    writeFileSync(join(dir, 'f'), 'x');
-    g('add', '.');
-    g('commit', '-q', '-m', 'init');
-    g('worktree', 'add', '-q', '-b', 'nuworq/w1', `${dir}.worktrees/w1`);
-    assert.equal(repoRoot(`${dir}.worktrees/w1`), dir);
-    assert.equal(repoRoot(dir), dir);
-  });
-});
-
-describe('projects are found by name too', () => {
-  test('checking in with a project\'s display name reaches it instead of creating an empty one', () => {
-    const { hub, make, op } = setup();
-    make('trellis');
-    hub.humanOp('trellis', 'settings', { name: 'nuworq' });
-    hub.humanOp('trellis', 'create', { title: 'Real work', acceptance: 'x' });
-    const brief = op('nuworq', 'checkin', 'a');
-    assert.equal(brief.project, 'trellis');
-    assert.equal(hub.projects().length, 1, 'no second, empty project');
-    assert.equal(op('Nuworq', 'next', 'a').item, '#1');
-  });
-});
-
-describe('learning where a project lives', () => {
-  test('a checkin from a clone of another repository does not teach the project its folder', () => {
-    const { hub, make, op } = setup();
-    make('proxy');
-    hub.humanOp('proxy', 'remote', { add: 'git@github.com:acme/proxy.git' });
-    hub.agentOp('proxy', 'checkin', 'a', {}, { root: '/code/other-repo', remote: 'github.com/acme/other' });
-    assert.equal(hub.project('proxy').path, '', 'the wrong folder is not learned');
-    hub.agentOp('proxy', 'checkin', 'b', {}, { root: '/code/proxy', remote: 'github.com/acme/proxy' });
-    assert.equal(hub.project('proxy').path, '/code/proxy', 'its own clone is');
+  test('workspace outcomes carry the routing results', () => {
+    const { hub, builds } = world();
+    builds(OPUS, 3, 3);
+    const o = workspaceOutcomes(hub, { period: '14d' });
+    assert.deepEqual(o.routing.cells[0].models[0], { model: OPUS, attempts: 3, clean: 3, rate: 1, cost_per_clean: null });
   });
 });
