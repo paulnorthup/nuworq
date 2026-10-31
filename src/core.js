@@ -130,7 +130,10 @@ export function providerOf(model = '') {
 
 // Everything written into nuworq has up to three layers. Be forgiving: an over-long
 // headline is trimmed and the overflow moved into the summary rather than rejected.
-export function layered(headline, summary = '', detail = '', what = 'headline') {
+// It ends at the last sentence that fits; only a first sentence over the cap is cut at a space, with "…".
+// whole: a question (#387), kept at any length, since a person must read all of it to answer.
+// moved: '' (nothing), 'sentence' or 'space', so the agent can be told.
+export function layered(headline, summary = '', detail = '', what = 'headline', { whole = false } = {}) {
   headline = String(headline ?? '').trim();
   summary = String(summary ?? '').trim();
   detail = String(detail ?? '').trim();
@@ -140,13 +143,42 @@ export function layered(headline, summary = '', detail = '', what = 'headline') 
     headline = first.trim();
     summary = [rest.join('\n').trim(), summary].filter(Boolean).join('\n\n');
   }
-  if (headline.length > HEADLINE_MAX) {
-    const space = headline.lastIndexOf(' ', HEADLINE_MAX - 1);
-    const at = space > 60 ? space : HEADLINE_MAX - 1;
-    summary = ['…' + headline.slice(at).trim(), summary].filter(Boolean).join('\n\n');
-    headline = headline.slice(0, at).trim() + '…';
+  let moved = '';
+  if (!whole && headline.length > HEADLINE_MAX) {
+    const ends = [...headline.slice(0, HEADLINE_MAX + 1).matchAll(/[.?!]["')\]]?(?=\s)/g)];
+    const end = ends.length ? ends.at(-1).index + ends.at(-1)[0].length : 0;
+    if (end) {
+      summary = [headline.slice(end).trim(), summary].filter(Boolean).join('\n\n');
+      headline = headline.slice(0, end).trim();
+      moved = 'sentence';
+    } else {
+      const space = headline.lastIndexOf(' ', HEADLINE_MAX - 1);
+      const at = space > 60 ? space : HEADLINE_MAX - 1;
+      summary = ['…' + headline.slice(at).trim(), summary].filter(Boolean).join('\n\n');
+      headline = headline.slice(0, at).trim() + '…';
+      moved = 'space';
+    }
   }
-  return { headline, summary, detail };
+  return { headline, summary, detail, moved };
+}
+
+// What an agent's call should be told about its first line (#387): a long question is kept whole but should
+// be shorter; a long headline or title says what moved into the summary. '' when nothing needs saying.
+export function layeredNote(op, args = {}) {
+  if (op === 'ask') {
+    const first = str(args.question).split('\n')[0].trim();
+    return first.length > HEADLINE_MAX
+      ? `Your question is stored whole (${first.length} characters), but keep a question to one short sentence and put the rest in context.`
+      : '';
+  }
+  const line = typeof args.headline === 'string' && args.headline.trim() ? args.headline
+    : op === 'propose' && typeof args.title === 'string' ? args.title : '';
+  if (!line.trim()) return '';
+  const field = line === args.headline ? 'headline' : 'title';
+  const { moved } = layered(line);
+  if (moved === 'sentence') return `Your ${field} was over ${HEADLINE_MAX} characters: it now ends after the last sentence that fit, and the rest opens the summary.`;
+  if (moved === 'space') return `Your ${field}'s first sentence was over ${HEADLINE_MAX} characters: it was cut at a space with "…", and the rest opens the summary. Keep it to one short sentence.`;
+  return '';
 }
 
 const str = (v) => (v == null ? '' : String(v).trim());
@@ -1490,6 +1522,8 @@ export class Hub extends EventEmitter {
       }
       const renamed = renamedTags(op === 'checkin' ? args?.has : ['propose', 'refine'].includes(op) ? args?.needs : null);
       if (renamed) r.hint = `${renamed} ${r.hint ?? ''}`.trim();
+      const trimmed = layeredNote(op, args ?? {});
+      if (trimmed && r && typeof r === 'object') r.hint = `${trimmed} ${r.hint ?? ''}`.trim();
       if (!slug) r.project ??= p.slug; // so clients can stay with the project they were sent to
       if (['checkin', 'next'].includes(op)) {
         const where = normDir(p.path);
@@ -2179,7 +2213,7 @@ function escalate(p, agent, args) {
   if (this.q(`SELECT 1 FROM questions WHERE escalates = ? AND status = 'open'`).get(orig.id)) {
     throw new UserError(`Question ${orig.id} is already escalated`, { status: 409, hint: "The human's answer will settle it. Call next." });
   }
-  const question = layered(args.question, args.context, args.detail, 'question');
+  const question = layered(args.question, args.context, args.detail, 'question', { whole: true });
   const evidence = evidenceList(args.evidence);
   if (!evidence.length) throw new UserError('An escalation needs evidence', { hint: 'Pass evidence: what you ran or checked, e.g. [{ "label": "dry run: 3 tables dropped", "url": "https://…" }], so the human can decide without redoing it.' });
   const steps = stepList(args.steps);
@@ -2332,7 +2366,7 @@ const AGENT_OPS = {
 
   ask(p, agent, args) {
     if (args.escalates != null && args.escalates !== '') return escalate.call(this, p, agent, args);
-    const question = layered(args.question, args.context, args.detail, 'question');
+    const question = layered(args.question, args.context, args.detail, 'question', { whole: true });
     const assumption = str(args.assumption);
     const to = str(args.to).toLowerCase();
     if (to && !['reporter', 'human', 'operator'].includes(to)) {

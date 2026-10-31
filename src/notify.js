@@ -113,7 +113,7 @@ export function compose(entries, baseUrl = '') {
   const link = (slug) => (baseUrl ? `${baseUrl}/#/p/${encodeURIComponent(slug)}` : '');
   const url = baseUrl ? (slugs.length === 1 ? link(slugs[0]) : `${baseUrl}/#/`) : '';
   const title = `nuworq: ${plural(entries.length, 'thing')} ${entries.length === 1 ? 'needs' : 'need'} you`;
-  const lines = entries.map((e) => `• ${slugs.length > 1 ? `${e.name} ` : ''}${e.entry.item ? `${e.entry.item} ` : ''}${LABEL[e.entry.kind] ?? e.entry.kind}: ${clip(e.entry.headline)}`);
+  const lines = entries.map((e) => `• ${slugs.length > 1 ? `${e.name} ` : ''}${e.entry.item ? `${e.entry.item} ` : ''}${LABEL[e.entry.kind] ?? e.entry.kind}: ${e.entry.kind === 'question' ? e.entry.headline : clip(e.entry.headline)}`);
   return {
     title, url,
     text: [title, ...lines, url && `→ ${url}`].filter(Boolean).join('\n'),
