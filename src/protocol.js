@@ -510,7 +510,8 @@ A top-level item with parts is a milestone: finishing it releases something mean
 
 ## Tidy jobs
 Milestones have to stay true. When they drift, ${c('next')} hands one agent a tidy job; its summary lists what drifted.
-- **Look for:** open work in no milestone; two milestones changing the same files or after the same outcome; a milestone whose parts are all done or dropped; a pull request no item tracks.
+- **Look for:** open work in no milestone; two milestones changing the same files or after the same outcome; a milestone whose parts are all done or dropped; a pull request no item tracks; a ready item nobody has touched in 21 days.
+- **Stale ready item:** read it and recommend keeping, refining or dropping it, with a reason. Refine it yourself if that's the fix. To drop it, ${c('ask')} the person on that item (no assumption); ${c('refine')} \`drop\` needs their answer, so the drop waits for it.
 - **Change:** move an item with ${c('refine')} \`parent\` (\`""\` takes it out); merge two milestones by moving one's parts into the other; ${c('propose')} a parent for a cluster and move its parts in; ${c('submit')} or close a finished milestone; attach a stray pull request with ${c('refine')} \`pr\` (propose an item for it first if none fits). Give every change a one-line \`reason\`: it goes on both parents' history.
 - **Never touch:** a priority a person set (the hub refuses it) or a decision. If one looks wrong, say so in your submit.
 - **Finish:** ${c('submit')} the tidy job with what you changed and what you left alone on purpose. What it listed isn't raised again.

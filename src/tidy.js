@@ -2,11 +2,11 @@
 // offers as mode "tidy" at priority soon, one at a time. Drift is: open work in no group (once the project has
 // groups at all), two groups whose open
 // parts touch two or more of the same source files, a group someone could submit whose parts are all finished,
-// and a pull request no item tracks. The agent moves items (refine parent), merges or creates groups, closes
+// a pull request no item tracks, and ready work nobody has touched in 21 days (#442). The agent moves items (refine parent), merges or creates groups, closes
 // finished ones, and attaches stray pull requests (refine pr); it never changes a priority a person set.
 // Submitting the tidy job finishes it. What an agent looked at and left alone isn't raised again until it
 // changes: a new tidy job lists only drift no finished one already listed.
-import { SYSTEM } from './core.js';
+import { SYSTEM, DAY } from './core.js';
 
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const pathOf = (t) => String(t ?? '').split(' (')[0].trim().replace(/^\.\//, '');
@@ -15,6 +15,12 @@ const OPEN = "stage NOT IN ('done', 'dropped')";
 // The hub's own work items aren't anyone's to group: sweeps, tidy jobs, and releases, which span every
 // milestone and stay top-level (#425).
 const OWN = "sweep = 0 AND tidy = '' AND release = 0";
+// A ready item is stale once untouched this long (#442). What touches it: someone claiming, commenting,
+// refining, moving or answering about it. A question asked about it doesn't, so the tidy job's own ask
+// can't hide it; the person's answer does.
+const STALE_DAYS = 21; // in days: core.js imports this module before it defines DAY
+const TOUCH = ['claimed', 'comment', 'refined', 'regrouped', 'shaped', 'handoff', 'sent_back', 'answered', 'assumption_confirmed', 'staged', 'unparked']
+  .map((x) => `'${x}'`).join(', ');
 
 // What drifted in this project now: [{ key, kind, text }], most actionable first.
 export function drift(hub, p) {
@@ -49,6 +55,17 @@ export function drift(hub, p) {
   for (const r of hub.q(`SELECT * FROM untracked_prs WHERE project_id = ? AND state = 'open' ORDER BY number`).all(p.id)) {
     out.push({ key: `pr:${r.repo}#${r.number}`, kind: 'pr', text: `PR ${r.repo}#${r.number} "${r.title}" (branch ${r.head_ref || '?'}) belongs to no item: attach it (refine an item with pr: "${r.repo}#${r.number}"), or propose an item for it first.` });
   }
+  // Ready work nobody has touched in 21 days (#442): no claim, comment, refine, answer or steer. The agent
+  // recommends keeping, refining or dropping it; only a person drops it. Touching it starts the 21 days again.
+  const t = hub.now();
+  for (const i of items) {
+    if (i.stage !== 'ready' || i.holder) continue;
+    const touched = Math.max(i.stage_since, i.created_at ?? 0,
+      hub.q(`SELECT MAX(at) AS at FROM events WHERE item_id = ? AND type IN (${TOUCH})`).get(i.id).at ?? 0,
+      hub.q("SELECT MAX(at) AS at FROM notes WHERE item_id = ? AND kind = 'steer'").get(i.id).at ?? 0);
+    if (t - touched < STALE_DAYS * DAY) continue;
+    out.push({ key: `stale:${i.seq}:${touched}`, kind: 'stale', text: `#${i.seq} "${i.title}" has been ready ${Math.floor((t - touched) / DAY)} days and nobody has touched it: recommend keeping, refining or dropping it, with a reason. To drop it, ask the person (on #${i.seq}); refine drop needs their answer.` });
+  }
   // Loose work counts only once the project steers by groups: until then nothing is out of place.
   for (const i of groups.length ? items : []) {
     if (['ready', 'proposed'].includes(i.stage) && !i.parent_id && !kids.has(i.id)) {
@@ -67,6 +84,7 @@ const ACCEPTANCE = [
   '- Each drift listed is fixed, or left alone on purpose with the reason in your submit.',
   '- Every change is made with refine and a one-line reason (reason), so the affected milestones\' history says why.',
   '- No priority a person set is changed, and no decision is touched.',
+  '- Each stale ready item gets your recommendation (keep, refine or drop) with a reason. To drop one, ask the person on it; drop it with refine drop only once they answer.',
 ].join('\n');
 
 // Opens a tidy job when there is drift the last one didn't list, or brings the waiting one up to date. Called

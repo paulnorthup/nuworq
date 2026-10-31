@@ -562,15 +562,15 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     blocked_by: unmet(it).map(ref), last_worker: it.last_worker, attempts: it.attempts,
     handoff: json(it.handoff, null),
     ...(it.feedback ? { feedback: true } : {}), // approved feedback about nuworq (#295)
+    ...(it.stage === 'done' && t - it.stage_since >= RECENT ? { old: true } : {}), // off the board; search finds it (#442)
   });
   const rank = { now: 0, soon: 1, later: 2 };
   const queue = in_('ready').sort((a, b) => rank[a.priority] - rank[b.priority] || a.seq - b.seq).map(brief);
   const proposed = in_('proposed').map(brief);
   const waiting = in_('waiting').map(brief);
   const verifying = in_('verifying').map((it) => ({ ...brief(it), implementer: it.implementer, reviewer: it.holder }));
-  const done = items.filter((i) => i.stage === 'done' && t - i.stage_since < 3 * DAY)
-    .sort((a, b) => b.stage_since - a.stage_since)
-    .map((it) => ({ ...brief(it), implementer: it.implementer, accepted: lastEvent(it, ['accepted'])?.actor }));
+  const done = recentlyDone(items, t).map(({ it, parts }) => ({ ...brief(it), implementer: it.implementer, accepted: lastEvent(it, ['accepted'])?.actor,
+    ...(parts ? { parts: parts.map((c) => ({ item: ref(c), title: c.title, stage: c.stage })) } : {}) }));
 
   // ── agents and their track records ──
   const agentRows = agents.map((a) => {
@@ -706,6 +706,25 @@ function waitsOnYou(p, i, openQs) {
   return !!i.parked_by || openQs.some((q) => q.item_id === i.id && q.blocking && q.audience !== 'operator')
     || (i.stage === 'proposed' && !i.holder && !!i.acceptance && waitsForOk(p, i))
     || (i.stage === 'verifying' && !i.holder && p.autonomy !== 'full');
+}
+
+// Done work stays on the board this long (#442), in Recently finished; after that only search, the launcher,
+// analytics and history show it.
+export const RECENT = 3 * DAY;
+
+// Recently finished, newest first (#442): [{ it, parts }]. A finished milestone is one line carrying its parts
+// (the ones not dropped), and the parts it carries don't get lines of their own.
+export function recentlyDone(items, t) {
+  const kids = new Map();
+  for (const i of items) if (i.parent_id) kids.set(i.parent_id, [...(kids.get(i.parent_id) ?? []), i]);
+  const recent = items.filter((i) => i.stage === 'done' && t - i.stage_since < RECENT).sort((a, b) => b.stage_since - a.stage_since);
+  const folds = new Set(recent.filter((i) => kids.has(i.id)).map((i) => i.id));
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const folded = (i, seen = new Set()) => {
+    for (let p = byId.get(i.parent_id); p && !seen.has(p.id); seen.add(p.id), p = byId.get(p.parent_id)) if (folds.has(p.id)) return true;
+    return false;
+  };
+  return recent.filter((i) => !folded(i)).map((it) => ({ it, parts: folds.has(it.id) ? kids.get(it.id).filter((c) => c.stage !== 'dropped').sort((a, b) => a.seq - b.seq) : null }));
 }
 
 const GROUP_STATE = { you: 0, stuck: 1, moving: 2, queued: 3 };
