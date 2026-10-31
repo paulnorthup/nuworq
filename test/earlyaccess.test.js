@@ -235,6 +235,49 @@ describe('early access', () => {
     } finally { server.close(); sink.close(); spaces.close(); }
   });
 
+  test("an owner alone in their workspace hears requests on its hub-wide channels (#251); a second person stops that; a URL hears it once", async () => {
+    const got = [];
+    const sink = http.createServer(async (req, res) => { for await (const _ of req); got.push(req.url); res.end('ok'); });
+    await new Promise((r) => sink.listen(0, '127.0.0.1', r));
+    const to = (path) => `http://127.0.0.1:${sink.address().port}${path}`;
+    const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
+    const dir = spaces.directory;
+    // paul is the only person in each workspace. northup's only channel is hub-wide; acme's hub-wide channel has
+    // the same URL as his personal one in globex.
+    for (const ws of ['northup', 'acme', 'globex']) {
+      spaces.create(ws);
+      new Auth(spaces.get(ws).db).addPerson('paul', 'owner', { email: 'paul@example.com' });
+    }
+    dir.identify('paul@example.com', 'github');
+    for (const ws of ['northup', 'acme', 'globex']) dir.join('paul@example.com', ws);
+    addChannel(spaces.get('northup').db, 'webhook', to('/northup-everyone'), Date.now());
+    addChannel(spaces.get('acme').db, 'webhook', to('/shared'), Date.now());
+    addChannel(spaces.get('globex').db, 'webhook', to('/shared'), Date.now(), { person: '@paul' });
+    const auth = new Auth(spaces.get('northup').db);
+    const token = auth.createToken('paul-web', 'human', { person: 'paul' });
+    const server = createServer(spaces, { earlyAccess: { owners: ['paul@example.com'], verify: async () => true } });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const post = (email) => fetch(`${base}/api/early-access`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, turnstile: 't' }) });
+    const settle = async (n) => { for (let i = 0; i < 100 && got.length < n; i++) await new Promise((r) => setTimeout(r, 20)); await new Promise((r) => setTimeout(r, 100)); };
+    const notify = async () => (await fetch(`${base}/w/northup/api/notify`, { headers: { authorization: `Bearer ${token}` } })).json();
+    try {
+      assert.equal((await post('ann@example.com')).status, 200);
+      await settle(2);
+      assert.deepEqual(got.sort(), ['/northup-everyone', '/shared'], 'the lone workspace\'s hub-wide channel; the shared URL once');
+      const n = await notify();
+      assert.deepEqual(n.requests, n.channels.map((c) => c.id), 'the modal is told this channel hears requests');
+
+      // A second person in northup reads its hub-wide channel too: the push stops going there.
+      auth.addPerson('mate', 'member', { email: 'mate@example.com' });
+      got.length = 0;
+      assert.equal((await post('bob@example.com')).status, 200);
+      await settle(1);
+      assert.deepEqual(got, ['/shared']);
+      assert.deepEqual((await notify()).requests, [], 'the modal is told nothing here hears requests');
+    } finally { server.close(); sink.close(); spaces.close(); }
+  });
+
   test('with no owners, or owners without a channel, a request is still stored and answered', async () => {
     for (const owners of [[], ['paul@example.com']]) {
       const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });

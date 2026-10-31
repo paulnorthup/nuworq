@@ -1124,12 +1124,13 @@ async function notifySettings() {
   let n;
   try { n = await api('/api/notify'); } catch (e) { return toastError(e); }
   S.notifyPerson = n.person; // who "only what needs me" means
-  const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> <span class="faint">${c.person ? `${c.person === n.person ? 'you' : esc(c.person)}: only what they own` : 'everyone'}</span> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
+  const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> <span class="faint">${c.person ? `${c.person === n.person ? 'you' : esc(c.person)}: only what they own` : 'everyone'}${n.requests?.includes(c.id) ? ' · early-access requests reach you here' : ''}</span> ${c.failing ? `<span class="warn">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
     <button class="btn ghost small" data-action="notify-weekly" data-id="${c.id}" data-on="${c.weekly ? 0 : 1}" aria-pressed="${c.weekly}" title="Once a week, one line per project: items landed, your actions, cost, escapes">Weekly line: ${c.weekly ? 'on' : 'off'}</button>
     <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
   modal(`<h2>Notifications</h2>
     <p class="lead">When something new needs you (a blocking question, work to verify, "what matters most?"), nuworq sends one message, batched over 2 minutes, with a link. Healthy work sends nothing. Once a week, each channel also gets one line per project that was busy: what landed, your actions, the cost and escapes. Turn it off per channel.</p>
     ${rows || '<p class="lead faint">No channels yet, so you only learn that something needs you when you open the dashboard. Add one below.</p>'}
+    ${n.requests && !n.requests.length ? `<p class="lead warn">No channel here hears about early-access requests. Add one below with "Only what needs me" checked.</p>` : ''}
     <h4>Add a channel</h4>
     <div class="inline-form notify-add"><select id="nt-kind">${Object.keys(n.kinds).map((k) => `<option value="${k}">${k}</option>`).join('')}</select>
       <input id="nt-url" placeholder="https://ntfy.sh/your-secret-topic, a Slack webhook, or any URL"><button class="btn primary small" data-action="notify-add">Add</button></div>
