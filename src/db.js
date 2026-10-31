@@ -404,7 +404,8 @@ export function openDb(file) {
     'ALTER TABLE projects ADD COLUMN staff_asked INTEGER NOT NULL DEFAULT 1',
     "ALTER TABLE items ADD COLUMN tidy TEXT NOT NULL DEFAULT ''", // a tidy job the hub opened (src/tidy.js): JSON, the drift it listed; '' otherwise
     "ALTER TABLE items ADD COLUMN priority_by TEXT NOT NULL DEFAULT ''", // the person who set its priority ('' = nobody did): a tidy job leaves it alone
-    'ALTER TABLE projects ADD COLUMN runner_polled_at INTEGER NOT NULL DEFAULT 0', // when a nuworq run last asked where work is, for this project (#185)    // The weekly line (#178): on unless turned off on the channel, and when it last went (0: count from created_at).
+    'ALTER TABLE projects ADD COLUMN runner_polled_at INTEGER NOT NULL DEFAULT 0', // when a nuworq run last asked where work is, for this project (#185)
+    // The weekly line (#178): on unless turned off on the channel, and when it last went (0: count from created_at).
     'ALTER TABLE channels ADD COLUMN weekly INTEGER NOT NULL DEFAULT 1',
     'ALTER TABLE channels ADD COLUMN weekly_at INTEGER NOT NULL DEFAULT 0',
     // Each session's role (#238), fixed for its life: operator | shaper | worker | session. A worker carries its

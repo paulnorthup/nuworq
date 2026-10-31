@@ -2,6 +2,10 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, PERSON_CAN } from '../src/core.js';
 import { createServer } from '../src/server.js';
+import { Workspaces } from '../src/workspaces.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const HOUR = 60 * 60 * 1000;
@@ -87,4 +91,29 @@ describe('the public live view', () => {
     assert.equal((await turn(false)).status, 200);
     for (const path of ['/live/nuworq', '/api/live/nuworq']) assert.equal((await get(path)).status, 404, path);
   });
+});
+
+// On a hub of workspaces reached by path, the page's script and styles come from under /w/<workspace>/ too.
+test('under /w/<workspace>, the live page loads its script and styles, and its data', async () => {
+  const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-live-ws-')) });
+  spaces.create('acme');
+  const hub = spaces.get('acme');
+  hub.tx(() => hub.project('nuworq', { create: true }));
+  hub.humanOp('nuworq', 'settings', { live: true });
+  const server = createServer(spaces, {});
+  const url = `http://127.0.0.1:${await listen(server)}`;
+  try {
+    const page = await fetch(`${url}/w/acme/live/nuworq`);
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    const assets = [...html.matchAll(/(?:src|href)="(\/[^"]+\.(?:js|css))"/g)].map((m) => m[1]);
+    assert.deepEqual(assets.sort(), ['/w/acme/live.js', '/w/acme/style.css']);
+    for (const asset of assets) {
+      const r = await fetch(`${url}${asset}`);
+      assert.equal(r.status, 200, asset);
+      assert.match(r.headers.get('content-type'), asset.endsWith('.js') ? /javascript/ : /css/, asset);
+    }
+    // live.js asks for the data at the page's path with /live/ turned into /api/live/.
+    assert.equal((await fetch(`${url}/w/acme/api/live/nuworq`)).status, 200);
+  } finally { server.close(); server.closeAllConnections(); spaces.close(); }
 });

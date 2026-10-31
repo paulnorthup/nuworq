@@ -1012,7 +1012,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const data = liveView(hub, decodeURIComponent(watch[2]));
         if (!data) return send(404, 'not found', 'text/plain');
         res.writeHead(200, { 'content-type': watch[1] ? 'application/json; charset=utf-8' : TYPES['.html'], 'cache-control': `public, max-age=${LIVE_TTL_MS / 1000}` });
-        return res.end(watch[1] ? JSON.stringify(data) : withLogo(await readFile(join(WEB, 'live.html'), 'utf8')));
+        // The page's script and styles sit under the workspace's path too (/w/<workspace>/live.js), or it never loads.
+        return res.end(watch[1] ? JSON.stringify(data) : withLogo(await readFile(join(WEB, 'live.html'), 'utf8')).replace(/(href|src)="\//g, (_, attr) => `${attr}="${base}/`));
       }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md') {
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
