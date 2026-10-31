@@ -149,7 +149,8 @@ describe('/nuworq.tgz', () => {
     g('commit', '-q', '--allow-empty', '-m', 'Release v9.9.10, off main');
     const side = g('rev-parse', 'HEAD');
     g('tag', 'v9.9.10');
-    g('switch', '-q', '-');
+    // Back by commit, not `switch -`: the clone starts on a detached HEAD when ROOT is one (CI checks out a merge commit).
+    g('switch', '-q', '--detach', untagged);
     g('commit', '-q', '--allow-empty', '-m', 'landed after');
     const s = createServer(new Hub(), { source: repo, packageDir: cache });
     const u = `http://127.0.0.1:${await listen(s)}`;
