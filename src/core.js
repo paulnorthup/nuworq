@@ -12,6 +12,7 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
+import { AGENTS, modelFor, modeAt, parseTiers } from './models.js';
 import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
 export { slugify, normRemote };
@@ -594,7 +595,9 @@ export class Hub extends EventEmitter {
   // With runner, only projects the human lets `nuworq run` staff. scope: the slugs a token may reach;
   // powers: what it may do (null: everything); has: the agent's tags when it is declaring them right
   // now (else what it declared last).
-  route(agent = '', { runner = false, scope = null, powers = null, has } = {}) {
+  // kind and model: the runner's agent (claude, codex, opencode) and its --model, so a project that routes
+  // models (#347) says which one each job calls for.
+  route(agent = '', { runner = false, scope = null, powers = null, has, kind = '', model = '' } = {}) {
     this.sweep();
     const options = [];
     for (const p of this.projects()) {
@@ -621,7 +624,28 @@ export class Hub extends EventEmitter {
       ...(runner ? { holders: this.q(`SELECT holder FROM items WHERE project_id = ? AND holder IS NOT NULL
           UNION SELECT a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND a.stage = 'active' AND a.closed = 0`)
         .all(o.p.id, o.p.id).map((h) => h.holder), limit: o.p.run_workers ?? null } : {}),
+      ...(runner && kind ? { model: this.jobModel(o.p, o.item, o.mode, kind, model) ?? undefined } : {}),
     }));
+  }
+
+  // The model a job on item runs on with agent kind (#347), or null: routing is off, or there is nothing to choose from.
+  jobModel(p, item, mode, kind, top = '') {
+    return p.model_routing ? modelFor(json(p.model_tiers, {}), kind, mode, item.tier_up ?? 0, top) : null;
+  }
+
+  // An attempt on item failed (sent back, stalled, handed off, lease lost): its next one goes up a tier (#347). With
+  // routing on, the history says so when that changes the model its next job runs on.
+  stepUp(p, item, why) {
+    const it = this.itemById(item.id);
+    const up = it.tier_up ?? 0;
+    this.patch(it, { tier_up: up + 1 });
+    if (!p.model_routing) return;
+    const mode = modeAt(it);
+    const tiers = json(p.model_tiers, {});
+    const next = AGENTS.filter((k) => tiers[k]?.length)
+      .map((k) => [modelFor(tiers, k, mode, up), modelFor(tiers, k, mode, up + 1)])
+      .filter(([was, now]) => was !== now).map(([, now]) => now);
+    if (next.length) this.event(p, { item: it, actor: SYSTEM, type: 'stepped_up', headline: `#${it.seq} ${why}, so its next attempt steps up a tier: ${next.join(', ')}` });
   }
 
   // A project's staffing (#174), as runners follow it: the worker limit (null: each runner's own), paused, the
@@ -635,6 +659,7 @@ export class Hub extends EventEmitter {
       workers: p.run_workers ?? null, paused: !!p.run_paused, budget, spent_today: Math.round(spent * 100) / 100,
       stopped: p.run_paused ? 'paused' : budget != null && spent >= budget ? 'budget' : null,
       asked: !!p.staff_asked,
+      models: { on: !!p.model_routing, tiers: json(p.model_tiers, {}) }, // model routing (#347)
     };
   }
 
@@ -722,8 +747,13 @@ export class Hub extends EventEmitter {
   }
 
   event(p, { item = null, actor, type, headline, summary = '', detail = '', data = {} }) {
-    // Every claim records the role it was taken in (#238), so time and cost split by role.
-    if (CLAIM_TYPES.includes(type)) data = { role: this.roleOf(p, actor), ...data };
+    // Every claim records the role it was taken in (#238), so time and cost split by role, and the model it runs
+    // on and the job it is (#347), so each model's cost and record can be told per job.
+    if (CLAIM_TYPES.includes(type)) {
+      const model = this.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, actor)?.model ?? '';
+      const job = { claimed: item?.tidy ? 'tidy' : 'work', shaping: 'shape', review_started: 'review', landing: 'land' }[type];
+      data = { role: this.roleOf(p, actor), model, job, ...data };
+    }
     const r = this.q(`INSERT INTO events (project_id, item_id, actor, type, headline, summary, detail, data, at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, actor, type, headline, summary, detail, JSON.stringify(data), this.now());
     return Number(r.lastInsertRowid);
@@ -1250,7 +1280,7 @@ export class Hub extends EventEmitter {
     const children = this.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(item.id);
     const history = this.q(`SELECT * FROM events WHERE item_id = ?
         AND type IN ('handoff','sent_back','lease_expired','answered','assumption_confirmed','submitted','shaped','picked','comment','steer','refined',
-          'accepted','pr_failed','pr_blocked','rebased','issue_close_failed')
+          'accepted','pr_failed','pr_blocked','rebased','issue_close_failed','stepped_up')
         ORDER BY at DESC LIMIT 8`).all(item.id).reverse();
     const questions = this.q('SELECT * FROM questions WHERE item_id = ? ORDER BY at').all(item.id);
     const steers = this.q(`SELECT n.* FROM notes n WHERE n.item_id = ? AND n.kind = 'steer' AND n.active = 1
@@ -1336,6 +1366,7 @@ export class Hub extends EventEmitter {
           summary: last ? `Their last update: "${last.headline}"` : 'They left no updates.',
           data: { agent: a.agent },
         });
+        this.stepUp(p, it, 'stalled');
         this.settleRace(p, it, SYSTEM);
       }
       for (const it of expired) {
@@ -1363,6 +1394,7 @@ export class Hub extends EventEmitter {
             ? { item: it, actor: SYSTEM, type: 'lease_expired', headline: `${it.holder} went quiet while landing #${it.seq}; another agent can land it`, data: { agent: it.holder } }
             : { item: it, actor: SYSTEM, type: 'lease_expired', headline: `Review lease on #${it.seq} expired; it's open for review again` });
         }
+        if (it.stage !== 'verifying') this.stepUp(p, it, 'lost its lease');
       }
     });
     for (const p of touched.values()) this.changed(p);
@@ -2454,6 +2486,8 @@ const AGENT_OPS = {
       });
     }
     this.event(p, { item, actor: agent, type: 'handoff', headline: `${agent} handed off #${item.seq}: ${headline}`, summary, detail });
+    // A reviewer letting a review go isn't a failed attempt at the work.
+    if (item.stage !== 'verifying') this.stepUp(p, item, 'was handed off');
     if (racing) this.settleRace(p, item, agent);
     this.setStatus(p, agent, `Handed off #${item.seq}`);
     return { ok: true, hint: 'Handed off; the next agent will see your note. Call next or signoff.' };
@@ -2811,6 +2845,7 @@ Object.assign(Hub.prototype, {
         handoff: JSON.stringify({ kind: 'sent_back', by: actor, headline, summary, at: this.now() }),
       });
       this.event(p, { item, actor, type: 'sent_back', headline: `${who} sent back #${item.seq}: ${headline}`, summary, detail });
+      this.stepUp(p, item, 'was sent back');
     }
   },
 });
@@ -3057,8 +3092,29 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers }, by) {
     const changes = [];
+    // Model routing (#347): the tiers per agent, cheapest first; blank for an agent: the runner's --model.
+    if (model_tiers !== undefined) {
+      let tiers;
+      try { tiers = parseTiers(model_tiers); } catch (e) {
+        throw new UserError(e.message, { hint: 'Cheapest first, e.g. { "claude": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"] }. Leave an agent out for its runner\'s --model.' });
+      }
+      if (JSON.stringify(tiers) !== JSON.stringify(json(p.model_tiers, {}))) {
+        this.q('UPDATE projects SET model_tiers = ? WHERE id = ?').run(JSON.stringify(tiers), p.id);
+        p.model_tiers = JSON.stringify(tiers);
+        const said = Object.entries(tiers).map(([k, l]) => `${k}: ${l.join(' → ')}`).join('; ');
+        this.event(p, { actor: by, type: 'runner', headline: said ? `${You(by)} set the model tiers: ${said}` : `${You(by)} cleared the model tiers: each runner's --model is the one tier` });
+      }
+    }
+    if (model_routing != null && !!model_routing !== !!p.model_routing) {
+      this.q('UPDATE projects SET model_routing = ? WHERE id = ?').run(model_routing ? 1 : 0, p.id);
+      this.event(p, {
+        actor: by, type: 'runner',
+        headline: model_routing ? `${You(by)} turned on model routing: landing and tidy jobs start on the cheapest tier and step up when an attempt fails`
+          : `${You(by)} turned off model routing: every worker runs on its runner's own model`,
+      });
+    }
     // Staffing (#174): blank clears the limit or the budget.
     if (run_workers !== undefined) {
       const n = run_workers === null || run_workers === '' ? null : Number(run_workers);

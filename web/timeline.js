@@ -9,7 +9,7 @@ export const DOT = {
   // the person's move
   question: 'you', kept_parked: 'you',
   // back in the queue for any agent
-  answered: 'queue', sent_back: 'queue', handoff: 'queue', unparked: 'queue', race_finished: 'queue', precondition_passed: 'queue',
+  answered: 'queue', sent_back: 'queue', handoff: 'queue', stepped_up: 'queue', unparked: 'queue', race_finished: 'queue', precondition_passed: 'queue',
   // depends on the project's autonomy
   submitted: 'verifying', shaped: 'proposed',
   // finished, at risk, failed
