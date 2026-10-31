@@ -170,8 +170,11 @@ The hub, as nuworq.com runs it (since 2026-10-31, #205): `deploy/nuworq.service`
 `--site-host` is left from before nuworq.com moved to nuworq-site; the hub now ignores it with one line at start (#164), and it can go at the next unit change.
 Its environment comes from drop-ins in `/etc/systemd/system/nuworq.service.d/`. The files they load are root-only (`chmod 600`), and their values never go in an item or a commit:
 ```ini
-# github-oauth.conf: GitHub sign-in. The OAuth App matches callbacks exactly, so each host's is registered:
-# https://app.nuworq.com/auth/github/callback and https://admin.nuworq.com/auth/github/callback
+# github-oauth.conf: GitHub sign-in. The OAuth App matches callbacks exactly (subdomains don't match),
+# so each sign-in host's is registered, all three:
+#   https://nuworq.com/auth/github/callback
+#   https://app.nuworq.com/auth/github/callback
+#   https://admin.nuworq.com/auth/github/callback
 # The file holds NUWORQ_GITHUB_CLIENT_ID=… and NUWORQ_GITHUB_CLIENT_SECRET=…
 [Service]
 EnvironmentFile=/etc/nuworq/github-oauth.env
@@ -280,7 +283,7 @@ A release precondition (`{ kind: "release", repo: "acme/api", min: "2.1.0" }`) r
 - **What moves there.** With `--admin-host` set, `/requests.html` on the app (and on any workspace address) is a `308` to the admin host. `GET /api/early-access` and `POST /api/early-access/decide` on the app are refused with a hint naming the admin host. `/api/workspaces` is refused on the app with or without `--admin-host`. The public form (`/early-access`, `POST /api/early-access`) stays on the app. Without `--admin-host`, nothing changes.
 - **Callbacks.** The admin host signs in on its own address, so each provider must also accept its callback:
   1. **Google**: in Google Cloud console → APIs & Services → **Credentials**, open the hub's OAuth client and add an Authorized redirect URI: `https://admin.example.com/auth/google/callback`. Click Save. Check: both URIs, the app's and the admin host's, are listed.
-  2. **GitHub, OAuth App**: an OAuth App has one callback URL, and GitHub also accepts its subdomains. Set the Authorization callback URL to the apex, e.g. `https://example.com/auth/github/callback`, so that `app.example.com` and `admin.example.com` both match. (If the app's callback must stay on another domain, make a GitHub App instead: it takes several callback URLs.)
+  2. **GitHub, OAuth App**: GitHub matches callback URLs exactly, so a subdomain doesn't match the apex's. Register each sign-in host's callback: under Settings → Developer settings → **OAuth Apps** → your app, add `https://admin.example.com/auth/github/callback` next to the app's (e.g. `https://example.com/auth/github/callback` and `https://app.example.com/auth/github/callback`), and click Update application. Check: sign in on each host lands back on that host, not on GitHub's "redirect_uri is not associated" page. A 302 to GitHub proves nothing.
   3. **GitHub, GitHub App** (user sign-in): under Callback URL, click Add callback URL and enter `https://admin.example.com/auth/github/callback`.
   4. Route `admin.example.com` to the hub like the app's host (Caddy site block or tunnel hostname), restart with `--admin-host admin.example.com`, and open `https://admin.example.com/`. Check: it offers Sign in, and after signing in with an owner's email it lists the requests. To undo, remove `--admin-host` and restart: `/requests.html` works on the app again.
 
