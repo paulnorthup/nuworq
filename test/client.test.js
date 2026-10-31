@@ -227,10 +227,11 @@ describe('the client follows a moved hub, and only a moved hub (#222)', () => {
   });
 
   test('a workspace on a hub behind a tunnel: nuworq.com/w/acme → the public URL is followed with the token', async () => {
-    // The real hub, in workspaces mode, with a site host in front and no --trust-proxy: it sees plain http, as behind Cloudflare.
+    // The real hub, in workspaces mode, with no --trust-proxy: it sees plain http, as behind Cloudflare. nuworq.com
+    // isn't the hub's (nuworq-site serves it); it sends app paths on to the app with a 308.
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ws-')) });
     spaces.create('acme');
-    const server = hubServer(spaces, { publicUrl: 'https://app.nuworq.test', siteHost: 'nuworq.test', sweepMs: 3600_000 });
+    const server = hubServer(spaces, { publicUrl: 'https://app.nuworq.test', sweepMs: 3600_000 });
     const port = await listen(server);
     const calls = [];
     const real = globalThis.fetch;
@@ -238,6 +239,7 @@ describe('the client follows a moved hub, and only a moved hub (#222)', () => {
     globalThis.fetch = (url, init = {}) => new Promise((resolve, reject) => {
       const u = new URL(url);
       calls.push({ url: u.href, auth: init.headers?.authorization });
+      if (u.host === 'nuworq.test') return resolve(new Response(null, { status: 308, headers: { location: `https://app.nuworq.test${u.pathname}${u.search}` } }));
       const req = request({ host: '127.0.0.1', port, path: u.pathname + u.search, method: init.method ?? 'GET', headers: { ...init.headers, host: u.host } }, (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));

@@ -146,8 +146,7 @@ No open ports, and Cloudflare provides the certificate. The hub listens on loopb
 ```bash
 cloudflared tunnel login                         # once, as root: open the link, pick the zone
 cloudflared tunnel create nuworq
-cloudflared tunnel route dns nuworq app.nuworq.com   # the app
-cloudflared tunnel route dns nuworq nuworq.com       # the landing page; an apex name works (Cloudflare flattens the CNAME)
+cloudflared tunnel route dns nuworq app.nuworq.com   # the app; nuworq.com itself is served from the nuworq-site repo, not the hub
 install -d -m 700 /etc/cloudflared && install -m 600 ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/
 cat > /etc/cloudflared/config.yml <<EOF
 tunnel: <tunnel-id>
@@ -155,24 +154,22 @@ credentials-file: /etc/cloudflared/<tunnel-id>.json
 ingress:
   - hostname: app.nuworq.com
     service: http://127.0.0.1:4747
-  - hostname: nuworq.com
-    service: http://127.0.0.1:4747
   - service: http_status:404
 EOF
 cloudflared tunnel ingress validate && cloudflared service install && systemctl enable --now cloudflared
-# the hub: deploy/nuworq.service as is, plus --public-url https://app.nuworq.com --site-host nuworq.com
+# the hub: deploy/nuworq.service as is, plus --public-url https://app.nuworq.com
 ```
 Verified: a valid certificate, 401 without login, a `Secure` session cookie, and the live stream (`/api/stream`) arriving unbuffered through Cloudflare.
 
-**The app on its own host, the landing page on the apex.** Start the hub with `--public-url https://app.nuworq.com --site-host nuworq.com` (`NUWORQ_SITE_HOST`), and route both hostnames to it. On the site host, `/` and `site/`'s files serve the landing page. Every other path (`/api/…`, `/login.html`, `/auth/…`, `/w/…`, `/agents.md`) gets a `308` to the same path and query on the public URL. Old links like `nuworq.com/#/p/<slug>/12` keep working: the fragment never reaches the server, so the landing page's one inline script (allowed by its hash in the CSP) sends them on to the public URL. Every link the hub builds uses the public URL. When nuworq.com is served elsewhere (e.g. Cloudflare Pages) with its own early-access form, that form calls the app cross-origin: `GET /api/early-access/config` and `POST /api/early-access` answer `https://<site-host>` (and only it) with `Access-Control-Allow-Origin`, without credentials. Check: `curl -si -H 'Origin: https://nuworq.com' https://app.nuworq.com/api/early-access/config | grep -i access-control` shows `access-control-allow-origin: https://nuworq.com`.
+**The app on its own host; nuworq.com is not the hub's.** The hub lives at `--public-url https://app.nuworq.com`, and only the app's hostnames route to it. nuworq.com is served from the nuworq-site repo (Cloudflare Pages), which sends app paths (`/api/…`, `/login.html`, `/auth/…`, `/w/…`, `/agents.md`, and old `#/p/<slug>/12` links) on to the app with a `308`. Every link the hub builds uses the public URL. The site's early-access form calls the app cross-origin: `GET /api/early-access/config` and `POST /api/early-access` answer the public URL's parent domain over https (`https://nuworq.com` for `app.nuworq.com`, and only it) with `Access-Control-Allow-Origin`, without credentials. No flag names it; an old unit's `--site-host` (`NUWORQ_SITE_HOST`) is ignored, with one line saying so at start. Check: `curl -si -H 'Origin: https://nuworq.com' https://app.nuworq.com/api/early-access/config | grep -i access-control` shows `access-control-allow-origin: https://nuworq.com`.
 
-**Moving a running hub to the app host.** The `308` is for browsers. A client following it to another host drops its `Authorization` header (Node's fetch does, as the Fetch standard says), and GitHub doesn't follow redirects at all. So when `--site-host` takes over the address agents and GitHub already use:
-1. Route the app host first (DNS and tunnel entry above). Check: `curl -s https://app.nuworq.com/api/health` answers `200`.
-2. Point the GitHub App at the app host: on its settings page (`https://github.com/settings/apps/<slug>`, General), set Webhook URL to `https://app.nuworq.com/api/hooks/github-app` and Setup URL to `https://app.nuworq.com/#/`, then Save changes. (The hub never uses the App's Callback URL; leave it.) The webhook URL can also be set with the App's own key: `PATCH /app/hook/config` with `{"url": …}`. Check: Advanced → Recent Deliveries → Redeliver the last one answers `200`.
-3. Restart the hub with the two flags. Check: `curl -sI https://nuworq.com/api/info` is a `308` to `https://app.nuworq.com/api/info`.
+**Moving a running hub to a new address.** A redirect is for browsers. A client following one to another host drops its `Authorization` header (Node's fetch does, as the Fetch standard says), and GitHub doesn't follow redirects at all. So when the hub's address moves (as it did from nuworq.com to app.nuworq.com):
+1. Route the new host first (DNS and tunnel entry above). Check: `curl -s https://app.nuworq.com/api/health` answers `200`.
+2. Point the GitHub App at the new host: on its settings page (`https://github.com/settings/apps/<slug>`, General), set Webhook URL to `https://app.nuworq.com/api/hooks/github-app` and Setup URL to `https://app.nuworq.com/#/`, then Save changes. (The hub never uses the App's Callback URL; leave it.) The webhook URL can also be set with the App's own key: `PATCH /app/hook/config` with `{"url": …}`. Check: Advanced → Recent Deliveries → Redeliver the last one answers `200`.
+3. Restart the hub with `--public-url https://app.nuworq.com`. Check: `curl -s https://app.nuworq.com/api/health` shows `"url": "https://app.nuworq.com"`.
 4. On each machine with agents: `nuworq connect https://app.nuworq.com` (or set `"url"` in `~/.nuworq/connect.json`), then restart its `nuworq run` and MCP sessions. Until then they get `401`s.
 
-Undo: restart the hub without `--site-host` (and with the old `--public-url`); nuworq.com serves the app again.
+Undo: restart the hub with the old `--public-url`.
 
 ### Keeping a server up to date: it pulls, nothing pushes to it
 `serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. If the new hub doesn't come up healthy, it rolls back. No CI job reaches into your network, and the server only needs read access:
@@ -245,7 +242,7 @@ A release precondition (`{ kind: "release", repo: "acme/api", min: "2.1.0" }`) r
 3. Test it: `nuworq notify test --workspace <that workspace>` sends a test line. Remove it with `nuworq notify remove <id> --workspace <that workspace>`.
 
 ### The admin host (owners only)
-`--admin-host admin.example.com` (`NUWORQ_ADMIN_HOST`) gives the hub's owners a dashboard on a host of its own. It needs `--workspaces` and `--public-url` (the app's address; the links it hands out go there), and it can't be the app's host or the site host. On the admin host the hub serves only the dashboard (`/`), its sign-in (`/auth/<provider>/…`) and the admin APIs (`GET /api/me`, `POST /api/logout`, `GET /api/early-access`, `POST /api/early-access/decide`, `GET /api/workspaces`, `POST /api/workspaces/plan`). Every other path there is a 404: no workspaces, no app pages, no request form.
+`--admin-host admin.example.com` (`NUWORQ_ADMIN_HOST`) gives the hub's owners a dashboard on a host of its own. It needs `--workspaces` and `--public-url` (the app's address; the links it hands out go there), and it can't be the app's host. On the admin host the hub serves only the dashboard (`/`), its sign-in (`/auth/<provider>/…`) and the admin APIs (`GET /api/me`, `POST /api/logout`, `GET /api/early-access`, `POST /api/early-access/decide`, `GET /api/workspaces`, `POST /api/workspaces/plan`). Every other path there is a 404: no workspaces, no app pages, no request form.
 - **Workspaces and plans.** Below the requests, the dashboard lists every workspace, most recently active first: its plan, the agents holding work now and when it was last active. Tap one for who created it, its people and projects, and whether its plan was set (by whom, when) or is the default. **Switch to Unlimited** / **Switch to Free** asks first, then sets the same plan as `nuworq workspace plan <name> <free|unlimited>`, and `nuworq workspace list` shows it. `GET /api/workspaces` returns `{ enforced, workspaces: [{ name, plan, source, set_by, set_at, creator, people, projects, working, last_active }] }`, where `source` is `set`, `default` or `owners` (a hub owner is in it, so it is always unlimited). `POST /api/workspaces/plan` takes `{ workspace, plan }`. Plans only limit anything with `--plans`; without it the dashboard says so, and changes are still stored. Removing a workspace stays `nuworq workspace remove` on the hub host.
 - **Who gets in.** Anyone can sign in with GitHub or Google. Only the emails in `--owners` / `NUWORQ_HUB_OWNERS` see anything; everyone else gets a 403 that names the setting. The session is an `HttpOnly; SameSite=Strict` cookie, `nuworq_admin`, with no `Domain` attribute (host-only), and it lasts 12 hours. App sessions don't open the admin host, and admin sessions don't open the app, even if the cookie is copied across.
 - **What moves there.** With `--admin-host` set, `/requests.html` on the app (and on any workspace address) is a `308` to the admin host. `GET /api/early-access` and `POST /api/early-access/decide` on the app are refused with a hint naming the admin host. `/api/workspaces` is refused on the app with or without `--admin-host`. The public form (`/early-access`, `POST /api/early-access`) stays on the app. Without `--admin-host`, nothing changes.

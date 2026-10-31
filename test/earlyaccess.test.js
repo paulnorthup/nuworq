@@ -119,8 +119,9 @@ describe('early access', () => {
 
   test("nuworq.com's form may call the form's APIs cross-origin (#245); no other origin or endpoint may", async () => {
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
+    // The site is the app's parent domain (#164): no flag names it.
     const server = createServer(spaces, {
-      publicUrl: 'http://app.example.test', siteHost: 'nuworq.com',
+      publicUrl: 'https://app.nuworq.com',
       earlyAccess: { owners: ['paul@example.com'], verify: async (t) => t === 'good', gate: true, sitekey: '0xSITEKEY' },
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -165,6 +166,19 @@ describe('early access', () => {
         assert.deepEqual(cors(r), [], `${method} ${path}`);
       }
     } finally { server.close(); }
+  });
+
+  test('an app with no parent domain (nuworq.com itself, localhost, an IP) lets no site call cross-origin', async () => {
+    for (const publicUrl of ['https://nuworq.com', 'http://localhost:4747', 'http://10.0.0.5:4747', '']) {
+      const server = createServer(new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) }), { publicUrl, earlyAccess: { owners: [], verify: async () => true, sitekey: 'k' } });
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
+      try {
+        for (const origin of ['https://com', 'https://nuworq.com', 'https://0.0.5']) {
+          const r = await fetch(`http://127.0.0.1:${server.address().port}/api/early-access/config`, { headers: { origin } });
+          assert.equal(r.headers.get('access-control-allow-origin'), null, `${publicUrl} ${origin}`);
+        }
+      } finally { server.close(); }
+    }
   });
 
   test('a request is decided once', async () => {

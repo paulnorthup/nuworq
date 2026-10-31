@@ -22,7 +22,7 @@ import { ORG_CAP, ADMIN_SESSION_MS } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { tmpdir } from 'node:os';
 import { buildPackage, signatureOf } from './package.js';
@@ -60,14 +60,6 @@ const SECURITY_HEADERS = {
   'x-frame-options': 'DENY',
   'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
-// The landing page (site/), for the site host. Its one inline script sends old app links (nuworq.com/#/p/…) on
-// to the app; CSP allows exactly that script, by hash. Nothing else runs, and nothing is fetched from elsewhere.
-const SITE = join(ROOT, 'site');
-const SITE_APP = 'https://app.nuworq.com'; // the app's address as site/ is written; served as the hub's public URL
-const siteCsp = (html) => {
-  const hashes = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`);
-  return `default-src 'self'; img-src 'self' data:; style-src 'self'; script-src ${hashes.join(' ') || "'none'"}; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`;
-};
 // A page of the Connect GitHub flow that the hub serves itself: the sign-in card's look (style.css,
 // login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
 const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -100,23 +92,21 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // earlyAccess (workspaces mode): { owners: [emails], verify: async (token, ip) => bool, gate: bool }. owners
 // decide requests; verify checks the form's Turnstile token (src/directory.js turnstile); gate: making an
 // organization takes an approved request's grant. null: no early access.
-// siteHost: the marketing host (e.g. nuworq.com), when the app lives at publicUrl (app.nuworq.com): it serves
-// the landing page (site/) and sends every other path to the same path on publicUrl. Its https origin may also
-// call the public early-access APIs cross-origin (nuworq.com's own form, #245).
 // adminHost (workspaces mode): the admin host (e.g. admin.nuworq.com). It serves the admin dashboard, its own
 // sign-in and the admin APIs, and nothing else; only earlyAccess.owners get past sign-in. With it set, the
 // early-access request list and its APIs are no longer served anywhere else.
 // billing (workspaces mode): src/billing.js billingFromEnv(): { webhookSecret, secretKey, prices }. null: billing
 // is off, and POST /api/stripe/webhook answers 404.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', siteHost = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
-  siteHost = String(siteHost).toLowerCase();
-  if (siteHost && !publicUrl) throw new Error('a site host needs the public URL the app lives at (--public-url)');
   adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
   // The links it hands out (an approved request's grant) go to the app, so it must know the app's address.
   if (adminHost && !publicUrl) throw new Error('an admin host needs the public URL the app lives at (--public-url)');
-  if (adminHost && [new URL(publicUrl).hostname, siteHost].includes(hostname(adminHost))) throw new Error('the admin host must be a host of its own, not the app\'s or the site\'s');
+  if (adminHost && new URL(publicUrl).hostname === hostname(adminHost)) throw new Error('the admin host must be a host of its own, not the app\'s');
+  // The marketing site (nuworq.com, served from the nuworq-site repo) is the app's parent domain, over https:
+  // app.nuworq.com's is https://nuworq.com. Its early-access form calls the form's two APIs cross-origin (#245).
+  const siteOrigin = siteOf(publicUrl);
   // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
   let built = null;
   const pkg = buildPackage(source, packageDir).then((b) => (built = b));
@@ -332,25 +322,6 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const deviceCode = (s) => (/^[A-Z]{4}-[A-Z]{4}$/i.test(String(s ?? '')) ? String(s).toUpperCase() : '');
   const redirect = (res, location) => { res.writeHead(302, { location, 'cache-control': 'no-store' }); res.end(); };
 
-  // The site host: its own files from site/, and every app path (/api, /login.html, /w/…, /agents.md) on to the app.
-  const sitePage = async (req, res, url) => {
-    const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-    let body = null;
-    if (['GET', 'HEAD'].includes(req.method) && /^[a-z0-9-]+\.(html|css)$/.test(file)) {
-      try { body = await readFile(join(SITE, file), 'utf8'); } catch { /* not the site's: the app's */ }
-    }
-    if (body == null) {
-      res.writeHead(308, { location: `${publicUrl}${url.pathname}${url.search}`, 'cache-control': 'no-store' });
-      return res.end();
-    }
-    body = body.replaceAll(SITE_APP, publicUrl.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`));
-    res.writeHead(200, {
-      'content-type': TYPES[extname(file)], 'cache-control': 'no-cache',
-      ...(file.endsWith('.html') ? { 'content-security-policy': siteCsp(body) } : {}),
-    });
-    res.end(req.method === 'HEAD' ? undefined : body);
-  };
-
   // GET /auth/<provider>/start?ws=<workspace> and /auth/<provider>/callback: hub-wide, whatever the host.
   async function signIn(req, res, url, provider, step, { send, deny }) {
     if (!required) return deny(400, 'this hub has no logins', 'Sign-in is for hubs that require login (--auth or --workspaces).');
@@ -519,7 +490,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     // credentials: these calls neither set nor read cookies. Any other origin, and the owners' list, get no CORS headers.
     if ((path === '/api/early-access' && ['POST', 'OPTIONS'].includes(req.method)) || (path === '/api/early-access/config' && req.method === 'GET')) {
       res.setHeader('vary', 'Origin');
-      if (siteHost && req.headers.origin === `https://${siteHost}`) {
+      if (siteOrigin && req.headers.origin === siteOrigin) {
         res.setHeader('access-control-allow-origin', req.headers.origin);
         if (req.method === 'OPTIONS' && path === '/api/early-access') {
           res.writeHead(204, { 'access-control-allow-methods': 'POST', 'access-control-allow-headers': 'content-type', 'access-control-max-age': '600' });
@@ -648,7 +619,6 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
       if (onAdmin(req)) return await adminRoot(req, res, url, path, { send, deny });
-      if (siteHost && hostname(hostOf(req)) === siteHost) return await sitePage(req, res, url);
       let am;
       if (req.method === 'GET' && (am = path.match(/^\/auth\/([a-z]+)\/(start|callback)$/))) return await signIn(req, res, url, am[1], am[2], { send, deny });
       // nuworq itself, as an npm package of the commit this hub runs: public, the same for every workspace.
@@ -1273,6 +1243,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 
 function hostname(host) {
   try { return new URL(`http://${host}`).hostname; } catch { return ''; }
+}
+
+// The https origin of a public URL's parent domain (https://app.nuworq.com → https://nuworq.com), or '' when it
+// has none: no public URL, an IP address, or a host like localhost or nuworq.com.
+function siteOf(publicUrl) {
+  if (!publicUrl) return '';
+  const host = new URL(publicUrl).hostname;
+  const labels = host.split('.');
+  return /^[\d.]+$|:/.test(host) || labels.length < 3 ? '' : `https://${labels.slice(1).join('.')}`;
 }
 
 // x-nuworq-<name>, else the old x-trellis-<name> that clients from before the rename send.
