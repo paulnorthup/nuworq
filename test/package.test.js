@@ -170,6 +170,8 @@ describe('a signed release reaches installs through the public /api/package', ()
     version = JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version;
     writeFileSync(join(clone, 'CHANGELOG.md'), `# Changelog\n\n## ${version} (2026-10-31)\n\n- Signed releases\n`);
     execFileSync('git', ['-C', clone, 'remote', 'remove', 'origin']);
+    // The real release's tag came with the clone once main is tagged; these tests tag their own commit.
+    try { execFileSync('git', ['-C', clone, 'tag', '-d', `v${version}`], { stdio: 'ignore' }); } catch {}
     execFileSync('git', ['-C', clone, 'add', 'release-key.pub', 'CHANGELOG.md']);
     execFileSync('git', ['-C', clone, '-c', 'user.name=t', '-c', 'user.email=t@t.test', 'commit', '-qm', 'release key']);
     [commit, time] = execFileSync('git', ['-C', clone, 'log', '-1', '--format=%H %ct'], { encoding: 'utf8' }).trim().split(' ');

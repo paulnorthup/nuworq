@@ -8,6 +8,12 @@
 //                                                      as nuworq-<commit>.tgz.sig, and copied beside it with scp.
 //                                                      Run it in a checkout of nuworq: the package must be a
 //                                                      release, its version tagged vX.Y.Z on that commit (#400)
+//   node scripts/sign-release.js watch <hub> <release-key.pem> <scp destination> [--install]
+//                                                      every few minutes, sign each new vX.Y.Z tag on origin's main,
+//                                                      built from GitHub (scripts/signer.js, #430). Run it in a checkout
+//                                                      of nuworq. --install: as a service (LaunchAgent / systemd user
+//                                                      unit), logging to ~/.nuworq/logs/signer.log; watch --uninstall
+//                                                      stops and removes it
 // The .sig goes beside the hub's package (nuworq-<commit>.tgz in its package folder); installs that pinned
 // release-key.pub update only to a package it verifies (src/update.js).
 import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sign, verify } from 'node:crypto';
@@ -72,7 +78,57 @@ if (cmd === 'keygen' && a) {
     if (!now.signed) throw new Error(`copied to ${c}, but ${base} doesn't serve it: is that its package folder (<data dir>/package/)?`);
     console.log(`${base} serves ${version} (${short}) signed: installs that pinned this key take it at their next check (at most 10 minutes after a nuworq command starts).`);
   }
+} else if (cmd === 'watch' && (a === '--uninstall' || (a && b && c))) {
+  await watchCmd();
 } else {
-  console.error('usage: sign-release.js keygen <dir> | sign <nuworq.tgz> <release-key.pem> | release <hub> <release-key.pem> [<scp destination>]');
+  console.error('usage: sign-release.js keygen <dir> | sign <nuworq.tgz> <release-key.pem> | release <hub> <release-key.pem> [<scp destination>]\n'
+    + '       | watch <hub> <release-key.pem> <scp destination> [--install] | watch --uninstall');
   process.exit(2);
+}
+
+// watch: the signer (scripts/signer.js), in the foreground, or installed as a service with --install.
+async function watchCmd() {
+  const args = process.argv.slice(3);
+  const { resolve } = await import('node:path');
+  const { homedir, userInfo } = await import('node:os');
+  const { promisify } = await import('node:util');
+  const { execFile } = await import('node:child_process');
+  const svc = await import('../src/service.js');
+  const { dataDir } = await import('../src/names.js');
+  const { repoRoot, connected, createClient } = await import('../src/client.js');
+  const signer = await import('./signer.js');
+  const exec = (cmd, xs) => promisify(execFile)(cmd, xs);
+  const where = { platform: process.platform, home: homedir(), uid: userInfo().uid, exec, ...svc.SIGNER };
+  const self = resolve(import.meta.dirname, 'sign-release.js');
+  if (args.includes('--uninstall')) {
+    const r = await svc.uninstall(where);
+    return console.log(r.removed ? `Removed the ${r.kind} ${r.file}: the signer has stopped. Signing by hand (release) still works.` : `No signer was installed (${r.file}).`);
+  }
+  const [hub, pem, dest] = args.filter((x) => !x.startsWith('--'));
+  const repo = repoRoot(process.cwd());
+  if (!repo) throw new Error('run watch in a checkout of nuworq: it builds each release from its origin (GitHub)');
+  const key = createPrivateKey(readFileSync(pem)); // fails now, not in the log, when the key can't be read
+  const log = join(dataDir(), 'logs', 'signer.log');
+  if (args.includes('--install')) {
+    const command = [svc.stableNode(process.execPath), self, 'watch', new URL(hub).origin, resolve(pem), dest];
+    const r = await svc.install({ ...where, command, env: svc.serviceEnv(process.env), log, cwd: repo });
+    if (!r.up) process.exitCode = 1;
+    return console.log(`${r.up ? `Installed the release signer as a ${r.kind}, and it is up.` : `Installed the release signer as a ${r.kind}, but it isn't up after 10 seconds. Check on it with: ${r.status}`}
+  Signs:   each new vX.Y.Z tag on main at ${repo}'s origin, for ${new URL(hub).origin}
+  Wrote:   ${r.file}
+  Log:     ${r.log}
+  Remove:  node ${self} watch --uninstall`);
+  }
+  // A signed release is said on its release item, when this machine is connected to a hub (nuworq connect).
+  const conn = connected();
+  const comment = !conn ? undefined : async (r) => {
+    const client = createClient({ url: conn.url, cwd: repo });
+    const as = { agent: 'nuworq-signer' };
+    const look = async (stage) => (await client.call('look', stage ? { stage } : {}, as)).board;
+    const item = signer.releaseItem(await look(), r.version) ?? signer.releaseItem(await look('done'), r.version);
+    await client.call('comment', { item: item ?? undefined, headline: `Signed v${r.version} (${r.short})` }, as);
+  };
+  const scp = (file, to) => exec('scp', ['-q', '-o', 'BatchMode=yes', file, to]);
+  console.log(`Signing each new release tag for ${new URL(hub).origin} from ${repo}, every ${signer.EVERY / 60_000} minutes.`);
+  await signer.watch({ repo, hub, key, dest, scp, comment, log: (l) => console.log(l), stateFile: join(dataDir(), 'signer.json') });
 }
