@@ -22,6 +22,7 @@ import { rank, resultsHtml, confirmHtml } from './launcher.js';
 import { feedbackForm, feedbackThanks, feedbackMine, attached } from './feedback.js';
 import { LOGO } from './logo.js';
 import { isTextBox, saveFocus, restoreFocus } from './focus.js';
+import { keepScroll } from './scroll.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -233,11 +234,11 @@ function render({ force = false } = {}) {
   if (!force && typing()) { S.pending = true; return; }
   S.pending = false;
   const writing = saveFocus(document); // a forced redraw puts the person back where they were writing
-  const drawerScroll = $('#drawer').scrollTop;
-  renderRail();
-  $('#main').innerHTML = S.analytics ? analytics() : S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
-  renderDrawer();
-  $('#drawer').scrollTop = drawerScroll;
+  keepScroll(document, () => { // every scrolled area keeps its place, anchored to the row in view (#376)
+    renderRail();
+    $('#main').innerHTML = S.analytics ? analytics() : S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview();
+    renderDrawer();
+  });
   for (const el of document.querySelectorAll('[data-draft]')) {
     const v = S.drafts[el.dataset.draft];
     if (v == null) continue;
@@ -399,7 +400,7 @@ function projectBody(v, empty) {
     steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', runners: z() >= 1 ? runners(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
   };
   const order = (keys) => keys.map((k) => s[k]).join('');
-  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'groups', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']));
+  if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'groups', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']), `p:${S.slug}`);
   return order(['pulse', 'composer', 'empty', 'needs', 'groups', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
 }
 
@@ -1119,7 +1120,9 @@ function connectStep(r) {
 // ── modals ──
 function modal(html) {
   const m = $('#modal');
-  m.innerHTML = `<div class="dialog">${html}</div>`;
+  // Redrawn in place (a toggle, a live count), a dialog keeps its place (#376); a different dialog starts at the top.
+  const title = html.match(/<h[23][^>]*>([^<]*)/)?.[1] ?? '';
+  keepScroll(document, () => { m.innerHTML = `<div class="dialog" data-scroll="dialog:${esc(title)}">${html}</div>`; });
   m.hidden = false;
   markNew(m);
 }
