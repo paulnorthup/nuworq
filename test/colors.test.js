@@ -1,6 +1,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync } from 'node:fs';
+import http from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Every color means one thing (#188): the state colors and the provider marks stay clearly apart.
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
@@ -58,10 +61,11 @@ describe('the color map keeps meanings apart (#188)', () => {
     const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
     assert.match(read('web/app.js'), /import \{ LOGO \} from '\.\/logo\.js';/);
     assert.match(read('src/server.js'), /<link rel="icon" href="\$\{FAVICON\}">[^`]*<div class="brand">\$\{LOGO\}<span>nuworq<\/span>/, 'the flow pages');
-    for (const f of ['index.html', 'login.html', 'device.html', 'invite.html', 'early-access.html']) {
+    // Every page has the favicon (#318), and the sign-in style pages the logo above their card.
+    for (const f of readdirSync(new URL('../web/', import.meta.url)).filter((n) => n.endsWith('.html'))) {
       const html = read(`web/${f}`);
       assert.match(html, /<link rel="icon" href="<!--favicon-->">/, `${f}'s favicon`);
-      if (f !== 'index.html') assert.match(html, /<div class="brand">\s*<!--logo-->\s*<span>nuworq<\/span>/, `${f}'s logo`);
+      if (['login.html', 'device.html', 'invite.html', 'early-access.html'].includes(f)) assert.match(html, /<div class="brand">\s*<!--logo-->\s*<span>nuworq<\/span>/, `${f}'s logo`);
       assert.ok(withLogo(html).includes(FAVICON) && !withLogo(html).includes('<!--'), `${f} is filled in`);
     }
     for (const dir of ['web', 'src']) {
@@ -69,6 +73,7 @@ describe('the color map keeps meanings apart (#188)', () => {
         const src = read(`${dir}/${f}`);
         assert.doesNotMatch(src, /<svg viewBox="0 0 32 32"|rx="8" fill=|rx='8'/, `${dir}/${f} draws its own mark`);
         assert.ok(!src.includes('M8 24L24 8'), `${dir}/${f} still has the lattice`);
+        assert.doesNotMatch(src, /rgba\(20, ?20, ?18/, `${dir}/${f} still has the old warm shade (#318)`);
       }
     }
   });
@@ -87,6 +92,30 @@ describe('the color map keeps meanings apart (#188)', () => {
         assert.ok(!html.includes('<!--logo-->') && !html.includes('<!--favicon-->'), `${page} is filled in`);
       }
     } finally { server.close(); }
+  });
+
+  test('the admin host and the hub\'s own address serve their pages with the favicon too (#318)', async () => {
+    const { Workspaces } = await import('../src/workspaces.js');
+    const { createServer } = await import('../src/server.js');
+    const { FAVICON } = await import('../web/logo.js');
+    // With an admin host it serves the dashboard; without one, the hub's own address serves the request list.
+    for (const [adminHost, pages] of [['admin.example.test', [['admin.example.test', '/'], ['app.example.test', '/join.html']]], ['', [['app.example.test', '/requests.html']]]]) {
+      const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-logo-')), owners: ['paul@example.com'] });
+      const server = createServer(spaces, { publicUrl: 'http://app.example.test', adminHost });
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
+      const get = (host, path) => new Promise((resolve, reject) => {
+        http.get({ host: '127.0.0.1', port: server.address().port, path, headers: { host } }, (res) => {
+          let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(b));
+        }).on('error', reject);
+      });
+      try {
+        for (const [host, page] of pages) {
+          const html = await get(host, page);
+          assert.ok(html.includes(`<link rel="icon" href="${FAVICON}">`), `${host}${page} has the favicon`);
+          assert.ok(!html.includes('<!--favicon-->'), `${host}${page} is filled in`);
+        }
+      } finally { server.close(); }
+    }
   });
 
   test('the citron brand stands apart from every meaning, carries a readable mark, and is never text (#319)', () => {
