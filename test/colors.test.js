@@ -148,6 +148,7 @@ describe('the color map keeps meanings apart (#188)', () => {
     const states = /var\(--(you|agents|queue|ok|warn|bad)(-tint|-line)?\)/;
     for (const sel of ['.plan', '.plan-free', '.plan-unlimited', '.agent i']) assert.doesNotMatch(rule(sel), states, `${sel} uses no state color`);
     assert.match(rule('.admin-space .working'), /color: var\(--agents\)/);
+    assert.match(css, /\.status\.quiet, \.agent-strip \.st\.quiet \{ color: var\(--warn\); \}/, 'a quiet agent is amber in the agent strip too, as in Agents');
     const admin = readFileSync(new URL('../web/admin.js', import.meta.url), 'utf8');
     assert.match(admin, /<b class="working">\$\{w\.working\.length\} working<\/b>/, 'a workspace\'s working agents are drawn as agents, not as done');
   });

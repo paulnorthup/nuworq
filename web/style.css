@@ -291,7 +291,7 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .agent-card .stats span { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
 .status { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-left: auto; }
 .status.working, .agent-strip .st.working { color: var(--agents); }
-.status.quiet { color: var(--warn); }
+.status.quiet, .agent-strip .st.quiet { color: var(--warn); }
 .status.idle, .status.away, .status.signed { color: var(--muted); }
 /* Runners (#171): their state leads the row, coloured by whether work can start. */
 .row-item.runner .h { display: flex; align-items: baseline; gap: 8px; }
