@@ -1,0 +1,27 @@
+/* The getting-started guide (/guide, src/userguide.js). Phone first: one column of steps, each a thumb-sized
+   row that opens for the details; a wider screen only gets more room around the same column. */
+.guide { max-width: 680px; margin: 0 auto; padding: 16px 16px 48px; }
+.guide header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.guide header .brand { padding: 0; }
+.guide header .btn { min-height: 44px; display: inline-flex; align-items: center; }
+.guide h1 { font-size: 24px; letter-spacing: -.01em; }
+.guide h2 { font-size: 17px; margin: 28px 0 10px; }
+.guide .lead { color: var(--muted); margin: 6px 0 4px; }
+.guide .version { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
+.guide .guide-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.guide details { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); scroll-margin-top: 12px; }
+.guide summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 56px; }
+.guide summary::-webkit-details-marker { display: none; }
+.guide summary::after { content: ''; margin-left: auto; flex: none; width: 8px; height: 8px; border: solid var(--muted); border-width: 0 2px 2px 0; transform: rotate(-45deg); }
+.guide details[open] summary::after { transform: rotate(45deg); }
+.guide .n { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 12px; font-weight: 600; flex: none; }
+.guide .t { display: flex; flex-direction: column; min-width: 0; }
+.guide .g { color: var(--muted); font-size: 13px; }
+.guide .body { padding: 0 14px 14px 52px; }
+.guide .essentials .body { padding-left: 14px; }
+.guide .body h4 { margin: 12px 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.guide .body p { margin: 4px 0; }
+.guide .copyable button { min-height: 32px; }
+@media (max-width: 480px) {
+  .guide .body { padding-left: 14px; }
+}

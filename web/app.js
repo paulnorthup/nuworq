@@ -287,6 +287,7 @@ function renderRail() {
       <button class="rail-item" data-action="archived">Archived projects</button>
       <button class="rail-item" data-action="connect">Connect an agent</button>
       <button class="rail-item" data-action="notify">Notifications</button>
+      <a class="rail-item" href="guide"><span data-new="guide">Getting started guide</span></a>
       <button class="rail-item kbd-hint" data-action="shortcuts"><span data-new="shortcuts"><kbd>?</kbd> Shortcuts</span></button>
       ${S.feedback?.on ? '<button class="rail-item" data-action="feedback"><span data-new="feedback">Feedback</span></button>' : ''}
       ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings"><span class="name">Workspace settings</span>${S.billing.plans?.length ? '<span class="tag now">Upgrade</span>' : ''}</button>` : ''}
