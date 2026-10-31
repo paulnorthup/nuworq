@@ -2,14 +2,14 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createHash } from 'node:crypto';
-import { mkdtempSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
-import { fileInTarball, releaseOf } from '../src/update.js';
+import { fileInTarball, releaseOf, update, describeUpdate } from '../src/update.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
@@ -72,6 +72,60 @@ describe('/nuworq.tgz', () => {
     const bin = join(prefix, 'bin', 'nuworq');
     assert.ok(existsSync(bin));
     assert.match(execFileSync(bin, ['help'], { encoding: 'utf8', env: { ...process.env, NUWORQ_URL: 'http://127.0.0.1:9' } }), /connect/);
+  });
+
+  // #254: Paul signs the package of the commit the hub runs; main then moves on twice before an install checks.
+  test('a release signed an hour ago reaches an install after main has moved on twice', async () => {
+    const d = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-pkg-rel-')));
+    const repo = join(d, 'src'), cache = join(d, 'cache');
+    execFileSync('git', ['clone', '-q', '--no-hardlinks', ROOT, repo]);
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const pub = publicKey.export({ type: 'spki', format: 'pem' });
+    writeFileSync(join(repo, 'release-key.pub'), pub);
+    const t0 = Math.floor(Date.now() / 1000) - 7200;
+    const commit = (n, msg) => {
+      const env = { ...process.env, GIT_COMMITTER_DATE: `${t0 + n * 1800} +0000`, GIT_AUTHOR_DATE: `${t0 + n * 1800} +0000` };
+      execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qa', '--allow-empty', '-m', msg], { env });
+      return execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    };
+    // The hub runs a commit, Paul signs its package, then main moves on and the hub follows: a restart each time.
+    const serve = async () => {
+      const s = createServer(new Hub(), { source: repo, packageDir: cache });
+      const port = await listen(s);
+      await s.package;
+      return { s, u: `http://127.0.0.1:${port}`, close: () => { s.close(); s.closeAllConnections(); } };
+    };
+    execFileSync('git', ['-C', repo, 'add', 'release-key.pub']);
+    const a = commit(1, 'a release');
+    const first = await serve();
+    const tgz = readFileSync(join(cache, `nuworq-${a}.tgz`));
+    writeFileSync(join(cache, `nuworq-${a}.tgz.sig`), `${sign(null, tgz, privateKey).toString('base64')}\n`);
+    first.close();
+    commit(2, 'landed');
+    (await serve()).close();
+    const c = commit(3, 'landed again');
+    const hub = await serve();
+    try {
+      const info = (await (await fetch(`${hub.u}/api/info`)).json()).package;
+      assert.equal(info.commit, c.slice(0, 7), 'the hub runs the newest commit');
+      assert.deepEqual(info.release, { url: `${hub.u}/nuworq-${a}.tgz`, sha256: createHash('sha256').update(tgz).digest('hex'), commit: a, time: t0 + 1800 });
+      assert.equal((await fetch(`${hub.u}/nuworq.tgz.sig`)).status, 404, 'what it runs is unsigned');
+      assert.equal((await fetch(`${hub.u}/nuworq-${c}.tgz.sig`)).status, 404);
+      for (const p of [`/nuworq-${'f'.repeat(40)}.tgz`, `/nuworq-${a.slice(0, 7)}.tgz`, '/nuworq-..%2Fhub.json.tgz', `/nuworq-${a}.tgz.sig.sig`]) {
+        assert.equal((await fetch(`${hub.u}${p}`)).status, 404, p);
+      }
+
+      // An install of something older, pinning the same key.
+      const root = join(d, 'installed');
+      mkdirSync(join(root, 'src'), { recursive: true });
+      writeFileSync(join(root, 'src', 'commit.txt'), `${'0'.repeat(40)} ${t0}\n`);
+      writeFileSync(join(root, 'release-key.pub'), pub);
+      const got = [];
+      const r = await update({ root, hub: hub.u, dir: join(d, 'data'), env: {}, force: true, install: async (f) => { got.push(readFileSync(f)); return null; } });
+      assert.equal(r.status, 'updated', describeUpdate(r));
+      assert.equal(r.to, a);
+      assert.ok(got[0].equals(tgz), 'exactly the signed bytes');
+    } finally { hub.close(); }
   });
 
   test('a hub not running from a git checkout says so', async () => {
