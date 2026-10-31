@@ -140,6 +140,8 @@ export class Directory {
     try { this.db.exec('ALTER TABLE feedback ADD COLUMN told_at INTEGER'); } catch { /* already there */ }
     // The level that proposed a piece at once, without an owner's decision (#296): balanced | full; '' when decided.
     try { this.db.exec("ALTER TABLE feedback ADD COLUMN auto TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
+    // The workspace a used grant made (#355): it starts on Unlimited.
+    try { this.db.exec('ALTER TABLE org_grants ADD COLUMN workspace TEXT'); } catch { /* already there */ }
   }
 
   // ── billing (#227) ──
@@ -296,16 +298,21 @@ export class Directory {
   }
 
   // Use a grant to create one organization: true once, for an unused grant before it expires.
-  useGrant(code, identity) {
+  useGrant(code, identity, workspace = null) {
     if (!code) return false;
     const t = this.now();
-    return this.db.prepare('UPDATE org_grants SET used_by = ?, used_at = ? WHERE hash = ? AND used_at IS NULL AND expires_at > ?')
-      .run(identity.id, t, sha(code), t).changes === 1;
+    return this.db.prepare('UPDATE org_grants SET used_by = ?, used_at = ?, workspace = ? WHERE hash = ? AND used_at IS NULL AND expires_at > ?')
+      .run(identity.id, t, workspace, sha(code), t).changes === 1;
   }
 
   // Give a grant back when the organization it was used for couldn't be made after all.
   returnGrant(code) {
-    this.db.prepare('UPDATE org_grants SET used_by = NULL, used_at = NULL WHERE hash = ?').run(sha(code));
+    this.db.prepare('UPDATE org_grants SET used_by = NULL, used_at = NULL, workspace = NULL WHERE hash = ?').run(sha(code));
+  }
+
+  // Whether an early-access grant made this workspace (#355).
+  madeByGrant(workspace) {
+    return !!this.db.prepare('SELECT 1 FROM org_grants WHERE workspace = ? AND used_at IS NOT NULL').get(workspace);
   }
 
   // ── feedback (#295) ──
