@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "trellis",
+      "name": "nuworq",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["bin/trellis.js", "serve"],
+      "runtimeArgs": ["bin/nuworq.js", "serve"],
       "port": 4747
     }
   ]
