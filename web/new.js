@@ -21,6 +21,9 @@ export const NEW = {
   guide: '2026-10-31', // #383: the getting-started guide at /guide (the rail's Getting started guide)
   'guide-gs': '2026-10-31', // #383: the same guide from Get started's head (each undone step's How? opens its section)
   'ea-sources': '2026-10-31', // #356: on the admin dashboard, how far the people from each early-access source got
+  'model-quality': '2026-10-31', // #349: the quality bar routing keeps to, in Staffing
+  'model-why': '2026-10-31', // #349: in an item's drawer, which model its job runs on and why
+  'model-routing-results': '2026-10-31', // #349: analytics' Model routing, each model's results per kind of job
   'copy-each-command': '2026-10-31', // #379: several commands in a step, each with its own Copy that copies clean
   'live-view': '2026-10-31', // #358: Settings → Anyone can watch, the project's public live page
   'propose-work': '2026-10-31', // #389: propose work from a project's board, one field first, the rest on demand

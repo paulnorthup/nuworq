@@ -65,8 +65,28 @@ export function analyticsPage(o, { esc, dur, period = o?.period ?? '14d', open =
     <div class="an-lines">${shown.map((a) => compared(a, esc(a.agent ?? 'unknown'), a.model ? esc(a.model) : '')).join('') || '<div class="zero">Nothing landed in this period.</div>'}</div>${more}</section>`;
 
   const calSec = calibrationSection(o.calibration, { esc });
+  const routeSec = routingSection(o.routing, { esc });
   const top = `${head}${take}<div class="an-switch">${seg}</div>`;
-  return wide ? `${top}${columns(`${projects}${calSec}`, `${modelSec}${agentSec}`)}` : `${top}${projects}${modelSec}${agentSec}${calSec}`;
+  return wide ? `${top}${columns(`${projects}${calSec}`, `${modelSec}${agentSec}${routeSec}`)}` : `${top}${projects}${modelSec}${agentSec}${routeSec}${calSec}`;
+}
+
+const JOBS = { work: 'Building', land: 'Landing', tidy: 'Tidying', review: 'Reviewing', shape: 'Shaping' };
+
+// Model routing (#349): each model's results per kind of job, the figures routing picks from. What it saved comes
+// first, in words; then per kind of job, each model's clean rate as a bar (an amount: no state color), its attempts
+// and its full cost per clean job beside it. Routing counts a model in a kind from 20 attempts: fewer are faint.
+export function routingSection(r, { esc }) {
+  if (!r?.cells?.length) return '';
+  const saved = r.saved_usd == null ? 'Nothing priced to compare yet: savings show once jobs on different models report their cost.'
+    : r.saved_usd >= 0 ? `Routing saved ${money(r.saved_usd)} against running each job on its dearest model.`
+      : `Routing cost ${money(-r.saved_usd)} more than running each job on its dearest model: the cheaper models needed rework.`;
+  const cell = (c) => `<div class="an-line"><span class="an-name">${esc(JOBS[c.job] ?? c.job)} <span class="s">${esc(c.difficulty)} items</span></span>
+    <dl class="funnel an-cal">${c.models.map((m) => `<div class="step${m.attempts < 20 ? ' faint' : ''}"><dt>${esc(m.model)} <span class="s">${m.attempts}${m.cost_per_clean == null ? '' : ` · ${money(m.cost_per_clean)}`}</span></dt>
+      <dd><span class="bar" style="width:${Math.max(m.rate ? 2 : 0, Math.round(m.rate * 100))}%"></span></dd>
+      <dd class="n">${pct(m.rate)}</dd></div>`).join('')}</dl></div>`;
+  return `<section class="sec" data-new="model-routing-results"><header><h2>Model routing</h2><span class="hint">clean rate per model, by kind of job</span></header>
+    <p class="an-verdict">${esc(saved)}</p>
+    <div class="an-lines">${r.cells.map(cell).join('')}</div></section>`;
 }
 
 const LABELS = { rote: 'Rote', standard: 'Standard', hard: 'Hard', small: 'Small', large: 'Large' };

@@ -431,6 +431,10 @@ export function openDb(file) {
     'ALTER TABLE projects ADD COLUMN model_trial INTEGER NOT NULL DEFAULT 10',
     'ALTER TABLE projects ADD COLUMN model_race INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN live INTEGER NOT NULL DEFAULT 0', // anyone may watch it, read-only, at /live/<slug> (#358; src/live.js)
+    // Routing by results (#349): the project's quality bar (best | balanced | cheapest, src/models.js QUALITY), and
+    // the one line an item last got on which model its job runs on and why.
+    "ALTER TABLE projects ADD COLUMN model_quality TEXT NOT NULL DEFAULT 'balanced'",
+    "ALTER TABLE items ADD COLUMN route_why TEXT NOT NULL DEFAULT ''",
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,

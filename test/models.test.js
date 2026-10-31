@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, LEASE_MS } from '../src/core.js';
 import { view } from '../src/insight.js';
-import { modelFor, parseTiers } from '../src/models.js';
+import { modelFor, parseTiers, QUALITY } from '../src/models.js';
 
 const TIERS = { claude: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] };
 
@@ -50,7 +50,7 @@ describe('model routing', () => {
   test('off by default: routes name no model, whatever the tiers', () => {
     const { hub, set, route } = world();
     hub.humanOp('p', 'create', { title: 'Build', acceptance: 'x' });
-    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: false, tiers: {}, trial: 10, race: 0 });
+    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: false, tiers: {}, trial: 10, race: 0, quality: 'balanced', qualities: QUALITY });
     set({ model_tiers: TIERS });
     assert.equal(route('claude-opus-5-5').model, undefined);
     assert.equal(hub.route('', {})[0].model, undefined, 'and an agent asking where work is never hears one');
@@ -59,7 +59,7 @@ describe('model routing', () => {
   test('on: each route names the model its job calls for', () => {
     const { hub, set, op, route, landing } = world();
     set({ model_routing: true, model_tiers: TIERS });
-    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, trial: 10, race: 0 });
+    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, trial: 10, race: 0, quality: 'balanced', qualities: QUALITY });
     assert.match(hub.q("SELECT headline FROM events WHERE type = 'runner' ORDER BY id DESC").get().headline, /turned on model routing: landing and tidy jobs start on the cheapest tier/);
     hub.humanOp('p', 'create', { title: 'Build', acceptance: 'x' });
     assert.deepEqual([route().mode, route().model], ['work', 'claude-opus-5-5']);
