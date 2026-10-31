@@ -91,7 +91,9 @@ describe('the package updates itself only to a release signed by its pinned key'
     try {
       const root = installed();
       writeFileSync(join(root, 'package.json'), '{"name":"nuworq","version":"0.2.0"}');
-      const r = await update({ root, hub: hub.url, dir: tmp('nuworq-upd-data-'), install: installer().install, force: true });
+      // As npm install -g does, the install replaces the package the update runs from.
+      const install = async () => { writeFileSync(join(root, 'package.json'), '{"name":"nuworq","version":"0.3.0"}'); return null; };
+      const r = await update({ root, hub: hub.url, dir: tmp('nuworq-upd-data-'), install, force: true });
       assert.equal(r.status, 'updated', describeUpdate(r));
       assert.equal(describeUpdate(r), 'Updated nuworq 0.2.0 → 0.3.0. The next run uses it.\n  What landed since v0.2.0.\n  Faster search (#12)\n  - Index titles (#13)');
     } finally { hub.close(); }

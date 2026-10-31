@@ -187,6 +187,8 @@ export async function update({ root, hub, dir, env = process.env, force = false,
       if (rel.time <= mine.time) return refused(`${to.slice(0, 7)} (${when(rel.time)} UTC) isn't newer than the installed ${from.slice(0, 7)} (${when(mine.time)} UTC); updates never go back`);
     }
 
+    // The version it moves from, read before npm replaces the package it is read from (root).
+    const fromVersion = installedVersion(root);
     const file = join(dir, `nuworq-${to}.tgz`);
     writeFileSync(file, tgz.body);
     const failed = await install(file);
@@ -195,7 +197,7 @@ export async function update({ root, hub, dir, env = process.env, force = false,
     writeState(stateFile, { ...readState(stateFile), installed: to });
     // The versions it moved between, and what changed in the new one (#400).
     const { version, changes } = versionIn(tgz.body);
-    return { status: 'updated', from, to, from_version: installedVersion(root), to_version: version, changes };
+    return { status: 'updated', from, to, from_version: fromVersion, to_version: version, changes };
   } finally { unlock(); }
 }
 
