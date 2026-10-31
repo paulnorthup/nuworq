@@ -12,7 +12,7 @@ function setup() {
   hub.humanOp('r', 'settings', { autonomy: 'full' });
   const human = (op, args) => hub.humanOp('r', op, args);
   human('create', { title: 'Generic work', acceptance: 'x' }); // #1
-  human('create', { title: 'Check the live VM', acceptance: 'x', needs: ['operator', 'nuworq-infra'] }); // #2
+  human('create', { title: 'Check the live VM', acceptance: 'x', needs: ['operator', 'infra'] }); // #2
   human('create', { title: 'An idea', stage: 'proposed' }); // #3
   const p = hub.project('r');
   return {
@@ -30,7 +30,7 @@ describe('a session has one role, from how it started', () => {
   test('a plain checkin is a session; the operator tag an operator; role "shaper" a shaper', () => {
     const { a, role } = setup();
     assert.equal(a('s1', 'checkin', { model: 'm' }).role, 'session');
-    a('op', 'checkin', { has: ['operator', 'nuworq-infra'] });
+    a('op', 'checkin', { has: ['operator', 'infra'] });
     a('sh', 'checkin', { role: 'shaper' });
     assert.deepEqual([role('s1'), role('op'), role('sh')], ['session', 'operator', 'shaper']);
   });
@@ -84,7 +84,7 @@ describe('a session has one role, from how it started', () => {
 describe('the role decides what next and claim offer', () => {
   test('an operator gets operator-only work first, and the operator questions before that', () => {
     const { a } = setup();
-    a('op', 'checkin', { has: ['operator', 'nuworq-infra'] });
+    a('op', 'checkin', { has: ['operator', 'infra'] });
     assert.equal(a('op', 'next', { claim: false }).item, '#2');
     a('s', 'checkin');
     a('s', 'claim', { item: '#1' });
@@ -117,14 +117,14 @@ describe('the role decides what next and claim offer', () => {
 
   test('a worker never gets operator-only work, even with the capability on its machine', () => {
     const { a } = setup();
-    a('w', 'checkin', { has: ['macos', 'nuworq-infra'] }, RUNNER);
+    a('w', 'checkin', { has: ['macos', 'infra'] }, RUNNER);
     assert.equal(a('w', 'next', { claim: false }, RUNNER).item, '#1');
     assert.throws(() => a('w', 'claim', { item: '#2' }, RUNNER), (e) => e.status === 403 && /operator-only/.test(e.message) && /operator session/.test(e.hint));
   });
 
   test('once operator-only work is accepted, a worker may land it, so its next never stalls on it', () => {
     const { hub, a, item, tick } = setup();
-    a('op', 'checkin', { has: ['operator', 'nuworq-infra'] });
+    a('op', 'checkin', { has: ['operator', 'infra'] });
     a('op', 'claim', { item: '#2' });
     hub.q("UPDATE items SET stage = 'landing', holder = NULL, stage_since = ? WHERE id = ?").run(hub.now(), item(2).id); // accepted, with a branch to land
     tick(10 * MIN); // past the builder's grace
@@ -139,7 +139,7 @@ describe('the role decides what next and claim offer', () => {
     // Before it's submitted: no build offer, and a claim is refused.
     assert.ok(!a('w', 'next', { claim: false }, RUNNER).item.match(/#2|#4/));
     assert.throws(() => a('w', 'claim', { item: '#2' }, RUNNER), (e) => e.status === 403 && /operator-only/.test(e.message));
-    a('op', 'checkin', { has: ['operator', 'nuworq-infra', 'browser'] });
+    a('op', 'checkin', { has: ['operator', 'infra', 'browser'] });
     for (const n of [2, 4]) {
       a('op', 'claim', { item: `#${n}` });
       a('op', 'submit', { item: `#${n}`, headline: 'Done', evidence: [{ label: 'systemctl status nuworq: active (running)' }] });
@@ -148,7 +148,7 @@ describe('the role decides what next and claim offer', () => {
     // The worker is offered #2's review (not #4's: it has no browser), with a hint on the live part.
     const n = a('w', 'next', {}, RUNNER);
     assert.deepEqual([n.mode, n.item], ['review', '#2']);
-    assert.match(n.hint, /operator, nuworq-infra part was verified live by its builder or an operator/);
+    assert.match(n.hint, /operator, infra part was verified live by its builder or an operator/);
     assert.match(n.hint, /ask to: "operator" with the exact command and how to check it, and don't accept until it's answered/);
     assert.equal(item(2).holder, 'w');
     a('w', 'review', { item: '#2', verdict: 'accept', headline: 'Code and live output check out' }, RUNNER);
@@ -180,7 +180,7 @@ describe('claims, usage and presence carry the role', () => {
 
   test('checkin, look and the project view say each agent\'s role, where it runs and its job', () => {
     const { a, hub } = setup();
-    a('op', 'checkin', { has: ['operator', 'nuworq-infra'], machine: "Paul's Mac" });
+    a('op', 'checkin', { has: ['operator', 'infra'], machine: "Paul's Mac" });
     a('op', 'claim', { item: '#2' });
     a('w', 'checkin', {}, RUNNER);
     a('w', 'claim', { item: '#1' }, RUNNER);
@@ -241,10 +241,10 @@ describe('the guide and both skills describe the roles', () => {
   test('the shape hint for operator-only work, and refine adding an operator tag, say to split it; refine still applies it', () => {
     const { a, item } = setup();
     a('sh', 'checkin', { role: 'shaper' });
-    const split = /needs nuworq-infra[^.]*\. If it has code, docs or tests to change, split it: drop the operator tag[^.]*ask to: "operator" with steps/;
-    const r = a('sh', 'refine', { item: '#3', needs: ['nuworq-infra'] });
+    const split = /needs infra[^.]*\. If it has code, docs or tests to change, split it: drop the operator tag[^.]*ask to: "operator" with steps/;
+    const r = a('sh', 'refine', { item: '#3', needs: ['infra'] });
     assert.match(r.hint, split);
-    assert.deepEqual(JSON.parse(item(3).needs), ['nuworq-infra']);
+    assert.deepEqual(JSON.parse(item(3).needs), ['infra']);
     assert.doesNotMatch(a('sh', 'refine', { item: '#3', title: 'Renamed' }).hint ?? '', split, 'only when the tag is new');
     assert.doesNotMatch(a('sh', 'refine', { item: '#1', needs: ['docker'] }).hint ?? '', split, 'not for other tags');
     assert.match(a('sh', 'claim', { item: '#3' }).hint, split);

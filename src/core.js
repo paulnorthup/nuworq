@@ -12,7 +12,7 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
-import { OPERATOR_TAGS } from './protocol.js';
+import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
 export { slugify, normRemote };
 
@@ -170,9 +170,15 @@ export function normPaths(v) {
 const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
 
 // Fit tags: what an item needs, and what an agent's machine has. "Docker, linux-vm" → ["docker", "linux-vm"].
+// Old names become their new one: "nuworq-infra" → "infra".
+const tagList = (v) => Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[\s,]+/) : [];
 export function normTags(v) {
-  const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[\s,]+/) : [];
-  return [...new Set(list.map((x) => slugify(x)).filter(Boolean))].slice(0, 20);
+  return [...new Set(tagList(v).map((x) => slugify(x)).map((t) => TAG_ALIASES[t] ?? t).filter(Boolean))].slice(0, 20);
+}
+// The old tag names in v, for a hint that they were renamed. '' when none.
+function renamedTags(v) {
+  const old = [...new Set(tagList(v).map((x) => slugify(x)).filter((t) => TAG_ALIASES[t]))];
+  return old.length ? `Tag renamed: ${old.map((t) => `${t} is now ${TAG_ALIASES[t]}`).join(', ')}. It was stored under the new name; use it from now on.` : '';
 }
 export const SIZES = ['small', 'large'];
 
@@ -232,6 +238,14 @@ export class Hub extends EventEmitter {
     this._measuring = new Map(); // item id → its measurement in flight
     // Questions left open on work that had already landed or been dropped (before #182) close the same way.
     for (const it of this.q(`SELECT * FROM items WHERE stage IN ('done', 'dropped') AND id IN (SELECT item_id FROM questions WHERE status = 'open')`).all()) this.settleQuestions(it, it.stage);
+    // Renamed tags (#325): stored needs and declared has move to the new names, quietly (no events).
+    const old = Object.keys(TAG_ALIASES).map((t) => `%"${t}"%`);
+    for (const [table, col] of [['items', 'needs'], ['agents', 'has']]) {
+      const where = old.map(() => `${col} LIKE ?`).join(' OR ');
+      for (const row of this.db.prepare(`SELECT rowid AS id, ${col} AS tags FROM ${table} WHERE ${where}`).all(...old)) {
+        this.db.prepare(`UPDATE ${table} SET ${col} = ? WHERE rowid = ?`).run(JSON.stringify(normTags(json(row.tags, []))), row.id);
+      }
+    }
   }
 
   q(sql) {
@@ -1431,6 +1445,8 @@ export class Hub extends EventEmitter {
           r.hint = `The human has steered you; read it, adjust, then ack. ${r.hint ?? ''}`.trim();
         }
       }
+      const renamed = renamedTags(op === 'checkin' ? args?.has : ['propose', 'refine'].includes(op) ? args?.needs : null);
+      if (renamed) r.hint = `${renamed} ${r.hint ?? ''}`.trim();
       if (!slug) r.project ??= p.slug; // so clients can stay with the project they were sent to
       if (['checkin', 'next'].includes(op)) {
         const where = normDir(p.path);

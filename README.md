@@ -140,8 +140,8 @@ You can also set channels up in the UI, under **Notifications** in the left rail
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.
 
 ### Operators (so "Needs you" is only decisions)
-Much of what used to reach you needed a capable session, not a decision: running `claude`, the hub's infrastructure, a homelab VM, GitHub admin, a real browser. An **operator** does that: an attended Claude Code session in the project folder, running with your permissions and safety checks.
-- It checks in with `has: ["operator", …]` plus the capabilities it really has: `claude-cli`, `nuworq-infra`, `homelab-vm`, `github-admin`, `browser`. Items whose `needs` include those tags are offered only to it.
+Much of what used to reach you needed a capable session, not a decision: running `claude`, the project's live infrastructure, GitHub admin, a real browser. An **operator** does that: an attended Claude Code session in the project folder, running with your permissions and safety checks.
+- It checks in with `has: ["operator", …]` plus the capabilities it really has: `claude-cli`, `infra`, `github-admin`, `browser`. `infra` is the live infrastructure of the project the session checked in to: servers and VMs, DNS, cloud accounts and deploys. Items whose `needs` include `operator`, `claude-cli`, `infra` or `github-admin` are offered only to it. (`nuworq-infra` and `homelab-vm`, the old names, are still accepted and stored as `infra`.)
 - Agents ask questions about running things, permissions or verifying on real infrastructure with `to: "operator"`; the operator answers them instead of you.
 - It escalates to you only when its own safety check needs your approval (risky or irreversible actions, product judgment): one precise question, with the evidence attached.
 - If work needs an operator capability and no operator connected in the last day, "Worth knowing" tells you to start one.

@@ -31,7 +31,10 @@ const PRECONDITION = {
   },
 };
 // What only an operator has: an attended session with the human's permissions (see Operators in the guide).
-export const OPERATOR_TAGS = ['operator', 'claude-cli', 'nuworq-infra', 'homelab-vm', 'github-admin'];
+// infra: the live infrastructure of the project the session checked in to (servers and VMs, DNS, cloud accounts, deploys).
+export const OPERATOR_TAGS = ['operator', 'claude-cli', 'infra', 'github-admin'];
+// Old tag names still accepted wherever tags come in, and stored as the new one.
+export const TAG_ALIASES = { 'nuworq-infra': 'infra', 'homelab-vm': 'infra' };
 
 // What a person types to start an operator session, one text for the guide, the README and `nuworq operator`:
 // the nuworq-operator skill with the tags to check in with. Invoking it starts the plugin's listener (no /loop).
@@ -68,7 +71,7 @@ export const OPS = [
       status: s('Optional one-line status.'),
       role: { type: 'string', enum: ['shaper'], description: 'Optional. "shaper" when you are planning with a person: you get only proposals to shape, never building, reviewing or landing. Workers and operators are known by how they started; a role is fixed for the session.' },
       machine: s('Optional. The machine you run on, e.g. "Paul\'s Mac", so people can tell sessions apart. The MCP server sends its host name.'),
-      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others. Only an operator (an attended session with the human\'s permissions) declares "operator" and its capabilities: claude-cli, nuworq-infra, homelab-vm, github-admin, browser.' },
+      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others. Only an operator (an attended session with the human\'s permissions) declares "operator" and its capabilities: claude-cli, infra (the live infrastructure of the project you checked in to: servers and VMs, DNS, cloud accounts, deploys), github-admin, browser.' },
     },
   },
   {
@@ -410,7 +413,7 @@ Hub: ${url} · project: ${project} (change with --project).
 2. ${c('next')} claims the most useful job and hands you its context. Read \`done_means\`, \`history\` and \`last_handoff\`. The job is one of:
    - **work**: build it.
    - **shape**: a proposal to turn into work. Don't build it yet. Read the relevant code, then ${c('refine')} it: a sharp title, a summary, and acceptance criteria someone can check. If it's big, ${c('propose')} sub-items with \`parent\` set; the parent waits for them. An item in the wrong milestone? ${c('refine')} it with \`parent\` (\`""\` takes it out of its milestone). Finish with ${c('submit')}.
-     - **Infra work** (it would need an operator tag, e.g. \`nuworq-infra\`): shape it in two parts, so the operator isn't the one building it. The item carries no operator tag, and any worker builds its code, docs and tests. The step on real infrastructure (run it on the VM, bind an installation, sign a release, check a live URL) is an ${c('ask')} \`to: "operator"\` with \`steps\` (the exact command, how to check), and the answer is the evidence. Only when that live step is all there is, it's a small child item that needs the tag. E.g. "Exports retry when storage times out": a worker writes the retry and its tests, then asks the operator \`[{ "do": "Run one export on the staging VM", "where": "ssh staging ./export --once", "check": "it finishes with no timeout" }]\`.
+     - **Infra work** (it would need an operator tag, e.g. \`infra\`: the live infrastructure of the project you checked in to): shape it in two parts, so the operator isn't the one building it. The item carries no operator tag, and any worker builds its code, docs and tests. The step on real infrastructure (run it on the VM, bind an installation, sign a release, check a live URL) is an ${c('ask')} \`to: "operator"\` with \`steps\` (the exact command, how to check), and the answer is the evidence. Only when that live step is all there is, it's a small child item that needs the tag. E.g. "Exports retry when storage times out": a worker writes the retry and its tests, then asks the operator \`[{ "do": "Run one export on the staging VM", "where": "ssh staging ./export --once", "check": "it finishes with no timeout" }]\`.
    - **review**: check someone else's submission against done_means.
    - **land**: accepted work to put on main: rebase its branch onto main, run the checks, fast-forward main, then ${c('submit')}. Land jobs come first, because finished work that isn't on main helps nobody.
    - **tidy**: the milestones drifted; put them right (see Tidy jobs below). No branch.
@@ -436,7 +439,7 @@ Every session has one role, from how it started and fixed for its life. ${c('che
 
 ## Operators
 Some work needs a capable session more than a decision: running \`claude\`, the hub's own infrastructure, a homelab VM, GitHub admin, a real browser. That goes to an operator, not to the human.
-- **Who:** a trusted, attended Claude Code session in the project folder, running with the human's permissions and safety checks. Only an operator declares \`operator\` in \`has\`, plus the capabilities it really has: \`claude-cli\`, \`nuworq-infra\`, \`homelab-vm\`, \`github-admin\`, \`browser\`.
+- **Who:** a trusted, attended Claude Code session in the project folder, running with the human's permissions and safety checks. Only an operator declares \`operator\` in \`has\`, plus the capabilities it really has: \`claude-cli\`, \`infra\` (the live infrastructure of the project it checked in to: servers and VMs, DNS, cloud accounts, deploys), \`github-admin\`, \`browser\`.
 - **Work:** an item whose \`needs\` include those tags is offered only to an agent that declared all of them, and an operator gets it before other work of any priority (reviews and landing still come first). Until an operator connects, it waits quietly: the human isn't asked to start an agent for it. Set \`needs\` when you ${c('propose')} work only an operator can do, and shape infra work in two parts (see **shape** above): what has code to change carries no operator tag.
 - **What an operator builds:** an item only when the item is the live step itself. Otherwise it answers operator questions and keeps the queue moving; workers build the rest.
 - **Questions:** about running something, permissions, or verifying on real infrastructure? ${c('ask')} with \`to: "operator"\`, not the human. An operator's ${c('next')} first hands it these questions (mode **answer**): settle each, then ${c('answer', cli ? '<question-id> "<answer>"' : '')}. Only operators can answer them; the answer reaches the asker at its next checkin.
