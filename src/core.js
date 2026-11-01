@@ -1484,7 +1484,16 @@ export class Hub extends EventEmitter {
   // Whether each branch being built lacks what landed since it started (#535), for headsUp to read. Off the request
   // path: on the sweep timer, and soon after a fetch or a landing (refreshBehindSoon). git runs asynchronously, and
   // a branch whose head and base head haven't moved keeps its last answer without running merge-base.
-  async refreshBehind() {
+  // One at a time (#557): a call while one runs waits for it, then a run of its own sees the newest state; calls made
+  // while that run is still queued share it. So two never interleave, and an older answer is never written last.
+  refreshBehind() {
+    if (this._behindNext) return this._behindNext;
+    const next = (this._behindRun ?? Promise.resolve()).catch(() => {}).then(() => { this._behindNext = null; return this.checkBehind(); });
+    this._behindNext = this._behindRun = next;
+    return next;
+  }
+
+  async checkBehind() {
     const seen = new Set();
     for (const p of this.projects()) {
       for (const item of this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'active' AND branch != ''`).all(p.id)) {
