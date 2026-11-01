@@ -1765,7 +1765,7 @@ async function main() {
   if (!agent) throw new HubError('who are you?', { hint: 'Pass --as <name> (e.g. --as claude-1) or set NUWORQ_AGENT. Keep the same name for your whole session.' });
   const client = createClient(flags);
   const result = await client.call(cmd, clean(shape(pos, flags)), { agent });
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(result)); // compact, like the hub's own responses (#528)
 }
 
 main().catch((e) => {

@@ -121,10 +121,11 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
           const updated = takeNews(updateDir, 'mcp');
           if (updated) result = { ...result, updated };
         }
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        // Compact: indentation is a tenth of what an agent reads, and it reads JSON fine without (#528).
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       } catch (e) {
         const body = { ok: false, error: e.message, ...(e.hint ? { hint: e.hint } : {}) };
-        return { content: [{ type: 'text', text: JSON.stringify(body, null, 2) }], isError: true };
+        return { content: [{ type: 'text', text: JSON.stringify(body) }], isError: true };
       }
     },
   };

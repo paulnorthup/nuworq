@@ -2611,6 +2611,9 @@ function escalate(p, agent, args) {
   };
 }
 
+// look without an item shows this many of each stage, and of what was recently done.
+const LOOK_TOP = 5;
+
 const AGENT_OPS = {
   checkin(p, agent, args, presence) {
     if (presence.fresh || presence.gap > 30 * MIN || presence.wasSignedOff) {
@@ -2999,18 +3002,28 @@ const AGENT_OPS = {
   look(p, agent, args) {
     if (args.item) return this.context(p, this.item(p, args.item), agent);
     const stages = args.stage ? [str(args.stage)] : OPEN_STAGES;
-    const out = {};
+    const out = {}, counts = {};
     const eff = this.effectivePriorities(p);
+    // In the order next offers them: the most urgent (as it counts, from its group too) first, then the oldest.
+    const rank = (i) => PRIORITY_RANK[eff.get(i.id)?.priority ?? i.priority] ?? 9;
     for (const s of stages) {
-      const rows = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = ? ORDER BY seq`).all(p.id, s);
-      // Its difficulty (#348) beside its priority, once rated.
-      if (rows.length) out[s] = rows.map((i) => `#${i.seq} [${this.effectiveLabel(p, i, eff) ?? i.priority}${i.difficulty ? `, ${i.difficulty}` : ''}] ${i.title}${i.holder ? ` (${i.holder})` : ''}`);
+      const rows = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = ? ORDER BY seq`).all(p.id, s).sort((a, b) => rank(a) - rank(b) || a.seq - b.seq);
+      if (!rows.length) continue;
+      counts[s] = rows.length;
+      // Without a stage, the top few of each (#528): a big board is most of a response no one reads. Its difficulty
+      // (#348) beside its priority, once rated.
+      out[s] = (args.stage ? rows : rows.slice(0, LOOK_TOP)).map((i) => `#${i.seq} [${this.effectiveLabel(p, i, eff) ?? i.priority}${i.difficulty ? `, ${i.difficulty}` : ''}] ${i.title}${i.holder ? ` (${i.holder})` : ''}`);
     }
-    const recent = this.q(`SELECT seq, title FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? ORDER BY stage_since DESC LIMIT 10`)
+    const recent = this.q(`SELECT seq, title FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? ORDER BY stage_since DESC LIMIT ${LOOK_TOP}`)
       .all(p.id, this.now() - 3 * DAY);
     if (!args.stage && recent.length) out.recently_done = recent.map((i) => `#${i.seq} ${i.title}`);
+    const more = args.stage ? [] : Object.keys(counts).filter((s) => counts[s] > LOOK_TOP);
     const notes = this.fieldNotes(p, args.notes === 'all' ? [] : this.workFor(p, agent), { all: args.notes === 'all' });
-    return { board: out, decisions: this.decisions(p).map((d) => d.body), ...notes, others_working: this.others(p, agent).map(fmtOther), agents: this.presentAgents(p) };
+    return {
+      board: out, ...(args.stage ? {} : { counts }),
+      ...(more.length ? { more: `Showing the top ${LOOK_TOP} of each stage. For all of one: look with stage, e.g. stage: "${more[0]}" (${counts[more[0]]} items).` } : {}),
+      decisions: this.decisions(p).map((d) => d.body), ...notes, others_working: this.others(p, agent).map(fmtOther), agents: this.presentAgents(p),
+    };
   },
 
   learn(p, agent, args) {
