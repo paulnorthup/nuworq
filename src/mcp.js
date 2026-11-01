@@ -17,7 +17,8 @@ const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 // updateDir: where the self-update keeps its state (src/update.js), whose news checkin passes on once.
 export function runMcp({ input = process.stdin, output = process.stdout, env = process.env, clientOpts = {}, updateDir = join(dataDir(), 'update') } = {}) {
   // Its session's keys go with every call, so the listener beside it wakes it and no other session (#335).
-  const client = createClient({ session: serverKeys({ env }), ...clientOpts });
+  // Every answer names the protocol the hub serves (#541): a new one is when the tools and the guide are refetched.
+  const client = createClient({ session: serverKeys({ env }), onProtocol: (h) => heard(h), ...clientOpts });
   const { url } = client.settings;
   let project = client.settings.project;
   let agent = envVar('AGENT', env) || null;
@@ -30,9 +31,15 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
 
   // The tools and the guide come from the hub, so a hub that learned something new teaches it to every open
   // session, without a reinstall. This package's own definitions stand in only while the hub can't be reached.
-  const meta = createClient({ ...clientOpts, retryMs: 0 });
+  // They are fetched at startup, and again only when an answer names a protocol other than the one they came
+  // with (#541): no polling, so a quiet session asks nothing.
+  const meta = createClient({ ...clientOpts, retryMs: 0, onProtocol: (h) => heard(h) });
   const where = () => project ?? 'whichever project the hub sends you to';
   let fromHub = null; // { tools, guide } as the hub last said, or null
+  let protocol = null; // the x-nuworq-protocol they came with
+  let latest = null; // the one the last answer named
+  let fetching = null; // the fetch under way
+  let initialized = false;
   async function fetchProtocol() {
     try {
       const [t, g] = await Promise.all([meta.get('/api/tools?format=mcp'), meta.get(`/api/guide?via=tools&project=${encodeURIComponent(where())}`)]);
@@ -40,16 +47,22 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
     } catch { return null; }
   }
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  let watching = null;
-  function watch() {
-    const every = Number(envVar('MCP_POLL_MS', env)) || 60_000;
-    watching = setInterval(async () => {
+  // An answer named protocol h: one the tools didn't come with, or any once the hub is back after they couldn't
+  // be fetched, refetches them. The client hears list_changed when they differ.
+  function heard(h) {
+    latest = h;
+    if (!fetching && initialized && (h !== protocol || !fromHub)) refresh();
+  }
+  function refresh() {
+    return fetching ??= (async () => {
       const now = await fetchProtocol();
-      if (!now || same(now.tools, fromHub?.tools)) return;
+      fetching = null;
+      if (!now) return;
+      const changed = !same(now.tools, fromHub?.tools);
       fromHub = now;
-      write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
-    }, every);
-    watching.unref?.();
+      protocol = latest;
+      if (changed && initialized) write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+    })();
   }
   const STALE = 'The hub could not be reached when this session started, so these are the tools this nuworq package was built with; they may be stale. Call checkin: the hub will say what it expects.';
 
@@ -58,8 +71,8 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
       clientName = params.clientInfo?.name ?? '';
       agent ??= `${slugify(clientName || 'agent') || 'agent'}-${randomBytes(2).toString('hex')}`;
       log(`agent ${agent} on ${project ? `project ${project}` : 'whatever project the hub routes it to'} via ${url}`);
-      fromHub = await fetchProtocol();
-      if (!watching) watch();
+      if (!initialized) await refresh();
+      initialized = true;
       return {
         protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : '2025-06-18',
         capabilities: { tools: { listChanged: true } },

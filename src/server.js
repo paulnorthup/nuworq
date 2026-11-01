@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_AGENT_CAN, STAGES, normRemote, slugify, refuseSecrets, providerOf, MIN, HOUR, DAY } from './core.js';
 import { checkLocalModels } from './llmproxy.js';
 import { view, itemView, projectList, homeView, withEntry } from './insight.js';
-import { tools, guide, LISTENER } from './protocol.js';
+import { tools, guide, LISTENER, protocolVersion } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces } from './workspaces.js';
@@ -799,6 +799,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const url = new URL(req.url, 'http://local');
     let path = url.pathname;
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+    res.setHeader('x-nuworq-protocol', protocolVersion()); // an MCP process refetches tools and guide when it changes (#541)
     const send = (status, body, type = 'application/json; charset=utf-8') => {
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
       res.end(type.startsWith('application/json') ? JSON.stringify(body, null, 2) : body);
