@@ -1,27 +1,22 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
 import { mentions } from '../src/userguide.js';
+import { COMMANDS } from '../src/help.js';
 
 // The guide never names what nuworq no longer has (#384): every `nuworq …` command and flag is in the CLI's help,
 // every **label** is in a web/ file, and every /path is a page src/server.js serves. The marks are documented at
 // the top of src/userguide.js.
-const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
 // Flags every agent command takes (the help's Agents heading and its Text flags line).
 const GLOBAL = ['--as', '--project', '--url', '--summary', '--detail', '--help'];
 
-// The help, as each command's flags: a line "  <cmd> …" starts a block; lines indented further continue it.
-export function cliContract(help) {
+// The help's table (#481), as each command's flags: those in its usage lines and its Flags.
+export function cliContract(commands) {
   const cmds = new Map();
-  let cur = null;
-  for (const line of help.replace(/\x1b\[[0-9;]*m/g, '').split('\n')) {
-    const start = line.match(/^ {2}([a-z][\w-]*)(?=\s|$)/);
-    if (start) { cur = start[1]; if (!cmds.has(cur)) cmds.set(cur, new Set()); } else if (!/^ {3,}/.test(line)) { cur = null; }
-    if (cur) for (const f of line.matchAll(/--[a-z][\w-]*/g)) cmds.get(cur).add(f[0]);
+  for (const c of commands) {
+    const text = [...c.usage, ...(c.flags ?? []).map(([f]) => f)].join(' ');
+    cmds.set(c.name, new Set([...text.matchAll(/--[a-z][\w-]*/g)].map((m) => m[0])));
   }
   return cmds;
 }
@@ -52,8 +47,7 @@ export function stale({ commands = [], labels = [], paths = [] }, { cli, webText
 describe('the getting-started guide names only what nuworq has (#384)', () => {
   let cli, webText, served;
   before(async () => {
-    const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'help'], { env: { ...process.env, NUWORQ_NO_UPDATE: '1' } });
-    cli = cliContract(stdout);
+    cli = cliContract(COMMANDS);
     // The web app's text, and Get started's button labels, which the hub sends to web/getstarted.js to draw.
     webText = [...readdirSync(new URL('../web/', import.meta.url)).filter((f) => /\.(js|html)$/.test(f)).map((f) => `web/${f}`), 'src/getstarted.js'].map(read).join('\n');
     const server = read('src/server.js');
