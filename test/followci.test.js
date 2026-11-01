@@ -1,6 +1,12 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { follower } from '../src/follow.js';
+import { createServer } from 'node:http';
+import { generateKeyPairSync } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { follower, system } from '../src/follow.js';
 import { checkOn } from '../src/ghapp.js';
 
 // A pretend world whose main moves, with CI's verdict per commit (ci: sha → answer) and a clock.
@@ -132,5 +138,43 @@ describe("checkOn reads the check's latest run from GitHub", () => {
     assert.equal(a.asked[1].token, 't');
     await assert.rejects(checkOn(app([], 500), 'github.com/acme/api', 'abc1234'), /GitHub answered 500/);
     assert.equal(await checkOn(a, 'gitlab.com/acme/api', 'abc1234'), null, 'not a GitHub repository');
+  });
+});
+
+// The supervisor loads only node: modules (#546), so serve --follow hands it the app file's path, not a function:
+// it asks GitHub through src/followhub.js, run as a child.
+describe("the supervisor asks GitHub through src/followhub.js", () => {
+  test('passed, failed and pending come back from a child that read the app file; no app setting, no ci', async () => {
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const runs = { aaaaaaa1: [{ status: 'completed', conclusion: 'success' }], bbbbbbb2: [{ status: 'completed', conclusion: 'failure' }], ccccccc3: [] };
+    const asked = [];
+    const gh = createServer((req, res) => {
+      asked.push(`${req.method} ${req.url}`);
+      const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+      if (req.url === '/repos/acme/api/installation') return json(200, { id: 42 });
+      if (req.url === '/app/installations/42/access_tokens') return json(201, { token: 'ghs_t', expires_at: new Date(Date.now() + 3600_000).toISOString() });
+      const m = req.url.match(/^\/repos\/acme\/api\/commits\/(\w+)\/check-runs\?check_name=test&filter=latest$/);
+      if (m) return json(200, { check_runs: runs[m[1]] ?? [] });
+      json(404, { message: 'Not Found' });
+    });
+    await new Promise((r) => gh.listen(0, '127.0.0.1', r));
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'followci-'));
+      const repo = join(root, 'repo');
+      execFileSync('git', ['init', '-q', repo]);
+      execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'git@github.com:acme/api.git']);
+      const app = join(root, 'github-app.json');
+      writeFileSync(app, JSON.stringify({ id: 1234, key: privateKey.export({ type: 'pkcs8', format: 'pem' }), api: `http://127.0.0.1:${gh.address().port}` }));
+      const sys = system({ repo, dir: join(root, 'hub-src'), url: 'http://127.0.0.1:1', ci: { app } });
+      assert.deepEqual(await sys.ci('aaaaaaa1'), { state: 'passed' });
+      assert.equal((await sys.ci('bbbbbbb2')).state, 'failed');
+      assert.deepEqual(await sys.ci('ccccccc3'), { state: 'pending', missing: true });
+      assert.ok(asked.includes('GET /repos/acme/api/commits/aaaaaaa1/check-runs?check_name=test&filter=latest'));
+      writeFileSync(app, '{}');
+      assert.equal(await sys.ci('aaaaaaa1'), null, 'an app file gone bad since: no verdict, so the suite runs here');
+      assert.equal(system({ repo, dir: join(root, 'hub-src'), url: 'http://127.0.0.1:1' }).ci, null);
+    } finally {
+      gh.close();
+    }
   });
 });
