@@ -26,7 +26,7 @@ import { LOGO } from './logo.js';
 import { isTextBox, saveFocus, restoreFocus } from './focus.js';
 import { keepScroll } from './scroll.js';
 import { morph } from './morph.js';
-import { liveGate } from './pace.js';
+import { liveGate, onScreen } from './pace.js';
 import { predict, placeholder } from './instant.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
@@ -2025,7 +2025,8 @@ function listen() {
     const info = await api('/api/info').catch(() => null);
     if (info && info.commit !== S.info?.commit) { S.info = info; scheduleRefresh(); }
   };
-  es.onmessage = () => scheduleRefresh();
+  // Only a change in what's on screen refetches it (#502); the rail's other projects catch up on the half-minute look.
+  es.onmessage = (m) => { if (onScreen(m.data, { slug: S.analytics || S.missing ? null : S.slug })) scheduleRefresh(); };
   es.onerror = () => { es.close(); offline(); setTimeout(listen, 3000); };
 }
 
