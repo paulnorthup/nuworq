@@ -61,7 +61,8 @@ export function manifest(base, name) {
     redirect_url: `${base}/api/github/app/callback`,
     // After installing (or changing which repositories it sees), GitHub sends the person back to the hub.
     setup_url: `${base}/#/`, setup_on_update: true,
-    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read' },
+    // members (an organization permission): whether the person installing on an organization is its admin (#478).
+    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' },
     default_events: reachable ? APP_EVENTS : [],
   };
 }

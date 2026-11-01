@@ -15,7 +15,7 @@ The hub holds a GitHub App's private key, and nothing else holds a GitHub creden
 **Or by hand** (the fallback, and the way for workspaces hubs). On GitHub, go to Settings → Developer settings → **GitHub Apps** → New GitHub App (for an organization: its Settings → Developer settings). Then:
 - Name: e.g. `nuworq-<your-org>`. Homepage URL: your hub's public address.
 - Webhook: **Active**, URL `https://<hub>/api/hooks/github-app`, content type `application/json`, and a long random **Webhook secret** (give the hub the same one, below). Subscribe to **Issues**, **Issue comment**, **Pull request**, **Pull request review**, **Check suite**, **Check run** and **Dependabot alert** (installation events always come). This one webhook serves every project on every repository the app is installed on, so no project needs a webhook or secret of its own. A hub GitHub can't reach (localhost) leaves it off, and each project's own webhook still works (see DEPLOY.md, "GitHub: pull requests and CI on items").
-- Repository permissions: **Contents: read & write**, **Pull requests: read & write**, **Checks: read**, **Issues: read & write**, **Dependabot alerts: read**, **Metadata: read**. Nothing else, and no account permissions.
+- Repository permissions: **Contents: read & write**, **Pull requests: read & write**, **Checks: read**, **Issues: read & write**, **Dependabot alerts: read**, **Metadata: read**. Organization permissions: **Members: read**, so the hub can check that whoever installs it on an organization is its admin before binding it to their workspace. Nothing else, and no account permissions.
 - Where can it be installed: *Only on this account*.
 - Create it, note the **App ID**, and under *Private keys* generate one (a `.pem` download).
 
