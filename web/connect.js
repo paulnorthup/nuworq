@@ -43,7 +43,7 @@ export function connectCommands(info, page = null, slug = 'my-project') {
     worker: 'nuworq worker --agent claude --run',
     // For Claude Code (#97, #432): the MCP server, /nuworq:shaper and /nuworq:operator as one plugin, as in the README.
     // At its release branch (#473): the plugin changes only with a release Paul approved and the signer signed.
-    plugin: 'claude plugin marketplace add paulnorthup/nuworq#release\nclaude plugin install nuworq@nuworq',
+    plugin: 'claude plugin marketplace add paulnorthup/nuworq#release\nclaude plugin install nuworq@nuworq --scope user',
     // By hand (what connect does for you): no token, no address, no path.
     claude: 'claude mcp add --scope user nuworq -- nuworq mcp',
     codex: '[mcp_servers.nuworq]\ncommand = "nuworq"\nargs = ["mcp"]\ndefault_tools_approval_mode = "approve"',

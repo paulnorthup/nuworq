@@ -23,8 +23,9 @@ Flags
   --skills        without the nuworq plugin in Claude Code, write the server and
                   skills without asking
   --off           the same as nuworq disconnect
-  --yes           answer yes to each follow-up (staff this project, start an
-                  operator) without asking
+  --yes           answer yes to each follow-up (install the plugin, remove old
+                  leftovers, staff this project, start an operator) without
+                  asking
   --no            answer no to each follow-up without asking
   --budget <usd>  with staffing: the daily cap for its workers (default: 20)
 
@@ -38,8 +39,9 @@ You approve a code in the browser, and the hub is saved in
 ~/.nuworq/connect.json, which only you can read. The CLI, the MCP server and
 nuworq run use it from then on; NUWORQ_URL and NUWORQ_TOKEN still win.
 
-Claude Code without the nuworq plugin: connect offers to install it first. Undo
-all of it with nuworq disconnect.
+Claude Code without the nuworq plugin for your account: connect offers to
+install it first. With it, connect offers to remove what an earlier nuworq left
+beside it (old skills, a second server). Undo all of it with nuworq disconnect.
 
 Then, one at a time: staff the project this folder is a clone of with workers
 here (nuworq staff), and start an operator (operator --start). --yes or --no

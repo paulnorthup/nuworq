@@ -79,7 +79,8 @@ export const STEPS = [
     hand: [
       'Beside you: install the Claude Code plugin once (two commands), open Claude Code in a clone of the project\'s repository, and say "Work on <project> using nuworq". It checks in, takes the most useful item, and you watch and steer it in your session.',
       '`claude plugin marketplace add paulnorthup/nuworq#release`',
-      '`claude plugin install nuworq@nuworq`',
+      '`claude plugin install nuworq@nuworq --scope user`',
+      'In Claude Code\'s /plugin menu, pick the option for you (all projects), not one for this repository only: then every project gets /nuworq:shaper and /nuworq:operator.',
       'On their own: workers are headless agents, each in its own git worktree with a branch per item. One worker, wherever work is waiting:',
       '`nuworq worker --agent claude --run`',
       'Or keep up to three going on the projects you let it staff. First open the project, then **Settings**, and switch on **Staff it with nuworq run** (the board also offers **Let nuworq run staff this project**). Ctrl-C stops them. Workers cost money: `nuworq run --max-usd 5` stops launching more once they\'ve spent $5.',
