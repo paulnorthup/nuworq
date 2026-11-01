@@ -89,6 +89,23 @@ export async function proposedRelease(repo, tag) {
   return { ...t, subject, changes: changes ?? '', refusal };
 }
 
+// Why the plugin's branch mustn't move to t, the release the hub says it serves: '' when it may. t must be on
+// origin's main, and approved here or signed by key: the hub's package of it and its .sig, checked by us.
+async function unsigned(repo, get, base, key, approvals, t) {
+  if (!(await git(repo, ['merge-base', '--is-ancestor', t.commit, MAIN]).then(() => true, () => false))) return `${t.commit.slice(0, 7)} isn't on origin's main`;
+  if (!approvalOf(approvals, key, t.tag, t.commit)) return '';
+  const file = `${base}/nuworq-${t.commit}.tgz`;
+  const unsure = 'no one approved it here, and the hub\'s package of it isn\'t signed by this key';
+  try {
+    const bytes = async (url) => { const r = await get(url, { signal: AbortSignal.timeout(120_000) }); if (!r.ok) throw Object.assign(new Error(`${url} answered ${r.status}`), { status: r.status }); return Buffer.from(await r.arrayBuffer()); };
+    const sig = Buffer.from((await bytes(`${file}.sig`)).toString('utf8').trim(), 'base64');
+    if (verify(null, await bytes(file), createPublicKey(key), sig)) return '';
+  } catch (e) {
+    return e.status === 404 ? unsure : `couldn't check its signature (${e.message})`;
+  }
+  return unsure;
+}
+
 const json = async (get, url) => {
   const r = await get(url, { signal: AbortSignal.timeout(30_000) });
   if (!r.ok) throw new Error(`${url} answered ${r.status}`);
@@ -136,7 +153,14 @@ export async function round({ repo, hub, key, dest, scp, approvals, fetch: get =
   for (const t of tags) {
     const short = t.commit.slice(0, 7);
     const say = (outcome, reason) => results.push({ ...t, short, outcome, reason });
-    if (release?.commit === t.commit) { say('done', `the hub serves it as its signed release${await publish(t)}`); continue; }
+    if (release?.commit === t.commit) {
+      // The hub only says so: the branch moves only to a release on main that a person approved here, or whose
+      // package the hub serves carries this key's signature (signed by hand, before approvals). Else the plugin
+      // would follow whatever tag a compromised hub names.
+      const why = branchAt === t.commit ? '' : await unsigned(repo, get, base, key, approvals, t);
+      say('done', `the hub serves it as its signed release${why ? `, but the plugin's ${RELEASE_BRANCH} branch stays where it is: ${why}` : await publish(t)}`);
+      continue;
+    }
     const time = Number((await git(repo, ['log', '-1', '--format=%ct', t.commit])).trim());
     if (release && (time <= release.time || (current && !newer(t.version, current)))) {
       say('refused', `older than the hub's signed release${current ? ` v${current}` : ''} (${release.commit.slice(0, 7)}), and signing it would roll installs back`);

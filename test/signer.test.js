@@ -2,7 +2,7 @@ import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { generateKeyPairSync, createPublicKey, verify } from 'node:crypto';
+import { generateKeyPairSync, createPublicKey, sign, verify } from 'node:crypto';
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -23,7 +23,7 @@ const keypair = () => {
 // does (src/package.js). scp copies into the hub's package folder, unless told to fail.
 describe('the release signer (#430)', () => {
   // buildsReleases: the hub builds a skipped release's package when asked for it, as hubs with #434 do.
-  let dir, origin, work, repo, hubDir, approvals, server, hub, ours, pinned, scpFails, ran, comments, asked, withdrawn, buildsReleases;
+  let dir, origin, work, repo, hubDir, approvals, server, hub, ours, pinned, scpFails, ran, comments, asked, withdrawn, buildsReleases, claims;
   const commit = (files, msg) => {
     for (const [f, text] of Object.entries(files)) { mkdirSync(join(work, f, '..'), { recursive: true }); writeFileSync(join(work, f), text); }
     git(work, 'add', '-A');
@@ -60,7 +60,7 @@ describe('the release signer (#430)', () => {
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
     execFileSync('git', ['clone', '-q', origin, work]);
     git(work, 'config', 'user.email', 't@example.com'); git(work, 'config', 'user.name', 'T');
-    ours = keypair(); pinned = ours.pub; scpFails = false; comments = []; asked = []; withdrawn = []; buildsReleases = false;
+    ours = keypair(); pinned = ours.pub; scpFails = false; comments = []; asked = []; withdrawn = []; buildsReleases = false; claims = null;
     commit({ '.gitattributes': 'src/commit.txt export-subst\n', 'src/commit.txt': '$Format:%H %ct$\n', 'bin/nuworq.js': '// nuworq\n', 'release-key.pub': pinned }, 'start');
     git(work, 'push', '-q', 'origin', 'main');
     await runs(git(work, 'rev-parse', 'HEAD'));
@@ -69,7 +69,8 @@ describe('the release signer (#430)', () => {
       await new Promise((r) => setTimeout(r, 0));
       const path = new URL(req.url, 'http://x').pathname;
       if (path === '/api/package') {
-        const r = newestSigned(hubDir, readFileSync(join(work, 'release-key.pub'), 'utf8'), new Map());
+        // claims: a compromised hub, naming a release of its choosing.
+        const r = claims ?? newestSigned(hubDir, readFileSync(join(work, 'release-key.pub'), 'utf8'), new Map());
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ package: { commit: ran.slice(0, 7), signed: !!signatureOf({ file: join(hubDir, `nuworq-${ran}.tgz`) }), release: r && { commit: r.commit, time: r.time, sha256: r.sha256 } } }));
       }
@@ -284,6 +285,25 @@ describe('the release signer (#430)', () => {
     // A release signed before the branch existed: the branch catches up to it.
     git(origin, 'branch', '-D', RELEASE_BRANCH);
     assert.match(outcome(await check(), 'v0.3.0').reason, /^the hub serves it as its signed release; the plugin's release branch is at it now$/);
+    assert.equal(git(origin, 'rev-parse', RELEASE_BRANCH), c);
+  });
+
+  test('moves the release branch only to a release it can check itself, not one a hub merely names', async () => {
+    const c = await release('0.3.0', { approved: false });
+    claims = { commit: c, time: 0, sha256: 'x' };
+    let r = outcome(await check(), 'v0.3.0');
+    assert.equal(r.outcome, 'done');
+    assert.match(r.reason, /the plugin's release branch stays where it is: no one approved it here, and the hub's package of it isn't signed by this key$/);
+    assert.equal(git(origin, 'branch', '--list', RELEASE_BRANCH), '', 'a compromised hub can\'t move the plugin');
+    // Off main, even signed: not moved.
+    const side = await release('0.4.0', { branch: 'side' });
+    claims = { commit: side, time: 0, sha256: 'x' };
+    assert.match(outcome(await check(), 'v0.4.0').reason, /stays where it is: [0-9a-f]{7} isn't on origin's main$/);
+    // Signed by hand before approvals existed: the hub's package carries this key's signature, so it moves.
+    writeFileSync(join(hubDir, `nuworq-${c}.tgz.sig`), `${sign(null, readFileSync(join(hubDir, `nuworq-${c}.tgz`)), ours.key).toString('base64')}\n`);
+    claims = { commit: c, time: 0, sha256: 'x' };
+    r = outcome(await check(), 'v0.3.0');
+    assert.match(r.reason, /^the hub serves it as its signed release; the plugin's release branch is at it now$/);
     assert.equal(git(origin, 'rev-parse', RELEASE_BRANCH), c);
   });
 
