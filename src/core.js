@@ -307,6 +307,9 @@ export class Hub extends EventEmitter {
     this.hosted = hosted;
     this._stmts = new Map();
     this._snaps = new Map(); // project id → its snapshot (snap)
+    // One counter per hub (a workspace) that goes up with every change, for what caches on it (#517).
+    this.changeSeq = 0;
+    this._marks = null; // while an agent operation runs: what it wrote that a view shows (mark())
     this._unreachable = new Set(); // repositories the hub has said it can't reach
     this._behind = new Map(); // item id → whether its branch lacks its base, as refreshBehind last found (#535)
     // The app's read tokens for the hub's own mirrors, per remote: { token, expires_at } once minted,
@@ -382,8 +385,15 @@ export class Hub extends EventEmitter {
     return `${v.c}:${v.v}`;
   }
 
-  changed(p) {
-    this.emit('change', { project: p.slug, at: this.now() });
+  // A change a view shows: browsers, listeners and the Notifier hear it. item ("#12") and kind (an event type, or
+  // "stage", "item") say what, when one thing changed.
+  changed(p, { item = null, kind = null } = {}) {
+    this.emit('change', { project: p?.slug ?? null, item, kind, seq: ++this.changeSeq, at: this.now() });
+  }
+
+  // Inside an agent operation: it wrote something a view shows, so it ends in a change (agentOp).
+  mark(item, kind) {
+    this._marks?.push({ item: item?.seq != null ? `#${item.seq}` : null, kind });
   }
 
   // ── projects ────────────────────────────────────────────────────────────
@@ -996,6 +1006,7 @@ export class Hub extends EventEmitter {
     const r = this.q(`INSERT INTO events (project_id, item_id, actor, type, headline, summary, detail, data, at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, actor, type, headline, summary, detail, JSON.stringify(data), this.now());
     if (type === 'landed') this.refreshBehindSoon(); // branches being built may now lack their base (#535)
+    this.mark(item, type);
     return Number(r.lastInsertRowid);
   }
 
@@ -1011,6 +1022,7 @@ export class Hub extends EventEmitter {
     this.q(`UPDATE items SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
       .run(...keys.map((k) => fields[k] ?? null), item.id);
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
+    this.mark(item, 'stage');
     // Leaving the race (back to the queue, done, dropped) closes this round's attempts, whatever the race
     // count is now: it may have been changed while the item was verifying.
     if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);    Object.assign(item, fields);
@@ -1088,6 +1100,9 @@ export class Hub extends EventEmitter {
     const keys = itemColumns(this, fields);
     this.q(`UPDATE items SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
       .run(...keys.map((k) => fields[k] ?? null), item.id);
+    // A renewed lease alone changes nothing a view shows; touching that stayed the same neither.
+    const shown = Object.keys(fields).filter((k) => !['updated_at', 'lease_until'].includes(k) && !(k === 'touching' && fields[k] === item[k]));
+    if (shown.length) this.mark(item, 'item');
     Object.assign(item, fields);
   }
 
@@ -1319,6 +1334,7 @@ export class Hub extends EventEmitter {
     machine = clip(machine, 80) || a.machine;
     if (role !== a.role || runner !== a.runner || machine !== a.machine) {
       this.q('UPDATE agents SET role = ?, runner = ?, machine = ? WHERE project_id = ? AND name = ?').run(role, runner, machine, p.id, agent);
+      this.mark(null, 'presence');
     }
   }
 
@@ -1594,8 +1610,12 @@ export class Hub extends EventEmitter {
 
   setTouching(item, v, agent) {
     if (v == null) return;
-    if (this.racing(item)) this.q('UPDATE attempts SET touching = ? WHERE id = ?').run(JSON.stringify(normPaths(v)), this.attemptOf(item, agent).id);
-    else this.patch(item, { touching: JSON.stringify(normPaths(v)) });
+    const touching = JSON.stringify(normPaths(v));
+    if (!this.racing(item)) return this.patch(item, { touching });
+    const a = this.attemptOf(item, agent);
+    if (a.touching === touching) return;
+    this.q('UPDATE attempts SET touching = ? WHERE id = ?').run(touching, a.id);
+    this.mark(item, 'item');
   }
 
   // The field notes for work on these items, at most ten and the most relevant first (#443, src/fieldnotes.js):
@@ -1843,10 +1863,13 @@ export class Hub extends EventEmitter {
     if (slug && remote && op === 'checkin' && !(this.hosted && remote.startsWith('/')) && !this.projectByRemote(remote, null, { archived: true }) && !this.repoGuard?.(remote)) this.addRemote(p, remote, agent);
     // A clone of the project's repository is the right place to work, wherever it sits on disk.
     const ownClone = !!remote && this.projectByRemote(remote)?.id === p.id;
+    const marks = this._marks = []; // a throw leaves it to the next operation, which starts its own
     const result = this.tx(() => {
       this.ownsAgent(p, agent, identity);
       // The runner posts a worker's usage after it exited: that's bookkeeping, not the agent being here.
       const presence = op === 'usage' ? null : this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
+      // Arriving, or coming back, shows on the page; being seen again a minute later doesn't.
+      if (presence && (presence.fresh || presence.wasSignedOff || presence.gap > AWAY_MS)) this.mark(null, 'presence');
       // Its role (#238): a runner's token says worker on every call; a checkin says the rest, and where it runs.
       if (presence) {
         const claimed = op === 'checkin' ? this.claimedRole(token, args) : token?.runner ? { role: 'worker', runner: token.runner } : null;
@@ -1912,7 +1935,10 @@ export class Hub extends EventEmitter {
         if (warn) result.hint = `${warn}: the reviewer will see this. ${result.hint}`;
       }
     }
-    this.changed(p);
+    // Only real changes travel (#517): a read (look, a peek, a heartbeat, a checkin of an agent already here) wrote
+    // nothing a view shows, so no browser, listener or notifier hears of it. Every other operation is a write.
+    this._marks = null;
+    if (!QUIET_OPS.includes(op) || marks.length) this.changed(p, marks.find((m) => m.item) ?? marks[0] ?? { kind: op });
     return result;
   }
 
@@ -2696,10 +2722,14 @@ function escalate(p, agent, args) {
 
 // look without an item shows this many of each stage, and of what was recently done.
 const LOOK_TOP = 5;
+// Operations that often only read: they end in a change only when they wrote something a view shows (#517).
+const QUIET_OPS = ['look', 'next', 'progress', 'checkin'];
+// Seen again after this long, an agent is back: the page shows it arriving.
+const AWAY_MS = 30 * MIN;
 
 const AGENT_OPS = {
   checkin(p, agent, args, presence) {
-    if (presence.fresh || presence.gap > 30 * MIN || presence.wasSignedOff) {
+    if (presence.fresh || presence.gap > AWAY_MS || presence.wasSignedOff) {
       const what = [args.model, args.client].filter(Boolean).join(' via ');
       this.event(p, { actor: agent, type: 'checkin', headline: `${agent} checked in${what ? ` (${what})` : ''}` });
     }
@@ -2711,6 +2741,7 @@ const AGENT_OPS = {
       const has = normTags(args.has), gained = has.some((t) => !had.includes(t));
       this.q(`UPDATE agents SET has = ?${gained ? ', has_since = ?' : ''} WHERE project_id = ? AND name = ?`)
         .run(JSON.stringify(has), ...(gained ? [this.now()] : []), p.id, agent);
+      if (gained) this.mark(null, 'has');
     }
     return this.briefing(p, agent, last);
   },
@@ -2720,8 +2751,11 @@ const AGENT_OPS = {
     const oq = this.isOperator(p, agent) ? this.operatorQuestion(p, agent) : null;
     if (oq) {
       // Held for this operator like an item (#467), so a second operator's next moves on; a peek holds nothing.
-      if (args.claim !== false) this.q('UPDATE questions SET held_by = ?, held_until = ? WHERE id = ?').run(agent, this.now() + LEASE_MS, oq.id);
       const item = this.itemById(oq.item_id);
+      if (args.claim !== false) {
+        this.q('UPDATE questions SET held_by = ?, held_until = ? WHERE id = ?').run(agent, this.now() + LEASE_MS, oq.id);
+        this.mark(item, 'question');
+      }
       return {
         mode: 'answer',
         question: {

@@ -158,7 +158,12 @@ export class Notifier {
     Object.assign(this, { hub, baseUrl: baseUrl.replace(/\/+$/, ''), windowMs, interval, debounce });
     this.sendOpts = { now: () => hub.now(), ...sendOpts };
     this.pending = new Set(); // `${project_id}\t${key}` waiting for the batch window to close
-    this.onChange = () => this.soon();
+    this.changedSlugs = new Set(); // projects changed since the last scan; null: all of them
+    this.onChange = (e) => {
+      if (e?.project && this.changedSlugs) this.changedSlugs.add(e.project);
+      else this.changedSlugs = null; // a change that names no project (a channel failing) may touch any
+      this.soon();
+    };
   }
 
   start() {
@@ -177,14 +182,19 @@ export class Notifier {
 
   soon() {
     if (this.scanTimer) return;
-    this.scanTimer = setTimeout(() => { this.scanTimer = null; this.scan(); }, this.debounce);
+    this.scanTimer = setTimeout(() => {
+      this.scanTimer = null;
+      const only = this.changedSlugs;
+      this.changedSlugs = new Set();
+      this.scan(only);
+    }, this.debounce);
   }
 
-  // What needs the human right now, everywhere it's allowed to ask.
-  current() {
+  // What needs the human right now, everywhere it's allowed to ask; only: just these projects (slugs).
+  current(only = null) {
     const entries = new Map(), looked = [];
     for (const p of this.hub.projects()) {
-      if (p.parked) continue;
+      if (p.parked || (only && !only.has(p.slug))) continue;
       looked.push(p.id);
       for (const entry of view(this.hub, p.slug, { light: true }).attention) {
         if (entry.level === 'act') entries.set(`${p.id}\t${entry.key}`, { project_id: p.id, project: p.slug, name: p.name, entry });
@@ -212,12 +222,15 @@ export class Notifier {
     return Promise.all(sends).finally(() => this.sending--);
   }
 
-  scan() {
+  // only: the projects that changed (a set of slugs), or null for every one (the periodic scan).
+  scan(only = null) {
     try {
+      // No push channel: nothing to work out (#517).
       if (!this.channels().length) { this.pending.clear(); return; }
       this.weekly().catch((e) => console.error('weekly push failed', e));
+      if (only && !only.size) return;
       const db = this.hub.db, t = this.hub.now();
-      const { entries, looked } = this.current();
+      const { entries, looked } = this.current(only);
       const seen = db.prepare('UPDATE notified SET seen_at = ? WHERE project_id = ? AND key = ?');
       for (const [k, e] of entries) {
         if (!seen.run(t, e.project_id, e.entry.key).changes) this.pending.add(k); // never pushed before
@@ -235,7 +248,8 @@ export class Notifier {
   async flush() {
     clearTimeout(this.batch);
     this.batch = null;
-    const now = this.current().entries;
+    const ids = new Set([...this.pending].map((k) => Number(k.split('\t')[0])));
+    const now = this.current(new Set(this.hub.projects().filter((p) => ids.has(p.id)).map((p) => p.slug))).entries;
     // Resolved, dismissed or parked in the meantime: drop it. Headlines are read fresh.
     const entries = [...this.pending].map((k) => now.get(k)).filter(Boolean);
     this.pending.clear();
@@ -250,7 +264,7 @@ export class Notifier {
     this.sending = (this.sending ?? 0) + 1; // holds a workspace open until it's sent (notifyWorkspaces)
     const results = await Promise.all(sends.map(([c, es]) => deliver(db, c, compose(es, this.baseUrl), this.sendOpts))).finally(() => this.sending--);
     // A channel started or stopped failing: the UI shows that as something worth knowing.
-    if (results.some((r) => r.ok === before.has(r.id))) this.hub.emit('change', { project: null, at: this.hub.now() });
+    if (results.some((r) => r.ok === before.has(r.id))) this.hub.changed(null, { kind: 'channel' });
     return results;
   }
 }

@@ -67,6 +67,49 @@ describe('live updates at a calm pace (#392)', () => {
   });
 });
 
+describe('no refresh piles up (#517)', () => {
+  test('none starts while the last is on its way; changes meanwhile make one more, after it lands', async () => {
+    const c = clock();
+    try {
+      let runs = 0, land;
+      const gate = liveGate({ run: () => { runs++; return new Promise((r) => { land = r; }); } });
+      gate.poke();
+      c.tick(200);
+      assert.equal(runs, 1);
+      for (let i = 0; i < 5; i++) { gate.poke(); c.tick(1500); }
+      assert.equal(runs, 1, 'not while the first is in flight');
+      land();
+      await new Promise((r) => setImmediate(r));
+      c.tick(1500);
+      assert.equal(runs, 2, 'one more for everything that came meanwhile');
+      land();
+      await new Promise((r) => setImmediate(r));
+      c.tick(5000);
+      assert.equal(runs, 2, 'and nothing after that');
+    } finally { c.done(); }
+  });
+
+  test('none while the tab is hidden; shown again, one', () => {
+    const c = clock();
+    try {
+      let runs = 0, hidden = true;
+      const gate = liveGate({ run: () => runs++, hidden: () => hidden });
+      for (let i = 0; i < 5; i++) { gate.poke(); c.tick(1500); }
+      assert.equal(runs, 0);
+      gate.shown(); // still hidden: a visibilitychange to hidden changes nothing
+      c.tick(1500);
+      assert.equal(runs, 0);
+      hidden = false;
+      gate.shown();
+      c.tick(1500);
+      assert.equal(runs, 1);
+      gate.shown();
+      c.tick(1500);
+      assert.equal(runs, 1, 'shown with nothing waiting: no refresh');
+    } finally { c.done(); }
+  });
+});
+
 describe('the page', () => {
   const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
   test('the stream and the 30-second look go through the gate, and a live redraw waits while the person is busy', () => {
