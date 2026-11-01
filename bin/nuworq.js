@@ -829,19 +829,39 @@ async function chooseWorkFolders(flags, projects, s) {
   return chosen;
 }
 
+// Staffing is never off without saying so (#491): --staff <project> opts it in; with none opted in, it says so, and
+// at a terminal offers the project of the clone it runs in (or asks which). A yes turns on the same switch as Settings.
+async function staffing(client, projects, flags) {
+  const { staffCheck } = await import('../src/runner.js');
+  const { remote, root } = client.settings;
+  const here = projects.find((p) => !p.parked && ((remote && (p.remotes ?? []).includes(remote)) || (p.path && p.path === root))) ?? null;
+  const tty = process.stdin.isTTY && process.stdout.isTTY;
+  const rl = tty ? (await import('node:readline/promises')).createInterface({ input: process.stdin, output: process.stdout }) : null;
+  try {
+    await staffCheck({
+      projects, here, staff: flags.staff, ask: rl ? (q) => rl.question(q) : null, log: (l) => console.log(l.startsWith('No project') ? `${amber('!')} ${l}` : l),
+      optIn: (p) => client.post(`/api/p/${encodeURIComponent(p.slug)}/human/settings`, { runner: true }).catch((e) => {
+        throw new HubError(`Couldn't staff ${p.name ?? p.slug}: ${e.message}`, { hint: `Turn on "Staff it with nuworq run" in its Settings on the hub (this machine's token may not change settings).` });
+      }),
+    });
+  } catch (e) {
+    throw e.hint && !(e instanceof HubError) ? new HubError(e.message, { hint: e.hint }) : e;
+  } finally { rl?.close(); }
+}
+
 // Keep up to --workers headless workers on waiting work in the projects the human opted in.
 async function runCmd(flags) {
   if (flags.install || flags.uninstall) return runService(flags);
   const s = resolveSettings(flags);
   const agent = agentOf(flags);
   const client = createClient(flags);
-  await hubProjects(client);
+  await staffing(client, await hubProjects(client), flags);
   const token = await agentToken(client, flags);
   const num =(v, d) => (v === undefined ? d : Number(v) > 0 ? Number(v) : (() => { throw new HubError(`expected a positive number, got "${v}"`, { hint: 'See: nuworq help' }); })());
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine } = await import('../src/runner.js');
   const logs = join(dirname(HUB_FILE), 'logs');
   lockDown(dirname(HUB_FILE)); // 0700 folders and 0600 files, again on every start (#477)
   const chosen = await chooseWorkFolders(flags, await hubProjects(client), s);
@@ -959,6 +979,8 @@ async function runCmd(flags) {
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`),
+    // Work waiting where it doesn't staff (#491): every project's routes, not only the opted-in ones.
+    unstaffed: async () => unstaffedLine(await client.get(`/api/route?has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}`), await hubProjects(client)),
     launch, workers, maxWorkers, machine, sweep: (running) => sweepAll(running), sweptAt,
     // What it prints and logs: no tokens, and no control characters from hub text (#477).
     log: (line) => console.log(safe(line)),

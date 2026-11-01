@@ -69,6 +69,9 @@ Flags
   --folder <path>     a folder workers may work in, added to
                       ~/.nuworq/folders.json
   --until-idle        exit once no work is waiting, instead of waiting for more
+  --staff <project>   let nuworq run staff that project first (its "Staff it
+                      with nuworq run" switch); with none staffed, run says so
+                      and offers this clone's
   --max-runs <n>      stop after starting n workers
   --max-minutes <t>   stop after t minutes
   --max-usd <x>       stop starting workers once their reported spend reaches x
