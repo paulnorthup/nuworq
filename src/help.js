@@ -386,7 +386,7 @@ const AGENT = {
   checkin: { usage: ['checkin [--model m] [--client c] [--has tags]'], flags: [['--model <m>', P('model')], ['--client <c>', P('client')], ['--has <tags>', P('has')], ['--status <s>', P('status')]], env: [['NUWORQ_HAS', 'instead of --has']], example: 'nuworq checkin --as claude-1 --has docker,macos' },
   next: { usage: ['next [--peek]'], flags: [['--peek', 'look without claiming']], example: 'nuworq next --as claude-1' },
   claim: { usage: ['claim <item> [--touching paths]'], flags: [['--touching <a,b>', P('touching')]], example: 'nuworq claim 12 --as claude-1' },
-  progress: { usage: ['progress <item> [headline] [--touching paths]'], flags: [['--touching <a,b>', P('touching')]], example: 'nuworq progress 12 "Parser done" --touching src/parse.js --as claude-1', notes: ['It renews your lease. With no headline it is a silent heartbeat that only does that.'] },
+  progress: { usage: ['progress <item> [headline] [--touching paths]'], flags: [['--touching <a,b>', P('touching')]], example: 'nuworq progress 12 "Parser done" --touching src/parse.js --as claude-1' },
   ask: {
     usage: ['ask [<item>] <question> [flags]', 'ask <question> --escalates <question-id> --evidence "label|url"...'],
     flags: [['--assume <a>', P('assumption')], ['--option <x>', 'a likely answer; repeat it for more'], ['--blocking', P('blocking')], ['--to <who>', 'human, reporter or operator'], ['--context <c>', P('context')], ['--escalates <id>', P('escalates')], ['--evidence <label|url>', 'what you checked; repeat it for more']],

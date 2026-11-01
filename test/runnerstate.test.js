@@ -105,7 +105,7 @@ describe('the hub knows which runners are up (#171)', () => {
     assert.equal(out.why, 'interrupted');
     assert.equal(polls, 3);
     assert.equal(reports.length, 4, '3 polls, then the stop');
-    assert.deepEqual(reports[0], { running: 0, workers: 2, spent: 0, poll_seconds: 45, skipping: [{ project: 'p', reason: 'no checkout of p here' }], paused: null });
+    assert.deepEqual(reports[0], { running: 0, workers: 2, spent: 0, poll_seconds: 45, live: [], skipping: [{ project: 'p', reason: 'no checkout of p here' }], paused: null });
     assert.equal(reports.at(-1).stopped, 'interrupted');
   });
 

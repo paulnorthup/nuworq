@@ -496,8 +496,7 @@ stdin).
 ### nuworq progress
 
 ```text
-nuworq progress: report a milestone on an item you hold; it renews the lease and
-  returns steering
+nuworq progress: report a milestone on an item you hold; it returns steering
 
 Usage
   nuworq progress <item> [headline] [--touching paths]
@@ -507,9 +506,6 @@ Flags
 
 Example
   nuworq progress 12 "Parser done" --touching src/parse.js --as claude-1
-
-It renews your lease. With no headline it is a silent heartbeat that only does
-that.
 
 Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url.
 --summary and --detail add the 5- and 30-minute versions ("-" reads one from

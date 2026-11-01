@@ -1364,6 +1364,33 @@ export class Hub extends EventEmitter {
     return this.racing(item) ? this.attemptOf(item, agent)?.lease_until ?? null : item.lease_until;
   }
 
+  // The leases a live process vouches for (#540): the runner for its running workers, an attended session's MCP
+  // process while its session makes calls. names: agent names. Only leases still running are renewed, never one
+  // that lapsed, and only for names this caller's token holds (identity: required mode; local hubs have one person).
+  // How many items and race attempts it renewed.
+  renewWorkers(names, { scope = null, identity = null } = {}) {
+    const list = [...new Set((Array.isArray(names) ? names : []).map((n) => clip(n, 80)).filter(Boolean))].slice(0, 100);
+    // A browser session vouches for no worker: only the token its workers run on does.
+    if (!list.length || identity?.session) return 0;
+    let n = 0;
+    for (const p of this.projects()) {
+      if (scope && !scope.includes(p.slug)) continue;
+      for (const name of list) {
+        if (identity && this.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, name)?.token_id !== identity.id) continue;
+        n += this.renewHeld(p, name);
+      }
+    }
+    return n;
+  }
+
+  // Renew the leases name holds in p that haven't lapsed: its items, and its race attempts still running. How many.
+  renewHeld(p, name) {
+    const t = this.now(), until = t + LEASE_MS;
+    return Number(this.q('UPDATE items SET lease_until = ? WHERE project_id = ? AND holder = ? AND lease_until > ?').run(until, p.id, name, t).changes)
+      + Number(this.q(`UPDATE attempts SET lease_until = ? WHERE agent = ? AND stage = 'active' AND closed = 0 AND lease_until > ?
+        AND item_id IN (SELECT id FROM items WHERE project_id = ?)`).run(until, name, t, p.id).changes);
+  }
+
   renew(item, agent) {
     const until = this.now() + LEASE_MS;
     if (this.racing(item)) this.q('UPDATE attempts SET lease_until = ? WHERE id = ?').run(until, this.attemptOf(item, agent).id);
@@ -1785,6 +1812,8 @@ export class Hub extends EventEmitter {
       }
       this.noteToken(p, agent, token?.name);
       if (identity && !identity.session) this.q('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ? AND token_id IS NULL').run(identity.id, p.id, agent);
+      // Any call it makes renews what it holds here (#540): a session at work keeps its job without heartbeats.
+      if (presence) this.renewHeld(p, agent);
       // Its session's keys (#335): the listener beside it sends the same, and wakes it alone.
       if (op === 'checkin' && session.length) this.q('UPDATE agents SET session = ? WHERE project_id = ? AND name = ?').run(session.join(','), p.id, agent);
       const need = powers && this.powerFor(p, op, args ?? {});

@@ -261,6 +261,8 @@ export async function run({
     const t = now();
     return {
       running: running.length, workers: most, ...(auto ? { auto: true, holding } : {}), spent, poll_seconds: pollSeconds,
+      // Its live workers by name (#540): the hub renews the leases they hold, so none has to spend a turn on it.
+      live: running.map((w) => w.name),
       skipping: [
         ...[...resting].filter(([, r]) => r.until > t).map(([project, r]) => ({ project, reason: cant.get(project) ?? "its checkout couldn't be updated", until: r.until })),
         ...[...cant].filter(([project]) => !(resting.get(project)?.until > t)).map(([project, reason]) => ({ project, reason })),

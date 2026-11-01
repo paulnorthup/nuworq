@@ -37,7 +37,7 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - `checkin`: Start here, and again after any break: the mission, decisions, field notes, steering, answers, verdicts, who is on what, and your next step.
 - `next`: Get and claim the most useful job for you now: a review, work to build, or a proposal to shape.
 - `claim`: Claim a specific item: a 20-minute lease that progress renews.
-- `progress`: Report a milestone on an item you hold; it renews the lease and returns steering.
+- `progress`: Report a milestone on an item you hold; it returns steering.
 - `ask`: Ask a question.
 - `answer`: Answer a question asked to: "operator" (next hands it to you as mode "answer").
 - `withdraw`: Withdraw a question you asked that is still open, with a reason: answered another way, or no longer matters.

@@ -138,8 +138,8 @@ export const OPS = [
   },
   {
     name: 'progress',
-    description: 'Report a milestone on an item you hold; it renews the lease and returns steering. With no headline, a silent heartbeat.',
-    params: { item: ITEM, ...LAYERS, headline: s('One line, outcome first. Omit for a silent heartbeat.'), touching: TOUCHING, usage: USAGE },
+    description: 'Report a milestone on an item you hold; it returns steering.',
+    params: { item: ITEM, ...LAYERS, headline: s('One line, outcome first.'), touching: TOUCHING, usage: USAGE },
     required: ['item'],
   },
   {
@@ -509,7 +509,7 @@ Use \`${command}\` with \`--as <your-name>\` on every command (or NUWORQ_AGENT).
 ## The loop
 1. ${c('checkin')} with \`has\`: what your machine can do (docker, macos, browser…), so you get only work you can finish. ${c('ack')} each steer.
 2. ${c('next')} claims one job (work, shape, review, land, tidy, answer); its hint says how to do that kind. Read done_means, history and last_handoff: don't repeat what failed.
-3. Once you know your files, ${c('progress')} with \`touching\`, then at real milestones. One with no headline renews your 20-minute lease.
+3. Once you know your files, ${c('progress')} with \`touching\`, then at real milestones. Your lease renews by itself while you make calls.
 4. Done? ${c('submit')} with evidence a reviewer checks fast: tests and results, branch and commit. Never mark your own work done. Evidence is as public as the repository: from a demo or local hub, never a live workspace's data.
 5. Can't finish, or low on context? ${c('handoff')}: what's done, what's next. A person said to drop it? ${c('refine')} with \`drop\` set to that question.
 6. Other work? ${c('propose')} it with acceptance criteria; don't grow your item. If it repairs landed work, set \`fixes\` to that item. Learned something the hard way? ${c('learn')} it. nuworq got in your way? ${c('feedback')}.
