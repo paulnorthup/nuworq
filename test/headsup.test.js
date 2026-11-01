@@ -43,6 +43,13 @@ function countGit() {
   return { calls: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []), restore: () => { process.env.PATH = was; } };
 }
 
+// No refresh queued (refreshBehindSoon) or running: one queued fires on a later turn, and refreshBehind runs one at a
+// time (#557), so a call made once none is queued waits for any still running, then runs after it.
+async function settled(hub) {
+  while (hub._behindQueued) await new Promise((r) => setImmediate(r));
+  await hub.refreshBehind();
+}
+
 describe('no request path runs git to say main moved', () => {
   test('heartbeats, checkin and the view spawn no git, and still say when to rebase, and when not', async () => {
     const { hub, repo, git, op, build, tick } = setup();
@@ -91,10 +98,9 @@ describe('no request path runs git to say main moved', () => {
     op('a1', 'next');
     git(repo, 'merge', '-q', '--ff-only', one.branch);
     op('a1', 'submit', { item: '#1', headline: 'Landed' });
-    await hub.refreshBehind();
-    // The landing's own refresh (refreshBehindSoon) may be queued behind that one: let it run before counting.
-    await new Promise((r) => setImmediate(r));
-    await hub.refreshBehind();
+    // The landing queued its own refresh (refreshBehindSoon): let every queued one finish before counting (#556), so
+    // only the refresh this test runs is counted, however late a loaded machine runs the queued one.
+    await settled(hub);
     const g = countGit();
     try { await hub.refreshBehind(); } finally { g.restore(); }
     assert.ok(g.calls().length > 0, 'it looks at the heads');
