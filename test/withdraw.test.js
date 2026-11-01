@@ -53,8 +53,9 @@ describe('an agent withdraws its own open question (#184)', () => {
 
   test('the guide and the skill list it and say when to use it; decisions are asked without an assumption', () => {
     const g = guide();
-    assert.match(g, /`withdraw` it with a reason/);
-    assert.match(tools().find((t) => t.name === 'withdraw').description, /one-line reason: the answer came another way \(say who said it\)/);
+    // The guide carries the detail and the tool stays one sentence (#527 with #529).
+    assert.match(g, /`withdraw` it with a one-line reason \(quote who said it\)/);
+    assert.match(tools().find((t) => t.name === 'withdraw').description, /with a reason: answered another way, or no longer matters/);
     assert.match(g, /A person decides\? Give `options`, no assumption/);
     assert.match(skill(), /- `withdraw`: Withdraw a question you asked/);
     assert.ok(tools().some((t) => t.name === 'withdraw'));

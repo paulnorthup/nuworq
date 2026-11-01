@@ -2,7 +2,7 @@
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -14,7 +14,7 @@ import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion } from './releases.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
-import { jobsTaken } from './outcomes.js';
+import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
 import { commandParts } from '../web/commands.js';
@@ -291,6 +291,7 @@ export class Hub extends EventEmitter {
     this.hosted = hosted;
     this._stmts = new Map();
     this._unreachable = new Set(); // repositories the hub has said it can't reach
+    this._behind = new Map(); // item id → whether its branch lacks its base, as refreshBehind last found (#535)
     // The app's read tokens for the hub's own mirrors, per remote: { token, expires_at } once minted,
     // { pending } while minting, { error, hint, at } when GitHub said no. Memory only, never the database.
     this._mirrorTokens = new Map();
@@ -309,7 +310,7 @@ export class Hub extends EventEmitter {
     // Routing by results (#349): each local model's readiness as llm-proxy last said ({ ready, state, why, at };
     // checkLocalModels in src/llmproxy.js), and each project's results per cell, recounted when events move on.
     this.localReady = new Map();
-    this._cells = new Map(); // project id → { last: its newest event id, cells }
+    this._cells = new Map(); // project id → { last: what decided its jobs when counted, cells }
     // Questions left open on work that had already landed or been dropped (before #182) close the same way.
     for (const it of this.q(`SELECT * FROM items WHERE stage IN ('done', 'dropped') AND id IN (SELECT item_id FROM questions WHERE status = 'open')`).all()) this.settleQuestions(it, it.stage);
     // Renamed tags (#325): stored needs and declared has move to the new names, quietly (no events).
@@ -619,6 +620,7 @@ export class Hub extends EventEmitter {
 
   remoteChanged(remote) {
     for (const p of this.projects()) if (this.remotesOf(p).includes(remote)) this.changed(p);
+    this.refreshBehindSoon(); // a fetch moved its branches (#535)
   }
 
   // The branch work lands on, as far as git can say: main, else master; main when it can't.
@@ -713,9 +715,17 @@ export class Hub extends EventEmitter {
 
   // Each cell's results (#349): { 'work standard': { model: { attempts, clean } } } over the last 90 days of jobs,
   // where clean is a build that landed without being sent back or escaping, or any other job finished. Jobs still
-  // going, and raced attempts not chosen, don't count. Recounted only when the project's events have moved on.
+  // going, and raced attempts not chosen, don't count. Recounted only when something that decides a job's result
+  // happened (#537): a take or a job's end, an item reaching or leaving done, an item naming what it fixes.
+  // Heartbeats, comments, proposals and the rest leave the count as it is; before, any event reread every job's
+  // events on the next routed claim.
   cellStats(p) {
-    const last = this.q('SELECT MAX(id) AS id FROM events WHERE project_id = ?').get(p.id).id ?? 0;
+    const last = [
+      this.q(`SELECT MAX(id) AS id FROM events WHERE project_id = ? AND type IN (${JOB_EVENTS.map(() => '?').join(', ')})`).get(p.id, ...JOB_EVENTS).id ?? 0,
+      this.q(`SELECT MAX(t.id) AS id FROM transitions t JOIN items i ON i.id = t.item_id WHERE i.project_id = ? AND t.stage = 'done'`).get(p.id).id ?? 0,
+      this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND stage = 'done'`).get(p.id).n,
+      this.q('SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND fixes IS NOT NULL').get(p.id).n,
+    ].join(' ');
     const hit = this._cells.get(p.id);
     if (hit?.last === last) return hit.cells;
     const cells = {};
@@ -822,6 +832,19 @@ export class Hub extends EventEmitter {
     return n;
   }
 
+  // What agent first took since then, for `nuworq run`'s log (#533): "#12 Fix x (review)", or null.
+  firstClaim(agent, since, { scope = null } = {}) {
+    const MODE = { claimed: 'work', shaping: 'shape', review_started: 'review', landing: 'land' };
+    let first = null;
+    for (const p of this.projects()) {
+      if (scope && !scope.includes(p.slug)) continue;
+      const e = this.q(`SELECT e.type, e.at, i.seq, i.title FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND e.actor = ? AND e.at >= ?
+          AND e.type IN (${CLAIM_TYPES.map(() => '?').join(',')}) ORDER BY e.at LIMIT 1`).get(p.id, agent, since, ...CLAIM_TYPES);
+      if (e && (!first || e.at < first.at)) first = e;
+    }
+    return first ? `#${first.seq} ${first.title} (${MODE[first.type]})` : null;
+  }
+
   // The branches of a project's finished work (done or dropped), for `nuworq run`'s sweep (#444): its local
   // copies of them can go. Only the projects a token may reach.
   finishedBranches(slug, { scope = null } = {}) {
@@ -852,6 +875,8 @@ export class Hub extends EventEmitter {
     if (!name) throw new UserError('a runner needs a name', { hint: 'Send { name, machine, ... }: nuworq run sends its machine name.' });
     const state = {
       running: num(r.running), workers: num(r.workers),
+      // --workers auto (#533): it adds workers while the machine has room, and why it holds when it doesn't.
+      ...(r.auto ? { auto: true, holding: r.holding ? clip(r.holding, 200) : null } : {}),
       skipping: (Array.isArray(r.skipping) ? r.skipping : []).slice(0, 50).filter((s) => s?.project)
         .map((s) => ({ project: clip(s.project, 80), reason: clip(s.reason, 200), ...(when(s.until) ? { until: when(s.until) } : {}) })),
       paused: r.paused && when(r.paused.until) ? { until: when(r.paused.until), reason: clip(r.paused.reason, 200) } : null,
@@ -888,6 +913,7 @@ export class Hub extends EventEmitter {
           name: r.name, machine: r.machine, seen_at: r.seen_at,
           state: s.stopped ? 'stopped' : down ? 'down' : s.paused?.until > t ? 'paused' : skip ? 'skipping' : 'up',
           last_seen: dur(t - r.seen_at), running: s.running ?? 0, workers: s.workers ?? 0, spent: s.spent ?? 0,
+          ...(s.auto ? { auto: true, holding: s.holding ?? null } : {}),
           stopped: s.stopped ?? null,
           paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t) } : null,
           // Why it leaves this project alone, if it does; and how many others it leaves alone.
@@ -923,6 +949,7 @@ export class Hub extends EventEmitter {
     }
     const r = this.q(`INSERT INTO events (project_id, item_id, actor, type, headline, summary, detail, data, at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, actor, type, headline, summary, detail, JSON.stringify(data), this.now());
+    if (type === 'landed') this.refreshBehindSoon(); // branches being built may now lack their base (#535)
     return Number(r.lastInsertRowid);
   }
 
@@ -1423,19 +1450,55 @@ export class Hub extends EventEmitter {
     }
     if (clashes.length) notes.push(`${clashes.join('; ')}. Keep your changes there small and coordinate with a comment on their item.`);
     // Work that landed since this agent started, unless its branch already has it: rebase while conflicts are small.
-    if (item.stage === 'active' && item.branch) {
-      const landed = this.q(`SELECT DISTINCT i.seq FROM events e JOIN items i ON i.id = e.item_id
-        WHERE e.project_id = ? AND e.type = 'landed' AND json_extract(e.data, '$.nocode') IS NULL AND e.at > ? AND i.id != ? ORDER BY i.seq`).all(p.id, item.stage_since, item.id);
-      const repo = landed.length ? this.repoFor(p, item) : null;
-      const base = repo ? baseOf(repo.path) : null;
-      if (base && branchExists(repo.path, item.branch) && !contains(repo.path, item.branch, base)) {
-        const how = repo.mode === 'remote'
-          ? `git fetch origin, then git rebase origin/${base}, then git push origin ${item.branch} --force-with-lease`
-          : `git rebase ${base}`;
-        notes.push(`${base} moved since you started: ${landed.map((x) => `#${x.seq}`).join(', ')} landed. Rebase now (${how}), while any conflicts are small.`);
-      }
+    // Whether it has it comes from refreshBehind's cache, so a heartbeat runs no git (#535).
+    const landed = item.stage === 'active' && item.branch ? this.landedSince(p, item) : [];
+    const b = landed.length ? this._behind.get(item.id) : null;
+    if (b?.behind && b.branch === item.branch) {
+      const how = b.mode === 'remote'
+        ? `git fetch origin, then git rebase origin/${b.base}, then git push origin ${item.branch} --force-with-lease`
+        : `git rebase ${b.base}`;
+      notes.push(`${b.base} moved since you started: ${landed.map((x) => `#${x.seq}`).join(', ')} landed. Rebase now (${how}), while any conflicts are small.`);
     }
     return notes.length ? notes.join(' ') : undefined;
+  }
+
+  // Code work that landed in the project since item started, other than item itself.
+  landedSince(p, item) {
+    return this.q(`SELECT DISTINCT i.seq FROM events e JOIN items i ON i.id = e.item_id
+      WHERE e.project_id = ? AND e.type = 'landed' AND json_extract(e.data, '$.nocode') IS NULL AND e.at > ? AND i.id != ? ORDER BY i.seq`).all(p.id, item.stage_since, item.id);
+  }
+
+  // Whether each branch being built lacks what landed since it started (#535), for headsUp to read. Off the request
+  // path: on the sweep timer, and soon after a fetch or a landing (refreshBehindSoon). git runs asynchronously, and
+  // a branch whose head and base head haven't moved keeps its last answer without running merge-base.
+  async refreshBehind() {
+    const seen = new Set();
+    for (const p of this.projects()) {
+      for (const item of this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'active' AND branch != ''`).all(p.id)) {
+        if (!this.landedSince(p, item).length) continue;
+        let repo = null;
+        try { repo = this.repoFor(p, item); } catch {}
+        if (!repo) continue;
+        seen.add(item.id);
+        const was = this._behind.get(item.id);
+        const known = was?.branch === item.branch && was.path === repo.path ? was : null;
+        const r = await behindBase(repo.path, item.branch, known).catch(() => null);
+        if (r) this._behind.set(item.id, { ...r, branch: item.branch, path: repo.path, mode: repo.mode });
+        else this._behind.delete(item.id);
+      }
+    }
+    for (const id of this._behind.keys()) if (!seen.has(id)) this._behind.delete(id);
+  }
+
+  // A fetch or a landing moved a base: refresh after the current request, never during it.
+  refreshBehindSoon() {
+    if (this._behindQueued) return;
+    this._behindQueued = setImmediate(() => {
+      this._behindQueued = null;
+      // A hub closed meanwhile (tests, shutdown) has nothing to check.
+      if (this.db.isOpen !== false) this.refreshBehind().catch((e) => this.db.isOpen !== false && console.error('checking branches against main failed', e));
+    });
+    this._behindQueued.unref?.();
   }
 
   setTouching(item, v, agent) {
@@ -1927,8 +1990,12 @@ export class Hub extends EventEmitter {
     const a = this.q('SELECT has, model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent ?? '')
       ?? this.q('SELECT has, model FROM agents WHERE name = ? ORDER BY last_seen DESC LIMIT 1').get(agent ?? '');
     const landed = this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND implementer = ? AND size = 'large' AND stage = 'done'`).get(p.id, agent ?? '').n;
-    const missed = this.q(`SELECT COUNT(*) AS n FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND i.size = 'large'
-        AND ((e.type = 'sent_back' AND i.implementer = ?) OR (e.type = 'lease_expired' AND json_extract(e.data, '$.agent') = ?))`).get(p.id, agent ?? '', agent ?? '').n;
+    // Two counts, not one OR, so each finds its rows by index (events_type, events_lapsed).
+    const missed = this.q(`SELECT
+        (SELECT COUNT(*) FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND e.type = 'sent_back'
+          AND i.implementer = ? AND i.size = 'large')
+      + (SELECT COUNT(*) FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND e.type = 'lease_expired'
+          AND json_extract(e.data, '$.agent') = ? AND i.size = 'large') AS n`).get(p.id, agent ?? '', p.id, agent ?? '').n;
     return { has: has ?? json(a?.has, []), weak: smallModel(a?.model) || (missed >= 2 && !landed) };
   }
 

@@ -16,6 +16,8 @@ export function connectCommands(info, page = null, slug = 'my-project') {
   return {
     url, local, secured: info.auth === 'required',
     install: pkg ? `npm install -g ${pkg}` : null,
+    // One paste (#490): install from this hub, then connect, which goes on to ask about the rest of the setup.
+    setup: pkg ? `npm install -g ${pkg} && nuworq connect ${url}` : `nuworq connect ${url}`,
     // Log in through the browser, save the token and the address, register nuworq with Claude Code and Codex.
     connect: `nuworq connect ${url}`,
     // Keep workers going wherever work is waiting, across projects; one worker on its own.
@@ -32,4 +34,4 @@ export function connectCommands(info, page = null, slug = 'my-project') {
 }
 
 // The commands meant for a shell, for checking: none may hold a placeholder.
-export const shellCommands = (c) => [c.install, c.connect, c.run, c.worker, c.plugin, c.claude, c.guide].filter(Boolean);
+export const shellCommands = (c) => [c.setup, c.install, c.connect, c.run, c.worker, c.plugin, c.claude, c.guide].filter(Boolean);
