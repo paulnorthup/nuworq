@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_AGENT_CAN, STAGES, normRemote, slugify, refuseSecrets, providerOf, MIN, HOUR, DAY } from './core.js';
 import { checkLocalModels } from './llmproxy.js';
 import { view, itemView, projectList, homeView, withEntry } from './insight.js';
-import { tools, guide, LISTENER } from './protocol.js';
+import { tools, guide, LISTENER, protocolVersion } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces, IDLE_MS, WAKE_MS } from './workspaces.js';
@@ -850,6 +850,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
     // HSTS from the hub itself, not only from a Caddy in front: live traffic may come through a tunnel instead.
     if (hsts) res.setHeader('strict-transport-security', HSTS);
+    res.setHeader('x-nuworq-protocol', protocolVersion()); // an MCP process refetches tools and guide when it changes (#541)
     let answered = null, applying = null; // a write with an idempotency key keeps its answer, and is applied once (#524)
     const send = (status, body, type = 'application/json; charset=utf-8') => {
       answered?.(status, body, type);

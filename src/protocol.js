@@ -1,5 +1,6 @@
 // The agent protocol, defined once. MCP tools, OpenAI/Anthropic function schemas,
 // the CLI and the agent guide are all generated from this list, so every model sees the same thing.
+import { createHash } from 'node:crypto';
 
 const s = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const ITEM = s('The item, e.g. "#12".');
@@ -348,6 +349,12 @@ export function tools(format = 'mcp', prefix = '', { role = null } = {}) {
     return { name, description: op.description, inputSchema: params };
   });
 }
+
+// Which protocol a hub serves (#541): a hash of its tools and its guide, sent as x-nuworq-protocol on every
+// response, so an MCP process refetches them only when it changes. It changes only with the code: computed once.
+let protocolHash = null;
+export const protocolVersion = () => (protocolHash ??= createHash('sha256')
+  .update(JSON.stringify(OPS)).update(guide()).update(guide({ via: 'cli' })).digest('hex').slice(0, 16));
 
 // The guide every agent gets: served at /agents.md, returned as MCP server instructions, printed by `nuworq guide`.
 // Written for the agent, about what nuworq does for the agent. Ceremony costs context, so it stays short.
