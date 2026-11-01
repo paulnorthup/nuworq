@@ -72,10 +72,13 @@ export function homeView(hub, { viewer } = {}) {
       ORDER BY seq`).all(p.id, p.id)
     .map((r) => ({ agent: r.agent, presence: presenceNamed(hub, p, r.agent), item: `#${r.seq}`, title: r.title, stage: r.stage, project: tag(p) })));
   // The agents here now across live projects (#441), for the home to count by role.
-  const agents = live.flatMap(({ p }) => hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id)
-    .map((a) => ({ a, presence: hub.presenceOf(p, a) }))
-    .filter(({ a, presence }) => isPresent(a, presence.job ? [presence.job] : [], t))
-    .map(({ a, presence }) => ({ name: a.name, model: a.model, ...presence, project: tag(p) })));
+  const agents = live.flatMap(({ p }) => {
+    const snap = hub.snap(p); // the jobs they hold, from one load (#538)
+    return hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id)
+      .map((a) => ({ a, presence: hub.presenceOf(p, a, snap) }))
+      .filter(({ a, presence }) => isPresent(a, presence.job ? [presence.job] : [], t))
+      .map(({ a, presence }) => ({ name: a.name, model: a.model, ...presence, project: tag(p) }));
+  });
   return {
     pulse: {
       state, sentence, act: needs.length, working, active: inFlight,
@@ -157,7 +160,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const openQs = hub.q(`SELECT q.* FROM questions q LEFT JOIN items i ON i.id = q.item_id
     WHERE q.project_id = ? AND q.status = 'open' AND (i.id IS NULL OR i.stage NOT IN ('done', 'dropped')) ORDER BY q.at`).all(p.id);
   const dismissed = new Set(hub.q('SELECT key FROM dismissals WHERE project_id = ?').all(p.id).map((d) => d.key));
-  const unmet = (i) => hub.unmetDeps(i);
+  const snap = hub.snap(p); // dependencies, jobs and records from one load (#538)
+  const unmet = (i) => hub.unmetDeps(i, snap);
   const lastEvent = (i, types) => hub.q(`SELECT * FROM events WHERE item_id = ? AND type IN (${types.map(() => '?').join(',')}) ORDER BY at DESC, id DESC LIMIT 1`).get(i.id, ...types);
 
   const in_ = (stage) => items.filter((i) => i.stage === stage);
@@ -542,21 +546,22 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const act = attention.filter((a) => a.level === 'act');
 
   // ── since you last looked ──
-  const sinceEvents = hub.q(`SELECT e.*, i.seq AS item_seq, i.title AS item_title FROM events e LEFT JOIN items i ON i.id = e.item_id
-      WHERE e.project_id = ? AND e.at > ? AND e.actor != ? AND e.actor NOT LIKE '@%' ORDER BY e.at DESC`).all(p.id, p.seen_at, HUMAN);
-  const finished = sinceEvents.filter((e) => e.type === 'accepted');
-  const submitted = sinceEvents.filter((e) => e.type === 'submitted');
+  // Counted in SQL; only what finished is loaded (#538).
+  const agentsSince = `e.project_id = ? AND e.at > ? AND e.actor != ? AND e.actor NOT LIKE '@%'`;
+  const sinceCounts = new Map(hub.q(`SELECT e.type, COUNT(*) AS n FROM events e WHERE ${agentsSince} GROUP BY e.type`).all(p.id, p.seen_at, HUMAN).map((r) => [r.type, r.n]));
+  const finished = hub.q(`SELECT e.actor, i.seq AS item_seq, i.title AS item_title FROM events e LEFT JOIN items i ON i.id = e.item_id
+      WHERE ${agentsSince} AND e.type = 'accepted' ORDER BY e.at DESC`).all(p.id, p.seen_at, HUMAN);
   const since = {
     at: p.seen_at,
     ago: p.seen_at ? dur(t - p.seen_at) : null,
     finished: finished.map((e) => ({ item: `#${e.item_seq}`, title: e.item_title, by: e.actor })),
     counts: {
       finished: finished.length,
-      submitted: submitted.length,
-      started: sinceEvents.filter((e) => e.type === 'claimed').length,
-      proposed: sinceEvents.filter((e) => e.type === 'created').length,
-      sent_back: sinceEvents.filter((e) => e.type === 'sent_back').length,
-      updates: sinceEvents.length,
+      submitted: sinceCounts.get('submitted') ?? 0,
+      started: sinceCounts.get('claimed') ?? 0,
+      proposed: sinceCounts.get('created') ?? 0,
+      sent_back: sinceCounts.get('sent_back') ?? 0,
+      updates: [...sinceCounts.values()].reduce((a, b) => a + b, 0),
     },
   };
 
@@ -622,39 +627,34 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     ...(parts ? { parts: parts.map((c) => ({ item: ref(c), title: c.title, stage: c.stage })) } : {}) }));
 
   // ── agents and their track records ──
+  // What each holds, in seq order: its own items and its running race attempts.
+  const holdingOf = new Map();
+  for (const i of items) {
+    for (const name of new Set([i.holder, ...racers.filter((r) => r.item_id === i.id).map((r) => r.agent)].filter(Boolean))) {
+      (holdingOf.get(name) ?? holdingOf.set(name, []).get(name)).push(ref(i));
+    }
+  }
+  // Who answers for each agent: the person who minted its token, or the runner it belongs to.
+  const tokenIds = agents.map((a) => a.token_id).filter((id) => id != null);
+  const tokens = new Map(tokenIds.length ? hub.q(`SELECT t.id, t.runner, m.handle FROM tokens t LEFT JOIN people m ON m.id = t.minted_by WHERE t.id IN (SELECT value FROM json_each(?))`)
+    .all(JSON.stringify(tokenIds)).map((r) => [r.id, r]) : []);
   const agentRows = agents.map((a) => {
-    const holding = items.filter((i) => i.holder === a.name || racers.some((r) => r.item_id === i.id && r.agent === a.name)).map(ref);
+    const holding = holdingOf.get(a.name) ?? [];
     const idle = t - a.last_seen;
     const status = a.signed_off ? 'signed off' : holding.length ? (idle > 10 * MIN ? 'quiet' : 'working') : idle < PRESENT_FOR ? 'idle' : 'away';
-    const rec = hub.q(`SELECT
-        SUM(type = 'submitted') AS submitted,
-        SUM(type = 'claimed') AS claimed,
-        SUM(type = 'handoff') AS handoffs,
-        SUM(type = 'question') AS questions,
-        SUM(type = 'assumption') AS assumptions,
-        SUM(type = 'created') AS proposed,
-        SUM(type = 'accepted') AS reviews_accepted,
-        SUM(type = 'learned') AS learned
-      FROM events WHERE project_id = ? AND actor = ?`).get(p.id, a.name);
-    const landed = hub.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND implementer = ? AND stage = 'done'`).get(p.id, a.name).n;
-    const sentBack = hub.q(`SELECT COUNT(*) AS n FROM events e JOIN items i ON i.id = e.item_id
-        WHERE e.project_id = ? AND e.type = 'sent_back' AND i.implementer = ?`).get(p.id, a.name).n;
-    const stalls = hub.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'lease_expired' AND json_extract(data, '$.agent') = ?`).get(p.id, a.name).n;
-    // Who answers for this agent: the person who minted its token, or the runner it belongs to.
-    const tok = a.token_id != null ? hub.q(`SELECT t.runner, m.handle FROM tokens t LEFT JOIN people m ON m.id = t.minted_by WHERE t.id = ?`).get(a.token_id) : null;
+    const rec = snap.records.get(a.name) ?? {};
+    const tok = a.token_id != null ? tokens.get(a.token_id) : null;
     const via = tok?.runner ? `runner ${tok.runner}` : tok?.handle ? `via @${tok.handle}` : null;
-    const races = hub.q(`SELECT COUNT(*) AS entered, COALESCE(SUM(a.stage = 'chosen'), 0) AS won FROM attempts a JOIN items i ON i.id = a.item_id
-        WHERE i.project_id = ? AND a.agent = ?`).get(p.id, a.name);
     return {
       name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), tokens: a.tokens ? a.tokens.split(',') : [], via, has: json(a.has, []),
       status, present: isPresent(a, holding, t), line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
-      ...hub.presenceOf(p, a), // role, where it runs, its current job (#238)
+      ...hub.presenceOf(p, a, snap), // role, where it runs, its current job (#238)
       record: {
-        landed, sent_back: sentBack, stalls,
+        landed: rec.landed ?? 0, sent_back: rec.sent_back ?? 0, stalls: rec.stalls ?? 0,
         claimed: rec.claimed ?? 0, submitted: rec.submitted ?? 0, handoffs: rec.handoffs ?? 0,
         questions: rec.questions ?? 0, assumptions: rec.assumptions ?? 0, proposed: rec.proposed ?? 0,
-        reviews: rec.reviews_accepted ?? 0, learned: rec.learned ?? 0,
-        races: races.entered, races_won: races.won,
+        reviews: rec.reviews ?? 0, learned: rec.learned ?? 0,
+        races: rec.races ?? 0, races_won: rec.races_won ?? 0,
       },
     };
   });
@@ -962,7 +962,8 @@ function flowStats(hub, p, items, t) {
 function verificationStats(hub, p, items, from) {
   const landed = items.filter((i) => i.stage === 'done' && i.stage_since > from);
   if (!landed.length) return null;
-  const modelOf = (agent) => (agent ? hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model || null : null);
+  const models = new Map(hub.q('SELECT name, model FROM agents WHERE project_id = ?').all(p.id).map((a) => [a.name, a.model])); // one load (#538)
+  const modelOf = (agent) => (agent ? models.get(agent) || null : null);
   return verification(hub, landed, modelOf);
 }
 
