@@ -261,6 +261,25 @@ export function readInstallState(app, state, now = Date.now()) {
   return want.length === sig.length && timingSafeEqual(Buffer.from(want), Buffer.from(sig)) ? workspace : null;
 }
 
+// What GitHub says of one check (CI's required `test`) on a commit of repo ("github.com/acme/api"), for serve
+// --follow (#543): { state: 'passed' }, { state: 'failed', failed }, { state: 'pending' } while it runs or
+// ({ missing: true }) before GitHub has heard of it, or null when it ended without a verdict (skipped, neutral,
+// stale). Read with a checks:read token for the repository, from the hub's own GitHub App.
+const FAILED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure']);
+export async function checkOn(app, repo, sha, name = 'test') {
+  const [, owner, nm] = String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/) ?? [];
+  if (!owner) return null;
+  const { token } = await app.mint(repo, { checks: 'read', metadata: 'read' });
+  const r = await app.call('GET', `/repos/${owner}/${nm}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`, undefined, token);
+  if (r.status !== 200) throw new Error(`GitHub answered ${r.status} about ${name} on ${sha.slice(0, 7)}`);
+  const run = r.json.check_runs?.[0];
+  if (!run) return { state: 'pending', missing: true };
+  if (run.status !== 'completed') return { state: 'pending' };
+  if (run.conclusion === 'success') return { state: 'passed' };
+  if (FAILED.has(run.conclusion)) return { state: 'failed', failed: `CI's ${name} check: ${run.conclusion}${run.html_url ? `, ${run.html_url}` : ''}` };
+  return null;
+}
+
 // GitHub won't turn auto-merge on for a pull request with nothing left to wait for (no required checks, or
 // they already passed). It says "Pull request Pull request is in clean status": the PR can merge as it is.
 export const CLEAN = /\bis in clean status\b/i;

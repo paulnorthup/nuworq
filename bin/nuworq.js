@@ -1390,10 +1390,16 @@ async function serveFollow(flags) {
   const repo = repoRoot(ROOT);
   const args = process.argv.slice(3).filter((a) => !/^--?follow(=.*)?$/.test(a));
   const data = dataHome(flags);
+  // A commit goes live once CI's required check passed for it (#543), asked of GitHub with the hub's own App
+  // (src/followhub.js ci): the suite isn't run again here. No app, or not a GitHub remote: the suite runs here, as before.
+  const { appFromEnv, appFromFile } = await import('../src/ghapp.js');
+  const appFile = join(data, 'github-app.json');
+  const ci = (appFromEnv() ?? appFromFile(appFile)) && repoRemote(repo).startsWith('github.com/') ? { app: appFile } : null;
   const settings = {
     repo,
     // Copied before every move, to <data>/backups: the one database, or every workspace's.
     store: flags.demo ? null : { dir: join(data, 'backups'), ...(flags.workspaces ? { workspaces: workspacesDir(flags) } : { db: resolve(dbPath(flags)) }) },
+    ci,
     dir: join(data, 'hub-src'),
     next: join(data, 'hub-next'),
     args,

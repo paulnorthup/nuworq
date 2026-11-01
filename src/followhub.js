@@ -1,8 +1,10 @@
 // What serve --follow asks of the hub's own code, run as a short child process (#546): the supervisor
 // (src/follow.js) loads only node: modules, so a commit that changes the client never restarts it.
-// `node src/followhub.js red <json>` files "fix main" (see redMain in follow.js) and prints its answer as JSON.
+// `node src/followhub.js red <json>` files "fix main" (see redMain in follow.js), and `ci <json>` asks GitHub whether
+// CI passed a commit (#543); each prints its answer as JSON.
 import { createClient, repoRemote, HubError } from './client.js';
 import { findWorkspace } from './follow.js';
+import { appFromEnv, appFromFile, GitHubApp, checkOn } from './ghapp.js';
 
 const short = (sha) => String(sha).slice(0, 7);
 
@@ -46,7 +48,14 @@ export async function redMain({ url, repo, sha, failed, running, workspaces = nu
   return { where: `${r.item} in ${ws ? `${ws}/` : ''}${project}` };
 }
 
-const OPS = { red: redMain };
+// CI's required `test` check on sha, from GitHub with the hub's own App: NUWORQ_GITHUB_APP_*, else the app file
+// (its github-app.json). checkOn's answer, or null when there is no app or the repo isn't on GitHub.
+export async function ciCheck({ repo, sha, app }) {
+  const conf = appFromEnv() ?? appFromFile(app);
+  return conf ? checkOn(new GitHubApp(conf), repoRemote(repo), sha) : null;
+}
+
+const OPS = { red: redMain, ci: ciCheck };
 
 if (import.meta.filename === process.argv[1]) {
   const [op, input] = process.argv.slice(2);
