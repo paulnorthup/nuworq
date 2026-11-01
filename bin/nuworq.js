@@ -10,7 +10,7 @@ import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneD
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
-import { sandboxSettings, projectCommands } from '../src/sandbox.js';
+import { sandboxSettings, filePermissions, projectCommands } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -626,14 +626,18 @@ const browserServer = (name) => ({
 // skill and command out (#368). A worker needs none: its task and the nuworq MCP server's instructions say it all.
 // Its shell runs in Claude Code's sandbox (#472, src/sandbox.js): writes in its worktree, the checkout's .git and
 // temp only, and the network to the hub, GitHub, the project's registries and the hosts a person added for it.
-// Set here, from --settings, so no settings file in the repository can loosen it.
-function workerSettings(sandbox) {
+// Its file tools answer to permissions instead, which say the same (filePermissions): edits in its folder only, and
+// no reads of the keys the sandbox hides. Set here, from --settings, so no settings file in the repository can loosen it.
+// own: the allowlist is the person's (--allow), so only the denies are added to it.
+function workerSettings(sandbox, { own = false } = {}) {
   let plugins = {};
   try {
     const file = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'plugins', 'installed_plugins.json');
     plugins = JSON.parse(readFileSync(file, 'utf8')).plugins ?? {};
   } catch { /* none installed */ }
-  return JSON.stringify({ enabledPlugins: Object.fromEntries(Object.keys(plugins).map((p) => [p, false])), ...(sandbox ? { sandbox: sandboxSettings(sandbox) } : {}) });
+  const files = sandbox && filePermissions(sandbox);
+  return JSON.stringify({ enabledPlugins: Object.fromEntries(Object.keys(plugins).map((p) => [p, false])),
+    ...(sandbox ? { sandbox: sandboxSettings(sandbox), permissions: own ? { deny: files.deny } : files } : {}) });
 }
 
 // A worker's git, set in its environment (#472). credential.helper's empty value drops every helper set before it
@@ -717,7 +721,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     // nuworq/ branches (src/gitproxy.js); landing on main is the hub's.
     origin && ['Bash(git fetch:*)', 'Bash(git push origin:*)'],
   ].filter(Boolean).flat();
-  const allow = [...(flags.allow ? [String(flags.allow)] : ['mcp__nuworq', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(ls:*)', ...run]),
+  const allow = [...(flags.allow ? [String(flags.allow)] : ['mcp__nuworq', 'Bash(ls:*)', ...run]),
     ...(browser ? ['mcp__playwright'] : [])].join(',');
   const mcp = JSON.stringify({ mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env }, ...(browser ? { playwright: browserServer(name) } : {}) } });
 
@@ -756,7 +760,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     // --proxy: Claude Code's traffic goes to llm-proxy's Anthropic route with the proxy's owner token (not the
     // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed.
     const via = flags.proxy === undefined ? '' : `ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN" \\\n  `;
-    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts: target.sandbox_hosts ?? [], landsHere: !origin, tokenFile: tokenAt }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts: target.sandbox_hosts ?? [], landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.

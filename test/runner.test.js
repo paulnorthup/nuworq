@@ -170,7 +170,12 @@ describe('nuworq worker --agent claude', () => {
       assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*only nuworq\/ branches: main and tags are the hub.*where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch \(`git push origin <branch> --force-with-lease`\), then submit; the hub puts it on main/);
       assert.doesNotMatch(stdout, /<branch>:main/);
       // Its shell runs in Claude Code's sandbox, from --settings so no file in the repository loosens it.
-      const { sandbox } = JSON.parse(stdout.match(/--settings '([^']*)'/)[1]);
+      const { sandbox, permissions } = JSON.parse(stdout.match(/--settings '([^']*)'/)[1]);
+      // Its file tools say the same (test/sandbox.test.js): edits only in its worktree, never the keys the sandbox hides.
+      assert.ok(!allow.some((a) => /^(Read|Edit|Write|Glob|Grep)/.test(a)), 'no file tool in --allowedTools: --settings scopes them');
+      const wt = `${repo}.worktrees/c-2`;
+      assert.deepEqual(permissions.allow, ['Read', 'Glob', 'Grep', `Edit(/${wt}/**)`]);
+      for (const r of ['Read(~/.ssh/**)', 'Read(~/.nuworq/**)', 'Edit(~/.ssh/**)', `Edit(/${join(repo, '.git', 'hooks')}/**)`, `Edit(/${join(wt, '.git')})`]) assert.ok(permissions.deny.includes(r), r);
       assert.deepEqual({ ...sandbox, network: undefined, filesystem: undefined }, { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false, network: undefined, filesystem: undefined });
       assert.deepEqual(sandbox.network, { allowedDomains: [`127.0.0.1:${server.address().port}`, 'github.com', '*.github.com', '*.githubusercontent.com', 'registry.npmjs.org', 'api.stripe.com'], strictAllowlist: true, allowLocalBinding: true });
       // Its worktree (the working directory) and temp, and of the checkout's .git only what its commits need: never
@@ -197,7 +202,6 @@ describe('nuworq worker --agent claude', () => {
       // Every value in the helper is quoted (#477): git runs it through sh.
       assert.match(setup, /-c credential\.helper= -c credential\.https:\/\/github\.com\.helper= -c 'credential\.https:\/\/github\.com\.helper=!NUWORQ_URL='\\''http:\/\/127\.0\.0\.1:\d+'\\'' node '\\''[^']+'\\'' git-credential --project '\\''gh'\\'' --as '\\''c-2'\\''' -c credential\.https:\/\/github\.com\.useHttpPath=true fetch/);
       execFileSync('/bin/sh', ['-c', setup.replace(/ \\\n/g, ' ')]);
-      const wt = `${repo}.worktrees/c-2`;
       assert.equal(g(wt, 'rev-parse', 'HEAD'), g(origin, 'rev-parse', 'main'), 'at the latest main on GitHub');
       assert.notEqual(g(repo, 'rev-parse', 'main'), g(origin, 'rev-parse', 'main'), 'not the stale local main');
       g(repo, 'worktree', 'remove', '--force', wt);
@@ -242,6 +246,7 @@ describe('nuworq worker --browser', () => {
       assert.equal(plain.settings.sandbox.enabled, true);
       assert.deepEqual(plain.settings.sandbox.filesystem.allowWrite, [repo], 'no origin: it lands by fast-forwarding this checkout, so it may write there');
       for (const p of ['hooks', 'config']) assert.ok(plain.settings.sandbox.filesystem.denyWrite.includes(join(repo, '.git', p)), `all but its .git/${p}`);
+      assert.ok(plain.settings.permissions.allow.includes(`Edit(/${repo}/**)`) && plain.settings.permissions.deny.includes(`Edit(/${join(repo, '.git', 'hooks')}/**)`), 'its file tools likewise');
       assert.ok(!plain.allow.some((a) => /^Bash\(node/.test(a)), 'no node to run anything with');
       assert.ok(plain.noSkills, 'no skills either: ~/.claude/skills holds nuworq-operator, and it isn\'t a plugin (#368)');
       assert.ok(!plain.allow.includes('mcp__playwright'));
@@ -266,7 +271,10 @@ describe('nuworq worker --browser', () => {
       assert.match(b.task, /desktop width and at 375px wide \(browser_resize\); the app is light only/);
       assert.doesNotMatch(b.task, /dark mode \(|browser_emulate_media/, 'no dark-mode screenshots (#156)');
       assert.match(b.task, /describe in your evidence what you saw/);
-      assert.deepEqual(parts(await cli('--agent', 'claude', '--browser', '--allow', 'Read')).allow, ['Read', 'mcp__playwright'], '--allow keeps its list');
+      const own = parts(await cli('--agent', 'claude', '--browser', '--allow', 'Read'));
+      assert.deepEqual(own.allow, ['Read', 'mcp__playwright'], '--allow keeps its list');
+      assert.deepEqual(Object.keys(own.settings.permissions), ['deny'], 'and gets the file denies, not the file allows');
+      assert.ok(own.settings.permissions.deny.includes('Read(~/.ssh/**)'));
 
       await assert.rejects(cli('--agent', 'codex', '--browser'), (e) => e.stderr.includes('--browser is for Claude workers only'));
     } finally {

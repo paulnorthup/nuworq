@@ -81,6 +81,26 @@ export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = f
   };
 }
 
+// The sandbox holds only for the shell; Claude Code's own file tools (Read, Edit, Write, Glob, Grep) answer to
+// permission rules instead, so these say the same (#472). Edit and Write only in the worker's folder (cwd: its
+// worktree, or the checkout itself) and, when work lands here, the checkout; never git's hooks or config there.
+// Read, Glob and Grep anywhere but the keys DENY_READ names, the worker's own token file included: only its git's
+// credential helper reads that, in the shell. Deny wins over allow. Rule paths: //abs is absolute, ~/ the home
+// folder. Edit rules cover Write too, and a Write(path) rule never matches (code.claude.com/docs/en/permissions,
+// checked 2026-11-01).
+const rule = (tool, p) => `${tool}(${p.startsWith('~/') ? p : `/${p}`})`;
+const tree = (tool, p) => [rule(tool, p), rule(tool, `${p}/**`)];
+export function filePermissions({ home, worktree, cwd = worktree ?? home, landsHere = false }) {
+  const writable = [...new Set([cwd, ...(landsHere ? [home] : [])].filter(Boolean))];
+  return {
+    allow: ['Read', 'Glob', 'Grep', ...writable.map((p) => rule('Edit', `${p}/**`))],
+    deny: [
+      ...DENY_READ.flatMap((p) => [...tree('Read', p), ...tree('Edit', p)]),
+      ...gitDenies(home, worktree).flatMap((p) => tree('Edit', p)),
+    ],
+  };
+}
+
 // The project's own test and build commands: npm's scripts by name (with arguments, e.g. npm test -- test/a.test.js),
 // installing what the lockfile says (no packages by name), and the usual test and build commands of Python, Rust
 // and Go. Each still runs project code, which is why the sandbox is around it.
