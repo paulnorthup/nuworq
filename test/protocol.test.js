@@ -210,7 +210,7 @@ describe('transports', () => {
   test('MCP: initialize, list tools, call checkin and next', async () => {
     hub.humanOp(hub.tx(() => hub.project('mcp-proj', { create: true })).slug, 'create', { title: 'MCP task', acceptance: 'x' });
     const child = spawn(process.execPath, [BIN, 'mcp'], {
-      env: { ...process.env, NUWORQ_URL: url, NUWORQ_PROJECT: 'mcp-proj', NUWORQ_MODEL: 'gpt-5', NUWORQ_AGENT: '' },
+      env: { ...process.env, NUWORQ_URL: url, NUWORQ_PROJECT: 'mcp-proj', NUWORQ_MODEL: 'gpt-5', NUWORQ_AGENT: '', NUWORQ_ROLE: '' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const pending = new Map();
@@ -239,10 +239,10 @@ describe('transports', () => {
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
 
       const list = await rpc('tools/list', {});
-      assert.equal(list.result.tools.length, 19);
+      assert.equal(list.result.tools.length, 18);
       assert.ok(list.result.tools.some((t) => t.name === 'retire'), 'a field-notes review retires notes (#443)');
       assert.ok(list.result.tools.some((t) => t.name === 'withdraw'), 'the asker takes back its question (#184)');
-      assert.ok(list.result.tools.some((t) => t.name === 'answer'), 'the operator tool (#133)');
+      assert.ok(!list.result.tools.some((t) => t.name === 'answer'), 'the operator tool (#133) is for operators only (#529)');
 
       const checkin = await rpc('tools/call', { name: 'checkin', arguments: { model: 'unknown' } }); // NUWORQ_MODEL wins
       assert.ok(!checkin.result.isError, checkin.result.content[0].text);

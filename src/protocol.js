@@ -2,42 +2,42 @@
 // the CLI and the agent guide are all generated from this list, so every model sees the same thing.
 
 const s = (description, extra = {}) => ({ type: 'string', description, ...extra });
-const ITEM = s('Item reference, e.g. "#12" or "12".');
-const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Optional. Files or directories you are changing, e.g. ["src/db", "src/api/tags.ts"]. Other agents are warned before they collide with you, and you with them.' };
-const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Optional. What an agent\'s machine must have to do it, e.g. ["docker"], ["linux-vm"], ["browser"], ["gpu"]. Only agents that declared these tags (checkin `has`) are offered it.' };
-const SIZE = { type: 'string', enum: ['small', 'large'], description: 'Optional. "large": multi-step work; small models get it only when nothing else fits.' };
+const ITEM = s('The item, e.g. "#12".');
+const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Optional. Paths you are changing, so others steer clear.' };
+const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Optional. Tags an agent must have declared (checkin has) to take it, e.g. ["docker"].' };
+const SIZE = { type: 'string', enum: ['small', 'large'], description: 'Optional. "large": multi-step work.' };
 // How hard an item is (#348): set when shaping, with a one-line reason. Unrated counts as standard.
 const DIFFICULTY = {
-  difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'How hard it is, rated when shaping: "rote" (mechanical, a cheap model could do it), "standard", or "hard" (needs the strongest model). Give difficulty_why with it.' },
-  difficulty_why: { type: 'string', description: 'One line: why that difficulty, e.g. "renames one setting and its tests".' },
+  difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'Rated when shaping: rote (a cheap model could), standard, or hard (needs the strongest).' },
+  difficulty_why: s('One line: why that difficulty.'),
 };
-const FIXES = s('Optional. The landed item this repairs, e.g. "#12": a bug in it or something it missed. That item counts as an escape.');
+const FIXES = s('Optional. The landed item this repairs, e.g. "#12" (it counts as an escape).');
 // Who an item breaks once it ships (#398): the release that carries it bumps by who must act.
-const BREAKING = s('Optional. Set when shipping it makes someone on the previous version act: one line on who must do what, e.g. "Machines on Node 24 must upgrade to 26 before `nuworq update`". Leave it out when nobody must act.');
+const BREAKING = s('Optional. One line on who must act when it ships, e.g. "Machines on Node 24 must upgrade to 26".');
+// A runner records its workers' usage itself, so a worker isn't offered it.
 const USAGE = {
   type: 'object',
-  description: 'Optional. What this work cost so far, if your client tells you: tokens and dollars since your last report on this item. Leave it out if a runner started you; it records usage itself.',
-  properties: {
-    input_tokens: { type: 'integer' }, output_tokens: { type: 'integer' },
-    cost_usd: { type: 'number', description: 'Leave out when unknown (e.g. a local model).' },
-    model: s('The model id.'),
-  },
+  roles: ['operator', 'shaper', 'session'],
+  description: 'Optional. Tokens and dollars since your last report, if your client tells you.',
+  properties: { input_tokens: { type: 'integer' }, output_tokens: { type: 'integer' }, cost_usd: { type: 'number' }, model: { type: 'string' } },
 };
+// An outside fact work waits for (src/precondition.js). Defined here once: propose carries it in full and refine
+// refers to it, so its schema is sent once (#529). The examples are in the hints a wrong one gets (HINT and friends there).
 const PRECONDITION = {
   type: 'object',
-  description: 'Optional, and rarely needed: usually build against the documented contract with a fake instead. A fact outside this hub the work must wait for; until the hub sees it, the item waits in "outside" and next doesn\'t offer it. A URL alone means it must answer 200. Or { url, status, contains, json_path, equals, credential } where credential is a NAME (the hub host\'s NUWORQ_CRED_<NAME>), never a secret. For a version: { kind: "version", url, json_path, min } (the version at json_path, or the first in the body, reaches semver min), or { kind: "release", repo: "owner/name", min } (its latest GitHub release). To wait for a day without asking anyone: { kind: "date", after: "2026-11-08" }. {} clears it.',
+  description: 'Optional, rarely needed: a fact outside the hub the work waits for (a URL alone must answer 200). {} clears it.',
   properties: {
-    kind: { type: 'string', enum: ['http', 'version', 'release', 'date', 'ask'], description: 'Default "http". "ask" is the last resort: no fact the hub can check, so the human is asked `question` and answering makes it ready.' },
-    after: s('For kind "date": the day the work may start, e.g. "2026-11-08" (midnight UTC), or an ISO time.'),
-    question: s('For kind "ask": what to ask the human.'),
-    min: s('For kind "version" or "release": the lowest semver version that will do, e.g. "2.1.0".'),
-    repo: s('For kind "release": the GitHub repository, e.g. "acme/api".'),
-    url: s('http(s) URL the hub GETs.'), status: { type: 'integer', description: 'Expected status (default 200).' },
-    contains: s('Text the body must contain.'), json_path: s('Dotted path into a JSON body, e.g. "features.export".'),
-    equals: { description: 'The value at json_path must equal this (otherwise it must just exist).' },
-    credential: s('The NAME of a credential on the hub host, e.g. "VENDOR" for NUWORQ_CRED_VENDOR. It is sent only to the hosts the hub host lists in NUWORQ_CRED_VENDOR_HOSTS.'),
+    kind: { type: 'string', enum: ['http', 'version', 'release', 'date', 'ask'], description: 'Default "http"; "ask" (asks the human `question`) is the last resort.' },
+    url: { type: 'string' }, status: { type: 'integer' }, contains: { type: 'string' }, json_path: { type: 'string' }, equals: {},
+    min: s('For version or release: the lowest semver.'), repo: s('For release: "owner/name".'),
+    after: s('For date: e.g. "2026-11-08".'), question: { type: 'string' },
+    credential: s('The NAME of a hub-host credential (NUWORQ_CRED_<NAME>), never a secret.'),
   },
 };
+const PRECONDITION_REF = { type: 'object', description: 'Optional. Replaces the precondition: the same shape as propose\'s; {} clears it.' };
+// What only an operator may send (an op's or a param's roles): tools() leaves it out for every other role, and
+// the hub refuses it from them too.
+const OPERATOR_ONLY = ['operator'];
 // What only an operator has: an attended session with the human's permissions (see Operators in the guide).
 // infra: the live infrastructure of the project the session checked in to (servers and VMs, DNS, cloud accounts, deploys).
 export const OPERATOR_TAGS = ['operator', 'claude-cli', 'infra', 'github-admin'];
@@ -83,98 +83,99 @@ export const operatorAsks = (t = (op) => `\`${op}\``) => [
   `**Ask the human only for what only they can do:** their own accounts, credentials or keys, signing, moving money, a CAPTCHA, or an irreversible step or product call that no decision covers. Ask it as one hub question: ${t('ask')} with \`escalates\` (the operator question's id, so the answer reaches its asker too) and \`evidence\`, plus \`steps\` when they must act and \`options\` when they decide. Never ask only in chat, and never re-ask in chat what the hub already answers.`,
   '**Your own client\'s permission prompts still apply.** This rule is about what you ask the human through the hub, not about getting around your safety checks.',
 ];
-const REPO = s('Optional. The repository the work lands in, when the project has several, e.g. "github.com/acme/api". Default: the project\'s first.');
+const REPO = s('Optional. The repository it lands in, e.g. "github.com/acme/api"; default the project\'s first.');
 const LAYERS = {
-  headline: s('One line, ≤100 characters, outcome first. What a busy person needs in three seconds.'),
-  summary: s('Optional. The 5-minute version: a few short lines on what, why, and what is next.'),
-  detail: s('Optional. The 30-minute version: logs, reasoning, diagnostics, alternatives considered.'),
+  headline: s('One line, outcome first, ≤100 characters.'),
+  summary: s('Optional. The 5-minute version: what, why, what next.'),
+  detail: s('Optional. The 30-minute version: logs, reasoning, alternatives.'),
 };
 
 export const OPS = [
   {
     name: 'checkin',
-    description: 'Start here, and again after any break. Returns everything you need to start warm: the mission, standing decisions, field notes left by earlier agents, steering to acknowledge, answers to your questions, verdicts on your past work, who else is working on what, and the suggested next step.',
+    description: 'Start here, and again after any break: the mission, decisions, field notes, steering, answers, verdicts, who is on what, and your next step.',
     params: {
-      project: s('Optional. The project to work on, if your setup did not already pick one (MCP and CLI only).'),
-      model: s('Your model id, e.g. "claude-opus-5-5", "gpt-5", "qwen3-coder".'),
-      client: s('The tool you run in, e.g. "claude-code", "codex", "opencode".'),
+      project: s('Optional. The project to work on, if your setup did not pick one.'),
+      model: s('Your model id, e.g. "claude-opus-5-5".'),
+      client: s('The tool you run in, e.g. "claude-code", "codex".'),
       status: s('Optional one-line status.'),
-      role: { type: 'string', enum: ['shaper'], description: 'Optional. "shaper" when you are planning with a person: you get only proposals to shape, never building, reviewing or landing. Workers and operators are known by how they started; a role is fixed for the session.' },
-      machine: s('Optional. The machine you run on, e.g. "Paul\'s Mac", so people can tell sessions apart. The MCP server sends its host name.'),
-      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]. Work that needs a tag you lack is left for others. Only an operator (an attended session with the human\'s permissions) declares "operator" and its capabilities: claude-cli, infra (the live infrastructure of the project you checked in to: servers and VMs, DNS, cloud accounts, deploys), github-admin, browser.' },
+      role: { type: 'string', enum: ['shaper'], description: 'Optional. "shaper" when you plan with a person: you only shape proposals.' },
+      machine: s('Optional. The machine you run on, so people can tell sessions apart.'),
+      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]; only an operator declares "operator", with claude-cli, infra or github-admin.' },
     },
   },
   {
     name: 'next',
-    description: 'Get and claim the most useful work for you right now: a peer review (when allowed), ready work to build, or a proposal to shape into work. Returns the item with everything you need: what done means, prior attempts, handoff notes, answers, steering. The `mode` says which kind of job it is.',
-    params: { claim: { type: 'boolean', description: 'Default true. Set false to peek without claiming.' } },
+    description: 'Get and claim the most useful job for you now: a review, work to build, or a proposal to shape. Its `mode` says which.',
+    params: { claim: { type: 'boolean', description: 'Default true. false peeks without claiming.' } },
   },
   {
     name: 'claim',
-    description: 'Claim a specific item. Starts a 20-minute lease; every progress call renews it. If you go quiet, the item returns to the queue for someone else.',
+    description: 'Claim a specific item: a 20-minute lease that progress renews.',
     params: { item: ITEM, touching: TOUCHING },
     required: ['item'],
   },
   {
     name: 'progress',
-    description: 'Report a meaningful milestone on an item you hold (not every step). Renews your lease and returns any steering from the human. During long stretches without a milestone, call it with no headline every ~15 minutes: a silent heartbeat that only renews the lease.',
-    params: { item: ITEM, ...LAYERS, headline: s('One line, ≤100 characters, outcome first. Omit for a silent heartbeat.'), touching: TOUCHING, usage: USAGE },
+    description: 'Report a milestone on an item you hold; it renews the lease and returns steering. With no headline, a silent heartbeat.',
+    params: { item: ITEM, ...LAYERS, headline: s('One line, outcome first. Omit for a silent heartbeat.'), touching: TOUCHING, usage: USAGE },
     required: ['item'],
   },
   {
     name: 'ask',
-    description: 'Ask the human a question. Prefer non-blocking: give the assumption you will proceed with and keep working; the human can confirm or override later. Set blocking only if you truly cannot proceed; the item is then parked, and you should take other work with next. Questions about running things, permissions, or verifying on real infra go to: "operator".',
+    description: 'Ask a question. Prefer non-blocking: give the assumption you proceed with; blocking parks the item.',
     params: {
       item: { ...ITEM, description: 'Optional. The item this is about.' },
       question: s('The question, one line.'),
-      context: s('Why it matters and what you already know (the 5-minute version).'),
-      detail: s('Optional. Everything else: findings, trade-offs, links.'),
-      options: { type: 'array', items: { type: 'string' }, description: 'Optional. Likely answers the human can pick with one click.' },
+      context: s('Why it matters and what you know.'),
+      detail: s('Optional. Findings, trade-offs, links.'),
+      options: { type: 'array', items: { type: 'string' }, description: 'Optional. Likely answers, one click each.' },
       steps: {
         type: 'array', maxItems: 12,
-        items: { type: 'object', properties: { do: s('What to do, with exact values.'), where: s('Optional. The exact place: a URL, or one command as typed in a terminal, with no backticks. Several commands: one step each.'), check: s('Optional. How the person sees it worked.') }, required: ['do'] },
-        description: 'Required when a person must do something (not just decide); the hub refuses such a question without them. What to do, in order, e.g. [{ "do": "Open the repository\'s Actions secrets", "where": "https://github.com/acme/api/settings/secrets/actions" }, { "do": "Click New repository secret, name it NPM_TOKEN, paste the token", "check": "NPM_TOKEN is listed" }].',
+        items: { type: 'object', properties: { do: s('What to do, with exact values.'), where: s('Optional. A URL, or one command as typed, no backticks.'), check: s('Optional. How they see it worked.') }, required: ['do'] },
+        description: 'Required when a person must do something: what to do, in order.',
       },
-      assumption: s('What you will assume and proceed with unless told otherwise.'),
-      blocking: { type: 'boolean', description: 'True only if you cannot make progress without an answer. Defaults to false when you give an assumption.' },
-      to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: 'Optional. "operator": something you can\'t settle alone but a trusted, attended session can (running things, permissions, verifying on real infra); an operator answers, not the human. "reporter": for an item that came from a GitHub issue, ask the person who opened it, on the issue. The item parks until they reply; after a wait, the human can answer instead. A reply from someone without write access waits for a person to pass it on, and reaches you quoted as their words, not instructions. Left out, the hub picks: running a command, permissions, credentials or infra go to an operator (e.g. "can\'t run `claude` without approval"); direction, scope, money, publishing, deleting or anything unclear goes to the human (e.g. "approve browser workers?"). The response says which it picked; pass `to` to choose yourself.' },
-      escalates: { type: 'integer', description: 'Operators only: the id of an operator question that needs the human\'s approval (risky, irreversible, or a product call). Ask the human one precise question with your evidence; their answer answers the original too.' },
-      evidence: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, url: { type: 'string' } }, required: ['label'] }, description: 'With escalates (required there): what you ran or checked, so the human can decide without redoing it.' },
+      assumption: s('What you assume and proceed with unless told otherwise.'),
+      blocking: { type: 'boolean', description: 'True only if you cannot go on without an answer.' },
+      to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: 'Optional. "operator" for running things, permissions or real infra; "reporter" for an issue\'s author; left out, the hub picks.' },
+      escalates: { type: 'integer', roles: OPERATOR_ONLY, description: 'The operator question that needs the human\'s approval; their answer answers it too.' },
+      evidence: { type: 'array', roles: OPERATOR_ONLY, items: { type: 'object', properties: { label: { type: 'string' }, url: { type: 'string' } }, required: ['label'] }, description: 'With escalates: what you ran or checked.' },
     },
     required: ['question'],
   },
   {
     name: 'answer',
-    description: 'Operators only (checked in with has: ["operator"]): answer a question an agent asked with to: "operator". next hands you one as mode "answer" and holds it for you for 20 minutes, so another operator doesn\'t act on it too. The asker sees your answer at its next checkin, and parked work goes back to ready.',
+    roles: OPERATOR_ONLY,
+    description: 'Answer a question asked to: "operator" (next hands it to you as mode "answer").',
     params: {
       question: { type: 'integer', description: 'The question id, from next.' },
-      answer: s('What you found or decided, so the asker can go on. If only the human can settle it, say so.'),
+      answer: s('What you found or decided; if only the human can settle it, say so.'),
     },
     required: ['question', 'answer'],
   },
   {
     name: 'withdraw',
-    description: 'Withdraw a question you asked that is still open, with a one-line reason: the answer came another way (say who said it), or it no longer matters. It leaves Needs you and Worth knowing, the reason goes on the record, and work it parked goes back to ready. Only the asker can.',
+    description: 'Withdraw a question you asked that is still open, with a reason: answered another way, or no longer matters.',
     params: {
       question: { type: 'integer', description: 'The question id (ask returned it).' },
-      reason: s('Why, in one line, e.g. "Paul answered in a planning session: he is the only admin."'),
+      reason: s('Why, one line, e.g. "Paul answered in a planning session".'),
     },
     required: ['question', 'reason'],
   },
   {
     name: 'submit',
-    description: 'Finished an item you hold? Submit it for verification with evidence. Someone other than you verifies it; never mark your own work done. When you were shaping a proposal, submit ends the shaping: the item becomes ready (or goes to the human for approval). When you were landing accepted work, submit once main contains its branch: the hub checks git and marks it done.',
+    description: 'Submit an item you hold with evidence; someone else verifies it. Also ends a shaping job, and a landing job once main has its branch.',
     params: {
       item: ITEM,
       ...LAYERS,
-      acceptance: s('Only when finishing a shaping job: what done means, if you have not set it with refine.'),
-      difficulty: { ...DIFFICULTY.difficulty, description: `Only when finishing a shaping job, if you have not set it with refine. ${DIFFICULTY.difficulty.description}` },
+      acceptance: s('Shaping only: what done means, if not set with refine.'),
+      difficulty: { ...DIFFICULTY.difficulty, description: `Shaping only, if not set with refine. ${DIFFICULTY.difficulty.description}` },
       difficulty_why: DIFFICULTY.difficulty_why,
-      conflicts: s('Only when landing: the rebase needed conflict fixes that change what was approved. Say what you changed and why; instead of landing, the item goes back for review.'),
+      conflicts: s('Landing only: conflict fixes that change what was approved; it goes back for review.'),
       evidence: {
         type: 'array',
-        description: 'Proof it meets done_means: tests run and their result, commands, commit hashes, PR links.',
-        items: { type: 'object', properties: { label: s('What this shows, e.g. "npm test: 48 passed".'), url: s('Optional link.') }, required: ['label'] },
+        description: 'Proof it meets done_means: tests and results, commits, links.',
+        items: { type: 'object', properties: { label: s('What this shows, e.g. "npm test: 48 passed".'), url: { type: 'string' } }, required: ['label'] },
       },
       usage: USAGE,
     },
@@ -182,11 +183,11 @@ export const OPS = [
   },
   {
     name: 'handoff',
-    description: "Release an item you hold without finishing it, with a note on where you left off. Use it when your context is running low, you're stuck, or something else is more urgent. The next agent starts from your note.",
+    description: 'Release an item you hold unfinished, with a note on where you left off for the next agent.',
     params: {
       item: ITEM,
       headline: s('Where you left off, one line.'),
-      summary: s('What is done, what is next, gotchas the next agent must know.'),
+      summary: s('What is done, what is next, gotchas.'),
       detail: LAYERS.detail,
       usage: USAGE,
     },
@@ -194,12 +195,12 @@ export const OPS = [
   },
   {
     name: 'propose',
-    description: "Add work you noticed (don't silently expand your current item). With acceptance criteria it can become ready for any agent, depending on project autonomy.",
+    description: "Add work you noticed (don't silently expand your current item).",
     params: {
       title: s('One line: the outcome, not the activity.'),
       summary: s('Why it matters and what you know.'),
       detail: LAYERS.detail,
-      acceptance: s('What done means: observable, checkable criteria.'),
+      acceptance: s('What done means: checkable criteria.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'], description: 'Default "soon".' },
       parent: { ...ITEM, description: 'Optional. The item this is part of.' },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Items that must be done first.' },
@@ -209,13 +210,13 @@ export const OPS = [
       size: SIZE,
       repo: REPO,
       precondition: PRECONDITION,
-      release: { type: 'boolean', description: 'Optional. True when a person asks for a release now, e.g. a patch for an urgent fix: the hub drafts "Release vX.Y.Z" from what landed since the last one (or redrafts the open one) and ignores the other fields. Title it "Release".' },
+      release: { type: 'boolean', description: 'Optional. A person asked for a release now: the hub drafts it; title it "Release".' },
     },
     required: ['title'],
   },
   {
     name: 'refine',
-    description: 'Improve an item: sharpen the title or summary, add acceptance criteria, set priority or dependencies. Giving a proposal acceptance criteria makes it ready, when the project lets agents shape work.',
+    description: 'Improve an item: title, summary, acceptance, priority, dependencies. Acceptance on a proposal can make it ready.',
     params: {
       item: ITEM,
       title: s('Optional new title.'),
@@ -224,99 +225,107 @@ export const OPS = [
       acceptance: s('Optional. What done means.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
-      parent: s('Optional. Move it under another item: the one it is part of, e.g. "#170" (a top-level item with parts is a milestone). "" makes it top-level. Not under itself, not under a done or dropped item.'),
-      pr: s('Optional. A pull request no item tracks, as a tidy job lists it (e.g. "acme/api#12"): it becomes this item\'s, and lands with it.'),
-      reason: s('Optional. Why, in one line. It goes on the record, and on both parents\' history when the item moves. A tidy job always gives one.'),
+      parent: s('Optional. The item it is part of, e.g. "#170"; "" makes it top-level.'),
+      pr: s('Optional. An untracked pull request a tidy job lists, e.g. "acme/api#12": it becomes this item\'s.'),
+      reason: s('Optional. Why, one line, for the record; a tidy job always gives one.'),
       fixes: { ...FIXES, description: `${FIXES.description} "" clears it.` },
       breaking: { ...BREAKING, description: `${BREAKING.description} "" clears it.` },
       needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
       size: SIZE,
       ...DIFFICULTY,
       repo: REPO,
-      precondition: { ...PRECONDITION, description: `${PRECONDITION.description} Replaces any earlier one.` },
-      duplicate_of: { ...ITEM, description: 'Optional, for a proposal imported from a GitHub issue: the item it duplicates. Its issue moves there and this proposal is dropped.' },
-      stale: s('Optional, for a proposal imported from a GitHub issue: why it is stale, in one line. The human gets one question to close all flagged issues at once.'),
-      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Optional. For hard items: how many agents may attempt it at once (each on its own; the reviewer keeps the best). 1 is the usual single worker. Only while it is not being worked on.' },
-      drop: { type: 'integer', description: 'Optional. Drop this item because a person said so: the id of their answered question that says to drop it (its question_id in next or look; asked on this item, or naming it, e.g. "Drop #136-#139"). Only a person decides; you carry it out, and nothing else in this call applies.' },
+      precondition: PRECONDITION_REF,
+      duplicate_of: { ...ITEM, description: 'Optional. For an imported issue: the item it duplicates (this one is dropped).' },
+      stale: s('Optional. For an imported issue: why it is stale, one line.'),
+      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Optional. For hard items: how many agents may attempt it at once.' },
+      drop: { type: 'integer', description: 'Optional. Drop it: the id of the person\'s answered question that says so.' },
     },
     required: ['item'],
   },
   {
     name: 'review',
-    description: "Peer-review an item in verifying, when the project allows it. Check it against done_means and the evidence. You can't review your own work.",
+    description: "Peer-review an item in verifying against done_means and the evidence; never your own.",
     params: {
       item: ITEM,
       verdict: { type: 'string', enum: ['accept', 'reject'] },
-      attempt: s('Only for a raced item with several submissions: the one to keep, by number or agent name (see race.submissions). The others are recorded as not chosen.'),
+      attempt: s('Raced items only: the submission to keep, by number or agent.'),
       ...LAYERS,
     },
     required: ['item', 'verdict', 'headline'],
   },
   {
     name: 'comment',
-    description: 'Leave a note for the record on an item or the whole project. Not for questions (use ask) or status (use progress).',
+    description: 'Leave a note for the record on an item or the project; not for questions or status.',
     params: { item: { ...ITEM, description: 'Optional.' }, ...LAYERS },
     required: ['headline'],
   },
   {
     name: 'ack',
-    description: 'Acknowledge steering from the human, saying in one line how you are adjusting. The human sees whether their steering landed.',
+    description: 'Acknowledge steering, saying in one line how you are adjusting.',
     params: { steer: { type: 'integer', description: 'The steer id.' }, response: s('How you are adjusting, one line.') },
     required: ['steer'],
   },
   {
     name: 'learn',
-    description: "Leave a field note for every future agent: something about this codebase or project you learned the hard way and nobody should have to learn again. A command that works, a trap, a convention, where something lives. Agents whose work it bears on get it at checkin and next. Not for status (use progress) or rules (only the human makes decisions).",
+    description: 'Leave a field note for future agents: something learned the hard way (a command, a trap, a convention). Not for status or rules.',
     params: {
-      note: s('One or two lines. Concrete: "Run `npm run build` before `npm test`; tests import from dist/."'),
-      item: { ...ITEM, description: 'Optional. The item this came up on: agents working on it, its parent or its siblings see the note first.' },
-      replaces: { type: 'integer', description: 'Optional. The id of an outdated field note this one replaces.' },
+      note: s('One or two concrete lines.'),
+      item: { ...ITEM, description: 'Optional. The item it came up on.' },
+      replaces: { type: 'integer', description: 'Optional. The id of an outdated note this replaces.' },
     },
     required: ['note'],
   },
   {
     name: 'retire',
-    description: 'Only in a field-notes review (next mode "tidy"), under "Run with it": retire field notes whose lesson is now in the code, the guide or a test, or merge duplicates into one. Each goes on the record with your reason; a person can bring it back.',
+    description: 'In a field-notes review (next mode "tidy"): retire notes whose lesson now lives in code, the guide or a test, or merge duplicates.',
     params: {
-      notes: { type: 'array', items: { type: 'integer' }, description: 'The ids of the field notes to retire, as the review lists them.' },
-      reason: s('Where the lesson lives now (a file, the guide section, a test), in one line. For a merge: what the merged note carries.'),
-      into: { type: 'integer', description: 'Optional. For a merge: the id of the note you learned with the combined lesson.' },
+      notes: { type: 'array', items: { type: 'integer' }, description: 'The note ids, as the review lists them.' },
+      reason: s('Where the lesson lives now, one line.'),
+      into: { type: 'integer', description: 'Optional. For a merge: the note you learned with the combined lesson.' },
     },
     required: ['notes', 'reason'],
   },
   {
     name: 'feedback',
-    description: "Tell nuworq's developers when nuworq itself got in your way: a misleading hint, a missing tool, a confusing response or rule. It reaches the hub's owners as feedback. Not for the project's own knowledge (learn) or work (propose).",
+    description: "Tell nuworq's developers when nuworq itself got in your way: a misleading hint, a missing tool, a confusing rule.",
     params: {
-      text: s('What happened and what you expected, in a few lines. The hub adds your name, client, model and its version.'),
-      item: { ...ITEM, description: 'Optional. The item you were on when it happened.' },
+      text: s('What happened and what you expected.'),
+      item: { ...ITEM, description: 'Optional. The item you were on.' },
     },
     required: ['text'],
   },
   {
     name: 'look',
-    description: 'Look around. With item: full context for that item. Without: the board grouped by stage, plus standing decisions and the field notes for your work.',
+    description: 'Look around. With item: its full context. Without: the board by stage, decisions and your field notes.',
     params: {
       item: { ...ITEM, description: 'Optional.' },
       stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'done'] },
-      notes: { type: 'string', enum: ['all'], description: 'Optional. "all": every active field note, not only the ten most relevant to your work.' },
+      notes: { type: 'string', enum: ['all'], description: 'Optional. "all": every active field note.' },
     },
   },
   {
     name: 'signoff',
-    description: 'End your session. Anything you hold is handed off with your note.',
+    description: 'End your session; anything you hold is handed off with your note.',
     params: { headline: s('Where things stand, one line.'), summary: s('Optional.') },
   },
 ];
 
-const schema = (op) => ({ type: 'object', properties: op.params, ...(op.required ? { required: op.required } : {}) });
+// roles on an op or a param: only sessions with those roles (core.js ROLES) get it from tools(…, { role }).
+const allowed = (x, role) => !role || !x.roles || x.roles.includes(role);
+const schema = (op, role) => {
+  const properties = {};
+  for (const [k, { roles, ...v }] of Object.entries(op.params ?? {})) if (allowed({ roles }, role)) properties[k] = v;
+  return { type: 'object', properties, ...(op.required ? { required: op.required } : {}) };
+};
 
-export function tools(format = 'mcp', prefix = '') {
-  return OPS.map((op) => {
+// role: the session's; left out, every tool and parameter, as for the CLI and the docs.
+export function tools(format = 'mcp', prefix = '', { role = null } = {}) {
+  return OPS.filter((op) => allowed(op, role)).map((op) => {
     const name = prefix + op.name;
-    if (format === 'openai') return { type: 'function', function: { name, description: op.description, parameters: schema(op) } };
-    if (format === 'anthropic') return { name, description: op.description, input_schema: schema(op) };
-    return { name, description: op.description, inputSchema: schema(op) };
+    const params = schema(op, role);
+    if (format === 'openai') return { type: 'function', function: { name, description: op.description, parameters: params } };
+    if (format === 'anthropic') return { name, description: op.description, input_schema: params };
+    return { name, description: op.description, inputSchema: params };
   });
 }
 
