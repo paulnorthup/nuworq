@@ -88,5 +88,5 @@ test('the guide and the ask tool require steps when a person must act, with an e
   assert.match(steps.description, /Required when a person must do something/);
   assert.match(steps.description, /"do":/);
   assert.deepEqual(steps.items.required, ['do']);
-  assert.match(guide(), /Does a person have to do something.*`steps`.*"do":.*refuses/s);
+  assert.match(guide(), /Does a person have to do something\? Give `steps` \(`do`, `where`, `check`\); the hub refuses/);
 });
