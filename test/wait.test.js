@@ -556,6 +556,8 @@ describe('GET /api/wait and nuworq wait', () => {
       first.tx(() => first.project('o', { create: true }));
       first.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] });
       let server = createServer(first);
+      // The server listens for changes itself: the listener's wait is one more (#569).
+      const own = first.listenerCount('change');
       const port = await listen(server);
       const env = { ...process.env, NUWORQ_URL: `http://127.0.0.1:${port}`, NUWORQ_TOKEN: '', NUWORQ_AGENT: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
       const child = execFile(process.execPath, [bin, 'wait', '--operator', '--follow', '--as', 'op', '--retry-ms', '50'], { env });
@@ -569,19 +571,28 @@ describe('GET /api/wait and nuworq wait', () => {
       };
       let second;
       try {
-        await until(() => first.listenerCount('change') > 0, 'the listener to wait on the first hub');
+        await until(() => first.listenerCount('change') > own, 'the listener to wait on the first hub');
         server.close();
         server.closeAllConnections(); // the old process exits
         first.db.close();
         second = new Hub({ file });
         server = createServer(second);
+        // Each wait the new hub answers: when it was asked, and when the answer went out.
+        const waits = [];
+        server.on('request', (req, res) => {
+          const asked = Date.now();
+          if (req.url.startsWith('/api/wait')) res.on('finish', () => waits.push({ asked, answered: Date.now(), status: res.statusCode }));
+        });
         await new Promise((res) => server.listen(port, '127.0.0.1', res));
-        await until(() => second.listenerCount('change') > 0, 'the listener to wait on the new hub');
+        await until(() => second.listenerCount('change') > own, 'the listener to wait on the new hub');
         const ready = Date.now();
         second.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
         await until(() => stdout.includes(line), 'the line');
         assert.equal(stdout, line);
-        assert.ok(Date.now() - ready < 1000, `within a second (${Date.now() - ready} ms)`);
+        // Prompt means it came on the wait already open when the item became ready: no retry, no fresh ask (#569).
+        // Measured against what the listener did, not the clock, so a loaded machine doesn't fail it.
+        assert.ok(waits.some((w) => w.asked < ready && w.answered >= ready && w.status === 200), `the open wait answered it: ${JSON.stringify(waits.map((w) => ({ asked: w.asked - ready, answered: w.answered - ready, status: w.status })))}`);
+        assert.ok(Date.now() - ready < 5000, `and soon (${Date.now() - ready} ms)`);
       } finally {
         child.kill();
         server.close();
