@@ -4,11 +4,15 @@
 // at a commit, never from the human's checkout (which agents move). When main moves, the new commit is
 // tested in a second worktree (hub-next), so the running hub's files never change under it. If the
 // tests pass, the hub stops, hub-src moves to the commit, and the hub starts again; if the new hub
-// doesn't answer, it goes back to the last good commit. If main fails its tests, the hub stays where it
+// doesn't answer, it goes back to the last good commit. Before the switch, a commit that passed boots on a
+// side port against copies of the live databases (#544), so one that can't start on real data never goes
+// live. If main fails its tests, the hub stays where it
 // is and fixing main goes to the front of the queue: stop the line, not the hub. Before each move the
 // database is copied aside, and a rollback puts the copy back: new code may migrate it on startup.
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, copyFileSync } from 'node:fs';
+import { createServer as createNetServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -18,6 +22,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STOP_GRACE_MS = 5000;
 const HEALTHY_MS = 15_000;
 const TEST_TIMEOUT_MS = 10 * 60_000;
+const SMOKE_MS = 60_000; // a smoke boot's migrations run on copies of all the live data
+// A loopback port nothing listens on, for a smoke boot.
+const freePort = () => new Promise((resolve, reject) => {
+  const s = createNetServer();
+  s.once('error', reject);
+  s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
+});
 export const KEEP_BACKUPS = 10;
 const DIRECTORY_FILE = 'directory.sqlite'; // the workspaces host directory (src/workspaces.js)
 
@@ -65,6 +76,20 @@ export function backups({ dir, db = null, workspaces = null, keep = KEEP_BACKUPS
       for (const old of kept.splice(0, Math.max(0, kept.length - keep))) rmSync(target(old), { recursive: true, force: true });
       writeFileSync(orderFile, kept.join('\n') + '\n');
       return out;
+    },
+    // Copy the live database(s) under root, for a smoke boot (#544), while the hub runs: VACUUM INTO reads
+    // a consistent snapshot. Returns { db } (root/nuworq.db) or { workspaces } (root/workspaces, every
+    // workspace and the host directory), or null when there is nothing to copy yet.
+    copyTo(root) {
+      const files = live();
+      if (!files.length) return null;
+      if (!workspaces) {
+        vacuum(files[0].file, join(root, 'nuworq.db'));
+        return { db: join(root, 'nuworq.db') };
+      }
+      mkdirSync(join(root, 'workspaces'), { recursive: true });
+      for (const f of files) vacuum(f.file, join(root, 'workspaces', f.name));
+      return { workspaces: join(root, 'workspaces') };
     },
     // Put the copy taken when leaving sha back, with the hub stopped; null when there is none. A
     // workspace the copy doesn't have (created since) is left as it is.
@@ -170,9 +195,10 @@ function place(repo, path, sha) {
 // candidates are tested in. args: the hub's serve flags. url: where the hub answers. cwd: the hub's
 // working directory (relative --db paths mean what they did).
 // store: where the database is copied before each move (see backups()); null: no copies (--demo).
-export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null }) {
+export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null, smokeMs = SMOKE_MS }) {
   let child = null;
   let testing = null;
+  let smoking = null;
   let fetched = 0;
   const pull = (branch) => {
     if (Date.now() - fetched < fetchMs) return;
@@ -225,6 +251,52 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
         p.on('error', (e) => finish(false, `npm test didn't run (${e.message})`));
         p.on('close', (code, sig) => finish(code === 0, sig ? `the tests were stopped (${sig})` : 'the test suite exited with an error'));
       });
+    },
+    // Boot sha, as tested in the candidates' worktree, on a free loopback port against copies of the live
+    // database(s) (#544): its migrations meet real data before the switch, not after. `serve --smoke` starts
+    // no pushes, sweeps or hub.json, and runs without the hub's NUWORQ_* settings, so the copy reaches nobody.
+    // Stopped and its copies removed either way. { ok } or { ok: false, failed: why }.
+    async smoke(sha) {
+      if (!store) return { ok: true, skipped: 'no live data to boot on' };
+      const root = mkdtempSync(join(tmpdir(), 'nuworq-smoke-'));
+      let p = null, out = '';
+      try {
+        const copies = store.copyTo(root);
+        if (!copies) return { ok: true, skipped: 'no live data to boot on' };
+        const port = await freePort();
+        const where = copies.db ? ['--db', copies.db] : ['--workspaces'];
+        p = smoking = spawn(process.execPath, [join(next, bin), 'serve', '--smoke', '--host', '127.0.0.1', '--port', String(port), '--data-dir', root, ...where],
+          { cwd: root, env: testEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+        p.stdout.on('data', (d) => { out += d; });
+        p.stderr.on('data', (d) => { out += d; });
+        const exited = new Promise((r) => p.once('exit', (code, sig) => r(sig ? `it was stopped (${sig})` : `it exited with code ${code}`)));
+        const until = Date.now() + smokeMs;
+        while (Date.now() < until && !closed) {
+          if (p.exitCode != null || p.signalCode != null) {
+            // Why, as it said: its last "Error: …" or "error: …" line (Node ends with its version), else its last line.
+            const lines = out.split('\n').map((l) => l.trim()).filter((l) => l && !/^at /.test(l));
+            const last = lines.findLast((l) => /^(\w*Error|error)\b/.test(l)) ?? lines.at(-1);
+            return { ok: false, failed: `${await exited} at ${short(sha)}${last ? `: ${last}` : ''}` };
+          }
+          if (await answers(`http://127.0.0.1:${port}`)) return { ok: true };
+          await sleep(250);
+        }
+        return { ok: false, failed: closed ? 'stopped' : `it didn't answer /api/health within ${smokeMs / 1000}s at ${short(sha)}` };
+      } catch (e) {
+        return { ok: false, failed: `couldn't boot it on copies of the live data (${e.message.split('\n')[0]})` };
+      } finally {
+        if (p) {
+          if (p.exitCode == null && p.signalCode == null) {
+            const gone = new Promise((r) => p.once('exit', r));
+            killGroup(p, 'SIGTERM');
+            const kill = setTimeout(() => killGroup(p, 'SIGKILL'), STOP_GRACE_MS);
+            await gone;
+            clearTimeout(kill);
+          }
+          if (smoking === p) smoking = null;
+        }
+        rmSync(root, { recursive: true, force: true });
+      }
     },
     async start() {
       if (await answers(url)) throw new Error(`something else already answers at ${url}; stop it or pick another --port`);
@@ -284,6 +356,7 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
     async close() {
       closed = true;
       if (testing) killGroup(testing, 'SIGTERM');
+      if (smoking) killGroup(smoking, 'SIGTERM');
       await this.stop();
     },
   };
@@ -374,6 +447,17 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       const t = await sys.test(sha);
       if (state.closed) return;
       if (!t.ok) return await red(sha, t.failed);
+      // Booted on copies of the live data first, while the hub runs on (#544): a migration that fails on real
+      // data stops here, not after the switch.
+      if (sys.smoke) {
+        const s = await sys.smoke(sha);
+        if (state.closed) return;
+        if (!s.ok) {
+          state.skip = sha;
+          return log(`${short(sha)} passes its tests but didn't boot on copies of the live data (${s.failed}); staying on ${short(state.running)} and not trying ${short(sha)} again`);
+        }
+        if (!s.skipped) log(`${short(sha)} boots on copies of the live data`);
+      }
       log(`${short(sha)} passes its tests${state.red ? ` (${branch} is green again)` : ''}; restarting the hub on it`);
       state.red = false;
       const from = state.running;
