@@ -1267,7 +1267,8 @@ async function person(pos, flags) {
   const [sub, handle, role] = pos;
   try {
     if (sub === 'add') {
-      const p = auth.addPerson(need(handle, '<handle>'), flags.role || 'member', { name: flags.name, email: flags.email });
+      // The host vouches for the email it types here (#470), unlike an owner adding someone through the API.
+      const p = auth.addPerson(need(handle, '<handle>'), flags.role || 'member', { name: flags.name, email: flags.email, verified: true });
       return console.log(`${green('Added')} @${p.handle} as ${p.role}. Give them a login: nuworq token create <token-name> --role human --person ${p.handle}`);
     }
     if (sub === 'list') {

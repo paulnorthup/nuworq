@@ -159,7 +159,8 @@ CREATE TABLE IF NOT EXISTS people (
   name       TEXT NOT NULL DEFAULT '',
   email      TEXT NOT NULL DEFAULT '',
   role       TEXT NOT NULL,               -- owner | steward | member | viewer
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  verified_at INTEGER                     -- when they proved the email is theirs (signed in with it); NULL: a hint someone typed (#470)
 );
 -- Who looks after a project: its "needs you" entries go to them (else to the owners and stewards).
 CREATE TABLE IF NOT EXISTS project_stewards (
@@ -464,5 +465,11 @@ export function openDb(file) {
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }
+  // An email counts as a person's own only once they signed in with it (#470). People from before who already
+  // have a login keep theirs; rows someone made by typing an email wait for its owner's first sign-in.
+  try {
+    db.exec('ALTER TABLE people ADD COLUMN verified_at INTEGER');
+    try { db.exec(`UPDATE people SET verified_at = created_at WHERE email != '' AND id IN (SELECT person_id FROM tokens WHERE role = 'human' AND person_id IS NOT NULL)`); } catch { /* no logins yet */ }
+  } catch { /* already there */ }
   return db;
 }

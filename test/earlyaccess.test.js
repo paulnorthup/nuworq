@@ -213,7 +213,7 @@ describe('early access', () => {
     for (const [ws, handle, email] of [['acme', 'paul', 'paul@example.com'], ['globex', 'quinn', 'quinn@example.com']]) {
       spaces.create(ws);
       const db = spaces.get(ws).db;
-      new Auth(db).addPerson(handle, 'owner', { email });
+      new Auth(db).addPerson(handle, 'owner', { email, verified: true });
       new Auth(db).addPerson(`${handle}-mate`, 'member', { email: `${handle}-mate@example.com` });
       dir.identify(email, 'github');
       dir.join(email, ws);
@@ -260,7 +260,7 @@ describe('early access', () => {
     // the same URL as his personal one in globex.
     for (const ws of ['northup', 'acme', 'globex']) {
       spaces.create(ws);
-      new Auth(spaces.get(ws).db).addPerson('paul', 'owner', { email: 'paul@example.com' });
+      new Auth(spaces.get(ws).db).addPerson('paul', 'owner', { email: 'paul@example.com', verified: true });
     }
     dir.identify('paul@example.com', 'github');
     for (const ws of ['northup', 'acme', 'globex']) dir.join('paul@example.com', ws);
@@ -311,7 +311,7 @@ describe('early access', () => {
     await new Promise((r) => sink.listen(0, '127.0.0.1', r));
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
     spaces.create('acme');
-    new Auth(spaces.get('acme').db).addPerson('paul', 'owner', { email: 'paul@example.com' });
+    new Auth(spaces.get('acme').db).addPerson('paul', 'owner', { email: 'paul@example.com', verified: true });
     spaces.directory.identify('paul@example.com', 'github');
     spaces.directory.join('paul@example.com', 'acme');
     addChannel(spaces.get('acme').db, 'webhook', `http://127.0.0.1:${sink.address().port}/`, Date.now(), { person: '@paul' });
