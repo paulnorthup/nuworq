@@ -5,10 +5,12 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, 
 import { join, dirname, basename, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { userSkills } from './protocol.js';
+import { MARKETPLACE } from './plugin.js';
 
 const NAME = 'nuworq';
-// How a person installs the plugin, and the `claude` arguments connect runs when they say yes (#432).
-export const PLUGIN_INSTALL = [['plugin', 'marketplace', 'add', 'paulnorthup/nuworq'], ['plugin', 'install', `${NAME}@${NAME}`]];
+// How a person installs the plugin, and the `claude` arguments connect runs when they say yes (#432): the
+// marketplace at its release branch (#473).
+export const PLUGIN_INSTALL = [['plugin', 'marketplace', 'add', MARKETPLACE], ['plugin', 'install', `${NAME}@${NAME}`]];
 
 const which = (cmd, env) => (env.PATH ?? '').split(delimiter).map((d) => d && join(d, cmd)).find((f) => f && existsSync(f)) ?? null;
 const onPath = (cmd, env) => !!which(cmd, env);

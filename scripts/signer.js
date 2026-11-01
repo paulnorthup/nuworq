@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { archive } from '../src/package.js';
 import { versionOf, changelogEntry } from '../src/update.js';
+import { RELEASE_BRANCH } from '../src/plugin.js';
 
 export const EVERY = 5 * 60_000;
 const TAG = /^v(\d+\.\d+\.\d+)$/;
@@ -41,7 +42,7 @@ export const newer = (a, b) => {
 };
 
 // The branch the plugin installs from (src/plugin.js): the newest signed release, moved only by the signer.
-export const RELEASE_BRANCH = 'release';
+export { RELEASE_BRANCH };
 
 // An approval: what the release key signs to say a person approved tag at commit. Kept as <dir>/<tag>.json.
 const approvalText = (tag, commit) => `nuworq release approval: ${tag} ${commit}\n`;

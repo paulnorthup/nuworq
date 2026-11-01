@@ -20,9 +20,16 @@ export const MONITORS = [{
 
 const WHAT = 'The nuworq MCP server, the /nuworq:shaper and /nuworq:operator commands, the skill workers load on their own, and the operator\'s listener.';
 
+// Where the plugin installs from (#473): the release branch, which the release signer (scripts/signer.js) moves to
+// each release a person approved and it signed. Never main: a commit there alone changes nothing on anyone's machine.
+// The marketplace is added at that branch too, so the entry below is read from a release as well.
+export const REPO = 'paulnorthup/nuworq';
+export const RELEASE_BRANCH = 'release';
+export const MARKETPLACE = `${REPO}#${RELEASE_BRANCH}`;
+
 // { relative path: contents } for the plugin folder.
 // No version, here or in the marketplace entry (#364): Claude Code then takes it from the installed commit, so
-// every commit on main is an update. A pinned "version" kept everyone on the cached copy until it changed.
+// every release is an update. A pinned "version" kept everyone on the cached copy until it changed.
 export function pluginFiles() {
   const json = (v) => `${JSON.stringify(v, null, 2)}\n`;
   return {
@@ -42,12 +49,14 @@ export function pluginFiles() {
 }
 
 // The marketplace that lists it (.claude-plugin/marketplace.json at the repository root), so
-// `claude plugin marketplace add <repo>` then `claude plugin install nuworq@nuworq` installs it.
+// `claude plugin marketplace add <MARKETPLACE>` then `claude plugin install nuworq@nuworq` installs it.
+// The plugin's source is the release branch's plugin/ folder, not "./plugin": a marketplace added before #473
+// follows main, and this way it too gets the plugin only from a release.
 export function marketplace() {
   return `${JSON.stringify({
     name: 'nuworq',
     owner: { name: 'nuworq' },
     metadata: { description: 'The Claude Code plugin for nuworq, the work hub where AI agents claim, build, review and land work.' },
-    plugins: [{ name: 'nuworq', source: './plugin', description: WHAT }],
+    plugins: [{ name: 'nuworq', source: { source: 'git-subdir', url: REPO, path: 'plugin', ref: RELEASE_BRANCH }, description: WHAT }],
   }, null, 2)}\n`;
 }
