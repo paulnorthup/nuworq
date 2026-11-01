@@ -4,7 +4,7 @@
 // with only what runs. Built once per commit, off the request path, and kept under dir.
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileInTarball, releaseOf } from './update.js';
 
@@ -106,6 +106,28 @@ export async function releasePackage(root, dir, commit) {
   return packageAt(dir, commit);
 }
 
+// Packages pile up, one per commit the hub ran, and /api/info reads every signed one (#525). Keep the running
+// commit's, the newest `releases` signed ones, and anything from the last `graceMs` (a release the signer may still
+// be signing); remove the rest, with their signatures. Returns the names removed.
+export function prunePackages(dir, current, { releases = 3, graceMs = 24 * 3600_000, now = Date.now() } = {}) {
+  let names;
+  try { names = readdirSync(dir); } catch { return []; }
+  const pkgs = names.filter((n) => PACKAGE_NAME.test(n)).map((name) => {
+    const file = join(dir, name);
+    let mtime = 0;
+    try { mtime = statSync(file).mtimeMs; } catch {}
+    return { name, file, mtime, signed: existsSync(`${file}.sig`), commit: name.match(PACKAGE_NAME)[1] };
+  });
+  const keep = new Set(pkgs.filter((p) => p.signed).sort((a, b) => b.mtime - a.mtime).slice(0, releases).map((p) => p.name));
+  const removed = [];
+  for (const p of pkgs) {
+    if (p.commit === current || keep.has(p.name) || now - p.mtime < graceMs) continue;
+    for (const f of [p.file, `${p.file}.sig`]) rmSync(f, { force: true });
+    removed.push(p.name);
+  }
+  return removed;
+}
+
 // Build (or find) the package of root's commit in dir. Resolves { file, sha256, commit }, or null when
 // root isn't a git checkout. Never rejects: a failed build resolves null too, and says why on stderr.
 export async function buildPackage(root, dir) {
@@ -117,6 +139,7 @@ export async function buildPackage(root, dir) {
       mkdirSync(dir, { recursive: true });
       await archive(root, commit, file);
     }
+    prunePackages(dir, commit);
     return { file, commit, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') };
   } catch (e) {
     console.error(`nuworq: couldn't build the package at ${commit.slice(0, 7)} (${e.message}); /nuworq.tgz isn't served`);
