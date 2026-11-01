@@ -46,7 +46,7 @@ describe('the hub knows which runners are up (#171)', () => {
       await fetch(`${base}/api/runner`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'mini', machine: 'mini.local', workers: 3, paused: { until: h.now() + 5 * MIN, reason: '3 workers in a row failed within seconds' } }) });
       const paused = view(h, 'on').runners[0];
       assert.equal(paused.state, 'paused');
-      assert.deepEqual(paused.paused, { reason: '3 workers in a row failed within seconds', for: '5m' });
+      assert.deepEqual(paused.paused, { reason: '3 workers in a row failed within seconds', for: '5m', until: h.now() + 5 * MIN }); // until: the page counts it down (#530)
       await fetch(`${base}/api/runner`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'mini', stopped: 'interrupted' }) });
       assert.equal(view(h, 'on').runners[0].state, 'stopped');
       assert.equal(view(h, 'on').runners[0].stopped, 'interrupted');

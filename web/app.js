@@ -1,6 +1,7 @@
 // nuworq UI. No framework: state → HTML strings → one delegated event handler.
 // Zoom levels mirror 0-30-5-30: what isn't relevant at a level simply isn't rendered.
 import { connectCommands } from './connect.js';
+import { ago, startTicking } from './ago.js';
 import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
 import { proposeForm, proposal, sentToast } from './propose.js';
@@ -485,7 +486,7 @@ function pulse(v) {
     c.sent_back && `<b>${c.sent_back}</b> sent back`,
   ].filter(Boolean);
   const since = v.since.at
-    ? bits.length ? `Since you last looked (${v.since.ago} ago): ${bits.join(' · ')}` : `No agent activity since you last looked (${v.since.ago} ago).`
+    ? bits.length ? `Since you last looked (${when(v.since)} ago): ${bits.join(' · ')}` : `No agent activity since you last looked (${when(v.since)} ago).`
     : v.home ? 'Everything here is new to you.' : 'Everything in this project is new to you.';
   // On the home, each finished item names its project, and its link opens it there.
   const list = z() >= 1 && v.since.finished.length
@@ -785,7 +786,7 @@ function motion(v) {
         ${z() >= 1 && m.heads_up ? `<div class="headsup">⚠ ${esc(m.heads_up.split('. ')[0])}</div>` : ''}
         ${z() >= 2 && m.last?.summary ? `<div class="s">${md(m.last.summary)}</div>` : ''}
       </div>
-      <span class="age" title="Lease: ${esc(m.lease_left)} left">${m.last ? esc(m.last.ago) + ' ago' : ''}${z() >= 1 ? ` · on it ${esc(m.for)}` : ''}</span>
+      <span class="age" title="Lease: ${esc(m.lease_left)} left">${m.last ? when(m.last) + ' ago' : ''}${z() >= 1 ? ` · on it ${when(m, 'for', 'since_at')}` : ''}</span>
     </div>`).join('');
   return `<section class="sec motion"><header><h2>In motion</h2><span class="count">${v.motion.length}</span></header><div class="rows">${rows}</div></section>`;
 }
@@ -805,7 +806,7 @@ function flow(v) {
     const items = here.filter((i) => !S.onlyFeedback || !fb || i.feedback).slice(-25).reverse();
     detail = `<div class="stage-detail"><div class="blurb"><b>${esc(st.label)}.</b> ${esc(st.blurb)} ${st.court ? `<i>Whose move: ${st.court === 'you' ? 'yours' : st.court === 'agents' ? "the agents'" : st.court === 'external' ? 'someone outside this hub' : 'nobody yet (waiting for an agent)'}.</i>` : ''} ${st.ms ? `Work spent ${esc(st.time)} here in the last 14 days.` : ''}</div>
       ${fb ? `<button class="chip fb-only ${S.onlyFeedback ? 'on' : ''}" data-action="only-feedback" aria-pressed="${!!S.onlyFeedback}">Feedback only</button>` : ''}
-      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${i.feedback ? '<span class="tag fb-tag">feedback</span> ' : ''}${esc(i.title)} <span class="age">${esc(i.ago)}</span></div>`).join('') : `<div class="age">${STAGE_EMPTY[S.stage] ?? 'Nothing here.'}</div>`}</div>`;
+      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${i.feedback ? '<span class="tag fb-tag">feedback</span> ' : ''}${esc(i.title)} <span class="age">${when(i)}</span></div>`).join('') : `<div class="age">${STAGE_EMPTY[S.stage] ?? 'Nothing here.'}</div>`}</div>`;
   }
   const c = f.court;
   const hasTime = c.agents + c.queue + c.you + (c.external ?? 0) > 0;
@@ -885,7 +886,7 @@ function itemRow(i, extra = '') {
   return `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
     <span class="tag ${i.priority}">${i.priority}</span>
     <div class="body"><div class="h">${refLink(i.item)} ${esc(i.title)}${repoTag(i)}</div>${notes || extra ? `<div class="s">${esc(notes)}${extra}</div>` : ''}</div>
-    <span class="age">${esc(i.ago)}</span></div>`;
+    <span class="age">${when(i)}</span></div>`;
 }
 
 function upNext(v) {
@@ -903,7 +904,7 @@ function finished(v) {
   return `<section class="sec"><header><h2>Recently finished</h2><span class="count">${v.done.length}</span><span class="hint">last 3 days</span></header>
     <div class="rows">${shown.map((i) => i.parts ? finishedMilestone(i) : `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
       <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>${credit(i, who) ? `<div class="s">${credit(i, who)}</div>` : ''}</div>
-      <span class="age">${esc(i.ago)} ago</span></div>`).join('')}</div></section>`;
+      <span class="age">${when(i)} ago</span></div>`).join('')}</div></section>`;
 }
 // A finished milestone is one line (#442): its title, how many parts, when it finished. Tapping the parts count
 // opens them under it.
@@ -913,7 +914,7 @@ function finishedMilestone(i) {
     <div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>
     <button class="link fin-parts" data-action="toggle" data-key="${esc(key)}" aria-expanded="${shown}">${shown ? 'Hide parts' : `${plural(i.parts.length, 'part')}`}</button>
     ${shown ? `<ul class="fin-list">${i.parts.map((c) => `<li>${refLink(c.item)} ${esc(c.title)}${c.stage === 'done' ? '' : ` ${stagePill(c.stage, courtOf(c.stage))}`}</li>`).join('')}</ul>` : ''}</div>
-    <span class="age">finished ${esc(i.ago)} ago</span></div>`;
+    <span class="age">finished ${when(i)} ago</span></div>`;
 }
 
 function steering(v) {
@@ -923,14 +924,14 @@ function steering(v) {
     const missing = s.item ? [] : expected.filter((n) => !s.acks.some((x) => x.agent === n));
     return `<div class="row-item steer-item" data-key="note:${s.id}"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>
       <div class="acks">${ackList({ acks: s.acks, missing, key: `acks:${s.id}`, open: S.open.has(`acks:${s.id}`), responses: z() >= 2 }, { esc })}</div></div>
-      <div class="acts"><span class="age">${esc(dur(Date.now() - s.at))} ago</span><button class="btn ghost small" data-action="retire" data-note="${s.id}" title="Stop delivering it">Retire</button></div></div>`;
+      <div class="acts"><span class="age">${ago(s.at)} ago</span><button class="btn ghost small" data-action="retire" data-note="${s.id}" title="Stop delivering it">Retire</button></div></div>`;
   }).join('');
   const decisions = v.decisions.map((d) => `<div class="row-item" data-key="note:${d.id}"><div class="body"><div class="h">${inline(d.body)}</div></div>
-    <div class="acts"><span class="age">${esc(d.ago)} ago</span><button class="btn ghost small" data-action="retire" data-note="${d.id}">Retire</button></div></div>`).join('');
+    <div class="acts"><span class="age">${when(d)} ago</span><button class="btn ghost small" data-action="retire" data-note="${d.id}">Retire</button></div></div>`).join('');
   const shownNotes = z() >= 2 ? v.notes : v.notes.slice(0, 3);
   // Agents get the ten notes that bear on their work (#443); a note marked always-show reaches every one of them.
   const notes = shownNotes.map((n, i) => `<div class="row-item note-item" data-key="note:${n.id}"><div class="body"><div class="h">${inline(n.note ?? n.body)}</div><div class="s">${who(n.by)}${n.item ? ` on ${refLink(n.item)}` : ''}</div></div>
-    <div class="acts"><span class="age">${esc(n.ago)} ago</span><button class="btn ghost small${n.always ? ' on' : ''}" data-action="always" data-note="${n.id}" data-on="${n.always ? 0 : 1}" aria-pressed="${!!n.always}" title="${n.always ? 'Every agent gets it, whatever it works on. Tap to stop' : 'Give it to every agent, whatever it works on (at most 3)'}"${i === 0 ? ' data-new="always-show"' : ''}>${n.always ? 'Always shown' : 'Always show'}</button><button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button></div></div>`).join('');
+    <div class="acts"><span class="age">${when(n)} ago</span><button class="btn ghost small${n.always ? ' on' : ''}" data-action="always" data-note="${n.id}" data-on="${n.always ? 0 : 1}" aria-pressed="${!!n.always}" title="${n.always ? 'Every agent gets it, whatever it works on. Tap to stop' : 'Give it to every agent, whatever it works on (at most 3)'}"${i === 0 ? ' data-new="always-show"' : ''}>${n.always ? 'Always shown' : 'Always show'}</button><button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button></div></div>`).join('');
   const sub = (label, hint) => `<div class="sublabel">${label}<span>${hint}</span></div>`;
   return `<section class="sec"><header><h2>Steering &amp; memory</h2><span class="hint">did your nudges land, and what every agent carries into every session</span></header>
     ${steers ? `${sub('Your steering', 'acknowledged by')}<div class="rows" style="margin-bottom:var(--sp-4)">${steers}</div>` : ''}
@@ -939,13 +940,10 @@ function steering(v) {
       ${v.notes.length > shownNotes.length ? `<div class="zoom-more">${v.notes.length} field notes in all; every one at 30m</div>` : ''}` : ''}
   </section>`;
 }
-function dur(ms) {
-  const m = 60000, h = 60 * m, d = 24 * h;
-  if (ms < m) return `${Math.max(1, Math.round(ms / 1000))}s`;
-  if (ms < h) return `${Math.round(ms / m)}m`;
-  if (ms < d) return `${+(ms / h).toFixed(ms < 10 * h ? 1 : 0)}h`;
-  return `${+(ms / d).toFixed(1)}d`;
-}
+// A relative time from the hub that keeps ticking (#530): o[at] is when (ms), o[key] the hub's own string, shown
+// if a view from an older hub has no time. left: a time still to come (a lease, a pause).
+const when = (o, key = 'ago', at = 'at', left = false) => ago(o?.[at], { left, fallback: esc(o?.[key]) });
+const stageAge = (it) => when(it, 'in_stage', 'stage_since');
 
 // What git says the worker committed, read by the hub from the repo at submit time.
 function commits(g) {
@@ -981,7 +979,7 @@ function agents(v) {
         <div><b>${a.record.stalls}</b><span>stalls</span></div>
         <div><b>${a.record.handoffs}</b><span>handoffs</span></div>
       </div>
-      <div class="model" style="margin-top:var(--sp-2)">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${esc(a.last_seen)} ago</div>
+      <div class="model" style="margin-top:var(--sp-2)">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${when(a, 'last_seen', 'seen_at')} ago</div>
     </div>`).join('')}</div>${earlier}</section>`;
 }
 
@@ -994,10 +992,10 @@ function runners(v) {
   const staff = `<span class="right">${esc(staffLine(v.project.staffing))} <button class="link" data-action="staffing">Staffing</button></span>`;
   if (!rs.length) return `<section class="sec"><header><h2>Runners</h2>${staff}</header>
     ${zero('<b>No runner has reported here.</b> Nothing starts workers until one does.', 'On a machine with a checkout: <code>nuworq run</code>')}</section>`;
-  const why = (r) => r.state === 'down' ? `Silent since ${esc(r.last_seen)} ago${r.machine ? ` on ${esc(r.machine)}` : ''}.`
-    : r.state === 'stopped' ? `Stopped ${esc(r.last_seen)} ago: ${esc(r.stopped)}.`
-    : r.state === 'paused' ? `Paused for ${esc(r.paused.for)}: ${esc(r.paused.reason)}.`
-    : r.state === 'skipping' ? `Leaves this project alone${r.skipping.for ? ` for ${esc(r.skipping.for)}` : ''}: ${esc(r.skipping.reason)}.`
+  const why = (r) => r.state === 'down' ? `Silent since ${when(r, 'last_seen', 'seen_at')} ago${r.machine ? ` on ${esc(r.machine)}` : ''}.`
+    : r.state === 'stopped' ? `Stopped ${when(r, 'last_seen', 'seen_at')} ago: ${esc(r.stopped)}.`
+    : r.state === 'paused' ? `Paused for ${when(r.paused, 'for', 'until', true)}: ${esc(r.paused.reason)}.`
+    : r.state === 'skipping' ? `Leaves this project alone${r.skipping.for ? ` for ${when(r.skipping, 'for', 'until', true)}` : ''}: ${esc(r.skipping.reason)}.`
     // --workers auto (#533): it adds workers while the machine has room, and says why when it holds.
     : r.auto ? `${r.running} of up to ${r.workers} running${r.holding ? `. Holding: ${esc(r.holding)}.` : ', as the machine has room.'}`
     : `${r.running} of ${r.workers} worker${r.workers === 1 ? '' : 's'} running.`;
@@ -1010,7 +1008,7 @@ function runners(v) {
     <div class="rows">${rs.map((r) => `<div class="row-item runner"><div class="body">
       <div class="h">${esc(r.name)}<span class="status runner-${r.state}">${esc(r.state)}</span></div>
       <div class="s">${why(r)}</div>
-      <div class="s faint">${[r.machine && r.machine !== r.name ? `on ${esc(r.machine)}` : '', r.state !== 'down' ? `seen ${esc(r.last_seen)} ago` : '', r.spent ? `$${r.spent.toFixed(2)} spent` : '', r.skipping_others ? `skips ${r.skipping_others} other project${r.skipping_others === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}</div>
+      <div class="s faint">${[r.machine && r.machine !== r.name ? `on ${esc(r.machine)}` : '', r.state !== 'down' ? `seen ${when(r, 'last_seen', 'seen_at')} ago` : '', r.spent ? `$${r.spent.toFixed(2)} spent` : '', r.skipping_others ? `skips ${r.skipping_others} other project${r.skipping_others === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}</div>
     </div></div>`).join('')}</div></section>`;
 }
 
@@ -1030,7 +1028,7 @@ function activity(v) {
         <span class="type">${esc(e.type.replace('_', ' '))}</span>
         <div class="body"><div class="h">${e.item ? refLink(e.item) + ' ' : ''}${named(e.headline, e.actor, undefined, { beside: true })}</div>
           ${open ? `<div class="expand">${md(e.summary)}${e.data?.evidence?.length ? `<div class="evidence">${e.data.evidence.map((x) => `<span class="ev">${esc(x.label)}</span>`).join('')}</div>` : ''}${e.detail ? `<pre>${esc(e.detail)}</pre>` : ''}</div>` : ''}</div>
-        <span class="age">${who(e.actor)} · ${esc(e.ago)}</span></div>`;
+        <span class="age">${who(e.actor)} · ${when(e)}</span></div>`;
     }).join('')}</div></section>`;
 }
 
@@ -1047,7 +1045,7 @@ function allWork(v) {
   ].filter(Boolean).join(' · ');
   return `<section class="sec"><header><h2>All work</h2><span class="count">${shown.length}</span></header>
     ${shown.length ? `<div class="work-scroll"><table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Worked on by</th><th>In stage</th></tr></thead><tbody>
-    ${shown.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : '<span class="age" title="No agent has worked on it yet">—</span>'}</td><td class="age">${esc(i.ago)}</td></tr>`).join('')}
+    ${shown.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : '<span class="age" title="No agent has worked on it yet">—</span>'}</td><td class="age">${when(i)}</td></tr>`).join('')}
     </tbody></table></div>` : zero('<b>Nothing open or recently finished.</b>')}
     ${foot ? `<div class="zoom-more">${foot}</div>` : ''}</section>`;
 }
@@ -1062,17 +1060,17 @@ function renderDrawer() {
   if (!it) { paint(d, placeholder(4)); return; }
   const holderLine = {
     proposed: it.holder
-      ? `<b>${who(it.holder)}</b> is shaping it · lease ${esc(it.lease_left)} left`
-      : `<b>Proposed</b> by ${who(it.created_by)} ${esc(it.created)} ago. ${it.waits_for_ok && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${who(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
-    ready: `<b>Ready</b> for ${it.race > 1 ? `${it.race} agents at once (a race)` : 'any agent'} · waiting ${esc(it.in_stage)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
+      ? `<b>${who(it.holder)}</b> is shaping it · lease ${when(it, 'lease_left', 'lease_until', true)} left`
+      : `<b>Proposed</b> by ${who(it.created_by)} ${when(it, 'created', 'created_at')} ago. ${it.waits_for_ok && it.acceptance ? 'Shaped and waiting for your approval.' : `Nothing needed from you: ${it.holder ? `${who(it.holder)} is shaping it now` : it.priority === 'now' ? 'the next free agent shapes it first' : 'a free agent shapes it into ready work'}.`}`,
+    ready: `<b>Ready</b> for ${it.race > 1 ? `${it.race} agents at once (a race)` : 'any agent'} · waiting ${stageAge(it)}${it.depends_on.some((x) => !['done', 'dropped'].includes(x.stage)) ? ' · blocked by dependencies' : ''}`,
     active: it.race > 1
-      ? `<b>Race of ${it.race}</b> · ${esc(it.in_stage)} so far · ${it.racers.map((r) => `${who(r.agent, r.model)} ${r.stage === 'active' ? `on it, lease ${esc(r.lease_left)} left` : esc(r.stage)}`).join(' · ') || 'no one yet'}`
-      : `<b>${who(it.holder)}</b> is on it · ${esc(it.in_stage)} so far · lease ${esc(it.lease_left)} left`,
-    waiting: `<b>Waiting on you</b> for ${esc(it.in_stage)}: an agent parked it to ask a question.`,
-    verifying: `<b>Verifying</b> · ${who(it.implementer)} finished it ${esc(it.in_stage)} ago${it.holder ? ` · ${who(it.holder)} is reviewing` : ''}`,
+      ? `<b>Race of ${it.race}</b> · ${stageAge(it)} so far · ${it.racers.map((r) => `${who(r.agent, r.model)} ${r.stage === 'active' ? `on it, lease ${when(r, 'lease_left', 'lease_until', true)} left` : esc(r.stage)}`).join(' · ') || 'no one yet'}`
+      : `<b>${who(it.holder)}</b> is on it · ${stageAge(it)} so far · lease ${when(it, 'lease_left', 'lease_until', true)} left`,
+    waiting: `<b>Waiting on you</b> for ${stageAge(it)}: an agent parked it to ask a question.`,
+    verifying: `<b>Verifying</b> · ${who(it.implementer)} finished it ${stageAge(it)} ago${it.holder ? ` · ${who(it.holder)} is reviewing` : ''}`,
     landing: `<b>Landing</b> · accepted; ${it.holder ? `${who(it.holder)} is putting it on main` : 'the next free agent puts it on main'}`,
-    done: `<b>Done</b> ${esc(it.in_stage)} ago${it.implementer ? ` · ${credit({ implementer: it.implementer }, who)}` : ''}`,
-    dropped: `<b>Dropped</b> ${esc(it.in_stage)} ago`,
+    done: `<b>Done</b> ${stageAge(it)} ago${it.implementer ? ` · ${credit({ implementer: it.implementer }, who)}` : ''}`,
+    dropped: `<b>Dropped</b> ${stageAge(it)} ago`,
   }[it.stage];
 
   const actions = [];
@@ -1103,11 +1101,11 @@ function renderDrawer() {
   }).join('');
 
   const handoff = it.handoff && it.stage !== 'done' ? `<div class="d-sec"><div class="label">${it.handoff.kind === 'sent_back' ? 'Sent back' : 'Where the last agent left off'}</div>
-    <div class="handoff"><div class="by">${who(it.handoff.by)} · ${esc(dur(Date.now() - it.handoff.at))} ago</div><b>${esc(it.handoff.headline)}</b>${it.handoff.summary ? md(it.handoff.summary) : ''}</div></div>` : '';
+    <div class="handoff"><div class="by">${who(it.handoff.by)} · ${ago(it.handoff.at)} ago</div><b>${esc(it.handoff.headline)}</b>${it.handoff.summary ? md(it.handoff.summary) : ''}</div></div>` : '';
 
   const questions = it.questions.length ? `<div class="d-sec"><div class="label">Questions <span class="count">${it.questions.length}</span></div>
     ${it.questions.map((q) => `<div class="q ${q.status} ${q.blocking ? 'blocking' : ''}">
-      <div class="meta">${who(q.asked_by)} · ${q.escalation ? `escalated ${esc(q.escalation.asked_by)}'s question` : q.blocking ? 'blocking' : 'non-blocking'} · ${esc(q.ago)} ago · ${esc(q.status)}</div>
+      <div class="meta">${who(q.asked_by)} · ${q.escalation ? `escalated ${esc(q.escalation.asked_by)}'s question` : q.blocking ? 'blocking' : 'non-blocking'} · ${when(q)} ago · ${esc(q.status)}</div>
       <div><b>${esc(q.question)}</b></div>${q.escalation ? `<div class="a">${esc(q.escalation.asked_by)} asked an operator: <i>${esc(q.escalation.question)}</i></div>` : ''}${q.context ? md(q.context) : ''}
       ${q.evidence?.length ? `<div class="evidence">${q.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
       ${q.assumption ? `<div class="a">Assumed: <i>${esc(q.assumption)}</i></div>` : ''}
@@ -1120,7 +1118,7 @@ function renderDrawer() {
     </div>`).join('')}</div>` : '';
 
   const steers = it.steers.length ? `<div class="d-sec"><div class="label">Your steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
-      <div class="meta">${esc(s.ago)} ago</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
+      <div class="meta">${when(s)} ago</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
 
   const edit = S.editItem ? `<div class="d-sec"><div class="label">Edit</div><div class="add-work" style="margin:0">
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
@@ -1135,7 +1133,7 @@ function renderDrawer() {
   const deep = S.deep ? `
     <div class="d-sec"><div class="label">The record</div>
       <dl class="kv">
-        <dt>Created</dt><dd>${esc(it.created)} ago by ${who(it.created_by)}</dd>
+        <dt>Created</dt><dd>${when(it, 'created', 'created_at')} ago by ${who(it.created_by)}</dd>
         <dt>Attempts</dt><dd>${it.attempts}${it.stalls ? ` · ${plural(it.stalls, 'stall')}` : ''}${it.rejections ? ` · sent back ${it.rejections}×` : ''}</dd>
         <dt>Agents involved</dt><dd>${it.agents.map((a) => `${who(a.name, a.model)} <span class="age">${esc(a.model)}</span>`).join(', ') || '—'}</dd>
         ${it.parent ? `<dt>Part of</dt><dd>${refLink(it.parent.item)} ${esc(it.parent.title)}</dd>` : ''}
@@ -1148,7 +1146,7 @@ function renderDrawer() {
     ${it.usage ? usageTable(it.usage) : ''}
     <div class="d-sec"><div class="label">Timeline <span class="count">${plural(it.events.length, 'event')}</span></div><div class="timeline">
       ${it.events.map((e) => `<div class="tl t-${e.type} ${dotClass(e.type, courtOf)}">
-        <div class="meta">${who(e.actor)}<span>${esc(e.type.replace('_', ' '))}</span><span>${esc(e.ago)} ago</span></div>
+        <div class="meta">${who(e.actor)}<span>${esc(e.type.replace('_', ' '))}</span><span>${when(e)} ago</span></div>
         <div class="h">${named(e.headline, e.actor, undefined, { beside: true })}</div>
         ${e.summary ? `<div class="sm">${md(e.summary)}</div>` : ''}
         ${e.data?.evidence?.length ? `<div class="evidence">${e.data.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : ''}
@@ -1613,7 +1611,7 @@ async function showMine({ scroll = false } = {}) {
   const r = await api('/api/feedback/mine').catch(() => null);
   const slot = $('#fb-mine-slot');
   if (!slot || !r) return;
-  slot.innerHTML = feedbackMine(r.feedback, esc, (t) => `${dur(Date.now() - t)} ago`);
+  slot.innerHTML = feedbackMine(r.feedback, esc, (t) => `${ago(t)} ago`);
   if (scroll) $('#fb-mine')?.scrollIntoView({ block: 'start' });
 }
 
@@ -2069,9 +2067,11 @@ function listen() {
   // Feedback about nuworq (#295): only a hub that takes it shows the entry.
   S.feedback = await api('/api/feedback').catch(() => null);
   await loadProjects().catch(() => {});
-  if (fromGitHub) return void (route(), listen(), setInterval(() => live.poke(), 30_000), backFromGitHub());
-  if (fromStripe) return void (route(), listen(), setInterval(() => live.poke(), 30_000), workspaceSettings());
-  if (fromFixed && S.feedback?.on) return void (route(), listen(), setInterval(() => live.poke(), 30_000), ACTIONS.feedback(null, { mine: true }));
+  // Relative times tick here (#530); only a change on the hub refetches, never a timer.
+  startTicking();
+  if (fromGitHub) return void (route(), listen(), backFromGitHub());
+  if (fromStripe) return void (route(), listen(), workspaceSettings());
+  if (fromFixed && S.feedback?.on) return void (route(), listen(), ACTIONS.feedback(null, { mine: true }));
   if (!location.hash || location.hash === '#/') {
     // One project opens it, unless Get started still has steps to show on All projects.
     S.gs = await api('/api/get-started').catch(() => null);
@@ -2079,5 +2079,4 @@ function listen() {
   }
   route();
   listen();
-  setInterval(() => live.poke(), 30_000);
 })();
