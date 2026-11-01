@@ -1071,7 +1071,7 @@ export class Hub extends EventEmitter {
     // count is now: it may have been changed while the item was verifying.
     if (!['active', 'verifying'].includes(stage)) this.q('UPDATE attempts SET closed = 1 WHERE item_id = ? AND closed = 0').run(item.id);    Object.assign(item, fields);
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
-    if (['done', 'dropped'].includes(stage)) this.settleQuestions(item, stage);
+    if (['done', 'dropped'].includes(stage)) { this.settleQuestions(item, stage); this.retireSteers(item, stage); }
     if (stage === 'done') { landed(this, item); deleteBranch.call(this, item); } // a finished milestone drafts the release (#399)
     if (unmet?.kind === 'ask') this.askPrecondition(item, actor);
   }
@@ -1085,6 +1085,19 @@ export class Hub extends EventEmitter {
       const shipped = stage === 'done' && !q.blocking && !!q.assumption;
       this.q('UPDATE questions SET status = ?, closed_reason = ? WHERE id = ?').run(shipped ? 'shipped' : 'withdrawn', reason, q.id);
       this.q(`UPDATE questions SET status = 'withdrawn', closed_reason = ? WHERE escalates = ? AND status = 'open'`).run(reason, q.id);
+    }
+  }
+
+  // Steering about an item is spent once the item is (#551): it retires with the reason, people's and agents'
+  // alike. The record keeps it, and unretire brings it back. Steering for the whole project stays until retired.
+  retireSteers(item, stage) {
+    const steers = this.q(`SELECT * FROM notes WHERE item_id = ? AND kind = 'steer' AND active = 1`).all(item.id);
+    if (!steers.length) return;
+    const reason = stage === 'done' ? `#${item.seq} landed` : `#${item.seq} was dropped`;
+    const p = this.q('SELECT * FROM projects WHERE id = ?').get(item.project_id);
+    for (const n of steers) {
+      this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
+      this.event(p, { item, actor: SYSTEM, type: 'retired', headline: `nuworq retired a steer, as ${reason}: ${clip(n.body, 100)}`, data: { note: n.id, reason } });
     }
   }
 
