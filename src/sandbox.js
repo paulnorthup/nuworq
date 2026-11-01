@@ -57,8 +57,10 @@ export const gitDenies = (home, worktree) => [
 // Claude Code's sandbox for a worker: hub is the hub's address, home the project's checkout (its .git holds the
 // worktree's objects and refs), worktree the worker's own (its folder in .git/worktrees has its name), hosts what a
 // person added for the project's tests. landsHere: the project has no origin, so work lands by fast-forwarding the
-// checkout itself, which the worker may then write, all but its .git's hooks and config.
-export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = false }) {
+// checkout itself, which the worker may then write, all but its .git's hooks and config. tokenFile: the worker's own
+// token, in ~/.nuworq/tokens (#477), which its git's credential helper reads inside the sandbox; the narrower allowRead
+// re-opens that one file in the denied ~/.nuworq (code.claude.com/docs/en/sandboxing, checked 2026-11-01).
+export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = false, tokenFile = null }) {
   const hubHost = hub ? new URL(hub).host : '';
   return {
     enabled: true,
@@ -74,6 +76,7 @@ export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = f
       allowWrite: landsHere ? [home] : gitWrites(home, worktree && basename(worktree)),
       denyWrite: gitDenies(home, worktree),
       denyRead: DENY_READ,
+      ...(tokenFile ? { allowRead: [tokenFile] } : {}),
     },
   };
 }

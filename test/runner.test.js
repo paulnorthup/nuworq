@@ -307,6 +307,10 @@ describe('workers on a hub that requires login', () => {
       const ran = (await cli('--run', '--agent-token', agent)).stdout;
       const file = join(home, '.nuworq', 'tokens', 'w.token');
       assert.match(ran, new RegExp(`ARGS: .*"NUWORQ_TOKEN_FILE":"${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+      // Its git's credential helper reads that file inside the sandbox, which denies the rest of ~/.nuworq (#472).
+      const { sandbox } = JSON.parse(ran.match(/--settings (\{\S*\})/)[1]);
+      assert.ok(sandbox.filesystem.denyRead.includes('~/.nuworq'));
+      assert.deepEqual(sandbox.filesystem.allowRead, [file], 'its own token file, nothing else of ~/.nuworq');
       assert.doesNotMatch(ran, /ARGS: .*nwq_/, 'no token in its arguments');
       assert.match(ran, /^ENV TOKENS: 0$/m, 'no token in its environment, not even the person\'s');
       assert.match(ran, /^-rw-------@? .* w\.token$/m, 'a file only this user reads');

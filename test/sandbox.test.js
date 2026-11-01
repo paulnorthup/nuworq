@@ -35,6 +35,14 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     });
   }
 
+  test("its git reads the worker's own token file, and nothing else of ~/.nuworq", () => {
+    const tokenFile = join('/home/me', '.nuworq', 'tokens', 'claude-1a2b.token');
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree, tokenFile });
+    assert.ok(filesystem.denyRead.includes('~/.nuworq'));
+    assert.deepEqual(filesystem.allowRead, [tokenFile], 'one file: the narrower path re-opens it');
+    assert.equal(sandboxSettings({ hub: 'https://hub.example', home, worktree }).filesystem.allowRead, undefined, 'no token, nothing re-opened');
+  });
+
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree: null, landsHere: true });
     for (const p of ['hooks', 'config', 'modules', 'info']) assert.ok(filesystem.denyWrite.includes(join(home, '.git', p)), p);

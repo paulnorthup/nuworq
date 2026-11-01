@@ -756,7 +756,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     // --proxy: Claude Code's traffic goes to llm-proxy's Anthropic route with the proxy's owner token (not the
     // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed.
     const via = flags.proxy === undefined ? '' : `ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN" \\\n  `;
-    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts: target.sandbox_hosts ?? [], landsHere: !origin }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts: target.sandbox_hosts ?? [], landsHere: !origin, tokenFile: tokenAt }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
