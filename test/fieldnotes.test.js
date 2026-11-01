@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, DAY } from '../src/core.js';
-import { guide } from '../src/protocol.js';
+import { guide, MODE_RULES } from '../src/protocol.js';
 import { NOTES_SHOWN } from '../src/fieldnotes.js';
 
 // A project with a milestone #1 and its parts #2 (exports), #3 (imports) and #4 (billing), 31 field notes about
@@ -158,10 +158,9 @@ describe('a tidy job reviews the field notes (#443)', () => {
     assert.throws(() => agent('retire', 'a2', { notes: [ids.item], reason: 'x' }), /Only a field-notes review retires notes/);
   });
 
-  test('the guide says how', () => {
-    const g = guide();
-    assert.match(g, /## Field notes\n/);
-    assert.match(g, /at most ten field notes/);
-    assert.match(g, /`retire`/);
+  test('the review\'s hint says how (#527)', () => {
+    assert.match(guide(), /`learn` it/);
+    assert.match(MODE_RULES.notes, /at most ten notes/);
+    assert.match(MODE_RULES.notes, /look with notes "all"/);
   });
 });

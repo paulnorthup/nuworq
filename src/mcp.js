@@ -22,6 +22,8 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
   let project = client.settings.project;
   let agent = envVar('AGENT', env) || null;
   let clientName = '';
+  // Its role picks its tools (#529): a runner's workers say so at start; any other session learns it at checkin.
+  let role = envVar('ROLE', env) || 'session';
 
   const log = (...a) => process.stderr.write(`[nuworq-mcp] ${a.join(' ')}\n`);
   const write = (msg) => output.write(JSON.stringify(msg) + '\n');
@@ -35,7 +37,7 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
   let fromHub = null; // { tools, guide } as the hub last said, or null
   async function fetchProtocol() {
     try {
-      const [t, g] = await Promise.all([meta.get('/api/tools?format=mcp'), meta.get(`/api/guide?via=tools&project=${encodeURIComponent(where())}`)]);
+      const [t, g] = await Promise.all([meta.get(`/api/tools?format=mcp&role=${encodeURIComponent(role)}`), meta.get(`/api/guide?via=tools&project=${encodeURIComponent(where())}`)]);
       return Array.isArray(t) && typeof g === 'string' ? { tools: t, guide: g } : null;
     } catch { return null; }
   }
@@ -68,7 +70,7 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
       };
     },
     ping: () => ({}),
-    'tools/list': () => ({ tools: fromHub?.tools ?? tools('mcp') }),
+    'tools/list': () => ({ tools: fromHub?.tools ?? tools('mcp', '', { role }) }),
     async 'tools/call'(params = {}) {
       agent ??= `agent-${randomBytes(2).toString('hex')}`;
       const name = params.name;
@@ -95,6 +97,12 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
         let result = await client.call(name, args, { agent, project });
         // The hub resolved or routed us to a project: stay with it for the rest of the session.
         if (!project && result?.project) project = result.project;
+        // The hub said who this session is, e.g. an operator: its tools follow.
+        if (name === 'checkin' && typeof result?.role === 'string' && result.role !== role) {
+          role = result.role;
+          fromHub = (await fetchProtocol()) ?? fromHub;
+          write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+        }
         // nuworq updated itself under this session (#436): said once, in the next checkin.
         if (name === 'checkin' && result && typeof result === 'object') {
           const updated = takeNews(updateDir, 'mcp');

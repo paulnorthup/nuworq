@@ -27,7 +27,7 @@ export function projectList(hub, { viewer } = {}) {
 const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
 
 // The home: does anything need you, anywhere? One aggregate pulse, every act entry of the viewer's across
-// projects (tagged with its project, oldest first as on a project page), then one line per project. 5m adds
+// projects (tagged with its project, ranked as on a project page: byNeed), then one line per project. 5m adds
 // worth knowing per project and what's in motion. A parked project's state and agents never set the pulse,
 // but what it already asked of you (a blocking question, work to verify) still needs you, so it counts here as
 // it does on its own line and badge (#152). Parking only stops new asks: direction and staffing.
@@ -52,7 +52,7 @@ export function homeView(hub, { viewer } = {}) {
   const once = new Set();
   const needs = rows.flatMap(({ p, v }) => v.attention.filter((a) => a.level === 'act').map((a) => ({ ...a, project: tag(p) })))
     .filter((a) => !a.hubwide || (!once.has(a.key) && once.add(a.key)))
-    .sort((a, b) => a.at - b.at);
+    .sort(byNeed);
   const state = needs.length ? 'needs-you' : URGENCY.find((s) => live.some(({ v }) => v.pulse.state === s)) ?? 'idle';
   const across = (n) => (n > 1 ? ` across ${plural(n, 'project')}` : '');
   const working = live.reduce((n, { v }) => n + v.pulse.working, 0), inFlight = live.reduce((n, { v }) => n + v.pulse.active, 0);
@@ -89,13 +89,55 @@ export function homeView(hub, { viewer } = {}) {
   };
 }
 
-// The home with one more act entry that belongs to the workspace, not a project (#231: a failed payment): first
-// in Needs you (project null), counted in the pulse and its sentence.
+// The home with one more act entry that belongs to the workspace, not a project (#231: a failed payment): in Needs
+// you as now, since it holds up all the workspace's work (#505), counted in the pulse and its sentence.
 export function withEntry(h, entry) {
-  const needs = [{ ...entry, project: null }, ...h.needs];
+  const needs = [{ priority: 'now', priority_why: "now: it holds up all of the workspace's work", holds: 3, ...entry, project: null }, ...h.needs].sort(byNeed);
   const sentence = h.pulse.sentence.replace(/^(Nothing needs you\.|\d+ things?( across \d+ projects)? needs? you\.)/,
     `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you.`);
   return { ...h, needs, pulse: { ...h.pulse, state: 'needs-you', act: needs.length, sentence } };
+}
+
+// Needs you ranks the way agents' work does (#505). Each card carries the priority of the work it holds up and
+// why, in one line: a card about an item takes the item's effective priority (its milestone's or a dependent's,
+// when higher); one that holds up all of a project's or the workspace's work is now; a question about no item
+// takes the highest priority of the items it names, else soon. Cards rank by a person's pick, then priority, then
+// what they hold up (a blocking question parking work, then a review or PR holding a landing, then a milestone's
+// part), then oldest first. Worth knowing keeps its own order.
+const RANK = { now: 0, soon: 1, later: 2 };
+const ALL_WORK = new Set(['app-wiring', 'plan-limit', 'operator-missing', 'direction', 'no-agents', 'payment-failed']);
+const HOLDS_LANDING = new Set(['review', 'ci-failing', 'pr-review']);
+export const byNeed = (a, b) => (b.picked ? 1 : 0) - (a.picked ? 1 : 0) || (RANK[a.priority] ?? 1) - (RANK[b.priority] ?? 1)
+  || (a.holds ?? 3) - (b.holds ?? 3) || a.at - b.at;
+
+function prioritize(hub, p, attention, items) {
+  const eff = hub.effectivePriorities(p);
+  const bySeq = new Map(items.map((i) => [`#${i.seq}`, i]));
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const picked = new Set(hub.q(`SELECT DISTINCT e.item_id FROM events e JOIN items i ON i.id = e.item_id
+    WHERE e.project_id = ? AND e.type = 'picked' AND i.stage NOT IN ('done', 'dropped')`).all(p.id).map((r) => r.item_id));
+  const ancestor = (it, id) => { for (let x = byId.get(it.parent_id); x; x = byId.get(x.parent_id)) if (x.id === id) return true; return false; };
+  const of = (it) => {
+    const e = eff.get(it.id) ?? { priority: it.priority, from: null };
+    const from = e.from && items.find((i) => i.seq === e.from);
+    return { priority: e.priority, why: !from ? `${e.priority}: #${it.seq}'s own priority` : ancestor(it, from.id) ? `${e.priority}: part of #${from.seq}` : `${e.priority}: #${from.seq} waits on it` };
+  };
+  for (const a of attention) {
+    const it = a.item ? bySeq.get(a.item) : null;
+    let r;
+    if (ALL_WORK.has(a.kind)) r = { priority: 'now', why: `now: it holds up all of ${a.hubwide ? "the hub's" : `${p.name}'s`} work` };
+    else if (it) r = of(it);
+    else if (a.kind === 'question') {
+      // A question about no item parks what it names, e.g. "Drop #136-#139?" (the question only: its why can quote
+      // an outsider's reply).
+      const named = [...String(a.headline).matchAll(/#(\d+)/g)].map((m) => bySeq.get(`#${m[1]}`)).filter((i) => i && eff.has(i.id)).map(of);
+      r = named.sort((x, y) => RANK[x.priority] - RANK[y.priority])[0] ?? { priority: 'soon', why: 'soon: it is about no item' };
+    } else r = { priority: 'soon', why: 'soon: it is about no item' };
+    a.priority = r.priority;
+    a.priority_why = r.why;
+    if (it && picked.has(it.id)) a.picked = true;
+    a.holds = a.kind === 'question' && a.parked ? 0 : HOLDS_LANDING.has(a.kind) ? 1 : it?.parent_id ? 2 : 3;
+  }
 }
 
 // The repository an item lands in, short (acme/api), when the project has several; null with one.
@@ -495,7 +537,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       }
     }
   }
-  attention.sort((a, b) => (a.level === b.level ? a.at - b.at : a.level === 'act' ? -1 : 1));
+  prioritize(hub, p, attention, items);
+  attention.sort((a, b) => (a.level !== b.level ? (a.level === 'act' ? -1 : 1) : a.level === 'act' ? byNeed(a, b) : a.at - b.at));
   const act = attention.filter((a) => a.level === 'act');
 
   // ── since you last looked ──
@@ -596,7 +639,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const landed = hub.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND implementer = ? AND stage = 'done'`).get(p.id, a.name).n;
     const sentBack = hub.q(`SELECT COUNT(*) AS n FROM events e JOIN items i ON i.id = e.item_id
         WHERE e.project_id = ? AND e.type = 'sent_back' AND i.implementer = ?`).get(p.id, a.name).n;
-    const stalls = hub.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'lease_expired' AND data LIKE ?`).get(p.id, `%"agent":"${a.name}"%`).n;
+    const stalls = hub.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'lease_expired' AND json_extract(data, '$.agent') = ?`).get(p.id, a.name).n;
     // Who answers for this agent: the person who minted its token, or the runner it belongs to.
     const tok = a.token_id != null ? hub.q(`SELECT t.runner, m.handle FROM tokens t LEFT JOIN people m ON m.id = t.minted_by WHERE t.id = ?`).get(a.token_id) : null;
     const via = tok?.runner ? `runner ${tok.runner}` : tok?.handle ? `via @${tok.handle}` : null;

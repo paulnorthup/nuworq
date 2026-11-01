@@ -4,7 +4,7 @@
 // with only what runs. Built once per commit, off the request path, and kept under dir.
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileInTarball, releaseOf } from './update.js';
 
@@ -15,8 +15,18 @@ const run = (args) => new Promise((resolve, reject) => {
   execFile('git', args, { timeout: 60_000 }, (e, out, err) => (e ? reject(new Error(String(err || e.message).trim())) : resolve(out)));
 });
 
-// The commit root is checked out at, or null when it isn't a git checkout (installed from a package).
+// Whether root is the top level of a git checkout of its own (#511). An npm install can sit inside someone else's
+// repository (/opt/homebrew/lib/node_modules/nuworq is in Homebrew's clone), and git would answer for that one.
+export function ownCheckout(root) {
+  try {
+    const top = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return !!top && realpathSync(top) === realpathSync(root);
+  } catch { return false; }
+}
+
+// The commit root is checked out at, or null when it isn't a git checkout of its own (installed from a package).
 export function commitOf(root) {
+  if (!ownCheckout(root)) return null;
   try {
     return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
   } catch { return null; }

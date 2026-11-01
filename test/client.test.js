@@ -101,11 +101,12 @@ describe('the client rides out a hub restart', () => {
     });
   }
 
-  test('a proxy page is waited out for reads (checkin, look, next without claiming), never for writes', async () => {
-    const hits = {};
+  test('a proxy page is waited out for reads (checkin, look, next without claiming), and for writes with one idempotency key (#524)', async () => {
+    const hits = {}, keys = {};
     const server = createServer((req, res) => {
       const op = req.url.split('/').pop();
       hits[op] = (hits[op] ?? 0) + 1;
+      (keys[op] ??= new Set()).add(req.headers['idempotency-key']);
       res.statusCode = 502; res.setHeader('content-type', 'text/html'); res.end(page);
     });
     const port = await listen(server);
@@ -113,12 +114,16 @@ describe('the client rides out a hub restart', () => {
     try {
       for (const [op, args] of [['comment', { headline: 'hi' }], ['submit', { item: '#1', headline: 'done' }], ['next', {}]]) {
         await assert.rejects(c.call(op, args, { agent: 'a' }), (e) => e.status === 502 && /restarting or unreachable/.test(e.message) && /look before sending it again/.test(e.hint));
+        assert.ok(hits[op] > 1, `${op} was sent ${hits[op]} time(s)`);
+        assert.equal(keys[op].size, 1, `every try of ${op} carried the same key`);
+        assert.match([...keys[op]][0], /^[0-9a-f-]{36}$/);
       }
-      assert.deepEqual(hits, { comment: 1, submit: 1, next: 1 });
       for (const [op, args] of [['checkin', {}], ['look', {}], ['next', { claim: false }]]) {
         hits[op] = 0;
+        keys[op] = new Set();
         await assert.rejects(c.call(op, args, { agent: 'a' }), (e) => e.status === 502 && /Try again in a minute/.test(e.hint));
         assert.ok(hits[op] > 1, `${op} was sent ${hits[op]} time(s)`);
+        assert.deepEqual([...keys[op]], [undefined], 'a read carries no key');
       }
     } finally {
       server.close();
