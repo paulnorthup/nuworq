@@ -139,6 +139,14 @@ describe('one start line for the skill, the README and the command; no /loop any
     assert.match(s, /## If you are the operator/);
     for (const want of [/nuworq operator/, /\/nuworq:operator/, /to: "operator"/, /escalates/, /Never pass operator powers on/]) assert.match(s.split('## If you are the operator')[1], want);
   });
+
+  test('the skill\'s operator section says what --detect proves and lists the rules that run without prompts (#494)', () => {
+    const s = skill().split('## If you are the operator')[1].split('## The tools')[0];
+    assert.match(s, /with nothing typed after `\/nuworq:operator`, `nuworq operator --detect` proves each capability/);
+    assert.match(s, /Routine commands run without prompts:.*git \(status, diff, .*rebase, push/);
+    assert.match(s, /Force-pushes, deleting or rewriting remote refs .* still ask/);
+    assert.match(s, /`nuworq operator --allow` adds them/);
+  });
 });
 
 // #312: every text an operator reads says, in the same words, to read the hub before asking and to ask the human
