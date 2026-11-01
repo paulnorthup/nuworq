@@ -832,6 +832,19 @@ export class Hub extends EventEmitter {
     return n;
   }
 
+  // What agent first took since then, for `nuworq run`'s log (#533): "#12 Fix x (review)", or null.
+  firstClaim(agent, since, { scope = null } = {}) {
+    const MODE = { claimed: 'work', shaping: 'shape', review_started: 'review', landing: 'land' };
+    let first = null;
+    for (const p of this.projects()) {
+      if (scope && !scope.includes(p.slug)) continue;
+      const e = this.q(`SELECT e.type, e.at, i.seq, i.title FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND e.actor = ? AND e.at >= ?
+          AND e.type IN (${CLAIM_TYPES.map(() => '?').join(',')}) ORDER BY e.at LIMIT 1`).get(p.id, agent, since, ...CLAIM_TYPES);
+      if (e && (!first || e.at < first.at)) first = e;
+    }
+    return first ? `#${first.seq} ${first.title} (${MODE[first.type]})` : null;
+  }
+
   // The branches of a project's finished work (done or dropped), for `nuworq run`'s sweep (#444): its local
   // copies of them can go. Only the projects a token may reach.
   finishedBranches(slug, { scope = null } = {}) {
@@ -862,6 +875,8 @@ export class Hub extends EventEmitter {
     if (!name) throw new UserError('a runner needs a name', { hint: 'Send { name, machine, ... }: nuworq run sends its machine name.' });
     const state = {
       running: num(r.running), workers: num(r.workers),
+      // --workers auto (#533): it adds workers while the machine has room, and why it holds when it doesn't.
+      ...(r.auto ? { auto: true, holding: r.holding ? clip(r.holding, 200) : null } : {}),
       skipping: (Array.isArray(r.skipping) ? r.skipping : []).slice(0, 50).filter((s) => s?.project)
         .map((s) => ({ project: clip(s.project, 80), reason: clip(s.reason, 200), ...(when(s.until) ? { until: when(s.until) } : {}) })),
       paused: r.paused && when(r.paused.until) ? { until: when(r.paused.until), reason: clip(r.paused.reason, 200) } : null,
@@ -898,6 +913,7 @@ export class Hub extends EventEmitter {
           name: r.name, machine: r.machine, seen_at: r.seen_at,
           state: s.stopped ? 'stopped' : down ? 'down' : s.paused?.until > t ? 'paused' : skip ? 'skipping' : 'up',
           last_seen: dur(t - r.seen_at), running: s.running ?? 0, workers: s.workers ?? 0, spent: s.spent ?? 0,
+          ...(s.auto ? { auto: true, holding: s.holding ?? null } : {}),
           stopped: s.stopped ?? null,
           paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t) } : null,
           // Why it leaves this project alone, if it does; and how many others it leaves alone.

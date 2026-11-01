@@ -989,6 +989,8 @@ function runners(v) {
     : r.state === 'stopped' ? `Stopped ${esc(r.last_seen)} ago: ${esc(r.stopped)}.`
     : r.state === 'paused' ? `Paused for ${esc(r.paused.for)}: ${esc(r.paused.reason)}.`
     : r.state === 'skipping' ? `Leaves this project alone${r.skipping.for ? ` for ${esc(r.skipping.for)}` : ''}: ${esc(r.skipping.reason)}.`
+    // --workers auto (#533): it adds workers while the machine has room, and says why when it holds.
+    : r.auto ? `${r.running} of up to ${r.workers} running${r.holding ? `. Holding: ${esc(r.holding)}.` : ', as the machine has room.'}`
     : `${r.running} of ${r.workers} worker${r.workers === 1 ? '' : 's'} running.`;
   const up = rs.filter((r) => r.state === 'up').length;
   const st = v.project.staffing;

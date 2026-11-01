@@ -1581,7 +1581,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { ok: true });
       }
       if (req.method === 'GET' && path === '/api/claims') {
-        return send(200, { claims: hub.claimsSince(url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0, { scope: caller.scope }) });
+        const [who, since] = [url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0];
+        return send(200, { claims: hub.claimsSince(who, since, { scope: caller.scope }), first: hub.firstClaim(who, since, { scope: caller.scope }) });
       }
       if (req.method === 'GET' && path === '/api/finished') {
         const slug = url.searchParams.get('project') ?? '';
