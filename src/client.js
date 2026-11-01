@@ -147,7 +147,8 @@ const clip = (s, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
 // opts: url, project, token, cwd, connectFile (see resolveSettings); retryMs: how long to retry a refused or
 // dropped connection, or a proxy's 502/503/504. session: this process's session keys (src/session.js), sent
-// as x-nuworq-session so an operator's listener finds the session it serves (#335).
+// as x-nuworq-session so an operator's listener finds the session it serves (#335). onProtocol(hash): called with
+// each answer's x-nuworq-protocol (#541).
 export function createClient(opts = {}) {
   const settings = resolveSettings(opts);
   // What the saved connection said when last read: `nuworq connect` may change it while this client lives.
@@ -264,6 +265,9 @@ export function createClient(opts = {}) {
       seen = saved(resolveSettings(opts));
       return once(method, path, { body, agent, read, deadline, key }, hops + 1);
     }
+    // Which protocol the hub serves (#541): whoever asked hears it, to refetch the tools when it changes.
+    const protocol = res.headers.get('x-nuworq-protocol');
+    if (protocol) opts.onProtocol?.(protocol);
     let text;
     try {
       text = await res.text();
