@@ -212,10 +212,11 @@ const KILL_GRACE_MS = 10_000;
 // up to maxWorkers), saying once per change why it holds. took(worker): what a worker started for no one job
 // claimed, e.g. "#12 Fix x (review)", or null while it hasn't; said once, when it has.
 // unstaffed(): the line on work waiting in projects it doesn't staff (see unstaffedLine), or null; said the first
-// time nothing is waiting for it (#491), once per run.
+// time nothing is waiting for it (#491), once per run. signoff(worker): signs off a worker that exited, handing back what
+// it held (#558), so a crashed one's item doesn't wait out its lease; the hub ignores it for one that already signed off.
 export async function run({
   routes, launch, claimed = async () => true, took = async () => null, log = console.log, report = async () => {}, sweep, sweptAt = 0,
-  updated = () => null, supervised = false, machine = () => ({}), maxWorkers, unstaffed = async () => null,
+  updated = () => null, supervised = false, signoff = async () => {}, machine = () => ({}), maxWorkers, unstaffed = async () => null,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
@@ -389,6 +390,7 @@ export async function run({
             if (code !== 0 && !interrupted && !w.killedAt && ms < FAST_FAIL_MS) failedFast();
             else fastFails = 0;
             // It counts as running until the hub answers, so no replacement starts meanwhile.
+            await Promise.resolve().then(() => signoff(w)).catch(() => {});
             const empty = code === 0 && !interrupted && !w.killedAt && ms < EMPTY_MS && !(await claimed(w).catch(() => true));
             if (empty) foundNothing(w);
             else if (code === 0) { empties = []; pauseMs = PAUSE_MS; } // it worked: the next streak pauses 5m again
