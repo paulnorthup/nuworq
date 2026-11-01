@@ -12,7 +12,8 @@ import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, ALWAYS_MAX } from './fieldnotes.js';
-import { RELEASES, landed, askRelease, tagRelease, releaseVersion } from './releases.js';
+import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease } from './releases.js';
+import { builtWhatItReviews, reviewRelease } from './security.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
@@ -2046,7 +2047,7 @@ export class Hub extends EventEmitter {
     const snap = this.snap(p); // what each waits on, from one load (#538)
     // The freshness sweep (src/freshness.js) waits while now or soon work is ready, whoever can take it.
     const urgent = open.some((i) => !i.sweep && ranked({ item: i }).priority !== 'later' && !this.unmetDeps(i, snap).length);
-    const ready = open.filter((i) => fresh(i) && !this.unmetDeps(i, snap).length && !(i.sweep && urgent))
+    const ready = open.filter((i) => fresh(i) && !this.unmetDeps(i, snap).length && !(i.sweep && urgent) && !builtWhatItReviews(this, i, agent))
       .map((item) => ({ mode: item.tidy ? 'tidy' : 'work', item })); // a tidy job (src/tidy.js) keeps the groups true
     // Races with an open slot this agent hasn't taken a turn in. A slot goes to a different model first:
     // an agent on a model already in the race sees it after other work of the same priority.
@@ -2149,6 +2150,8 @@ export class Hub extends EventEmitter {
       throw new UserError(`#${item.seq} waits on something outside this hub: ${describePrecondition(JSON.parse(item.precondition))}${last ? ` (last check: ${last.detail})` : ' (not checked yet)'}`, { status: 409, hint: 'The hub checks it and makes the work ready when it passes. Pick other work with next.' });
     }
     if (item.stage !== 'ready') throw new UserError(`#${item.seq} is ${item.stage}`, { status: 409 });
+    // A pre-release security review is read by someone who built none of what the release ships (#480).
+    if (builtWhatItReviews(this, item, agent)) throw new UserError(`#${item.seq} reviews changes you built`, { status: 403, hint: 'A security review before a release goes to an agent that built none of what it ships. Pick other work with next.' });
     const unmet = this.unmetDeps(item);
     if (unmet.length) throw new UserError(`#${item.seq} depends on unfinished work: ${unmet.map((d) => `#${d.seq}`).join(', ')}`, { status: 409, hint: 'Work on a dependency, or pick other work with next.' });
     this.move(item, 'active', agent, { holder: agent, lease_until: t + LEASE_MS, last_worker: agent, attempts: item.attempts + 1, branch: item.branch || itemBranch(item) });
@@ -2242,11 +2245,12 @@ export class Hub extends EventEmitter {
     const release = version ? ` This is a release: set the version file to ${version} (package.json's version, else VERSION) and put the summary at the top of CHANGELOG.md under "## ${version} (${new Date(this.now()).toISOString().slice(0, 10)})". Nothing else changes. ${MODE_RULES.release}` : '';
     // The weekly freshness sweep (#181): how to do it.
     const sweep = item.sweep ? ` ${MODE_RULES.fresh}` : '';
+    const security = item.security ? ` ${MODE_RULES.security}` : ''; // a security review (#480)
     // Operator-only work (only an operator builds it): it builds only its live step.
     const live = operatorOnly(item) ? ` ${MODE_RULES.operator}` : '';
     // Tests (#532): where CI checks the pull request, the whole suite is CI's; elsewhere it's the builder's.
     const tests = item.branch ? ` ${this.ciGated(p, item) ? CI_TESTS : OWN_TESTS}` : '';
-    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo) + tests + release + sweep + live;
+    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo) + tests + release + sweep + security + live;
   }
 
   // The branch git found for the latest submission, when the item has none of its own (older work).
@@ -3683,7 +3687,7 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, security, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
     const changes = [];
     // The quality bar routing keeps to (#349): how close to the best model's results a cheaper one must come.
     if (model_quality != null && model_quality !== '') {
@@ -3751,6 +3755,15 @@ const HUMAN_OPS = {
     if (fresh != null && !!fresh !== !!p.fresh) {
       this.q('UPDATE projects SET fresh = ? WHERE id = ?').run(fresh ? 1 : 0, p.id);
       this.event(p, { actor: by, type: 'settings', headline: fresh ? `${You(by)} turned the weekly freshness sweep back on` : `${You(by)} turned off the weekly freshness sweep: ${p.name} is no longer kept current` });
+    }
+    // Security reviews (#480, src/security.js): before each release and monthly. On, the first monthly review opens
+    // at the next sweep, and a release already drafted waits for a review too.
+    if (security != null && !!security !== !!p.security) {
+      this.q('UPDATE projects SET security = ? WHERE id = ?').run(security ? 1 : 0, p.id);
+      p.security = security ? 1 : 0;
+      this.event(p, { actor: by, type: 'settings', headline: security ? `${You(by)} turned on security reviews: one before each release, and one area each month` : `${You(by)} turned off security reviews: releases no longer wait for one` });
+      const open = security && openRelease(this, p);
+      if (open && ['proposed', 'ready', 'outside', 'waiting'].includes(open.stage)) reviewRelease(this, p, open, by);
     }
     // Releases (#399, src/releases.js): per milestone, a finished milestone drafts the next release.
     if (releases != null && releases !== '' && releases !== p.releases) {

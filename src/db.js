@@ -527,6 +527,17 @@ export const MIGRATIONS = [
       addColumn(db, "ALTER TABLE projects ADD COLUMN ci TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    // Security reviews (#480, src/security.js): on per project; when the monthly one last fired and which area is
+    // next; and an item's kind of review: 'release' (before a release) or 'area' (the monthly one).
+    name: 'security reviews before each release and monthly',
+    up(db) {
+      addColumn(db, 'ALTER TABLE projects ADD COLUMN security INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'ALTER TABLE projects ADD COLUMN security_at INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'ALTER TABLE projects ADD COLUMN security_area INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, "ALTER TABLE items ADD COLUMN security TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
