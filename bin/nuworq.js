@@ -297,7 +297,25 @@ function agentOf(flags) {
         : "Give --proxy with llm-proxy's LAN or tailnet address (e.g. http://studio.local:4100), and its owner token in NUWORQ_LLM_PROXY_TOKEN.",
     });
   }
+  if (!proxied && !privateHost(new URL(proxyUrl(flags)).hostname)) {
+    throw new HubError(`--proxy ${proxyUrl(flags)} is a public address: llm-proxy refuses its provider routes there`, {
+      hint: "Claude Code and Codex go through llm-proxy's /anthropic and /openai routes, which answer only on its LAN or tailnet address. Give --proxy http://studio.local:4100 (or its tailnet name or 100.x address), and its owner token in NUWORQ_LLM_PROXY_TOKEN.",
+    });
+  }
   return agent;
+}
+
+// A LAN or tailnet host: loopback, private and CGNAT (Tailscale 100.64/10) IPs, single-label names, and
+// local or tailnet suffixes (.local, .lan, .internal, .home.arpa, .ts.net). Anything else is a public hostname.
+function privateHost(host) {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h.includes(':')) return h === '::1' || /^f[cd]|^fe[89ab]/.test(h);
+  const ip = h.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (ip) {
+    const [a, b] = [Number(ip[1]), Number(ip[2])];
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  }
+  return !h.includes('.') || /\.(local|lan|internal|home\.arpa|localhost|ts\.net)$/.test(h);
 }
 
 // llm-proxy's address for workers: --proxy, else NUWORQ_LLM_PROXY_URL; without a trailing slash or /v1.
