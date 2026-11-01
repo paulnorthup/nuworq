@@ -1,6 +1,6 @@
 // Push: when something new needs the human, send one batched message over plain HTTP
 // (ntfy, a Slack incoming webhook, or any JSON webhook). Healthy work sends nothing.
-import { view } from './insight.js';
+import { view, byNeed } from './insight.js';
 import { outcomes } from './outcomes.js';
 import { MIN, HOUR, DAY, SYSTEM, UserError } from './core.js';
 import { outbound, privateLiteral } from './outbound.js';
@@ -112,16 +112,20 @@ export async function testChannels(db, { baseUrl = '', ...opts } = {}) {
   return Promise.all(channels.map((c) => deliver(db, c, msg, opts)));
 }
 
+// Most important first, in Needs you's order (#507), and the title counts by priority ("nuworq: 1 now, 3 soon"),
+// so a phone's first line says how much is now.
 export function compose(entries, baseUrl = '') {
+  entries = [...entries].sort((a, b) => byNeed(a.entry, b.entry));
   const slugs = [...new Set(entries.map((e) => e.project))];
   const link = (slug) => (baseUrl ? `${baseUrl}/#/p/${encodeURIComponent(slug)}` : '');
   const url = baseUrl ? (slugs.length === 1 ? link(slugs[0]) : `${baseUrl}/#/`) : '';
-  const title = `nuworq: ${plural(entries.length, 'thing')} ${entries.length === 1 ? 'needs' : 'need'} you`;
+  const count = (p) => entries.filter((e) => (e.entry.priority ?? 'soon') === p).length;
+  const title = `nuworq: ${['now', 'soon', 'later'].filter(count).map((p) => `${count(p)} ${p}`).join(', ')}`;
   const lines = entries.map((e) => `• ${slugs.length > 1 ? `${e.name} ` : ''}${e.entry.item ? `${e.entry.item} ` : ''}${LABEL[e.entry.kind] ?? e.entry.kind}: ${e.entry.kind === 'question' ? e.entry.headline : clip(e.entry.headline)}`);
   return {
     title, url,
     text: [title, ...lines, url && `→ ${url}`].filter(Boolean).join('\n'),
-    entries: entries.map((e) => ({ project: e.project, key: e.entry.key, kind: e.entry.kind, item: e.entry.item, headline: e.entry.headline, url: link(e.project) })),
+    entries: entries.map((e) => ({ project: e.project, key: e.entry.key, kind: e.entry.kind, item: e.entry.item, priority: e.entry.priority ?? 'soon', headline: e.entry.headline, url: link(e.project) })),
   };
 }
 

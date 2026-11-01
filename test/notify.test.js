@@ -2,7 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Hub, MIN, HOUR } from '../src/core.js';
-import { view } from '../src/insight.js';
+import { view, byNeed } from '../src/insight.js';
 import { Notifier, addChannel, listChannels, mask, testChannels } from '../src/notify.js';
 import { createServer } from '../src/server.js';
 
@@ -56,7 +56,7 @@ describe('push notifications', () => {
     n.stop();
     assert.equal(got.length, 2, 'one message per channel');
     const hook = JSON.parse(got.find((g) => g.path === '/hook').body);
-    assert.equal(hook.title, 'nuworq: 2 things need you');
+    assert.equal(hook.title, 'nuworq: 2 soon');
     assert.equal(hook.url, 'http://hub.test/#/p/app');
     assert.equal(hook.entries.length, 2);
     assert.match(hook.text, /#1 question: Postgres or SQLite\?/);
@@ -64,6 +64,26 @@ describe('push notifications', () => {
     const slack = JSON.parse(got.find((g) => g.path === '/slack').body);
     assert.deepEqual(Object.keys(slack), ['text']);
     assert.match(slack.text, /→ http:\/\/hub\.test\/#\/p\/app$/);
+  });
+
+  test('a batch lists the most important first, in Needs you\'s order, and its title counts what is now (#507)', async () => {
+    const { hub, op, n } = setup();
+    hub.humanOp('app', 'update', { item: '#2', priority: 'now' });
+    hub.humanOp('app', 'create', { title: 'Polish the thing', acceptance: 'it shines', priority: 'later' });
+    blockingAsk(op, 'a', '#1', 'Postgres or SQLite?'); // asked first, but soon
+    for (const [agent, item, q] of [['b', '#2', 'Which region?'], ['c', '#3', 'Which shade?']]) {
+      op('checkin', agent);
+      op('claim', agent, { item });
+      blockingAsk(op, agent, item, q);
+    }
+    const order = view(hub, 'app').attention.filter((a) => a.level === 'act').sort(byNeed).map((a) => a.item);
+    n.scan();
+    await n.flush();
+    const hook = JSON.parse(got[0].body);
+    assert.deepEqual(hook.entries.map((e) => e.item), order, 'the same order as Needs you');
+    assert.deepEqual(hook.entries.map((e) => [e.item, e.priority]), [['#2', 'now'], ['#1', 'soon'], ['#3', 'later']]);
+    assert.equal(hook.title, 'nuworq: 1 now, 1 soon, 1 later');
+    assert.match(hook.text, /^nuworq: 1 now, 1 soon, 1 later\n• #2 question: Which region\?\n• #1 question: Postgres or SQLite\?\n• #3 question: Which shade\?\n/);
   });
 
   test('the same entry is never pushed twice; a new one is', async () => {
@@ -178,9 +198,9 @@ describe('push notifications', () => {
     blockingAsk(op, 'a', '#1', 'Postgres or SQLite?');
     n.scan();
     await n.flush();
-    assert.equal(got[0].headers.title, 'nuworq: 1 thing needs you');
+    assert.equal(got[0].headers.title, 'nuworq: 1 soon');
     assert.equal(got[0].headers.click, 'http://hub.test/#/p/app');
-    assert.match(got[0].body, /^nuworq: 1 thing needs you\n• #1 question: Postgres or SQLite\?\n→ /);
+    assert.match(got[0].body, /^nuworq: 1 soon\n• #1 question: Postgres or SQLite\?\n→ /);
     const hub2 = new Hub();
     assert.equal(addChannel(hub2.db, 'ntfy', 'just-a-topic-name').url, 'https://ntfy.sh/…name');
   });
