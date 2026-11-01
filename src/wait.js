@@ -75,7 +75,12 @@ function eventsFor(hub, p, agent, since) {
   // One already escalated waits for the human's answer, as next leaves it: that answer wakes the escalating operator.
   for (const q of hub.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'open' AND asked_by != ? AND at > ?
       AND NOT EXISTS (SELECT 1 FROM questions e WHERE e.escalates = q.id AND e.status = 'open') ORDER BY at`).all(p.id, agent, since)) {
-    out.push({ at: q.at, kind: 'question', project: p.slug, question: q.id, ...(q.item_id ? { item: `#${seq(q.item_id)}` } : {}) });
+    // Every operator still hears of it, but one another operator holds (#467) says who, so this one can stay idle.
+    const holder = hub.questionHolder(q);
+    out.push({
+      at: q.at, kind: 'question', project: p.slug, question: q.id, ...(q.item_id ? { item: `#${seq(q.item_id)}` } : {}),
+      ...(holder && holder !== agent ? { held_by: holder } : {}),
+    });
   }
   // Only answers the asker hasn't had yet (#329): one checkin already delivered isn't worth a wake, so a
   // fresh listener (since 0) doesn't replay every answer of the last day.
@@ -138,6 +143,7 @@ export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, s
 export function describeEvent(e) {
   const where = e.project ? ` in ${e.project}` : '';
   if (e.kind === 'item') return `nuworq: operator work waiting (${e.item}${where}). Run next.`;
+  if (e.kind === 'question' && e.held_by) return `nuworq: a question for the operator (question ${e.question}${e.item ? ` on ${e.item}` : ''}${where}) (${e.held_by} has it). Nothing to do.`;
   if (e.kind === 'question') return `nuworq: a question for the operator (question ${e.question}${e.item ? ` on ${e.item}` : ''}${where}). Read it with checkin, then answer.`;
   if (e.kind === 'answer') return `nuworq: your question ${e.question}${e.item ? ` on ${e.item}` : ''} was answered${where}. Run checkin.`;
   if (e.kind === 'steer') return `nuworq: steering for you (steer ${e.steer}${e.item ? ` on ${e.item}` : ''}${where}). Run checkin and ack it.`;

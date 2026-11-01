@@ -64,6 +64,19 @@ describe('an operator waits on the hub', () => {
     assert.match(describeEvent(r.events[0]), /^nuworq: steering for you \(steer \d+ in o\)\. Run checkin and ack it\.$/);
   });
 
+  // #467: every operator hears of a question, but the line says when another operator already holds it.
+  test('a question another operator holds still wakes it, saying who has it', () => {
+    const { hub } = setup();
+    hub.agentOp('o', 'checkin', 'op2', { has: ['operator'] });
+    const asked = hub.agentOp('o', 'ask', 'w1', { question: 'Does it run on the VM?', to: 'operator' });
+    hub.agentOp('o', 'next', 'op2');
+    const [e] = strip(operatorEvents(hub, 'op')).filter((x) => x.kind === 'question');
+    assert.deepEqual(e, { kind: 'question', project: 'o', question: asked.question, held_by: 'op2' });
+    assert.equal(describeEvent(e), `nuworq: a question for the operator (question ${asked.question} in o) (op2 has it). Nothing to do.`);
+    const [own] = strip(operatorEvents(hub, 'op2')).filter((x) => x.kind === 'question');
+    assert.equal(own.held_by, undefined, 'the holder hears it plainly');
+  });
+
   // #281: Paul's answer to an operator's escalation reached its idle terminal only ~114 s later.
   test("the human's answer to an operator's escalation wakes that operator at once", async () => {
     const { hub, tick } = setup();
