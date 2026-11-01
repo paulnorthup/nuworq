@@ -128,10 +128,12 @@ export function forgetWorkspace(dir, name) {
 // brings it back on the new code (EX_TEMPFAIL).
 export const RESTART_EXIT = 75;
 
-// The supervisor's own code: what this process loaded, as opposed to the hub it runs as a child.
-// Static imports only, from the CLI and this file: the CLI's dynamic imports (server, insight, …)
-// load in the child. read(path) gives a file's text at some commit, or null if it has none.
-export const SELF_ROOTS = ['bin/nuworq.js', 'src/follow.js'];
+// The supervisor's own code: what this process loaded, as opposed to the hub it runs as a child. The CLI
+// hands serve --follow to this file run on its own (#546), and it imports only node: modules, so only a
+// change to it restarts the supervisor. Whatever needs the hub's code (filing "fix main") runs as a child:
+// src/followhub.js. read(path) gives a file's text at some commit, or null if it has none.
+export const SELF_ROOTS = ['src/follow.js'];
+const HELPER = 'src/followhub.js';
 export function importGraph(read, roots = SELF_ROOTS) {
   const seen = new Set();
   const todo = [...roots];
@@ -345,46 +347,29 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
       }
       return false;
     },
-    // Main is red: one "fix main" item at priority now, in the project that lives in this repo, through
-    // the hub's human API (on a hub with login, that needs a human NUWORQ_TOKEN). Returns "#12 in nuworq", or null.
+    // Main is red: one "fix main" item at priority now (src/followhub.js), with the code of the commit the
+    // hub runs, which passed; this process loads none of the hub's. Returns "#12 in nuworq", or null.
     // running: the commit the hub runs (the red one itself when the supervisor just started on it).
-    // With workspaces, every API path names one (#561): the workspace whose project lives in this repo, from their
-    // databases (findWorkspace), its hub at /w/<workspace>/, with a human token of that workspace in NUWORQ_TOKEN.
+    // With workspaces (#561), it is filed in the workspace whose project lives in this repo (findWorkspace).
     async redMain(sha, failed, running) {
-      const { createClient, repoRemote, HubError } = await import('./client.js');
-      let hub, project, ws = null;
-      if (workspaces) {
-        const remote = repoRemote(repo);
-        const found = findWorkspace({ workspaces, workspace, repo, remote });
-        if (!found) {
-          throw new Error(`no ${workspace ? `project in workspace ${workspace}` : `workspace in ${workspaces} has a project`} for ${remote || repo}. Link the repository to its project there, or name the workspace with serve --follow --workspace <name>`);
-        }
-        ({ workspace: ws, project } = found);
-        hub = createClient({ url: `${url}/w/${encodeURIComponent(ws)}`, cwd: repo });
-      } else {
-        hub = createClient({ url, cwd: repo });
-        project = hub.settings.project ?? (await hub.where()).project;
-        if (!project) return null;
-      }
-      const hubIs = running === sha
-        ? 'The hub runs it anyway, since it just started and had nothing older to run.'
-        : `The hub stays on ${short(running)}, the last commit that passed.`;
+      // The running commit's helper, else (a commit from before #546) the one beside this file.
+      const helper = existsSync(join(dir, HELPER)) ? join(dir, HELPER) : join(import.meta.dirname, posix.basename(HELPER));
+      const out = await new Promise((resolve, reject) => {
+        let text = '';
+        const p = spawn(process.execPath, [helper, 'red', JSON.stringify({ url, repo, sha, failed, running, workspaces, workspace })], { cwd: repo, stdio: ['ignore', 'pipe', 'inherit'] });
+        p.stdout.on('data', (d) => { text += d; });
+        p.on('error', reject);
+        p.on('close', () => resolve(text));
+      });
       let r;
-      try {
-        r = await hub.post(`/api/p/${encodeURIComponent(project)}/human/create`, {
-          title: `main fails its tests at ${short(sha)}: ${failed}`.slice(0, 160),
-          summary: `\`npm test\` fails on main at ${sha} (${failed}). ${hubIs} Fix main before anything else: everything that lands next builds on it.`,
-          acceptance: '`npm test` passes on main, and the hub moves onto it by itself.',
-          priority: 'now',
-        });
-      } catch (e) {
-        if (ws && e instanceof HubError && [401, 403].includes(e.status)) {
-          throw new Error(`workspace ${ws} refused it (${e.message}): give serve --follow a human token of that workspace in NUWORQ_TOKEN, e.g. from nuworq token create follow --role human --workspace ${ws}`);
-        }
-        throw e;
-      }
-      return `${r.item} in ${ws ? `${ws}/` : ''}${project}`;
+      try { r = JSON.parse(out); } catch { throw new Error(`${HELPER} answered ${JSON.stringify(out.trim().slice(0, 200))}`); }
+      if (r.error) throw new Error(r.error);
+      return r.where;
     },
+    // The last commit that passed its tests, kept beside the hub's worktree, so a restarted supervisor
+    // doesn't test the commit it already took again.
+    passed() { try { return readFileSync(`${dir}.passed`, 'utf8').trim() || null; } catch { return null; } },
+    pass(sha) { try { writeFileSync(`${dir}.passed`, `${sha}\n`); } catch { /* it only saves a test run */ } },
     // Files of the supervisor's own code that differ between two commits (either side's import graph).
     ownCode(from, to) {
       const changed = git(repo, 'diff', '--name-only', from, to).split('\n').filter(Boolean);
@@ -460,13 +445,17 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       throw new Error(`the hub didn't answer at ${short(sha)} within ${HEALTHY_MS / 1000}s`);
     }
     Object.assign(state, { running: sha, good: sha });
+    // A supervisor restarted on the commit it had taken (its own code changed) doesn't test it again (#546).
+    if (sys.passed?.() === sha) return log(`hub running at ${short(sha)}; following ${branch}; ${short(sha)} already passed its tests`);
     log(`hub running at ${short(sha)}; following ${branch}, testing ${short(sha)}`);
     state.busy = true;
     try {
       const t = await sys.test(sha);
       if (state.closed) return;
-      if (t.ok) log(`${short(sha)} passes its tests`);
-      else await red(sha, t.failed);
+      if (t.ok) {
+        sys.pass?.(sha);
+        log(`${short(sha)} passes its tests`);
+      } else await red(sha, t.failed);
     } finally {
       state.busy = false;
     }
@@ -500,6 +489,7 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
         }
         if (!s.skipped) log(`${short(sha)} boots on copies of the live data`);
       }
+      sys.pass?.(sha);
       log(`${short(sha)} passes its tests${state.red ? ` (${branch} is green again)` : ''}; restarting the hub on it`);
       state.red = false;
       const from = state.running;
@@ -575,4 +565,18 @@ export async function follow({ repo, dir, next, args, url, branch = 'main', ever
     throw e;
   }
   timer = setInterval(() => f.tick(), every);
+}
+
+// `node src/follow.js <json>`: the supervisor on its own (#546). The CLI's serve --follow works out the
+// settings and hands over: { repo, dir, next, args, url, store: backups() options or null, color, hint }.
+// It exits as the supervisor does (RESTART_EXIT when its own code changed under systemd).
+if (import.meta.filename === process.argv[1]) {
+  const { store, color, hint, ...opts } = JSON.parse(process.argv[2]);
+  const stamp = () => `[follow ${new Date().toTimeString().slice(0, 8)}]`;
+  try {
+    await follow({ ...opts, store: store && backups(store), log: (line) => console.log(`${color ? `\x1b[2m${stamp()}\x1b[0m` : stamp()} ${line}`) });
+  } catch (e) {
+    console.error(`error: --follow couldn't start the hub: ${e.message}${hint ? `\nhint: ${hint}` : ''}`);
+    process.exit(1);
+  }
 }

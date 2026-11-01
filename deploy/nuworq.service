@@ -5,8 +5,9 @@
 #   sudo systemctl enable --now nuworq
 # --follow keeps the hub on the latest main in /opt/nuworq that passes its tests (it runs from
 # /var/lib/nuworq/hub-src and tests new commits in hub-next). Verified on Debian 13 in a Proxmox LXC.
-# ExecStart runs the supervisor from /opt/nuworq, which --follow fast-forwards: when a move changes the
-# supervisor's own code it exits 75, and Restart=on-failure starts it again on the new code.
+# ExecStart runs the supervisor from /opt/nuworq, which --follow fast-forwards. The supervisor is
+# src/follow.js alone (node: modules only): when a move changes that file it exits 75, and
+# Restart=on-failure starts it again on the new code. A move that changes anything else restarts only the hub.
 [Unit]
 Description=nuworq hub
 After=network-online.target

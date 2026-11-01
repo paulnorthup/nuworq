@@ -188,9 +188,10 @@ describe('the hub follows main', () => {
     assert.equal(f.state.red, true);
   });
 
-  // Which files each move changes; own: the supervisor's own code among them (as importGraph decides).
+  // Which files each move changes; the supervisor's own code among them is what importGraph finds in this repo.
+  const root = join(import.meta.dirname, '..');
+  const own = importGraph((f) => (existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8') : null));
   const moves = (w, changes, { systemd = false } = {}) => {
-    const own = new Set(['bin/nuworq.js', 'src/follow.js', 'src/client.js', 'src/core.js']);
     w.ownCode = (from, to) => (changes[`${from}..${to}`] ?? []).filter((f) => own.has(f));
     w.supervised = () => systemd;
     w.exit = (code) => w.log.push(`exit ${code}`);
@@ -198,39 +199,81 @@ describe('the hub follows main', () => {
   };
 
   test("a move that changes the supervisor's own code: in a terminal, it says so once per commit", async () => {
-    const w = moves(world(), { 'aaaaaaa1..bbbbbbb2': ['web/app.js', 'src/insight.js'], 'bbbbbbb2..ccccccc3': ['src/core.js', 'README.md'] });
+    const w = moves(world(), { 'aaaaaaa1..bbbbbbb2': ['web/app.js', 'src/core.js'], 'bbbbbbb2..ccccccc3': ['src/follow.js', 'README.md'] });
     const f = follow(w);
     await f.boot();
     w.main = 'bbbbbbb2';
     await f.tick();
-    assert.ok(!w.said.some((l) => /own code/.test(l)), 'web/app.js and src/insight.js are the hub, not the supervisor');
+    assert.ok(!w.said.some((l) => /own code/.test(l)), 'web/app.js and src/core.js are the hub, not the supervisor');
     w.main = 'ccccccc3';
     await f.tick();
     await f.tick();
     assert.equal(w.up, 'ccccccc3', 'the hub still moves');
-    assert.deepEqual(w.said.filter((l) => /own code/.test(l)), ["follow's own code changed at ccccccc (src/core.js); restart serve --follow to run it"]);
+    assert.deepEqual(w.said.filter((l) => /own code/.test(l)), ["follow's own code changed at ccccccc (src/follow.js); restart serve --follow to run it"]);
     assert.ok(!w.log.some((l) => l.startsWith('exit')));
   });
 
-  test('under systemd, the supervisor stops the hub and then exits for Restart=on-failure', async () => {
-    const w = moves(world(), { 'aaaaaaa1..bbbbbbb2': ['src/follow.js'] }, { systemd: true });
+  test('under systemd, a commit that changes the CLI restarts only the hub; one that changes follow.js restarts the supervisor (#546)', async () => {
+    const w = moves(world(), { 'aaaaaaa1..bbbbbbb2': ['bin/nuworq.js', 'src/client.js', 'src/protocol.js', 'src/followhub.js'], 'bbbbbbb2..ccccccc3': ['src/follow.js'] }, { systemd: true });
     const f = follow(w);
     await f.boot();
     w.main = 'bbbbbbb2';
     await f.tick();
-    assert.deepEqual(w.log.slice(-3), ['start bbbbbbb2', 'close', `exit ${RESTART_EXIT}`], 'the hub stops first, then the supervisor exits');
+    assert.equal(w.up, 'bbbbbbb2', 'the hub moved');
+    assert.ok(!w.log.some((l) => l.startsWith('exit')) && !w.said.some((l) => /own code/.test(l)), 'the supervisor stays');
+    w.main = 'ccccccc3';
+    await f.tick();
+    assert.deepEqual(w.log.slice(-3), ['start ccccccc3', 'close', `exit ${RESTART_EXIT}`], 'the hub stops first, then the supervisor exits');
     assert.ok(RESTART_EXIT !== 0, 'non-zero, so on-failure restarts it');
-    assert.ok(w.said.includes("follow's own code changed at bbbbbbb (src/follow.js); stopping the hub so systemd restarts serve --follow on it"));
+    assert.ok(w.said.includes("follow's own code changed at ccccccc (src/follow.js); stopping the hub so systemd restarts serve --follow on it"));
     await f.tick();
     assert.equal(count(w, 'exit'), 1, 'nothing more happens once closed');
   });
 
-  test("the supervisor's own code is the CLI and follow.js with their static imports, not the hub's modules", () => {
-    const root = join(import.meta.dirname, '..');
-    const own = importGraph((f) => (existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8') : null));
-    for (const f of ['bin/nuworq.js', 'src/follow.js', 'src/client.js', 'src/text.js', 'src/names.js']) assert.ok(own.has(f), f);
-    // The hub's own modules run in the child: core.js too, since the client side takes its names from text.js (#257).
-    for (const f of ['src/core.js', 'src/insight.js', 'src/server.js', 'web/app.js']) assert.ok(!own.has(f), f);
+  test('a supervisor restarted on the commit it took starts the hub without testing it again (#546)', async () => {
+    const w = world();
+    let passed = null;
+    Object.assign(w, { passed: () => passed, pass: (sha) => { passed = sha; } });
+    await follow(w).boot();
+    assert.equal(passed, 'aaaaaaa1');
+    w.main = 'bbbbbbb2';
+    const f = follow(w);
+    await f.boot(); // as if restarted, main having moved meanwhile: tested
+    assert.equal(count(w, 'test bbbbbbb2'), 1);
+    assert.equal(passed, 'bbbbbbb2');
+    const again = follow(w);
+    await again.boot(); // restarted again on the same main
+    assert.equal(count(w, 'test bbbbbbb2'), 1, 'not tested a second time');
+    assert.equal(w.up, 'bbbbbbb2');
+    assert.ok(w.said.includes('hub running at bbbbbbb; following main; bbbbbbb already passed its tests'));
+  });
+
+  test("the supervisor's own code is follow.js alone, and it imports only node: modules (#546)", () => {
+    assert.deepEqual([...own], ['src/follow.js']);
+    const text = readFileSync(join(root, 'src/follow.js'), 'utf8');
+    const specs = [...text.matchAll(/\bfrom\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1] ?? m[2]);
+    assert.ok(specs.length > 3, 'it found the imports');
+    for (const s of specs) assert.match(s, /^node:/, s);
+    assert.doesNotMatch(text, /\bimport\(\s*[^'"\s]/, 'no computed dynamic import either');
+  });
+
+  test("serve --follow hands over to src/follow.js run on its own, and the hub's code only runs in children", () => {
+    const cli = readFileSync(join(root, 'bin/nuworq.js'), 'utf8');
+    const body = cli.slice(cli.indexOf('async function serveFollow('), cli.indexOf('\n}\n', cli.indexOf('async function serveFollow(')));
+    assert.match(body, /spawn\(process\.execPath, \[join\(ROOT, 'src', 'follow\.js'\)/);
+    assert.doesNotMatch(body, /import\('\.\.\/src\//, 'the CLI imports none of the supervisor');
+  });
+
+  test('src/follow.js runs on its own: a repo it can\'t follow ends it with the reason and the hint, exit 1', () => {
+    const data = mkdtempSync(join(tmpdir(), 'nuworq-followmain-'));
+    const settings = { repo: data, store: null, dir: join(data, 'hub-src'), next: join(data, 'hub-next'), args: [], url: 'http://127.0.0.1:9', color: false, hint: 'It follows the main branch of x.' };
+    let r;
+    try {
+      execFileSync(process.execPath, [join(root, 'src/follow.js'), JSON.stringify(settings)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) { r = e; }
+    assert.equal(r?.status, 1);
+    assert.match(r.stdout, /^\[follow \d\d:\d\d:\d\d\] following main in /);
+    assert.match(r.stderr, /^error: --follow couldn't start the hub: there is no main branch to follow\nhint: It follows the main branch of x\.\n$/);
   });
 
   test('a hub that stops by itself is started again on the same commit', async () => {

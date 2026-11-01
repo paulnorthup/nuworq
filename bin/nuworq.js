@@ -1346,8 +1346,9 @@ ${pkg ? `    Install (once):     npm install -g ${base}/nuworq.tgz\n` : ''}    C
 // The hub itself runs as a child (serve with the same flags, minus --follow) from its own worktree
 // under the data folder (hub-src), never from this checkout, which agents fast-forward. New commits
 // are tested in a second worktree there (hub-next). See src/follow.js.
+// This process only works out the settings and hands over to src/follow.js run on its own (#546), which
+// loads only node: modules: a commit that changes the CLI moves the hub and never restarts the supervisor.
 async function serveFollow(flags) {
-  const { follow, backups } = await import('../src/follow.js');
   const host = String(flags.host || envVar('HOST') || '127.0.0.1');
   const port = Number(flags.port || envVar('PORT') || 4747);
   if (!port) throw new HubError('--follow needs a fixed port', { hint: 'Pass --port <n> (the supervisor checks the hub there).' });
@@ -1355,26 +1356,25 @@ async function serveFollow(flags) {
   const repo = repoRoot(ROOT);
   const args = process.argv.slice(3).filter((a) => !/^--?follow(=.*)?$/.test(a));
   const data = dataHome(flags);
-  // Copied before every move, to <data>/backups: the one database, or every workspace's.
-  const store = flags.demo ? null : backups({
-    dir: join(data, 'backups'),
-    ...(flags.workspaces ? { workspaces: workspacesDir(flags) } : { db: resolve(dbPath(flags)) }),
-  });
-  try {
-    await follow({
-      repo,
-      store,
-      dir: join(data, 'hub-src'),
-      next: join(data, 'hub-next'),
-      args,
-      url: `http://${probe.includes(':') ? `[${probe}]` : probe}:${port}`,
-      // A red main is reported in the workspace whose project lives in this repo (#561).
-      ...(flags.workspaces ? { workspaces: workspacesDir(flags), workspace: typeof flags.workspace === 'string' ? flags.workspace : null } : {}),
-      log:(line) => console.log(`${dim(`[follow ${new Date().toTimeString().slice(0, 8)}]`)} ${line}`),
-    });
-  } catch (e) {
-    throw new HubError(`--follow couldn't start the hub: ${e.message}`, { hint: `It follows the main branch of ${repo}, the git checkout this nuworq runs from. Without --follow, serve runs this copy as it is.` });
-  }
+  const settings = {
+    repo,
+    // Copied before every move, to <data>/backups: the one database, or every workspace's.
+    store: flags.demo ? null : { dir: join(data, 'backups'), ...(flags.workspaces ? { workspaces: workspacesDir(flags) } : { db: resolve(dbPath(flags)) }) },
+    dir: join(data, 'hub-src'),
+    next: join(data, 'hub-next'),
+    args,
+    url: `http://${probe.includes(':') ? `[${probe}]` : probe}:${port}`,
+    // A red main is reported in the workspace whose project lives in this repo (#561).
+    ...(flags.workspaces ? { workspaces: workspacesDir(flags), workspace: typeof flags.workspace === 'string' ? flags.workspace : null } : {}),
+    color: !!tty,
+    hint: `It follows the main branch of ${repo}, the git checkout this nuworq runs from. Without --follow, serve runs this copy as it is.`,
+  };
+  const { spawn } = await import('node:child_process');
+  const p = spawn(process.execPath, [join(ROOT, 'src', 'follow.js'), JSON.stringify(settings)], { stdio: 'inherit' });
+  // Signals reach the supervisor (it stops the hub in order); this process leaves with its exit code.
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => p.kill(sig));
+  const code = await new Promise((r) => p.on('exit', (c, sig) => r(c ?? (sig ? 1 : 0))));
+  process.exit(code);
 }
 
 // Many workspaces, one process: each workspace is its own database, reached by subdomain or /w/<name>/.
