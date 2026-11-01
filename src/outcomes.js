@@ -13,26 +13,44 @@ const median = (xs) => {
 // Whether landed work held up (#176). It escaped when a later item names it in `fixes`. Its reviewer is whoever
 // accepted it last (the verdict it landed on); a peer is an agent. A peer's accept is overturned when a person
 // sent the work back after it, or the work escaped on a peer's verdict.
-export function heldUp(hub, it) {
-  const fixed_by = hub.q('SELECT seq FROM items WHERE fixes = ? ORDER BY seq').all(it.id).map((r) => `#${r.seq}`);
-  const accepts = hub.q(`SELECT actor, at FROM events WHERE item_id = ? AND type = 'accepted' ORDER BY at, id`).all(it.id);
+export const heldUp = (hub, it) => { const { first_peer, ...r } = heldUpAll(hub, [it]).get(it.id); return r; };
+
+// heldUp for many items in three queries, not three per item (#537): item id → its answer, with first_peer, the
+// peer whose accept a person later overturned (verification counts it).
+const ids = (items) => JSON.stringify(items.map((it) => it.id));
+const byItem = (rows) => {
+  const m = new Map();
+  for (const r of rows) (m.get(r.item_id) ?? m.set(r.item_id, []).get(r.item_id)).push(r);
+  return m;
+};
+export function heldUpAll(hub, items) {
+  const list = ids(items);
+  const fixes = byItem(hub.q('SELECT fixes AS item_id, seq FROM items WHERE fixes IN (SELECT value FROM json_each(?)) ORDER BY seq').all(list));
+  const accepts = byItem(hub.q(`SELECT item_id, actor, at FROM events WHERE item_id IN (SELECT value FROM json_each(?)) AND type = 'accepted' ORDER BY at, id`).all(list));
+  const backs = byItem(hub.q(`SELECT item_id, at FROM events WHERE item_id IN (SELECT value FROM json_each(?)) AND type = 'sent_back' AND (actor = ? OR actor LIKE '@%')`).all(list, HUMAN));
   const peer = (a) => !isHuman(a) && !isSystem(a);
-  const last = accepts.at(-1) ?? null;
-  const firstPeer = accepts.find((a) => peer(a.actor));
-  const sentBack = !!firstPeer && !!hub.q(`SELECT 1 FROM events WHERE item_id = ? AND type = 'sent_back' AND at >= ? AND (actor = ? OR actor LIKE '@%')`).get(it.id, firstPeer.at, HUMAN);
-  const peerReviewed = !!last && peer(last.actor);
-  return {
-    escaped: fixed_by.length > 0, fixed_by,
-    reviewer: last?.actor ?? null, peer_review: peerReviewed,
-    overturned: sentBack || (peerReviewed && fixed_by.length > 0),
-    peer_accepted: !!firstPeer,
-  };
+  const out = new Map();
+  for (const it of items) {
+    const fixed_by = (fixes.get(it.id) ?? []).map((r) => `#${r.seq}`);
+    const acc = accepts.get(it.id) ?? [];
+    const last = acc.at(-1) ?? null;
+    const firstPeer = acc.find((a) => peer(a.actor));
+    const sentBack = !!firstPeer && (backs.get(it.id) ?? []).some((b) => b.at >= firstPeer.at);
+    const peerReviewed = !!last && peer(last.actor);
+    out.set(it.id, {
+      escaped: fixed_by.length > 0, fixed_by,
+      reviewer: last?.actor ?? null, peer_review: peerReviewed,
+      overturned: sentBack || (peerReviewed && fixed_by.length > 0),
+      peer_accepted: !!firstPeer, first_peer: firstPeer?.actor ?? null,
+    });
+  }
+  return out;
 }
 
 // Escapes and overturned peer verdicts over some landed items, per model: as builder (the implementer's model)
 // and as reviewer (the peer whose accept it landed on). modelOf(agent) → model or null.
-export function verification(hub, landed, modelOf) {
-  const rows = landed.map((it) => ({ it, ...heldUp(hub, it) }));
+export function verification(hub, landed, modelOf, held = heldUpAll(hub, landed)) {
+  const rows = landed.map((it) => ({ it, ...held.get(it.id) }));
   const models = new Map();
   const row = (m) => models.get(m ?? '') ?? models.set(m ?? '', { model: m ?? null, built: 0, built_escaped: 0, reviewed: 0, reviewed_escaped: 0, overturned: 0 }).get(m ?? '');
   for (const r of rows) {
@@ -44,10 +62,7 @@ export function verification(hub, landed, modelOf) {
       v.reviewed++;
       if (r.escaped) v.reviewed_escaped++;
     }
-    if (r.overturned) {
-      const by = hub.q(`SELECT actor FROM events WHERE item_id = ? AND type = 'accepted' ORDER BY at, id`).all(r.it.id).map((a) => a.actor).find((a) => !isHuman(a) && !isSystem(a));
-      row(modelOf(by)).overturned++;
-    }
+    if (r.overturned) row(modelOf(r.first_peer)).overturned++;
   }
   return {
     landed: rows.length, escaped: rows.filter((r) => r.escaped).length,
@@ -70,6 +85,9 @@ const ACTIONS = () => `e.type IN (${HUMAN_ACTIONS.map((t) => `'${t}'`).join(', '
 
 // A person's actions on one item, ever.
 export const humanActionsOn = (hub, item) => hub.q(`SELECT COUNT(*) AS n FROM events e WHERE e.item_id = ? AND ${ACTIONS()}`).get(item.id).n;
+// The same for many items in one query: item id → count (#537).
+const humanActionsAll = (hub, items) => new Map(hub.q(`SELECT e.item_id, COUNT(*) AS n FROM events e
+  WHERE e.item_id IN (SELECT value FROM json_each(?)) AND ${ACTIONS()} GROUP BY e.item_id`).all(ids(items)).map((r) => [r.item_id, r.n]));
 
 // How long act-level Needs you entries (src/insight.js) waited until a person resolved them, for those resolved
 // in (from, to], each from when it reached you: a blocking question to you (a reporter's once the hub asks you
@@ -117,12 +135,18 @@ export function outcomes(hub, slug, { since, until } = {}) {
   const from = Number.isFinite(Number(since)) && since !== '' && since != null ? Number(since) : to - 30 * DAY;
   const finished = hub.q(`SELECT * FROM items WHERE project_id = ? AND stage IN ('done', 'dropped') AND stage_since >= ? AND stage_since <= ?
     ORDER BY stage_since, seq`).all(p.id, from, to);
-  const modelOf = (agent) => (agent ? hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.model || null : null);
+  const models = new Map(hub.q('SELECT name, model FROM agents WHERE project_id = ?').all(p.id).map((a) => [a.name, a.model || null]));
+  const modelOf = (agent) => (agent ? models.get(agent) ?? null : null);
+  // What every finished item needs from its events, in one query each, not one per item (#537).
+  const claims = new Map(hub.q(`SELECT item_id, MIN(at) AS at FROM events WHERE item_id IN (SELECT value FROM json_each(?)) AND type = 'claimed' GROUP BY item_id`).all(ids(finished)).map((r) => [r.item_id, r.at]));
+  const landed = finished.filter((it) => it.stage === 'done');
+  const helds = heldUpAll(hub, landed);
+  const actions = humanActionsAll(hub, finished);
   const items = finished.map((it) => {
-    const claimed = hub.q(`SELECT MIN(at) AS at FROM events WHERE item_id = ? AND type = 'claimed'`).get(it.id).at;
+    const claimed = claims.get(it.id) ?? null;
     const usage = (hub.usageOf(it)?.rows ?? []).filter((r) => !r.superseded)
       .map((r) => ({ agent: r.agent, model: r.model, source: r.source, input_tokens: r.input_tokens, output_tokens: r.output_tokens, cost_usd: r.cost_usd }));
-    const held = it.stage === 'done' ? heldUp(hub, it) : null;
+    const held = it.stage === 'done' ? helds.get(it.id) : null;
     // No model from checkin in this project (#306): the one the implementer's own usage rows name, if just one.
     const reported = [...new Set(usage.filter((r) => r.agent === it.implementer && r.model).map((r) => r.model))];
     return {
@@ -135,7 +159,7 @@ export function outcomes(hub, slug, { since, until } = {}) {
       implementer: it.implementer || null, model: modelOf(it.implementer) ?? (reported.length === 1 ? reported[0] : null),
       reviewer: held?.reviewer ?? null, reviewer_model: held?.peer_review ? modelOf(held.reviewer) : null,
       escaped: held?.escaped ?? false, fixed_by: held?.fixed_by ?? [], overturned: held?.overturned ?? false,
-      human_actions: humanActionsOn(hub, it),
+      human_actions: actions.get(it.id) ?? 0,
       usage,
     };
   });
@@ -143,7 +167,7 @@ export function outcomes(hub, slug, { since, until } = {}) {
   const by_agent = groupBy(items, (i) => i.implementer).map(([agent, list]) => ({ agent, model: list.find((i) => i.model)?.model ?? null, ...tally(list) }));
   // Peer reviewers, per model: what they accepted that landed, how much of it escaped, and how many of their
   // verdicts a person overturned.
-  const v = verification(hub, finished.filter((it) => it.stage === 'done'), modelOf);
+  const v = verification(hub, landed, modelOf, helds);
   const by_reviewer = v.by_model.filter((m) => m.reviewed || m.overturned).map((m) => ({ model: m.model, reviewed: m.reviewed, escapes: m.reviewed_escaped, overturned: m.overturned }));
   const cost = humanCost(hub, p, from, to);
   const human_actions = { total: cost.actions, landed: cost.landed, per_landed: cost.per_landed, median_wait_ms: cost.median_wait_ms };
@@ -155,6 +179,8 @@ export function outcomes(hub, slug, { since, until } = {}) {
 // The events that end a job, per job: its taker finished it.
 const FINISHED = { work: ['submitted'], review: ['accepted', 'sent_back'], shape: ['shaped'], land: ['landed', 'pushed', 'rebased', 'submitted'], tidy: ['submitted'] };
 const TAKES = ['claimed', 'shaping', 'review_started', 'landing'];
+// Every event that can change a job's result: its take, its end, and the verdicts and lapses after it (#537).
+export const JOB_EVENTS = [...new Set([...TAKES, ...Object.values(FINISHED).flat(), 'accepted', 'sent_back', 'handoff', 'lease_expired'])];
 
 // Every job taken in [from, to], oldest first: { item, job, agent, model, difficulty, trial, at, result }.
 // A building job's result: landed (without being sent back), escaped (landed, and a later item repairs it), sent
@@ -163,11 +189,14 @@ const TAKES = ['claimed', 'shaping', 'review_started', 'landing'];
 export function jobsTaken(hub, p, from, to = hub.now()) {
   const takes = hub.q(`SELECT e.*, i.seq, i.stage AS item_stage FROM events e JOIN items i ON i.id = e.item_id
     WHERE e.project_id = ? AND e.type IN (${TAKES.map(() => '?').join(', ')}) AND e.at >= ? AND e.at <= ? ORDER BY e.at, e.id`).all(p.id, ...TAKES, from, to);
-  const escaped = new Map();
+  // Every event of the items taken, in one query, grouped by item in id order (#537); and the items later repaired.
+  const taken = [...new Set(takes.map((e) => e.item_id))];
+  const events = byItem(hub.q(`SELECT item_id, id, type, actor, data FROM events WHERE item_id IN (SELECT value FROM json_each(?)) ORDER BY item_id, id`).all(JSON.stringify(taken)));
+  const repaired = new Set(hub.q(`SELECT DISTINCT fixes FROM items WHERE fixes IN (SELECT value FROM json_each(?))`).all(JSON.stringify(taken)).map((r) => r.fixes));
   return takes.map((e) => {
     const d = JSON.parse(e.data || '{}');
     const job = d.job ?? { shaping: 'shape', review_started: 'review', landing: 'land' }[e.type] ?? 'work';
-    const after = hub.q(`SELECT type, actor, data FROM events WHERE item_id = ? AND id > ? ORDER BY id`).all(e.item_id, e.id);
+    const after = (events.get(e.item_id) ?? []).filter((x) => x.id > e.id);
     const mine = (x) => x.actor === e.actor;
     const lapsed = (x) => x.type === 'lease_expired' && (JSON.parse(x.data || '{}').agent ?? (job === 'review' ? e.actor : null)) === e.actor;
     let result = 'open';
@@ -182,10 +211,7 @@ export function jobsTaken(hub, p, from, to = hub.now()) {
         const kept = verdict && JSON.parse(verdict.data || '{}').kept;
         if (verdict?.type === 'sent_back') result = 'sent_back';
         else if (verdict && kept && kept !== e.actor) result = 'not_chosen';
-        else if (verdict && e.item_stage === 'done') {
-          if (!escaped.has(e.item_id)) escaped.set(e.item_id, !!hub.q('SELECT 1 FROM items WHERE fixes = ?').get(e.item_id));
-          result = escaped.get(e.item_id) ? 'escaped' : 'landed';
-        }
+        else if (verdict && e.item_stage === 'done') result = repaired.has(e.item_id) ? 'escaped' : 'landed';
       }
     }
     return { item: `#${e.seq}`, job, agent: e.actor, model: d.model || null, difficulty: d.difficulty ?? 'standard', trial: d.trial ?? null, at: e.at, result };

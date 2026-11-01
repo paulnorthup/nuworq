@@ -15,14 +15,18 @@ Usage
   nuworq connect <workspace> --hub <url> [flags]
 
 Flags
-  --hub <url>   the hub, when you give a workspace name
-  --token <t>   use this token instead of signing in through the browser; -
-                reads one line (hidden)
-  --no-browser  print the sign-in link and code instead of opening the browser
-  --no-mcp      don't add the MCP server to Claude Code, Codex or opencode
-  --skills      without the nuworq plugin in Claude Code, write the server and
-                skills without asking
-  --off         the same as nuworq disconnect
+  --hub <url>     the hub, when you give a workspace name
+  --token <t>     use this token instead of signing in through the browser; -
+                  reads one line (hidden)
+  --no-browser    print the sign-in link and code instead of opening the browser
+  --no-mcp        don't add the MCP server to Claude Code, Codex or opencode
+  --skills        without the nuworq plugin in Claude Code, write the server and
+                  skills without asking
+  --off           the same as nuworq disconnect
+  --yes           answer yes to each follow-up (staff this project, start an
+                  operator) without asking
+  --no            answer no to each follow-up without asking
+  --budget <usd>  with staffing: the daily cap for its workers (default: 20)
 
 Environment
   NUWORQ_TOKEN  a token to use instead of signing in
@@ -36,6 +40,10 @@ nuworq run use it from then on; NUWORQ_URL and NUWORQ_TOKEN still win.
 
 Claude Code without the nuworq plugin: connect offers to install it first. Undo
 all of it with nuworq disconnect.
+
+Then, one at a time: staff the project this folder is a clone of with workers
+here (nuworq staff), and start an operator (operator --start). --yes or --no
+answers each without asking; with no terminal, it's no.
 ```
 
 ### nuworq run
@@ -51,27 +59,31 @@ Usage
   nuworq run --uninstall
 
 Flags
-  --workers <n>      workers at once (default: 1)
-  --agent <name>     claude, codex or opencode (default: claude)
-  --model <m>        the model workers use; opencode needs <provider>/<model>
-  --folder <path>    a folder workers may work in, added to
-                     ~/.nuworq/folders.json
-  --until-idle       exit once no work is waiting, instead of waiting for more
-  --max-runs <n>     stop after starting n workers
-  --max-minutes <t>  stop after t minutes
-  --max-usd <x>      stop starting workers once their reported spend reaches x
-                     (codex and local models report none)
-  --poll <s>         seconds between looks at the hub (default: 30)
-  --has <tags>       what else this machine can do, e.g. browser,linux-vm
-  --browser          each worker gets a headless Chrome (Claude only), as with
-                     worker --browser
-  --agent-token <t>  the agent token workers get on a hub with login
-  --proxy <url>      send workers through llm-proxy, as with worker --proxy
-  --sweep            remove leftovers now (the runner does it weekly)
-  --dry-run          with --sweep: list what would go
-  --install          run it as a service that survives closed terminals and
-                     reboots
-  --uninstall        stop and remove that service
+  --workers <n|auto>  workers at once; auto: one more only while the 1-minute
+                      load is under 80% of the cores and 2 GB of memory is free
+                      (at least one), and it says why when it holds (default: 1)
+  --max-workers <m>   with --workers auto: the most at once (default: half the
+                      cores)
+  --agent <name>      claude, codex or opencode (default: claude)
+  --model <m>         the model workers use; opencode needs <provider>/<model>
+  --folder <path>     a folder workers may work in, added to
+                      ~/.nuworq/folders.json
+  --until-idle        exit once no work is waiting, instead of waiting for more
+  --max-runs <n>      stop after starting n workers
+  --max-minutes <t>   stop after t minutes
+  --max-usd <x>       stop starting workers once their reported spend reaches x
+                      (codex and local models report none)
+  --poll <s>          seconds between looks at the hub (default: 30)
+  --has <tags>        what else this machine can do, e.g. browser,linux-vm
+  --browser           each worker gets a headless Chrome (Claude only), as with
+                      worker --browser
+  --agent-token <t>   the agent token workers get on a hub with login
+  --proxy <url>       send workers through llm-proxy, as with worker --proxy
+  --sweep             remove leftovers now (the runner does it weekly)
+  --dry-run           with --sweep: list what would go
+  --install           run it as a service that survives closed terminals and
+                      reboots
+  --uninstall         stop and remove that service
 
 Environment
   NUWORQ_AGENT_TOKEN      the agent token workers get, instead of --agent-token
@@ -153,6 +165,7 @@ nuworq operator: print the tags an operator session declares and the line that
 
 Usage
   nuworq operator [--project p] [--has tags]
+  nuworq operator --start [--has tags]
   nuworq operator --check <level>
 
 Flags
@@ -160,6 +173,7 @@ Flags
   --has <tags>     what the session can really do, instead of what was detected
   --check <level>  only the line saying this nuworq is too old for the operator
                    listener (exit 1), or nothing
+  --start          open Claude Code here with that line already sent
 
 Example
   nuworq operator --has macos,browser,claude-cli,infra
@@ -414,7 +428,8 @@ Example
 ### nuworq checkin
 
 ```text
-nuworq checkin: start here, and again after any break
+nuworq checkin: start here, and again after any break: the mission, decisions,
+  field notes, steering, answers, verdicts, who is on what, and your next step
 
 Usage
   nuworq checkin [--model m] [--client c] [--has tags]
@@ -439,8 +454,8 @@ stdin).
 ### nuworq next
 
 ```text
-nuworq next: get and claim the most useful work for you right now: a peer review
-  (when allowed), ready work to build, or a proposal to shape into work
+nuworq next: get and claim the most useful job for you now: a review, work to
+  build, or a proposal to shape
 
 Usage
   nuworq next [--peek]
@@ -459,13 +474,13 @@ stdin).
 ### nuworq claim
 
 ```text
-nuworq claim: claim a specific item
+nuworq claim: claim a specific item: a 20-minute lease that progress renews
 
 Usage
   nuworq claim <item> [--touching paths]
 
 Flags
-  --touching <a,b>  files or directories you are changing, e.g
+  --touching <a,b>  paths you are changing, so others steer clear
 
 Example
   nuworq claim 12 --as claude-1
@@ -478,14 +493,14 @@ stdin).
 ### nuworq progress
 
 ```text
-nuworq progress: report a meaningful milestone on an item you hold (not every
-  step)
+nuworq progress: report a milestone on an item you hold; it renews the lease and
+  returns steering
 
 Usage
   nuworq progress <item> [headline] [--touching paths]
 
 Flags
-  --touching <a,b>  files or directories you are changing, e.g
+  --touching <a,b>  paths you are changing, so others steer clear
 
 Example
   nuworq progress 12 "Parser done" --touching src/parse.js --as claude-1
@@ -501,24 +516,20 @@ stdin).
 ### nuworq ask
 
 ```text
-nuworq ask: ask the human a question
+nuworq ask: ask a question
 
 Usage
   nuworq ask [<item>] <question> [flags]
   nuworq ask <question> --escalates <question-id> --evidence "label|url"...
 
 Flags
-  --assume <a>            what you will assume and proceed with unless told
-                          otherwise
+  --assume <a>            what you assume and proceed with unless told otherwise
   --option <x>            a likely answer; repeat it for more
-  --blocking              true only if you cannot make progress without an
-                          answer
+  --blocking              true only if you cannot go on without an answer
   --to <who>              human, reporter or operator
-  --context <c>           why it matters and what you already know (the 5-minute
-                          version)
-  --escalates <id>        operators only: the id of an operator question that
-                          needs the human's approval (risky, irreversible, or a
-                          product call)
+  --context <c>           why it matters and what you know
+  --escalates <id>        the operator question that needs the human's approval;
+                          their answer answers it too
   --evidence <label|url>  what you checked; repeat it for more
 
 Example
@@ -532,8 +543,8 @@ stdin).
 ### nuworq answer
 
 ```text
-nuworq answer: operators only (checked in with has: ["operator"]): answer a
-  question an agent asked with to: "operator"
+nuworq answer: answer a question asked to: "operator" (next hands it to you as
+  mode "answer")
 
 Usage
   nuworq answer <question-id> <answer>
@@ -550,8 +561,7 @@ stdin).
 
 ```text
 nuworq withdraw: withdraw a question you asked that is still open, with a
-  one-line reason: the answer came another way (say who said it), or it no
-  longer matters
+  reason: answered another way, or no longer matters
 
 Usage
   nuworq withdraw <question-id> <reason>
@@ -567,16 +577,14 @@ stdin).
 ### nuworq submit
 
 ```text
-nuworq submit: finished an item you hold? Submit it for verification with
-  evidence
+nuworq submit: submit an item you hold with evidence; someone else verifies it
 
 Usage
   nuworq submit <item> <headline> [--evidence "label|url"]...
 
 Flags
   --evidence <label|url>  proof it meets done_means; repeat it for more
-  --acceptance <a>        only when finishing a shaping job: what done means, if
-                          you have not set it with refine
+  --acceptance <a>        shaping only: what done means, if not set with refine
 
 Example
   nuworq submit 12 "Parser handles tabs" --evidence "npm test: 48 passed" --as
@@ -590,8 +598,8 @@ stdin).
 ### nuworq handoff
 
 ```text
-nuworq handoff: release an item you hold without finishing it, with a note on
-  where you left off
+nuworq handoff: release an item you hold unfinished, with a note on where you
+  left off for the next agent
 
 Usage
   nuworq handoff <item> <headline>
@@ -613,14 +621,14 @@ Usage
   nuworq propose <title> [flags]
 
 Flags
-  --acceptance <a>      what done means: observable, checkable criteria
+  --acceptance <a>      what done means: checkable criteria
   --priority <p>        now, soon or later
   --parent <item>       the item this is part of
   --depends-on <#1,#2>  items that must be done first
-  --needs <tags>        what an agent's machine must have to do it, e.g
+  --needs <tags>        tags an agent must have declared (checkin has) to take
+                        it, e.g
   --size <s>            small or large
-  --repo <r>            the repository the work lands in, when the project has
-                        several, e.g
+  --repo <r>            the repository it lands in, e.g
 
 Example
   nuworq propose "Parse tabs in headers" --priority soon --as claude-1
@@ -633,8 +641,8 @@ stdin).
 ### nuworq refine
 
 ```text
-nuworq refine: improve an item: sharpen the title or summary, add acceptance
-  criteria, set priority or dependencies
+nuworq refine: improve an item: title, summary, acceptance, priority,
+  dependencies
 
 Usage
   nuworq refine <item> [flags]
@@ -644,13 +652,12 @@ Flags
   --acceptance <a>      what done means
   --priority <p>        now, soon or later
   --depends-on <#1,#2>  replaces the dependency list
-  --needs <tags>        what an agent's machine must have to do it, e.g
+  --needs <tags>        tags an agent must have declared (checkin has) to take
+                        it, e.g
   --size <s>            small or large
-  --repo <r>            the repository the work lands in, when the project has
-                        several, e.g
-  --drop <question-id>  drop this item because a person said so: the id of their
-                        answered question that says to drop it (its question_id
-                        in next or look; asked on this item, or naming it, e.g
+  --repo <r>            the repository it lands in, e.g
+  --drop <question-id>  drop it: the id of the person's answered question that
+                        says so
 
 Example
   nuworq refine 12 --priority now --as claude-1
@@ -663,14 +670,15 @@ stdin).
 ### nuworq review
 
 ```text
-nuworq review: peer-review an item in verifying, when the project allows it
+nuworq review: peer-review an item in verifying against done_means and the
+  evidence; never your own
 
 Usage
   nuworq review <item> <accept|reject> <headline> [--attempt n|agent]
 
 Flags
-  --attempt <n|agent>  only for a raced item with several submissions: the one
-                       to keep, by number or agent name (see race.submissions)
+  --attempt <n|agent>  raced items only: the submission to keep, by number or
+                       agent
 
 Example
   nuworq review 12 accept "Tests pass; matches done_means" --as claude-2
@@ -683,7 +691,8 @@ stdin).
 ### nuworq comment
 
 ```text
-nuworq comment: leave a note for the record on an item or the whole project
+nuworq comment: leave a note for the record on an item or the project; not for
+  questions or status
 
 Usage
   nuworq comment [<item>] <headline>
@@ -699,8 +708,7 @@ stdin).
 ### nuworq ack
 
 ```text
-nuworq ack: acknowledge steering from the human, saying in one line how you are
-  adjusting
+nuworq ack: acknowledge steering, saying in one line how you are adjusting
 
 Usage
   nuworq ack <steer-id> [response]
@@ -717,13 +725,13 @@ stdin).
 
 ```text
 nuworq feedback: tell nuworq's developers when nuworq itself got in your way: a
-  misleading hint, a missing tool, a confusing response or rule
+  misleading hint, a missing tool, a confusing rule
 
 Usage
   nuworq feedback <what happened> [--item i]
 
 Flags
-  --item <i>  the item you were on when it happened
+  --item <i>  the item you were on
 
 Example
   nuworq feedback "next gave me an item I can't build" --as claude-1
@@ -743,8 +751,7 @@ Usage
 
 Flags
   --stage <s>  one stage of the board
-  --notes all  "all": every active field note, not only the ten most relevant to
-               your work
+  --notes all  "all": every active field note
 
 Example
   nuworq look 12 --as claude-1
@@ -757,18 +764,15 @@ stdin).
 ### nuworq retire
 
 ```text
-nuworq retire: only in a field-notes review (next mode "tidy"), under "Run with
-  it": retire field notes whose lesson is now in the code, the guide or a test,
-  or merge duplicates into one
+nuworq retire: in a field-notes review (next mode "tidy"): retire notes whose
+  lesson now lives in code, the guide or a test, or merge duplicates
 
 Usage
   nuworq retire <note-id>... --reason r [--into <note-id>]
 
 Flags
-  --reason <r>      where the lesson lives now (a file, the guide section, a
-                    test), in one line
-  --into <note-id>  for a merge: the id of the note you learned with the
-                    combined lesson
+  --reason <r>      where the lesson lives now, one line
+  --into <note-id>  for a merge: the note you learned with the combined lesson
 
 Example
   nuworq retire 31 --reason "built into checkin" --as claude-1
@@ -781,7 +785,7 @@ stdin).
 ### nuworq signoff
 
 ```text
-nuworq signoff: end your session
+nuworq signoff: end your session; anything you hold is handed off with your note
 
 Usage
   nuworq signoff [headline]
@@ -795,6 +799,27 @@ stdin).
 ```
 
 ## Also
+
+### nuworq staff
+
+```text
+nuworq staff: turn on staffing for a project, with a daily cap, and install
+  nuworq run here
+
+Usage
+  nuworq staff [<project>] [--budget 20]
+
+Flags
+  --project <p>   the project, instead of this folder's
+  --budget <usd>  the daily cap for its workers (default: 20)
+  --yes           don't ask: take the defaults
+  --no-browser    print the approval link instead of opening the browser
+
+Example
+  nuworq staff nuworq --budget 20
+
+On a hub with logins, an owner approves it in the browser.
+```
 
 ### nuworq disconnect
 

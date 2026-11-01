@@ -62,16 +62,16 @@ export const STEPS = [
     check: 'Get started ticks Connect GitHub off, and **Connect an agent** says the app is installed.',
   },
   {
-    key: 'machine', title: 'Install and connect your machine', glance: 'Two commands, once per machine.',
+    key: 'machine', title: 'Install and connect your machine', glance: 'One paste, once per machine.',
     hand: [
-      'You need Node 24 or newer (`node --version` tells you). Open **Connect an agent** in the rail (on a phone, under **Menu**). It shows this hub\'s commands, ready to copy.',
-      'Step 1 installs nuworq from the hub, so it\'s the same version as the hub and keeps itself up to date: `npm install -g <the package address it shows>`.',
-      'Step 2 is `nuworq connect <your workspace\'s address>`. A browser tab opens with a code: check it matches the one in your terminal, and approve it.',
+      'You need Node 24 or newer: `node --version` tells you. Missing or older? Install the current LTS from nodejs.org, or on a Mac with Homebrew run `brew install node`, then open a new terminal.',
+      'Open **Connect an agent** in the rail (on a phone, under **Menu**). Its first block is this hub\'s command, ready to copy. Paste it in a terminal, in a clone of the project\'s repository: `npm install -g <the package address it shows> && nuworq connect <your workspace\'s address>`. It installs nuworq from the hub, so it\'s the same version as the hub and keeps itself up to date.',
+      'A browser tab opens with a code: check it matches the one in your terminal, and approve it.',
       'To register nuworq with your agent tools yourself, connect with `nuworq connect <address> --no-mcp` instead, then for Claude Code:',
       '`claude mcp add --scope user nuworq -- nuworq mcp`',
       'Codex, opencode and other MCP clients are under **Connect an agent** at depth 30m.',
     ],
-    auto: '`nuworq connect` without `--no-mcp` also registers nuworq with Claude Code, Codex and opencode where they\'re installed. It saves this machine\'s token in ~/.nuworq/connect.json, which only you can read. `nuworq disconnect` revokes the token and undoes all of it.',
+    auto: '`nuworq connect` without `--no-mcp` also registers nuworq with Claude Code, Codex and opencode where they\'re installed. It saves this machine\'s token in ~/.nuworq/connect.json, which only you can read. `nuworq disconnect` revokes the token and undoes all of it. Then it asks, one question at a time: install the Claude Code plugin, staff the project with workers on this machine (up to a daily cap you set; an owner approves it in the browser), and start an operator. Each says what it does and costs, and a no prints the command for later: `nuworq staff` or `nuworq operator --start`. It ends with how to plan work with a shaper.',
     check: 'The terminal says the machine is connected, and Get started ticks Install and connect your machine off.',
   },
   {

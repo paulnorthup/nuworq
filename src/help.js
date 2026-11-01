@@ -34,12 +34,16 @@ export const COMMANDS = [
       ['--no-mcp', "don't add the MCP server to Claude Code, Codex or opencode"],
       ['--skills', 'without the nuworq plugin in Claude Code, write the server and skills without asking'],
       ['--off', 'the same as nuworq disconnect'],
+      ['--yes', 'answer yes to each follow-up (staff this project, start an operator) without asking'],
+      ['--no', 'answer no to each follow-up without asking'],
+      ['--budget <usd>', 'with staffing: the daily cap for its workers', '20'],
     ],
     env: [['NUWORQ_TOKEN', 'a token to use instead of signing in']],
     example: 'nuworq connect https://app.nuworq.com/w/acme',
     notes: [
       'You approve a code in the browser, and the hub is saved in ~/.nuworq/connect.json, which only you can read. The CLI, the MCP server and nuworq run use it from then on; NUWORQ_URL and NUWORQ_TOKEN still win.',
       'Claude Code without the nuworq plugin: connect offers to install it first. Undo all of it with nuworq disconnect.',
+      "Then, one at a time: staff the project this folder is a clone of with workers here (nuworq staff), and start an operator (operator --start). --yes or --no answers each without asking; with no terminal, it's no.",
     ],
   },
   {
@@ -47,7 +51,8 @@ export const COMMANDS = [
     does: 'keep up to N headless workers on waiting work in the projects you opted in',
     usage: ['run [flags]', 'run --sweep [--dry-run]', 'run --install [run flags]', 'run --uninstall'],
     flags: [
-      ['--workers <n>', 'workers at once', '1'],
+      ['--workers <n|auto>', 'workers at once; auto: one more only while the 1-minute load is under 80% of the cores and 2 GB of memory is free (at least one), and it says why when it holds', '1'],
+      ['--max-workers <m>', 'with --workers auto: the most at once', 'half the cores'],
       ['--agent <name>', 'claude, codex or opencode', 'claude'],
       ['--model <m>', 'the model workers use; opencode needs <provider>/<model>'],
       ['--folder <path>', 'a folder workers may work in, added to ~/.nuworq/folders.json'],
@@ -101,11 +106,12 @@ export const COMMANDS = [
   {
     name: 'operator', group: 'agents', brief: 'the line that starts an operator session',
     does: 'print the tags an operator session declares and the line that starts it (runs nothing)',
-    usage: ['operator [--project p] [--has tags]', 'operator --check <level>'],
+    usage: ['operator [--project p] [--has tags]', 'operator --start [--has tags]', 'operator --check <level>'],
     flags: [
       ['--project <p>', "the project, instead of this folder's"],
       ['--has <tags>', 'what the session can really do, instead of what was detected'],
       ['--check <level>', 'only the line saying this nuworq is too old for the operator listener (exit 1), or nothing'],
+      ['--start', 'open Claude Code here with that line already sent'],
     ],
     example: 'nuworq operator --has macos,browser,claude-cli,infra',
     notes: [
@@ -260,6 +266,19 @@ export const COMMANDS = [
     ],
     env: [['NUWORQ_PUBLIC_URL', "the hub's address, for links in push messages"]],
     example: 'nuworq notify add ntfy https://ntfy.sh/my-topic',
+  },
+  {
+    name: 'staff', group: 'more',
+    does: 'turn on staffing for a project, with a daily cap, and install nuworq run here',
+    usage: ['staff [<project>] [--budget 20]'],
+    flags: [
+      ['--project <p>', "the project, instead of this folder's"],
+      ['--budget <usd>', 'the daily cap for its workers', '20'],
+      ['--yes', "don't ask: take the defaults"],
+      ['--no-browser', 'print the approval link instead of opening the browser'],
+    ],
+    example: 'nuworq staff nuworq --budget 20',
+    notes: ['On a hub with logins, an owner approves it in the browser.'],
   },
   {
     name: 'disconnect', group: 'more',

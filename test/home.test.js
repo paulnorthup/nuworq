@@ -52,7 +52,7 @@ describe('the home: what needs you across every project', () => {
     assert.deepEqual(a.worth_knowing, [{ slug: 'p2', name: 'p2', count: 1 }], "@b's question is worth knowing for @a");
     assert.deepEqual(a.motion.map((m) => [m.project.slug, m.item, m.agent]), [['p2', '#2', 'bot3']], 'parked-by-question work is not in motion');
 
-    // Without stewards, the owner owns both: oldest first, across projects.
+    // Without stewards, the owner owns both: the same priority, so oldest first, across projects (#505).
     for (const slug of ['p1', 'p2']) hub.humanOp(slug, 'stewards', { set: [] }, '@o');
     const o = homeView(hub, { viewer: '@o' });
     assert.deepEqual(o.needs.map((n) => n.project.slug), ['p1', 'p2']);

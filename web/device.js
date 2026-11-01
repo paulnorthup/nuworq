@@ -6,6 +6,7 @@ const error = document.getElementById('error');
 const go = document.getElementById('go');
 const deny = document.getElementById('deny');
 let checked = null; // the code whose machine is on screen, waiting for confirmation
+let staff = null; // what a staffing request asks for, when it is one
 
 const show = (msg) => { error.textContent = msg; error.hidden = !msg; };
 const post = (path, body) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -25,8 +26,12 @@ async function check() {
   if (!ok) return show([j.error, j.hint].filter(Boolean).join('. '));
   checked = code.value;
   code.readOnly = true;
-  lead.textContent = `"${j.machine}" asks for an agent token in your name. Its agents will work here, and you answer for them. Only approve it if you just started this on that machine.`;
-  go.textContent = `Approve ${j.machine}`;
+  staff = j.staff ?? null;
+  // A staffing request (#490): the machine is connected already, and asks to start workers on one project.
+  lead.textContent = staff
+    ? `"${j.machine}" asks to staff ${staff.name ?? staff.project} with its workers, spending up to $${staff.budget} a day. Approving turns on staffing for ${staff.name ?? staff.project} with that daily budget. Only approve it if you just asked for this on that machine.`
+    : `"${j.machine}" asks for an agent token in your name. Its agents will work here, and you answer for them. Only approve it if you just started this on that machine.`;
+  go.textContent = staff ? `Staff ${staff.name ?? staff.project}` : `Approve ${j.machine}`;
   deny.hidden = false;
 }
 
@@ -35,7 +40,8 @@ async function decide(approve) {
   try {
     const { ok, j } = await post('api/device/approve', { user_code: checked, approve });
     if (!ok) return show([j.error, j.hint].filter(Boolean).join('. '));
-    done(approve ? `Approved. ${j.machine} is connected as ${j.token_name}; you can close this page.` : `Denied. ${j.machine} gets no token.`);
+    if (staff) done(approve ? `Approved. ${staff.name ?? staff.project} is staffed, up to $${staff.budget} a day; ${j.machine} installs its runner now. You can close this page.` : `Denied. ${staff.name ?? staff.project} isn't staffed.`);
+    else done(approve ? `Approved. ${j.machine} is connected as ${j.token_name}; you can close this page.` : `Denied. ${j.machine} gets no token.`);
   } catch {
     show("Can't reach the hub.");
   } finally {
