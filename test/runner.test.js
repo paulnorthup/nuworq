@@ -499,14 +499,18 @@ describe('a worker for a project with no checkout on this machine', () => {
 });
 
 // A fake world: time only moves when the runner sleeps; workers are promises we resolve by hand.
+// end(): stops the loop and lets every worker go, so a failed assertion never leaves run() pending (#553).
 function world(routesSeq) {
   let t = 0;
   const workers = [];
   const lines = [];
   let i = 0;
+  let stop = null;
   return {
     workers, lines,
+    end: () => { stop?.(); stop?.(); for (const x of workers) x.finish('ended'); },
     opts: {
+      onInterrupt: (fn) => { stop = fn; },
       routes: async () => routesSeq[Math.min(i++, routesSeq.length - 1)],
       launch: async (r) => {
         let finish;
@@ -524,12 +528,27 @@ function world(routesSeq) {
   };
 }
 
+// The loop runs on real time as fast as the machine lets it, so wait for what it does, not a fixed few ms (#553).
+async function until(cond, what, ms = 10_000) {
+  for (const end = Date.now() + ms; !cond();) {
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+// The test's body, ending the loop if it fails, so the file doesn't hang on a pending run().
+async function checked(w, p, body) {
+  try { await body(); } catch (e) { w.end(); await p.catch(() => {}); throw e; }
+}
+
 describe('run: the supervising loop', () => {
   test('with --until-idle: starts one worker for one item, waits for it, then exits when nothing is waiting', async () => {
     const w = world([[route('a', 1)], [route('a', 1)], []]);
     const p = run({ ...w.opts, workers: 3, untilIdle: true });
-    await new Promise((r) => setTimeout(r, 20));
-    assert.equal(w.workers.length, 1, 'no herd while the first worker has not claimed');
+    await checked(w, p, async () => {
+      await until(() => w.workers.length, 'a worker');
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(w.workers.length, 1, 'no herd while the first worker has not claimed');
+    });
     w.workers[0].finish(0);
     const res = await p;
     assert.equal(res.launched, 1);
@@ -540,7 +559,7 @@ describe('run: the supervising loop', () => {
   test('by default it waits for work instead of exiting, and starts a worker the moment work appears', async () => {
     const w = world([[], [], [], [route('a', 1)], [route('a', 1)], []]);
     const p = run({ ...w.opts, workers: 1, maxRuns: 1 });
-    while (!w.workers.length) await new Promise((r) => setTimeout(r, 5));
+    await checked(w, p, () => until(() => w.workers.length, 'a worker once work appears'));
     assert.equal(w.lines.filter((l) => /Nothing is waiting/.test(l)).length, 1, 'says so once, not every poll');
     w.workers[0].finish(0);
     const res = await p;
@@ -550,9 +569,11 @@ describe('run: the supervising loop', () => {
   test('stops after --max-runs, and terminates workers that run past --max-minutes', async () => {
     const w = world([[route('a', 5)]]);
     const p = run({ ...w.opts, workers: 1, maxRuns: 1, maxMinutes: 1 });
-    await new Promise((r) => setTimeout(r, 50));
-    assert.equal(w.workers.length, 1);
-    assert.deepEqual(w.workers[0].signals.slice(0, 2), ['SIGTERM', 'SIGKILL']);
+    await checked(w, p, async () => {
+      await until(() => w.workers[0]?.signals.length >= 2, 'SIGTERM, then SIGKILL');
+      assert.equal(w.workers.length, 1);
+      assert.deepEqual(w.workers[0].signals.slice(0, 2), ['SIGTERM', 'SIGKILL']);
+    });
     w.workers[0].finish('SIGKILL');
     const res = await p;
     assert.match(res.why, /max-runs 1/);
@@ -562,7 +583,7 @@ describe('run: the supervising loop', () => {
     const w = world([[route('a', 5)]]);
     let interrupt;
     const p = run({ ...w.opts, workers: 2, onInterrupt: (fn) => { interrupt = fn; } });
-    await new Promise((r) => setTimeout(r, 20));
+    await until(() => w.workers.length >= 2, 'two workers').catch((e) => { interrupt(); interrupt(); w.end(); throw e; });
     assert.equal(w.workers.length, 2);
     interrupt();
     interrupt();
@@ -576,14 +597,16 @@ describe('run: the supervising loop', () => {
   test('stops launching at --max-usd, lets running workers finish, and says what was spent', async () => {
     const w = world([[route('a', 5)]]);
     const p = run({ ...w.opts, workers: 2, maxUsd: 2.5 });
-    await new Promise((r) => setTimeout(r, 20));
-    assert.equal(w.workers.length, 2);
-    w.workers[0].spent = () => 3.1;
-    w.workers[0].finish(0);
-    await new Promise((r) => setTimeout(r, 20));
-    assert.equal(w.workers.length, 2, 'no new worker once the budget is spent');
-    assert.deepEqual(w.workers[1].signals, [], 'the running worker is left to finish');
-    assert.ok(w.lines.some((l) => /■ w1 \(a\) exited 0 after \d+s, spent \$3\.10/.test(l)));
+    await checked(w, p, async () => {
+      await until(() => w.workers.length >= 2, 'two workers');
+      w.workers[0].spent = () => 3.1;
+      w.workers[0].finish(0);
+      await until(() => w.lines.some((l) => /■ w1/.test(l)), "w1's exit");
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(w.workers.length, 2, 'no new worker once the budget is spent');
+      assert.deepEqual(w.workers[1].signals, [], 'the running worker is left to finish');
+      assert.ok(w.lines.some((l) => /■ w1 \(a\) exited 0 after \d+s, spent \$3\.10/.test(l)));
+    });
     w.workers[1].spent = () => null; // a CLI that reports no cost
     w.workers[1].finish(0);
     const res = await p;
@@ -595,7 +618,7 @@ describe('run: the supervising loop', () => {
   test('without a budget, workers that report no spend change nothing', async () => {
     const w = world([[route('a', 1)], []]);
     const p = run({ ...w.opts, workers: 1, untilIdle: true });
-    await new Promise((r) => setTimeout(r, 20));
+    await checked(w, p, () => until(() => w.workers.length, 'a worker'));
     w.workers[0].finish(0);
     const res = await p;
     assert.equal(res.spent, 0);
@@ -610,8 +633,11 @@ describe('run: the supervising loop', () => {
       return start(r);
     };
     const p = run({ ...w.opts, workers: 2, untilIdle: true });
-    await new Promise((r) => setTimeout(r, 20));
-    assert.deepEqual(w.workers.map((x) => x.project), ['a'], "far's slots went to a");
+    await checked(w, p, async () => {
+      await until(() => w.workers.length, 'a worker');
+      await new Promise((r) => setTimeout(r, 20));
+      assert.deepEqual(w.workers.map((x) => x.project), ['a'], "far's slots went to a");
+    });
     w.workers[0].finish(0);
     const res = await p;
     assert.equal(res.launched, 1);
