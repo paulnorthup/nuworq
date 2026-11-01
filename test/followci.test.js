@@ -77,6 +77,22 @@ describe("serve --follow goes by CI's test check", () => {
     assert.equal(w.up, 'bbbbbbb2');
   });
 
+  test("GitHub won't answer (no install, no checks:read): said once, then after 30 minutes the suite runs here", async () => {
+    const w = world({ aaaaaaa1: { state: 'passed' } });
+    const f = await run(w);
+    w.ci = async () => { throw new Error('GitHub answered 403 about test on bbbbbbb'); };
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    await f.tick();
+    assert.equal(w.up, 'aaaaaaa1', 'no move at first');
+    assert.deepEqual(w.said.filter((l) => /can't ask GitHub/.test(l)), ["can't ask GitHub about bbbbbbb (GitHub answered 403 about test on bbbbbbb); still waiting, and its tests run here after 30 minutes"]);
+    w.t += 31 * 60_000;
+    await f.tick();
+    assert.ok(w.log.includes('test bbbbbbb2'));
+    assert.ok(w.said.includes("still can't ask GitHub about bbbbbbb (GitHub answered 403 about test on bbbbbbb); running its tests here"));
+    assert.equal(w.up, 'bbbbbbb2');
+  });
+
   test('without GitHub: the suite runs here, as before, said once', async () => {
     const w = world(null);
     const f = await run(w);
@@ -105,6 +121,7 @@ describe("checkOn reads the check's latest run from GitHub", () => {
     assert.deepEqual(failed, { state: 'failed', failed: "CI's test check: failure, https://github.com/acme/api/runs/1" });
     assert.deepEqual(await checkOn(app([]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true });
     assert.equal(await checkOn(app([{ status: 'completed', conclusion: 'skipped' }]), 'github.com/acme/api', 'abc1234'), null);
+    assert.equal(await checkOn(app([{ status: 'completed', conclusion: 'cancelled' }]), 'github.com/acme/api', 'abc1234'), null, 'cancelled is no verdict, not red main');
   });
 
   test('asks for the test check with a checks:read token for that repository', async () => {

@@ -264,8 +264,9 @@ export function readInstallState(app, state, now = Date.now()) {
 // What GitHub says of one check (CI's required `test`) on a commit of repo ("github.com/acme/api"), for serve
 // --follow (#543): { state: 'passed' }, { state: 'failed', failed }, { state: 'pending' } while it runs or
 // ({ missing: true }) before GitHub has heard of it, or null when it ended without a verdict (skipped, neutral,
-// stale). Read with a checks:read token for the repository, from the hub's own GitHub App.
-const FAILED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure']);
+// stale, or cancelled: someone stopped it, nothing failed). Read with a checks:read token for the repository,
+// from the hub's own GitHub App.
+const FAILED = new Set(['failure', 'timed_out', 'action_required', 'startup_failure']);
 export async function checkOn(app, repo, sha, name = 'test') {
   const [, owner, nm] = String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/) ?? [];
   if (!owner) return null;

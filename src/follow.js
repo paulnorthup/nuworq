@@ -424,16 +424,22 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
   // Whether sha may go live (#543): CI's required check, when GitHub can say (sys.ci), so this machine doesn't run
   // the suite again. { ok, by: 'CI' } once it passed, { ok: false, failed } once it failed, { pending } while it
   // runs. Without GitHub (no app, not a GitHub remote, said once), or a check that never shows up within
-  // CI_WAIT_MS or ends without a verdict, the suite runs here as before.
+  // CI_WAIT_MS or ends without a verdict, the suite runs here as before. GitHub failing to answer (no install on
+  // the repo, no checks:read, a revoked key) counts as a check that never showed up: said once, then the suite.
   async function verdict(sha) {
     if (sys.ci) {
       let c;
-      try { c = await sys.ci(sha); } catch (e) { c = { state: 'pending', why: e.message.split('\n')[0] }; }
+      try { c = await sys.ci(sha); } catch (e) { c = { state: 'pending', missing: true, error: e.message.split('\n')[0] }; }
       if (state.waiting?.sha !== sha) state.waiting = { sha, since: now() };
+      if (c?.error && !state.waiting.unasked) {
+        state.waiting.unasked = true;
+        log(`can't ask GitHub about ${short(sha)} (${c.error}); still waiting, and its tests run here after ${CI_WAIT_MS / 60_000} minutes`);
+      }
       if (c?.state === 'passed') return { ok: true, by: 'CI' };
       if (c?.state === 'failed') return { ok: false, failed: c.failed };
-      if (c?.state === 'pending' && !(c.missing && now() - state.waiting.since > CI_WAIT_MS)) return { pending: true, why: c.why };
-      log(c ? `CI's test check never showed up for ${short(sha)}; running its tests here` : `CI's test check ended without a verdict on ${short(sha)}; running its tests here`);
+      if (c?.state === 'pending' && !(c.missing && now() - state.waiting.since > CI_WAIT_MS)) return { pending: true };
+      log(c?.error ? `still can't ask GitHub about ${short(sha)} (${c.error}); running its tests here`
+        : c ? `CI's test check never showed up for ${short(sha)}; running its tests here` : `CI's test check ended without a verdict on ${short(sha)}; running its tests here`);
     } else if (!state.local) {
       state.local = true;
       log("no GitHub App for this repository's remote, so each commit's tests run here");
