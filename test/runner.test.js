@@ -160,7 +160,7 @@ describe('nuworq worker --agent claude', () => {
       assert.ok(allow.includes(`Bash(git -C ${repo} merge --ff-only:*)`), 'kept for a hub that lands in this checkout');
       assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [`Bash(git -C ${repo} merge --ff-only:*)`], 'no other -C command');
       assert.ok(!allow.some((a) => /^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no blanket git');
-      assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*`git push origin <branch>:main`/);
+      assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*where CI checks the pull request, push the branch and let its checks decide; otherwise run the checks, then `git push origin <branch>:main`/);
       assert.match(stdout, /detached at origin\/main/);
       assert.match(stdout, /run only the tests that cover what you change\. For the whole suite, follow the hint `next` gives: where CI checks the pull request, CI runs it; otherwise run it once, just before you submit/);
       // Its test runs take 2 files at a time (or what the operator set), for every process the agent starts.

@@ -68,6 +68,27 @@ describe('the whole suite is CI\'s where CI checks the pull request (#532)', () 
     assert.throws(() => w.hub.humanOp('demo', 'settings', { ci: 'sometimes' }), /ci must be auto, on or off/);
   });
 
+  test('a land job whose pull request conflicts: the tests near the rebase where CI checks it, else the checks', () => {
+    const landHint = (w) => {
+      const p = w.p();
+      const it = w.hub.humanOp('demo', 'create', { title: 'Imports resume', acceptance: 'x' }).item;
+      const item = w.hub.item(p, it);
+      w.hub.patch(item, { stage: 'landing', branch: `nuworq/${item.seq}-x` });
+      w.hub.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at, blocked) VALUES (?, 'github.com/acme/api', ?, ?, '', 'Imports resume', 'open', ?, '', 0, 'conflict')`)
+        .run(p.id, item.seq, item.id, `nuworq/${item.seq}-x`);
+      return w.hub.landHint(p, w.hub.item(p, it));
+    };
+    const gated = world();
+    gated.check();
+    const ci = landHint(gated);
+    assert.match(ci, /conflicts with main/);
+    assert.match(ci, /2\. Run the tests near what the rebase touched\. Not the whole suite: CI runs it on the pull request\./);
+    assert.doesNotMatch(ci, /Run the project's checks/);
+    const own = landHint(world());
+    assert.match(own, /2\. Run the project's checks \(e\.g\. npm test\)\./);
+    assert.doesNotMatch(own, /tests near what the rebase touched/);
+  });
+
   test('the project view says which it is', () => {
     const w = world();
     assert.equal(view(w.hub, 'demo').project.ci, 'auto');

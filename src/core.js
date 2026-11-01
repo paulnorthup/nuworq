@@ -468,7 +468,8 @@ export class Hub extends EventEmitter {
 
   // Whether CI checks the item's pull request before it merges (#532): it lands through one, and the project says
   // so (ci 'on') or the hub recorded checks for its commits lately. Then CI runs the whole suite and workers run
-  // only the tests near their change; elsewhere they run it themselves before submitting.
+  // only the tests near their change; elsewhere they run it themselves before submitting. Any recorded check counts:
+  // the hub doesn't know which checks are required, and auto-merge waits on the required ones anyway.
   ciGated(p, item) {
     if (p.ci === 'off' || !this.prMode(p, item)) return false;
     return p.ci === 'on' || !!this.q('SELECT 1 FROM checks WHERE project_id = ? AND at > ? LIMIT 1').get(p.id, this.now() - CI_RECENT);
