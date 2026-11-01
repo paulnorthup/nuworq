@@ -32,7 +32,8 @@ import { liveView, LIVE_TTL_MS } from './live.js';
 import { waitFor } from './wait.js';
 import { parseKeys } from './session.js';
 import { tmpdir } from 'node:os';
-import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
+import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, ownCheckout, PACKAGE_NAME } from './package.js';
+import { runningCommit } from './update.js';
 import { LOGO, FAVICON, withLogo } from '../web/logo.js';
 import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
 
@@ -43,24 +44,32 @@ const MAX_BODY = 1024 * 1024;
 const DECIDES = { human: ['accept'], agent: ['submit', 'review'] };
 
 // What is running: package.json's version and the commit of this code's own folder (under --follow, the
-// hub-src worktree; the hub restarts on every move, so reading it once per process stays true).
+// hub-src worktree; the hub restarts on every move, so reading it once per process stays true). Git is asked only
+// when the folder is a checkout of its own (#511); an installed package names its commit in src/commit.txt and
+// links it on the repository its package.json names, never on a repository that happens to enclose the folder.
+// root: another folder, read afresh (tests).
 const ROOT = join(WEB, '..');
 let build = null;
-export function buildInfo() {
-  if (build) return build;
+export function buildInfo(root) {
+  if (!root && build) return build;
+  const at = root ?? ROOT;
   const git = (...args) => {
-    try { return execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch { return null; }
+    try { return execFileSync('git', ['-C', at, ...args], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch { return null; }
   };
-  let version = null;
-  try { version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? null; } catch {}
-  const sha = git('rev-parse', 'HEAD');
-  const remote = normRemote(git('remote', 'get-url', 'origin') ?? '');
-  return (build = {
-    version,
+  let pkg = {};
+  try { pkg = JSON.parse(readFileSync(join(at, 'package.json'), 'utf8')) ?? {}; } catch {}
+  const checkout = ownCheckout(at);
+  const sha = checkout ? git('rev-parse', 'HEAD') : runningCommit(at);
+  const remote = checkout ? normRemote(git('remote', 'get-url', 'origin') ?? '') : '';
+  const home = remote || normRemote(typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url ?? '');
+  const info = {
+    version: pkg.version ?? null,
     commit: sha?.slice(0, 7) ?? null,
-    commit_url: sha && remote.startsWith('github.com/') ? `https://${remote}/commit/${sha}` : null,
+    commit_url: sha && home.startsWith('github.com/') ? `https://${home}/commit/${sha}` : null,
     source: remote.startsWith('github.com/') ? remote : null, // where to clone nuworq from, for another machine
-  });
+  };
+  if (!root) build = info;
+  return info;
 }
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
