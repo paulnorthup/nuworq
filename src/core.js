@@ -1927,8 +1927,12 @@ export class Hub extends EventEmitter {
     const a = this.q('SELECT has, model FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent ?? '')
       ?? this.q('SELECT has, model FROM agents WHERE name = ? ORDER BY last_seen DESC LIMIT 1').get(agent ?? '');
     const landed = this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND implementer = ? AND size = 'large' AND stage = 'done'`).get(p.id, agent ?? '').n;
-    const missed = this.q(`SELECT COUNT(*) AS n FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND i.size = 'large'
-        AND ((e.type = 'sent_back' AND i.implementer = ?) OR (e.type = 'lease_expired' AND json_extract(e.data, '$.agent') = ?))`).get(p.id, agent ?? '', agent ?? '').n;
+    // Two counts, not one OR, so each finds its rows by index (events_type, events_lapsed).
+    const missed = this.q(`SELECT
+        (SELECT COUNT(*) FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND e.type = 'sent_back'
+          AND i.implementer = ? AND i.size = 'large')
+      + (SELECT COUNT(*) FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND e.type = 'lease_expired'
+          AND json_extract(e.data, '$.agent') = ? AND i.size = 'large') AS n`).get(p.id, agent ?? '', p.id, agent ?? '').n;
     return { has: has ?? json(a?.has, []), weak: smallModel(a?.model) || (missed >= 2 && !landed) };
   }
 
