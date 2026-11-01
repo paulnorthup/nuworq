@@ -2,7 +2,7 @@
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -291,6 +291,7 @@ export class Hub extends EventEmitter {
     this.hosted = hosted;
     this._stmts = new Map();
     this._unreachable = new Set(); // repositories the hub has said it can't reach
+    this._behind = new Map(); // item id → whether its branch lacks its base, as refreshBehind last found (#535)
     // The app's read tokens for the hub's own mirrors, per remote: { token, expires_at } once minted,
     // { pending } while minting, { error, hint, at } when GitHub said no. Memory only, never the database.
     this._mirrorTokens = new Map();
@@ -619,6 +620,7 @@ export class Hub extends EventEmitter {
 
   remoteChanged(remote) {
     for (const p of this.projects()) if (this.remotesOf(p).includes(remote)) this.changed(p);
+    this.refreshBehindSoon(); // a fetch moved its branches (#535)
   }
 
   // The branch work lands on, as far as git can say: main, else master; main when it can't.
@@ -931,6 +933,7 @@ export class Hub extends EventEmitter {
     }
     const r = this.q(`INSERT INTO events (project_id, item_id, actor, type, headline, summary, detail, data, at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, actor, type, headline, summary, detail, JSON.stringify(data), this.now());
+    if (type === 'landed') this.refreshBehindSoon(); // branches being built may now lack their base (#535)
     return Number(r.lastInsertRowid);
   }
 
@@ -1431,19 +1434,55 @@ export class Hub extends EventEmitter {
     }
     if (clashes.length) notes.push(`${clashes.join('; ')}. Keep your changes there small and coordinate with a comment on their item.`);
     // Work that landed since this agent started, unless its branch already has it: rebase while conflicts are small.
-    if (item.stage === 'active' && item.branch) {
-      const landed = this.q(`SELECT DISTINCT i.seq FROM events e JOIN items i ON i.id = e.item_id
-        WHERE e.project_id = ? AND e.type = 'landed' AND json_extract(e.data, '$.nocode') IS NULL AND e.at > ? AND i.id != ? ORDER BY i.seq`).all(p.id, item.stage_since, item.id);
-      const repo = landed.length ? this.repoFor(p, item) : null;
-      const base = repo ? baseOf(repo.path) : null;
-      if (base && branchExists(repo.path, item.branch) && !contains(repo.path, item.branch, base)) {
-        const how = repo.mode === 'remote'
-          ? `git fetch origin, then git rebase origin/${base}, then git push origin ${item.branch} --force-with-lease`
-          : `git rebase ${base}`;
-        notes.push(`${base} moved since you started: ${landed.map((x) => `#${x.seq}`).join(', ')} landed. Rebase now (${how}), while any conflicts are small.`);
-      }
+    // Whether it has it comes from refreshBehind's cache, so a heartbeat runs no git (#535).
+    const landed = item.stage === 'active' && item.branch ? this.landedSince(p, item) : [];
+    const b = landed.length ? this._behind.get(item.id) : null;
+    if (b?.behind && b.branch === item.branch) {
+      const how = b.mode === 'remote'
+        ? `git fetch origin, then git rebase origin/${b.base}, then git push origin ${item.branch} --force-with-lease`
+        : `git rebase ${b.base}`;
+      notes.push(`${b.base} moved since you started: ${landed.map((x) => `#${x.seq}`).join(', ')} landed. Rebase now (${how}), while any conflicts are small.`);
     }
     return notes.length ? notes.join(' ') : undefined;
+  }
+
+  // Code work that landed in the project since item started, other than item itself.
+  landedSince(p, item) {
+    return this.q(`SELECT DISTINCT i.seq FROM events e JOIN items i ON i.id = e.item_id
+      WHERE e.project_id = ? AND e.type = 'landed' AND json_extract(e.data, '$.nocode') IS NULL AND e.at > ? AND i.id != ? ORDER BY i.seq`).all(p.id, item.stage_since, item.id);
+  }
+
+  // Whether each branch being built lacks what landed since it started (#535), for headsUp to read. Off the request
+  // path: on the sweep timer, and soon after a fetch or a landing (refreshBehindSoon). git runs asynchronously, and
+  // a branch whose head and base head haven't moved keeps its last answer without running merge-base.
+  async refreshBehind() {
+    const seen = new Set();
+    for (const p of this.projects()) {
+      for (const item of this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'active' AND branch != ''`).all(p.id)) {
+        if (!this.landedSince(p, item).length) continue;
+        let repo = null;
+        try { repo = this.repoFor(p, item); } catch {}
+        if (!repo) continue;
+        seen.add(item.id);
+        const was = this._behind.get(item.id);
+        const known = was?.branch === item.branch && was.path === repo.path ? was : null;
+        const r = await behindBase(repo.path, item.branch, known).catch(() => null);
+        if (r) this._behind.set(item.id, { ...r, branch: item.branch, path: repo.path, mode: repo.mode });
+        else this._behind.delete(item.id);
+      }
+    }
+    for (const id of this._behind.keys()) if (!seen.has(id)) this._behind.delete(id);
+  }
+
+  // A fetch or a landing moved a base: refresh after the current request, never during it.
+  refreshBehindSoon() {
+    if (this._behindQueued) return;
+    this._behindQueued = setImmediate(() => {
+      this._behindQueued = null;
+      // A hub closed meanwhile (tests, shutdown) has nothing to check.
+      if (this.db.isOpen !== false) this.refreshBehind().catch((e) => this.db.isOpen !== false && console.error('checking branches against main failed', e));
+    });
+    this._behindQueued.unref?.();
   }
 
   setTouching(item, v, agent) {
