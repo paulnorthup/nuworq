@@ -96,6 +96,9 @@ describe('nuworq worker --agent opencode', () => {
       assert.deepEqual(readdirSync(repo).sort(), ['.git', 'f'], 'no config file left in the repo');
 
       await assert.rejects(cli(), (e) => /opencode needs a model/.test(e.stderr));
+      // With somewhere to push, it isn't started (#472): opencode has no sandbox for its shell.
+      g('remote', 'add', 'origin', 'https://github.com/acme/oc.git');
+      await assert.rejects(cli('--model', 'ollama/qwen3:8b', '--as', 'oc-2'), (e) => /opencode workers aren't started for oc: it has a remote, and opencode has no sandbox/.test(e.stderr) && /--agent claude/.test(e.stderr));
     } finally {
       server.close();
     }
@@ -144,11 +147,14 @@ describe('nuworq worker --agent claude', () => {
     g(other, 'add', '.');
     g(other, 'commit', '-q', '-m', 'landed elsewhere');
     g(other, 'push', '-q', 'origin', 'main');
-    writeFileSync(join(repo, 'package.json'), '{}'); // a Node project
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node --test', lint: 'x', 'bad; rm': 'y' } })); // a Node project
 
     const hub = new Hub();
     hub.tx(() => hub.project('gh', { create: true }));
-    hub.humanOp('gh', 'settings', { path: repo });
+    hub.humanOp('gh', 'settings', { path: repo, sandbox_hosts: 'API.stripe.com, api.stripe.com' }); // a host its tests need, said by a person
+    assert.throws(() => hub.humanOp('gh', 'settings', { sandbox_hosts: 'https://evil.example/x' }), /isn't a host name/);
+    assert.throws(() => hub.agentOp('gh', 'settings', 'c-2', { sandbox_hosts: 'evil.example' }), 'an agent can\'t add one');
+    assert.equal(hub.project('gh').sandbox_hosts, '["api.stripe.com"]');
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
@@ -157,10 +163,29 @@ describe('nuworq worker --agent claude', () => {
       const allow = stdout.match(/--allowedTools '([^']*)'/)[1].split(',');
       assert.ok(allow.includes('Bash(git fetch:*)'));
       assert.deepEqual(allow.filter((a) => /git push/.test(a)), ['Bash(git push origin:*)'], 'no other push, and no bare git push');
-      assert.ok(allow.includes(`Bash(git -C ${repo} merge --ff-only:*)`), 'kept for a hub that lands in this checkout');
-      assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [`Bash(git -C ${repo} merge --ff-only:*)`], 'no other -C command');
+      assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [], 'no -C command: the hub lands work on origin');
       assert.ok(!allow.some((a) => /^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no blanket git');
-      assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*where CI checks the pull request, push the branch and let its checks decide; otherwise run the checks, then `git push origin <branch>:main`/);
+      // The project's own commands (#472): its npm scripts by name, never an interpreter that runs anything.
+      assert.deepEqual(allow.filter((a) => /npm|node|python|cargo|go /.test(a)), ['Bash(npm test:*)', 'Bash(npm ci)', 'Bash(npm install)', 'Bash(npm run lint:*)']);
+      assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*only nuworq\/ branches: main and tags are the hub.*where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch \(`git push origin <branch> --force-with-lease`\), then submit; the hub puts it on main/);
+      assert.doesNotMatch(stdout, /<branch>:main/);
+      // Its shell runs in Claude Code's sandbox, from --settings so no file in the repository loosens it.
+      const { sandbox, permissions } = JSON.parse(stdout.match(/--settings '([^']*)'/)[1]);
+      // Its file tools say the same (test/sandbox.test.js): edits only in its worktree, never the keys the sandbox hides.
+      assert.ok(!allow.some((a) => /^(Read|Edit|Write|Glob|Grep)/.test(a)), 'no file tool in --allowedTools: --settings scopes them');
+      const wt = `${repo}.worktrees/c-2`;
+      assert.deepEqual(permissions.allow, ['Read', 'Glob', 'Grep', `Edit(/${wt}/**)`]);
+      for (const r of ['Read(~/.ssh/**)', 'Read(~/.nuworq/**)', 'Edit(~/.ssh/**)', `Edit(/${join(repo, '.git', 'hooks')}/**)`, `Edit(/${join(wt, '.git')})`]) assert.ok(permissions.deny.includes(r), r);
+      assert.deepEqual({ ...sandbox, network: undefined, filesystem: undefined }, { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false, network: undefined, filesystem: undefined });
+      assert.deepEqual(sandbox.network, { allowedDomains: [`127.0.0.1:${server.address().port}`, 'github.com', '*.github.com', '*.githubusercontent.com', 'registry.npmjs.org', 'api.stripe.com'], strictAllowlist: true, allowLocalBinding: true });
+      // Its worktree (the working directory) and temp, and of the checkout's .git only what its commits need: never
+      // hooks or config, which an unsandboxed git there would run (test/sandbox.test.js).
+      assert.ok(sandbox.filesystem.allowWrite.includes(join(repo, '.git', 'objects')) && sandbox.filesystem.allowWrite.includes(join(repo, '.git', 'worktrees', 'c-2')));
+      assert.ok(!sandbox.filesystem.allowWrite.includes(join(repo, '.git')), 'not all of .git');
+      for (const p of ['hooks', 'config']) assert.ok(sandbox.filesystem.denyWrite.includes(join(repo, '.git', p)), p);
+      assert.ok(sandbox.filesystem.denyWrite.includes(join(`${repo}.worktrees`, 'c-2', '.git')), "its worktree's own .git file");
+      for (const p of ['~/.ssh', '~/.nuworq', '~/.aws', '~/.config/gh', '~/.git-credentials']) assert.ok(sandbox.filesystem.denyRead.includes(p), p);
+      assert.match(stdout, /^export NODE_USE_ENV_PROXY=1(?= && \\\n)/m, "Node's fetch goes through the sandbox's proxy too");
       assert.match(stdout, /detached at origin\/main/);
       assert.match(stdout, /run only the tests that cover what you change\. For the whole suite, follow the hint `next` gives: where CI checks the pull request, CI runs it; otherwise run it once, just before you submit/);
       // Its test runs take 2 files at a time (or what the operator set), for every process the agent starts.
@@ -171,13 +196,12 @@ describe('nuworq worker --agent claude', () => {
       assert.equal(val({ NUWORQ_TEST_CONCURRENCY: '4' }), '4');
       assert.doesNotMatch(stdout, /NODE_OPTIONS/, 'Node refuses --test-concurrency there');
 
-      const setup = stdout.match(/^git -C '[^']*' -c .+? -c \S+ fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
+      const setup = stdout.match(/^git -C '[^']*' -c credential\.helper= -c credential\.https:\/\/github\.com\.helper= -c '(?:[^']|'\\'')*' -c \S+ fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
       assert.ok(setup, 'fetch first, then the worktree detached at origin/main');
-      // It holds no item yet, so over HTTPS the fetch gets the project's read-only token, not the item one.
+      // It holds no item yet, so over HTTPS the fetch gets the project's read-only token; the person's own helpers are reset.
       // Every value in the helper is quoted (#477): git runs it through sh.
-      assert.match(setup, /-c 'credential\.https:\/\/github\.com\.helper=!NUWORQ_URL='\\''http:\/\/127\.0\.0\.1:\d+'\\'' node '\\''[^']+'\\'' git-credential --project '\\''gh'\\'' --as '\\''c-2'\\''' -c credential\.https:\/\/github\.com\.useHttpPath=true fetch/);
+      assert.match(setup, /-c credential\.helper= -c credential\.https:\/\/github\.com\.helper= -c 'credential\.https:\/\/github\.com\.helper=!NUWORQ_URL='\\''http:\/\/127\.0\.0\.1:\d+'\\'' node '\\''[^']+'\\'' git-credential --project '\\''gh'\\'' --as '\\''c-2'\\''' -c credential\.https:\/\/github\.com\.useHttpPath=true fetch/);
       execFileSync('/bin/sh', ['-c', setup.replace(/ \\\n/g, ' ')]);
-      const wt = `${repo}.worktrees/c-2`;
       assert.equal(g(wt, 'rev-parse', 'HEAD'), g(origin, 'rev-parse', 'main'), 'at the latest main on GitHub');
       assert.notEqual(g(repo, 'rev-parse', 'main'), g(origin, 'rev-parse', 'main'), 'not the stale local main');
       g(repo, 'worktree', 'remove', '--force', wt);
@@ -218,7 +242,12 @@ describe('nuworq worker --browser', () => {
       const plain = parts(await cli('--agent', 'claude'));
       assert.deepEqual(Object.keys(plain.servers), ['nuworq']);
       assert.ok(plain.strict, 'only the runner\'s MCP servers, none of the person\'s own');
-      assert.deepEqual(plain.settings, { enabledPlugins: { 'nuworq@nuworq': false, 'other@market': false } }, 'every installed plugin off');
+      assert.deepEqual(plain.settings.enabledPlugins, { 'nuworq@nuworq': false, 'other@market': false }, 'every installed plugin off');
+      assert.equal(plain.settings.sandbox.enabled, true);
+      assert.deepEqual(plain.settings.sandbox.filesystem.allowWrite, [repo], 'no origin: it lands by fast-forwarding this checkout, so it may write there');
+      for (const p of ['hooks', 'config']) assert.ok(plain.settings.sandbox.filesystem.denyWrite.includes(join(repo, '.git', p)), `all but its .git/${p}`);
+      assert.ok(plain.settings.permissions.allow.includes(`Edit(/${repo}/**)`) && plain.settings.permissions.deny.includes(`Edit(/${join(repo, '.git', 'hooks')}/**)`), 'its file tools likewise');
+      assert.ok(!plain.allow.some((a) => /^Bash\(node/.test(a)), 'no node to run anything with');
       assert.ok(plain.noSkills, 'no skills either: ~/.claude/skills holds nuworq-operator, and it isn\'t a plugin (#368)');
       assert.ok(!plain.allow.includes('mcp__playwright'));
       assert.ok(!(plain.servers.nuworq.env.NUWORQ_HAS ?? '').split(',').includes('browser'));
@@ -233,14 +262,19 @@ describe('nuworq worker --browser', () => {
       });
       assert.deepEqual(Object.keys(b.servers), ['nuworq', 'playwright']);
       assert.ok(b.strict);
-      assert.deepEqual(b.allow, [...plain.allow, 'mcp__playwright'], 'the same allowlist, plus the browser');
+      const demo = 'Bash(node bin/nuworq.js serve --demo --port 0)';
+      assert.deepEqual(b.allow.filter((a) => a !== demo), [...plain.allow, 'mcp__playwright'], 'the same allowlist, plus the browser');
+      assert.ok(b.allow.includes(demo), 'and the one command that serves the demo hub to look at');
       assert.equal(b.deny, 'mcp__playwright__browser_run_code_unsafe', 'except its tool that runs any code in the server process');
       assert.ok(b.servers.nuworq.env.NUWORQ_HAS.split(',').includes('browser'), 'it declares browser, as --has browser would');
       assert.match(b.task, /`node bin\/nuworq\.js serve --demo --port 0` in the background/);
       assert.match(b.task, /desktop width and at 375px wide \(browser_resize\); the app is light only/);
       assert.doesNotMatch(b.task, /dark mode \(|browser_emulate_media/, 'no dark-mode screenshots (#156)');
       assert.match(b.task, /describe in your evidence what you saw/);
-      assert.deepEqual(parts(await cli('--agent', 'claude', '--browser', '--allow', 'Read')).allow, ['Read', 'mcp__playwright'], '--allow keeps its list');
+      const own = parts(await cli('--agent', 'claude', '--browser', '--allow', 'Read'));
+      assert.deepEqual(own.allow, ['Read', 'mcp__playwright'], '--allow keeps its list');
+      assert.deepEqual(Object.keys(own.settings.permissions), ['deny'], 'and gets the file denies, not the file allows');
+      assert.ok(own.settings.permissions.deny.includes('Read(~/.ssh/**)'));
 
       await assert.rejects(cli('--agent', 'codex', '--browser'), (e) => e.stderr.includes('--browser is for Claude workers only'));
     } finally {
@@ -281,6 +315,10 @@ describe('workers on a hub that requires login', () => {
       const ran = (await cli('--run', '--agent-token', agent)).stdout;
       const file = join(home, '.nuworq', 'tokens', 'w.token');
       assert.match(ran, new RegExp(`ARGS: .*"NUWORQ_TOKEN_FILE":"${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+      // Its git's credential helper reads that file inside the sandbox, which denies the rest of ~/.nuworq (#472).
+      const { sandbox } = JSON.parse(ran.match(/--settings (\{\S*\})/)[1]);
+      assert.ok(sandbox.filesystem.denyRead.includes('~/.nuworq'));
+      assert.deepEqual(sandbox.filesystem.allowRead, [file], 'its own token file, nothing else of ~/.nuworq');
       assert.doesNotMatch(ran, /ARGS: .*nwq_/, 'no token in its arguments');
       assert.match(ran, /^ENV TOKENS: 0$/m, 'no token in its environment, not even the person\'s');
       assert.match(ran, /^-rw-------@? .* w\.token$/m, 'a file only this user reads');

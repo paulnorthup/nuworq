@@ -78,7 +78,7 @@ describe('steering about an item retires with the item (#551)', () => {
     // As before #551: those steers still active, the database one migration behind.
     hub.q(`UPDATE notes SET active = 1 WHERE kind = 'steer'`).run();
     hub.q(`DELETE FROM events WHERE type = 'retired'`).run();
-    hub.db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    hub.db.exec(`PRAGMA user_version = ${MIGRATIONS.findIndex((m) => m.name === 'steering about finished or dropped items retires')}`);
     hub.db.close();
     const logged = [];
     t.mock.method(console, 'log', (m) => logged.push(m));

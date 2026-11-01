@@ -10,6 +10,7 @@ import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneD
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
+import { sandboxSettings, filePermissions, projectCommands } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -468,9 +469,9 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
   if (!flags.run) {
     console.log(`\n${cmd}\n`);
     console.log(dim({
-      claude: `Headless agents can't ask permission: they may only use the tools in --allowedTools (set from what's in the folder; change with --allow). ${origin ? 'Pushes go to origin only: item branches, and landing one on main (GitHub keeps main fast-forward-only).' : 'Never git push.'}`,
+      claude: `Headless agents can't ask permission: they may only use the tools in --allowedTools (the project's own test and build commands; change with --allow). Their shell runs in Claude Code's sandbox: it writes only in the worktree and temp, and reaches only the hub, GitHub, the project's registries and the hosts its settings add. ${origin ? 'Pushes go through the hub, which takes nuworq/ branches only; the hub lands work on main.' : 'Never git push.'}`,
       codex: `Codex runs in its workspace-write sandbox; the nuworq MCP server runs outside it, so it can reach the hub.`,
-      opencode: `opencode has no sandbox: it may run any shell command except git push (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
+      opencode: `opencode has no sandbox, so it runs only on projects without a remote, and never git pushes (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
     }[agent] + '\nAdd --run to start it now.'));
     if (s.token) console.log(dim('Replace <agent-token> with an agent token (nuworq token create <name> --role agent --project <p>). With --run, pass it as --agent-token.'));
     return;
@@ -623,13 +624,36 @@ const browserServer = (name) => ({
 // server (a second, unscoped nuworq identity), skills and tool definitions in each worker's context.
 // Skills in ~/.claude/skills (nuworq-operator among them) aren't plugins: --disable-slash-commands keeps every
 // skill and command out (#368). A worker needs none: its task and the nuworq MCP server's instructions say it all.
-function workerSettings() {
+// Its shell runs in Claude Code's sandbox (#472, src/sandbox.js): writes in its worktree, the checkout's .git and
+// temp only, and the network to the hub, GitHub, the project's registries and the hosts a person added for it.
+// Its file tools answer to permissions instead, which say the same (filePermissions): edits in its folder only, and
+// no reads of the keys the sandbox hides. Set here, from --settings, so no settings file in the repository can loosen it.
+// own: the allowlist is the person's (--allow), so only the denies are added to it.
+function workerSettings(sandbox, { own = false } = {}) {
   let plugins = {};
   try {
     const file = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'plugins', 'installed_plugins.json');
     plugins = JSON.parse(readFileSync(file, 'utf8')).plugins ?? {};
   } catch { /* none installed */ }
-  return JSON.stringify({ enabledPlugins: Object.fromEntries(Object.keys(plugins).map((p) => [p, false])) });
+  const files = sandbox && filePermissions(sandbox);
+  return JSON.stringify({ enabledPlugins: Object.fromEntries(Object.keys(plugins).map((p) => [p, false])),
+    ...(sandbox ? { sandbox: sandboxSettings(sandbox), permissions: own ? { deny: files.deny } : files } : {}) });
+}
+
+// A worker's git, set in its environment (#472). credential.helper's empty value drops every helper set before it
+// (osxkeychain, gh, the person's own), and so do the github.com ones; then nuworq's, the only one. Pushes for
+// github.com, by HTTPS or SSH address, go to the hub's /api/git/. SSH addresses fetch over HTTPS too, and the
+// SSH agent is unset, so no SSH key of the person's is ever used.
+function gitEnv({ hub, tokenAt, name, project }) {
+  // Every value quoted, and the token only as the path of its 0600 file (#477).
+  const helper = `!NUWORQ_URL=${sq(hub)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --project ${sq(project)} --as ${sq(name)}`;
+  const through = `${hub.replace(/\/+$/, '')}/api/git/github.com/`;
+  const config = [
+    ['credential.helper', ''], ['credential.https://github.com.helper', ''], ['credential.helper', helper], ['credential.useHttpPath', 'true'],
+    ['url.https://github.com/.insteadOf', 'git@github.com:'], ['url.https://github.com/.insteadOf', 'ssh://git@github.com/'],
+    [`url.${through}.pushInsteadOf`, 'https://github.com/'], [`url.${through}.pushInsteadOf`, 'git@github.com:'], [`url.${through}.pushInsteadOf`, 'ssh://git@github.com/'],
+  ];
+  return `unset SSH_AUTH_SOCK && export GIT_CONFIG_COUNT=${config.length} ${config.map(([k, v], i) => `GIT_CONFIG_KEY_${i}=${sq(k)} GIT_CONFIG_VALUE_${i}=${sq(v)}`).join(' ')}`;
 }
 
 // The shell command that gives a worker its worktree (detached at main, or at origin/main after a
@@ -648,6 +672,12 @@ function workerSetup(target, agent, flags, s, token = null) {
   const isRepo = existsSync(join(home, '.git'));
   // With an origin (GitHub), work starts from main there and lands by pushing to it.
   const origin = isRepo && hasOrigin(home);
+  // opencode has no sandbox to keep its shell in (#472): it runs only where there is nothing to push to.
+  if (agent === 'opencode' && origin) {
+    throw new HubError(`opencode workers aren't started for ${target.name}: it has a remote, and opencode has no sandbox`, {
+      hint: "opencode's shell could read this machine's keys and reach any host, so it works only on projects without an origin. Use --agent claude (its shell runs in Claude Code's sandbox) or --agent codex (workspace-write).",
+    });
+  }
   const worktree = isRepo && !flags.here ? join(`${home}.worktrees`, name) : null;
   const main = isRepo ? mainBranch(home) : 'main';
   const cwd = worktree ?? home;
@@ -667,7 +697,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   };
   const task = [
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
-    worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. To land accepted work, follow the hub's steps: rebase onto origin/${main}; where CI checks the pull request, push the branch and let its checks decide; otherwise run the checks, then \`git push origin <branch>:${main}\`. Never work in the main checkout, ${home}.`
+    worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. Your pushes go through the hub, which takes only nuworq/ branches: ${main} and tags are the hub's. To land accepted work, follow the hub's steps: rebase onto origin/${main}; where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch (\`git push origin <branch> --force-with-lease\`), then submit; the hub puts it on ${main}. Never work in the main checkout, ${home}.`
       : worktree ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} with \`git switch -c <branch> ${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, and include the branch and commit in your evidence when you submit. Never work in the main checkout, ${home}.` : '',
     browser && (has('bin/nuworq.js')
       ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login. When you ship a visible UI feature, add its key with today\'s date to web/new.js and data-new="<key>" to its element, so people see it\'s new.'
@@ -679,20 +709,19 @@ function workerSetup(target, agent, flags, s, token = null) {
       : 'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
 
+  // The project's own test and build commands, never an interpreter that runs anything (#472, src/sandbox.js).
   const run = [
-    has('package.json') && ['Bash(npm test:*)', 'Bash(npm run:*)', 'Bash(node:*)'],
-    (has('pyproject.toml') || has('requirements.txt') || has('setup.py')) && ['Bash(python3:*)', 'Bash(pytest:*)'],
-    has('Cargo.toml') && ['Bash(cargo:*)'],
-    has('go.mod') && ['Bash(go:*)'],
-    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)'],
-    // Landing: rebase onto main, then fast-forward main in this one checkout. Nothing else with -C.
-    isRepo && ['Bash(git rebase:*)', `Bash(git -C ${home} merge --ff-only:*)`],
-    // Through origin: push the item's branch, and land it with git push origin <branch>:main. Claude Code
-    // matches allowed commands at word boundaries, so the rule is "git push origin"; main itself is kept
-    // fast-forward-only by the repository's rules on GitHub (no force-push, no delete).
+    projectCommands(home),
+    // nuworq itself: the demo hub its UI work is looked at with.
+    browser && has('bin/nuworq.js') && ['Bash(node bin/nuworq.js serve --demo --port 0)'],
+    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)', 'Bash(git rebase:*)'],
+    // Landing without an origin: fast-forward main in this one checkout. Nothing else with -C.
+    isRepo && !origin && [`Bash(git -C ${home} merge --ff-only:*)`],
+    // Through origin: fetch, and push the item's branch. Every push goes through the hub, which passes on only
+    // nuworq/ branches (src/gitproxy.js); landing on main is the hub's.
     origin && ['Bash(git fetch:*)', 'Bash(git push origin:*)'],
   ].filter(Boolean).flat();
-  const allow = [...(flags.allow ? [String(flags.allow)] : ['mcp__nuworq', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(ls:*)', ...run]),
+  const allow = [...(flags.allow ? [String(flags.allow)] : ['mcp__nuworq', 'Bash(ls:*)', ...run]),
     ...(browser ? ['mcp__playwright'] : [])].join(',');
   const mcp = JSON.stringify({ mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env }, ...(browser ? { playwright: browserServer(name) } : {}) } });
 
@@ -701,18 +730,20 @@ function workerSetup(target, agent, flags, s, token = null) {
   const setup = [];
   if (worktree && origin) {
     // A fetch over HTTPS from GitHub gets a read-only token for the project's repository from the hub's
-    // GitHub App: the worker holds no item yet. git asks its own helpers first, and SSH needs none.
+    // GitHub App: the worker holds no item yet. Only that helper: the person's own are reset. SSH needs none.
+    // Every value in it quoted, and the token only as the path of its 0600 file (#477).
     const reader = `!NUWORQ_URL=${sq(s.url)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --project ${sq(target.slug)} --as ${sq(name)}`;
-    setup.push(`git -C ${sq(home)} -c ${sq(`credential.https://github.com.helper=${reader}`)} -c credential.https://github.com.useHttpPath=true fetch -q origin`,
+    setup.push(`git -C ${sq(home)} -c credential.helper= -c credential.https://github.com.helper= -c ${sq(`credential.https://github.com.helper=${reader}`)} -c credential.https://github.com.useHttpPath=true fetch -q origin`,
       `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
   } else if (worktree) setup.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
   const lines = [`cd ${sq(cwd)}`];
-  // Pushes over HTTPS to GitHub get a one-repo, one-hour token from the hub's GitHub App, asked for by git
-  // itself: this worker's processes only (no config file changes), and the agent never sees the token.
-  if (origin) {
-    const helper = `!NUWORQ_URL=${sq(s.url)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --as ${sq(name)}`;
-    lines.push(`export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0=${sq(helper)} GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath GIT_CONFIG_VALUE_1=true`);
-  }
+  // git in this worker's processes only (no config file changes): nuworq's helper is its one credential helper
+  // (the person's keychain, gh and any other are reset), answering GitHub with a read-only token for the project's
+  // repository and the hub with the worker's name. Pushes to GitHub go to the hub instead (#472), which passes
+  // nuworq/ branches on with its own token. SSH remotes go over HTTPS, without the person's SSH agent.
+  if (origin) lines.push(gitEnv({ hub: s.url, tokenAt, name, project: target.slug }));
+  // Node's fetch goes through the sandbox's proxy, as git and curl do (the credential helper reaches the hub).
+  if (agent === 'claude') lines.push('export NODE_USE_ENV_PROXY=1');
   // Workers each running a Node project's whole suite on every core at once saturate the machine: their test
   // runs take at most 2 files at a time (unless the operator set otherwise). Node refuses --test-concurrency in
   // NODE_OPTIONS, so the project's test script reads this (nuworq's own does: scripts/run-tests.js).
@@ -729,7 +760,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     // --proxy: Claude Code's traffic goes to llm-proxy's Anthropic route with the proxy's owner token (not the
     // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed.
     const via = flags.proxy === undefined ? '' : `ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN" \\\n  `;
-    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts: target.sandbox_hosts ?? [], landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
@@ -1656,6 +1687,13 @@ async function gitCredential(pos, flags) {
   let input = '';
   for await (const c of process.stdin) input += c;
   const ask = Object.fromEntries(input.split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  // The hub itself, where a worker's pushes go (#472): its name, and its agent token as the password.
+  const hub = new URL(resolveSettings(flags).url);
+  if (ask.host === hub.host && ask.protocol === hub.protocol.slice(0, -1)) {
+    const agent = flags.as || envVar('AGENT');
+    if (!agent) throw new HubError('who are you?', { hint: 'The helper needs --as <name> or NUWORQ_AGENT.' });
+    return process.stdout.write(`username=${agent}\npassword=${resolveSettings(flags).token || 'none'}\n`);
+  }
   if (ask.host !== 'github.com') return;
   // --project: a read-only token to clone or fetch that project's repository (a worker before it holds an item).
   if (flags.project) {
