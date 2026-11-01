@@ -42,7 +42,7 @@ describe('a typed email makes no membership', () => {
     try {
       assert.equal(spaces.planOf('evil'), 'free');
       assert.equal((await post('/api/people', { handle: 'boss', role: 'owner', email: PAUL })).status, 200);
-      assert.equal((await post('/api/notify', { kind: 'webhook', url: 'http://127.0.0.1:1/sink', person: '@boss' })).status, 200);
+      assert.equal((await post('/api/notify', { kind: 'webhook', url: 'https://sink.example.com/boss', person: '@boss' })).status, 200);
       assert.equal(spaces.planOf('evil'), 'free', 'the plan still follows only Paul\'s own sign-ins');
       assert.deepEqual(dir.orgsOf(dir.identity(PAUL), spaces).map((m) => m.workspace), ['pauls']);
       assert.deepEqual(ownerChannels(spaces, [PAUL]).map(({ c }) => c.url), ['http://127.0.0.1:1/paul'], 'applicants\' details reach only Paul\'s channel');
