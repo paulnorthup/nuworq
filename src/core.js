@@ -14,7 +14,7 @@ import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion } from './releases.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
-import { jobsTaken } from './outcomes.js';
+import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
 import { commandParts } from '../web/commands.js';
@@ -309,7 +309,7 @@ export class Hub extends EventEmitter {
     // Routing by results (#349): each local model's readiness as llm-proxy last said ({ ready, state, why, at };
     // checkLocalModels in src/llmproxy.js), and each project's results per cell, recounted when events move on.
     this.localReady = new Map();
-    this._cells = new Map(); // project id → { last: its newest event id, cells }
+    this._cells = new Map(); // project id → { last: what decided its jobs when counted, cells }
     // Questions left open on work that had already landed or been dropped (before #182) close the same way.
     for (const it of this.q(`SELECT * FROM items WHERE stage IN ('done', 'dropped') AND id IN (SELECT item_id FROM questions WHERE status = 'open')`).all()) this.settleQuestions(it, it.stage);
     // Renamed tags (#325): stored needs and declared has move to the new names, quietly (no events).
@@ -713,9 +713,17 @@ export class Hub extends EventEmitter {
 
   // Each cell's results (#349): { 'work standard': { model: { attempts, clean } } } over the last 90 days of jobs,
   // where clean is a build that landed without being sent back or escaping, or any other job finished. Jobs still
-  // going, and raced attempts not chosen, don't count. Recounted only when the project's events have moved on.
+  // going, and raced attempts not chosen, don't count. Recounted only when something that decides a job's result
+  // happened (#537): a take or a job's end, an item reaching or leaving done, an item naming what it fixes.
+  // Heartbeats, comments, proposals and the rest leave the count as it is; before, any event reread every job's
+  // events on the next routed claim.
   cellStats(p) {
-    const last = this.q('SELECT MAX(id) AS id FROM events WHERE project_id = ?').get(p.id).id ?? 0;
+    const last = [
+      this.q(`SELECT MAX(id) AS id FROM events WHERE project_id = ? AND type IN (${JOB_EVENTS.map(() => '?').join(', ')})`).get(p.id, ...JOB_EVENTS).id ?? 0,
+      this.q(`SELECT MAX(t.id) AS id FROM transitions t JOIN items i ON i.id = t.item_id WHERE i.project_id = ? AND t.stage = 'done'`).get(p.id).id ?? 0,
+      this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND stage = 'done'`).get(p.id).n,
+      this.q('SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND fixes IS NOT NULL').get(p.id).n,
+    ].join(' ');
     const hit = this._cells.get(p.id);
     if (hit?.last === last) return hit.cells;
     const cells = {};
