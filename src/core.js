@@ -1457,6 +1457,9 @@ export class Hub extends EventEmitter {
           'accepted','pr_failed','pr_blocked','rebased','issue_close_failed','stepped_up','trial','retired','restored')
         ORDER BY at DESC LIMIT 8`).all(item.id).reverse();
     const questions = this.q('SELECT * FROM questions WHERE item_id = ? ORDER BY at').all(item.id);
+    // Its own answers shown here are delivered, as checkin's are (#458): a fresh listener doesn't wake it for them.
+    const mine = questions.filter((q) => agent && q.asked_by === agent && ['answered', 'confirmed'].includes(q.status) && !q.seen_by_asker);
+    if (mine.length) this.q(`UPDATE questions SET seen_by_asker = 1 WHERE id IN (${mine.map(() => '?').join(',')})`).run(...mine.map((q) => q.id));
     const steers = this.q(`SELECT n.* FROM notes n WHERE n.item_id = ? AND n.kind = 'steer' AND n.active = 1
         AND (n.target IS NULL OR n.target = ?) AND n.author != ?
         AND NOT EXISTS (SELECT 1 FROM acks a WHERE a.note_id = n.id AND a.agent = ?) ORDER BY n.at`).all(item.id, agent ?? '', agent ?? '', agent ?? '');

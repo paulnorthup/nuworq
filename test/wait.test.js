@@ -124,6 +124,31 @@ describe('an operator waits on the hub', () => {
     assert.deepEqual(strip(operatorEvents(hub, 'op', { since: r.at })), [], 'once');
   });
 
+  // #458: fresh listeners kept reporting answers the operator had read with look and next, and the stale line
+  // came first, so it read as the answer to a newer question.
+  test('an answer the operator read with checkin, look or next is delivered: a fresh listener reports only the new one, by its own id', async () => {
+    const { hub, tick } = setup();
+    hub.humanOp('o', 'create', { title: 'Sign the release', acceptance: 'x' });
+    const viaCheckin = hub.agentOp('o', 'ask', 'op', { question: 'Will you sign it?', item: '#1' });
+    const viaLook = hub.agentOp('o', 'ask', 'op', { question: 'And with one command?', item: '#1' });
+    tick(1);
+    hub.humanOp('o', 'answer', { question: viaCheckin.question, answer: 'Have operator do signing' });
+    assert.deepEqual(hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] }).answers.map((a) => a.question), ['Will you sign it?']);
+    tick(1);
+    hub.humanOp('o', 'answer', { question: viaLook.question, answer: 'Signed' });
+    assert.equal(hub.agentOp('o', 'look', 'op', { item: '#1' }).questions.find((q) => q.question_id === viaLook.question).answer, 'Signed');
+    assert.deepEqual((await waitFor(hub, 'op', { ms: 30 })).events, [], 'checkin and look delivered both');
+    assert.ok(hub.agentOp('o', 'look', 'w1', { item: '#1' }), "another agent's look delivers nothing for op");
+
+    const fresh = hub.agentOp('o', 'ask', 'op', { question: 'Is it live?', item: '#1' });
+    const waiting = waitFor(hub, 'op', { ms: 5000 });
+    tick(1);
+    hub.humanOp('o', 'answer', { question: fresh.question, answer: 'Yes' });
+    const r = await waiting;
+    assert.deepEqual(r.events, [{ kind: 'answer', project: 'o', question: fresh.question, item: '#1' }]);
+    assert.deepEqual((await waitFor(hub, 'op', { ms: 30 })).events.map((e) => e.question), [fresh.question], 'not read yet: still waiting for it');
+  });
+
   test("unnamed, operator-only work wakes it only when one operator has all its needs, not the operators' tags together", async () => {
     const { hub, tick } = setup();
     hub.agentOp('o', 'checkin', 'op2', { has: ['operator', 'claude-cli'] });
