@@ -17,7 +17,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect', 'allow']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -219,7 +219,8 @@ async function operatorCmd(flags) {
     return;
   }
   if (flags.detect) return detectCmd(flags);
-  if (flags.allow) return allowCmd(flags);
+  // --allow takes a value elsewhere (worker --allow <tools>), so a flag after it here arrives as its value.
+  if (flags.allow) return allowCmd(typeof flags.allow === 'string' && flags.allow.startsWith('--') ? { ...flags, [flags.allow.slice(2)]: true } : flags);
   // --start: open Claude Code here as the operator, as connect does on a yes (#490).
   if (flags.start) return startOperator(process.cwd(), flags.has ? has : null);
   console.log(`${bold('Start it:')} open Claude Code in ${project}'s folder (the terminal or the desktop app's Code tab) and type:
