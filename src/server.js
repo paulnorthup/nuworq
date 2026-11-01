@@ -1341,7 +1341,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { ok: true, slug: p.slug, ...(repo ? { repo, runner_opt_in: true } : {}) });
       }
       if (req.method === 'GET' && path === '/api/tools') {
-        return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? ''));
+        return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? '', { role: url.searchParams.get('role') || null }));
       }
 
       let m;
