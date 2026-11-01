@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { itemView } from '../src/insight.js';
-import { guide, OPS } from '../src/protocol.js';
+import { MODE_RULES, OPS } from '../src/protocol.js';
 
 // Items say when they break someone (#398): who must do what once it ships, so the release knows how to bump.
 const WHO = 'Machines on Node 24 must upgrade to 26 before `nuworq update`';
@@ -50,21 +50,17 @@ describe('the breaking flag (#398)', () => {
   });
 });
 
-describe('the guide says when to set it and that review checks it (#398)', () => {
-  const g = guide();
+describe('the hints say when to set it and that review checks it (#398, #527)', () => {
   test('shape: the API or tools, the CLI, the runtime minimum, or a manual migration; tooling updates are not breaking', () => {
-    const shape = g.slice(g.indexOf('- **shape**'), g.indexOf('- **review**'));
-    for (const re of [/Set `breaking` when/, /API route or tool removed or changed incompatibly/, /CLI command or flag removed/, /runtime minimum raised/, /manual migration/, /who must do what/, /Dependency or tooling updates that don't change what people install .* aren't breaking/]) {
-      assert.match(shape, re);
+    for (const re of [/Set breaking when/, /API route or tool removed or changed incompatibly/, /CLI command or flag removed/, /runtime minimum raised/, /manual migration/, /who must do what/, /dev tools and a runtime only tested in CI break nobody/]) {
+      assert.match(MODE_RULES.shape, re);
     }
   });
   test('review: the reviewer checks the flag is set when it should be, and accurate', () => {
-    const review = g.slice(g.indexOf('- **review**'), g.indexOf('- **land**'));
-    assert.match(review, /Check `breaking` too/);
-    assert.match(review, /Reject when it's missing, wrong, or set on a change that breaks nobody/);
+    assert.match(MODE_RULES.review, /Check breaking too/);
+    assert.match(MODE_RULES.review, /reject it when missing, wrong, or set on a change that breaks nobody/);
   });
-  test('the freshness sweep proposes a breaking upgrade with `breaking` set', () => {
-    const sweep = g.slice(g.indexOf('## Freshness sweep'), g.indexOf('## Write in layers'));
-    assert.match(sweep, /One proposal per breaking upgrade[^\n]*`breaking` set to who must do what/);
+  test('the freshness sweep proposes a breaking upgrade with breaking set', () => {
+    assert.match(MODE_RULES.fresh, /Propose each breaking upgrade[^\n]*breaking set to who must do what/);
   });
 });

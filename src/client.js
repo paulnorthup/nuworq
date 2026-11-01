@@ -2,6 +2,7 @@
 import { readFileSync, existsSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join, dirname, basename, resolve, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { slugify, normRemote } from './text.js';
 import { mirrorSource } from './git.js';
 import { envVar, dataDir, CONFIG_FILES } from './names.js';
@@ -100,15 +101,17 @@ export function connected(file = CONNECT_FILE) {
 // project is null unless someone named it (flag, env, or .nuworq.json): otherwise the hub decides,
 // from the folder the agent is in, or by routing it to the work that matters most.
 // The hub: flag, env, .nuworq.json, the connected hub, the one serving on this machine, the default.
-// The token: flag, env, then the connected hub's, which is only ever sent to that hub.
+// The token: flag, env, a file the env names (NUWORQ_TOKEN_FILE: how a runner's workers get theirs, #477), then
+// the connected hub's, which is only ever sent to that hub.
 export function resolveSettings({ url, project, token, cwd = process.cwd(), connectFile } = {}) {
   const config = findConfig(cwd);
   const conn = connected(connectFile);
   const hubUrl = (url || envVar('URL') || config?.url || conn?.url || discoveredUrl() || DEFAULT_URL).replace(/\/+$/, '');
   const named = project || envVar('PROJECT') || config?.project;
+  const fromFile = () => { const f = envVar('TOKEN_FILE'); try { return f ? readFileSync(f, 'utf8').trim() || null : null; } catch { return null; } };
   return {
     url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd),
-    token: token ?? envVar('TOKEN') ?? (conn?.url === hubUrl ? conn.token : ''), config,
+    token: token ?? envVar('TOKEN') ?? fromFile() ?? (conn?.url === hubUrl ? conn.token : ''), config,
   };
 }
 
@@ -162,9 +165,11 @@ export function createClient(opts = {}) {
   // proxy in front of it answers 502/503/504 with a page of its own. Those are retried with backoff (a few
   // seconds on this machine, about a minute elsewhere), so a call made meanwhile just takes longer.
   // The hub's own answers (JSON), errors included, are never retried. Redirects come back unfollowed.
-  // A proxy's answer is retried only for a read: a write may have reached the hub before the proxy gave up
-  // (Cloudflare's 520 and 524 come after the hub got it), and sending it again could apply it twice.
-  async function send(path, init, { read = false } = {}) {
+  // A proxy's answer is retried for a read, and for a write that carries an idempotency key (#524): it may have
+  // reached the hub before the proxy gave up (Cloudflare's 520 and 524 come after the hub got it), and the hub
+  // answers the same key with the first answer instead of applying it twice. A key the hub is still applying
+  // (409, x-nuworq-replay: pending) is waited out the same way.
+  async function send(path, init, { read = false, key = '' } = {}) {
     const until = Date.now() + (opts.retryMs ?? (LOOPBACK_HOST.test(new URL(settings.url).hostname) ? RETRY_MS : RESTART_MS));
     for (let wait = 100; ; wait = Math.min(wait * 2, 5000)) {
       let res;
@@ -174,7 +179,9 @@ export function createClient(opts = {}) {
         if (!RETRY_CODES.has(e?.cause?.code) || Date.now() + wait > until) throw e;
       }
       if (res) {
-        if (!read || !GATEWAY.has(res.status) || isJson(res) || Date.now() + wait > until) return res;
+        const pending = key && res.status === 409 && res.headers.get('x-nuworq-replay') === 'pending';
+        if (!pending && (!(read || key) || !GATEWAY.has(res.status) || isJson(res))) return res;
+        if (Date.now() + wait > until) return res;
         await res.body?.cancel();
       }
       await new Promise((r) => setTimeout(r, wait));
@@ -224,15 +231,15 @@ export function createClient(opts = {}) {
   }
 
   // deadline: ms the whole answer may take; past it the call fails like a dropped connection (status 0).
-  async function once(method, path, { body, agent, read = method === 'GET', deadline } = {}, hops = 0) {
+  async function once(method, path, { body, agent, read = method === 'GET', deadline, key = '' } = {}, hops = 0) {
     let res;
     try {
       res = await send(path, () => ({
         method,
-        headers: headers(agent ? { agent } : {}),
+        headers: { ...headers(agent ? { agent } : {}), ...(key ? { 'idempotency-key': key } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
         ...(deadline ? { signal: AbortSignal.timeout(deadline) } : {}),
-      }), { read });
+      }), { read, key });
     } catch (e) {
       throw new HubError(`nuworq hub not reachable at ${settings.url}; start it with: nuworq serve`, {
         hint: 'Or point at another hub with --url / NUWORQ_URL.',
@@ -255,7 +262,7 @@ export function createClient(opts = {}) {
       // What the saved connection says now: an address given outright (--url, NUWORQ_URL) still names the old
       // one, and must not send a failing call back there in a loop.
       seen = saved(resolveSettings(opts));
-      return once(method, path, { body, agent, read, deadline }, hops + 1);
+      return once(method, path, { body, agent, read, deadline, key }, hops + 1);
     }
     let text;
     try {
@@ -289,7 +296,9 @@ export function createClient(opts = {}) {
   // A call that can't get through (no hub, the wrong token, a redirect it may not follow) tries once more
   // if the saved connection changed since it was last read: a session started before `nuworq connect`
   // pointed somewhere new reaches the new address without a restart.
-  async function request(method, path, args) {
+  async function request(method, path, args = {}) {
+    // One key per logical write (#524), the same on every try, redirect and reconnect of it.
+    if (method !== 'GET' && !(args.read ?? false) && !args.key) args = { ...args, key: randomUUID() };
     for (;;) {
       try {
         return await once(method, path, args);

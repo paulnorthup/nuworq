@@ -45,7 +45,7 @@ describe('staffing', () => {
     hub.tx(() => hub.project('old', { create: true }));
     hub.db.close();
     const db = new DatabaseSync(file);
-    db.exec('ALTER TABLE projects DROP COLUMN staff_asked'); // as a database from before #174 was
+    db.exec('ALTER TABLE projects DROP COLUMN staff_asked; PRAGMA user_version = 0'); // as a database from before #174 was
     db.close();
     const again = new Hub({ file });
     assert.equal(view(again, 'old').project.staffing.asked, true);

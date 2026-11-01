@@ -99,13 +99,13 @@ describe('one strict set of tokens (#391)', () => {
     for (const sel of ['.badge', '.count', '.age', '.stage .n', '.g-count', '.an-figs']) assert.ok(rule[1].includes(sel), sel);
   });
 
-  test('the style guide shows every token and every component, and the agents\' guide points UI work at it', async () => {
+  test('the style guide shows every token and every component, and nuworq-only, so not in the agents\' guide (#527)', async () => {
     const sg = read('styleguide.html');
     for (const t of [...names(/^--(fs|sp|r|e)-/), '--rule', '--accent']) assert.ok(sg.includes(`var(${t})`), `the style guide shows ${t}`);
     for (const c of ['btn primary', 'btn ghost', 'disabled', 'class="seg"', 'class="switch"', '<input', '<textarea', '<select', 'class="card"', 'class="tag now"',
       'stage-pill', 'courtbar', 'g-bar', 'lifebar', 'class="steps"', 'class="dialog"', 'class="toast"', 'toast err']) assert.ok(sg.includes(c), `the style guide shows ${c}`);
     const { guide } = await import('../src/protocol.js');
-    assert.match(guide(), /UI work uses only the tokens and components in \/styleguide/);
+    assert.doesNotMatch(guide(), /\/styleguide/, 'a rule for nuworq\'s own repository is a decision of that project, not the guide');
   });
 
   test('/styleguide is for signed-in people: the page with its logo for them, 401 for anyone else', async () => {

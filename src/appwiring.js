@@ -13,6 +13,7 @@ const PERMISSIONS = {
   metadata: { label: 'Metadata', without: "the hub can't see the repositories" },
   issues: { label: 'Issues', without: "GitHub issues won't come in as work, and the hub can't comment on or close them" },
   vulnerability_alerts: { label: 'Dependabot alerts', without: "Dependabot alerts won't come in as work" },
+  members: { label: 'Members', org: true, without: "a GitHub organization's admins can't connect its installation to their workspace" },
 };
 const EVENTS = {
   issues: { label: 'Issues', without: "new GitHub issues won't come in as work" },
@@ -58,9 +59,10 @@ export function wiringEntry(w) {
     gaps.events.length && `${gaps.events.length === 1 ? 'an event' : `${gaps.events.length} events`}`,
   ].filter(Boolean).join(' and ');
   const how = [{ do: "Open the nuworq GitHub App's permissions and events page", where: url }];
-  if (gaps.permissions.length) {
-    how.push({ do: `Under "Repository permissions", set ${gaps.permissions.map((p) => `${PERMISSIONS[p.name]?.label ?? p.name} to "${level(p.want)}"`).join(', ')}` });
-  }
+  const set = (ps) => ps.map((p) => `${PERMISSIONS[p.name]?.label ?? p.name} to "${level(p.want)}"`).join(', ');
+  const repo = gaps.permissions.filter((p) => !PERMISSIONS[p.name]?.org), org = gaps.permissions.filter((p) => PERMISSIONS[p.name]?.org);
+  if (repo.length) how.push({ do: `Under "Repository permissions", set ${set(repo)}` });
+  if (org.length) how.push({ do: `Under "Organization permissions", set ${set(org)}` });
   if (gaps.events.length) {
     how.push({ do: `Under "Subscribe to events", tick ${gaps.events.map((e) => `"${EVENTS[e]?.label ?? e}"`).join(', ')}` });
   }

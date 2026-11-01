@@ -44,7 +44,7 @@ describe('the release signer (#430)', () => {
   // The hub ran commit c: it built its package from its own checkout (here, the origin).
   const runs = async (c) => { await archive(origin, c, join(hubDir, `nuworq-${c}.tgz`)); ran = c; };
   const scp = async (file, to) => {
-    if (scpFails) throw new Error('ssh: connect to host nuworq-vm: Operation timed out');
+    if (scpFails) throw new Error('ssh: connect to host signing-host: Operation timed out');
     copyFileSync(file, join(to, basename(file)));
   };
   const check = (state = {}) => round({ repo, hub, key: ours.key, dest: hubDir, scp, state, comment: async (r) => comments.push(r) });
@@ -177,7 +177,7 @@ describe('the release signer (#430)', () => {
     const state = {};
     const r = outcome(await check(state), 'v0.3.0');
     assert.equal(r.outcome, 'failed');
-    assert.match(r.reason, /scp to .* failed \(ssh: connect to host nuworq-vm.*\); trying again next round/);
+    assert.match(r.reason, /scp to .* failed \(ssh: connect to host signing-host.*\); trying again next round/);
     scpFails = false;
     assert.equal(outcome(await check(state), 'v0.3.0').outcome, 'signed');
   });

@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, DAY, HOUR } from '../src/core.js';
 import { view, homeView } from '../src/insight.js';
-import { tools } from '../src/protocol.js';
+import { tools, guide } from '../src/protocol.js';
 import { defaultAudience } from '../src/audience.js';
 
 // #133: questions an agent can't settle alone (running things, permissions, real infra) go to an operator session, not Paul.
@@ -224,10 +224,9 @@ describe('the default audience when to is left out', () => {
     assert.equal(audience(toOp.question), 'operator');
   });
 
-  test('the ask tool says what the default does, with an example each way', () => {
+  test('the ask tool says what the default does, and the guide gives an example each way', () => {
     const t = tools().find((x) => x.name === 'ask');
-    assert.match(t.inputSchema.properties.to.description, /Left out/);
-    assert.match(t.inputSchema.properties.to.description, /`claude`/);
-    assert.match(t.inputSchema.properties.to.description, /approve browser workers/);
+    assert.match(t.inputSchema.properties.to.description, /left out, the hub picks/);
+    assert.match(guide(), /Leave out `to` and the hub picks.*`claude`.*approve browser workers/); // one sentence per param since #529
   });
 });

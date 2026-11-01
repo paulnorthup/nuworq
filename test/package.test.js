@@ -268,11 +268,14 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
   test('release signs what the hub serves; put beside it, installs take it', async () => {
     const out = clone; // a checkout of nuworq, where the release's tag is
     execFileSync('git', ['-C', clone, 'tag', `v${version}`, commit]);
-    const { stdout } = await run(process.execPath, [SIGN, 'release', `${url}/w/acme`, join(dir, 'key', 'release-key.pem')], { cwd: out });
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-rel-home-'));
+    const { stdout } = await run(process.execPath, [SIGN, 'release', `${url}/w/acme`, join(dir, 'key', 'release-key.pem')], { cwd: out, env: { ...process.env, HOME: home } });
     const sig = `nuworq-${commit}.tgz.sig`;
-    assert.match(stdout, new RegExp(`Signed ${version.replace(/\./g, '\\.')} \\(${commit.slice(0, 7)}, made \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\): wrote ${sig}`));
-    assert.match(stdout, new RegExp(`scp ${sig} <hub host>:/var/lib/nuworq/package/`));
-    copyFileSync(join(out, sig), join(dir, 'cache', sig));
+    const wrote = join(home, '.nuworq', 'signatures', sig); // its own folder, never the checkout (#475)
+    assert.match(stdout, new RegExp(`Signed ${version.replace(/\./g, '\\.')} \\(${commit.slice(0, 7)}, made \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\): wrote ${wrote}`));
+    assert.match(stdout, new RegExp(`scp ${wrote} <hub host>:/var/lib/nuworq/package/`));
+    assert.ok(!existsSync(join(out, sig)), 'nothing written into the checkout');
+    copyFileSync(wrote, join(dir, 'cache', sig));
     const named = (await (await fetch(`${url}/api/package`)).json()).package;
     assert.equal(named.signed, true);
     assert.equal(named.release?.commit, commit, 'and it is the release installs follow (#254), whatever the hub runs later');

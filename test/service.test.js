@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { launchdPlist, systemdUnit, install, uninstall, serviceEnv, serviceArgs, stableNode, missingCheckouts, LABEL, UNIT, SIGNER } from '../src/service.js';
+import { launchdPlist, systemdUnit, install, uninstall, serviceEnv, serviceArgs, takeToken, stableNode, missingCheckouts, LABEL, UNIT, SIGNER } from '../src/service.js';
 import { cleanWorktree } from '../src/runner.js';
 
 const command = ['/usr/local/bin/node', '/opt/nuworq/bin/nuworq.js', 'run', '--workers', '3', '--agent', 'claude', '--model', 'opus & "friends" 100%$'];
@@ -152,6 +152,10 @@ describe('nuworq run --install (#172)', () => {
     assert.deepEqual(serviceArgs(['--workers', '2', '--install', '--agent', 'codex']), ['--workers', '2', '--agent', 'codex']);
     assert.throws(() => serviceArgs(['--install', '--until-idle']), /--until-idle makes run exit/);
     assert.throws(() => serviceArgs(['--install', '--max-runs=3']), /--max-runs makes run exit/);
+    // The agent token never goes on its command line (#477): it's taken out, for a 0600 file.
+    assert.deepEqual(takeToken(['--workers', '2', '--agent-token', 'nwq_abc', '--agent', 'codex']), { args: ['--workers', '2', '--agent', 'codex'], token: 'nwq_abc' });
+    assert.deepEqual(takeToken(['--agent-token=nwq_abc']), { args: [], token: 'nwq_abc' });
+    assert.deepEqual(takeToken(['--workers', '2']), { args: ['--workers', '2'], token: null });
     assert.deepEqual(serviceEnv({ PATH: '/bin', HOME: '/h', NUWORQ_TOKEN: 't', TRELLIS_URL: 'u', SECRET: 'no', SHELL: '/bin/zsh' }), { HOME: '/h', NUWORQ_TOKEN: 't', PATH: '/bin', TRELLIS_URL: 'u' });
   });
 });

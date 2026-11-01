@@ -8,7 +8,7 @@ import { createServer } from '../src/server.js';
 import { Auth } from '../src/auth.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
-const PAUL = 'paul@paulnorthup.com';
+const PAUL = 'paul@example.com';
 const fresh = (opts = {}) => new Workspaces({ dir: realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-plans-'))), plans: true, owners: [PAUL], ...opts });
 
 // A workspace hub with one project and n ready items, made by someone who signed up (so Free), or by

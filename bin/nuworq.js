@@ -9,6 +9,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
+import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -16,7 +17,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -111,7 +112,7 @@ const AGENT_CMDS = {
   signoff: (p, f) => ({ headline: rest(p, 0), summary: text(f.summary) }),
 };
 
-const tty = process.stdout.isTTY;
+const tty = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const bold = c('1'), dim = c('2'), amber = c('33'), green = c('32'), grey = c('90');
 const stateColor = (s) => ({ 'needs-you': amber, flowing: green, stalled: amber }[s] ?? grey);
@@ -205,14 +206,10 @@ async function operatorCmd(flags) {
     return;
   }
   const project = resolveSettings(flags).project ?? basename(process.cwd());
-  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
-  const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
-    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
-  const detected = [{ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform], chrome && 'browser'].filter(Boolean);
-  const given = (flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase());
-  const has = ['operator', ...new Set(given.map((t) => TAG_ALIASES[t] ?? t).filter((t) => t !== 'operator'))];
-  const renamed = [...new Set(given.filter((t) => TAG_ALIASES[t]))].map((t) => `${t} is now ${TAG_ALIASES[t]}`);
+  const { has, renamed } = operatorHas(flags);
   if (renamed.length) console.log(dim(`Tag renamed: ${renamed.join(', ')}.`));
+  // --start: open Claude Code here as the operator, as connect does on a yes (#490).
+  if (flags.start) return startOperator(process.cwd(), has);
   console.log(`${bold('Declare:')} ${has.join(', ')}${flags.has ? '' : dim('  (detected; add what else this session can really do with --has, e.g. --has macos,browser,claude-cli,infra)')}
 ${dim('infra: the live infrastructure of the project the session checks in to (servers and VMs, DNS, cloud accounts, deploys).')}
 ${bold('Start it:')} open Claude Code in ${project}'s folder (the terminal or the desktop app's Code tab) and type:
@@ -221,6 +218,83 @@ ${operatorStart(has)}
 
 It works until nothing waits, then stays idle and listens: each new operator item, operator question or answer
 starts a turn on its own. No /loop.${dim(` (Without the nuworq plugin: ${operatorStart(has, { plugin: false })}.)`)}`);
+}
+
+// The tags an operator session declares: the platform, and browser when a Chrome or Chromium is installed;
+// --has replaces what was detected. renamed: old tag names given, with their new ones.
+function operatorHas(flags) {
+  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
+  const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
+    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
+  const detected = [{ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform], chrome && 'browser'].filter(Boolean);
+  const given = (flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase());
+  const has = ['operator', ...new Set(given.map((t) => TAG_ALIASES[t] ?? t).filter((t) => t !== 'operator'))];
+  const renamed = [...new Set(given.filter((t) => TAG_ALIASES[t]))].map((t) => `${t} is now ${TAG_ALIASES[t]}`);
+  return { has, renamed };
+}
+
+// Claude Code in folder as the operator (#490): `claude "<the operator line>"` starts it with the line already
+// sent, and gives the terminal back when the session ends. A Claude Code whose help shows no [prompt] argument
+// can't take one: then it prints the line to paste.
+async function startOperator(folder, has) {
+  const { pluginInstalled } = await import('../src/connect.js');
+  const line = operatorStart(has, { plugin: pluginInstalled(homedir()) });
+  let help = '';
+  try { help = execFileSync('claude', ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 }); } catch {}
+  if (!/\[prompt\]/.test(help)) {
+    return console.log(`${amber('!')} ${help ? "This Claude Code can't take a first prompt" : "Claude Code isn't on PATH"}. Open Claude Code in ${folder} and type:\n\n${line}\n`);
+  }
+  console.log(`${green('●')} Starting the operator: Claude Code in ${folder}, with ${bold(line)} sent.`);
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync('claude', [line], { cwd: folder, stdio: 'inherit' });
+  if (r.error) console.log(`${amber('!')} Couldn't start Claude Code (${r.error.message}). Open it in ${folder} and type: ${line}`);
+}
+
+// Staff a project with workers on this machine, up to a daily budget (#490): the hub turns staffing on, at once
+// on a hub without logins, else once an owner approves it in the browser. Returns the lines to print.
+async function staffProject(project, budget, flags) {
+  const client = createClient(flags);
+  const r = await client.post('/api/staff', { project: project.slug, budget, machine: hostname().split('.')[0] });
+  const name = project.name ?? project.slug;
+  const done = `${green('●')} Staffed ${bold(name)}: its workers may spend up to $${budget} a day (change it in ${name}'s Settings).`;
+  if (r.staffed) return [done];
+  console.log(`To staff ${name}, an owner approves it at ${bold(r.verify_url_complete)} (the code ${bold(r.user_code)}). It expires in ${Math.round(r.expires_in / 60)} minutes.`);
+  if (process.stdout.isTTY && !flags['no-browser']) {
+    const { spawn } = await import('node:child_process');
+    const opener = { darwin: 'open', win32: 'explorer' }[process.platform] ?? 'xdg-open';
+    try { spawn(opener, [r.verify_url_complete], { stdio: 'ignore', detached: true }).on('error', () => {}).unref(); } catch {}
+  }
+  const hub = createClient({ url: client.settings.url, token: '', retryMs: 0 });
+  let wait = r.interval ?? 5;
+  for (;;) {
+    await new Promise((ok) => setTimeout(ok, wait * 1000));
+    const p = await hub.post('/api/device/poll', { device_code: r.device_code }).catch((e) => { throw new HubError(`it wasn't approved: ${e.message}`, { hint: e.hint }); });
+    if (p.status === 'approved') return [done];
+    if (p.status === 'slow_down') wait = (p.interval ?? wait) + 1;
+  }
+}
+
+// nuworq staff [<project>] [--budget usd]: connect's staffing question on its own (#490). The project is the
+// one this folder is a clone of, unless named; the runner is installed from here.
+async function staffCmd(pos, flags) {
+  const { chooseProject, budgetOf } = await import('../src/setup.js');
+  const mode = flags.yes ? 'yes' : process.stdin.isTTY && process.stdout.isTTY ? 'ask' : 'yes';
+  const ask = askLine;
+  const projects = await hubProjects(createClient(flags));
+  const at = await chooseProject({ projects, named: pos[0] ?? flags.project, remote: repoRemote(), root: repoRoot(), mode, ask, say: console.log });
+  if (at.none) throw new HubError(at.none, { hint: 'nuworq staff <project> [--budget 20]' });
+  const usd = await budgetOf(mode, ask, flags.budget);
+  for (const l of await staffProject(at.project, usd, flags)) console.log(l);
+  await runService({ ...flags, folder: besideOf(process.cwd()) }, { argv: [] });
+}
+
+// One line typed at the terminal, after a prompt (on stderr, so piped output stays clean).
+async function askLine(prompt) {
+  const { createInterface } = await import('node:readline');
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const said = await new Promise((resolve) => { rl.question(prompt, resolve); rl.once('close', () => resolve('')); });
+  rl.close();
+  return said;
 }
 
 // An operator waiting on the hub (#283): one line when there is something for it, then exit; --follow
@@ -343,7 +417,9 @@ async function agentToken(client, flags) {
   const me = await client.get('/api/me');
   if (me.auth !== 'required') return null;
   // A machine connected with an agent token (nuworq connect) hands that one on.
-  const t = flags['agent-token'] || envVar('AGENT_TOKEN') || (me.role === 'agent' ? client.settings.token : null);
+  // NUWORQ_AGENT_TOKEN_FILE: how an installed runner keeps its --agent-token off its command line (#477).
+  const fromFile = () => { try { return readFileSync(envVar('AGENT_TOKEN_FILE'), 'utf8').trim() || null; } catch { return null; } };
+  const t = flags['agent-token'] || envVar('AGENT_TOKEN') || (envVar('AGENT_TOKEN_FILE') && fromFile()) || (me.role === 'agent' ? client.settings.token : null);
   const how = 'Create one on the hub host: nuworq token create <name> --role agent --project <project>. Pass it with --agent-token or NUWORQ_AGENT_TOKEN.';
   if (!t || t === true) throw new HubError('This hub requires login, so workers need their own agent token', { hint: how });
   const who = await createClient({ url: client.settings.url, token: t }).get('/api/me');
@@ -386,7 +462,7 @@ async function worker(flags) {
     target = { ...target, repo: routes.find((r) => r.project === target.slug)?.repo ?? null };
   }
   const token = flags.run ? await agentToken(client, flags) : null;
-  const { name, worktree, main, origin, cwd, cmd } = await setupOrClone(target, agent, flags, s, client, token);
+  const { name, worktree, main, origin, cwd, cmd, tokenAt } = await setupOrClone(target, agent, flags, s, client, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
@@ -401,9 +477,10 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
     return;
   }
   const { spawn } = await import('node:child_process');
-  const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['inherit', 'pipe', 'inherit'] });
+  const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['inherit', 'pipe', 'inherit'], env: withoutTokens() });
   const usage = await tapUsage(child, agent, flags, (l) => console.log(l));
   await new Promise((done) => child.on('close', (code) => { process.exitCode = code ?? 1; done(); }));
+  dropTokenFile(tokenAt);
   await reportUsage(s, token, target.slug, name, usage());
 }
 
@@ -428,8 +505,6 @@ async function reportUsage(s, token, project, name, usage) {
   }
 }
 
-const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
-
 // The branch work lands on: main, or (in a repo without one) the branch the main checkout is on.
 function mainBranch(home) {
   const git = (...a) => { try { return execFileSync('git', ['-C', home, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
@@ -445,8 +520,20 @@ const hasOrigin = (home) => {
 // server knows projects by remote, and has no folder for them here); with neither, this folder.
 // target.repo: in a project with several repositories, the one its most useful work is in: the
 // project's folder only when that is a clone of it, else this machine's checkout of it.
+// flags.chosen (nuworq run, #477): the folders the person chose on this machine. The hub's folder for a project
+// counts only when it is one of them, and a checkout found by remote only inside one.
 function homeOf(target, flags) {
   if (flags.here) return process.cwd();
+  if (flags.chosen) {
+    const ok = (p) => inChosen(p, flags.chosen);
+    const home = target.path && ok(target.path) && existsSync(target.path) && (!target.repo || repoRemote(target.path) === target.repo)
+      ? target.path
+      : target.repo || target.remotes?.length ? checkoutOf(target.repo ? [target.repo] : target.remotes) : null;
+    if (home && ok(home)) return home;
+    throw new HubError(home ? `${home} isn't a folder you chose for workers on this machine` : `${target.name ?? target.slug} has no folder you chose for workers on this machine`, {
+      hint: 'Run `nuworq run` in a terminal to choose the folders workers may use, or add one with `nuworq run --folder <path>`.',
+    });
+  }
   if (target.repo) {
     const recorded = target.path && existsSync(target.path) ? repoRemote(target.path) : '';
     return recorded === target.repo ? target.path : checkoutOf([target.repo]);
@@ -467,6 +554,8 @@ async function cloneHome(target, flags, s, client, token, missing) {
   const remote = missing.missing;
   const github = /^github\.com\/[^/]+\/[^/]+$/.test(remote);
   if (flags.here || !(remote.startsWith('/') || github)) throw missing;
+  // A path remote is a folder on this machine: only a hub on this machine may have one cloned (#477).
+  if (remote.startsWith('/') && !loopback(s.url)) throw missing;
   if (github) {
     const info = await client.get('/api/info').catch(() => ({}));
     if (!info.github_app || info.github_app === 'create') throw missing;
@@ -474,15 +563,19 @@ async function cloneHome(target, flags, s, client, token, missing) {
   const dir = cloneDir(remote);
   const cant = (why) => new HubError(`Couldn't clone ${remote} into ${dir}: ${why}`, { hint: missing.hint });
   if (existsSync(dir)) throw cant('something else is there');
-  const helper = `!node ${JSON.stringify(BIN)} git-credential --project ${target.slug}`;
+  if (flags.chosen && !inChosen(dir, flags.chosen)) throw cant("that isn't inside a folder you chose for workers; run `nuworq run` in a terminal to choose one");
+  const helper = `!node ${sq(BIN)} git-credential --project ${sq(checkName('project', target.slug))}`;
+  const file = token ?? s.token ? tokenFile(dirname(HUB_FILE), `clone-${randomBytes(3).toString('hex')}`, token ?? s.token) : null;
   try {
     execFileSync('git', ['-c', 'credential.https://github.com.helper=', '-c', `credential.https://github.com.helper=${helper}`, '-c', 'credential.https://github.com.useHttpPath=true',
       'clone', '-q', github ? `https://${remote}.git` : remote, dir], {
       stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', NUWORQ_URL: s.url, ...(token ?? s.token ? { NUWORQ_TOKEN: token ?? s.token } : {}) },
+      env: { ...withoutTokens(), GIT_TERMINAL_PROMPT: '0', NUWORQ_URL: s.url, ...(file ? { NUWORQ_TOKEN_FILE: file } : {}) },
     });
   } catch (e) {
-    throw cant(String(e.stderr ?? e.message).trim().split('\n').filter(Boolean).pop() ?? 'git clone failed');
+    throw cant(redact(String(e.stderr || '').trim().split('\n').filter(Boolean).pop() ?? 'git clone failed'));
+  } finally {
+    dropTokenFile(file);
   }
   console.log(`Cloned ${remote} into ${dir}`);
   return dir;
@@ -547,7 +640,12 @@ function workerSettings() {
 function workerSetup(target, agent, flags, s, token = null) {
   const home = homeOf(target, flags);
 
-  const name = String(flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
+  // Names from the hub (and --as) reach shells and file names: plain names only (#477).
+  checkName('project', target.slug);
+  const name = checkName('worker name', flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
+  // Its agent token goes in a 0600 file the MCP server and the credential helper read; only the file's path is
+  // in the commands and the environment (#477).
+  const tokenAt = token ? tokenFile(dirname(HUB_FILE), name, token) : null;
   const isRepo = existsSync(join(home, '.git'));
   // With an origin (GitHub), work starts from main there and lands by pushing to it.
   const origin = isRepo && hasOrigin(home);
@@ -566,7 +664,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     ...(model && agent !== 'opencode' ? { NUWORQ_MODEL: model } : {}),
     // A worker nuworq run started says so at checkin, with its runner (#238); a runner's token says it too.
     ...(flags.run ? { NUWORQ_ROLE: 'worker', NUWORQ_RUNNER: hostname() } : {}),
-    ...(token ? { NUWORQ_TOKEN: token } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
+    ...(tokenAt ? { NUWORQ_TOKEN_FILE: tokenAt } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
   };
   const task = [
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
@@ -605,7 +703,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   if (worktree && origin) {
     // A fetch over HTTPS from GitHub gets a read-only token for the project's repository from the hub's
     // GitHub App: the worker holds no item yet. git asks its own helpers first, and SSH needs none.
-    const reader = `!NUWORQ_URL=${s.url}${token ? ` NUWORQ_TOKEN=${token}` : ''} node ${JSON.stringify(BIN)} git-credential --project ${target.slug} --as ${name}`;
+    const reader = `!NUWORQ_URL=${sq(s.url)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --project ${sq(target.slug)} --as ${sq(name)}`;
     setup.push(`git -C ${sq(home)} -c ${sq(`credential.https://github.com.helper=${reader}`)} -c credential.https://github.com.useHttpPath=true fetch -q origin`,
       `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
   } else if (worktree) setup.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
@@ -613,7 +711,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   // Pushes over HTTPS to GitHub get a one-repo, one-hour token from the hub's GitHub App, asked for by git
   // itself: this worker's processes only (no config file changes), and the agent never sees the token.
   if (origin) {
-    const helper = `!NUWORQ_URL=${s.url}${token ? ` NUWORQ_TOKEN=${token}` : ''} node ${JSON.stringify(BIN)} git-credential --as ${name}`;
+    const helper = `!NUWORQ_URL=${sq(s.url)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --as ${sq(name)}`;
     lines.push(`export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0=${sq(helper)} GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath GIT_CONFIG_VALUE_1=true`);
   }
   // Workers each running a Node project's whole suite on every core at once saturate the machine: their test
@@ -626,11 +724,13 @@ function workerSetup(target, agent, flags, s, token = null) {
   // Other endpoints ignore the header.
   const label = clientLabel(target.slug, name);
   if (agent === 'claude') {
-    const headers = [process.env.ANTHROPIC_CUSTOM_HEADERS, `x-client-name: ${label}`].filter(Boolean).join('\n');
+    // The runner's own headers (they may carry llm-proxy's x-proxy-token) are expanded by the shell from the
+    // inherited variable, so their values are never in argv or printed (#493).
+    const headers = `"\${ANTHROPIC_CUSTOM_HEADERS:+$ANTHROPIC_CUSTOM_HEADERS\n}"${sq(`x-client-name: ${label}`)}`;
     // --proxy: Claude Code's traffic goes to llm-proxy's Anthropic route with the proxy's owner token (not the
     // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed.
     const via = flags.proxy === undefined ? '' : `ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN" \\\n  `;
-    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${sq(headers)} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings())} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
@@ -659,14 +759,15 @@ function workerSetup(target, agent, flags, s, token = null) {
     lines.push(`codex exec${json}${model ? ` -m ${sq(model)}` : ''} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
   }
   return {
-    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd,
+    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd, tokenAt,
     checkout: setup.join(' && '), start: lines.join(' && \\\n'), cmd: [...setup, ...lines].join(' && \\\n'),
   };
 }
 
 // `nuworq run --install [run flags]`: the same runner as a LaunchAgent (macOS) or systemd user unit (Linux), so
 // it outlives the terminal and comes back after a reboot. --uninstall stops and removes it (#172).
-async function runService(flags) {
+// argv: the run flags the service keeps (connect and staff pass their own: #490).
+async function runService(flags, { argv = process.argv.slice(3) } = {}) {
   const svc = await import('../src/service.js');
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
@@ -678,12 +779,19 @@ async function runService(flags) {
     return console.log(r.removed ? `${green('Removed')} the ${r.kind} ${dim(r.file)}: the runner has stopped.` : dim(`No runner was installed (${r.file}).`));
   }
   let args;
-  try { args = svc.serviceArgs(process.argv.slice(3)); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+  try { args = svc.serviceArgs(argv); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+  lockDown(dirname(HUB_FILE));
+  // The folders its workers may use, chosen now while there's a terminal to ask in (#477).
+  await chooseWorkFolders(flags, await createClient(flags).get('/api/projects').catch(() => []), resolveSettings(flags));
+  // --agent-token never goes on the service's command line, where ps shows it: a 0600 file it reads instead.
+  const taken = svc.takeToken(args);
+  args = taken.args;
+  const agentTokenFile = taken.token ? tokenFile(dirname(HUB_FILE), 'run-agent', taken.token) : null;
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
   // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
   const cwd = process.cwd();
   // NUWORQ_SERVICE: it knows it's the service, so it may exit to move onto a newly installed nuworq (#456).
-  const env = { ...svc.serviceEnv(process.env, { repos: besideOf(cwd) }), NUWORQ_SERVICE: svc.LABEL };
+  const env = { ...svc.serviceEnv(process.env, { repos: besideOf(cwd) }), NUWORQ_SERVICE: svc.LABEL, ...(agentTokenFile ? { NUWORQ_AGENT_TOKEN_FILE: agentTokenFile } : {}) };
   const r = await svc.install({ ...where, command: [svc.stableNode(process.execPath), BIN, 'run', ...args], env, log, cwd })
     .catch((e) => { throw new HubError(e.message, { hint: e.hint ?? 'Run it without --install to see what goes wrong.' }); });
   // Loaded isn't running (#250): only report success once the runner is up.
@@ -705,6 +813,31 @@ async function runService(flags) {
   console.log(dim(`  Then run nuworq run --install again from here, or install it with NUWORQ_REPOS=<the folder holding your checkouts>.`));
 }
 
+// The folders workers may use on this machine (#477), kept in ~/.nuworq/folders.json: those chosen before, any
+// --folder given now, and, in a terminal, each place this runner looks for checkouts (beside this folder, and
+// NUWORQ_REPOS) that the person says yes to. A folder the hub names is offered only by a hub on this machine,
+// and still asked about. A service, with no terminal, uses only what was chosen.
+async function chooseWorkFolders(flags, projects, s) {
+  const dir = dirname(HUB_FILE);
+  const given = [flags.folder].flat().filter((f) => typeof f === 'string' && f).map((f) => resolve(f));
+  let chosen = given.length ? chooseFolders(dir, given) : chosenFolders(dir);
+  const local = loopback(s.url) ? (projects ?? []).filter((p) => !p.remotes?.length && p.path).map((p) => p.path) : [];
+  const offer = toOffer([besideOf(process.cwd()), ...String(envVar('REPOS') ?? '').split(delimiter), ...local], chosen);
+  if (offer.length && process.stdin.isTTY && process.stdout.isTTY) {
+    const { createInterface } = await import('node:readline/promises');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const yes = [];
+    try {
+      for (const f of offer) if (/^y(es)?$/i.test((await rl.question(`Let workers work in checkouts inside ${bold(f)}? [y/N] `)).trim())) yes.push(f);
+    } finally { rl.close(); }
+    if (yes.length) chosen = chooseFolders(dir, yes);
+  }
+  if (!chosen.length) {
+    console.log(`${amber('!')} No folder is chosen for workers on this machine, so none will start. Run ${bold('nuworq run')} in a terminal to choose, or ${bold('nuworq run --folder <path>')}.`);
+  }
+  return chosen;
+}
+
 // Keep up to --workers headless workers on waiting work in the projects the human opted in.
 async function runCmd(flags) {
   if (flags.install || flags.uninstall) return runService(flags);
@@ -719,7 +852,8 @@ async function runCmd(flags) {
   const { createWriteStream } = await import('node:fs');
   const { run, cleanWorktree, cleanBranch, sweep, sweepLine } = await import('../src/runner.js');
   const logs = join(dirname(HUB_FILE), 'logs');
-  mkdirSync(logs, { recursive: true });
+  lockDown(dirname(HUB_FILE)); // 0700 folders and 0600 files, again on every start (#477)
+  const chosen = await chooseWorkFolders(flags, await hubProjects(client), s);
   const git = async (args) => (await promisify(execFile)('git', args, { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout;
   // The branches of a project's done and dropped items; merged: those whose PR merged (#455).
   const finishedOf = async (slug) => {
@@ -741,7 +875,7 @@ async function runCmd(flags) {
     const homes = new Map();
     for (const target of await hubProjects(client)) {
       let home;
-      try { home = homeOf(target, {}); } catch { continue; }
+      try { home = homeOf(target, { chosen }); } catch { continue; }
       if (home && existsSync(join(home, '.git')) && !homes.has(home)) homes.set(home, target);
     }
     for (const [home, target] of homes) {
@@ -765,36 +899,41 @@ async function runCmd(flags) {
     const routed = r.model ? { model: r.model, job: r } : {};
     let setup;
     try {
-      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true, ...routed }, s, client, token);
+      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true, chosen, ...routed }, s, client, token);
     } catch (e) {
       // This machine can't work on the project (no checkout of it here): the runner leaves it to others.
       if (e instanceof HubError) e.skip = true;
       throw e;
     }
-    const { name, home, worktree, cwd, checkout, start } = setup;
+    const { name, home, worktree, cwd, checkout, start, tokenAt } = setup;
     const log = join(logs, `${name}.log`);
     // Its worktree, at the latest main. When git can't do that (e.g. it can't reach origin), the agent never
     // starts: the runner leaves the project alone for a while and the others go on.
     if (checkout) {
       try {
-        await promisify(execFile)('/bin/sh', ['-c', checkout], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout: 5 * 60_000 });
+        await promisify(execFile)('/bin/sh', ['-c', checkout], { env: { ...withoutTokens(), GIT_TERMINAL_PROMPT: '0' }, timeout: 5 * 60_000 });
       } catch (e) {
-        const err = String(e.stderr || e.message).trim();
-        writeFileSync(log, `${err}\n`);
+        // git's own words only: the error's message holds the whole command.
+        const err = redact(String(e.stderr || (e.killed ? 'timed out' : `exited with ${e.code ?? 'an error'}`)).trim());
+        writeFileSync(log, `${err}\n`, { mode: 0o600 });
+        dropTokenFile(tokenAt);
         const said = err.split('\n').find((l) => /^(fatal|error):/.test(l)) ?? err.split('\n').pop();
         throw Object.assign(new HubError(`couldn't update its checkout: ${said}`, { hint: `log: ${log}` }), { skip: true, pause: true });
       }
     }
-    const out = createWriteStream(log);
-    // Its own process group, so stopping it stops the agent too, not just the shell.
-    const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const usage = await tapUsage(child, agent, { ...flags, ...routed }, (l) => out.write(`${l}\n`));
-    child.stderr.pipe(out, { end: false });
+    const out = createWriteStream(log, { mode: 0o600 });
+    // Its own process group, so stopping it stops the agent too, not just the shell. Never the runner's tokens.
+    const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: withoutTokens() });
+    // Its log holds no tokens (#477).
+    const usage = await tapUsage(child, agent, { ...flags, ...routed }, (l) => out.write(`${redact(l)}\n`));
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (c) => out.write(redact(c)));
     return {
       name, project: target.slug, worktree, where: dim(`${worktree ?? cwd}  log: ${log}`),
       kill: (sig) => { try { process.kill(-child.pid, sig); } catch {} },
       exited: new Promise((done) => child.on('close', async (code, sig) => {
         out.end();
+        dropTokenFile(tokenAt);
         await reportUsage(s, token, target.slug, name, usage());
         // Its worktree goes with it, unless something there would be lost; and its branch, once its item is
         // done or dropped and all of it is on origin (#444).
@@ -810,9 +949,16 @@ async function runCmd(flags) {
     };
   };
 
-  const workers = num(flags.workers, 1);
+  // --workers auto (#533): as many as the machine has room for, up to --max-workers (half its cores by default).
+  const { autoMax } = await import('../src/runner.js');
+  const { loadavg, availableParallelism, freemem } = await import('node:os');
+  const machine = () => ({ load: loadavg()[0], cores: availableParallelism(), free: process.availableMemory?.() || freemem() });
+  const auto = flags.workers === 'auto';
+  const workers = auto ? 'auto' : num(flags.workers, 1);
+  const maxWorkers = auto ? num(flags['max-workers'], autoMax(availableParallelism())) : undefined;
   const reporter = createClient({ url: s.url, token: token ?? s.token });
-  console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`up to ${workers} ${agent} worker${workers > 1 ? 's' : ''} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
+  const howMany = auto ? `as many ${agent} workers as this machine has room for (up to ${maxWorkers})` : `up to ${workers} ${agent} worker${workers > 1 ? 's' : ''}`;
+  console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`${howMany} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
   // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
   const startedOn = installed(ROOT);
   const { supervised } = await import('../src/service.js');
@@ -822,12 +968,15 @@ async function runCmd(flags) {
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`),
-    launch, workers, sweep: (running) => sweepAll(running), sweptAt,
+    launch, workers, maxWorkers, machine, sweep: (running) => sweepAll(running), sweptAt,
+    // What it prints and logs: no tokens, and no control characters from hub text (#477).
+    log: (line) => console.log(safe(line)),
     // How this runner is, on every poll (#171), with the workers' agent token: a runner token names the runner.
-    report: (state) => reporter.post('/api/runner', { name: hostname(), machine: hostname(), ...state }),
+    report: (state) => reporter.post('/api/runner', JSON.parse(redact(JSON.stringify({ name: hostname(), machine: hostname(), ...state })))),
     // Asked of the hub, not the routes: a quick worker can claim and exit between two polls. A minute
     // of slack covers clocks that differ.
     claimed: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).claims > 0,
+    took: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).first ?? null,
     maxRuns: num(flags['max-runs'], Infinity),
     untilIdle: !!flags['until-idle'],
     maxMinutes: num(flags['max-minutes'], Infinity),
@@ -927,7 +1076,9 @@ async function connect(pos, flags) {
   // Connecting again replaces the old token: revoke it first. The tools set up last time stay recorded.
   const old = readConnection();
   const notes = [old?.token && old.token !== token ? await revokeSaved(old) : null];
-  if (!flags['no-mcp']) notes.push(await offerPlugin(flags));
+  // A person at the terminal is asked; --yes and --no answer for them, and with no terminal it's a no (#490).
+  const mode = flags.yes ? 'yes' : flags.no ? 'no' : process.stdin.isTTY && process.stdout.isTTY ? 'ask' : 'no';
+  if (!flags['no-mcp']) notes.push(await offerPlugin(flags, mode));
   const { registerMcp } = await import('../src/connect.js');
   const mcp = flags['no-mcp'] ? { added: old?.added ?? [], lines: [] } : registerMcp({ bin: BIN, home: homedir(), kept: old?.added ?? [], url });
   // Written whole with mode 600 and moved into place, so the token is never in a file others can read.
@@ -939,22 +1090,48 @@ async function connect(pos, flags) {
   console.log(`${green('Connected')} to ${bold(url)}${me.auth === 'required' ? ` as ${me.name} (${me.role} token)` : dim(' (it needs no login)')}.
 ${[...notes.filter(Boolean), ...mcp.lines.map((l) => `  ${l}`)].join('\n')}${notes.some(Boolean) || mcp.lines.length ? '\n' : ''}${dim(`Saved in ${CONNECT_FILE}, readable only by you. The CLI, the MCP server and nuworq run on this machine use it
 now; NUWORQ_URL and NUWORQ_TOKEN still win. Undo all of it: nuworq disconnect`)}`);
+  if (!flags['no-mcp']) await setUp({ ...flags, url, token }, mode);
+}
+
+// The rest of the setup, once connected (#490, src/setup.js): workers for the project this folder is a clone of,
+// an operator, and how to start a shaper.
+async function setUp(flags, mode) {
+  const { chooseProject, finishSetup } = await import('../src/setup.js');
+  const { pluginInstalled } = await import('../src/connect.js');
+  const say = (l) => console.log(l);
+  const projects = await createClient(flags).get('/api/projects').catch(() => null);
+  if (!projects) return say(dim("Couldn't list the hub's projects, so nothing more was set up."));
+  const root = (() => { try { execFileSync('git', ['rev-parse', '--show-toplevel'], { stdio: 'ignore' }); return repoRoot(); } catch { return null; } })();
+  const at = await chooseProject({ projects, named: flags.project, remote: repoRemote(), root, mode, ask: askLine, say });
+  say('');
+  if (at.none) return say(at.none);
+  const remote = at.project.remotes?.[0];
+  const { mirrorSource } = await import('../src/git.js');
+  const clone = at.folder || !remote ? null : `git clone ${mirrorSource(remote) ?? remote} ${cloneDir(remote)}`;
+  const { has } = operatorHas(flags);
+  await finishSetup({
+    mode, ask: askLine, say, project: at.project, folder: at.folder, clone, budget: flags.budget,
+    plugin: pluginInstalled(homedir()),
+    actions: {
+      staff: (p, usd) => staffProject(p, usd, flags),
+      installRunner: async () => { await runService({ ...flags, folder: besideOf(at.folder ?? process.cwd()) }, { argv: [] }); return []; },
+      startOperator: () => startOperator(at.folder, has),
+    },
+  });
 }
 
 // Claude Code takes nuworq as its plugin (#432): one copy of the skills, shown as /nuworq:shaper and
 // /nuworq:operator. Without it, connect asks a person at the terminal to install it, and writes the MCP server
 // and the skills itself only when they decline (or the install fails). With no one to ask, or --skills, it
 // writes them as before and says how to get the plugin.
-async function offerPlugin(flags) {
+// mode (#490): 'ask' asks; 'yes' installs it; 'no' says how.
+async function offerPlugin(flags, mode) {
   const { pluginInstalled, claudeCode, installPlugin, PLUGIN_INSTALL } = await import('../src/connect.js');
   if (!claudeCode() || pluginInstalled(homedir())) return null;
   const how = PLUGIN_INSTALL.map((a) => `claude ${a.join(' ')}`).join(' && ');
-  if (flags.skills || !process.stdin.isTTY) return dim(`Claude Code takes nuworq best as its plugin, with /nuworq:shaper and /nuworq:operator: ${how}, then connect again.`);
-  const { createInterface } = await import('node:readline');
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const said = await new Promise((resolve) => rl.question('Install the nuworq plugin for Claude Code (its MCP server, /nuworq:shaper and /nuworq:operator)? [Y/n] ', resolve));
-  rl.close();
-  if (/^\s*n/i.test(said)) return null;
+  if (flags.skills || mode === 'no') return dim(`Claude Code takes nuworq best as its plugin, with /nuworq:shaper and /nuworq:operator: ${how}, then connect again.`);
+  const { answerer } = await import('../src/setup.js');
+  if (!await answerer(mode, askLine)('Install the nuworq plugin for Claude Code? It adds its MCP server and the /nuworq:shaper and /nuworq:operator commands, and costs nothing.', { def: true })) return null;
   const failed = installPlugin();
   return failed ? amber(`${failed}. Added the server and skills to Claude Code directly instead.`) : `  Claude Code: installed the ${bold('nuworq')} plugin (${how}).`;
 }
@@ -1411,161 +1588,6 @@ async function notify(pos, flags) {
   throw new HubError('usage: nuworq notify add ntfy|slack|webhook <url> | list | remove <id> | test');
 }
 
-const HELP = `${bold('nuworq')}: a hub where humans facilitate and AI agents coordinate work.
-
-${bold('Human')}
-  serve [--port 4747] [--host 127.0.0.1] [--db path] [--demo] [--auth] [--trust-proxy] [--public-url u] [--follow]
-                                         run the hub and web UI. Loopback: no login.
-                                         Any other host (or --auth): tokens required.
-                                         --follow: keep the hub on the latest main that passes its tests
-  token create <name> --role human|agent [--project a,b]
-                                         create a token (shown once); run on the hub host.
-                                         --project limits an agent token to those projects
-  token list | token revoke <name|id>    see or revoke tokens (revoking logs out sessions)
-                                         human tokens act as a person: --person <handle>
-                                         (default: one named like the token, created as owner)
-  person add <handle> --role owner|steward|member|viewer [--email e]
-  person list | person set-role <handle> <role> | person remove <handle>   (revokes tokens they minted)
-  invite create --role steward [--email e] [--public-url u] | invite list | invite revoke <id>
-                                         a single-use, 7-day link that adds a person with that role
-  token create <name> [--powers shape,build,review] [--minted-by <handle> | --runner [name]]
-                                         agent tokens: what they may do, and who answers for them
-                                         owners do everything; stewards steer, decide, answer and
-                                         accept; members comment and propose; viewers read
-                                         --workspace <name>: that workspace's tokens
-  serve --workspaces [--data-dir d] [--base-domain example.com]
-                                         one process, many workspaces (one database each),
-                                         at <name>.<base-domain> or /w/<name>/. Login always required.
-                                         [--workspace-cap 5]: workspaces one signed-in person may create
-                                         [--early-access]: making a workspace takes an approved request
-                                         (owners: --owners or NUWORQ_HUB_OWNERS emails; form at /early-access with
-                                         NUWORQ_TURNSTILE_SITEKEY, checked with NUWORQ_TURNSTILE_SECRET)
-                                         [--admin-host admin.example.com] (with --public-url): the owners'
-                                         dashboard; early-access requests are decided only there
-                                         [--feedback-project <workspace>/<project>] (with --admin-host): feedback
-                                         about nuworq is on; approving a piece proposes it there
-  workspace create|remove <name> | list  manage workspaces on the hub host
-  workspace adopt <name> [--db file]     turn a single hub's database into workspace <name> (a copy is kept);
-                                         tokens saved with the hub's root address keep working there, and
-                                         its GitHub App's installations are bound to it
-  workspace bind-installation <id> <workspace>   GitHub App deliveries for installation <id> reach <workspace>
-  notify add ntfy|slack|webhook <url> [--person bea]   push one batched message when something new needs you
-                                         (--person: a channel for bea, only what bea owns)
-  notify list | remove <id> | test       see, remove or test push channels (run on the hub host)
-  status [--all]                         the 30-second view
-
-${bold('Agents')}  (every command takes --as <name>, --project, --url)
-  checkin [--model m] [--client c] [--has "docker,macos"]
-                                         start here: mission, decisions, steering, answers.
-                                         --has: what your machine can do (or NUWORQ_HAS)
-  next [--peek]                          claim the most useful work
-  claim <item> [--touching "a,b"]        claim a specific item
-  progress <item> [headline] [--touching "src/db,src/api.js"]
-                                         milestone update (no headline = silent heartbeat); renews your lease
-  ask [<item>] <question> [--assume a] [--option x]... [--blocking] [--to human|reporter|operator]
-  ask <question> --escalates <question-id> --evidence "label|url"...
-                                         operators only: carry a question up to the human, with evidence
-  answer <question-id> <answer>          operators only: answer a question asked to: operator
-  withdraw <question-id> <reason>        take back your own open question: answered another way, or moot
-  submit <item> <headline> [--evidence "label|url"]...
-  handoff <item> <headline>              release with where you left off
-  propose <title> [--acceptance] [--priority now|soon|later] [--parent] [--depends-on "#1,#2"]
-          [--needs "docker,linux-vm"] [--size small|large] [--repo github.com/acme/api]
-  refine <item> [--title] [--acceptance] [--priority] [--depends-on] [--needs] [--size] [--repo]
-  review <item> <accept|reject> <headline> [--attempt n|agent]   (raced items: which attempt to keep)
-  comment [<item>] <headline>
-  ack <steer-id> [response]
-  look [<item>] [--stage s] [--notes all]
-  retire <note-id>... --reason r [--into <note-id>]
-                                         in a field-notes review: retire notes whose lesson is built in
-  signoff [headline]
-  Text flags: --summary, --detail (use "-" to read from stdin)
-
-${bold('Setup')}
-  init [--force]                         write .nuworq.json; print MCP config for Claude Code, Codex, opencode
-  connect <url> | <workspace> --hub <url> [--token t|-] [--no-browser] [--no-mcp] [--skills]
-                                         use that hub from this machine: log in through the browser (a code
-                                         you approve), save it in ~/.nuworq/connect.json (only you can read it),
-                                         and add the nuworq MCP server to Claude Code, Codex and opencode here.
-                                         Claude Code without the nuworq plugin: it offers to install it first;
-                                         --skills writes the server and skills instead without asking.
-                                         --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
-  disconnect                             revoke that token, remove what connect added, forget the hub
-  skill [--dir d]                        write the nuworq, nuworq-shaper and nuworq-operator skills for Claude (generated; connect does them without the plugin)
-  skill --plugin [dir]                   write the Claude Code plugin (MCP server, skills, listener; default: plugin/)
-  mcp                                    run the stdio MCP server (one per agent session)
-  git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
-                                         <name> holds, from the hub's GitHub App (workers set it up themselves)
-  guide [--via cli|tools]                the agent guide
-  operator [--project p] [--has tags]    print the tags an operator session declares and the line that starts it
-                                         to paste into Claude Code in the project folder (runs nothing). Operator
-                                         tags: claude-cli, infra (the project's live infrastructure: servers and
-                                         VMs, DNS, cloud accounts, deploys), github-admin, browser. First, one
-                                         line if this nuworq is too old for the operator listener. --check <level>:
-                                         only that line (exit 1), or nothing when it is new enough
-  wait --operator [--follow] [--as name] [--project p | --all-projects]
-                                         block until there is something for an operator (its work, a question
-                                         to it, an answer, steering) and print one line; --follow: one per event.
-                                         Without --as: the operator of the Claude Code session that started
-                                         it (else the operators that checked in with this token).
-                                         Only this folder's project, unless --project or --all-projects.
-  tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
-  worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags] [--browser]
-                                         start a headless worker where work is waiting (the hub routes it),
-                                         in its own git worktree, a branch per item (--here: no worktree). Without
-                                         --run it prints the command instead. opencode needs --model,
-                                         e.g. ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is set up for you).
-                                         --model proxy/<model> --proxy <url> (or NUWORQ_LLM_PROXY_URL) routes
-                                         opencode through llm-proxy, key from NUWORQ_LLM_PROXY_KEY (also on run);
-                                         --agent claude|codex --proxy <url> sends Claude Code or Codex through its
-                                         Anthropic or OpenAI route: <url> is its LAN or tailnet address, and the
-                                         key its owner token, from NUWORQ_LLM_PROXY_TOKEN.
-                                         On a hub with login, --run needs --agent-token (or
-                                         NUWORQ_AGENT_TOKEN): workers never get your own token.
-                                         It reports what this machine has (macos/linux, docker, gpu;
-                                         add more with --has). --browser (Claude only): the worker gets a
-                                         headless Chrome (Playwright MCP, local pages only) to check UI
-                                         work with, and has "browser".
-  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--max-usd X] [--poll 30] [--has tags] [--browser] [--until-idle]
-                                         keep up to N workers on waiting work in projects you opted in
-                                         (UI: "Let nuworq run staff this project"); waits for work, or
-                                         with --until-idle exits when the queue is empty. Workers that
-                                         keep failing pause it (5m, then longer, up to 30m), and a project
-                                         whose checkout can't be updated waits the same way while the
-                                         others go on. Logs: ~/.nuworq/logs. --max-usd stops launching
-                                         once workers' reported spend reaches X (codex and local models
-                                         report no cost, so they don't count against it).
-                                         --browser: each worker gets a browser, as with worker --browser.
-                                         A worker's worktree is removed when it exits, unless it holds
-                                         uncommitted changes or commits on no branch (then it says where).
-                                         Its branch goes too once its item is done or dropped and on origin.
-  run --sweep [--dry-run]                remove leftovers now (the runner does it weekly): worktrees and
-                                         nuworq/* branches of done or dropped items, idle worktrees with
-                                         no branch, and stale worktree records. Never your checkout, never
-                                         uncommitted or unpushed work. --dry-run lists what would go.
-  run --install [run flags] | run --uninstall
-                                         the same runner as a service: a LaunchAgent (macOS) or systemd
-                                         user unit (Linux) that survives closed terminals and reboots;
-                                         installing again replaces it. Log: ~/.nuworq/logs/run.log
-                                         Install from a checkout: it runs there and finds the ones beside it
-  update                               install the hub's newer nuworq now, if it is signed by the release key
-                                         this install pinned (otherwise, or offline, it keeps this version and
-                                         says why). Every command checks by itself at most every 10 minutes;
-                                         NUWORQ_NO_UPDATE=1 turns that off. After one updates it in the
-                                         background, the next command says once what changed.
-  changes                                this version's changelog lines again
-  prompt [--as name]                     just the worker prompt text, for other agents
-  seed                                   add the nuworq roadmap project to your hub's database
-
-Env: NUWORQ_URL (default ${DEFAULT_URL}), NUWORQ_PROJECT, NUWORQ_AGENT, NUWORQ_MODEL, NUWORQ_DB,
-     NUWORQ_TOKEN (a token the CLI and MCP server send to a hub that requires login),
-     NUWORQ_PUBLIC_URL (the hub's address as you reach it, used for links in push messages),
-     NUWORQ_LLM_PROXY_URL and NUWORQ_LLM_PROXY_KEY (serve: measured usage for agents that send
-     x-client-name: nuworq/<project>/<agent> through llm-proxy; a read-only key), and behind Cloudflare
-     Access NUWORQ_LLM_PROXY_ACCESS_ID and NUWORQ_LLM_PROXY_ACCESS_SECRET (a service token; serve only),
-     NUWORQ_LLM_PROXY_TOKEN (llm-proxy's owner token, for Claude and Codex workers with --proxy)
-Deploying on a VM or the internet: docs/DEPLOY.md`;
-
 // git's credential helper protocol (git help credential): for "get" on github.com, a token from the hub's
 // GitHub App for the repository of the item this agent holds. Anything else, or a different repository,
 // gets no answer, and git goes on to its other helpers. Errors go to stderr, where git shows them.
@@ -1614,10 +1636,22 @@ async function selfUpdate(flags, { force = false } = {}) {
   }
 }
 
+const unknownCommand = (cmd, near) => new HubError(`unknown command "${cmd}"`, { hint: `${near ? `Did you mean ${near}? ` : ''}See: nuworq help` });
+
 async function main() {
   const [cmd, ...argv] = process.argv.slice(2);
   const { pos, flags } = parse(argv);
-  if (!cmd || cmd === 'help' || flags.help || flags.h || cmd === '--help' || cmd === '-h') return console.log(HELP);
+  // Help (#481): a bare nuworq, one command's (help <command>, <command> --help), or all of it.
+  if (!cmd || cmd === 'help' || flags.help || flags.h || cmd === '--help' || cmd === '-h') {
+    const help = await import('../src/help.js');
+    const o = { width: process.stdout.isTTY ? process.stdout.columns || 80 : 80, style: { bold, dim } };
+    const want = cmd === 'help' ? pos[0] : cmd?.startsWith('-') ? undefined : cmd;
+    if (!want) return console.log(help.bare(o));
+    if (want === 'all') return console.log(flags.markdown ? help.reference({ markdown: true }) : help.reference(o));
+    const one = help.commandHelp(want, o);
+    if (!one) throw unknownCommand(want, help.nearest(want));
+    return console.log(one);
+  }
 
   if (cmd === 'serve') return serve(flags);
   if (cmd === 'update') {
@@ -1665,6 +1699,7 @@ async function main() {
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
   }
   if (cmd === 'operator') return operatorCmd(flags);
+  if (cmd === 'staff') return staffCmd(pos, flags);
   if (cmd === 'wait') return waitCmd(flags);
   if (cmd === 'skill' && flags.plugin) {
     // The Claude Code plugin (src/plugin.js): <dir> (default this checkout's plugin/), plus the marketplace
@@ -1703,7 +1738,7 @@ async function main() {
   if (cmd === 'git-credential') return gitCredential(pos, flags);
 
   const shape = AGENT_CMDS[cmd];
-  if (!shape) throw new HubError(`unknown command "${cmd}"`, { hint: 'See: nuworq help' });
+  if (!shape) throw unknownCommand(cmd, (await import('../src/help.js')).nearest(cmd));
   const agent = flags.as || envVar('AGENT');
   if (!agent) throw new HubError('who are you?', { hint: 'Pass --as <name> (e.g. --as claude-1) or set NUWORQ_AGENT. Keep the same name for your whole session.' });
   const client = createClient(flags);

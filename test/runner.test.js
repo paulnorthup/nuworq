@@ -171,10 +171,11 @@ describe('nuworq worker --agent claude', () => {
       assert.equal(val({ NUWORQ_TEST_CONCURRENCY: '4' }), '4');
       assert.doesNotMatch(stdout, /NODE_OPTIONS/, 'Node refuses --test-concurrency there');
 
-      const setup = stdout.match(/^git -C '[^']*' -c '[^']*' -c \S+ fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
+      const setup = stdout.match(/^git -C '[^']*' -c .+? -c \S+ fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
       assert.ok(setup, 'fetch first, then the worktree detached at origin/main');
       // It holds no item yet, so over HTTPS the fetch gets the project's read-only token, not the item one.
-      assert.match(setup, /-c 'credential\.https:\/\/github\.com\.helper=!NUWORQ_URL=http:\/\/127\.0\.0\.1:\d+ node "[^"]+" git-credential --project gh --as c-2' -c credential\.https:\/\/github\.com\.useHttpPath=true fetch/);
+      // Every value in the helper is quoted (#477): git runs it through sh.
+      assert.match(setup, /-c 'credential\.https:\/\/github\.com\.helper=!NUWORQ_URL='\\''http:\/\/127\.0\.0\.1:\d+'\\'' node '\\''[^']+'\\'' git-credential --project '\\''gh'\\'' --as '\\''c-2'\\''' -c credential\.https:\/\/github\.com\.useHttpPath=true fetch/);
       execFileSync('/bin/sh', ['-c', setup.replace(/ \\\n/g, ' ')]);
       const wt = `${repo}.worktrees/c-2`;
       assert.equal(g(wt, 'rev-parse', 'HEAD'), g(origin, 'rev-parse', 'main'), 'at the latest main on GitHub');
@@ -253,7 +254,8 @@ describe('workers on a hub that requires login', () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-tok-')));
     const bin = join(dir, 'bin');
     execFileSync('mkdir', [bin]);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "ARGS: $*"\n', { mode: 0o755 });
+    // What ps would show (its arguments), whether any token is in its environment, and the token files' modes.
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "ARGS: $*"\necho "ENV TOKENS: $(env | grep -c nwq_)"\nls -l "$HOME/.nuworq/tokens"\n', { mode: 0o755 });
     const hub = new Hub();
     hub.tx(() => hub.project('lock', { create: true }));
     hub.humanOp('lock', 'settings', { path: dir });
@@ -262,7 +264,8 @@ describe('workers on a hub that requires login', () => {
     const agent = server.auth.createToken('box', 'agent', { projects: ['lock'] });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, NUWORQ_TOKEN: human, NUWORQ_AGENT_TOKEN: '' };
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-tok-home-'));
+    const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, NUWORQ_TOKEN: human, NUWORQ_AGENT_TOKEN: '' };
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'lock', '--here', '--as', 'w', ...a], { env, cwd: dir });
     try {
       const printed = (await cli()).stdout;
@@ -273,9 +276,16 @@ describe('workers on a hub that requires login', () => {
       await assert.rejects(cli('--run', '--agent-token', human), (e) => /is a human token/.test(e.stderr));
       await assert.rejects(cli('--run', '--agent-token', 'nwq_not-a-real-token-at-all'), (e) => /refused the agent token/.test(e.stderr));
 
+      // The agent token reaches the MCP server through a 0600 file (#477): never in argv (what ps shows) or the
+      // agent's environment, and the person's own token not at all.
       const ran = (await cli('--run', '--agent-token', agent)).stdout;
-      assert.match(ran, /ARGS: .*"NUWORQ_TOKEN":"nwq_/);
-      assert.ok(ran.includes(agent) && !ran.includes(human), 'the agent gets the agent token only');
+      const file = join(home, '.nuworq', 'tokens', 'w.token');
+      assert.match(ran, new RegExp(`ARGS: .*"NUWORQ_TOKEN_FILE":"${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+      assert.doesNotMatch(ran, /ARGS: .*nwq_/, 'no token in its arguments');
+      assert.match(ran, /^ENV TOKENS: 0$/m, 'no token in its environment, not even the person\'s');
+      assert.match(ran, /^-rw-------@? .* w\.token$/m, 'a file only this user reads');
+      assert.ok(!ran.includes(agent) && !ran.includes(human));
+      assert.ok(!existsSync(file), 'gone once the worker is');
     } finally {
       server.close();
     }
@@ -348,6 +358,9 @@ describe('a worker for a project with no checkout on this machine', () => {
     g('-C', join(dir, 'seed'), 'push', '-q', 'origin', 'main');
     const repos = join(dir, 'repos'), home = join(dir, 'home'), bin = join(dir, 'bin');
     for (const d of [repos, home, bin]) mkdirSync(d);
+    // The person chose repos as where this machine's workers may work (#477).
+    mkdirSync(join(home, '.nuworq'));
+    writeFileSync(join(home, '.nuworq', 'folders.json'), JSON.stringify({ folders: [repos] }));
     writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "WORKING IN $(pwd)"\n', { mode: 0o755 });
     const hub = new Hub();
     hub.tx(() => hub.project('far', { create: true }));

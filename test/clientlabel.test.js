@@ -29,7 +29,21 @@ const freshHome = () => mkdtempSync(join(tmpdir(), 'nuworq-label-'));
 describe('workers label their model traffic nuworq/<project>/<agent>', () => {
   test('claude: ANTHROPIC_CUSTOM_HEADERS carries x-client-name', async () => {
     const out = await workerCmd('claude', { home: freshHome() });
-    assert.match(out, /ANTHROPIC_CUSTOM_HEADERS='x-client-name: nuworq\/lab\/w-1' \\\n\s+claude -p/);
+    assert.match(out, /ANTHROPIC_CUSTOM_HEADERS="\$\{ANTHROPIC_CUSTOM_HEADERS:\+\$ANTHROPIC_CUSTOM_HEADERS\n\}"'x-client-name: nuworq\/lab\/w-1' \\\n\s+claude -p/);
+  });
+
+  // The runner's headers may carry llm-proxy's x-proxy-token: the shell expands them, so they're never in argv or printed (#493).
+  test("claude: the runner's own headers reach Claude Code without their values in the command", async () => {
+    const home = freshHome();
+    const bin = join(home, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nprintf %s "$ANTHROPIC_CUSTOM_HEADERS"\n', { mode: 0o755 });
+    const out = await workerCmd('claude', { home, vars: { ANTHROPIC_CUSTOM_HEADERS: 'x-proxy-token: secret' } });
+    assert.ok(!out.includes('secret'), out);
+    const start = out.match(/^cd '[\s\S]*?--allowedTools '[^']*'$/m)[0];
+    const run = (env) => promisify(execFile)('/bin/sh', ['-c', start], { env: { PATH: `${bin}:/usr/bin:/bin`, ...env } }).then((r) => r.stdout);
+    assert.equal(await run({ ANTHROPIC_CUSTOM_HEADERS: 'x-proxy-token: secret' }), 'x-proxy-token: secret\nx-client-name: nuworq/lab/w-1');
+    assert.equal(await run({}), 'x-client-name: nuworq/lab/w-1', 'without the runner\'s headers, only the label');
   });
 
   test('opencode: the provider sends the header (ollama defined in full, others merged)', async () => {
@@ -77,7 +91,7 @@ describe('workers route through llm-proxy: opencode with --model proxy/<model>, 
 
   test("claude: --proxy points Claude Code at llm-proxy's Anthropic route with the owner token, expanded by the shell", async () => {
     const out = await workerCmd('claude', { home: freshHome(), vars, extra: ['--proxy', 'http://studio.local:4100/'] });
-    assert.match(out, /ANTHROPIC_BASE_URL='http:\/\/studio\.local:4100\/anthropic' ANTHROPIC_AUTH_TOKEN="\$NUWORQ_LLM_PROXY_TOKEN" \\\n\s+ANTHROPIC_CUSTOM_HEADERS='x-client-name: nuworq\/lab\/w-1' \\\n\s+claude -p/);
+    assert.match(out, /ANTHROPIC_BASE_URL='http:\/\/studio\.local:4100\/anthropic' ANTHROPIC_AUTH_TOKEN="\$NUWORQ_LLM_PROXY_TOKEN" \\\n\s+ANTHROPIC_CUSTOM_HEADERS="[^"]*"'x-client-name: nuworq\/lab\/w-1' \\\n\s+claude -p/);
     assert.deepEqual(leaks(out), [], 'no secret is printed or in argv');
     assert.doesNotMatch(out, /CF-Access|NUWORQ_LLM_PROXY_KEY/, "workers use the LAN address: no Access token, and not the hub's read key");
     const assign = out.match(/(ANTHROPIC_BASE_URL=.*?) \\\n\s+ANTHROPIC_CUSTOM_HEADERS/s)[1];

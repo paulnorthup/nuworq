@@ -4,7 +4,7 @@ import { createHmac } from 'node:crypto';
 import { Hub } from '../src/core.js';
 import { itemView, view } from '../src/insight.js';
 import { receive, prsOf } from '../src/github.js';
-import { guide, skill } from '../src/protocol.js';
+import { guide, skill, MODE_RULES } from '../src/protocol.js';
 import { drift } from '../src/tidy.js';
 
 // A project that steers by groups: #1 "Workers" with its part #2.
@@ -34,7 +34,7 @@ describe('agents keep the groups true (#202)', () => {
     assert.equal(r.mode, 'tidy');
     assert.equal(r.priority, 'soon');
     assert.match(r.summary, /#3 "Loose end" \(ready\) is in no milestone/);
-    assert.match(r.hint, /Never change a priority a person set/);
+    assert.match(r.hint, /Never touch a priority a person set/);
     human('create', { title: 'Another loose end', acceptance: 'x' });
     assert.notEqual(agent('next', 'w2').mode, 'tidy', 'one tidy job at a time');
     assert.equal(tidies().length, 1);
@@ -173,12 +173,10 @@ describe('agents keep the groups true (#202)', () => {
     assert.notEqual(agent('next', 'w1').mode, 'tidy', 'what it listed and left alone is not raised again');
   });
 
-  test('the guide describes the tidy job, and the skill includes it', () => {
-    const g = guide();
-    assert.match(g, /## Tidy jobs/);
-    assert.match(g, /\*\*Look for:\*\* open work in no milestone; two milestones changing the same files/);
-    assert.match(g, /\*\*Never touch:\*\* a priority a person set/);
-    assert.match(g, /- \*\*tidy\*\*: the milestones drifted/);
+  test('the tidy hint describes the job, the guide names it, and the skill includes it (#527)', () => {
+    assert.match(MODE_RULES.tidy, /Look for open work in no milestone, two milestones after the same outcome/);
+    assert.match(MODE_RULES.tidy, /Never touch a priority a person set/);
+    assert.match(guide(), /`next` claims one job \(work, shape, review, land, tidy, answer\)/);
     assert.match(skill(), /A tidy job/);
   });
 });

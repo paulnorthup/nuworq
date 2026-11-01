@@ -54,6 +54,7 @@ describe("a paying owner manages billing in Stripe's portal (#231)", () => {
   const invoice = (type, fields = {}) => deliver({ type, data: { object: { id: 'in_1', customer: 'cus_a', parent: { subscription_details: { subscription: 'sub_a' } }, ...fields } } });
 
   before(async () => {
+    process.env.NUWORQ_ALLOW_PRIVATE_HOSTS = '127.0.0.1'; // the hub host's setting: the push sink is local
     now = Date.parse('2026-11-01T00:00:00Z');
     stripe = await fakeStripe();
     spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-portal-')), plans: true, clock: () => now });
@@ -78,7 +79,7 @@ describe("a paying owner manages billing in Stripe's portal (#231)", () => {
     await deliver({ type: 'checkout.session.completed', data: { object: { client_reference_id: 'acme', customer: 'cus_a', subscription: 'sub_a', payment_status: 'paid' } } });
     await sub();
   });
-  after(() => { server.close(); server.closeAllConnections(); stripe.close(); spaces.close(); });
+  after(() => { delete process.env.NUWORQ_ALLOW_PRIVATE_HOSTS; server.close(); server.closeAllConnections(); stripe.close(); spaces.close(); });
 
   test('the owner sees the state in plain words, and Manage billing opens the portal for their customer, back to the settings', async () => {
     const b = await call('own', 'GET', '/api/billing');

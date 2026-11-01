@@ -276,7 +276,7 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       const action = html.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&');
       assert.ok(action.startsWith(`${stub}/settings/apps/new?state=`), action);
       const m = JSON.parse(html.match(/name="manifest" value="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
-      assert.deepEqual(m.default_permissions, { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read' });
+      assert.deepEqual(m.default_permissions, { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' });
       assert.equal(m.redirect_url, 'http://hub.test/api/github/app/callback');
       assert.equal(m.hook_attributes.url, 'http://hub.test/api/hooks/github-app');
       const state = new URL(action).searchParams.get('state');
@@ -321,7 +321,8 @@ describe('workers ask git for tokens through the helper', () => {
     const port = await listen(server);
     try {
       const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${port}`, '--project', 'api', '--as', 'w1'], { env: { ...process.env, HOME: dir }, cwd: dir });
-      assert.match(stdout, /export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential\.https:\/\/github\.com\.helper GIT_CONFIG_VALUE_0='!NUWORQ_URL=http:\/\/127\.0\.0\.1:\d+ node "[^"]+" git-credential --as w1'/);
+      // Every value in it quoted (#477): git runs the helper through sh.
+      assert.match(stdout, /export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential\.https:\/\/github\.com\.helper GIT_CONFIG_VALUE_0='!NUWORQ_URL='\\''http:\/\/127\.0\.0\.1:\d+'\\'' node '\\''[^']+'\\'' git-credential --as '\\''w1'\\'''/);
       assert.match(stdout, /GIT_CONFIG_KEY_1=credential\.https:\/\/github\.com\.useHttpPath GIT_CONFIG_VALUE_1=true/);
       assert.doesNotMatch(execFileSync('git', ['-C', home, 'config', '--list', '--local'], { encoding: 'utf8' }), /credential/);
     } finally { server.close(); }

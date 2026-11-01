@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { mkdtempSync } from 'node:fs';
@@ -56,6 +56,9 @@ async function hub({ feedbackProject = 'nuworq/nuworq', sweepMs } = {}) {
 }
 
 describe('feedback about nuworq (#295)', () => {
+  // The hub host's setting (#474): the push sinks here are local.
+  before(() => { process.env.NUWORQ_ALLOW_PRIVATE_HOSTS = '127.0.0.1'; });
+  after(() => { delete process.env.NUWORQ_ALLOW_PRIVATE_HOSTS; });
   test('a person sends it with only the page, the version and the browser; the owners see it, newest first', async () => {
     const h = await hub();
     try {
@@ -368,8 +371,8 @@ describe('feedback has its own autonomy (#296)', () => {
   });
 
   test('at every level, a change of scope or direction goes to the owners as a question instead of being built', async () => {
-    const { guide } = await import('../src/protocol.js');
-    assert.match(guide({ url: 'http://x', project: 'p' }), /Feedback about nuworq[^\n]*change scope or direction[^\n]*blocking/, 'the guide\'s shaping rules say how');
+    const { FEEDBACK_SCOPE } = await import('../src/core.js');
+    assert.match(FEEDBACK_SCOPE, /feedback about nuworq[^\n]*change scope or direction[^\n]*blocking/, 'the shape hint for feedback says how');
     for (const level of ['ask', 'balanced', 'full']) {
       const h = await hub();
       try {

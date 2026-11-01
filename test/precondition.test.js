@@ -177,8 +177,10 @@ describe('preconditions: work that waits on an outside fact', () => {
         assert.match(r.detail, /answered 302/);
         assert.equal(evil.state.hits, 0, 'the redirect target never saw the request');
       } finally { evil.close(); v.state.redirect = null; }
-      assert.match((await check(pre, { shared: true })).detail, /private address/);
-      assert.match((await check(normPrecondition('https://vendor.test/x'), { shared: true, resolve: async () => ({ address: '169.254.169.254' }) })).detail, /private address/);
+      const hits = v.state.hits;
+      assert.match((await check(normPrecondition(`${v.url}/x`), { shared: true })).detail, /^couldn't check 127\.0\.0\.1:\d+: a shared hub reaches only public addresses/);
+      assert.match((await check(normPrecondition('https://vendor.test/x'), { shared: true, resolve: async () => ({ address: '169.254.169.254' }) })).detail, /^couldn't check vendor\.test/);
+      assert.equal(v.state.hits, hits, 'a shared hub never asked the private address');
       for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.1', '::1', 'fd00::1', 'fe80::1']) assert.ok(privateAddress(ip), ip);
       for (const ip of ['8.8.8.8', '172.32.0.1', '2606:4700::1111']) assert.ok(!privateAddress(ip), ip);
     } finally { v.close(); }
@@ -248,7 +250,7 @@ describe('version preconditions: work that waits for a version', () => {
       v.state.body = 'nuworq 3.0.0 (abc123)';
       assert.deepEqual(await check(normPrecondition({ kind: 'version', url: `${v.url}/v`, min: '3.0.0' })), { ok: true, detail: `${v.url}/v reports 3.0.0, at least 3.0.0` });
       assert.match((await check(normPrecondition({ kind: 'version', url: `${v.url}/v`, min: '3.0.1' }))).detail, /reports 3\.0\.0, below 3\.0\.1/);
-      assert.match((await check(normPrecondition({ kind: 'version', url: `${v.url}/v`, min: '3.0.1' }), { shared: true, resolve: async () => ({ address: '8.8.8.8' }) })).detail, /reports a version below 3\.0\.1$/, 'a shared hub hides the value');
+      assert.match((await check(normPrecondition({ kind: 'version', url: `${v.url}/v`, min: '3.0.1' }), { shared: true, allow: ['127.0.0.1'] })).detail, /reports a version below 3\.0\.1$/, 'a shared hub hides the value');
     } finally { v.close(); }
   });
 
@@ -307,8 +309,9 @@ describe('date preconditions: work that waits for a day', () => {
     const pre = { kind: 'date', after: '2026-11-08' };
     assert.deepEqual(await check(pre, { now: Date.UTC(2026, 10, 7, 23, 59) }), { ok: false, detail: 'not 2026-11-08 yet' });
     assert.deepEqual(await check(pre, { now: Date.UTC(2026, 10, 8) }), { ok: true, detail: "it's 2026-11-08 or later" });
-    const refine = tools('mcp').find((t) => t.name === 'refine').inputSchema.properties.precondition.properties;
-    assert.ok(refine.kind.enum.includes('date') && refine.after);
+    // Defined once (#529): propose carries the schema, refine refers to it.
+    const propose = tools('mcp').find((t) => t.name === 'propose').inputSchema.properties.precondition.properties;
+    assert.ok(propose.kind.enum.includes('date') && propose.after);
   });
 
   test('a date: outside, asking no one and nothing, until the day; then ready on the sweep', async () => {

@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,6 +28,9 @@ async function hub({ gate = true } = {}) {
 }
 
 describe('early access', () => {
+  // The hub host's setting (#474): the push sinks here are local.
+  before(() => { process.env.NUWORQ_ALLOW_PRIVATE_HOSTS = '127.0.0.1'; });
+  after(() => { delete process.env.NUWORQ_ALLOW_PRIVATE_HOSTS; });
   test('the form: a passing Turnstile token is stored; none or a bad one is refused; the same email is one request; 5 an hour per address', async () => {
     const h = await hub();
     try {
@@ -256,33 +259,33 @@ describe('early access', () => {
     const to = (path) => `http://127.0.0.1:${sink.address().port}${path}`;
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
     const dir = spaces.directory;
-    // paul is the only person in each workspace. northup's only channel is hub-wide; acme's hub-wide channel has
+    // paul is the only person in each workspace. hooli's only channel is hub-wide; acme's hub-wide channel has
     // the same URL as his personal one in globex.
-    for (const ws of ['northup', 'acme', 'globex']) {
+    for (const ws of ['hooli', 'acme', 'globex']) {
       spaces.create(ws);
       new Auth(spaces.get(ws).db).addPerson('paul', 'owner', { email: 'paul@example.com', verified: true });
     }
     dir.identify('paul@example.com', 'github');
-    for (const ws of ['northup', 'acme', 'globex']) dir.join('paul@example.com', ws);
-    addChannel(spaces.get('northup').db, 'webhook', to('/northup-everyone'), Date.now());
+    for (const ws of ['hooli', 'acme', 'globex']) dir.join('paul@example.com', ws);
+    addChannel(spaces.get('hooli').db, 'webhook', to('/hooli-everyone'), Date.now());
     addChannel(spaces.get('acme').db, 'webhook', to('/shared'), Date.now());
     addChannel(spaces.get('globex').db, 'webhook', to('/shared'), Date.now(), { person: '@paul' });
-    const auth = new Auth(spaces.get('northup').db);
+    const auth = new Auth(spaces.get('hooli').db);
     const token = auth.createToken('paul-web', 'human', { person: 'paul' });
     const server = createServer(spaces, { earlyAccess: { owners: ['paul@example.com'], verify: async () => true } });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
     const post = (email) => fetch(`${base}/api/early-access`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, turnstile: 't' }) });
     const settle = async (n) => { for (let i = 0; i < 100 && got.length < n; i++) await new Promise((r) => setTimeout(r, 20)); await new Promise((r) => setTimeout(r, 100)); };
-    const notify = async () => (await fetch(`${base}/w/northup/api/notify`, { headers: { authorization: `Bearer ${token}` } })).json();
+    const notify = async () => (await fetch(`${base}/w/hooli/api/notify`, { headers: { authorization: `Bearer ${token}` } })).json();
     try {
       assert.equal((await post('ann@example.com')).status, 200);
       await settle(2);
-      assert.deepEqual(got.sort(), ['/northup-everyone', '/shared'], 'the lone workspace\'s hub-wide channel; the shared URL once');
+      assert.deepEqual(got.sort(), ['/hooli-everyone', '/shared'], 'the lone workspace\'s hub-wide channel; the shared URL once');
       const n = await notify();
       assert.deepEqual(n.requests, n.channels.map((c) => c.id), 'the modal is told this channel hears requests');
 
-      // A second person in northup reads its hub-wide channel too: the push stops going there.
+      // A second person in hooli reads its hub-wide channel too: the push stops going there.
       auth.addPerson('mate', 'member', { email: 'mate@example.com' });
       got.length = 0;
       assert.equal((await post('bob@example.com')).status, 200);

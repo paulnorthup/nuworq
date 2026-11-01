@@ -181,6 +181,18 @@ export function missingCheckouts(projects, find, { exists = existsSync } = {}) {
 
 // The run flags to keep: everything but --install/--uninstall. --until-idle and --max-runs make run exit,
 // which a service would only restart, so they're refused.
+// --agent-token out of the service's arguments (#477): ps shows a command line, so the token goes in a file.
+// Returns { args, token }.
+export function takeToken(argv) {
+  const args = [...argv];
+  const at = args.findIndex((a) => a === '--agent-token' || a.startsWith('--agent-token='));
+  if (at < 0) return { args, token: null };
+  const inline = args[at].includes('=');
+  const token = inline ? args[at].slice(args[at].indexOf('=') + 1) : args[at + 1];
+  args.splice(at, inline ? 1 : 2);
+  return { args, token: token || null };
+}
+
 export function serviceArgs(argv) {
   const args = argv.filter((a) => !/^--(un)?install$/.test(a));
   const exits = args.find((a) => /^--(until-idle|max-runs)(=|$)/.test(a));

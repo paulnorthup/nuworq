@@ -15,6 +15,23 @@ function git(repo, ...args) {
   }
 }
 const exists = (repo, ref) => git(repo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`) !== null;
+// The same, without blocking the event loop (#535): for work done off the request path.
+const gitAsync = (repo, ...args) => new Promise((done) => execFile('git', ['-C', repo, ...args], { encoding: 'utf8', timeout: 5000 },
+  (e, out) => done(e ? null : String(out).trim())));
+
+// Whether branch lacks commits its base has (#535): { base, behind, base_head, head }, or null when the repository
+// has no main or master, or no such branch. known: the last answer for this branch; when neither head moved, it
+// stands and no merge-base is run.
+export async function behindBase(repo, branch, known = null) {
+  const sha = (ref) => gitAsync(repo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+  let base = null, baseHead = null;
+  for (const b of ['main', 'master']) if ((baseHead = await sha(b))) { base = b; break; }
+  const head = base && await sha(branch);
+  if (!head) return null;
+  if (known && known.base === base && known.base_head === baseHead && known.head === head) return known;
+  const has = await gitAsync(repo, 'merge-base', '--is-ancestor', base, branch) !== null;
+  return { base, behind: !has, base_head: baseHead, head };
+}
 
 // Hash-looking words that claim a commit: in evidence labels when they mix digits and letters (so
 // "1234567" or "acceded" aren't mistaken for one), and in prose only right after "commit".
