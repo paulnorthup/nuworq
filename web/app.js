@@ -62,15 +62,18 @@ const MAC = /Mac|iP(hone|ad)/.test(navigator.platform);
 
 const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>');
 
+const MD_INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(^|[\s(])(https?:\/\/[^\s<)]+)/gm;
+const codeOnly = (t) => t.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
 function md(text) {
   if (!text) return '';
   const blocks = [];
   let s = String(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => { blocks.push(`<pre>${esc(code.replace(/\n$/, ''))}</pre>`); return `\u0000${blocks.length - 1}\u0000`; });
-  s = esc(s)
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  // One pass: each piece of text becomes code, bold, a link or an address once, and markup made here is never
+  // scanned again (a URL inside a link's address would otherwise close its href early).
+  const a = (href, label) => `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
+  s = esc(s).replace(MD_INLINE, (m, code, bold, label, href, lead, url) =>
+    code != null ? `<code>${code}</code>` : bold != null ? `<strong>${codeOnly(bold)}</strong>` : label != null ? a(href, codeOnly(label)) : `${lead}${a(url, url)}`);
   return s.split(/\n{2,}/).map((par) => {
     const ls = par.split('\n');
     const bullet = /^\s*([-*•]|\d+\.)\s+/;
@@ -604,6 +607,11 @@ const stepWhere = (where) => (!where ? '' : /^https?:\/\/\S+$/i.test(where.trim(
   ? `<a class="step-where" href="${esc(where.trim())}" target="_blank" rel="noopener">${esc(where.trim())}</a>`
   : commandBlocks(where));
 
+// Steps an agent wrote say so above their Copy buttons: their commands are the agent's words, not the hub's.
+// A person ('you', '@handle') or the hub itself ('nuworq') wrote the rest.
+const stepsBy = (asker) => (!asker || asker === 'you' || asker === 'nuworq' || String(asker).startsWith('@') ? ''
+  : `<div class="steps-by">Written by ${esc(asker)}, an agent, not by nuworq. Read each command before you run it.</div>`);
+
 // A question's steps as a checklist the person ticks off (#162), shown at every depth. The row is the tick target;
 // a URL opens in a new tab, each command gets a Copy button. Ticks are the viewer's own and survive a reload.
 function stepList(a) {
@@ -611,6 +619,7 @@ function stepList(a) {
   const q = a.question.id;
   return `<div class="steps" data-new="step-checklist">
     <div class="steps-head"><span class="label">Steps</span><span class="steps-count">${[...done].filter((n) => n <= a.steps.length).length} of ${a.steps.length} done</span></div>
+    ${stepsBy(a.question.asked_by)}
     <ol>${a.steps.map((s, i) => {
       const n = i + 1;
       const on = done.has(n);
@@ -989,6 +998,8 @@ function runners(v) {
     : r.state === 'stopped' ? `Stopped ${esc(r.last_seen)} ago: ${esc(r.stopped)}.`
     : r.state === 'paused' ? `Paused for ${esc(r.paused.for)}: ${esc(r.paused.reason)}.`
     : r.state === 'skipping' ? `Leaves this project alone${r.skipping.for ? ` for ${esc(r.skipping.for)}` : ''}: ${esc(r.skipping.reason)}.`
+    // --workers auto (#533): it adds workers while the machine has room, and says why when it holds.
+    : r.auto ? `${r.running} of up to ${r.workers} running${r.holding ? `. Holding: ${esc(r.holding)}.` : ', as the machine has room.'}`
     : `${r.running} of ${r.workers} worker${r.workers === 1 ? '' : 's'} running.`;
   const up = rs.filter((r) => r.state === 'up').length;
   const st = v.project.staffing;
@@ -1200,7 +1211,7 @@ function connectStep(r) {
     <h2>${esc(r.name)} is ready</h2>
     ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
     ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${commandBlocks(c.clone)}` : ''}
-    <h4>Connect it to ${esc(S.me.org)}</h4><p class="lead">It signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code and Codex if they're installed.</p>${commandBlocks(c.connect ?? c.guide)}
+    <h4>Set it up for ${esc(S.me.org)}</h4><p class="lead">Paste it in a terminal, in a clone of the repository. It installs nuworq (Node 24 or newer), signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code and Codex if they're installed. Then it asks to staff ${esc(r.name)} with workers and start an operator.</p>${commandBlocks(c.setup)}
     <h4>Start a worker in a clone of the repository</h4>${commandBlocks(c.worker)}
     <div class="foot"><button class="btn primary" data-action="goto-new" data-slug="${esc(r.slug)}">Open the board</button></div>`);
 }
@@ -1332,16 +1343,14 @@ async function connect() {
   const where = S.view?.project.path;
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
-    <h4>1. Install nuworq (once)</h4>
-    ${c.install ? `<p class="lead">From this hub: Node 24+, no other dependencies, and it keeps itself up to date.</p>${commandBlocks(c.install)}`
-      : '<p class="lead">This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed.</p>'}
-    <h4>2. Connect this machine (once)</h4><p class="lead">It logs you in through the browser, saves this machine's token, and registers nuworq with Claude Code, Codex and opencode if they're installed. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.connect)}
-    <h4>3. Keep workers going</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${commandBlocks(c.run)}
+    <h4>Set up this machine (once)</h4>
+    <p class="lead">Paste it in a terminal, in a clone of the project. ${c.verified ? '<span data-new="verified-install">It downloads this hub\'s newest signed release and checks its signature against nuworq\'s release key; if that doesn\'t match, it stops before anything installs.</span> Then it installs nuworq (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), which keeps itself up to date.' : c.install ? 'It installs nuworq from this hub (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), and keeps it up to date.' : 'This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed first.'} It signs you in through the browser, then asks, one at a time, to install the Claude Code plugin, staff the project with workers here, and start an operator. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.setup)}
+    <h4>Workers by hand</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${commandBlocks(c.run)}
     <p class="lead">One worker on its own, wherever work is waiting:</p>${commandBlocks(c.worker)}
-    <h4>Optional: the Claude Code plugin</h4><p class="lead">The MCP server and both nuworq skills in one install, instead of <code>claude mcp add</code> and copying the skills by hand. Connect this machine (step 2) all the same: the plugin holds no token.</p>${commandBlocks(c.plugin)}
     ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
     ${z() >= 2 ? `<h3>Setting up by hand</h3><p class="lead">What <code>nuworq connect</code> does for you. No token or address goes in these: connect saved both, and <code>nuworq mcp</code> reads them.</p>
+    <h4>The Claude Code plugin</h4><p class="lead">The MCP server and the nuworq skills in one install. Connect this machine all the same: the plugin holds no token.</p>${commandBlocks(c.plugin)}
     <h4>Claude Code</h4>${commandBlocks(c.claude)}
     <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}
@@ -1481,7 +1490,8 @@ function newProject() {
       <details><summary>Or add one by name</summary>` : `<p class="lead">${why} Agents also create projects when they check in to a new name.</p>`}
     <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
     <label>Repository (optional): its git remote, so agents in a clone find the project<input id="np-remote" placeholder="e.g. github.com/acme/llm-proxy"></label>
-    <label>Mission (optional): the north star every agent reads<textarea id="np-mission" placeholder="What is this for? What matters most?"></textarea></label></div>
+    <label>Mission (optional): the north star every agent reads<textarea id="np-mission" placeholder="What is this for? What matters most?"></textarea></label>
+    <label class="check-label"><input type="checkbox" id="np-staff"> Let <code>nuworq run</code> staff it: it starts headless workers whenever work is waiting, and they can cost money. Off until you say; Settings changes it later.</label></div>
     ${picker ? '</details>' : ''}
     <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="create-project">Create by name</button></div>`);
   if (!picker) return setTimeout(() => $('#np-name')?.focus(), 0);
@@ -1927,6 +1937,8 @@ const ACTIONS = {
     if (!name) return toast('Name it', true);
     try {
       const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('np-mission'), remote: val('np-remote') || undefined }) });
+      // Either answer is the answer (#491): the project page doesn't ask again.
+      await api(`/api/p/${encodeURIComponent(r.slug)}/human/settings`, { method: 'POST', body: JSON.stringify({ runner: !!$('#np-staff')?.checked }) });
       closeModal();
       go(r.slug);
     } catch (e) { toastError(e); }

@@ -30,8 +30,23 @@ describe('the Claude Code plugin', () => {
     for (const name of ['nuworq', 'shaper', 'operator']) assert.match(read(PLUGIN, 'skills', name, 'SKILL.md'), new RegExp(`^---\\nname: ${name}\\ndescription: .+\\n(?:[a-z-]+: .+\\n)*---\\n`));
     const market = JSON.parse(read(ROOT, '.claude-plugin', 'marketplace.json'));
     assert.ok(market.metadata.description, '`claude plugin validate` warns without a marketplace description');
-    assert.deepEqual(market.plugins.map((p) => [p.name, p.source]), [['nuworq', './plugin']]);
     assert.ok(market.plugins.every((p) => !('version' in p)), 'nor in the marketplace entry');
+  });
+
+  // #473: "./plugin" followed main, so every commit there reached people's machines with no release and no person.
+  test('installs from the release branch the signer moves, never from main', async () => {
+    const market = JSON.parse(read(ROOT, '.claude-plugin', 'marketplace.json'));
+    assert.deepEqual(market.plugins.map((p) => [p.name, p.source]), [['nuworq', { source: 'git-subdir', url: 'paulnorthup/nuworq', path: 'plugin', ref: 'release' }]],
+      'even a marketplace added at main takes the plugin from the release branch');
+    const { RELEASE_BRANCH } = await import('../scripts/signer.js');
+    assert.equal(RELEASE_BRANCH, 'release', 'the branch the signer moves to each signed release');
+    const { PLUGIN_INSTALL } = await import('../src/connect.js');
+    const { connectCommands } = await import('../web/connect.js');
+    assert.deepEqual(PLUGIN_INSTALL[0], ['plugin', 'marketplace', 'add', 'paulnorthup/nuworq#release'], 'connect adds the marketplace at the release branch');
+    assert.match(connectCommands({ url: 'https://app.nuworq.com' }).plugin, /^claude plugin marketplace add paulnorthup\/nuworq#release\n/);
+    for (const doc of ['README.md', join('docs', 'DEPLOY.md'), join('src', 'userguide.js')]) {
+      assert.doesNotMatch(read(ROOT, doc), /marketplace add paulnorthup\/nuworq(?!#release)/, `${doc} adds the marketplace at the release branch`);
+    }
   });
 
   // #432: Claude Code shows a plugin skill as /<plugin>:<name> unless its frontmatter says user-invocable: false.

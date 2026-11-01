@@ -309,8 +309,9 @@ describe('date preconditions: work that waits for a day', () => {
     const pre = { kind: 'date', after: '2026-11-08' };
     assert.deepEqual(await check(pre, { now: Date.UTC(2026, 10, 7, 23, 59) }), { ok: false, detail: 'not 2026-11-08 yet' });
     assert.deepEqual(await check(pre, { now: Date.UTC(2026, 10, 8) }), { ok: true, detail: "it's 2026-11-08 or later" });
-    const refine = tools('mcp').find((t) => t.name === 'refine').inputSchema.properties.precondition.properties;
-    assert.ok(refine.kind.enum.includes('date') && refine.after);
+    // Defined once (#529): propose carries the schema, refine refers to it.
+    const propose = tools('mcp').find((t) => t.name === 'propose').inputSchema.properties.precondition.properties;
+    assert.ok(propose.kind.enum.includes('date') && propose.after);
   });
 
   test('a date: outside, asking no one and nothing, until the day; then ready on the sweep', async () => {

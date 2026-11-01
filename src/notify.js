@@ -204,7 +204,8 @@ export class Notifier {
       db.prepare('UPDATE channels SET weekly_at = ? WHERE id = ?').run(t, c.id);
       if (msg) sends.push(deliver(db, c, msg, this.sendOpts));
     }
-    return Promise.all(sends);
+    this.sending = (this.sending ?? 0) + 1;
+    return Promise.all(sends).finally(() => this.sending--);
   }
 
   scan() {
@@ -242,36 +243,44 @@ export class Notifier {
     // A personal channel gets only the entries its person owns; a hub-wide one gets them all.
     const sends = channels.map((c) => [c, c.person ? entries.filter((e) => (e.entry.owners ?? []).includes(c.person)) : entries]).filter(([, es]) => es.length);
     const before = new Set(channels.filter((c) => c.failing_since).map((c) => c.id));
-    const results = await Promise.all(sends.map(([c, es]) => deliver(db, c, compose(es, this.baseUrl), this.sendOpts)));
+    this.sending = (this.sending ?? 0) + 1; // holds a workspace open until it's sent (notifyWorkspaces)
+    const results = await Promise.all(sends.map(([c, es]) => deliver(db, c, compose(es, this.baseUrl), this.sendOpts))).finally(() => this.sending--);
     // A channel started or stopped failing: the UI shows that as something worth knowing.
     if (results.some((r) => r.ok === before.has(r.id))) this.hub.emit('change', { project: null, at: this.hub.now() });
     return results;
   }
 }
 
-// Many workspaces in one process: each has its own channels, so each gets its own notifier, linking to
-// its own address (baseUrlFor(name)). Workspaces created while serving are picked up within `every` ms.
-// A workspace whose hub closes (evicted, or removed, even from another process) loses its notifier;
-// re-created, it gets a fresh one. Returns { notifiers (name → Notifier), sweep(), stop() }.
+// Many workspaces in one process: each has its own channels, so each open workspace with a channel gets its own
+// notifier, linking to its own address (baseUrlFor(name)) (#525). Nothing is opened for it: a workspace gets one
+// as it opens (a request, or the sweep waking it), and one that adds its first channel within `every` ms. A
+// notifier with a push on the way holds its workspace open until it goes. A workspace whose hub closes (idle,
+// evicted, or removed, even from another process) loses its notifier. Returns { notifiers, sweep(), stop() }.
 export function notifyWorkspaces(spaces, baseUrlFor, { every = 30_000, ...opts } = {}) {
   const notifiers = new Map();
+  const hasChannels = (hub) => !!hub.db.prepare('SELECT 1 FROM channels LIMIT 1').get();
+  const attach = (name, hub) => {
+    if (notifiers.has(name) || !hasChannels(hub)) return;
+    const n = new Notifier(hub, { baseUrl: baseUrlFor(name), guard: true, ...opts }).start(); // a shared host
+    hub.once('closed', () => { n.stop(); if (notifiers.get(name) === n) notifiers.delete(name); });
+    notifiers.set(name, n);
+  };
   const sweep = () => {
-    const names = spaces.list();
     for (const [name, n] of notifiers) {
-      if (names.includes(name)) continue;
-      spaces.get(name); // removed from the host: lets its hub go
+      if (spaces.has(name)) continue;
+      spaces.get(name, { touch: false }); // removed from the host: lets its hub go
       n.stop();
       notifiers.delete(name);
     }
-    for (const name of names) {
-      if (notifiers.has(name)) continue;
-      const hub = spaces.get(name);
-      if (!hub) continue;
-      const n = new Notifier(hub, { baseUrl: baseUrlFor(name), guard: true, ...opts }).start(); // a shared host
-      hub.once('closed', () => { n.stop(); if (notifiers.get(name) === n) notifiers.delete(name); });
-      notifiers.set(name, n);
+    for (const hub of spaces.hubs()) {
+      try { attach(hub.workspace, hub); } catch (e) { console.error('starting a notifier failed', e); }
     }
   };
+  spaces.onOpen((name, hub) => attach(name, hub));
+  spaces.holdOpen((hub) => {
+    const n = notifiers.get(hub.workspace);
+    return !!n && n.hub === hub && (n.pending.size > 0 || !!n.batch || !!n.scanTimer || n.sending > 0);
+  });
   sweep();
   const timer = setInterval(sweep, every);
   timer.unref?.();

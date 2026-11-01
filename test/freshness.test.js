@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Hub, DAY, HOUR } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { freshen, FRESH_EVERY } from '../src/freshness.js';
-import { guide, skill } from '../src/protocol.js';
+import { MODE_RULES, skill } from '../src/protocol.js';
 
 function setup() {
   let t = Date.UTC(2026, 9, 1, 9);
@@ -115,12 +115,11 @@ describe('the weekly freshness sweep (#181)', () => {
     assert.match(app, /'fresh-on': \(\) => setting\(\{ fresh: true \}/);
   });
 
-  test('the guide has a Freshness sweep section, and the skill points to it', () => {
-    const g = guide();
-    assert.match(g, /## Freshness sweep/);
+  test('the sweep\'s hint says how, and the skill points to it (#527)', () => {
+    const g = MODE_RULES.fresh;
     for (const cmd of ['npm outdated', 'pip-audit', 'cargo audit', 'go list -m -u all', 'osv-scanner']) assert.ok(g.includes(cmd), cmd);
-    assert.match(g, /One proposal per breaking upgrade/);
+    assert.match(g, /Propose each breaking upgrade/);
     assert.match(g, /fresh: nothing to update/);
-    assert.match(skill(), /Freshness sweep/);
+    assert.match(skill(), /freshness sweep[^\n]*The hint `next` gives with it says how/);
   });
 });

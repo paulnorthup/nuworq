@@ -149,7 +149,7 @@ describe('landing: done means on main', () => {
     assert.equal(plain.item(plain.project('solo'), '#1').stage, 'done');
   });
 
-  test('when something lands, agents still building are told to rebase until their branch has it', () => {
+  test('when something lands, agents still building are told to rebase until their branch has it', async () => {
     const { hub, repo, git, op, worktree, build, tick } = setup();
     hub.humanOp('demo', 'create', { title: 'First', acceptance: 'x' });
     hub.humanOp('demo', 'create', { title: 'Second', acceptance: 'x' });
@@ -168,9 +168,11 @@ describe('landing: done means on main', () => {
     git(repo, 'merge', '-q', '--ff-only', one.branch);
     op('a1', 'submit', { item: '#1', headline: 'Landed' });
 
+    await hub.refreshBehind(); // the sweep's check, off the request path (#535)
     const nudge = op('a2', 'progress', { item: '#2', headline: 'Still going' }).heads_up;
     assert.match(nudge, /main moved since you started: #1 landed\. Rebase now/);
     git(wt2, 'rebase', '-q', 'main');
+    await hub.refreshBehind();
     assert.equal(op('a2', 'progress', { item: '#2' }).heads_up, undefined);
   });
 
@@ -320,7 +322,7 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     assert.equal(git(origin, 'log', '--format=%s', 'main'), 'add second\nadd first\ninit');
   });
 
-  test('when something lands on GitHub, agents still building are told to rebase onto origin/main', () => {
+  test('when something lands on GitHub, agents still building are told to rebase onto origin/main', async () => {
     const { hub, clone, op, build, push, rebase, tick } = remote();
     hub.humanOp('demo', 'create', { title: 'First', acceptance: 'x' });
     hub.humanOp('demo', 'create', { title: 'Second', acceptance: 'x' });
@@ -339,6 +341,7 @@ describe('landing through GitHub, when the hub has no checkout', () => {
     push(mac1, `${one.branch}:main`);
     op('a1', 'submit', { item: '#1', headline: 'Landed' });
 
+    await hub.refreshBehind();
     const nudge = op('a2', 'progress', { item: '#2', headline: 'Still going' }).heads_up;
     assert.match(nudge, /main moved since you started: #1 landed\. Rebase now \(git fetch origin, then git rebase origin\/main, then git push origin nuworq\/2-second --force-with-lease\)/);
   });

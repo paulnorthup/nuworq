@@ -12,6 +12,7 @@ import { createServer } from '../src/server.js';
 import { fileInTarball, releaseOf, update, describeUpdate } from '../src/update.js';
 import { Workspaces } from '../src/workspaces.js';
 import { LISTENER } from '../src/protocol.js';
+import { connectCommands, VERIFY } from '../web/connect.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
@@ -110,7 +111,21 @@ describe('/nuworq.tgz', () => {
     try {
       const info = (await (await fetch(`${hub.u}/api/info`)).json()).package;
       assert.equal(info.commit, c.slice(0, 7), 'the hub runs the newest commit');
-      assert.deepEqual(info.release, { url: `${hub.u}/nuworq-${a}.tgz`, sha256: createHash('sha256').update(tgz).digest('hex'), commit: a, time: t0 + 1800 });
+      const key = pub.replace(/-----[A-Z ]+-----|\s/g, '');
+      assert.deepEqual(info.release, { url: `${hub.u}/nuworq-${a}.tgz`, sha256: createHash('sha256').update(tgz).digest('hex'), commit: a, time: t0 + 1800, key });
+
+      // #473: the first install, as the README and Connect an agent give it: the release and its signature under
+      // one name, checked against the key before npm sees it.
+      const first = join(d, 'first');
+      mkdirSync(first);
+      for (const f of ['nuworq-release.tgz', 'nuworq-release.tgz.sig']) writeFileSync(join(first, f), Buffer.from(await (await fetch(`${hub.u}/${f}`)).arrayBuffer()));
+      assert.ok(readFileSync(join(first, 'nuworq-release.tgz')).equals(tgz), 'the signed release, not what the hub runs');
+      const check = (k) => execFileSync(process.execPath, ['-e', VERIFY, 'nuworq-release.tgz', k], { cwd: first, encoding: 'utf8', stdio: 'pipe' });
+      assert.equal(check(key), 'nuworq-release.tgz: signature verified\n');
+      assert.throws(() => check(generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64')), /NOT signed by the nuworq release key: do not install it/, 'another key: stops');
+      writeFileSync(join(first, 'nuworq-release.tgz'), Buffer.concat([tgz, Buffer.from('x')]));
+      assert.throws(() => check(key), /NOT signed/, 'tampered bytes: stops');
+      assert.match(connectCommands({ url: hub.u, package: info }).install, new RegExp(`^curl -fsSLO ${hub.u}/nuworq-release\\.tgz -O ${hub.u}/nuworq-release\\.tgz\\.sig\\nnode -e '.+' nuworq-release\\.tgz ${key.replace(/[+/]/g, '\\$&')}\\nnpm install -g \\./nuworq-release\\.tgz$`));
       assert.equal((await fetch(`${hub.u}/nuworq.tgz.sig`)).status, 404, 'what it runs is unsigned');
       assert.equal((await fetch(`${hub.u}/nuworq-${c}.tgz.sig`)).status, 404);
       for (const p of [`/nuworq-${'f'.repeat(40)}.tgz`, `/nuworq-${a.slice(0, 7)}.tgz`, '/nuworq-..%2Fhub.json.tgz', `/nuworq-${a}.tgz.sig.sig`]) {

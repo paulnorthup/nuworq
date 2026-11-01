@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { itemView } from '../src/insight.js';
-import { guide, tools } from '../src/protocol.js';
+import { MODE_RULES, tools } from '../src/protocol.js';
 
 // #1 Workers goal, #2 Operator lane (#3 its part), #4 a lone item.
 function setup() {
@@ -63,7 +63,7 @@ describe('moving an item to another group, or out of one (#199)', () => {
     assert.throws(() => hub.humanOp('p', 'update', { item: '#3', parent: '#1' }), /#1 is done/);
   });
 
-  test('people do it from the drawer; the guide and the refine tool name the field', () => {
+  test('people do it from the drawer; the shape hint and the refine tool name the field', () => {
     const { human, view, said } = setup();
     human('update', { item: '#4', parent: '#2' });
     assert.equal(view(4).parent.item, '#2');
@@ -71,7 +71,7 @@ describe('moving an item to another group, or out of one (#199)', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.match(app, /Part of <input data-draft="ei-parent"/);
     assert.match(app, /parent: val\('ei-parent'\)/);
-    assert.match(guide(), /refine`? it with `parent`/);
+    assert.match(MODE_RULES.shape, /refine it with parent \("" takes it out\)/);
     assert.match(tools().find((t) => t.name === 'refine').inputSchema.properties.parent.description, /"" makes it top-level/);
   });
 });

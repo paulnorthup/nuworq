@@ -22,6 +22,22 @@ export function plan(routes, running, { workers = 1, maxRuns = Infinity, launche
   return out;
 }
 
+// --workers auto (#533): how many workers this machine takes now, from how busy it is. running: how many run;
+// machine: { load (the 1-minute load average), cores, free (bytes of memory available) }; max: --max-workers;
+// sinceStart: ms since this runner last started one. One more only while the load is under 80% of the cores and
+// 2 GB is free, and only once the load average has had a minute to count the last one. At least one, always,
+// so waiting work never stalls. holding: why it adds none now, or null.
+export const autoMax = (cores) => Math.max(1, Math.floor(cores / 2));
+const LOAD_SHARE = 0.8, MIN_FREE = 2 * 1024 ** 3, SETTLE_MS = 60_000;
+export function capacity(running, { load = 0, cores = 1, free = Infinity } = {}, { max = autoMax(cores), sinceStart = Infinity } = {}) {
+  if (running >= max) return { workers: max, holding: `--max-workers ${max}` };
+  if (running < 1) return { workers: 1, holding: null };
+  if (sinceStart < SETTLE_MS) return { workers: running, holding: null }; // the last one isn't in the load yet
+  if (load >= cores * LOAD_SHARE) return { workers: running, holding: `load ${load.toFixed(1)} on ${cores} cores` };
+  if (free < MIN_FREE) return { workers: running, holding: `${(free / 1024 ** 3).toFixed(1)} GB memory free` };
+  return { workers: running + 1, holding: null };
+}
+
 // After a worker exits, its worktree goes (#172), unless something in it would be lost: uncommitted changes, or
 // commits no branch holds. git(args) runs git and resolves to its output. Returns { kept, why? }.
 export async function cleanWorktree(worktree, git) {
@@ -125,6 +141,49 @@ export function sweepLine(name, r, { dryRun = false } = {}) {
   return `${dryRun ? 'Sweep (dry run)' : 'Swept'} ${name}: ${parts.join(', ')}${r.kept.length ? `; kept ${r.kept.length} (${[...why].map(([w, k]) => `${k} ${w}`).join(', ')})` : ''}`;
 }
 
+// Before the first poll (#491): staffing is never off without saying so. projects: the hub's, as this machine's token
+// reaches them; here: the one whose clone this runs in (or null); staff: --staff <project>, opted in first.
+// ask(question): the person's answer, at a terminal (absent: none). optIn(project): turns on its "Staff it with
+// nuworq run" switch, as Settings does. Returns the projects, with any it opted in marked.
+const STAFF_HOW = 'turn on "Staff it with nuworq run" in its Settings on the hub, or run nuworq run --staff <project>';
+export async function staffCheck({ projects, here = null, staff, ask, optIn, log = console.log }) {
+  const live = projects.filter((p) => !p.parked);
+  const find = (s) => live.find((p) => [p.slug, String(p.name ?? '').toLowerCase()].includes(String(s).trim().toLowerCase()));
+  const names = live.map((p) => p.name ?? p.slug).join(', ');
+  const take = async (p) => { await optIn(p); p.runner = true; log(`nuworq run now staffs ${p.name ?? p.slug}: its workers start whenever work is waiting there.`); };
+  if (typeof staff === 'string' && staff) {
+    const p = find(staff);
+    if (!p) throw Object.assign(new Error(`No project "${staff}" on this hub that this machine reaches`), { hint: `Its projects: ${names || 'none'}.` });
+    if (!p.runner) await take(p);
+  }
+  if (!live.length || live.some((p) => p.runner)) return projects;
+  log(`No project is staffed by nuworq run: ${names}. Workers start only in projects whose "Staff it with nuworq run" switch is on.`);
+  if (!ask) { log(`To staff one, ${STAFF_HOW}.`); return projects; }
+  const yes = (a) => /^y(es)?$/i.test(String(a ?? '').trim());
+  let pick = null;
+  if (here && live.includes(here)) {
+    if (yes(await ask(`Let nuworq run staff ${here.name ?? here.slug}, the project of this clone? Its workers can cost money. [y/N] `))) pick = here;
+  } else {
+    const a = String(await ask(`Which project should nuworq run staff? Its workers can cost money. (${live.map((p) => p.slug).join(', ')}; Enter for none) `) ?? '').trim();
+    pick = a ? find(a) ?? null : null;
+    if (a && !pick) log(`No project "${a}".`);
+  }
+  if (pick) await take(pick);
+  else log(`None staffed, so no worker starts. Later, ${STAFF_HOW}.`);
+  return projects;
+}
+
+// The once-per-run line (#491) on work waiting where nuworq run doesn't staff: routes, the hub's /api/route without
+// runner=1 (every project the token reaches); projects, the hub's list. Null when none waits there.
+export function unstaffedLine(routes, projects) {
+  const off = new Map(projects.filter((p) => !p.runner && !p.parked).map((p) => [p.slug, p]));
+  const waiting = routes.filter((r) => off.has(r.project));
+  if (!waiting.length) return null;
+  const n = waiting.reduce((k, r) => k + (r.claimable ?? 1), 0);
+  const where = waiting.map((r) => `${off.get(r.project).name ?? r.project} (${r.claimable ?? 1})`).join(', ');
+  return `${n} item${n === 1 ? ' waits' : 's wait'} in projects nuworq run doesn't staff: ${where}. To staff one, ${STAFF_HOW}.`;
+}
+
 const FAST_FAIL_MS = 15_000;
 const FAST_FAILS = 3;
 // Clean exits this soon without claiming anything: the hub routed a worker to work it couldn't take.
@@ -149,14 +208,23 @@ const KILL_GRACE_MS = 10_000;
 // updated(): checked between rounds (#456); "<from> → <to>" once the package installed under this runner differs
 // from the one it started on, else null. supervised: a service (launchd, systemd) restarts it when it exits, so it
 // stops launching, lets running workers finish, and returns restart: true; started by hand, it only says so, once.
+// workers: how many at once, or 'auto' (#533): as many as the machine has room for (capacity(), from machine(),
+// up to maxWorkers), saying once per change why it holds. took(worker): what a worker started for no one job
+// claimed, e.g. "#12 Fix x (review)", or null while it hasn't; said once, when it has.
+// unstaffed(): the line on work waiting in projects it doesn't staff (see unstaffedLine), or null; said the first
+// time nothing is waiting for it (#491), once per run.
 export async function run({
-  routes, launch, claimed = async () => true, log = console.log, report = async () => {}, sweep, sweptAt = 0,
-  updated = () => null, supervised = false,
+  routes, launch, claimed = async () => true, took = async () => null, log = console.log, report = async () => {}, sweep, sweptAt = 0,
+  updated = () => null, supervised = false, machine = () => ({}), maxWorkers, unstaffed = async () => null,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
   const running = [];
   const done = [];
+  const auto = workers === 'auto';
+  const most = auto ? (maxWorkers ?? autoMax(machine().cores ?? 1)) : workers;
+  let holding = null; // why --workers auto starts no more now, as last said
+  let lastStart = -Infinity;
   let launched = 0;
   let spent = 0;
   let fastFails = 0;
@@ -168,6 +236,7 @@ export async function run({
   let wake = () => {};
   let hubDown = false;
   let idle = false;
+  let toldUnstaffed = false;
   let moved = null; // "<from> → <to>": the installed package changed under this runner
   const cant = new Map(); // project → why this machine can't work on it, as last said
   const resting = new Map(); // project → { until, ms }: its checkout couldn't be updated, so it waits until then
@@ -191,7 +260,7 @@ export async function run({
   const state = () => {
     const t = now();
     return {
-      running: running.length, workers, spent, poll_seconds: pollSeconds,
+      running: running.length, workers: most, ...(auto ? { auto: true, holding } : {}), spent, poll_seconds: pollSeconds,
       skipping: [
         ...[...resting].filter(([, r]) => r.until > t).map(([project, r]) => ({ project, reason: cant.get(project) ?? "its checkout couldn't be updated", until: r.until })),
         ...[...cant].filter(([project]) => !(resting.get(project)?.until > t)).map(([project, reason]) => ({ project, reason })),
@@ -237,6 +306,12 @@ export async function run({
       }
     }
 
+    // What each worker started for no one job took, once it has (#533).
+    for (const w of running.filter((x) => !x.told)) {
+      const what = await Promise.resolve().then(() => took(w)).catch(() => null);
+      if (what) { w.told = true; log(`  ${w.name} took ${what}`); }
+    }
+
     if (sweep && !stopping && t - sweptAt >= SWEEP_EVERY_MS) {
       sweptAt = t;
       await Promise.resolve().then(() => sweep(running)).catch((e) => log(`The sweep failed: ${e.message}`));
@@ -256,9 +331,18 @@ export async function run({
     if (list && !stopping) {
       // Projects this machine can't work on this round; their slots go to the others (plan again).
       const skip = new Set();
+      let held = null;
       for (let again = true; again && !stopping;) {
         again = false;
-        for (const r of plan(list.filter((x) => !skip.has(x.project) && !(resting.get(x.project)?.until > t)), running, { workers, maxRuns, launched })) {
+        const open = list.filter((x) => !skip.has(x.project) && !(resting.get(x.project)?.until > t));
+        let cap = workers;
+        if (auto) {
+          const c = capacity(running.length, machine(), { max: most, sinceStart: now() - lastStart });
+          cap = c.workers;
+          // Holding only when there's work it would otherwise start.
+          held = c.holding && plan(open, running, { workers: Infinity, maxRuns, launched }).length > plan(open, running, { workers: cap, maxRuns, launched }).length ? c.holding : null;
+        }
+        for (const r of plan(open, running, { workers: cap, maxRuns, launched })) {
           if (stopping) break;
           let w;
           try {
@@ -285,9 +369,12 @@ export async function run({
           launched++;
           cant.delete(r.project);
           resting.delete(r.project);
-          w.started = now();
+          w.started = lastStart = now();
           running.push(w);
-          log(`▶ ${w.name} → ${r.name ?? r.project}: ${r.item} ${r.title} (${r.mode}${r.model ? ` on ${r.model}` : ''})${w.where ? `  ${w.where}` : ''}`);
+          // The job only when it was started for that one (a routed model, #347): otherwise it takes what next
+          // gives it, which a later line says (#533).
+          w.told = !!r.model;
+          log(`▶ ${w.name} → ${r.name ?? r.project}${r.model ? `: ${r.item} ${r.title} (${r.mode} on ${r.model})` : ''}${w.where ? `  ${w.where}` : ''}`);
           w.exited.then(async (code) => {
             const ms = now() - w.started;
             const secs = Math.round(ms / 1000);
@@ -308,10 +395,21 @@ export async function run({
           });
         }
       }
+      if (auto && held !== holding) {
+        if (held) log(`Holding at ${running.length}: ${held}`);
+        holding = held;
+      }
       // Work starts the moment it's ready: by default, wait for it rather than exit.
       // Work this machine can't take doesn't count.
       const elsewhere = list.some((x) => cant.has(x.project));
-      if (list.some((x) => !cant.has(x.project))) idle = false;
+      const waiting = list.some((x) => !cant.has(x.project));
+      // Nothing for it here: work waiting where it doesn't staff is said once, before the waiting line.
+      if (!waiting && !running.length && !toldUnstaffed) {
+        toldUnstaffed = true;
+        const line = await Promise.resolve().then(unstaffed).catch(() => null);
+        if (line) log(line);
+      }
+      if (waiting) idle = false;
       else if (!running.length && untilIdle) stop(elsewhere ? 'no work this machine can take is waiting' : 'no work is waiting in opted-in projects');
       else if (!running.length && !idle) {
         idle = true;

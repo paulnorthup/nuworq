@@ -317,6 +317,18 @@ CREATE TABLE IF NOT EXISTS get_started (
   how TEXT NOT NULL,                          -- complete | hidden
   at  INTEGER NOT NULL
 );
+-- The answers to writes sent with an idempotency key (#524), so a retried write applies once. Kept 10 minutes.
+CREATE TABLE IF NOT EXISTS replies (
+  id     TEXT PRIMARY KEY,                    -- sha256 of workspace, caller, agent, path and the key
+  status INTEGER NOT NULL,
+  body   TEXT NOT NULL,
+  at     INTEGER NOT NULL
+);
+-- GitHub deliveries this hub acted on (X-GitHub-Delivery), so a replayed one changes nothing (#478). Kept a week.
+CREATE TABLE IF NOT EXISTS deliveries (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
+);
 `;
 
 // One record per pull request (#261). The hub records a PR it opens under the normalized remote
@@ -336,145 +348,206 @@ export const PR_TWINS = [
      AND lower(g.repo) = 'github.com/' || lower(prs.repo))`,
 ];
 
-export function openDb(file) {
+// Columns added since the first schema, in the order they came. On a database from before numbered migrations
+// (#516) they may already be there: a column that exists is skipped, and anything else that fails stops the start.
+const COLUMNS = [
+  'ALTER TABLE notes ADD COLUMN target TEXT',
+  "ALTER TABLE items ADD COLUMN touching TEXT NOT NULL DEFAULT '[]'",
+  'ALTER TABLE agents ADD COLUMN last_checkin INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE projects ADD COLUMN parked INTEGER NOT NULL DEFAULT 0',
+  "ALTER TABLE projects ADD COLUMN path TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE projects ADD COLUMN runner INTEGER NOT NULL DEFAULT 0',
+  "ALTER TABLE agents ADD COLUMN tokens TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE items ADD COLUMN race INTEGER NOT NULL DEFAULT 1',
+  'ALTER TABLE agents ADD COLUMN token_id INTEGER',
+  "ALTER TABLE projects ADD COLUMN github_secret TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE agents ADD COLUMN has TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE items ADD COLUMN needs TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE items ADD COLUMN size TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE items ADD COLUMN branch TEXT NOT NULL DEFAULT ''", // the git branch the item is built on, landed from
+  "ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''", // the repository it lands in (a normalized remote); '': the project's first
+  "ALTER TABLE projects ADD COLUMN issue_label TEXT NOT NULL DEFAULT ''", // only issues with this label come in ('' = all)
+  'ALTER TABLE projects ADD COLUMN archived_at INTEGER NOT NULL DEFAULT 0', // archived: out of lists and routing, history kept
+  'ALTER TABLE issues ADD COLUMN landed_comment INTEGER NOT NULL DEFAULT 0', // the hub's comment when its item landed (its id on GitHub)
+  "ALTER TABLE issues ADD COLUMN close_error TEXT NOT NULL DEFAULT ''", // why the hub couldn't close it after its item landed
+  "ALTER TABLE prs ADD COLUMN blocked TEXT NOT NULL DEFAULT ''", // why an open landing PR can't merge: '' | conflict | review
+  // An outside fact the item waits on (src/precondition.js): JSON, '' for none; the last check { at, ok, detail };
+  // when to check next; failures in a row (the backoff)
+  "ALTER TABLE items ADD COLUMN precondition TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE items ADD COLUMN last_check TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE items ADD COLUMN next_check INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE items ADD COLUMN check_fails INTEGER NOT NULL DEFAULT 0',
+  "ALTER TABLE items ADD COLUMN parked_by TEXT NOT NULL DEFAULT ''", // who answered and kept it waiting ('' = not kept parked)
+  'ALTER TABLE projects ADD COLUMN wait_days INTEGER NOT NULL DEFAULT 0', // how long work waits outside before you hear; 0: the default (src/precondition.js)
+  // What llm-proxy measured (source 'llm-proxy'; 0 on reported rows): model time, requests, failed ones, cold model loads
+  'ALTER TABLE usage ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE usage ADD COLUMN requests INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE usage ADD COLUMN failures INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE usage ADD COLUMN cold_loads INTEGER NOT NULL DEFAULT 0',
+  "ALTER TABLE channels ADD COLUMN person TEXT NOT NULL DEFAULT ''", // "@handle": a personal channel (only what they own); '' = hub-wide
+  "ALTER TABLE issues ADD COLUMN stale TEXT NOT NULL DEFAULT ''", // an agent flagged it stale: why ('' = not flagged)
+  'ALTER TABLE issues ADD COLUMN closing INTEGER NOT NULL DEFAULT 0', // 1: the human said close it; 2: closed on GitHub
+  // Questions to an issue's reporter (ask to: "reporter"): who wrote the issue, and the newest comment on it already handled
+  "ALTER TABLE issues ADD COLUMN author TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE issues ADD COLUMN last_comment INTEGER NOT NULL DEFAULT 0',
+  // A question put to an issue's reporter on GitHub: their login, the issue, and the hub's comment there (its id; 0 until posted, -1 posting)
+  "ALTER TABLE questions ADD COLUMN reporter TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE questions ADD COLUMN issue_repo TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE questions ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE questions ADD COLUMN issue_comment INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE projects ADD COLUMN reporter_wait INTEGER NOT NULL DEFAULT 48', // hours a reporter has to answer before the human is asked
+  "ALTER TABLE questions ADD COLUMN audience TEXT NOT NULL DEFAULT ''", // 'operator' (ask to: "operator"): an operator session answers, not the human; '' otherwise
+  'ALTER TABLE questions ADD COLUMN escalates INTEGER', // an operator's escalation to the human: the operator question it carries up
+  "ALTER TABLE questions ADD COLUMN evidence TEXT NOT NULL DEFAULT '[]'", // an escalation's evidence: [{ label, url? }]
+  "ALTER TABLE questions ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'", // what the person must do, in order: [{ do, where?, check? }]
+  'ALTER TABLE items ADD COLUMN fixes INTEGER', // the landed item this one repairs (its id): that one counts as an escape (#176)
+  'ALTER TABLE projects ADD COLUMN fresh INTEGER NOT NULL DEFAULT 1', // the weekly freshness sweep is on (src/freshness.js)
+  'ALTER TABLE projects ADD COLUMN fresh_at INTEGER NOT NULL DEFAULT 0', // when the sweep timer last fired (or the project began)
+  'ALTER TABLE items ADD COLUMN sweep INTEGER NOT NULL DEFAULT 0', // 1: a "keep <project> fresh" item the hub opened
+  // The weekly guide walk-through (#386, src/walkthrough.js): when it last looked, main's commit then, and its items.
+  'ALTER TABLE projects ADD COLUMN walk_at INTEGER NOT NULL DEFAULT 0',
+  "ALTER TABLE projects ADD COLUMN walk_sha TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE items ADD COLUMN walk INTEGER NOT NULL DEFAULT 0',
+  "ALTER TABLE questions ADD COLUMN closed_reason TEXT NOT NULL DEFAULT ''", // why a question closed with nobody answering (shipped, withdrawn), e.g. "#112 landed"
+  // Staffing, set on the hub and carried out by nuworq run (#174): at most this many agents working at once (NULL:
+  // each runner's own --workers), paused (no new workers), a daily budget in dollars (NULL: none, UTC days), and
+  // whether the person was asked if run may staff it (1 for projects from before #174; a new one starts at 0).
+  'ALTER TABLE projects ADD COLUMN run_workers INTEGER',
+  'ALTER TABLE projects ADD COLUMN run_paused INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE projects ADD COLUMN run_budget REAL',
+  'ALTER TABLE projects ADD COLUMN staff_asked INTEGER NOT NULL DEFAULT 1',
+  "ALTER TABLE items ADD COLUMN tidy TEXT NOT NULL DEFAULT ''", // a tidy job the hub opened (src/tidy.js): JSON, the drift it listed; '' otherwise
+  "ALTER TABLE items ADD COLUMN priority_by TEXT NOT NULL DEFAULT ''", // the person who set its priority ('' = nobody did): a tidy job leaves it alone
+  'ALTER TABLE projects ADD COLUMN runner_polled_at INTEGER NOT NULL DEFAULT 0', // when a nuworq run last asked where work is, for this project (#185)
+  // The weekly line (#178): on unless turned off on the channel, and when it last went (0: count from created_at).
+  'ALTER TABLE channels ADD COLUMN weekly INTEGER NOT NULL DEFAULT 1',
+  'ALTER TABLE channels ADD COLUMN weekly_at INTEGER NOT NULL DEFAULT 0',
+  // Each session's role (#238), fixed for its life: operator | shaper | worker | session. A worker carries its
+  // runner's name; any session may say which machine it runs on. Claims (event data) and usage record the role.
+  "ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT 'session'",
+  "ALTER TABLE agents ADD COLUMN runner TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE agents ADD COLUMN machine TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE usage ADD COLUMN role TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE items ADD COLUMN feedback INTEGER', // the hub directory's feedback id an owner approved into this proposal (#295)
+  "ALTER TABLE agents ADD COLUMN session TEXT NOT NULL DEFAULT ''", // its Claude Code session's keys, from checkin (#335)
+  'ALTER TABLE items ADD COLUMN gate INTEGER NOT NULL DEFAULT 0', // 1: once shaped, it waits for a person's OK whatever the autonomy (#296)
+  // Model routing (#347, src/models.js): on or off (off by default), the tiers per agent (JSON, cheapest first),
+  // and how many tiers an item's next attempt steps up after failed ones.
+  'ALTER TABLE projects ADD COLUMN model_routing INTEGER NOT NULL DEFAULT 0',
+  "ALTER TABLE projects ADD COLUMN model_tiers TEXT NOT NULL DEFAULT '{}'",
+  'ALTER TABLE items ADD COLUMN tier_up INTEGER NOT NULL DEFAULT 0',
+  // Difficulty and trials (#348): how hard an item is ('' counts as standard) and why, rated when shaped; the
+  // trial its building got ('': not decided yet, 'none', 'down': one tier down, 'race': cheaper against top);
+  // and the share of eligible jobs (whole percents) that try one tier down and that race.
+  "ALTER TABLE items ADD COLUMN difficulty TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE items ADD COLUMN difficulty_why TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE items ADD COLUMN trial TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE projects ADD COLUMN model_trial INTEGER NOT NULL DEFAULT 10',
+  'ALTER TABLE projects ADD COLUMN model_race INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE projects ADD COLUMN live INTEGER NOT NULL DEFAULT 0', // anyone may watch it, read-only, at /live/<slug> (#358; src/live.js)
+  // Routing by results (#349): the project's quality bar (best | balanced | cheapest, src/models.js QUALITY), and
+  // the one line an item last got on which model its job runs on and why.
+  "ALTER TABLE projects ADD COLUMN model_quality TEXT NOT NULL DEFAULT 'balanced'",
+  "ALTER TABLE items ADD COLUMN route_why TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE items ADD COLUMN breaking TEXT NOT NULL DEFAULT ''", // who must do what when it lands; '' breaks nobody (#398)
+  // When an item's needs last changed, and when an agent last gained a tag (#406): a ready item that newly
+  // matches an operator is pushed to its listener once, from then.
+  'ALTER TABLE items ADD COLUMN needs_since INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE agents ADD COLUMN has_since INTEGER NOT NULL DEFAULT 0',
+  // Releases (#399): 'milestone' proposes one when a milestone finishes; 'off' never does.
+  "ALTER TABLE projects ADD COLUMN releases TEXT NOT NULL DEFAULT 'off'",
+  'ALTER TABLE items ADD COLUMN release INTEGER NOT NULL DEFAULT 0', // 1: a "Release vX.Y.Z" item the hub drafted
+  "ALTER TABLE items ADD COLUMN release_draft TEXT NOT NULL DEFAULT ''", // the summary as the hub last drafted it
+  'ALTER TABLE items ADD COLUMN release_through INTEGER NOT NULL DEFAULT 0', // the draft covers work done up to then
+  // Field notes stay few and relevant (#443, src/fieldnotes.js): a note a person marked always-show, when a review
+  // last looked at it, the project's weekly review (when it last fired), and the review item the hub opened.
+  'ALTER TABLE notes ADD COLUMN always INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE notes ADD COLUMN reviewed_at INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE projects ADD COLUMN notes_at INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE items ADD COLUMN notes_review INTEGER NOT NULL DEFAULT 0',
+  // An operator question next handed to one operator (#467): who holds it, and until when (a lapsed lease frees it).
+  "ALTER TABLE questions ADD COLUMN held_by TEXT NOT NULL DEFAULT ''",
+  'ALTER TABLE questions ADD COLUMN held_until INTEGER NOT NULL DEFAULT 0',
+  // From outside the project (#471): an issue whose author has no write access, and a reply to a reporter
+  // question from such a person, held for a person to pass on ('' = none), with where it was written.
+  'ALTER TABLE issues ADD COLUMN outsider INTEGER NOT NULL DEFAULT 0',
+  "ALTER TABLE questions ADD COLUMN held_reply TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE questions ADD COLUMN held_url TEXT NOT NULL DEFAULT ''",
+];
+
+// Adds a column unless it is already there; true when it added it.
+function addColumn(db, sql) {
+  try { db.exec(sql); return true; } catch (e) { if (/duplicate column name/i.test(e.message)) return false; throw e; }
+}
+
+// Numbered migrations (#516): PRAGMA user_version is the last one a database ran. Each runs once, in order, in one
+// transaction with its number, and one that fails stops the hub's start naming it. Add new ones at the end; never
+// change or reorder one that has shipped.
+export const MIGRATIONS = [
+  {
+    name: 'columns and backfills from before numbered migrations',
+    up(db) {
+      for (const sql of COLUMNS) addColumn(db, sql);
+      // Sessions from before roles that declared the operator tag were operators.
+      db.exec(`UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`);
+      // An email counts as a person's own only once they signed in with it (#470). People from before who already
+      // have a login keep theirs; rows someone made by typing an email wait for its owner's first sign-in.
+      if (addColumn(db, 'ALTER TABLE people ADD COLUMN verified_at INTEGER')
+        && db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tokens'`).get()) {
+        db.exec(`UPDATE people SET verified_at = created_at WHERE email != '' AND id IN (SELECT person_id FROM tokens WHERE role = 'human' AND person_id IS NOT NULL)`);
+      }
+    },
+  },
+  {
+    // What the view, outcomes, checkin and routing look up: questions and notes by project and item, an item's
+    // children, holder, fixes and implementer, a PR's item, events by type and by actor, and lapsed leases by agent.
+    name: 'indexes for the queries the hub runs',
+    up(db) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS questions_project ON questions (project_id, status);
+        CREATE INDEX IF NOT EXISTS questions_item ON questions (item_id, status);
+        CREATE INDEX IF NOT EXISTS questions_escalates ON questions (escalates);
+        CREATE INDEX IF NOT EXISTS notes_project ON notes (project_id, kind, active);
+        CREATE INDEX IF NOT EXISTS notes_item ON notes (item_id, kind);
+        CREATE INDEX IF NOT EXISTS prs_item ON prs (item_id);
+        CREATE INDEX IF NOT EXISTS items_parent ON items (parent_id);
+        CREATE INDEX IF NOT EXISTS items_holder ON items (project_id, holder);
+        CREATE INDEX IF NOT EXISTS items_fixes ON items (fixes);
+        CREATE INDEX IF NOT EXISTS items_implementer ON items (project_id, implementer);
+        CREATE INDEX IF NOT EXISTS events_type ON events (project_id, type, at);
+        CREATE INDEX IF NOT EXISTS events_actor ON events (project_id, actor, at);
+        CREATE INDEX IF NOT EXISTS events_lapsed ON events (project_id, json_extract(data, '$.agent')) WHERE type = 'lease_expired';`);
+    },
+  },
+];
+
+export function migrate(db, migrations = MIGRATIONS) {
+  const at = db.prepare('PRAGMA user_version').get().user_version;
+  for (let n = at + 1; n <= migrations.length; n++) {
+    const m = migrations[n - 1];
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      m.up(db);
+      db.exec(`PRAGMA user_version = ${n}`);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw new Error(`Database migration ${n} (${m.name}) failed: ${e.message}. Nothing of it was kept: the database is still at migration ${n - 1}. Fix the cause and start the hub again.`, { cause: e });
+    }
+  }
+}
+
+export function openDb(file, { migrations = MIGRATIONS } = {}) {
   if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;');
+  const mode = db.prepare('PRAGMA journal_mode = WAL').get().journal_mode;
+  // In WAL mode NORMAL syncs at checkpoints instead of on every commit. Still safe: a crash of the hub loses
+  // nothing, and a power cut can only roll back the last commits, never corrupt the database.
+  if (mode === 'wal') db.exec('PRAGMA synchronous = NORMAL');
+  db.exec('PRAGMA busy_timeout = 3000');
   db.exec(SCHEMA);
-  for (const sql of [
-    'ALTER TABLE notes ADD COLUMN target TEXT',
-    "ALTER TABLE items ADD COLUMN touching TEXT NOT NULL DEFAULT '[]'",
-    'ALTER TABLE agents ADD COLUMN last_checkin INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE projects ADD COLUMN parked INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE projects ADD COLUMN path TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE projects ADD COLUMN runner INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE agents ADD COLUMN tokens TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE items ADD COLUMN race INTEGER NOT NULL DEFAULT 1',
-    'ALTER TABLE agents ADD COLUMN token_id INTEGER',
-    "ALTER TABLE projects ADD COLUMN github_secret TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE agents ADD COLUMN has TEXT NOT NULL DEFAULT '[]'",
-    "ALTER TABLE items ADD COLUMN needs TEXT NOT NULL DEFAULT '[]'",
-    "ALTER TABLE items ADD COLUMN size TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE items ADD COLUMN branch TEXT NOT NULL DEFAULT ''", // the git branch the item is built on, landed from
-    "ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''", // the repository it lands in (a normalized remote); '': the project's first
-    "ALTER TABLE projects ADD COLUMN issue_label TEXT NOT NULL DEFAULT ''", // only issues with this label come in ('' = all)
-    'ALTER TABLE projects ADD COLUMN archived_at INTEGER NOT NULL DEFAULT 0', // archived: out of lists and routing, history kept
-    'ALTER TABLE issues ADD COLUMN landed_comment INTEGER NOT NULL DEFAULT 0', // the hub's comment when its item landed (its id on GitHub)
-    "ALTER TABLE issues ADD COLUMN close_error TEXT NOT NULL DEFAULT ''", // why the hub couldn't close it after its item landed
-    "ALTER TABLE prs ADD COLUMN blocked TEXT NOT NULL DEFAULT ''", // why an open landing PR can't merge: '' | conflict | review
-    // An outside fact the item waits on (src/precondition.js): JSON, '' for none; the last check { at, ok, detail };
-    // when to check next; failures in a row (the backoff)
-    "ALTER TABLE items ADD COLUMN precondition TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE items ADD COLUMN last_check TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE items ADD COLUMN next_check INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE items ADD COLUMN check_fails INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE items ADD COLUMN parked_by TEXT NOT NULL DEFAULT ''", // who answered and kept it waiting ('' = not kept parked)
-    'ALTER TABLE projects ADD COLUMN wait_days INTEGER NOT NULL DEFAULT 0', // how long work waits outside before you hear; 0: the default (src/precondition.js)
-    // What llm-proxy measured (source 'llm-proxy'; 0 on reported rows): model time, requests, failed ones, cold model loads
-    'ALTER TABLE usage ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE usage ADD COLUMN requests INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE usage ADD COLUMN failures INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE usage ADD COLUMN cold_loads INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE channels ADD COLUMN person TEXT NOT NULL DEFAULT ''", // "@handle": a personal channel (only what they own); '' = hub-wide
-    "ALTER TABLE issues ADD COLUMN stale TEXT NOT NULL DEFAULT ''", // an agent flagged it stale: why ('' = not flagged)
-    'ALTER TABLE issues ADD COLUMN closing INTEGER NOT NULL DEFAULT 0', // 1: the human said close it; 2: closed on GitHub
-    // Questions to an issue's reporter (ask to: "reporter"): who wrote the issue, and the newest comment on it already handled
-    "ALTER TABLE issues ADD COLUMN author TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE issues ADD COLUMN last_comment INTEGER NOT NULL DEFAULT 0',
-    // A question put to an issue's reporter on GitHub: their login, the issue, and the hub's comment there (its id; 0 until posted, -1 posting)
-    "ALTER TABLE questions ADD COLUMN reporter TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE questions ADD COLUMN issue_repo TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE questions ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE questions ADD COLUMN issue_comment INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE projects ADD COLUMN reporter_wait INTEGER NOT NULL DEFAULT 48', // hours a reporter has to answer before the human is asked
-    "ALTER TABLE questions ADD COLUMN audience TEXT NOT NULL DEFAULT ''", // 'operator' (ask to: "operator"): an operator session answers, not the human; '' otherwise
-    'ALTER TABLE questions ADD COLUMN escalates INTEGER', // an operator's escalation to the human: the operator question it carries up
-    "ALTER TABLE questions ADD COLUMN evidence TEXT NOT NULL DEFAULT '[]'", // an escalation's evidence: [{ label, url? }]
-    "ALTER TABLE questions ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'", // what the person must do, in order: [{ do, where?, check? }]
-    'ALTER TABLE items ADD COLUMN fixes INTEGER', // the landed item this one repairs (its id): that one counts as an escape (#176)
-    'ALTER TABLE projects ADD COLUMN fresh INTEGER NOT NULL DEFAULT 1', // the weekly freshness sweep is on (src/freshness.js)
-    'ALTER TABLE projects ADD COLUMN fresh_at INTEGER NOT NULL DEFAULT 0', // when the sweep timer last fired (or the project began)
-    'ALTER TABLE items ADD COLUMN sweep INTEGER NOT NULL DEFAULT 0', // 1: a "keep <project> fresh" item the hub opened
-    // The weekly guide walk-through (#386, src/walkthrough.js): when it last looked, main's commit then, and its items.
-    'ALTER TABLE projects ADD COLUMN walk_at INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE projects ADD COLUMN walk_sha TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE items ADD COLUMN walk INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE questions ADD COLUMN closed_reason TEXT NOT NULL DEFAULT ''", // why a question closed with nobody answering (shipped, withdrawn), e.g. "#112 landed"
-    // Staffing, set on the hub and carried out by nuworq run (#174): at most this many agents working at once (NULL:
-    // each runner's own --workers), paused (no new workers), a daily budget in dollars (NULL: none, UTC days), and
-    // whether the person was asked if run may staff it (1 for projects from before #174; a new one starts at 0).
-    'ALTER TABLE projects ADD COLUMN run_workers INTEGER',
-    'ALTER TABLE projects ADD COLUMN run_paused INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE projects ADD COLUMN run_budget REAL',
-    'ALTER TABLE projects ADD COLUMN staff_asked INTEGER NOT NULL DEFAULT 1',
-    "ALTER TABLE items ADD COLUMN tidy TEXT NOT NULL DEFAULT ''", // a tidy job the hub opened (src/tidy.js): JSON, the drift it listed; '' otherwise
-    "ALTER TABLE items ADD COLUMN priority_by TEXT NOT NULL DEFAULT ''", // the person who set its priority ('' = nobody did): a tidy job leaves it alone
-    'ALTER TABLE projects ADD COLUMN runner_polled_at INTEGER NOT NULL DEFAULT 0', // when a nuworq run last asked where work is, for this project (#185)
-    // The weekly line (#178): on unless turned off on the channel, and when it last went (0: count from created_at).
-    'ALTER TABLE channels ADD COLUMN weekly INTEGER NOT NULL DEFAULT 1',
-    'ALTER TABLE channels ADD COLUMN weekly_at INTEGER NOT NULL DEFAULT 0',
-    // Each session's role (#238), fixed for its life: operator | shaper | worker | session. A worker carries its
-    // runner's name; any session may say which machine it runs on. Claims (event data) and usage record the role.
-    "ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT 'session'",
-    "ALTER TABLE agents ADD COLUMN runner TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE agents ADD COLUMN machine TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE usage ADD COLUMN role TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE items ADD COLUMN feedback INTEGER', // the hub directory's feedback id an owner approved into this proposal (#295)
-    "ALTER TABLE agents ADD COLUMN session TEXT NOT NULL DEFAULT ''", // its Claude Code session's keys, from checkin (#335)
-    'ALTER TABLE items ADD COLUMN gate INTEGER NOT NULL DEFAULT 0', // 1: once shaped, it waits for a person's OK whatever the autonomy (#296)
-    // Model routing (#347, src/models.js): on or off (off by default), the tiers per agent (JSON, cheapest first),
-    // and how many tiers an item's next attempt steps up after failed ones.
-    'ALTER TABLE projects ADD COLUMN model_routing INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE projects ADD COLUMN model_tiers TEXT NOT NULL DEFAULT '{}'",
-    'ALTER TABLE items ADD COLUMN tier_up INTEGER NOT NULL DEFAULT 0',
-    // Difficulty and trials (#348): how hard an item is ('' counts as standard) and why, rated when shaped; the
-    // trial its building got ('': not decided yet, 'none', 'down': one tier down, 'race': cheaper against top);
-    // and the share of eligible jobs (whole percents) that try one tier down and that race.
-    "ALTER TABLE items ADD COLUMN difficulty TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE items ADD COLUMN difficulty_why TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE items ADD COLUMN trial TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE projects ADD COLUMN model_trial INTEGER NOT NULL DEFAULT 10',
-    'ALTER TABLE projects ADD COLUMN model_race INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE projects ADD COLUMN live INTEGER NOT NULL DEFAULT 0', // anyone may watch it, read-only, at /live/<slug> (#358; src/live.js)
-    // Routing by results (#349): the project's quality bar (best | balanced | cheapest, src/models.js QUALITY), and
-    // the one line an item last got on which model its job runs on and why.
-    "ALTER TABLE projects ADD COLUMN model_quality TEXT NOT NULL DEFAULT 'balanced'",
-    "ALTER TABLE items ADD COLUMN route_why TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE items ADD COLUMN breaking TEXT NOT NULL DEFAULT ''", // who must do what when it lands; '' breaks nobody (#398)
-    // When an item's needs last changed, and when an agent last gained a tag (#406): a ready item that newly
-    // matches an operator is pushed to its listener once, from then.
-    'ALTER TABLE items ADD COLUMN needs_since INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE agents ADD COLUMN has_since INTEGER NOT NULL DEFAULT 0',
-    // Releases (#399): 'milestone' proposes one when a milestone finishes; 'off' never does.
-    "ALTER TABLE projects ADD COLUMN releases TEXT NOT NULL DEFAULT 'off'",
-    'ALTER TABLE items ADD COLUMN release INTEGER NOT NULL DEFAULT 0', // 1: a "Release vX.Y.Z" item the hub drafted
-    "ALTER TABLE items ADD COLUMN release_draft TEXT NOT NULL DEFAULT ''", // the summary as the hub last drafted it
-    'ALTER TABLE items ADD COLUMN release_through INTEGER NOT NULL DEFAULT 0', // the draft covers work done up to then
-    // Field notes stay few and relevant (#443, src/fieldnotes.js): a note a person marked always-show, when a review
-    // last looked at it, the project's weekly review (when it last fired), and the review item the hub opened.
-    'ALTER TABLE notes ADD COLUMN always INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE notes ADD COLUMN reviewed_at INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE projects ADD COLUMN notes_at INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE items ADD COLUMN notes_review INTEGER NOT NULL DEFAULT 0',
-    // An operator question next handed to one operator (#467): who holds it, and until when (a lapsed lease frees it).
-    "ALTER TABLE questions ADD COLUMN held_by TEXT NOT NULL DEFAULT ''",
-    'ALTER TABLE questions ADD COLUMN held_until INTEGER NOT NULL DEFAULT 0',
-    // From outside the project (#471): an issue whose author has no write access, and a reply to a reporter
-    // question from such a person, held for a person to pass on ('' = none), with where it was written.
-    'ALTER TABLE issues ADD COLUMN outsider INTEGER NOT NULL DEFAULT 0',
-    "ALTER TABLE questions ADD COLUMN held_reply TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE questions ADD COLUMN held_url TEXT NOT NULL DEFAULT ''",
-    // Sessions from before roles that declared the operator tag were operators.
-    `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
-    ...PR_TWINS,
-  ]) {
-    try { db.exec(sql); } catch { /* already there */ }
-  }
-  // An email counts as a person's own only once they signed in with it (#470). People from before who already
-  // have a login keep theirs; rows someone made by typing an email wait for its owner's first sign-in.
-  try {
-    db.exec('ALTER TABLE people ADD COLUMN verified_at INTEGER');
-    try { db.exec(`UPDATE people SET verified_at = created_at WHERE email != '' AND id IN (SELECT person_id FROM tokens WHERE role = 'human' AND person_id IS NOT NULL)`); } catch { /* no logins yet */ }
-  } catch { /* already there */ }
+  migrate(db, migrations);
+  // Fold PRs recorded twice (see PR_TWINS) at start too, in case the hub stopped between the land step's writes.
+  for (const sql of PR_TWINS) db.exec(sql);
   return db;
 }

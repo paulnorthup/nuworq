@@ -253,6 +253,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .steps-head { display: flex; align-items: baseline; gap: var(--sp-2); }
 .steps-head .label { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
 .steps-count { font-size: var(--fs-2); color: var(--muted); font-variant-numeric: tabular-nums; }
+.steps-by { font-size: var(--fs-2); color: var(--muted); margin-top: var(--sp-1); }
 .steps ol { list-style: none; margin: var(--sp-1) 0 0; padding: 0; display: flex; flex-direction: column; }
 .steps li { border-top: var(--rule) solid var(--line); padding-bottom: var(--sp-2); }
 .steps li:first-child { border-top: 0; }
@@ -559,6 +560,8 @@ kbd { display: inline-block; min-width: 1.6em; padding: var(--sp-h) var(--sp-2);
 .flow-form { display: flex; flex-direction: column; }
 .dialog .form, .setup .form, .narrow .form { display: flex; flex-direction: column; gap: var(--sp-3); }
 .dialog .form label, .setup .form label, .narrow .form label { font-size: var(--fs-2); color: var(--muted); display: flex; flex-direction: column; gap: var(--sp-1); }
+.dialog .form label.check-label { flex-direction: row; align-items: flex-start; gap: var(--sp-2); min-height: 44px; }
+.dialog .form label.check-label input { margin-top: var(--sp-h); }
 .dialog .foot, .setup .foot { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-4); }
 /* Feedback (#295): the box, then exactly what is sent with it. */
 .fb-label { display: block; font-weight: 600; margin: var(--sp-1) 0 var(--sp-2); }

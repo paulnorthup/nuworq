@@ -84,6 +84,21 @@ export function backups({ dir, db = null, workspaces = null, keep = KEEP_BACKUPS
   };
 }
 
+// A removed workspace's copies go with it (#479): dir/<sha>/<name>.db in every copy kept in dir, so its data
+// (its GitHub secret, channel URLs, people's emails) outlives it nowhere, and a rollback can't bring it back.
+// Returns how many copies held it.
+export function forgetWorkspace(dir, name) {
+  if (!dir || !existsSync(dir)) return 0;
+  let n = 0;
+  for (const sha of readdirSync(dir)) {
+    const file = join(dir, sha, `${name}.db`);
+    if (!existsSync(file)) continue;
+    rmSync(file, { force: true });
+    n++;
+  }
+  return n;
+}
+
 // Exit code when the supervisor's own code changed under systemd: non-zero, so Restart=on-failure
 // brings it back on the new code (EX_TEMPFAIL).
 export const RESTART_EXIT = 75;
