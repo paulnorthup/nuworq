@@ -184,7 +184,7 @@ describe('Dependabot alerts come in as work (#180)', () => {
   test('alerts off, or a permission not accepted, shows in the GitHub dialog with steps; issues and other webhooks carry on', async () => {
     try {
       gh.state.off = true;
-      gh.state.issues = [{ number: 5, title: 'An issue', body: '', state: 'open', labels: [], html_url: 'https://github.com/acme/api/issues/5' }];
+      gh.state.issues = [{ number: 5, title: 'An issue', body: '', state: 'open', labels: [], author_association: 'OWNER', html_url: 'https://github.com/acme/api/issues/5' }];
       const r = await install();
       assert.equal(r.body.github.issues, 1, 'the issue still came in');
       assert.deepEqual(r.body.alerts, { alerts: 0, problems: ['acme/api: off'] });

@@ -171,7 +171,7 @@ describe("adopting a hub with a GitHub App keeps the app's webhooks reaching it 
   test("a delivery for the adopted hub's installation reaches the workspace as a proposal", async () => {
     server = createServer(spaces, { githubApp: { id: '7', key: PEM, webhook_secret: WHS, api }, sweepMs: 3600_000 });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    const raw = JSON.stringify({ action: 'opened', installation: { id: 41 }, issue: { number: 121, title: 'Webhook check', state: 'open', html_url: 'https://github.com/paul/nuworq/issues/121' }, repository: { full_name: 'paul/nuworq' } });
+    const raw = JSON.stringify({ action: 'opened', installation: { id: 41 }, issue: { number: 121, title: 'Webhook check', state: 'open', author_association: 'OWNER', html_url: 'https://github.com/paul/nuworq/issues/121' }, repository: { full_name: 'paul/nuworq' } });
     const r = await fetch(`http://127.0.0.1:${server.address().port}/api/hooks/github-app`, {
       method: 'POST', body: raw,
       headers: { 'content-type': 'application/json', 'x-github-event': 'issues', 'x-hub-signature-256': 'sha256=' + createHmac('sha256', WHS).update(raw).digest('hex') },

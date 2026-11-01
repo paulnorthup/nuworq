@@ -10,7 +10,7 @@ const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const PEM = privateKey.export({ type: 'pkcs8', format: 'pem' });
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const repository = { full_name: 'acme/api' };
-const issue = (n) => ({ number: n, title: `Issue ${n}`, body: '', state: 'open', labels: [], html_url: `https://github.com/acme/api/issues/${n}` });
+const issue = (n) => ({ number: n, title: `Issue ${n}`, body: '', state: 'open', labels: [], author_association: 'OWNER', html_url: `https://github.com/acme/api/issues/${n}` });
 
 // GitHub, as far as this goes: a token, comments, and closing issues.
 function github() {
