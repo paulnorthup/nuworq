@@ -572,7 +572,7 @@ export const MIGRATIONS = [
   {
     // Hosts a project's tests need beyond the hub, GitHub and package registries (#472): workers' sandbox reaches them too.
     // A JSON list of host names; only a person sets it (settings).
-    name: 'a project can name hosts its workers' tests need',
+    name: 'a project can name hosts its workers\' tests need',
     up(db) { addColumn(db, "ALTER TABLE projects ADD COLUMN sandbox_hosts TEXT NOT NULL DEFAULT '[]'"); },
   },
 ];
