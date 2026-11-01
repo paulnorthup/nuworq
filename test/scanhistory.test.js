@@ -129,6 +129,7 @@ describe('scripts/scan-history.js: secrets anywhere in the history, before going
       `#   SHA256:${rand('fingerprint', 43)}`,
       'see src/very-long-module-name/and-another-path/file-name-here.js',
       '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk">',
+      `node -e '…' nuworq.tgz.sig MCowBQYDK2VwAyEA${rand('pub', 28)}`, // the release public key, quoted in a README
     ]) assert.equal(highEntropy(line), null, line.slice(0, 30));
     assert.equal(secretIn('release-key.pub', `MCowBQYDK2VwAyEA${rand('pub', 28)}`), null);
     assert.equal(nameIn('docs/.env.sample'), null);

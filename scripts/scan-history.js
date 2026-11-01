@@ -69,6 +69,7 @@ export function highEntropy(line) {
     if (/^[A-Za-z]+(?:[-_/][A-Za-z0-9]+)+$/.test(s)) continue; // a path or kebab-case name, not a key
     if (/SHA(?:256|512):$|sha(?:256|384|512)-$/.test(line.slice(0, m.index))) continue; // a fingerprint or integrity hash
     if (counting(s)) continue;
+    if (s.startsWith('MCowBQYDK2VwAyEA')) continue; // an Ed25519 public key (base64 DER), like release-key.pub's
     if (bits(s) > 4.5) return s;
   }
   return null;
