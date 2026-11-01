@@ -577,21 +577,26 @@ describe('GET /api/wait and nuworq wait', () => {
         first.db.close();
         second = new Hub({ file });
         server = createServer(second);
-        // Each wait the new hub answers: when it was asked, and when the answer went out.
+        // Each wait the new hub is asked: when it was asked, and when the answer went out.
         const waits = [];
         server.on('request', (req, res) => {
-          const asked = Date.now();
-          if (req.url.startsWith('/api/wait')) res.on('finish', () => waits.push({ asked, answered: Date.now(), status: res.statusCode }));
+          if (!req.url.startsWith('/api/wait')) return;
+          const w = { asked: Date.now(), answered: null, status: null };
+          waits.push(w);
+          res.on('finish', () => Object.assign(w, { answered: Date.now(), status: res.statusCode }));
         });
         await new Promise((res) => server.listen(port, '127.0.0.1', res));
         await until(() => second.listenerCount('change') > own, 'the listener to wait on the new hub');
+        // The waits held open when the item is created, by identity, not by clock: one asked in the same
+        // millisecond still counts, and a retry or fresh ask after the item exists never does (#584).
+        const open = waits.filter((w) => w.answered === null);
         const ready = Date.now();
         second.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
         await until(() => stdout.includes(line), 'the line');
         assert.equal(stdout, line);
         // Prompt means it came on the wait already open when the item became ready: no retry, no fresh ask (#569).
         // Measured against what the listener did, not the clock, so a loaded machine doesn't fail it.
-        assert.ok(waits.some((w) => w.asked < ready && w.answered >= ready && w.status === 200), `the open wait answered it: ${JSON.stringify(waits.map((w) => ({ asked: w.asked - ready, answered: w.answered - ready, status: w.status })))}`);
+        assert.ok(open.some((w) => w.status === 200), `the open wait answered it: ${JSON.stringify(waits.map((w) => ({ open: open.includes(w), asked: w.asked - ready, answered: w.answered === null ? null : w.answered - ready, status: w.status })))}`);
         assert.ok(Date.now() - ready < 5000, `and soon (${Date.now() - ready} ms)`);
       } finally {
         child.kill();
