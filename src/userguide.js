@@ -85,7 +85,7 @@ export const STEPS = [
       'Or keep up to three going on the projects you let it staff. First open the project, then **Settings**, and switch on **Staff it with nuworq run** (the board also offers **Let nuworq run staff this project**). Ctrl-C stops them. Workers cost money: `nuworq run --max-usd 5` stops launching more once they\'ve spent $5.',
       '`nuworq run --workers 3 --agent claude`',
     ],
-    auto: '`nuworq run --install` installs the runner as a service (a LaunchAgent on macOS, a systemd user unit on Linux), so workers keep going after you close the terminal or restart. It adds that one service; its log is ~/.nuworq/logs/run.log. `nuworq run --uninstall` removes it.',
+    auto: '`nuworq run --install` installs the runner as a service (a LaunchAgent on macOS, a systemd user unit on Linux), so workers keep going after you close the terminal or restart. When nuworq updates, it moves onto the new version by itself once its workers finish. It adds that one service; its log is ~/.nuworq/logs/run.log. `nuworq run --uninstall` removes it.',
     check: 'The agent shows on the project\'s board, on an item or checked in, and Get started ticks Start an agent off.',
   },
   {
