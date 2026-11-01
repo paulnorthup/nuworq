@@ -76,24 +76,35 @@ export function sshHost(check) {
 }
 
 // The operator's routine commands, allowed; their destructive forms, denied so they still prompt (deny wins).
-export const OPERATOR_GIT_CMDS = ['status', 'diff', 'log', 'show', 'fetch', 'pull', 'switch', 'checkout', 'add', 'commit', 'rebase', 'push', 'branch', 'tag', 'worktree', 'rev-parse', 'ls-remote', 'remote'];
+// Claude Code matches rule text: `*` is any text, spaces included, and `:*` means "and anything" only at the
+// very end. Commands it allows outright; checkout (its path form discards work) and the rest of remote still ask.
+export const OPERATOR_GIT_CMDS = ['status', 'diff', 'log', 'show', 'fetch', 'pull', 'switch', 'add', 'commit', 'rebase', 'push', 'branch', 'tag', 'worktree', 'rev-parse', 'ls-remote'];
+// A flag, wherever it sits: first (`git push -fu`) or later (`git push origin x --force`), with its value attached or not.
+const flag = (cmd, ...flags) => flags.flatMap((f) => [`Bash(${cmd} ${f}*)`, `Bash(${cmd} * ${f}*)`]);
 export function rules({ host = null } = {}) {
   const git = OPERATOR_GIT_CMDS;
-  const gh = ['pr', 'run', 'repo view', 'issue view', 'issue list', 'release view', 'release list', 'api'];
+  const gh = ['pr', 'run', 'repo view', 'issue view', 'issue list', 'release view', 'release list'];
   const allow = [
     'Bash(nuworq:*)', 'mcp__nuworq', 'mcp__plugin_nuworq_nuworq',
     ...git.map((c) => `Bash(git ${c}:*)`),
+    'Bash(git remote)', 'Bash(git remote -v)', 'Bash(git remote get-url *)',
     ...gh.map((c) => `Bash(gh ${c}:*)`),
+    // gh api with the path first, so the flags after it can be denied; flags first, or graphql, still ask.
+    'Bash(gh api repos/*)', 'Bash(gh api /repos/*)',
     ...(host ? [`Bash(ssh ${host}:*)`] : []),
   ];
   const deny = [
-    // Force-pushes, and deleting branches or tags, locally or on a remote.
-    'Bash(git push --force:*)', 'Bash(git push -f:*)', 'Bash(git push * --force*)', 'Bash(git push * -f*)', 'Bash(git push * +*)',
-    'Bash(git push --delete:*)', 'Bash(git push * --delete*)', 'Bash(git push -d:*)', 'Bash(git push * -d *)',
-    'Bash(git branch -d:*)', 'Bash(git branch -D:*)', 'Bash(git branch * -d*)', 'Bash(git branch * -D*)', 'Bash(git branch --delete*)', 'Bash(git branch * --delete*)',
-    'Bash(git tag -d:*)', 'Bash(git tag * -d*)', 'Bash(git tag --delete*)', 'Bash(git tag * --delete*)',
-    // gh api only reads: no method but GET, and no fields (which make it a POST).
-    'Bash(gh api * -X *)', 'Bash(gh api * --method *)', 'Bash(gh api * -f *)', 'Bash(gh api * -F *)', 'Bash(gh api * --field *)', 'Bash(gh api * --raw-field *)', 'Bash(gh api * --input *)',
+    // Force-pushes, and deleting or rewriting refs on a remote: --delete, an empty source (`origin :x`), --mirror, --prune.
+    // `:**`, not `:*`: at the end, `:*` would read as "and anything" and deny every push.
+    ...flag('git push', '-f', '--force', '-d', '--delete', '--mirror', '--prune'), 'Bash(git push * +*)', 'Bash(git push * :**)',
+    // Deleting, moving or force-resetting branches and tags.
+    ...flag('git branch', '-d', '-D', '--delete', '-f', '--force', '-M'),
+    ...flag('git tag', '-d', '--delete', '-f', '--force'),
+    // Throwing away uncommitted work.
+    ...flag('git switch', '-f', '--force', '--discard-changes', '-C'),
+    ...flag('git worktree remove', '-f', '--force'),
+    // gh api only reads: no method but GET, and no fields or input (which make it a write).
+    ...flag('gh api', '-X', '--method', '-f', '-F', '--field', '--raw-field', '--input'),
     'Bash(gh repo delete:*)', 'Bash(gh release delete:*)', 'Bash(gh run delete:*)',
   ];
   return { allow, deny };

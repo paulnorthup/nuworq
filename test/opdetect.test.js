@@ -66,10 +66,58 @@ describe('the operator\'s permission rules (#494)', () => {
     assert.equal(sshHost('ssh -i ~/.ssh/k root@box.lan uptime'), 'box.lan');
     assert.equal(sshHost('curl -sf https://x'), null);
     const r = rules({ host: 'nuworq-vm' });
-    for (const a of ['Bash(nuworq:*)', 'Bash(git push:*)', 'Bash(git rebase:*)', 'Bash(gh pr:*)', 'Bash(gh run:*)', 'Bash(gh api:*)', 'Bash(ssh nuworq-vm:*)']) assert.ok(r.allow.includes(a), a);
-    for (const d of ['Bash(git push --force:*)', 'Bash(git push * --delete*)', 'Bash(git branch -D:*)', 'Bash(git tag -d:*)', 'Bash(gh api * -X *)', 'Bash(gh api * -f *)', 'Bash(gh repo delete:*)']) assert.ok(r.deny.includes(d), d);
+    for (const a of ['Bash(nuworq:*)', 'Bash(git push:*)', 'Bash(git rebase:*)', 'Bash(gh pr:*)', 'Bash(gh run:*)', 'Bash(gh api repos/*)', 'Bash(ssh nuworq-vm:*)']) assert.ok(r.allow.includes(a), a);
     assert.ok(!rules().allow.some((a) => a.startsWith('Bash(ssh')), 'no check: no ssh');
     assert.ok(!r.allow.some((a) => /^Bash\((rm|curl|sh|bash|python)/.test(a)), 'nothing else');
+    assert.ok(!r.deny.some((d) => d.endsWith(':*)') && d.includes('* ')), 'no deny mixes * with the trailing :* (it would read as "and anything")');
+  });
+
+  // Claude Code's matching, as its permissions docs describe it: deny wins over allow; `*` is any text, spaces
+  // included; `:*` means a trailing ` *` only at the very end; a trailing ` *` that is the only wildcard also
+  // matches the bare command. Neither allowed nor denied means it asks.
+  const pattern = (rule) => {
+    let p = rule.slice(5, -1);
+    if (p.endsWith(':*')) p = `${p.slice(0, -2)} *`;
+    const re = (s) => new RegExp(`^${s.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+    const bare = p.endsWith(' *') && p.split('*').length === 2 ? re(p.slice(0, -2)) : null;
+    return (cmd) => re(p).test(cmd) || !!bare?.test(cmd);
+  };
+  const outcome = (r, cmd) => (r.deny.some((d) => pattern(d)(cmd)) ? 'deny' : r.allow.some((a) => a.startsWith('Bash(') && pattern(a)(cmd)) ? 'allow' : 'ask');
+
+  test('the routine forms run without a prompt', () => {
+    const r = rules({ host: 'nuworq-vm' });
+    for (const cmd of [
+      'nuworq next', 'git status', 'git fetch origin', 'git rebase origin/main', 'git switch -c nuworq/1-x origin/main',
+      'git push origin nuworq/1-x', 'git push -u origin nuworq/1-x', 'git push origin nuworq/1-x:main', 'git push origin HEAD:refs/heads/nuworq/1-x',
+      'git push --dry-run origin nuworq/1-x', 'git branch -a', 'git tag v1.2.3', 'git worktree add ../x', 'git worktree list', 'git worktree remove ../x',
+      'git remote -v', 'git remote get-url origin',
+      'gh api repos/acme/api --jq .permissions.admin', 'gh api /repos/acme/api/pulls --paginate', 'gh pr create --title x --body y', 'gh run view 12',
+      'ssh nuworq-vm true',
+    ]) assert.equal(outcome(r, cmd), 'allow', cmd);
+  });
+
+  test('the destructive forms still ask, written the way people type them', () => {
+    const r = rules({ host: 'nuworq-vm' });
+    for (const cmd of [
+      // gh api writes, flags before or after the path, values attached or not.
+      'gh api -X DELETE repos/o/r/git/refs/tags/v1', 'gh api --method=DELETE repos/o/r/git/refs/tags/v1', 'gh api -XDELETE repos/o/r/git/refs/tags/v1',
+      'gh api -f a=b repos/o/r/issues', 'gh api repos/o/r/issues -f title=x', 'gh api repos/o/r -X PATCH', 'gh api repos/o/r -XPATCH',
+      'gh api repos/o/r --method=DELETE', 'gh api repos/o/r/issues -Fbody=@x', 'gh api repos/o/r/issues --raw-field=title=x', 'gh api repos/o/r/issues --input body.json',
+      'gh api graphql -f query=x', 'gh repo delete o/r --yes', 'gh release delete v1', 'gh run delete 12',
+      // Force-pushes and remote deletes.
+      'git push -f origin x', 'git push -fu origin x', 'git push --force origin x', 'git push origin x --force-with-lease', 'git push origin +x',
+      'git push origin --delete x', 'git push -d origin x', 'git push origin :x', 'git push origin :refs/tags/v1',
+      'git push --mirror origin', 'git push origin --mirror', 'git push --prune origin refs/heads/*:refs/heads/*', 'git push origin --prune',
+      // Deleting or moving branches and tags.
+      'git branch -D x', 'git branch -d x', 'git branch --delete x', 'git branch -f main HEAD~3', 'git branch -M x',
+      'git tag -d v1', 'git tag v1 --delete', 'git tag -f v1', 'git tag v1 HEAD --force',
+      // Redirecting origin, or throwing away uncommitted work.
+      'git remote set-url origin https://evil', 'git remote add evil https://evil', 'git remote remove origin',
+      'git checkout -- src/a.js', 'git checkout .', 'git checkout main', 'git switch --discard-changes main', 'git switch -f main', 'git switch -C main origin/main',
+      'git worktree remove --force ../x', 'git worktree remove ../x -f',
+      // Anything else.
+      'ssh other-host true', 'rm -rf x', 'curl https://x',
+    ]) assert.notEqual(outcome(r, cmd), 'allow', cmd);
   });
 
   test('applied to a settings file and taken out again, leaving what was there', () => {

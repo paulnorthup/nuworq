@@ -69,7 +69,7 @@ describe('nuworq operator', () => {
     const cfg = JSON.parse(readFileSync(file, 'utf8'));
     assert.equal(cfg.model, 'x', 'the rest stays');
     assert.ok(cfg.permissions.allow.includes('Bash(nuworq:*)') && cfg.permissions.allow.includes('Bash(ls:*)'));
-    assert.ok(cfg.permissions.deny.includes('Bash(git push --force:*)'));
+    assert.ok(cfg.permissions.deny.includes('Bash(git push --force*)'));
     await at('--allow', '--off');
     assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { permissions: { allow: ['Bash(ls:*)'] }, model: 'x' });
   });
