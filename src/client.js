@@ -100,15 +100,17 @@ export function connected(file = CONNECT_FILE) {
 // project is null unless someone named it (flag, env, or .nuworq.json): otherwise the hub decides,
 // from the folder the agent is in, or by routing it to the work that matters most.
 // The hub: flag, env, .nuworq.json, the connected hub, the one serving on this machine, the default.
-// The token: flag, env, then the connected hub's, which is only ever sent to that hub.
+// The token: flag, env, a file the env names (NUWORQ_TOKEN_FILE: how a runner's workers get theirs, #477), then
+// the connected hub's, which is only ever sent to that hub.
 export function resolveSettings({ url, project, token, cwd = process.cwd(), connectFile } = {}) {
   const config = findConfig(cwd);
   const conn = connected(connectFile);
   const hubUrl = (url || envVar('URL') || config?.url || conn?.url || discoveredUrl() || DEFAULT_URL).replace(/\/+$/, '');
   const named = project || envVar('PROJECT') || config?.project;
+  const fromFile = () => { const f = envVar('TOKEN_FILE'); try { return f ? readFileSync(f, 'utf8').trim() || null : null; } catch { return null; } };
   return {
     url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd),
-    token: token ?? envVar('TOKEN') ?? (conn?.url === hubUrl ? conn.token : ''), config,
+    token: token ?? envVar('TOKEN') ?? fromFile() ?? (conn?.url === hubUrl ? conn.token : ''), config,
   };
 }
 
