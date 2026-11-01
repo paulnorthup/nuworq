@@ -101,10 +101,12 @@ describe("Stripe's signed webhook puts a workspace on a paid plan (#227)", () =>
     const r = await deliver(ev);
     assert.equal(r.status, 200, r.text);
     assert.deepEqual(r.json, { ok: true, workspace: 'acme' });
+    // A checkout doesn't say what it sold (#478): it names the workspace, and the subscription's own event, with
+    // nuworq's price, makes it paid and fills in the period and the plan's name.
+    assert.equal(plan('acme').plan, 'free');
+    assert.equal((await deliver(sub('sub_a'))).status, 200);
     assert.equal(plan('acme').plan, 'unlimited');
     assert.equal(plan('acme').source, 'billing');
-    // Its subscription's own event fills in the period and the plan's name.
-    assert.equal((await deliver(sub('sub_a'))).status, 200);
     assert.deepEqual(plan('acme').billing, { status: 'active', period_end: now + 30 * DAY, cancel_at_period_end: false, plan: 'pro', line: 'paid until 2026-12-01' });
   });
 
@@ -137,6 +139,7 @@ describe("Stripe's signed webhook puts a workspace on a paid plan (#227)", () =>
 
   test('a plan the hub owner set by hand wins over billing', async () => {
     await deliver(checkout('gamma', 'sub_g'));
+    await deliver(sub('sub_g', { customer: 'cus_g' }));
     assert.equal(plan('gamma').source, 'billing');
     spaces.setPlan('gamma', 'free', 'paul@example.com');
     assert.equal(plan('gamma').plan, 'free');
@@ -163,6 +166,24 @@ describe("Stripe's signed webhook puts a workspace on a paid plan (#227)", () =>
     assert.equal((await deliver(other)).json.ignored, 'not a nuworq price');
     assert.equal((await deliver({ id: 'evt_inv', type: 'invoice.created', created: created(), data: { object: {} } })).json.ignored, 'invoice.created');
     assert.equal((await deliver(checkout('nope', 'sub_n'))).json.ignored, 'no workspace or subscription');
+  });
+
+  test("a checkout for something else nuworq doesn't sell pays for nothing; a subscription moved off nuworq's price stops paying (#478)", async () => {
+    spaces.create('eps');
+    spaces.directory.identify('ann@eps.test', 'github');
+    spaces.directory.join('ann@eps.test', 'eps', { created: true });
+    // A Payment Link for another product carrying client_reference_id: named, never paid.
+    await deliver(checkout('eps', 'sub_e'));
+    assert.equal(plan('eps').plan, 'free');
+    const r = await deliver(sub('sub_e', { customer: 'cus_e', items: { data: [{ price: { id: 'price_other' } }] } }, 'customer.subscription.created'));
+    assert.equal(r.json.paid_for, 'nothing: not a nuworq price');
+    assert.equal(plan('eps').plan, 'free');
+    assert.equal(plan('eps').billing.status, 'canceled');
+    // Ours, then changed to another product: its change applies, and it pays no more.
+    await deliver(sub('sub_e', { customer: 'cus_e' }));
+    assert.equal(plan('eps').plan, 'unlimited');
+    await deliver(sub('sub_e', { customer: 'cus_e', items: { data: [{ price: { id: 'price_other' } }] } }));
+    assert.equal(plan('eps').plan, 'free');
   });
 
   test('the line the dashboard shows', () => {

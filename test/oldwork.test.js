@@ -115,10 +115,9 @@ describe('old work leaves the board (#442)', () => {
     assert.notEqual(agent('next', 'w1', { claim: false }).mode, 'tidy', 'still untouched, so still the same drift');
   });
 
-  test('the guide tells the tidy agent how to handle a stale item', async () => {
-    const { guide } = await import('../src/protocol.js');
-    const g = guide({ slug: 'p', name: 'App' });
-    assert.match(g, /a ready item nobody has touched in 21 days/);
-    assert.match(g, /\*\*Stale ready item:\*\* read it and recommend keeping, refining or dropping it, with a reason/);
+  test('the tidy hint tells the agent how to handle a stale item (#527)', async () => {
+    const { MODE_RULES } = await import('../src/protocol.js');
+    assert.match(MODE_RULES.tidy, /ready items untouched for 21 days/);
+    assert.match(MODE_RULES.tidy, /A stale ready item: recommend keeping, refining or dropping it, with a reason/);
   });
 });

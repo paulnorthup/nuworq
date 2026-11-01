@@ -2,6 +2,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const SESSION_MS = 30 * 24 * 3600_000;
+export const USED_EVERY_MS = 60_000; // a token's last-used time is written at most this often
 export const INVITE_MS = 7 * 24 * 3600_000;
 const ROLES = ['human', 'agent'];
 // What a person may do here: owner > steward > member > viewer (see PERSON_CAN in core.js).
@@ -304,10 +305,15 @@ export class Auth {
     token = String(token ?? '').trim();
     if (!TOKEN_PREFIXES.some((p) => token.startsWith(p)) || token.length < 20) return null;
     const h = sha(token);
-    const match = this.db.prepare('SELECT * FROM tokens WHERE prefix = ? AND revoked_at IS NULL').all(token.slice(0, 8))
-      .find((t) => same(Buffer.from(t.hash), h));
+    this._byPrefix ??= this.db.prepare('SELECT * FROM tokens WHERE prefix = ? AND revoked_at IS NULL');
+    const match = this._byPrefix.all(token.slice(0, 8)).find((t) => same(Buffer.from(t.hash), h));
     if (!match) return null;
-    this.db.prepare('UPDATE tokens SET last_used_at = ? WHERE id = ?').run(this.now(), match.id);
+    // Last used to the minute (#516): every bearer request writing it held the write lock and waited on a sync.
+    const t = this.now();
+    if (match.last_used_at == null || t - match.last_used_at >= USED_EVERY_MS) {
+      this._used ??= this.db.prepare('UPDATE tokens SET last_used_at = ? WHERE id = ?');
+      this._used.run(t, match.id);
+    }
     return this.identity(match);
   }
 

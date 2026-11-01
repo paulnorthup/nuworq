@@ -49,9 +49,25 @@ describe('connect an agent: commands that paste and run', () => {
     assert.equal(connectCommands({ ...REMOTE, package: null }).install, null, 'a hub with no package: the dialog says to install nuworq the way the hub was');
   });
 
+  // #473: the first install installed whatever the hub served. With a signed release, it checks the signature first.
+  test('with a signed release, install downloads it and its signature and checks it against the key before npm runs', () => {
+    const KEY = readFileSync(new URL('../release-key.pub', import.meta.url), 'utf8').replace(/-----[A-Z ]+-----|\s/g, '');
+    const pkg = { url: 'https://app.nuworq.com/nuworq.tgz', release: { url: `https://app.nuworq.com/nuworq-${'a'.repeat(40)}.tgz`, key: KEY } };
+    const c = connectCommands({ ...REMOTE, url: 'https://app.nuworq.com', package: pkg }, null, 'demo');
+    assert.equal(c.verified, true);
+    const lines = c.install.split('\n');
+    assert.equal(lines[0], 'curl -fsSLO https://app.nuworq.com/nuworq-release.tgz -O https://app.nuworq.com/nuworq-release.tgz.sig');
+    assert.ok(lines[1].startsWith("node -e '") && lines[1].endsWith(` nuworq-release.tgz ${KEY}`));
+    assert.equal(lines[2], 'npm install -g ./nuworq-release.tgz');
+    assert.ok(readFileSync(new URL('../README.md', import.meta.url), 'utf8').includes(c.install), 'the README\'s lines, with the key this repository pins');
+    // The one-paste setup (#490) runs the same lines joined by &&, so a check that fails stops npm and connect.
+    assert.equal(c.setup, `${lines.join(' && ')} && nuworq connect https://app.nuworq.com`);
+    assert.equal(connectCommands({ ...REMOTE, package: { url: 'https://nuworq.com/nuworq.tgz', release: null } }).verified, false, 'no signed release: nothing to check');
+  });
+
   test('the optional Claude Code plugin step copies the README\'s commands, exactly as shown (#132)', () => {
     const c = connectCommands({ ...REMOTE, package: { url: 'https://nuworq.com/nuworq.tgz' } }, null, 'demo');
-    assert.equal(c.plugin, 'claude plugin marketplace add paulnorthup/nuworq\nclaude plugin install nuworq@nuworq');
+    assert.equal(c.plugin, 'claude plugin marketplace add paulnorthup/nuworq#release\nclaude plugin install nuworq@nuworq');
     assert.ok(readFileSync(new URL('../README.md', import.meta.url), 'utf8').includes(c.plugin), 'the same lines as the README');
     const html = copyBlock(c.plugin);
     const text = (s) => s.replace(/&(lt|gt|quot|#39|amp);/g, (_, e) => ({ lt: '<', gt: '>', quot: '"', '#39': "'", amp: '&' })[e]);

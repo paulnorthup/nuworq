@@ -378,7 +378,7 @@ describe("the hub's own entries", () => {
 describe('bin/trellis.js', () => {
   test('still runs: help exits 0 and prints the nuworq help', async () => {
     const { stdout } = await run(OLD_BIN, ['help'], { env: envWith() });
-    assert.match(stdout, /^nuworq: a hub where humans facilitate/);
+    assert.match(stdout, /^nuworq [0-9.]+: a hub where agents do the work and people steer/);
   });
 
   test('stays a bin in package.json next to nuworq', () => {

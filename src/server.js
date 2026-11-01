@@ -10,7 +10,7 @@ import { view, itemView, projectList, homeView, withEntry } from './insight.js';
 import { tools, guide, LISTENER } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
-import { Workspaces } from './workspaces.js';
+import { Workspaces, IDLE_MS, WAKE_MS } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, notifyFeedback, composeFixed, deliver, workspaceUrl, requestChannels, setWeekly } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
@@ -26,13 +26,14 @@ import { getStarted, facts, finished, finish } from './getstarted.js';
 import { guidePage } from './userguide.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { liveView, LIVE_TTL_MS } from './live.js';
 import { waitFor } from './wait.js';
 import { parseKeys } from './session.js';
 import { tmpdir } from 'node:os';
-import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, PACKAGE_NAME } from './package.js';
+import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, ownCheckout, PACKAGE_NAME } from './package.js';
+import { runningCommit } from './update.js';
 import { LOGO, FAVICON, withLogo } from '../web/logo.js';
 import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
 
@@ -43,25 +44,34 @@ const MAX_BODY = 1024 * 1024;
 const DECIDES = { human: ['accept'], agent: ['submit', 'review'] };
 
 // What is running: package.json's version and the commit of this code's own folder (under --follow, the
-// hub-src worktree; the hub restarts on every move, so reading it once per process stays true).
+// hub-src worktree; the hub restarts on every move, so reading it once per process stays true). Git is asked only
+// when the folder is a checkout of its own (#511); an installed package names its commit in src/commit.txt and
+// links it on the repository its package.json names, never on a repository that happens to enclose the folder.
+// root: another folder, read afresh (tests).
 const ROOT = join(WEB, '..');
 let build = null;
-export function buildInfo() {
-  if (build) return build;
+export function buildInfo(root) {
+  if (!root && build) return build;
+  const at = root ?? ROOT;
   const git = (...args) => {
-    try { return execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch { return null; }
+    try { return execFileSync('git', ['-C', at, ...args], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch { return null; }
   };
-  let version = null;
-  try { version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? null; } catch {}
-  const sha = git('rev-parse', 'HEAD');
-  const remote = normRemote(git('remote', 'get-url', 'origin') ?? '');
-  return (build = {
-    version,
+  let pkg = {};
+  try { pkg = JSON.parse(readFileSync(join(at, 'package.json'), 'utf8')) ?? {}; } catch {}
+  const checkout = ownCheckout(at);
+  const sha = checkout ? git('rev-parse', 'HEAD') : runningCommit(at);
+  const remote = checkout ? normRemote(git('remote', 'get-url', 'origin') ?? '') : '';
+  const home = remote || normRemote(typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url ?? '');
+  const info = {
+    version: pkg.version ?? null,
     commit: sha?.slice(0, 7) ?? null,
-    commit_url: sha && remote.startsWith('github.com/') ? `https://${remote}/commit/${sha}` : null,
+    commit_url: sha && home.startsWith('github.com/') ? `https://${home}/commit/${sha}` : null,
     source: remote.startsWith('github.com/') ? remote : null, // where to clone nuworq from, for another machine
-  });
+  };
+  if (!root) build = info;
+  return info;
 }
+const HSTS = 'max-age=31536000; includeSubDomains'; // as deploy/Caddyfile sends it
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
@@ -88,7 +98,13 @@ const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^POST \/api\/staff$/,/^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
+// Addresses a proxy in front of the hub connects from: loopback and private networks (cloudflared, Caddy, a load balancer).
+const TRUSTED_HOP = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::ffff:(127|10)\.|f[cd][0-9a-f]{2}:|unknown$)/i;
+// Open streams (browser tabs) and operator waits per sign-in or token, and waits per listener on it.
+export const MAX_HELD = { stream: 20, wait: 32, listener: 2 };
+export const MAX_CONNECTIONS = 2000; // sockets the hub keeps open at once; past it, new ones are dropped
+export const LIMITER_MAX = 10_000; // addresses each per-address limit remembers
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 const REPO_PAGE = 30; // repositories per page in "+ Project"
 
@@ -112,7 +128,7 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // is off, and POST /api/stripe/webhook answers 404.
 // feedbackProject (workspaces mode, with an admin host): "<workspace>/<project>", where feedback about nuworq that
 // the owners approve becomes a proposal (#295). '': feedback is off. feedbackBatchMs: how long its push waits for more.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
@@ -124,22 +140,21 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // The marketing site (nuworq.com, served from the nuworq-site repo) is the app's parent domain, over https:
   // app.nuworq.com's is https://nuworq.com. Its early-access form calls the form's two APIs cross-origin (#245).
   const siteOrigin = siteOf(publicUrl);
+  const hsts = /^https:\/\//i.test(publicUrl);
   // Built once, at start, off the request path; null when this hub doesn't run from a git checkout.
   let built = null;
   const pkg = buildPackage(source, packageDir).then((b) => (built = b));
   // The newest signed release in packageDir, whichever commit the hub runs now (#254). Checked against the
   // release key this checkout pins; installs check it again against their own.
   const releases = new Map();
-  const release = () => {
-    let key = null;
-    try { key = readFileSync(join(source, 'release-key.pub'), 'utf8').trim() || null; } catch {}
-    return newestSigned(packageDir, key, releases);
-  };
+  const releaseKey = () => { try { return readFileSync(join(source, 'release-key.pub'), 'utf8').trim() || null; } catch { return null; } };
+  const release = () => newestSigned(packageDir, releaseKey(), releases);
   // /api/info's package: the running commit's, and release: the newest signed one, which installs update to.
+  // key: release-key.pub's base64 line, for the first install's signature check (web/connect.js, #473).
   const packageInfo = (at) => {
     const r = release();
     return { url: `${at}/nuworq.tgz`, sha256: built.sha256, commit: built.commit.slice(0, 7),
-      release: r ? { url: `${at}/nuworq-${r.commit}.tgz`, sha256: r.sha256, commit: r.commit, time: r.time } : null };
+      release: r ? { url: `${at}/nuworq-${r.commit}.tgz`, sha256: r.sha256, commit: r.commit, time: r.time, key: releaseKey()?.replace(/-----[A-Z ]+-----|\s/g, '') } : null };
   };
   const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
   let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, web: gh.web, ...githubApp }) : githubApp;
@@ -217,7 +232,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   };
   // Accepted remote work lands through a pull request the hub opens, as the app (also one created since start).
   const adopt = (hub, req, base) => {
-    if (app && hub._app !== app) { hub._app = app; hub.github = prClient(appOf(hub), { web: gh.web }); hub.publicUrl = (!spaces && publicUrl) || origin(req) + base; }
+    if (app && hub._app !== app) { hub._app = app; hub.github = prClient(appOf(hub), { web: gh.web }); hub.publicUrl = linkOrigin(req) && linkOrigin(req) + base; }
   };
   // After a webhook: issues that came in get their one comment; an install brings every open issue and
   // Dependabot alert in, each on its own, so one failing leaves the other. Both need the app.
@@ -237,12 +252,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!app?.webhookSecret) return deny(404, 'this hub takes no GitHub App webhooks: it has no app, or no webhook secret for it', "Give the hub the app's webhook secret (NUWORQ_GITHUB_APP_WEBHOOK_SECRET; an app created in one click keeps it in its saved file), or use each project's own webhook (docs/DEPLOY.md).");
     const event = req.headers['x-github-event'];
     const hubsOf = (body) => (!spaces ? [target] : [spaces.get(spaces.directory.installation(body.installation?.id) ?? '')].filter(Boolean));
-    const hit = receiveApp(hubsOf, { secret: app.webhookSecret, event, signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) });
+    const hit = receiveApp(hubsOf, { secret: app.webhookSecret, event, signature: req.headers['x-hub-signature-256'], delivery: req.headers['x-github-delivery'], raw: await rawBody(req) });
     const projects = [];
     for (const { hub, p, result } of hit) {
       const base = spaces ? `/w/${encodeURIComponent(hub.workspace)}` : '';
       adopt(hub, req, base);
-      const link = (item) => `${publicUrl || origin(req)}${base}/#/p/${encodeURIComponent(p.slug)}/${item.seq}`;
+      const link = (item) => `${linkOrigin(req)}${base}/#/p/${encodeURIComponent(p.slug)}/${item.seq}`;
       projects.push({ project: p.slug, ...(await intake(hub, p, event, result, link)) });
     }
     return send(200, { ok: true, ...(event === 'ping' ? { pong: true } : {}), projects });
@@ -285,38 +300,77 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return s;
   };
   const hubs = () => (spaces ? spaces.hubs() : [target]);
+  // A workspace a browser is streaming stays open (#525).
+  spaces?.holdOpen((hub) => (scopes.get(hub)?.clients.size ?? 0) > 0);
+  // And so does one with background work still running against its database.
+  spaces?.holdOpen((hub) => hub._running > 0);
+  const running = (hub, work) => {
+    hub._running = (hub._running ?? 0) + 1;
+    return work.finally(() => hub._running--);
+  };
   checkApp();
   const sweeper = setInterval(() => {
     checkApp();
     sweepMirrors(); // mirrors are the process's, not one hub's
+    // Workspaces nobody uses close; one closed workspace a tick opens for its sweep (and closes again later).
+    if (spaces) { spaces.closeIdle(IDLE_MS); spaces.wake(WAKE_MS); }
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
+      // Which branches being built lack what landed (#535), so heartbeats tell them to rebase without running git.
+      hub.refreshBehind().catch((e) => console.error('checking branches against main failed', e));
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
       // Release preconditions read GitHub through the app where it's installed.
-      runChecks(hub, { shared: !!spaces, github: { api: gh.api, app } }).catch((e) => console.error('checking preconditions failed', e));
+      running(hub, runChecks(hub, { shared: !!spaces, github: { api: gh.api, app } })).catch((e) => console.error('checking preconditions failed', e));
       // Landing work's pull requests, as GitHub has them (no webhook may reach the hub): ready ones merge,
       // merged ones land, closed or conflicting ones become land jobs. At most once a minute.
-      if (hub.github) hub.mergeReady().catch((e) => console.error('checking pull requests failed', e));
+      if (hub.github) running(hub, hub.mergeReady()).catch((e) => console.error('checking pull requests failed', e));
       // Whether each local model a routing project lists can take work, as llm-proxy says (#349). At most once a minute.
       if (!spaces && Date.now() - (hub._localChecked ?? 0) >= MIN) {
         hub._localChecked = Date.now();
         checkLocalModels(hub, (m) => providerOf(m) === 'Open-weight').catch((e) => console.error('checking local models failed', e));
       }
       // Issues whose work has landed close on GitHub (a hub that has served a request knows its public address).
-      if (app && hub._app === app) for (const p of hub.projects()) closeLanded(hub, p, hub.github.app).catch((e) => console.error('closing issues failed', e));
+      if (app && hub._app === app) for (const p of hub.projects()) running(hub, closeLanded(hub, p, hub.github.app)).catch((e) => console.error('closing issues failed', e));
       // Questions to issue reporters that GitHub refused when asked go out again.
-      if (app && hub._app === app) for (const p of hub.projects()) askReporters(hub, p, hub.github.app).catch((e) => console.error('asking reporters failed', e));
+      if (app && hub._app === app) for (const p of hub.projects()) running(hub, askReporters(hub, p, hub.github.app)).catch((e) => console.error('asking reporters failed', e));
     }
     // Feedback whose work landed: its sender hears once (#297).
     if (feedbackOn) try { tellFixed(); } catch (e) { console.error('telling senders their feedback is fixed failed', e); }
   }, sweepMs);
+  // Requests held open (/api/stream, /api/wait), counted per hub and per token, sign-in, or (local mode) address,
+  // so no one caller ties up the hub's connections. A wait is also counted per listener (its --as name, else the
+  // session keys it sends): one machine's operators share a token, each with a listener of its own, and a
+  // duplicate listener is what's refused. True: counted until the response closes; false: at a cap.
+  const held = new Map();
+  const hold = (req, res, hub, who, kind) => {
+    const caller = `${kind}|${hub.workspace ?? ''}|${who.via === 'local' ? `ip:${clientIp(req)}` : `${who.via}:${who.id ?? who.name}`}`;
+    const listener = kind === 'wait' ? String(header(req, 'agent') ?? '').trim() || sessionOf(req).sort().join(',') : '';
+    const caps = [[caller, MAX_HELD[kind]], ...(listener ? [[`${caller}|${listener}`, MAX_HELD.listener]] : [])];
+    if (caps.some(([k, max]) => (held.get(k) ?? 0) >= max)) return false;
+    for (const [k] of caps) held.set(k, (held.get(k) ?? 0) + 1);
+    res.once('close', () => { for (const [k] of caps) { const m = (held.get(k) ?? 1) - 1; if (m > 0) held.set(k, m); else held.delete(k); } });
+    return true;
+  };
   const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
 
   const first = (v) => String(v ?? '').split(',')[0].trim();
-  const clientIp = (req) => (trustProxy && first(req.headers['x-forwarded-for'])) || req.socket.remoteAddress || '?';
+  // Who is asking, for the per-address limits. Behind a proxy (--trust-proxy): Cloudflare's CF-Connecting-IP, which
+  // Cloudflare sets itself; else the rightmost X-Forwarded-For hop that isn't the proxies' own network, since a
+  // client writes whatever it likes at the left of that list.
+  const clientIp = (req) => {
+    const peer = req.socket.remoteAddress || '?';
+    if (!trustProxy) return peer;
+    const cf = String(req.headers['cf-connecting-ip'] ?? '').trim();
+    if (cf) return cf;
+    const hops = String(req.headers['x-forwarded-for'] ?? '').split(',').map((h) => h.trim()).filter(Boolean);
+    return hops.findLast((h) => !TRUSTED_HOP.test(h)) ?? hops.at(-1) ?? peer;
+  };
   const hostOf = (req) => (trustProxy && first(req.headers['x-forwarded-host'])) || req.headers.host || '';
   const https = (req) => req.socket.encrypted || (trustProxy && first(req.headers['x-forwarded-proto']) === 'https');
   const origin = (req) => `${https(req) ? 'https' : 'http'}://${hostOf(req)}`;
+  // Where links that leave the hub point (pull requests, issue comments): on a shared hub only its configured
+  // public URL, never a request's Host or X-Forwarded-Host, which whoever sends the request chooses.
+  const linkOrigin = (req) => (spaces ? publicUrl.replace(/\/+$/, '') : publicUrl || origin(req));
   const onAdmin = (req) => !!adminHost && hostname(hostOf(req)) === hostname(adminHost);
   const adminOrigin = (req) => `${https(req) ? 'https' : 'http'}://${adminHost}`;
   const jarOf = (req) => {
@@ -424,13 +478,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const sameOrigin = (req) => {
     try { return new URL(req.headers.origin).host === hostOf(req); } catch { return false; }
   };
-  const recent = (map, ip, window = LOGIN_WINDOW) => {
-    const now = Date.now();
-    const list = (map.get(ip) ?? []).filter((t) => now - t < window);
-    map.set(ip, list);
-    if (map.size > 10_000) map.clear();
-    return list;
-  };
+  const recent = (map, ip, window = LOGIN_WINDOW) => recentIn(map, ip, window);
   const recentFailures = (ip) => recent(failures, ip);
 
   // ── feedback about nuworq (#295) ──
@@ -664,7 +712,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const id = Number(url.searchParams.get('installation_id'));
       if (!ws || !spaces.has(ws) || !id) return deny(400, "this install didn't start from a workspace on this hub, or its link expired", 'Open your workspace, then Connect → Install the GitHub App, and finish the install within the hour.');
       if (!(await app.installedBy(url.searchParams.get('code'), id))) {
-        return deny(403, `GitHub says you can't see installation ${id}, so it isn't bound to ${ws}`, 'Install the app from your workspace on an account or repositories you manage, and let GitHub send you back here.');
+        return deny(403, `GitHub says installation ${id} isn't on your account or a GitHub organization you're an admin of, so it isn't bound to ${ws}`, 'Install the app from your workspace on your own account, or on a GitHub organization where you are an admin, and let GitHub send you back here.');
       }
       if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another workspace on this hub', 'Install the app for this workspace on its own account or repositories.');
       return redirect(res, `/w/${encodeURIComponent(ws)}/#github-installed`);
@@ -792,6 +840,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return deny(405, `use ${path === '/api/orgs' ? 'POST' : 'GET'}`);
   }
 
+  const inFlight = new Set(); // idempotency keys being applied now (#524), in memory: a restart forgets them
   const server = http.createServer(async (req, res) => {
     // A client that hangs up mid-request (e.g. after an oversized body is refused) must never crash the hub.
     req.on('error', () => {});
@@ -799,7 +848,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const url = new URL(req.url, 'http://local');
     let path = url.pathname;
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+    // HSTS from the hub itself, not only from a Caddy in front: live traffic may come through a tunnel instead.
+    if (hsts) res.setHeader('strict-transport-security', HSTS);
+    let answered = null, applying = null; // a write with an idempotency key keeps its answer, and is applied once (#524)
     const send = (status, body, type = 'application/json; charset=utf-8') => {
+      answered?.(status, body, type);
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
       res.end(type.startsWith('application/json') ? JSON.stringify(body, null, 2) : body);
     };
@@ -821,6 +874,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!sig) return deny(404, "this hub's package isn't signed", 'Installed copies keep their version until a signed release is served (docs/DEPLOY.md, "Signed releases").');
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
         return res.end(`${sig}\n`);
+      }
+      // The newest signed release and its signature under one name (#473), for a first install that checks the
+      // signature before installing (README, Connect an agent).
+      if (req.method === 'GET' && (path === '/nuworq-release.tgz' || path === '/nuworq-release.tgz.sig')) {
+        await pkg;
+        const r = release();
+        if (!r) return deny(404, 'this hub serves no signed release', 'Install the package of the commit it runs: /nuworq.tgz.');
+        const sig = path.endsWith('.sig');
+        res.writeHead(200, sig ? { 'content-type': 'text/plain', 'cache-control': 'no-cache' }
+          : { 'content-type': 'application/gzip', etag: `"${r.sha256}"`, 'cache-control': 'no-cache', 'content-disposition': 'attachment; filename="nuworq-release.tgz"' });
+        return res.end(sig ? `${signatureOf(r)}\n` : await readFile(r.file));
       }
       // What the packages are, for installs deciding whether to update (src/update.js) and for signing one
       // (scripts/sign-release.js): /api/info's package with its newest signed release, plus the running commit in
@@ -881,9 +945,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         hub.upgradeUrl = () => page;
       }
       const cookiePath = `${base}/`;
+      const tooMany = (what, n) => deny(429, `too many open ${what} for one sign-in (at most ${n})`, 'Close a tab or a session you no longer use, then try again.');
       const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
       // An item's page, as a link for GitHub: the public address when the hub has one.
-      const itemLink = (rq, slug) => (item) => `${publicUrl || origin(rq)}${base}/#/p/${encodeURIComponent(slug)}/${item.seq}`;
+      const itemLink = (rq, slug) => (item) => `${linkOrigin(rq)}${base}/#/p/${encodeURIComponent(slug)}/${item.seq}`;
       // A question to an issue's reporter goes onto the issue now; one GitHub refused, the sweep posts later.
       const askedReporter = async (h, rq, out) => {
         if (!out?.reporter || !app) return out;
@@ -903,7 +968,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       let hook;
       if (req.method === 'POST' && (hook = path.match(/^\/api\/hooks\/github\/([^/]+)$/))) {
         const slug = decodeURIComponent(hook[1]);
-        const r = receive(hub, slug, { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) });
+        const r = receive(hub, slug, { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], delivery: req.headers['x-github-delivery'], raw: await rawBody(req) });
         if (!app && !r.ignored && (r.sync || req.headers['x-github-event'] === 'issues')) {
           return send(200, { ...r, sync: undefined, github: 'no GitHub App configured: issues that arrive by webhook come in, but the hub can neither list issues nor comment' });
         }
@@ -1082,11 +1147,52 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           : 'Ask an owner of this workspace for a steward role, or connect an agent with its own token (Connect an agent).');
         return true;
       };
+      // A connected machine asks to staff a project with its workers, up to a daily budget (#490, nuworq connect).
+      // Without logins it's done. With them, an agent token can't change settings (#469): an owner approves it in
+      // the browser, as a device login, and their approval turns it on (see /api/device/approve).
+      if (req.method === 'POST' && path === '/api/staff') {
+        const b = await body(req);
+        const p = hub.project(String(b.project ?? ''));
+        if (caller.scope && !caller.scope.includes(p.slug)) return deny(403, `this token can't reach ${p.slug}`, 'Connect with a token for that project.');
+        const budget = Math.round(Number(b.budget) * 100) / 100;
+        if (!(budget > 0)) throw new UserError('budget is dollars per day, more than 0', { hint: 'e.g. 20.' });
+        // No logins, or a person whose role may change settings: done.
+        if (who.role !== 'agent') {
+          if (!PERSON_CAN[personRole]?.includes('settings')) return deny(403, `a ${personRole} can't staff projects`, 'Ask an owner of this workspace.');
+          hub.humanOp(p.slug, 'settings', { runner: true, run_budget: budget }, by);
+          return send(200, { ok: true, staffed: true });
+        }
+        const ip = clientIp(req);
+        if (recent(starts, ip).length >= DEVICE_MAX_STARTS) return deny(429, 'too many requests started', 'Wait 10 minutes, then try again.');
+        recent(starts, ip).push(Date.now());
+        const d = devices.start(b.machine, { project: p.slug, name: p.name, budget, token: caller.token.name });
+        const verify = `${origin(req)}${base}/device.html`;
+        return send(200, { ok: true, ...d, verify_url: verify, verify_url_complete: `${verify}?code=${d.user_code}` });
+      }
       // The style guide (#391): every token and component, for the people and agents building screens; signed in only.
       if (req.method === 'GET' && path === '/styleguide') return send(200, withLogo(readFileSync(join(WEB, 'styleguide.html'), 'utf8')), TYPES['.html']);
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
       if (req.method === 'POST' && path === '/api/me/revoke') return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
+      // A write sent again with the same idempotency key (#524: the client retries writes through a proxy's 502 or
+      // a dropped connection) gets the answer the first one got, and is applied once. One still being applied is
+      // a 409 the client waits out. Keys are per caller and agent, so nobody replays someone else's answer.
+      const key = req.method === 'POST' && path.startsWith('/api/') && String(req.headers['idempotency-key'] ?? '').slice(0, 200);
+      if (key) {
+        const id = createHash('sha256').update(`${ws ?? ''}\n${who.id ?? who.name ?? ''}\n${header(req, 'agent') ?? ''}\n${path}\n${key}`).digest('hex');
+        const old = replyTo(hub, id);
+        if (old) return send(old.status, old.body);
+        if (inFlight.has(id)) {
+          res.setHeader('x-nuworq-replay', 'pending');
+          return deny(409, 'this call is still being applied', 'The client tries it again in a moment and gets its answer.');
+        }
+        inFlight.add(applying = id);
+        // Kept as it's sent, before the key leaves inFlight (in the finally below), so a retry finds one or the other.
+        answered = (status, body, type) => {
+          answered = null;
+          if (status < 500 && type.startsWith('application/json')) keepReply(hub, id, status, body);
+        };
+      }
       // The hub's GitHub App: whether it has one, and the one-click page that creates it (owners, single hub).
       if (req.method === 'GET' && (path === '/api/github/app' || path === '/api/info')) freshSlug();
       // ?fresh: just back from installing it on GitHub, so ask GitHub again rather than trust the last minute's answer.
@@ -1150,11 +1256,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const peek = devices.peek(b.user_code);
         if (!peek.ok) return deny(410, peek.error, 'Check the code the CLI shows, or start the device login again.');
-        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
+        const staff = peek.request.staff;
+        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, ...(staff ? { staff } : {}), expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
         const approve = b.approve !== false;
         if (approve && personRole === 'viewer') return deny(403, "a viewer can't connect machines", 'Ask an owner for a member role.');
+        if (approve && staff && !PERSON_CAN[personRole]?.includes('settings')) return deny(403, `a ${personRole} can't staff projects`, 'Ask an owner of this workspace to approve it.');
         let d;
         try { d = devices.decide(b.user_code, who.person.handle, approve); } catch (e) { throw new UserError(e.message); }
+        // A staffing request (#490): the approver's yes turns staffing on, with the daily budget the machine asked for.
+        if (approve && staff) {
+          hub.humanOp(staff.project, 'settings', { runner: true, run_budget: staff.budget }, by);
+          return send(200, { ok: true, machine: d.machine, approved: true, staff });
+        }
         if (d.name) {
           for (const p of hub.projects()) {
             hub.event(p, { actor: by, type: 'connected', headline: `${by} connected ${d.machine} (agent token ${d.name})` });
@@ -1169,6 +1282,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { ok: true });
       }
       if (req.method === 'GET' && path === '/api/stream') {
+        if (!hold(req, res, hub, who, 'stream')) return tooMany('streams', MAX_HELD.stream);
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(': hello\n\n');
         clients.add(res);
@@ -1176,7 +1290,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return;
       }
       if (req.method === 'GET' && path === '/api/info') {
-        return send(200, { bin: join(WEB, '..', 'bin', 'nuworq.js'), url: ((!spaces && publicUrl) || origin(req)) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo(),
+        // bin: where this hub's CLI is, for a single hub on its own machine; a shared hub's paths are its host's business.
+        return send(200, { ...(spaces ? {} : { bin: join(WEB, '..', 'bin', 'nuworq.js') }), url: ((!spaces && publicUrl) || origin(req)) + base, auth: required ? 'required' : 'local', workspace: hub.workspace, github_app: app ? app.slug || true : (!spaces && personRole === 'owner' ? 'create' : null), ...buildInfo(),
           package: built ? packageInfo((!spaces && publicUrl) || origin(req)) : null });
       }
       // "Needs you" is the viewer's own: a person sees what is theirs as act, the rest as worth knowing.
@@ -1341,7 +1456,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { ok: true, slug: p.slug, ...(repo ? { repo, runner_opt_in: true } : {}) });
       }
       if (req.method === 'GET' && path === '/api/tools') {
-        return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? ''));
+        return send(200, tools(url.searchParams.get('format') ?? 'mcp', url.searchParams.get('prefix') ?? '', { role: url.searchParams.get('role') || null }));
       }
 
       let m;
@@ -1520,6 +1635,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // and kinds only, or empty after a few minutes. ?since= the last answer's at, so each event comes once.
       if (req.method === 'GET' && path === '/api/wait') {
         if (url.searchParams.get('for') !== 'operator') return deny(400, 'wait for what?', 'Only operators wait: GET /api/wait?for=operator.');
+        if (!hold(req, res, hub, who, 'wait')) return tooMany('waits', `${MAX_HELD.listener} per listener, ${MAX_HELD.wait} per token`);
         const done = new AbortController();
         res.on('close', () => done.abort());
         const timeout = Number(url.searchParams.get('timeout'));
@@ -1551,7 +1667,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { ok: true, renewed });
       }
       if (req.method === 'GET' && path === '/api/claims') {
-        return send(200, { claims: hub.claimsSince(url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0, { scope: caller.scope }) });
+        const [who, since] = [url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0];
+        return send(200, { claims: hub.claimsSince(who, since, { scope: caller.scope }), first: hub.firstClaim(who, since, { scope: caller.scope }) });
       }
       if (req.method === 'GET' && path === '/api/finished') {
         const slug = url.searchParams.get('project') ?? '';
@@ -1564,15 +1681,32 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       send(404, { ok: false, error: `No route ${req.method} ${path}` });
     } catch (e) {
       if (e instanceof UserError) return send(e.status, { ok: false, error: e.message, ...(e.hint ? { hint: e.hint } : {}) });
-      console.error(e);
-      send(500, { ok: false, error: String(e?.message ?? e) });
+      // What broke stays in the hub's log, under an id the caller can quote; the caller learns only that it did.
+      const id = randomBytes(6).toString('hex');
+      console.error(`error ${id}:`, e);
+      send(500, { ok: false, error: 'something went wrong', id, hint: `Try again in a minute. If it keeps happening, tell the hub's host this id: ${id}.` });
+    } finally {
+      // Only once the handler is done (#524), never when the connection drops: a proxy giving up mid-write is what
+      // the retry is for, and the write may still be applying.
+      if (applying) inFlight.delete(applying);
     }
   });
+  server.maxConnections = maxConnections;
   if (!spaces) server.auth = scopeOf(target).authz;
   server.package = pkg; // resolves to the built package, or null when this hub serves none
 
   server.on('close', () => { clearInterval(sweeper); clearInterval(keepalive); });
   return server;
+}
+
+// A per-address limit's times for ip within the window (the caller pushes the new one). The map keeps addresses
+// most recently seen last, so a flood of new addresses evicts the oldest, never the one being limited.
+export function recentIn(map, ip, window, now = Date.now(), max = LIMITER_MAX) {
+  const list = (map.get(ip) ?? []).filter((t) => now - t < window);
+  map.delete(ip);
+  map.set(ip, list);
+  for (const k of map.keys()) { if (map.size <= max) break; map.delete(k); }
+  return list;
 }
 
 function hostname(host) {
@@ -1590,6 +1724,18 @@ function siteOf(publicUrl) {
 
 // x-nuworq-<name>, else the old x-trellis-<name> that clients from before the rename send.
 const header = (req, name) => req.headers[`x-nuworq-${name}`] ?? req.headers[`x-trellis-${name}`];
+
+// The answers to writes sent with an idempotency key (#524), kept 10 minutes in the hub's database, so a retry
+// after a proxy's 502 or a restart gets the first answer instead of applying the write again.
+const REPLY_MS = 10 * MIN;
+function replyTo(hub, id) {
+  const r = hub.q('SELECT status, body FROM replies WHERE id = ? AND at >= ?').get(id, hub.now() - REPLY_MS);
+  return r ? { status: r.status, body: JSON.parse(r.body) } : null;
+}
+function keepReply(hub, id, status, body) {
+  hub.q('DELETE FROM replies WHERE at < ?').run(hub.now() - REPLY_MS);
+  hub.q('INSERT OR REPLACE INTO replies (id, status, body, at) VALUES (?, ?, ?, ?)').run(id, status, JSON.stringify(body ?? null), hub.now());
+}
 const rootOf = (req) => { try { return decodeURIComponent(header(req, 'root') ?? ''); } catch { return ''; } };
 const remoteOf = (req) => { try { return decodeURIComponent(header(req, 'remote') ?? ''); } catch { return ''; } };
 const sessionOf = (req) => parseKeys(header(req, 'session')); // the caller's Claude Code session (#335)

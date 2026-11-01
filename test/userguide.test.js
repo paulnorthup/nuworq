@@ -120,17 +120,13 @@ describe('GET /guide', () => {
 });
 
 describe('the change rule (#385)', () => {
-  test('/agents.md tells agents building nuworq to update this guide with any change to a new user\'s path, and reviewers to check', async () => {
+  test('the rule is nuworq\'s own, so /agents.md leaves it to that project\'s decisions (#527)', async () => {
     const server = createServer(new Hub(), { sweepMs: 60_000 });
     const url = await listen(server);
     try {
       const md = await (await fetch(`${url}/agents.md`)).text();
-      const rule = md.split('\n').find((l) => l.includes('getting-started guide'));
-      assert.ok(rule, 'the guide carries the rule');
-      for (const w of ['sign-in', 'workspace', 'project', 'GitHub App', 'connect', 'run', 'Get started', 'Needs you']) assert.ok(rule.includes(w), w);
-      assert.match(rule, /src\/userguide\.js[^\n]*same change/);
-      assert.match(rule, /Reviewers reject work that should have and didn't/);
-      assert.ok(existsSync(new URL('../src/userguide.js', import.meta.url)), 'the file it names exists');
+      assert.doesNotMatch(md, /src\/userguide\.js/);
+      assert.ok(existsSync(new URL('../src/userguide.js', import.meta.url)), 'the file the decision names exists');
     } finally { stop(server); }
   });
 });

@@ -36,6 +36,10 @@ function itemFor(hub, p, pr) {
   return bySeq(pr.title) || own() || byBranch() || bySeq(pr.body);
 }
 
+// Whether a pull request's branch is the item's own (#478): only that one's CI or closing sends landing work back.
+// An item that names no branch takes any of its pull requests, as before.
+const ownBranch = (item, ref) => !item.branch || item.branch === String(ref ?? '');
+
 // pass | fail | pending, over every check reported for a commit.
 export function ciState(hub, p, sha) {
   const rows = hub.q('SELECT * FROM checks WHERE project_id = ? AND sha = ? ORDER BY name').all(p.id, sha);
@@ -51,10 +55,15 @@ export function prsOf(hub, p, item) {
   });
 }
 
+// A pull request from a fork (#478): anyone can open one, so it never links to an item or moves one. A fork deleted
+// since has head.repo null. Payloads the hub writes itself (prMerged) carry no head.repo: they're its own.
+const fromFork = (pr, full) => pr.head && 'repo' in pr.head && (!pr.head.repo || String(pr.head.repo.full_name ?? '').toLowerCase() !== full.toLowerCase());
+
 function pullRequest(hub, p, body) {
   const pr = body.pull_request;
   if (!pr) return { ignored: 'no pull_request' };
   const full = body.repository?.full_name ?? '';
+  if (fromFork(pr, full)) return { ignored: "a fork's pull request" };
   const state = pr.merged ? 'merged' : pr.state === 'closed' ? 'closed' : 'open';
   // A PR the hub opened is on record under the normalized remote (github.com/o/r); others under o/r.
   const old = hub.q('SELECT * FROM prs WHERE project_id = ? AND repo IN (?, ?) AND number = ? ORDER BY repo DESC').get(p.id, full, `github.com/${full}`.toLowerCase(), pr.number);
@@ -89,7 +98,7 @@ function pullRequest(hub, p, body) {
         data: { pr: pr.number, url: pr.html_url, branch: pr.head?.ref ?? item.branch, base, head: pr.merge_commit_sha ?? '' },
       });
       if (item.release) tagRelease(hub, p, item, pr.merge_commit_sha ?? ''); // its merge is the release (#400)
-    } else if (item.stage === 'landing' && state === 'closed') {
+    } else if (item.stage === 'landing' && state === 'closed' && ownBranch(item, pr.head?.ref)) {
       const headline = `PR #${pr.number} was closed without merging`;
       const summary = 'Read the pull request for why, rework it on the same branch, and submit again.';
       hub.move(item, 'ready', ACTOR, { holder: null, lease_until: null, handoff: JSON.stringify({ kind: 'sent_back', by: ACTOR, headline, summary, at: hub.now() }) });
@@ -206,7 +215,7 @@ function check(hub, p, { sha, name, conclusion, url }) {
       });
       // Accepted work whose pull request fails a check goes back to its builder, like a send-back: the fix
       // goes on the same branch, the PR stays, and its auto-merge merges it once checks pass.
-      if (after.state === 'fail' && pr.state === 'open' && item?.stage === 'landing') {
+      if (after.state === 'fail' && pr.state === 'open' && item?.stage === 'landing' && ownBranch(item, pr.head_ref)) {
         const bad = after.checks.filter((c) => FAIL.has(c.conclusion));
         const headline = `${bad.map((c) => c.name).join(', ')} failed on PR #${pr.number}`;
         const summary = `${bad.map((c) => `${c.name}: ${c.conclusion}${c.url ? ` (${c.url})` : ''}`).join('\n')}\n\nFix it on ${item.branch || 'the same branch'} and push: the pull request stays open, and it merges once its checks pass. Then submit again.`;
@@ -221,14 +230,27 @@ function check(hub, p, { sha, name, conclusion, url }) {
   return { sha: sha.slice(0, 7), ci: after.state };
 }
 
-export function receive(hub, slug, { event, signature, raw }) {
+// GitHub delivery ids this hub acted on (#478), so a replay changes nothing. A delivery is marked once it was
+// handled, so one that failed can still be redelivered. No id (not from GitHub): new each time.
+const WEEK = 7 * 24 * 3600_000;
+const seen = (hub, id) => !!id && !!hub.q('SELECT 1 FROM deliveries WHERE id = ?').get(String(id));
+function mark(hub, id) {
+  if (!id) return;
+  hub.q('DELETE FROM deliveries WHERE at < ?').run(hub.now() - WEEK);
+  hub.q('INSERT OR IGNORE INTO deliveries (id, at) VALUES (?, ?)').run(String(id), hub.now());
+}
+
+export function receive(hub, slug, { event, signature, raw, delivery }) {
   let p;
   try { p = hub.project(slug); } catch { p = null; }
   // Unknown project, no secret, bad signature: all the same answer, and nothing is recorded.
   if (!p || !verify(p.github_secret, raw, signature)) {
     throw new UserError('signature check failed', { status: 401, hint: "Set the same secret in the project (UI: GitHub, under the mission) and in the GitHub webhook's settings, with content type application/json." });
   }
-  const result = handle(hub, p, event, parse(raw));
+  const body = parse(raw);
+  if (seen(hub, delivery)) return { ok: true, ignored: 'a delivery already acted on' };
+  const result = handle(hub, p, event, body);
+  mark(hub, delivery);
   if (!result.ignored && !result.pong) hub.changed(p);
   return { ok: true, ...result };
 }
@@ -237,7 +259,7 @@ export function receive(hub, slug, { event, signature, raw }) {
 // every repository the app is installed on, so no project needs a secret of its own. A delivery goes to
 // each project, on the hubs hubsOf(body) names, that has the repository it is about (an installation
 // event: any repository it lists). [{ hub, p, result }]; none when no project has it.
-export function receiveApp(hubsOf, { secret, event, signature, raw }) {
+export function receiveApp(hubsOf, { secret, event, signature, raw, delivery }) {
   if (!verify(secret, raw, signature)) {
     throw new UserError('signature check failed', { status: 401, hint: "The hub checks app deliveries with the app's webhook secret: the one in its saved app file, or NUWORQ_GITHUB_APP_WEBHOOK_SECRET. Set the same one in the app's settings on GitHub." });
   }
@@ -247,12 +269,18 @@ export function receiveApp(hubsOf, { secret, event, signature, raw }) {
   const out = [];
   if (event === 'ping' || !named.size) return out;
   for (const hub of hubsOf(body)) {
-    for (const p of hub.projects()) {
-      if (!hub.remotesOf(p).some((r) => named.has(r))) continue;
+    const ps = hub.projects().filter((p) => hub.remotesOf(p).some((r) => named.has(r)));
+    // Recorded only where some project takes it, so a delivery dropped (no project yet) can be redelivered.
+    if (seen(hub, delivery)) {
+      for (const p of ps) out.push({ hub, p, result: { ignored: 'a delivery already acted on' } });
+      continue;
+    }
+    for (const p of ps) {
       const result = handle(hub, p, event, body);
       if (!result.ignored) hub.changed(p);
       out.push({ hub, p, result });
     }
+    if (ps.length) mark(hub, delivery);
   }
   return out;
 }

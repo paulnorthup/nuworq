@@ -307,6 +307,36 @@ describe('GET /api/wait and nuworq wait', () => {
     }
   });
 
+  test('one machine\'s operators share a token: a 5th listener on it waits like the rest; only a duplicate listener is refused (#479)', async () => {
+    const { hub } = setup();
+    const names = ['op', 'op2', 'op3', 'op4', 'op5'];
+    for (const n of names.slice(1)) hub.agentOp('o', 'checkin', n, { has: ['operator'] });
+    const server = createServer(hub, { auth: 'required' });
+    const url = `http://127.0.0.1:${await listen(server)}`;
+    const token = server.auth.createToken('mac', 'agent');
+    const waits = [];
+    const wait = (agent) => {
+      const done = new AbortController();
+      const r = fetch(`${url}/api/wait?for=operator&timeout=20`, { headers: { authorization: `Bearer ${token}`, 'x-nuworq-agent': agent }, signal: done.signal }).catch(() => null);
+      waits.push(done);
+      return r;
+    };
+    try {
+      for (const n of names) wait(n);
+      wait('op'), wait('op'); // op's listener started twice already holds its places
+      await new Promise((res) => setTimeout(res, 100));
+      const over = await (await wait('op')).json();
+      assert.match(over.error, /too many open waits/);
+      assert.match(over.error, /2 per listener, 32 per token/);
+      const fifth = await Promise.race([wait('op5').then((r) => r.status), new Promise((res) => setTimeout(() => res('held'), 300))]);
+      assert.equal(fifth, 'held', "op5's listener is waiting, not refused");
+    } finally {
+      for (const w of waits) w.abort();
+      server.close();
+      server.closeAllConnections();
+    }
+  });
+
   test("waits on the folder's project; ?project= names one, ?all=1 takes every one", async () => {
     const { hub, tick } = setup();
     hub.agentOp('other', 'checkin', 'op', { has: ['operator', 'infra'] });
@@ -558,6 +588,17 @@ describe('GET /api/wait and nuworq wait', () => {
         server.closeAllConnections();
         second?.db.close();
       }
+    });
+
+    test('too many listeners on the token (429): it says so once, keeps trying, and hears the event once a place frees (#479)', async () => {
+      const crowded = (res) => res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'too many open waits for one sign-in (at most 2 per listener, 32 per token)', hint: 'Close a tab or a session you no longer use, then try again.' }));
+      const hub = await fake((n, _req, res) => (n <= 3 ? crowded(res) : n === 4 ? event(res, 5) : null));
+      try {
+        const r = await listenUntil(hub, (out) => out.includes(line), '--as', 'op');
+        assert.equal(r.stdout, `nuworq: too many open waits for one sign-in (at most 2 per listener, 32 per token); waiting for a place. Close a tab or a session you no longer use, then try again.\n${line}`, r.stderr);
+        assert.equal(r.exited, null, 'still listening');
+        assert.deepEqual(hub.asked.slice(0, 4), ['0', '0', '0', '0']);
+      } finally { hub.close(); }
     });
 
     test('away for long, it says so once and keeps trying', async () => {

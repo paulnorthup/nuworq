@@ -9,7 +9,7 @@ import { createServer } from '../src/server.js';
 import { receive } from '../src/github.js';
 import { itemView } from '../src/insight.js';
 import { Workspaces } from '../src/workspaces.js';
-import { notifyWorkspaces, workspaceUrl } from '../src/notify.js';
+import { notifyWorkspaces, workspaceUrl, addChannel } from '../src/notify.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const SECRET = 'loose-ends-secret';
@@ -26,18 +26,23 @@ describe('loose ends', () => {
     } finally { server.close(); }
   });
 
-  test('2. with workspaces, each workspace gets its own push notifier, linking to its own address', () => {
+  test('2. with workspaces, each open workspace with a channel gets its own push notifier, linking to its own address', () => {
     const spaces = new Workspaces({ dir: realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-ws-push-'))) });
-    spaces.create('acme');
-    spaces.create('beta');
+    for (const w of ['acme', 'beta', 'quiet']) spaces.create(w);
+    for (const w of ['acme', 'beta']) addChannel(spaces.get(w).db, 'ntfy', `https://ntfy.sh/${w}-x`);
+    spaces.close();
     const pushes = notifyWorkspaces(spaces, (n) => workspaceUrl(n, { publicUrl: 'https://hub.example' }), { every: 60_000 });
     try {
-      assert.deepEqual([...pushes.notifiers.keys()], ['acme', 'beta']);
+      assert.deepEqual(spaces.hubs(), [], 'starting opens no workspace (#525)');
+      for (const w of ['acme', 'beta', 'quiet']) spaces.get(w);
+      assert.deepEqual([...pushes.notifiers.keys()], ['acme', 'beta'], 'one as each opens, where there are channels');
       assert.equal(pushes.notifiers.get('acme').baseUrl, 'https://hub.example/w/acme');
       assert.equal(pushes.notifiers.get('acme').hub, spaces.get('acme'));
       spaces.create('gamma');
+      addChannel(spaces.get('gamma').db, 'ntfy', 'https://ntfy.sh/gamma-x');
+      addChannel(spaces.get('quiet').db, 'ntfy', 'https://ntfy.sh/quiet-x');
       pushes.sweep();
-      assert.ok(pushes.notifiers.has('gamma'), 'a workspace made while serving is picked up');
+      assert.ok(pushes.notifiers.has('gamma') && pushes.notifiers.has('quiet'), 'a first channel added while open is picked up');
     } finally { pushes.stop(); spaces.close(); }
     assert.equal(workspaceUrl('acme', { baseDomain: 'nuworq.com', publicUrl: 'https://nuworq.com' }), 'https://acme.nuworq.com');
   });
@@ -47,6 +52,7 @@ describe('loose ends', () => {
     const spaces = new Workspaces({ dir });
     spaces.create('acme');
     spaces.create('beta');
+    for (const w of ['acme', 'beta']) addChannel(spaces.get(w).db, 'ntfy', `https://ntfy.sh/${w}-x`);
     const pushes = notifyWorkspaces(spaces, (n) => workspaceUrl(n, { publicUrl: 'https://hub.example' }), { every: 60_000, interval: 5, debounce: 1 });
     const errors = [];
     const logged = console.error;
@@ -58,6 +64,7 @@ describe('loose ends', () => {
       await new Promise((r) => setTimeout(r, 30));
       assert.deepEqual(errors, [], 'no scans on the closed hub');
       spaces.create('acme');
+      addChannel(spaces.get('acme').db, 'ntfy', 'https://ntfy.sh/acme-x');
       pushes.sweep();
       assert.ok(pushes.notifiers.get('acme') && pushes.notifiers.get('acme') !== old, 'a fresh notifier');
       assert.equal(pushes.notifiers.get('acme').hub, spaces.get('acme'));
