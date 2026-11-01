@@ -550,6 +550,25 @@ export const MIGRATIONS = [
       addColumn(db, "ALTER TABLE items ADD COLUMN security TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    // Steering about an item retires once it's done or dropped (#551, Hub.retireSteers). Once, for the steers on
+    // items closed before that: the same way, with the reason on the record, and the count in the hub's log.
+    name: 'steering about finished or dropped items retires',
+    up(db) {
+      const stale = db.prepare(`SELECT n.id, n.body, n.project_id, i.id AS item_id, i.seq, i.stage FROM notes n
+        JOIN items i ON i.id = n.item_id WHERE n.kind = 'steer' AND n.active = 1 AND i.stage IN ('done', 'dropped')`).all();
+      const at = Date.now();
+      for (const s of stale) {
+        const reason = s.stage === 'done' ? `#${s.seq} landed` : `#${s.seq} was dropped`;
+        const body = s.body.length > 100 ? `${s.body.slice(0, 99)}…` : s.body;
+        db.prepare('UPDATE notes SET active = 0 WHERE id = ?').run(s.id);
+        db.prepare(`INSERT INTO events (project_id, item_id, actor, type, headline, data, at) VALUES (?, ?, 'nuworq', 'retired', ?, ?, ?)`)
+          .run(s.project_id, s.item_id, `nuworq retired a steer, as ${reason}: ${body}`, JSON.stringify({ note: s.id, reason }), at);
+      }
+      const of = stale.length + db.prepare(`SELECT COUNT(*) AS n FROM notes WHERE kind = 'steer' AND active = 1`).get().n;
+      if (stale.length) console.log(`Retired ${stale.length} of ${of} active steers: they were about items already done or dropped (#551).`);
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
