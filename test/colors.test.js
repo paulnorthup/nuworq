@@ -7,7 +7,13 @@ import { join } from 'node:path';
 
 // Every color means one thing (#188): the state colors and the provider marks stay clearly apart.
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
-const root = Object.fromEntries([...css.match(/:root \{([^}]*)\}/)[1].matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2].toLowerCase()]));
+const hexes = (body) => Object.fromEntries([...body.matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2].toLowerCase()]));
+const root = hexes(css.match(/:root \{([^}]*)\}/)[1]);
+// Dark (#484): the device's preference and the forced choice hold the same values, over the light ones.
+const DARK_MEDIA = css.match(/@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme="light"\]\) \{([^}]*)\}\s*\}/);
+const DARK_FORCED = css.match(/:root\[data-theme="dark"\] \{([^}]*)\}/);
+const dark = { ...root, ...hexes(DARK_FORCED?.[1] ?? '') };
+const THEMES = { light: root, dark };
 
 // WCAG relative luminance and contrast; CIE76 ΔE in Lab (D65).
 const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
@@ -33,28 +39,86 @@ describe('the color map keeps meanings apart (#188)', () => {
     for (const k of [...STATE, ...PROVIDER, '--panel', '--brand']) assert.ok(root[k], `${k} is a hex color in :root`);
   });
 
-  test('the five state colors are at least ΔE 30 apart, and readable as text and behind white text', () => {
-    for (const [a, b] of pairs(STATE)) assert.ok(dE(root[a], root[b]) >= 30, `${a} vs ${b}: ΔE ${dE(root[a], root[b]).toFixed(1)}`);
-    for (const k of STATE) {
-      assert.ok(contrast(root[k], root['--panel']) >= 4.5, `${k} on --panel: ${contrast(root[k], root['--panel']).toFixed(2)}`);
-      assert.ok(contrast(root[k], '#ffffff') >= 4.5, `white text on ${k}`);
-    }
+  for (const [name, t] of Object.entries(THEMES)) {
+    test(`${name}: the five state colors are at least ΔE 30 apart, and readable as text and behind --on-fill text`, () => {
+      for (const [a, b] of pairs(STATE)) assert.ok(dE(t[a], t[b]) >= 30, `${a} vs ${b}: ΔE ${dE(t[a], t[b]).toFixed(1)}`);
+      for (const k of STATE) {
+        assert.ok(contrast(t[k], t['--panel']) >= 4.5, `${k} on --panel: ${contrast(t[k], t['--panel']).toFixed(2)}`);
+        assert.ok(contrast(t[k], t['--on-fill']) >= 4.5, `--on-fill text on ${k}: ${contrast(t[k], t['--on-fill']).toFixed(2)}`);
+      }
+    });
+
+    test(`${name}: each provider mark is at least ΔE 30 from every state color and every other provider, and 3:1 on --panel`, () => {
+      for (const p of PROVIDER) {
+        for (const s of STATE) assert.ok(dE(t[p], t[s]) >= 30, `${p} vs ${s}: ΔE ${dE(t[p], t[s]).toFixed(1)}`);
+        assert.ok(contrast(t[p], t['--panel']) >= 3, `${p} on --panel`);
+      }
+      for (const [a, b] of pairs(PROVIDER)) assert.ok(dE(t[a], t[b]) >= 30, `${a} vs ${b}`);
+    });
+
+    test(`${name}: the citron brand stands apart from every meaning and carries a readable mark (#319)`, () => {
+      for (const s of STATE) assert.ok(dE(t['--brand'], t[s]) >= 30, `--brand vs ${s}: ΔE ${dE(t['--brand'], t[s]).toFixed(1)}`);
+      for (const p of PROVIDER) assert.ok(dE(t['--brand'], t[p]) >= 25, `--brand vs ${p}: ΔE ${dE(t['--brand'], t[p]).toFixed(1)}`);
+      assert.ok(contrast(t['--brand-ink'], t['--brand']) >= 4.5, `the mark (--brand-ink) on --brand: ${contrast(t['--brand-ink'], t['--brand']).toFixed(2)}`);
+    });
+
+    test(`${name}: text that carries information is at least 4.5:1 on the backgrounds it sits on (#195)`, () => {
+      const on = [
+        ['--muted', '--bg'], ['--muted', '--panel'], ['--muted', '--sunken'], ['--muted', '--queue-tint'],
+        ['--muted', '--you-tint'], ['--muted', '--agents-tint'], // a Flow stage's label on its court's tint
+        ['--you', '--you-tint'], ['--agents', '--agents-tint'], ['--ok', '--ok-tint'], ['--bad', '--bad-tint'],
+        ['--panel', '--ink'], // text on an --ink fill (the "now" tag, a primary button)
+      ];
+      for (const [fg, bg] of on) assert.ok(contrast(t[fg], t[bg]) >= 4.5, `${fg} on ${bg}: ${contrast(t[fg], t[bg]).toFixed(2)}`);
+      // Labels inside the courtbar and lifecycle bar segments: --on-fill on the colored ones, --on-queue on the grey.
+      for (const bg of ['--agents', '--you', '--ok', '--muted']) assert.ok(contrast(t['--on-fill'], t[bg]) >= 4.5, `--on-fill on ${bg}`);
+      assert.ok(contrast(t['--on-queue'], t['--queue']) >= 4.5, `--on-queue on --queue: ${contrast(t['--on-queue'], t['--queue']).toFixed(2)}`);
+    });
+
+    test(`${name}: Outside's labels are at least 4.5:1 on every stripe of its hatch (#209)`, () => {
+      const stripes = (token) => [...css.match(new RegExp(`${token}: repeating-linear-gradient\\(([^;]*)\\);`))[1].matchAll(/var\((--[\w-]+)\)/g)].map((m) => m[1]);
+      for (const s of stripes('--hatch')) assert.ok(contrast(t['--on-fill'], t[s]) >= 4.5, `--on-fill on --hatch stripe ${s}: ${contrast(t['--on-fill'], t[s]).toFixed(2)}`);
+      for (const s of stripes('--hatch-tint')) assert.ok(contrast(t['--ink'], t[s]) >= 4.5, `ink on --hatch-tint stripe ${s}: ${contrast(t['--ink'], t[s]).toFixed(2)}`);
+    });
+  }
+
+  test('dark is calm (#484): a graphite background, text in a comfortable band, softer state colors', () => {
+    assert.ok(DARK_MEDIA && DARK_FORCED, 'dark follows the device, and the theme choice can force it');
+    assert.deepEqual(hexes(DARK_MEDIA[1]), hexes(DARK_FORCED[1]), 'the device\'s dark and the forced dark hold the same values');
+    assert.match(css, /:root \{[^}]*color-scheme: light dark;/);
+    const L = lab(dark['--bg'])[0];
+    assert.ok(L >= 9 && L <= 14, `--bg L* ${L.toFixed(1)} is graphite, not near-black`);
+    const c = contrast(dark['--ink'], dark['--panel']);
+    assert.ok(c >= 10 && c <= 12.5, `--ink on --panel ${c.toFixed(2)}:1, comfortable rather than glaring`);
+    const chroma = STATE.map((k) => Math.hypot(lab(dark[k])[1], lab(dark[k])[2]));
+    const mean = chroma.reduce((a, b) => a + b, 0) / chroma.length;
+    assert.ok(mean <= 45, `mean state chroma ${mean.toFixed(1)}`);
+    assert.equal(dark['--brand'], root['--brand'], 'the citron stays');
+    assert.equal(dark['--brand-ink'], root['--brand-ink'], 'the q stays dark on it');
   });
 
-  test('each provider mark is at least ΔE 30 from every state color and every other provider, and 3:1 on --panel', () => {
-    for (const p of PROVIDER) {
-      for (const s of STATE) assert.ok(dE(root[p], root[s]) >= 30, `${p} vs ${s}: ΔE ${dE(root[p], root[s]).toFixed(1)}`);
-      assert.ok(contrast(root[p], root['--panel']) >= 3, `${p} on --panel`);
+  test('every color comes from the theme blocks: no hex, rgb() or rgba() elsewhere in web/ or the server (#484)', () => {
+    const outside = css.replace(/:root \{[^}]*\}/, '').replace(DARK_MEDIA[0], '').replace(DARK_FORCED[0], '');
+    // A three-character hex with a letter (#fff) counts anywhere; an all-digit one (#000) only as a value, after ":",
+    // so issue refs like "(#141)" or ", #228" aren't taken for colors.
+    const COLOR = /#[0-9a-f]{6}\b|#(?=\d*[a-f])[0-9a-f]{3}\b(?![\w-])|:\s*#\d{3}\b(?![\w-])|rgba?\(/gi;
+    const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.deepEqual(strip(outside).match(COLOR) ?? [], [], 'web/style.css');
+    for (const dir of ['web', 'src']) {
+      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n) && n !== 'style.css' && n !== 'logo.js')) {
+        if (dir === 'src' && f !== 'server.js') continue;
+        const src = strip(readFileSync(new URL(`../${dir}/${f}`, import.meta.url), 'utf8'));
+        assert.deepEqual(src.match(COLOR) ?? [], [], `${dir}/${f}`);
+      }
     }
-    for (const [a, b] of pairs(PROVIDER)) assert.ok(dE(root[a], root[b]) >= 30, `${a} vs ${b}`);
   });
 
   test('the logo is the brand, not a state: the q in ink on the citron tile, from one source (#319, #322)', async () => {
     const { LOGO, FAVICON, BRAND, INK, withLogo } = await import('../web/logo.js');
     const q = '<circle cx="15" cy="14.5" r="5.5"/><path d="M20.5 9.5V23.5q0 2 2 2h1"/>';
-    assert.ok(LOGO.includes(`rx="8" fill="var(--brand)"/><g fill="none" stroke="var(--ink)" stroke-width="3.2" stroke-linecap="round">${q}</g>`), 'the mark: the q in --ink on --brand');
+    assert.ok(LOGO.includes(`rx="8" fill="var(--brand)"/><g fill="none" stroke="var(--brand-ink)" stroke-width="3.2" stroke-linecap="round">${q}</g>`), 'the mark: the q in --brand-ink on --brand, dark in both themes (#484)');
     // A favicon can't read CSS variables, so it carries the same two colors as hexes, and a heavier stroke for 16px.
-    assert.deepEqual([BRAND, INK], [root['--brand'], root['--ink']], 'logo.js keeps the hexes of --brand and --ink');
+    assert.deepEqual([BRAND, INK], [root['--brand'], root['--brand-ink']], 'logo.js keeps the hexes of --brand and --brand-ink');
     const icon = decodeURIComponent(FAVICON.replace('data:image/svg+xml,', ''));
     assert.ok(icon.includes(`rx="8" fill="${BRAND}"/><g fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round">${q}</g>`), 'the favicon is the same q on --brand');
     // Every logo the hub draws uses that one source; no page keeps its own copy.
@@ -118,11 +182,9 @@ describe('the color map keeps meanings apart (#188)', () => {
     }
   });
 
-  test('the citron brand stands apart from every meaning, carries a readable mark, and is never text (#319)', () => {
-    for (const s of STATE) assert.ok(dE(root['--brand'], root[s]) >= 30, `--brand vs ${s}: ΔE ${dE(root['--brand'], root[s]).toFixed(1)}`);
-    for (const p of PROVIDER) assert.ok(dE(root['--brand'], root[p]) >= 25, `--brand vs ${p}: ΔE ${dE(root['--brand'], root[p]).toFixed(1)}`);
-    assert.ok(contrast(root['--ink'], root['--brand']) >= 4.5, `the mark (--ink) on --brand: ${contrast(root['--ink'], root['--brand']).toFixed(2)}`);
-    assert.ok(contrast('#ffffff', root['--brand']) < 4.5, 'a white mark on citron would fail this rule');
+  test('the citron brand is never text, and a light mark on it would fail (#319)', () => {
+    assert.ok(contrast('#ffffff', root['--brand']) < 4.5, 'a white mark on citron would fail the mark rule');
+    assert.ok(contrast(dark['--ink'], root['--brand']) < 4.5, 'so would dark\'s --ink: the mark is --brand-ink');
     for (const dir of ['web', 'src']) {
       for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n))) {
         const src = readFileSync(new URL(`../${dir}/${f}`, import.meta.url), 'utf8');
@@ -159,32 +221,23 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.match(app, /class="btn small" data-action="keep"/, 'race "Keep this one" buttons are peers');
   });
 
-  test('text that carries information is at least 4.5:1 on the backgrounds it sits on (#195)', () => {
-    const pairs = [
-      ['--muted', '--bg'], ['--muted', '--panel'], ['--muted', '--sunken'], ['--muted', '--queue-tint'],
-      ['--muted', '--you-tint'], ['--muted', '--agents-tint'], // a Flow stage's label on its court's tint
-      ['--you', '--you-tint'], ['--agents', '--agents-tint'], ['--ok', '--ok-tint'], ['--bad', '--bad-tint'],
-    ];
-    for (const [fg, bg] of pairs) assert.ok(contrast(root[fg], root[bg]) >= 4.5, `${fg} on ${bg}: ${contrast(root[fg], root[bg]).toFixed(2)}`);
-    // Labels inside the courtbar and lifecycle bar segments: white on the colored ones, ink on the grey queue.
-    for (const bg of ['--agents', '--you', '--ok', '--muted']) assert.ok(contrast('#ffffff', root[bg]) >= 4.5, `white on ${bg}`);
-    assert.ok(contrast(root['--ink'], root['--queue']) >= 4.5, `ink on --queue: ${contrast(root['--ink'], root['--queue']).toFixed(2)}`);
-    assert.match(css, /\.seg-c\.queue, \.lifebar \.queue \{ color: var\(--ink\); \}/);
+  test('bar labels use the label tokens: --on-fill on a state, --on-queue on Ready\'s grey (#195, #484)', () => {
+    assert.match(css, /\.seg-c\.queue, \.lifebar \.queue \{ color: var\(--on-queue\); \}/);
+    assert.match(css, /\.courtbar \.seg-c \{[^}]*color: var\(--on-fill\)/);
+    assert.match(css, /\.lifebar span \{[^}]*color: var\(--on-fill\)/);
   });
 
-  test('Outside\'s labels are at least 4.5:1 on every stripe of its hatch, and it still looks unlike Ready (#209)', () => {
+  test('Outside still looks unlike Ready, with its labels on the hatch (#209)', () => {
     const stripes = (token) => [...css.match(new RegExp(`${token}: repeating-linear-gradient\\(([^;]*)\\);`))[1].matchAll(/var\((--[\w-]+)\)/g)].map((m) => m[1]);
     const bar = stripes('--hatch'), tint = stripes('--hatch-tint');
     assert.ok(bar.length >= 2 && tint.length >= 2, 'both hatches are stripes of :root tokens');
-    // Courtbar and lifecycle bar segments: white labels (no color override on .external).
+    // Courtbar and lifecycle bar segments: --on-fill labels (no color override on .external).
     assert.doesNotMatch(css, /(\.seg-c\.external|\.lifebar \.external)[^{]*\{[^}]*(^|[^-])color:/);
-    for (const s of bar) assert.ok(contrast('#ffffff', root[s]) >= 4.5, `white on --hatch stripe ${s}: ${contrast('#ffffff', root[s]).toFixed(2)}`);
     // The Outside pill and Flow tile label: ink on --hatch-tint.
     assert.match(css, /\.stage-pill\.court-external \{ background: var\(--hatch-tint\); color: var\(--ink\); \}/);
     assert.match(css, /\.stage\.court-external \.l \{ color: var\(--ink\); \}/);
     // Its count stays ink at 0 too: the tile is always shown, and zero-count would draw it --muted.
     assert.match(css, /\.stage\.court-external\.zero-count \.n \{ color: var\(--ink\); \}/);
-    for (const s of tint) assert.ok(contrast(root['--ink'], root[s]) >= 4.5, `ink on --hatch-tint stripe ${s}: ${contrast(root['--ink'], root[s]).toFixed(2)}`);
     // Stripes, not a solid fill, so Outside never reads as Ready's grey.
     assert.ok(!bar.includes('--queue') && new Set(bar).size >= 2, '--hatch is two-tone and not --queue');
     assert.ok(!tint.includes('--queue-tint') && new Set(tint).size >= 2, '--hatch-tint is two-tone and not --queue-tint');
