@@ -14,12 +14,12 @@ export const DOT = {
   // depends on the project's autonomy
   submitted: 'verifying', shaped: 'proposed',
   // finished, at risk, failed
-  landed: 'ok', tagged: 'ok', tag_failed: 'warn', branch_deleted: 'ok', branch_delete_failed: 'warn', lease_expired: 'warn', pr_failed: 'bad', pr_merge_failed: 'bad', issue_close_failed: 'bad', credential_refused: 'bad',
+  landed: 'ok', tagged: 'ok', tag_failed: 'warn', branch_deleted: 'ok', branch_delete_failed: 'warn', lease_expired: 'warn', pr_failed: 'bad', pr_merge_failed: 'bad', issue_close_failed: 'bad', credential_refused: 'bad', push_refused: 'warn',
   // notes and bookkeeping: nobody's move changes
   comment: '', created: '', refined: '', regrouped: '', tidied: '', not_chosen: '', question_withdrawn: '', staged: '', check_now: '',
   alert: '', issue: '', duplicate: '', stale: '', ci: '', retired: '', restored: '', always: '', learned: '', ack: '', picked: '', stewards: '',
   checkin: '', signoff: '', project: '', path: '', remote: '', runner: '', settings: '', github: '', github_app: '', parked: '',
-  mission: '', joined: '', connected: '', credential: '',
+  mission: '', joined: '', connected: '', credential: '', pushed_via_hub: '',
 };
 
 // courtOf(stage): the project's court for a stage (agents, queue, you, external, or null).
