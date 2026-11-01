@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, MIN } from '../src/core.js';
 import { view } from '../src/insight.js';
-import { tools, guide, skill, shaperSkill } from '../src/protocol.js';
+import { tools, guide, skill, shaperSkill, MODE_RULES } from '../src/protocol.js';
 
 // #238: every session has one role, fixed for its life, from how it started; the role decides what it is offered.
 function setup() {
@@ -239,14 +239,15 @@ describe('claims, usage and presence carry the role', () => {
   });
 });
 
-// #241: the guide, the worker skill and the shaper skill say how each role starts, what it may take and what it never does.
-describe('the guide and the worker and shaper skills describe the roles', () => {
-  const texts = { guide: guide(), 'cli guide': guide({ via: 'cli' }), skill: skill(), 'shaper skill': shaperSkill() };
+// #241, #527: the worker skill and the shaper skill say how each role starts, what it may take and what it never does.
+describe('the worker and shaper skills describe the roles; the guide says a role is fixed', () => {
+  const texts = { skill: skill(), 'shaper skill': shaperSkill() };
   test('each names Operator, Shaper and Worker and how each starts', () => {
     for (const [name, t] of Object.entries(texts)) {
       for (const want of [/\*\*Operator\b/, /\*\*Shaper\b/, /\*\*Worker\b/, /nuworq operator/, /\/nuworq:operator/, /nuworq run/]) assert.match(t, want, `${name}: ${want}`);
     }
-    for (const t of [texts.guide, texts.skill]) assert.match(t, /shaper skill \(`\/nuworq:shaper`/);
+    assert.match(texts.skill, /shaper skill \(`\/nuworq:shaper`/);
+    for (const g of [guide(), guide({ via: 'cli' })]) assert.match(g, /Your role \(worker, shaper, operator, session\) is fixed at checkin/);
   });
 
   test('each says what a shaper and a worker never do', () => {
@@ -257,11 +258,9 @@ describe('the guide and the worker and shaper skills describe the roles', () => 
   });
 
   // #272: infra work is built by workers; the operator runs only the live step.
-  test('the guide shapes infra work in two parts, with an example, and the operator builds only the live step', () => {
-    for (const t of [texts.guide, texts['cli guide']]) {
-      assert.match(t, /\*\*Infra work\*\*[^\n]*carries no operator tag[^\n]*ask[^\n]*to: "operator"[^\n]*steps[^\n]*small child item[^\n]*E\.g\./);
-      assert.match(t, /\*\*What an operator builds:\*\* an item only when the item is the live step/);
-    }
+  test('the shape hint splits infra work in two parts, and the operator hint builds only the live step', () => {
+    assert.match(MODE_RULES.shape, /Infra work[^\n]*carries no operator tag[^\n]*ask to: "operator" with steps[^\n]*small child item/);
+    assert.match(MODE_RULES.operator, /Build an item yourself only when it is the step on real infrastructure/);
     assert.match(texts.skill, /\*\*Build only the live step:\*\*/);
   });
 
@@ -282,6 +281,5 @@ describe('the guide and the worker and shaper skills describe the roles', () => 
 
   test('the shaper skill checks in as a shaper', () => {
     assert.match(shaperSkill(), /`checkin` with role "shaper"/);
-    assert.match(guide(), /`checkin` with role `"shaper"`/);
   });
 });

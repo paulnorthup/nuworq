@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { guide, skill, operatorSkill, operatorStart, operatorAsks, OPERATOR_WAIT, OPERATOR_NEXT, OPS, LISTENER } from '../src/protocol.js';
+import { guide, skill, operatorSkill, operatorStart, operatorAsks, OPERATOR_WAIT, OPERATOR_NEXT, OPS, LISTENER, MODE_RULES } from '../src/protocol.js';
 import { staleListener } from '../src/update.js';
 import { MONITORS } from '../src/plugin.js';
 
@@ -87,11 +87,11 @@ describe('nuworq operator', () => {
   });
 });
 
-describe('one start line for the guide, the README and the command; no /loop anywhere', () => {
-  test('the guide and the README carry operatorStart() word for word, and the listener', () => {
+describe('one start line for the skill, the README and the command; no /loop anywhere', () => {
+  test('the worker skill and the README carry operatorStart() word for word, and the README and operator skill the listener', () => {
     const g = guide({ project: 'acme' });
-    assert.ok(g.includes(operatorStart()));
-    assert.ok(g.split('## Operators')[1].includes(OPERATOR_WAIT));
+    assert.ok(skill().includes(operatorStart()));
+    assert.ok(operatorSkill().includes(OPERATOR_WAIT));
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     assert.ok(readme.includes(operatorStart()));
     assert.ok(readme.includes(OPERATOR_WAIT));
@@ -112,8 +112,6 @@ describe('an operator keeps work moving and asks the human only for what only th
   const texts = {
     skill: skill().split('## If you are the operator')[1].split('## The tools')[0],
     'operator skill': operatorSkill(),
-    guide: guide({ project: 'acme' }).split('## Operators')[1].split('## Milestones')[0],
-    'guide (CLI)': guide({ project: 'acme', via: 'cli' }).split('## Operators')[1].split('## Milestones')[0],
   };
   for (const [name, t] of Object.entries(texts)) {
     test(name, () => {
@@ -126,7 +124,10 @@ describe('an operator keeps work moving and asks the human only for what only th
     });
   }
   test('the four rules are word for word the same in each', () => {
-    for (const [name, t] of Object.entries(texts)) if (name !== 'guide (CLI)') for (const r of operatorAsks()) assert.ok(t.includes(r), `${name}: ${r.slice(0, 40)}`);
+    for (const [name, t] of Object.entries(texts)) for (const r of operatorAsks()) assert.ok(t.includes(r), `${name}: ${r.slice(0, 40)}`);
+  });
+  test('the hint next gives an operator says it in short (#527)', () => {
+    for (const want of [/read the hub first/, /make reversible calls yourself/, /only for what only they can do/, /escalates and evidence/, /permission prompts still apply/]) assert.match(MODE_RULES.operator, want);
   });
 });
 
@@ -155,8 +156,8 @@ describe('the operator skill', () => {
     assert.match(operatorSkill({ url: 'https://hub.example/' }), /https:\/\/hub\.example\/agents\.md/);
   });
 
-  test('the skill and the guide say the same about what next gives an operator, and nothing offers it "anything else" (#333)', () => {
-    for (const text of [s, guide(), guide({ via: 'cli' })]) assert.ok(text.includes(OPERATOR_NEXT));
+  test('the skill and the operator hint say the same about what next gives an operator, and nothing offers it "anything else" (#333)', () => {
+    for (const text of [s, MODE_RULES.operator]) assert.ok(text.includes(OPERATOR_NEXT));
     for (const text of [s, guide(), skill()]) assert.doesNotMatch(text, /then anything else/);
   });
 

@@ -87,5 +87,5 @@ test('the guide and the ask tool require steps when a person must act, with an e
   const steps = tools().find((t) => t.name === 'ask').inputSchema.properties.steps;
   assert.match(steps.description, /Required when a person must do something/); // the example is the guide's (#529)
   assert.deepEqual(steps.items.required, ['do']);
-  assert.match(guide(), /Does a person have to do something.*`steps`.*"do":.*refuses/s);
+  assert.match(guide(), /Does a person have to do something\? Give `steps` \(`do`, `where`, `check`\); the hub refuses/);
 });

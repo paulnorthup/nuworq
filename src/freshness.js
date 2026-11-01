@@ -7,7 +7,7 @@ import { DAY, SYSTEM } from './core.js';
 
 export const FRESH_EVERY = 7 * DAY;
 
-const SUMMARY = `The weekly freshness sweep: library dependencies, the runtime version and CI actions, checked with the project's own tools on your machine (npm outdated / npm audit, pip list --outdated / pip-audit, cargo outdated / cargo audit, go list -m -u all, osv-scanner if present). The guide's "Freshness sweep" section says how.`;
+const SUMMARY = `The weekly freshness sweep: library dependencies, the runtime version and CI actions, checked with the project's own tools on your machine (npm outdated / npm audit, pip list --outdated / pip-audit, cargo outdated / cargo audit, go list -m -u all, osv-scanner if present). The hint next gives with this item says how.`;
 
 const ACCEPTANCE = [
   '- Patch and minor updates of dependencies land in one batch on this branch, lockfiles included, with the tests passing.',

@@ -15,7 +15,7 @@ import { fieldNotesFor, reviewUp, reviewed, setAlways, ALWAYS_MAX } from './fiel
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion } from './releases.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
-import { OPERATOR_TAGS, TAG_ALIASES } from './protocol.js';
+import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
 import { commandParts } from '../web/commands.js';
 export { slugify, normRemote };
@@ -2151,8 +2151,12 @@ export class Hub extends EventEmitter {
       : '';
     // A release (#400): what its branch changes, and nothing else.
     const version = item.release && releaseVersion(item);
-    const release = version ? ` This is a release: set the version file to ${version} (package.json's version, else VERSION) and put the summary at the top of CHANGELOG.md under "## ${version} (${new Date(this.now()).toISOString().slice(0, 10)})". Nothing else changes; the hub tags it v${version} once it lands (the guide's Releases section).` : '';
-    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo) + release;
+    const release = version ? ` This is a release: set the version file to ${version} (package.json's version, else VERSION) and put the summary at the top of CHANGELOG.md under "## ${version} (${new Date(this.now()).toISOString().slice(0, 10)})". Nothing else changes. ${MODE_RULES.release}` : '';
+    // The weekly freshness sweep (#181): how to do it.
+    const sweep = item.sweep ? ` ${MODE_RULES.fresh}` : '';
+    // Operator-only work (only an operator builds it): it builds only its live step.
+    const live = operatorOnly(item) ? ` ${MODE_RULES.operator}` : '';
+    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo) + release + sweep + live;
   }
 
   // The branch git found for the latest submission, when the item has none of its own (older work).
@@ -2173,6 +2177,7 @@ export class Hub extends EventEmitter {
     const warn = item.race > 1 ? null : gitWarning(this.submittedGit(item));
     const live = json(item.needs, []).filter((t) => OPERATOR_TAGS.includes(t));
     if (live.length) hint += ` Its ${live.join(', ')} part was verified live by its builder or an operator: check the code, and the live output in the submission's evidence. If you need something checked on real infrastructure, ask to: "operator" with the exact command and how to check it, and don't accept until it's answered.`;
+    hint += ` ${MODE_RULES.review}`;
     return warn ? `${warn}: check it before you accept. ${hint}` : hint;
   }
 
@@ -2198,6 +2203,7 @@ const NOTES_HINT = (item, p) => [
     ? 'Retire each one whose lesson is built in with retire { notes, reason }, the reason naming where it lives now. Merge duplicates: learn the combined note, then retire { notes: [the duplicates], into: <its id>, reason }. Keep the rest.'
     : `Don't retire anything yourself in this project: ask the person one question listing the notes to retire or merge and why (the reason naming where each lesson lives now); they retire them on the project page.`,
   `Then submit #${item.seq} with what you kept, merged and retired; that finishes it.`,
+  MODE_RULES.notes,
 ].join(' ');
 // Infra work is built by workers; only its live step needs the operator (#272).
 const INFRA_SPLIT = (item) => `#${item.seq} needs ${json(item.needs, []).filter((t) => OPERATOR_TAGS.includes(t)).join(', ')}, so only the operator can take it. If it has code, docs or tests to change, split it: drop the operator tag (refine needs) so any worker builds it, and make the step on real infrastructure an ask to: "operator" with steps (the exact command, how to check), whose answer is the evidence. Keep the tag only on a small child item when that live step is all there is.`;
@@ -2211,6 +2217,7 @@ const SHAPE_HINT = (item, p, repos = []) => [
   repos.length > 1 ? `Each item lands in one repository (${repos.join(', ')}): set repo when you refine or propose. Work that spans repositories becomes one sub-item per repository, with depends_on giving the order (e.g. the API before the client that calls it).` : '',
   operatorOnly(item) ? INFRA_SPLIT(item) : '',
   item.feedback ? FEEDBACK_SCOPE : '',
+  MODE_RULES.shape,
   'If the intent is unclear, ask with an assumption.',
   `Finish with submit (headline: the shape you chose). ${waitsForOk(p, item) ? 'The human then approves it.' : 'It becomes ready for any agent, including you.'}`,
 ].filter(Boolean).join(' ');
@@ -2622,7 +2629,7 @@ const AGENT_OPS = {
           ...(args.claim !== false ? { lease: { holder: agent, expires_in: dur(LEASE_MS) } } : {}),
         },
         ...(item ? this.context(p, item, agent) : {}),
-        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}.${args.claim !== false ? ` It's yours for ${dur(LEASE_MS)}: other operators leave it to you${item ? `, and progress on #${item.seq} renews it` : ''}.` : ''} Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. Read the hub first: an earlier answer, waiver or decision may settle it. Only if it needs what only the human can do (their accounts, credentials or keys, signing, money, a CAPTCHA, or an irreversible step or product call no decision covers), escalate instead: ask with escalates: ${oq.id}, one precise question, and your evidence.`,
+        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}.${args.claim !== false ? ` It's yours for ${dur(LEASE_MS)}: other operators leave it to you${item ? `, and progress on #${item.seq} renews it` : ''}.` : ''} Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. Read the hub first: an earlier answer, waiver or decision may settle it. Only if it needs what only the human can do (their accounts, credentials or keys, signing, money, a CAPTCHA, or an irreversible step or product call no decision covers), escalate instead: ask with escalates: ${oq.id}, one precise question, and your evidence. ${MODE_RULES.operator}`,
       };
     }
     const holding = this.heldBy(p, agent).filter((i) => ['active', 'proposed', 'landing'].includes(i.stage));
@@ -2684,7 +2691,7 @@ const AGENT_OPS = {
         : pick.mode === 'tidy' && args.claim !== false && pick.item.notes_review
           ? NOTES_HINT(pick.item, p)
         : pick.mode === 'tidy' && args.claim !== false
-          ? `You hold #${pick.item.seq}, a tidy job, for ${dur(LEASE_MS)}: its summary lists what drifted. No branch: fix each with refine and a one-line reason (parent moves an item, "" takes it out; pr attaches a pull request), propose a parent for a cluster, submit a milestone whose parts are all done. Never change a priority a person set or touch a decision. Then submit #${pick.item.seq} with what you changed; that finishes it.`
+          ? `You hold #${pick.item.seq}, a tidy job, for ${dur(LEASE_MS)}: its summary lists what drifted. No branch: fix each with refine and a one-line reason (parent moves an item, "" takes it out; pr attaches a pull request), propose a parent for a cluster, submit a milestone whose parts are all done. ${MODE_RULES.tidy} Then submit #${pick.item.seq} with what you changed and what you left alone on purpose; that finishes it.`
           : args.claim === false
           ? `Not claimed. Claim #${pick.item.seq} to start.`
           : `You hold #${pick.item.seq} for ${dur(LEASE_MS)}. ${this.workHint(p, this.itemById(pick.item.id))} ${TOUCHING_HINT} Then progress at milestones (it renews the lease). Submit with evidence when done_means is met.`.replace(/  +/g, ' '),
