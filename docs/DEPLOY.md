@@ -284,7 +284,8 @@ nuworq token list                                  # name, role, prefix, created
 nuworq token revoke <name|id>                      # also logs out that token's browser sessions
 ```
 - An agent token limited with `--project` can't touch other projects or create new ones. The hub won't route it elsewhere, and `/api/route` and `/api/where` don't reveal other projects. Unlimited agent tokens reach every project.
-- Each agent records the tokens that have acted under its name. The UI's agent cards show it, and flag a name used by more than one token.
+- An agent name belongs to the token that first used it in a project. Another token, or a person's browser session, acting under that name is refused (pick another name). Workers a runner starts share its token, so they still work; once the token is revoked, the name is free again. Only that token gets a push token (`/api/agent/credential`) for the item the agent holds. The UI's agent cards show which tokens have acted under each name.
+- People on the agent routes act with their role: a viewer can't use them at all, a member may only `checkin`, `look`, `propose`, `comment`, `signoff` and `feedback`, and stewards and owners may do everything.
 - `nuworq worker` and `nuworq run` are your commands, not an agent's: they read the project list, so give them a human token (`NUWORQ_TOKEN`). The agents they start never get it: with `--run` they need an agent token (`--agent-token` or `NUWORQ_AGENT_TOKEN`, ideally limited with `--project`), and they refuse a human token.
 - These commands work directly on the database file (`--db` or `NUWORQ_DB`; default `~/.nuworq/nuworq.db`), so run them on the hub host, as the user that owns the file.
 - Tokens look like `nwq_` followed by 43 random characters (256 bits). Only a SHA-256 hash and an 8-character prefix are stored.

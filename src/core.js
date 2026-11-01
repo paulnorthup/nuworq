@@ -54,6 +54,9 @@ const You = (by) => (by === HUMAN ? 'You' : by);
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
 const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'always', 'check', 'release'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
+// Which agent operations a person may use on the agent routes (#469): what their role allows on the human
+// routes. A member proposes and comments, never claims, reviews or gets a push token. null: every one.
+export const PERSON_AGENT_CAN = { viewer: [], member: ['checkin', 'look', 'propose', 'comment', 'signoff', 'feedback'], steward: null, owner: null };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
 export const STAGES = {
@@ -1081,6 +1084,23 @@ export class Hub extends EventEmitter {
     if (a && !seen.includes(token)) this.q('UPDATE agents SET tokens = ? WHERE project_id = ? AND name = ?').run([...seen, token].join(','), p.id, name);
   }
 
+  // An agent name belongs to the token that first used it (#469): another token, or a person's browser
+  // session, can't act as it. Workers a runner starts share its token, so they still work. Once that
+  // token is revoked, the name is free for the next token that uses it.
+  ownsAgent(p, name, identity) {
+    if (!identity) return;
+    const a = this.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, name);
+    if (a?.token_id == null || (!identity.session && a.token_id === identity.id)) return;
+    const live = this.q('SELECT 1 FROM tokens WHERE id = ? AND revoked_at IS NULL').get(a.token_id);
+    if (!live) return void this.q('UPDATE agents SET token_id = NULL WHERE project_id = ? AND name = ?').run(p.id, name);
+    throw new UserError(`"${name}" is another agent's name here`, {
+      status: 403,
+      hint: identity.session
+        ? "A person's browser session can't act as an agent that has its own token. Pick a name of your own, or act from the hub's pages."
+        : 'Each agent name belongs to the token that first used it. Pick a name of your own, e.g. claude-<4 random letters>.',
+    });
+  }
+
   // A token limited to some projects: refuse the rest, saying which it may use.
   inScope(scope, slug) {
     if (!scope || scope.includes(slugify(slug))) return;
@@ -1597,7 +1617,9 @@ export class Hub extends EventEmitter {
   // token: the calling token's identity (required mode): its name is recorded on the agent; an agent
   // token also brings its powers (none means every power) and provenance.
   // remote: the agent's repository (normalized origin remote), which finds the project on any machine.
-  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [] } = {}) {
+  // identity: who is calling when the hub has logins, { id: the token behind it, session: a person's browser
+  // session }; the agent name is bound to the first token that uses it (bindAgent). null: no logins.
+  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [], identity = null } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     refuseSecrets(args);
@@ -1644,6 +1666,7 @@ export class Hub extends EventEmitter {
     // A clone of the project's repository is the right place to work, wherever it sits on disk.
     const ownClone = !!remote && this.projectByRemote(remote)?.id === p.id;
     const result = this.tx(() => {
+      this.ownsAgent(p, agent, identity);
       // The runner posts a worker's usage after it exited: that's bookkeeping, not the agent being here.
       const presence = op === 'usage' ? null : this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
       // Its role (#238): a runner's token says worker on every call; a checkin says the rest, and where it runs.
@@ -1652,7 +1675,7 @@ export class Hub extends EventEmitter {
         if (claimed || (op === 'checkin' && args.machine)) this.setRole(p, agent, claimed, op === 'checkin' ? str(args.machine) : '');
       }
       this.noteToken(p, agent, token?.name);
-      if (token?.role === 'agent') this.q('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ?').run(token.id, p.id, agent);
+      if (identity && !identity.session) this.q('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ? AND token_id IS NULL').run(identity.id, p.id, agent);
       // Its session's keys (#335): the listener beside it sends the same, and wakes it alone.
       if (op === 'checkin' && session.length) this.q('UPDATE agents SET session = ? WHERE project_id = ? AND name = ?').run(session.join(','), p.id, agent);
       const need = powers && this.powerFor(p, op, args ?? {});
