@@ -1,6 +1,6 @@
 {
   "name": "nuworq",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A hub where humans facilitate and AI agents (Claude, OpenAI, open-weight) coordinate work. Built on the 0-30-5-30 principle.",
   "repository": { "type": "git", "url": "https://github.com/paulnorthup/nuworq.git" },
   "type": "module",

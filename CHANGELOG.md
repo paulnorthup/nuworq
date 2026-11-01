@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.6.0 (2026-11-01)
+
+What landed since v0.5.0.
+
+**When work is waiting, workers are on it: nobody has to start an agent (#170)**
+
+**Also in this release**
+
+- Codex workers can go through llm-proxy too: its passthrough carries the OpenAI Responses API on the LAN/tailnet route (#362)
+- Agents show only while they matter: working or seen in the last hour; signed-off sessions leave every list at once (#441)
+- Old work leaves the board: done after 3 days, dropped at once, finished milestones fold up, stale ready items get asked about (#442)
+- Field notes stay few and relevant: checkin gives the ten that fit your work, and notes whose lesson is now built in are retired (#443)
+- No leftovers on disk or GitHub: workers remove their worktrees, landed branches are deleted, and a weekly sweep clears the rest (#444)
+- The home's "Here now" counts wrap cleanly in the narrow side column, with no stray indent or tall gap (#445)
+- The first leftovers sweep has run on Paul's Mac, with worktree and branch counts before and after (#447)
+- The leftovers sweep can read finished branches: agent tokens may GET /api/finished (#448)
+- A field-notes review doesn't open another review just for the notes it wrote (#451)
+- Deleting a project never fails on a mirror that a fetch is still writing into (ENOTEMPTY seen on Node 24 CI) (#453)
+- The sweep clears landed work it keeps today: branches rebased before landing, and worktrees from the project's old path (#455)
+- A runner moves onto a newly installed nuworq by itself: it restarts between workers when the package under it changed (#456)
+- A fresh operator listener doesn't replay answers its session already read: idle operators take no turns for old news (#458)
+- feedback.test.js waits for the sender's push instead of asserting right after landing (flaked on Node 26 CI) (#460)
+- Work can wait for a date: a precondition { kind: "date", after: "2026-11-08" } keeps an item out of the queue and out of Needs you until… (#464)
+- An operator question goes to one operator at a time: next leases it like an item, so two operators never act on the same question (#467)
+- Agent operations are for agents, and each agent acts only as itself: a person's role and a token's identity decide what a caller may do (#469)
+- Who someone is comes only from how they signed in: plans, owner rights and notifications never follow an email someone typed (#470)
+- Text from outside the project waits for a person before any agent works from it: strangers' GitHub issues and replies are held like feedback (#471)
+- The hub reaches only the public internet on people's behalf: notification channels and preconditions can't touch the network it runs on (#474)
+- nuworq's repository is ready for anyone to read: a license, a way to report vulnerabilities, a complete history scan, nothing private (#475)
+- A runner trusts its own machine, not the hub: it checks what the hub sends and keeps its token out of commands, environments and logs (#477)
+- GitHub and Stripe events count only from those entitled to send them: installs bind to their owner, strangers' PRs change nothing (#478)
+- The hub's web edge is hardened: real client addresses, links from its own address, HSTS, quiet errors, single-pass markdown, capped streams (#479)
+- The CLI's help reads at a glance: one screen for a bare nuworq, help for each command, and a full reference, all from one table (#481)
+- nuworq connect finishes the setup: it asks once each to install the plugin, staff the project with workers, and start an operator (#490)
+- Staffing is never off without saying so: nuworq run tells you when no project is opted in, and offers to opt in the one you're in (#491)
+- A worker's llm-proxy token stays off its command line: ANTHROPIC_CUSTOM_HEADERS isn't copied into the start string (#493)
+- A live update refreshes only what changed: the project on screen when the change is in it, never a reload for another project's news (#502)
+- Each Needs you card carries the priority of the work it holds up, and the hub ranks cards by it, the way it ranks work for agents (#505)
+- An installed nuworq names its own commit, even inside another git repository such as Homebrew's (#511)
+- The database has the indexes its queries need, migrations are numbered and fail loudly, and a request writes only what it must (#516)
+- Agents' writes can be retried safely: each carries an idempotency key, so the client retries writes through 502s and restarts (#524)
+- The guide's core fits in 3,500 characters, and each mode's rules arrive in next's hint for that mode (#527)
+- Agents get only the tools their role can use, with short descriptions and one precondition schema (#529)
+- nuworq run --workers auto starts another worker only while the machine has CPU and memory to spare, and says why it's holding (#533)
+- No request path runs git synchronously: "main moved past your branch" is cached per repository, branch and base head (#535)
+- Outcomes read finished items' events in one query, and cellStats isn't recounted after every event (#537)
+
+**Upgrade notes**
+
+- Machines running `nuworq run` (or its service) must choose the folders workers may use, by running `nuworq run` once in a terminal or `nuworq run --folder <path>`; until then the runner starts no workers. (#477)
+
 ## 0.5.0 (2026-10-31)
 
 What landed since v0.4.0.
