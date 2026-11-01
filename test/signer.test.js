@@ -307,6 +307,20 @@ describe('the release signer (#430)', () => {
     assert.equal(git(origin, 'rev-parse', RELEASE_BRANCH), c);
   });
 
+  test('a hub replaying an older signed package under an unapproved tag doesn\'t move the release branch', async () => {
+    const old = await release('0.3.0');
+    await check();
+    assert.equal(git(origin, 'rev-parse', RELEASE_BRANCH), old);
+    const c = await release('0.4.0', { approved: false, run: false });
+    // v0.3.0's package and its genuine signature, served as v0.4.0's.
+    copyFileSync(join(hubDir, `nuworq-${old}.tgz`), join(hubDir, `nuworq-${c}.tgz`));
+    copyFileSync(join(hubDir, `nuworq-${old}.tgz.sig`), join(hubDir, `nuworq-${c}.tgz.sig`));
+    claims = { commit: c, time: 0, sha256: 'x' };
+    const r = outcome(await check(), 'v0.4.0');
+    assert.match(r.reason, new RegExp(`stays where it is: no one approved it here, and the signed package the hub serves for it isn't GitHub's build of ${c.slice(0, 7)}$`));
+    assert.equal(git(origin, 'rev-parse', RELEASE_BRANCH), old, 'the plugin stays on the approved release');
+  });
+
   test('what a person approves: the tag\'s commit, its changelog, and whether the signer would refuse it', async () => {
     const c = await release('0.3.0', { changelog: '## 0.3.0\n\n- the plugin installs from releases\n', approved: false });
     const p = await proposedRelease(repo, 'v0.3.0');

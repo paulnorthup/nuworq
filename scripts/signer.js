@@ -89,8 +89,24 @@ export async function proposedRelease(repo, tag) {
   return { ...t, subject, changes: changes ?? '', refusal };
 }
 
+// Whether bytes are GitHub's build of commit: the same package byte for byte, or the same tar gzipped by another
+// git (the hub's), as round() accepts when it signs.
+async function builtFrom(repo, commit, bytes) {
+  const dir = mkdtempSync(join(tmpdir(), 'nuworq-signer-'));
+  try {
+    const file = join(dir, `nuworq-${commit}.tgz`);
+    await archive(repo, commit, file);
+    const ours = readFileSync(file);
+    if (ours.equals(bytes)) return true;
+    try { return gunzipSync(ours).equals(gunzipSync(bytes)); } catch { return false; }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Why the plugin's branch mustn't move to t, the release the hub says it serves: '' when it may. t must be on
-// origin's main, and approved here or signed by key: the hub's package of it and its .sig, checked by us.
+// origin's main, and approved here or signed by key: the hub's package of it and its .sig, checked by us, and the
+// package must be GitHub's build of t.commit, so a hub can't replay another release's signed package under its name.
 async function unsigned(repo, get, base, key, approvals, t) {
   if (!(await git(repo, ['merge-base', '--is-ancestor', t.commit, MAIN]).then(() => true, () => false))) return `${t.commit.slice(0, 7)} isn't on origin's main`;
   if (!approvalOf(approvals, key, t.tag, t.commit)) return '';
@@ -99,11 +115,13 @@ async function unsigned(repo, get, base, key, approvals, t) {
   try {
     const bytes = async (url) => { const r = await get(url, { signal: AbortSignal.timeout(120_000) }); if (!r.ok) throw Object.assign(new Error(`${url} answered ${r.status}`), { status: r.status }); return Buffer.from(await r.arrayBuffer()); };
     const sig = Buffer.from((await bytes(`${file}.sig`)).toString('utf8').trim(), 'base64');
-    if (verify(null, await bytes(file), createPublicKey(key), sig)) return '';
+    const pkg = await bytes(file);
+    if (!verify(null, pkg, createPublicKey(key), sig)) return unsure;
+    if (!(await builtFrom(repo, t.commit, pkg))) return `no one approved it here, and the signed package the hub serves for it isn't GitHub's build of ${t.commit.slice(0, 7)}`;
+    return '';
   } catch (e) {
     return e.status === 404 ? unsure : `couldn't check its signature (${e.message})`;
   }
-  return unsure;
 }
 
 const json = async (get, url) => {
