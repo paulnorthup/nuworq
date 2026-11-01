@@ -25,9 +25,10 @@ const USAGE = {
 };
 const PRECONDITION = {
   type: 'object',
-  description: 'Optional, and rarely needed: usually build against the documented contract with a fake instead. A fact outside this hub the work must wait for; until the hub sees it, the item waits in "outside" and next doesn\'t offer it. A URL alone means it must answer 200. Or { url, status, contains, json_path, equals, credential } where credential is a NAME (the hub host\'s NUWORQ_CRED_<NAME>), never a secret. For a version: { kind: "version", url, json_path, min } (the version at json_path, or the first in the body, reaches semver min), or { kind: "release", repo: "owner/name", min } (its latest GitHub release). {} clears it.',
+  description: 'Optional, and rarely needed: usually build against the documented contract with a fake instead. A fact outside this hub the work must wait for; until the hub sees it, the item waits in "outside" and next doesn\'t offer it. A URL alone means it must answer 200. Or { url, status, contains, json_path, equals, credential } where credential is a NAME (the hub host\'s NUWORQ_CRED_<NAME>), never a secret. For a version: { kind: "version", url, json_path, min } (the version at json_path, or the first in the body, reaches semver min), or { kind: "release", repo: "owner/name", min } (its latest GitHub release). To wait for a day without asking anyone: { kind: "date", after: "2026-11-08" }. {} clears it.',
   properties: {
-    kind: { type: 'string', enum: ['http', 'version', 'release', 'ask'], description: 'Default "http". "ask" is the last resort: no fact the hub can check, so the human is asked `question` and answering makes it ready.' },
+    kind: { type: 'string', enum: ['http', 'version', 'release', 'date', 'ask'], description: 'Default "http". "ask" is the last resort: no fact the hub can check, so the human is asked `question` and answering makes it ready.' },
+    after: s('For kind "date": the day the work may start, e.g. "2026-11-08" (midnight UTC), or an ISO time.'),
     question: s('For kind "ask": what to ask the human.'),
     min: s('For kind "version" or "release": the lowest semver version that will do, e.g. "2.1.0".'),
     repo: s('For kind "release": the GitHub repository, e.g. "acme/api".'),

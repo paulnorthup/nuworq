@@ -10,7 +10,7 @@ import { lookup } from 'node:dns/promises';
 
 const str = (v) => (v == null ? '' : String(v).trim());
 export const FIRST_RETRY = 60_000, MAX_RETRY = 3_600_000, PER_HOST = 10_000, CHECK_MS = 10_000;
-const HINT = 'e.g. precondition: "https://api.example.com/v2/health" (answers 200), or { url, status: 200, contains: "v2", json_path: "features.export", equals: true, credential: "VENDOR" }. Last resort: { kind: "ask", question: "…" } asks the human. Pass {} or null to clear.';
+const HINT = 'e.g. precondition: "https://api.example.com/v2/health" (answers 200), or { url, status: 200, contains: "v2", json_path: "features.export", equals: true, credential: "VENDOR" }, or { kind: "date", after: "2026-11-08" } (waits for that day). Last resort: { kind: "ask", question: "…" } asks the human. Pass {} or null to clear.';
 const VERSION_HINT = 'e.g. { kind: "version", url: "https://api.example.com/version", json_path: "version", min: "2.1.0" } (without json_path, the first version in the body), or { kind: "release", repo: "acme/api", min: "v2.1.0" } (its latest GitHub release).';
 // How long work may sit outside before the human hears about it, unless the project says otherwise.
 export const WAIT_DAYS = 7;
@@ -32,7 +32,8 @@ export function normPrecondition(v) {
     return { kind, question: str(v.question).slice(0, 500) };
   }
   if (kind === 'release') return normRelease(v);
-  if (kind !== 'http' && kind !== 'version') throw new UserError(`precondition kind "${kind}" isn't known`, { hint: `Use kind "http", "version", "release" or "ask". ${HINT}` });
+  if (kind === 'date') return normDate(v);
+  if (kind !== 'http' && kind !== 'version') throw new UserError(`precondition kind "${kind}" isn't known`, { hint: `Use kind "http", "version", "release", "date" or "ask". ${HINT}` });
   const out = { kind, url: normUrl(v.url) };
   if (kind === 'version') {
     out.min = normMin(v.min);
@@ -76,6 +77,20 @@ function normRelease(v) {
   return { kind: 'release', repo: `${m[1]}/${m[2]}`, min: normMin(v.min) };
 }
 
+// { kind: 'date', after }: work that waits for a day (a check due a week after something landed). The hub
+// knows the time itself, so it asks no one and nothing: a day alone ("2026-11-08") starts at midnight UTC.
+const DATE_HINT = 'e.g. { kind: "date", after: "2026-11-08" } (from midnight UTC), or an ISO time such as "2026-11-08T09:00:00Z".';
+function normDate(v) {
+  const s = str(v.after);
+  if (!s) throw new UserError('A date precondition needs after, the day the work may start', { hint: DATE_HINT });
+  const at = /^\d{4}-\d{2}-\d{2}$/.test(s) ? Date.parse(`${s}T00:00:00Z`) : /^\d{4}-\d{2}-\d{2}T/.test(s) ? Date.parse(s) : NaN;
+  if (Number.isNaN(at)) throw new UserError(`precondition.after "${s.slice(0, 40)}" isn't a date`, { hint: DATE_HINT });
+  return { kind: 'date', after: /T/.test(s) ? new Date(at).toISOString() : s };
+}
+const dateAt = (pre) => Date.parse(/T/.test(pre.after) ? pre.after : `${pre.after}T00:00:00Z`);
+// Whether a date precondition's day has come (false for any other kind: those the hub has to check).
+export const dateReached = (pre, now) => pre?.kind === 'date' && now >= dateAt(pre);
+
 // Semver 2.0, with a leading v allowed: { core: [major, minor, patch], pre: [identifiers] }, or null.
 // Build metadata (+…) is dropped: it never affects precedence.
 const SEMVER = /v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][\dA-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][\dA-Za-z-]*))*))?(?:\+[\dA-Za-z-]+(?:\.[\dA-Za-z-]+)*)?/;
@@ -111,6 +126,7 @@ export function compareSemver(a, b) {
 // What it waits for, in words: "GET https://… answers 200, contains "v2"".
 export function describe(pre) {
   if (pre.kind === 'ask') return `a person answers "${pre.question}"`;
+  if (pre.kind === 'date') return `it's ${pre.after} or later`;
   if (pre.kind === 'release') return `the latest release of ${pre.repo} is ${pre.min} or later`;
   if (pre.kind === 'version') return `${pre.url}${pre.json_path ? ` ${pre.json_path}` : ''} reports ${pre.min} or later`;
   return [`${pre.url} answers ${pre.status}`, pre.contains && `contains "${pre.contains}"`,
@@ -134,6 +150,7 @@ export const privateAddress = (ip) => /^(127\.|10\.|192\.168\.|169\.254\.|0\.|17
 // host's credentials nor its private network, and see whether a value matched, never the value.
 // github: { api, token(repo) } for release checks; token resolves to an installation token or null (public API).
 export async function check(pre, opts = {}) {
+  if (pre.kind === 'date') return dateReached(pre, opts.now ?? Date.now()) ? { ok: true, detail: describe(pre) } : { ok: false, detail: `not ${pre.after} yet` };
   if (pre.kind === 'release') return checkRelease(pre, opts);
   const got = await fetchUrl(pre, opts);
   if (!got.res) return got;
@@ -234,6 +251,10 @@ export async function runChecks(hub, opts = {}) {
     if (busy.has(item.id)) continue;
     const pre = JSON.parse(item.precondition);
     if (pre.kind === 'ask') continue; // a person answers it, not the network
+    if (pre.kind === 'date') { // the hub's own clock: no host to spare
+      runs.push(check(pre, { now: t }).then((r) => settle(hub, item.id, item.precondition, r)));
+      continue;
+    }
     const host = new URL(pre.kind === 'release' ? opts.github?.api ?? 'https://api.github.com' : pre.url).host;
     if (t - (hosts.get(host) ?? -Infinity) < PER_HOST) continue;
     hosts.set(host, t);
@@ -265,8 +286,10 @@ function settle(hub, id, asked, r) {
   const t = hub.now();
   hub.tx(() => {
     if (!r.ok) {
-      const fails = item.check_fails + 1;
-      hub.patch(item, { last_check: JSON.stringify({ at: t, ok: false, detail: r.detail }), check_fails: fails, next_check: t + Math.min(FIRST_RETRY * 2 ** (fails - 1), MAX_RETRY) });
+      const fails = item.check_fails + 1, pre = JSON.parse(asked);
+      // A date has nothing to back off from: look again when it comes.
+      const next = pre.kind === 'date' ? dateAt(pre) : t + Math.min(FIRST_RETRY * 2 ** (fails - 1), MAX_RETRY);
+      hub.patch(item, { last_check: JSON.stringify({ at: t, ok: false, detail: r.detail }), check_fails: fails, next_check: next });
       return;
     }
     hub.patch(item, { last_check: JSON.stringify({ at: t, ok: true, detail: r.detail }), check_fails: 0 });

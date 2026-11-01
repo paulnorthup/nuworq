@@ -212,8 +212,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   }
 
   // Work that has waited outside past the project's limit: the fact may never come, or the check may be wrong.
+  // Not a wait for a date: that one waits on purpose, and its day comes by itself.
   const waitMs = (p.wait_days || WAIT_DAYS) * DAY;
-  for (const it of in_('outside').filter((i) => t - i.stage_since > waitMs)) {
+  for (const it of in_('outside').filter((i) => t - i.stage_since > waitMs && !/"kind":"date"/.test(i.precondition))) {
     const pre = preconditionOut(it);
     push({
       key: `outside:${it.id}:${it.stage_since}`, level: 'know', kind: 'outside-overdue', at: it.stage_since,

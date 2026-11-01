@@ -6,7 +6,7 @@ import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, i
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
-import { normPrecondition, describe as describePrecondition, WAIT_DAYS } from './precondition.js';
+import { normPrecondition, describe as describePrecondition, dateReached, WAIT_DAYS } from './precondition.js';
 import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue } from './issues.js';
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
@@ -983,9 +983,11 @@ export class Hub extends EventEmitter {
     return { ok: true, item: `#${item.seq}`, stage: 'dropped', decided_by: by, hint: 'Dropped. Call next.' };
   }
 
-  // The item's precondition (src/precondition.js), unless none or it has passed.
+  // The item's precondition (src/precondition.js), unless none or it has passed. A date passes the moment
+  // it comes, without waiting for the sweep.
   unmetPrecondition(item) {
-    return item.precondition && !json(item.last_check, {}).ok ? JSON.parse(item.precondition) : null;
+    const pre = item.precondition && !json(item.last_check, {}).ok ? JSON.parse(item.precondition) : null;
+    return pre && !dateReached(pre, this.now()) ? pre : null;
   }
 
   // An 'ask' precondition becomes a blocking question to the human, once; its last check points at it, so
@@ -2929,7 +2931,7 @@ Object.assign(Hub.prototype, {
     const gate = args.gate || parent?.gate ? 1 : 0; // a gated proposal's parts wait for the same OK (#296)
     let stage = human ? (args.stage === 'proposed' ? 'proposed' : 'ready')
       : !waitsForOk(p, { gate }) && acceptance ? 'ready' : 'proposed';
-    if (stage === 'ready' && pre) stage = pre.kind === 'ask' ? 'waiting' : 'outside';
+    if (stage === 'ready' && pre && !dateReached(pre, this.now())) stage = pre.kind === 'ask' ? 'waiting' : 'outside';
     const t = this.now();
     const seq = this.q('SELECT next_seq FROM projects WHERE id = ?').get(p.id).next_seq;
     this.q('UPDATE projects SET next_seq = next_seq + 1 WHERE id = ?').run(p.id);
@@ -3062,7 +3064,7 @@ Object.assign(Hub.prototype, {
         if (asked) this.q(`UPDATE questions SET status = 'withdrawn' WHERE id = ? AND status = 'open'`).run(asked);
         Object.assign(set, { precondition: val, last_check: '', check_fails: 0, next_check: this.now() });
         changed.push(pre ? `waits on: ${describePrecondition(pre)}` : 'no longer waits on anything outside');
-        gate = !pre ? 'ready' : pre.kind === 'ask' ? 'waiting' : 'outside';
+        gate = !pre || dateReached(pre, this.now()) ? 'ready' : pre.kind === 'ask' ? 'waiting' : 'outside';
       }
     }
     if (Object.keys(set).length) this.patch(item, set);
