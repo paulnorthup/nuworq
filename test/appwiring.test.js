@@ -38,6 +38,14 @@ describe("the hub checks its GitHub App's events and permissions (#220)", () => 
     assert.ok(e.how.some((s) => /Save changes/.test(s.do)));
     assert.ok(e.how.some((s) => /Accept new permissions/.test(s.do) && s.where), 'installations accept a new permission');
 
+    // Members is an organization permission (#478): its step names that section, not the repository one.
+    const { members, ...older } = ALL.permissions;
+    const org = wiringGaps({ ...ALL, permissions: { ...older, issues: 'read' } });
+    assert.deepEqual(org.permissions.map((p) => p.name), ['issues', 'members']);
+    const how = wiringEntry({ gaps: org, url: 'u', installations: 'i', since: 1 }).how.map((s) => s.do);
+    assert.ok(how.includes('Under "Repository permissions", set Issues to "Read and write"'), how.join('\n'));
+    assert.ok(how.includes('Under "Organization permissions", set Members to "Read-only"'), how.join('\n'));
+
     assert.equal(appSettingsUrl({ slug: 'nuworq', owner: { login: 'acme', type: 'Organization' } }), 'https://github.com/organizations/acme/settings/apps/nuworq/permissions');
     assert.equal(appSettingsUrl({ slug: 'nuworq', owner: { login: 'paul', type: 'User' } }), 'https://github.com/settings/apps/nuworq/permissions');
   });

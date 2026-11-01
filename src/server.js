@@ -246,7 +246,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!app?.webhookSecret) return deny(404, 'this hub takes no GitHub App webhooks: it has no app, or no webhook secret for it', "Give the hub the app's webhook secret (NUWORQ_GITHUB_APP_WEBHOOK_SECRET; an app created in one click keeps it in its saved file), or use each project's own webhook (docs/DEPLOY.md).");
     const event = req.headers['x-github-event'];
     const hubsOf = (body) => (!spaces ? [target] : [spaces.get(spaces.directory.installation(body.installation?.id) ?? '')].filter(Boolean));
-    const hit = receiveApp(hubsOf, { secret: app.webhookSecret, event, signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) });
+    const hit = receiveApp(hubsOf, { secret: app.webhookSecret, event, signature: req.headers['x-hub-signature-256'], delivery: req.headers['x-github-delivery'], raw: await rawBody(req) });
     const projects = [];
     for (const { hub, p, result } of hit) {
       const base = spaces ? `/w/${encodeURIComponent(hub.workspace)}` : '';
@@ -675,7 +675,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const id = Number(url.searchParams.get('installation_id'));
       if (!ws || !spaces.has(ws) || !id) return deny(400, "this install didn't start from a workspace on this hub, or its link expired", 'Open your workspace, then Connect → Install the GitHub App, and finish the install within the hour.');
       if (!(await app.installedBy(url.searchParams.get('code'), id))) {
-        return deny(403, `GitHub says you can't see installation ${id}, so it isn't bound to ${ws}`, 'Install the app from your workspace on an account or repositories you manage, and let GitHub send you back here.');
+        return deny(403, `GitHub says installation ${id} isn't on your account or a GitHub organization you're an admin of, so it isn't bound to ${ws}`, 'Install the app from your workspace on your own account, or on a GitHub organization where you are an admin, and let GitHub send you back here.');
       }
       if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another workspace on this hub', 'Install the app for this workspace on its own account or repositories.');
       return redirect(res, `/w/${encodeURIComponent(ws)}/#github-installed`);
@@ -917,7 +917,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       let hook;
       if (req.method === 'POST' && (hook = path.match(/^\/api\/hooks\/github\/([^/]+)$/))) {
         const slug = decodeURIComponent(hook[1]);
-        const r = receive(hub, slug, { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], raw: await rawBody(req) });
+        const r = receive(hub, slug, { event: req.headers['x-github-event'], signature: req.headers['x-hub-signature-256'], delivery: req.headers['x-github-delivery'], raw: await rawBody(req) });
         if (!app && !r.ignored && (r.sync || req.headers['x-github-event'] === 'issues')) {
           return send(200, { ...r, sync: undefined, github: 'no GitHub App configured: issues that arrive by webhook come in, but the hub can neither list issues nor comment' });
         }

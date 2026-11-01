@@ -14,9 +14,10 @@ test('nothing in web/ says "organization"', () => {
 });
 
 // Server code: its messages (errors, hints, labels) but not its comments. GitHub's own organizations,
-// as on the host's app-creation page and its URL, are a different thing and keep their name.
+// as on the host's app-creation page and its URL, are a different thing and keep their name, as does the
+// "Organization permissions" section of GitHub's app settings page (#478).
 const code = (l) => (/^\s*(\/\/|--|\*|\/\*)/.test(l) ? '' : l.split(/\s(?:\/\/|--)\s/)[0])
-  .replace(/GitHub organization/g, '').replace(/organizations\/\$\{/g, '');
+  .replace(/GitHub organization/g, '').replace(/organizations\/\$\{/g, '').replace(/"Organization permissions"/g, '');
 test('no server message says "organization"', () => {
   assert.deepEqual(dir('src').filter((f) => f.endsWith('.js')).flatMap((f) => hits(f, read(f).split('\n').map(code))), []);
 });
