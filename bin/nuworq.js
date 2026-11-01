@@ -981,12 +981,15 @@ async function runCmd(flags) {
   // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
   const startedOn = installed(ROOT);
   const { supervised } = await import('../src/service.js');
+  const routePath = () => `/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`;
   const r = await run({
     updated: () => { const now = installed(ROOT); return differs(startedOn, now) ? `${startedOn.label} → ${now.label}` : null; },
     supervised: supervised(),
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
-    routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`),
+    routes: () => client.get(routePath()),
+    // Nothing to start: the hub holds the answer until work appears (#542), a little past which the call gives up.
+    waitRoutes: ({ skip, seconds, signal }) => client.get(`${routePath()}&wait=${seconds}&skip=${encodeURIComponent(skip.join(','))}`, { signal, deadline: (seconds + 15) * 1000 }),
     // Work waiting where it doesn't staff (#491): every project's routes, not only the opted-in ones.
     unstaffed: async () => unstaffedLine(await client.get(`/api/route?has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}`), await hubProjects(client)),
     launch, workers, maxWorkers, machine, sweep: (running) => sweepAll(running), sweptAt,

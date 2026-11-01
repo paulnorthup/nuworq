@@ -112,29 +112,45 @@ function seen(hub, operators) {
 export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, session = [], ms = WAIT_MS, signal, drain } = {}) {
   const operators = operatorsOf(hub, agent, { scope, tokenId, session });
   seen(hub, operators);
+  return waitUntil(hub, () => {
+    let events;
+    try { events = collect(hub, operators, since); } catch { return []; } // e.g. its project was removed
+    return events.length ? events.map(({ at: _, ...e }) => e) : undefined;
+  }, { ms, signal, drain, otherwise: [] }).then((events) => {
+    if (events) seen(hub, operators);
+    return { events: events ?? [], at: hub.now() };
+  });
+}
+
+// The wait itself, for operators (waitFor) and runners (/api/route?wait=, #542): resolves look()'s first answer
+// that isn't undefined, looking now and on each change (at most once per every ms), or otherwise once ms pass.
+// A last look comes before otherwise: anything a change event didn't announce would be missed for good (#406).
+// signal: the caller went away (resolves undefined). drain: the hub is shutting down (#545): it answers now, as if the
+// time were up.
+export function waitUntil(hub, look, { ms = WAIT_MS, every = 0, signal, drain, otherwise } = {}) {
   ms = Math.min(Math.max(0, ms), MAX_WAIT_MS);
   return new Promise((resolve) => {
-    let timer, done = false;
-    const finish = (events) => {
+    let timer, soon = null, done = false;
+    const finish = (value) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      hub.off('change', check);
+      clearTimeout(soon);
+      hub.off('change', changed);
       signal?.removeEventListener('abort', quit);
       drain?.removeEventListener('abort', end);
-      if (events) seen(hub, operators);
-      resolve({ events: events ?? [], at: hub.now() });
+      resolve(value);
     };
-    function check() {
-      let events;
-      try { events = collect(hub, operators, since); } catch { return finish([]); } // e.g. its project was removed
-      if (events.length) finish(events.map(({ at: _, ...e }) => e));
-    }
-    const quit = () => finish(null);
-    // A last look before the empty answer: its at becomes the next since, so anything a change event didn't
-    // announce would otherwise be skipped for good (#406).
-    const end = () => { check(); finish([]); };
-    hub.on('change', check);
+    const check = () => {
+      soon = null;
+      const v = look();
+      if (v !== undefined) finish(v);
+    };
+    // Many writes in a row cost one look.
+    const changed = () => { if (!every) check(); else soon ??= setTimeout(check, every); };
+    const quit = () => finish(undefined);
+    const end = () => { check(); finish(otherwise); };
+    hub.on('change', changed);
     signal?.addEventListener('abort', quit);
     drain?.addEventListener('abort', end);
     timer = setTimeout(end, ms);

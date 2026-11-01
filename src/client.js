@@ -234,14 +234,15 @@ export function createClient(opts = {}) {
   }
 
   // deadline: ms the whole answer may take; past it the call fails like a dropped connection (status 0).
-  async function once(method, path, { body, agent, read = method === 'GET', deadline, key = '' } = {}, hops = 0) {
+  // signal: the caller stopped waiting for it (a runner's wait for work, #542).
+  async function once(method, path, { body, agent, read = method === 'GET', deadline, key = '', signal } = {}, hops = 0) {
     let res;
     try {
       res = await send(path, () => ({
         method,
         headers: { ...headers(agent ? { agent } : {}), ...(key ? { 'idempotency-key': key } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
-        ...(deadline ? { signal: AbortSignal.timeout(deadline) } : {}),
+        ...(deadline || signal ? { signal: AbortSignal.any([deadline && AbortSignal.timeout(deadline), signal].filter(Boolean)) } : {}),
       }), { read, key });
     } catch (e) {
       throw new HubError(`nuworq hub not reachable at ${settings.url}; start it with: nuworq serve`, {
@@ -265,7 +266,7 @@ export function createClient(opts = {}) {
       // What the saved connection says now: an address given outright (--url, NUWORQ_URL) still names the old
       // one, and must not send a failing call back there in a loop.
       seen = saved(resolveSettings(opts));
-      return once(method, path, { body, agent, read, deadline, key }, hops + 1);
+      return once(method, path, { body, agent, read, deadline, key, signal }, hops + 1);
     }
     // Which protocol the hub serves (#541): whoever asked hears it, to refetch the tools when it changes.
     const protocol = res.headers.get('x-nuworq-protocol');
@@ -336,7 +337,7 @@ export function createClient(opts = {}) {
     wait: ({ since = 0, timeout, all = false, grace = WAIT_GRACE_MS } = {}, { agent } = {}) =>
       request('GET', `/api/wait?for=operator&since=${since}${timeout ? `&timeout=${timeout}` : ''}${
         settings.project ? `&project=${encodeURIComponent(settings.project)}` : all ? '&all=1' : ''}`, { agent, deadline: (timeout ? timeout * 1000 : WAIT_MS) + grace }),
-    get: (path) => request('GET', path),
+    get: (path, { deadline, signal } = {}) => request('GET', path, { deadline, signal }),
     post: (path, body) => request('POST', path, { body }),
   };
 }

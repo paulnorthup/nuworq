@@ -30,7 +30,7 @@ import { writeFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { liveView, LIVE_TTL_MS } from './live.js';
-import { waitFor } from './wait.js';
+import { waitFor, waitUntil, WAIT_MS } from './wait.js';
 import { parseKeys } from './session.js';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
@@ -118,8 +118,11 @@ const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form
 const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^POST \/api\/staff$/,/^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
 // Addresses a proxy in front of the hub connects from: loopback and private networks (cloudflared, Caddy, a load balancer).
 const TRUSTED_HOP = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::ffff:(127|10)\.|f[cd][0-9a-f]{2}:|unknown$)/i;
-// Open streams (browser tabs) and operator waits per sign-in or token, and waits per listener on it.
-export const MAX_HELD = { stream: 20, wait: 32, listener: 2 };
+// Open streams (browser tabs), operator waits and runners' waits for work (#542) per sign-in or token, and waits
+// per listener on it.
+export const MAX_HELD = { stream: 20, wait: 32, listener: 2, route: 8 };
+// A runner's wait for work looks again at most this often while writes keep coming: work starts well within a second.
+const ROUTE_EVERY_MS = 250;
 export const MAX_CONNECTIONS = 2000; // sockets the hub keeps open at once; past it, new ones are dropped
 export const LIMITER_MAX = 10_000; // addresses each per-address limit remembers
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
@@ -1686,11 +1689,27 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!done.signal.aborted) send(200, r);
         return;
       }
-      if (req.method === 'GET' && path === '/api/route') return send(200, hub.route('', {
-        runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null,
-        has: url.searchParams.has('has') ? url.searchParams.get('has').split(',').filter(Boolean) : undefined,
-        kind: url.searchParams.get('agent') ?? '', model: url.searchParams.get('model') ?? '', // the runner's, for model routing (#347)
-      }));
+      if (req.method === 'GET' && path === '/api/route') {
+        const look = () => hub.route('', {
+          runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null,
+          has: url.searchParams.has('has') ? url.searchParams.get('has').split(',').filter(Boolean) : undefined,
+          kind: url.searchParams.get('agent') ?? '', model: url.searchParams.get('model') ?? '', // the runner's, for model routing (#347)
+        });
+        // A runner with nothing to start waits here (#542): ?wait= seconds, answered the moment work appears in a
+        // project outside ?skip= (those it can't work on), else when the wait ends or the hub shuts down (#545).
+        // An older hub answers at once.
+        const wait = Number(url.searchParams.get('wait'));
+        const skip = new Set((url.searchParams.get('skip') ?? '').split(',').filter(Boolean));
+        const fresh = (list) => (list.some((r) => !skip.has(r.project)) ? list : undefined);
+        const now = look();
+        if (!(wait > 0) || fresh(now)) return send(200, now);
+        if (!hold(req, res, hub, who, 'route')) return tooMany('waits for work', MAX_HELD.route);
+        const done = new AbortController();
+        res.on('close', () => done.abort());
+        const r = await waitUntil(hub, () => fresh(look()), { ms: Math.min(wait * 1000, WAIT_MS), every: ROUTE_EVERY_MS, signal: done.signal, drain: draining.signal, otherwise: null });
+        if (!done.signal.aborted) send(200, r ?? look());
+        return;
+      }
       // nuworq run's state, on every poll (#171): who it is comes from its token when it has a runner name.
       if (req.method === 'POST' && path === '/api/runner') {
         const b = await body(req);

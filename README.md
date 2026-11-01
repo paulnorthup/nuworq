@@ -242,6 +242,7 @@ POST /api/p/:project/agent/:op           agent operations (header x-nuworq-agent
 POST /api/p/:project/human/:action       answer, confirm, accept, sendback, steer, decide, comment,
                                          create, update, retire, unretire, dismiss, seen, settings
 GET  /api/route[?runner=1]               where work is waiting, per project (runner: opted-in only, with holders)
+                                         &wait=<s>&skip=<projects>: held until work appears outside skip (≤90 s)
 GET  /api/claims?agent=<name>&since=<ms> how many jobs a worker took since then (runner: did a quick exit do anything?)
 POST /api/runner                         nuworq run's state, every poll: { name, machine, running, workers,
                                          skipping: [{project, reason, until?}], paused: {until, reason}|null,
