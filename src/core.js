@@ -102,6 +102,8 @@ export const AUTONOMY = {
 };
 
 const PRIORITY_RANK = { now: 0, soon: 1, later: 2 };
+// One of the three, never an inherited key ('constructor', 'toString'): those pass a PRIORITY_RANK[x] != null check.
+const isPriority = (x) => typeof x === 'string' && Object.hasOwn(PRIORITY_RANK, x);
 export const MAX_RACE = 4;
 
 // Whether a shaped proposal waits for a person's OK before it is built: always under "Check with me", and for an
@@ -192,6 +194,17 @@ export function layeredNote(op, args = {}) {
 const str = (v) => (v == null ? '' : String(v).trim());
 const clip = (v, n = 120) => { const line = str(v).split('\n')[0]; return line.length > n ? line.slice(0, n - 1).trimEnd() + '…' : line; };
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+// The keys of an items update, each a column the items table has: patch() and move() build SQL from them, so
+// a key from anywhere else (a caller passing args through) is refused, never spliced in. Read once per database.
+const COLUMNS = new WeakMap();
+function itemColumns(hub, fields) {
+  let cols = COLUMNS.get(hub.db);
+  if (!cols) COLUMNS.set(hub.db, (cols = new Set(hub.db.prepare('PRAGMA table_info(items)').all().map((c) => c.name))));
+  const keys = Object.keys(fields);
+  const bad = keys.find((k) => !cols.has(k) || k === 'id');
+  if (bad) throw new Error(`items has no column ${JSON.stringify(bad)} to update`);
+  return keys;
+}
 // A question its work closed (#182) can't be answered, confirmed or overridden any more.
 const settled = (q) => {
   if (['shipped', 'withdrawn'].includes(q.status)) {
@@ -961,7 +974,7 @@ export class Hub extends EventEmitter {
     const t = this.now();
     const fields = { ...patch, stage, stage_since: t, updated_at: t };
     if (stage !== 'waiting' && item.parked_by) fields.parked_by = ''; // out of waiting: no longer kept parked
-    const keys = Object.keys(fields);
+    const keys = itemColumns(this, fields);
     this.q(`UPDATE items SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
       .run(...keys.map((k) => fields[k] ?? null), item.id);
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
@@ -1039,7 +1052,7 @@ export class Hub extends EventEmitter {
 
   patch(item, fields) {
     fields = { ...fields, updated_at: this.now() };
-    const keys = Object.keys(fields);
+    const keys = itemColumns(this, fields);
     this.q(`UPDATE items SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
       .run(...keys.map((k) => fields[k] ?? null), item.id);
     Object.assign(item, fields);
@@ -3075,7 +3088,7 @@ Object.assign(Hub.prototype, {
   createItem(p, actor, args) {
     const { headline: title, summary, detail } = layered(args.title ?? args.headline, args.summary, args.detail, 'title');
     const acceptance = str(args.acceptance);
-    const priority = PRIORITY_RANK[args.priority] != null ? args.priority : 'soon';
+    const priority = isPriority(args.priority) ? args.priority : 'soon';
     const parent = args.parent ? this.item(p, args.parent) : null;
     const repo = this.checkRepo(p, args.repo);
     const human = isHuman(actor);
@@ -3093,7 +3106,7 @@ Object.assign(Hub.prototype, {
     const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at, fixes, gate, breaking)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t, fixes?.id ?? null, gate, str(args.breaking));
     const item = this.itemById(Number(r.lastInsertRowid));
-    if (human && PRIORITY_RANK[args.priority] != null) this.patch(item, { priority_by: actor }); // a person chose it (#202)
+    if (human && isPriority(args.priority)) this.patch(item, { priority_by: actor }); // a person chose it (#202)
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
     this.setDeps(p, item, args.depends_on);
     this.event(p, {
@@ -3133,7 +3146,7 @@ Object.assign(Hub.prototype, {
     for (const k of ['summary', 'detail', 'acceptance']) {
       if (args[k] != null && str(args[k]) !== item[k]) { set[k] = str(args[k]); changed.push(k); }
     }
-    if (args.priority && PRIORITY_RANK[args.priority] != null && args.priority !== item.priority) {
+    if (isPriority(args.priority) && args.priority !== item.priority) {
       // A tidy job keeps the groups true; what matters most stays the person's call (#202).
       if (!isHuman(actor) && item.priority_by && this.tidying(p, actor)) {
         throw new UserError(`#${item.seq}'s priority was set by ${item.priority_by === HUMAN ? 'a person' : item.priority_by}; a tidy job doesn't change it`, { status: 403, hint: 'Leave priorities as they are. If one looks wrong, say so in your submit, or ask the person.' });
