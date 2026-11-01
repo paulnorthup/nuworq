@@ -2030,7 +2030,8 @@ document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('o
 
 // ── live updates ──
 // At most one a second, and none while the person scrolls or holds a pointer down: it waits, then applies (#392).
-const live = liveGate({ run: () => refresh(), idle: () => { if (S.pending && !typing()) render(); } });
+const live = liveGate({ run: () => refresh(), hidden: () => document.hidden, idle: () => { if (S.pending && !typing()) render(); } });
+document.addEventListener('visibilitychange', () => live.shown());
 document.addEventListener('pointerdown', () => live.press(), true);
 for (const ev of ['pointerup', 'pointercancel']) document.addEventListener(ev, () => live.release(), true);
 document.addEventListener('scroll', () => live.scrolled(), { capture: true, passive: true });

@@ -1643,14 +1643,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'POST' && path === '/api/notify') {
         const b = await body(req);
         const c = addChannel(hub.db, b.kind, b.url, hub.now(), { person: own ?? b.person, guard: !!spaces });
-        hub.emit('change', { project: null, at: hub.now() });
+        hub.changed(null, { kind: 'channel' });
         return send(200, { ok: true, ...c });
       }
       if (req.method === 'POST' && path === '/api/notify/remove') {
         const { id } = await body(req);
         if (own && channelOwner(hub.db, id) !== own) return deny(403, 'that channel isn\'t yours', 'You can remove only your own channels.');
         removeChannel(hub.db, id);
-        hub.emit('change', { project: null, at: hub.now() });
+        hub.changed(null, { kind: 'channel' });
         return send(200, { ok: true });
       }
       // The weekly line (#178), on or off for one channel.
@@ -1662,7 +1662,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'POST' && path === '/api/notify/test') {
         const results = await testChannels(hub.db, { baseUrl: (!spaces && publicUrl) || origin(req) + base, now: () => hub.now(), guard: !!spaces });
-        hub.emit('change', { project: null, at: hub.now() });
+        hub.changed(null, { kind: 'channel' });
         return send(200, { ok: results.every((r) => r.ok), results });
       }
       // An idle operator session waits here (#283): it answers the moment something is there for it, with ids
@@ -1695,7 +1695,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'POST' && path === '/api/runner') {
         const b = await body(req);
         const changed = hub.reportRunner(b, { name: caller.token?.runner ?? '', scope: caller.scope });
-        if (changed) hub.emit('change', { project: null, at: hub.now() });
+        if (changed) hub.changed(null, { kind: 'runner' });
         // Its live workers' leases renew with the report (#540), so a worker in a long test run keeps its job.
         const renewed = hub.renewWorkers(b.live, { scope: caller.scope, identity: caller.identity });
         return send(200, { ok: true, renewed });
