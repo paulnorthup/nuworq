@@ -674,7 +674,7 @@ function workerSetup(target, agent, flags, s, token = null) {
       ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login. When you ship a visible UI feature, add its key with today\'s date to web/new.js and data-new="<key>" to its element, so people see it\'s new.'
       : 'To check UI work, start the app from this worktree on a free local port, in the background.'),
     browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide (browser_resize); the app is light only, so there is no dark mode to check. Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
-    'While you work, run only the tests that cover what you change; run the full test suite once, just before you submit.',
+    'While you work, run only the tests that cover what you change. For the whole suite, follow the hint `next` gives: where CI checks the pull request, CI runs it; otherwise run it once, just before you submit.',
     // Routed (#347), it was started on the model this one job calls for, so it takes that job and no other.
     flags.job ? `You were started on ${model} for one job: ${flags.job.mode} ${flags.job.item}. After checkin, claim ${flags.job.item}, do that job, then sign off. If you can't claim it, sign off; don't take other work.`
       : 'Keep going until next says there is nothing left for you, then sign off.',

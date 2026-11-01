@@ -519,6 +519,14 @@ export const MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS events_lapsed ON events (project_id, json_extract(data, '$.agent')) WHERE type = 'lease_expired';`);
     },
   },
+  {
+    // Whether CI checks the project's pull requests before they merge (#532): '' lets the hub tell from the checks
+    // it records, 'on' or 'off' is a person saying so. Workers run the whole suite only where CI doesn't.
+    name: 'a project can say whether CI checks its pull requests',
+    up(db) {
+      addColumn(db, "ALTER TABLE projects ADD COLUMN ci TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
