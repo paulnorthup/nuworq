@@ -17,7 +17,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect', 'smoke']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -1323,6 +1323,10 @@ async function seedCmd(flags) {
   console.log(`${green('●')} Added the nuworq project to ${db}. Start the hub with: ${CLI} serve`);
 }
 
+// serve --smoke (#544): what --follow boots on copies of the live data before a switch, to check the new code starts
+// on them. No sweep ever runs (no mirrors, preconditions or GitHub calls), and no pushes or hub.json are started.
+const SMOKE = { sweepMs: 2 ** 31 - 1 };
+
 async function serve(flags) {
   if (flags.follow) return serveFollow(flags);
   const { Hub } = await import('../src/core.js');
@@ -1353,7 +1357,7 @@ async function serve(flags) {
   // The GitHub App: from the environment, else the one the hub created for itself (Create GitHub App).
   const appFile = join(dataHome(flags), 'github-app.json');
   ignoreSiteHost(flags);
-  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package') });
+  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), ...(flags.smoke ? SMOKE : {}) });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -1365,6 +1369,7 @@ hint: Create one, then start again:
   }
   server.listen(port, host, async () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
+    if (flags.smoke) return console.log(`nuworq booted on ${db} at ${url} (smoke: no pushes, no sweeps)`);
     if (!flags.demo) {
       // Let agents and the CLI on this machine find the hub without configuration.
       try { mkdirSync(dirname(HUB_FILE), { recursive: true }); writeFileSync(HUB_FILE, JSON.stringify({ url, pid: process.pid }) + '\n'); } catch {}
@@ -1434,6 +1439,8 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   // The hub's owners: one list for everything that asks (--owners, NUWORQ_HUB_OWNERS, or NUWORQ_OWNERS).
   const owners = String(flags.owners ?? envVar('HUB_OWNERS') ?? envVar('OWNERS') ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
   const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags), backups: join(dataHome(flags), 'backups'), plans, owners });
+  // A smoke boot opens every workspace now, so each one's migrations run before it answers health (#544).
+  if (flags.smoke) for (const name of spaces.list()) spaces.get(name, { touch: false });
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
@@ -1456,9 +1463,10 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const feedbackProject = String(flags['feedback-project'] || envVar('FEEDBACK_PROJECT') || '');
   // Billing (#227): Stripe, from the environment only; off unless NUWORQ_STRIPE_WEBHOOK_SECRET is set.
   const { billingFromEnv } = await import('../src/billing.js');
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject });
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject, ...(flags.smoke ? SMOKE : {}) });
   server.listen(port, host, () => {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
+    if (flags.smoke) return console.log(`nuworq booted ${spaces.list().length} workspaces in ${dir} at ${url} (smoke: no pushes, no sweeps)`);
     const names = spaces.list();
     console.log(`${green('●')} ${bold('nuworq')} is serving workspaces at ${bold(url)}  ${dim(`(${dir})`)}
   Auth: ${green('locked')}: every workspace has its own tokens${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}

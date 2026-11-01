@@ -222,7 +222,7 @@ Undo: restart the hub with the old `--public-url`.
   A `200` alone doesn't prove the hub took a delivery: open it and read the response. `"projects": [{ "project": "<slug>", … }]` means it reached the project. `"projects": []` means it reached none. On a hub of workspaces, that is an installation bound to no workspace: bind it (`nuworq workspace bind-installation <id> <workspace>`, see adopt above), then click **Redeliver** on the delivery.
 
 ### Keeping a server up to date: it pulls, nothing pushes to it
-`serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. If the new hub doesn't come up healthy, it rolls back. No CI job reaches into your network, and the server only needs read access:
+`serve --follow` (the systemd unit uses it) fetches `main` from GitHub every 30 seconds and fast-forwards to it. It tests each new commit in a second worktree and moves the hub onto it only if the tests pass. Then, while the old hub keeps serving, it boots the new commit on a free loopback port against fresh copies of every live database (`serve --smoke`: no pushes, no sweeps, without the hub's `NUWORQ_*` settings). If that boot doesn't answer `/api/health` within a minute, the hub stays where it is, logs the commit and the error, and doesn't try that commit again. If the new hub doesn't come up healthy after the switch, it rolls back. No CI job reaches into your network, and the server only needs read access:
 ```bash
 # on the server, as the hub's user
 sudo -u nuworq ssh-keygen -t ed25519 -N "" -C "nuworq server (read-only)" -f /var/lib/nuworq/.ssh/id_ed25519

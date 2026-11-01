@@ -13,7 +13,8 @@ import { createServer } from '../src/server.js';
 // A pretend world: main's head, which commits pass their tests or start healthy, and what happened.
 // out: the commit in the hub's own worktree (checkout moves it); tests run elsewhere (test(sha)).
 // full: backups fail (a full disk).
-function world({ red = [], sick = [], full = false } = {}) {
+// unbootable: commits that pass their tests but don't boot on copies of the live data (#544).
+function world({ red = [], sick = [], full = false, unbootable = [] } = {}) {
   const w = {
     main: 'aaaaaaa1', out: null, up: null, log: [], said: [],
     head: () => w.main,
@@ -25,6 +26,10 @@ function world({ red = [], sick = [], full = false } = {}) {
     },
     restore: (sha) => { w.log.push(`restore ${sha}${w.up ? ' while the hub runs' : ''}`); return `backups/${sha}.db`; },
     test: async (sha) => { w.log.push(`test ${sha}`); return red.includes(sha) ? { ok: false, failed: 'routing › picks work' } : { ok: true }; },
+    smoke: async (sha) => {
+      w.log.push(`smoke ${sha}${w.up ? ` beside ${w.up}` : ''}`);
+      return unbootable.includes(sha) ? { ok: false, failed: `it exited with code 1 at ${sha.slice(0, 7)}: Error: no such table: nope` } : { ok: true };
+    },
     start: async () => { w.up = w.out; w.log.push(`start ${w.out}`); },
     alive: () => w.up != null,
     stop: async () => { if (w.up) w.log.push(`stop ${w.up}`); w.up = null; },
@@ -123,6 +128,38 @@ describe('the hub follows main', () => {
     w.main = 'ccccccc3';
     await f.tick();
     assert.equal(w.up, 'ccccccc3', 'the next commit gets a fresh try');
+  });
+
+  test('a commit that passed its tests boots on copies of the live data beside the running hub before it switches (#544)', async () => {
+    const w = world();
+    const f = follow(w);
+    await f.boot();
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    const at = (l) => w.log.indexOf(l);
+    assert.ok(at('test bbbbbbb2') < at('smoke bbbbbbb2 beside aaaaaaa1'), 'tested, then booted, while the old hub still runs');
+    assert.ok(at('smoke bbbbbbb2 beside aaaaaaa1') < at('stop aaaaaaa1'));
+    assert.equal(w.up, 'bbbbbbb2');
+    assert.ok(w.said.includes('bbbbbbb boots on copies of the live data'));
+    assert.equal(count(w, 'smoke aaaaaaa1'), 0, 'boot has nothing older to run, so it starts main without one');
+  });
+
+  test("one that doesn't boot on them never goes live: the hub runs on, the log names the commit and why, and it isn't tried again (#544)", async () => {
+    const w = world({ unbootable: ['bbbbbbb2'] });
+    const f = follow(w);
+    await f.boot();
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    assert.equal(w.up, 'aaaaaaa1');
+    assert.equal(count(w, 'stop'), 0, 'the live hub was never stopped');
+    assert.equal(count(w, 'backup'), 0);
+    assert.equal(f.state.skip, 'bbbbbbb2');
+    assert.ok(w.said.includes("bbbbbbb passes its tests but didn't boot on copies of the live data (it exited with code 1 at bbbbbbb: Error: no such table: nope); staying on aaaaaaa and not trying bbbbbbb again"));
+    await f.tick();
+    assert.equal(count(w, 'test bbbbbbb2'), 1, 'not tried again');
+    w.main = 'ccccccc3';
+    await f.tick();
+    assert.equal(w.up, 'ccccccc3', 'the next commit goes live as usual');
   });
 
   test("a commit that doesn't start is not a red streak: the next red commit still asks for a fix", async () => {
@@ -360,6 +397,98 @@ describe('database backups, on real files', () => {
     assert.equal(w.up, 'aaaaaaa1');
     assert.deepEqual(columns(db), ['id', 'title'], 'the column bbbbbbb2 added is gone');
     assert.ok(w.said.some((l) => l.startsWith('put the database back as it was at aaaaaaa')));
+  });
+});
+
+describe('a smoke boot on copies of the live data, for real (#544)', () => {
+  const ROOT = realpathSync(new URL('..', import.meta.url));
+  const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-smokes-')));
+  const smokes = () => readdirSync(tmpdir()).filter((f) => f.startsWith('nuworq-smoke-')).sort();
+  const columns = (file) => { const d = new DatabaseSync(file); try { return d.prepare('PRAGMA table_info(items)').all().map((c) => c.name); } finally { d.close(); } };
+  // HOME is somewhere new, so a smoke boot that wrote hub.json (pointing this machine's agents at it) would show.
+  let home;
+  const saved = process.env.HOME;
+  before(() => { home = scratch(); process.env.HOME = home; });
+  after(() => { process.env.HOME = saved; });
+
+  test("nuworq's own serve --smoke boots on a copy of one hub's database, answers health, and leaves nothing behind", async () => {
+    const root = scratch();
+    const db = join(root, 'nuworq.db');
+    const hub = new Hub({ file: db });
+    hub.tx(() => hub.project('app', { create: true }));
+    hub.humanOp('app', 'create', { title: 'Something to boot with', acceptance: 'x' });
+    hub.db.close();
+    const before = smokes();
+    const sys = system({ repo: ROOT, dir: join(root, 'hub-src'), next: ROOT, url: 'http://127.0.0.1:1', store: backups({ dir: join(root, 'backups'), db }) });
+    assert.deepEqual(await sys.smoke('abcdef1234'), { ok: true });
+    assert.deepEqual(smokes(), before, 'the copies are removed');
+    assert.ok(!existsSync(join(home, '.nuworq', 'hub.json')), "a smoke boot doesn't tell this machine's agents about itself");
+  });
+
+  test('with workspaces, it opens every workspace, so each one migrates before health answers', async () => {
+    const root = scratch();
+    const ws = join(root, 'workspaces');
+    const spaces = new Workspaces({ dir: ws });
+    spaces.create('acme');
+    spaces.create('beta');
+    spaces.close();
+    const sys = system({ repo: ROOT, dir: join(root, 'hub-src'), next: ROOT, url: 'http://127.0.0.1:1', store: backups({ dir: join(root, 'backups'), workspaces: ws }) });
+    assert.deepEqual(await sys.smoke('abcdef1234'), { ok: true });
+    const broken = new DatabaseSync(join(ws, 'beta.db'));
+    broken.exec('DROP TABLE items; CREATE VIEW items AS SELECT 1 AS id');
+    broken.close();
+    const r = await sys.smoke('abcdef1234');
+    assert.equal(r.ok, false, "a workspace that can't open fails the boot, though nothing asked for it");
+    assert.match(r.failed, /^it exited with code 1 at abcdef1: \w*Error: /);
+  });
+
+  test("in a repo, a commit whose migration fails on the live data doesn't boot, and names why; the live database is untouched", async () => {
+    const root = scratch();
+    const repo = join(root, 'repo');
+    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    mkdirSync(join(repo, 'bin'), { recursive: true });
+    mkdirSync(join(repo, 'test'));
+    g('init', '-q', '-b', 'main');
+    // A hub that migrates its --db from migration.sql as it starts, then answers on --port.
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test' } }));
+    writeFileSync(join(repo, 'test', 'ok.test.js'), "import { test } from 'node:test';\ntest('ok', () => {});\n");
+    writeFileSync(join(repo, 'bin', 'nuworq.js'), `import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+import http from 'node:http';
+const a = process.argv.slice(2), at = (f) => a[a.indexOf(f) + 1];
+if (a[0] !== 'serve' || !a.includes('--smoke') || at('--host') !== '127.0.0.1') throw new Error('not a smoke boot: ' + a.join(' '));
+if (Object.keys(process.env).some((k) => k.startsWith('NUWORQ_'))) throw new Error('the hub settings reached it');
+new DatabaseSync(at('--db')).exec(readFileSync(new URL('../migration.sql', import.meta.url), 'utf8'));
+http.createServer((req, res) => res.end('{"ok":true}')).listen(Number(at('--port')), '127.0.0.1');
+`);
+    writeFileSync(join(repo, 'migration.sql'), "ALTER TABLE items ADD COLUMN repo TEXT NOT NULL DEFAULT ''");
+    g('add', '.');
+    g('commit', '-q', '-m', 'good');
+    const good = g('rev-parse', 'HEAD');
+    writeFileSync(join(repo, 'migration.sql'), 'ALTER TABLE nope ADD COLUMN repo TEXT');
+    g('commit', '-q', '-am', 'broken');
+    const bad = g('rev-parse', 'HEAD');
+
+    const db = join(root, 'nuworq.db');
+    const live = new DatabaseSync(db);
+    live.exec('PRAGMA journal_mode = WAL; CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)');
+    const sys = system({ repo, dir: join(root, 'hub-src'), next: join(root, 'hub-next'), url: 'http://127.0.0.1:1', store: backups({ dir: join(root, 'backups'), db }) });
+    process.env.NUWORQ_TOKEN_FOR_SMOKE_TEST = 'secret';
+    try {
+      const before = smokes();
+      assert.deepEqual(await sys.test(good), { ok: true });
+      assert.deepEqual(await sys.smoke(good), { ok: true }, 'booted while the live database is open');
+      assert.deepEqual(await sys.test(bad), { ok: true }, 'its tests pass: only real data shows it');
+      const r = await sys.smoke(bad);
+      assert.equal(r.ok, false);
+      assert.equal(r.failed, `it exited with code 1 at ${bad.slice(0, 7)}: Error: no such table: nope`);
+      assert.deepEqual(smokes(), before, 'the copies are removed either way');
+      assert.deepEqual(columns(db), ['id', 'title'], 'only the copies were migrated');
+    } finally {
+      delete process.env.NUWORQ_TOKEN_FOR_SMOKE_TEST;
+      live.close();
+      try { g('worktree', 'remove', '--force', join(root, 'hub-next')); } catch {}
+    }
   });
 });
 
