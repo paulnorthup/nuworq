@@ -49,7 +49,7 @@ export function pluginFiles() {
 }
 
 // The marketplace that lists it (.claude-plugin/marketplace.json at the repository root), so
-// `claude plugin marketplace add <MARKETPLACE>` then `claude plugin install nuworq@nuworq` installs it.
+// `claude plugin marketplace add <MARKETPLACE>` then `claude plugin install nuworq@nuworq --scope user` installs it.
 // The plugin's source is the release branch's plugin/ folder, not "./plugin": a marketplace added before #473
 // follows main, and this way it too gets the plugin only from a release.
 export function marketplace() {

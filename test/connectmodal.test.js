@@ -67,7 +67,7 @@ describe('connect an agent: commands that paste and run', () => {
 
   test('the optional Claude Code plugin step copies the README\'s commands, exactly as shown (#132)', () => {
     const c = connectCommands({ ...REMOTE, package: { url: 'https://nuworq.com/nuworq.tgz' } }, null, 'demo');
-    assert.equal(c.plugin, 'claude plugin marketplace add paulnorthup/nuworq#release\nclaude plugin install nuworq@nuworq');
+    assert.equal(c.plugin, 'claude plugin marketplace add paulnorthup/nuworq#release\nclaude plugin install nuworq@nuworq --scope user');
     assert.ok(readFileSync(new URL('../README.md', import.meta.url), 'utf8').includes(c.plugin), 'the same lines as the README');
     const html = copyBlock(c.plugin);
     const text = (s) => s.replace(/&(lt|gt|quot|#39|amp);/g, (_, e) => ({ lt: '<', gt: '>', quot: '"', '#39': "'", amp: '&' })[e]);

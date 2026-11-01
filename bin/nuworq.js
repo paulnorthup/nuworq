@@ -1103,6 +1103,8 @@ async function connect(pos, flags) {
   if (!flags['no-mcp']) notes.push(await offerPlugin(flags, mode));
   const { registerMcp } = await import('../src/connect.js');
   const mcp = flags['no-mcp'] ? { added: old?.added ?? [], lines: [] } : registerMcp({ bin: BIN, home: homedir(), kept: old?.added ?? [], url });
+  const cleared = flags['no-mcp'] ? null : await clearLeftovers(mode, old?.added ?? []);
+  if (cleared) mcp.lines.push(cleared);
   // Written whole with mode 600 and moved into place, so the token is never in a file others can read.
   mkdirSync(dirname(CONNECT_FILE), { recursive: true, mode: 0o700 });
   const tmp = `${CONNECT_FILE}.${process.pid}`;
@@ -1146,16 +1148,37 @@ async function setUp(flags, mode) {
 // /nuworq:operator. Without it, connect asks a person at the terminal to install it, and writes the MCP server
 // and the skills itself only when they decline (or the install fails). With no one to ask, or --skills, it
 // writes them as before and says how to get the plugin.
-// mode (#490): 'ask' asks; 'yes' installs it; 'no' says how.
+// mode (#490): 'ask' asks; 'yes' installs it; 'no' says how. An install for some folders only (#496) counts as
+// none: it says which folders it covers, then offers the account's.
 async function offerPlugin(flags, mode) {
-  const { pluginInstalled, claudeCode, installPlugin, PLUGIN_INSTALL } = await import('../src/connect.js');
-  if (!claudeCode() || pluginInstalled(homedir())) return null;
+  const { pluginScopes, claudeCode, installPlugin, PLUGIN_INSTALL } = await import('../src/connect.js');
+  const scopes = pluginScopes(homedir());
+  if (!claudeCode() || scopes.account) return null;
+  const n = scopes.folders.length;
+  const covers = n ? `  Claude Code has the nuworq plugin only for ${n > 1 ? `${n} folders` : 'one folder'} (${scopes.folders.slice(0, 3).join(', ')}${n > 3 ? ` and ${n - 3} more` : ''}), so other projects don't get /nuworq:shaper and /nuworq:operator.` : '';
   const how = PLUGIN_INSTALL.map((a) => `claude ${a.join(' ')}`).join(' && ');
-  if (flags.skills || mode === 'no') return dim(`Claude Code takes nuworq best as its plugin, with /nuworq:shaper and /nuworq:operator: ${how}, then connect again.`);
+  if (flags.skills || mode === 'no') return `${covers ? `${covers}\n` : ''}${dim(`Claude Code takes nuworq best as its plugin, installed for your account, with /nuworq:shaper and /nuworq:operator: ${how}, then connect again.`)}`;
+  if (covers) console.error(covers);
   const { answerer } = await import('../src/setup.js');
-  if (!await answerer(mode, askLine)('Install the nuworq plugin for Claude Code? It adds its MCP server and the /nuworq:shaper and /nuworq:operator commands, and costs nothing.', { def: true })) return null;
+  if (!await answerer(mode, askLine)('Install the nuworq plugin for Claude Code, for every project? It adds its MCP server and the /nuworq:shaper and /nuworq:operator commands, and costs nothing.', { def: true })) return null;
   const failed = installPlugin();
   return failed ? amber(`${failed}. Added the server and skills to Claude Code directly instead.`) : `  Claude Code: installed the ${bold('nuworq')} plugin (${how}).`;
+}
+
+// With the plugin installed for the account (#496), what an earlier nuworq left in Claude Code beside it (skills shown
+// as /nuworq-operator, a second MCP server) goes too, recorded or not: listed and asked about once at a terminal
+// (--yes answers for you), else the commands to remove them. What connect recorded it already took back itself.
+async function clearLeftovers(mode, kept) {
+  const { pluginInstalled, leftovers, leftoverCommands, removeLeftovers } = await import('../src/connect.js');
+  if (!pluginInstalled(homedir())) return null;
+  const skip = [...kept.filter((k) => k.tool === 'skill').flatMap((k) => k.files ?? [k.file]), ...(kept.some((k) => k.tool === 'claude') ? ['claude'] : [])];
+  const found = leftovers(homedir(), { skip });
+  if (!found.skills.length && !found.mcp) return null;
+  const what = [found.skills.length && `the ${found.skills.map((d) => basename(d)).join(', ')} skill folder${found.skills.length > 1 ? 's' : ''} in ${dirname(found.skills[0])}`, found.mcp && 'a user-scope nuworq MCP server'].filter(Boolean).join(' and ');
+  const { answerer } = await import('../src/setup.js');
+  if (!await answerer(mode, askLine)(`An earlier nuworq left ${what} in Claude Code, beside the plugin (they show as /nuworq-… commands, or a second nuworq). Remove them?`, { def: true })) return `Claude Code: an earlier nuworq left ${what} beside the plugin. To remove them: ${leftoverCommands(found).join(' && ')}`;
+  const problems = removeLeftovers(found);
+  return problems.length ? amber(`Claude Code: ${problems.join('; ')}`) : `Claude Code: removed what an earlier nuworq left beside the plugin: ${what}`;
 }
 
 // nuworq disconnect: revoke the saved token on its hub, remove the MCP entries connect added (only
