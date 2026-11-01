@@ -248,7 +248,8 @@ describe('feedback about nuworq (#295)', () => {
       await wait(120);
       assert.equal(pushes.length, 0, 'approved, declined and being worked on send nothing');
       nw.patch(it, { stage: 'done', stage_since: Date.now() });
-      await wait(150);
+      // The push goes out on a sweep and over HTTP: under CI load it can take far longer than a few sweeps (#460).
+      for (const end = Date.now() + 5000; !pushes.length && Date.now() < end;) await wait(20);
       assert.equal(pushes.length, 1, 'one push when it lands');
       assert.equal(pushes[0].title, 'nuworq: your feedback is fixed');
       assert.match(pushes[0].text, /You said: "Fix the lying button"/);
