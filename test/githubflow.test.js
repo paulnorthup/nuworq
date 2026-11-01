@@ -37,7 +37,7 @@ function github(root) {
   const bare = join(root, 'acme', 'api.git');
   mkdirSync(bare, { recursive: true });
   git(bare, ['init', '-q', '--bare', '-b', 'main']);
-  git(bare, ['config', 'http.receivepack', 'true']);  const issue = (number) => ({ number, title: `Issue ${number}`, body: `Body of ${number}`, state: 'open', labels: [], user: { login: 'reporter' }, html_url: `https://github.com/acme/api/issues/${number}` });
+  git(bare, ['config', 'http.receivepack', 'true']);  const issue = (number) => ({ number, title: `Issue ${number}`, body: `Body of ${number}`, state: 'open', labels: [], user: { login: 'reporter' }, author_association: 'OWNER', html_url: `https://github.com/acme/api/issues/${number}` });
   const state = {
     issues: new Map([[11, issue(11)], [12, issue(12)]]),
     mints: new Map(), // token → { repositories, permissions }

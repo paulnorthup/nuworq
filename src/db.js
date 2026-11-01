@@ -459,6 +459,11 @@ export function openDb(file) {
     // An operator question next handed to one operator (#467): who holds it, and until when (a lapsed lease frees it).
     "ALTER TABLE questions ADD COLUMN held_by TEXT NOT NULL DEFAULT ''",
     'ALTER TABLE questions ADD COLUMN held_until INTEGER NOT NULL DEFAULT 0',
+    // From outside the project (#471): an issue whose author has no write access, and a reply to a reporter
+    // question from such a person, held for a person to pass on ('' = none), with where it was written.
+    'ALTER TABLE issues ADD COLUMN outsider INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE questions ADD COLUMN held_reply TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE questions ADD COLUMN held_url TEXT NOT NULL DEFAULT ''",
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,

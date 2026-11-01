@@ -13,7 +13,7 @@ const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.addr
 
 const repository = { full_name: 'acme/api', html_url: 'https://github.com/acme/api' };
 const issue = (number, over = {}) => ({
-  number, title: `Issue ${number}`, body: `Body of ${number}`, state: 'open', labels: [],
+  number, title: `Issue ${number}`, body: `Body of ${number}`, state: 'open', labels: [], author_association: 'OWNER',
   html_url: `https://github.com/acme/api/issues/${number}`, ...over,
 });
 

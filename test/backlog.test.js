@@ -16,7 +16,7 @@ const PEM = privateKey.export({ type: 'pkcs8', format: 'pem' });
 
 // GitHub for one repository with 3 open issues: listing, comments, and closing, as the app's token sees it.
 function github() {
-  const issues = new Map([1, 2, 3].map((n) => [n, { number: n, title: `Issue ${n}`, body: `Body ${n}`, state: 'open', labels: [], html_url: `https://github.com/acme/api/issues/${n}` }]));
+  const issues = new Map([1, 2, 3].map((n) => [n, { number: n, title: `Issue ${n}`, body: `Body ${n}`, state: 'open', labels: [], author_association: 'OWNER', html_url: `https://github.com/acme/api/issues/${n}` }]));
   const state = { comments: [], closes: [] };
   const server = http.createServer(async (req, res) => {
     const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
