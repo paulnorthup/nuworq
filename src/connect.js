@@ -173,6 +173,25 @@ const TOOLS = {
       return null;
     },
   },
+  // pi (1.4+) has MCP built in, kept in mcp.json in its agent folder (PI_CODING_AGENT_DIR, else ~/.pi/agent). Its own
+  // CLI writes the entry. Direct exposure: nuworq's tools are declared to the model as they are, not behind codemode.
+  pi: {
+    label: 'pi',
+    where: ({ home, env }) => join(env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent'), 'mcp.json'),
+    present: ({ env }) => onPath('pi', env),
+    add(ctx) {
+      let cfg = {};
+      try { cfg = JSON.parse(readFileSync(TOOLS.pi.where(ctx), 'utf8')); } catch { /* none yet */ }
+      if (cfg.mcpServers?.[NAME]) return { skip: `it already has a "${NAME}" MCP server` };
+      const r = run('pi', ['mcp', 'add', NAME, '--exposure', 'direct', '--', ctx.launch.command, ...ctx.launch.args], ctx.env);
+      if (!r.ok) return { skip: `pi mcp add failed: ${r.out.split('\n')[0]}` };
+      return { record: {} };
+    },
+    remove({ env }) {
+      const r = run('pi', ['mcp', 'remove', NAME], env);
+      return r.ok || /no .*server named/i.test(r.out) ? null : `pi mcp remove failed: ${r.out.split('\n')[0]}`;
+    },
+  },
 };
 
 // The nuworq Claude Code plugin (plugin/, see src/plugin.js) brings the MCP server and the skills
