@@ -25,7 +25,8 @@ import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP, ADMIN_SESSION_MS } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
 import { guidePage } from './userguide.js';
-import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
+import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, WORK_PERMISSIONS, installState, readInstallState } from './ghapp.js';
+import { proxyPush } from './gitproxy.js';
 import { writeFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
@@ -115,7 +116,7 @@ const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^POST \/api\/staff$/,/^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^(GET|POST) \/api\/git\//, /^POST \/api\/runner$/, /^POST \/api\/staff$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
 // Addresses a proxy in front of the hub connects from: loopback and private networks (cloudflared, Caddy, a load balancer).
 const TRUSTED_HOP = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::ffff:(127|10)\.|f[cd][0-9a-f]{2}:|unknown$)/i;
 // Open streams (browser tabs) and operator waits per sign-in or token, and waits per listener on it.
@@ -292,7 +293,46 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return send(200, r);
   };
   // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
-  const minted = new Map(); // `${agent}|${item id}|${repo}` → { token, expires_at, repo }
+  const minted = new Map(); // `${agent}|${item id}|${repo}|r or w` → { token, expires_at, repo }
+  // The item an agent holds (building or landing), in a project its token reaches: held is { it, p }, or undefined.
+  // With logins, only for the token that agent uses (#469): other says the name is someone else's.
+  const heldBy = (hub, agent, caller) => {
+    const holding = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
+      .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
+      .filter(({ p }) => !caller.scope || caller.scope.includes(p.slug));
+    const held = holding.find(({ p }) => !caller.identity || hub.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.token_id === caller.identity.id);
+    return { held, other: !held && holding.length > 0 };
+  };
+  // A token for the repository of the item an agent holds, for an hour: read-only for the worker to fetch with;
+  // write (#472) only for the hub itself, to pass the worker's pushes on. git asks on every fetch and push, so the
+  // same agent, item, repository and kind reuse it while it's good. Each mint and refusal is on the record.
+  const itemToken = async (hub, { agent, it, p, caller, write = false }) => {
+    const repo = it.repo || hub.remotesOf(p)[0] || '';
+    const key = `${hub.workspace ?? ''}|${agent}|${it.id}|${repo}|${write ? 'w' : 'r'}`;
+    const have = minted.get(key);
+    if (have && Date.parse(have.expires_at) - 5 * 60_000 > Date.now()) return have;
+    let t;
+    try {
+      t = await appOf(hub).mint(repo, write ? WORK_PERMISSIONS : CLONE_PERMISSIONS);
+      for (const [k, v] of minted) if (Date.parse(v.expires_at) < Date.now()) minted.delete(k);
+      minted.set(key, t);
+    } catch (e) {
+      if (e instanceof UserError) {
+        hub.event(p, { item: it, actor: agent, type: 'credential_refused', headline: `No GitHub token for ${agent} on #${it.seq}: ${e.message}`, summary: e.hint ?? '', data: { agent, repo } });
+        hub.changed(p);
+      }
+      throw e;
+    }
+    const until = new Date(t.expires_at).toISOString().slice(11, 16);
+    hub.event(p, {
+      item: it, actor: agent, type: 'credential',
+      headline: write ? `The hub got a GitHub token for ${t.repo} to pass ${agent}'s pushes on #${it.seq} on, until ${until} UTC`
+        : `${agent} got a read-only GitHub token for ${t.repo} on #${it.seq}, until ${until} UTC`,
+      data: { agent, item: it.seq, repo: t.repo, expires_at: t.expires_at, token: caller.token?.name ?? null, write }, // the agent token that asked
+    });
+    hub.changed(p);
+    return t;
+  };
   // The hub's own address names no workspace: the base domain, or the public URL's host (e.g. auth.<base-domain>).
   const rootHost = publicUrl ? hostname(new URL(publicUrl).host) : '';
   const required = spaces ? true : auth === 'required';
@@ -890,6 +930,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       res.end(out.body);
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
+    // A worker's git pushes through the hub (#472) with basic auth, as git does: its name, and its agent token as
+    // the password. Asked first, so git's credential helper answers (nuworq git-credential).
+    let gitAgent = '';
+    if (/^(\/w\/[^/]+)?\/api\/git\//.test(path)) {
+      const [user, ...pass] = Buffer.from(String(req.headers.authorization ?? '').match(/^basic\s+(\S+)/i)?.[1] ?? '', 'base64').toString('utf8').split(':');
+      if (!user) {
+        res.writeHead(401, { 'www-authenticate': 'Basic realm="nuworq"', 'content-type': 'text/plain' });
+        return res.end('nuworq: pushes through the hub need the worker\'s name and agent token (nuworq git-credential)\n');
+      }
+      gitAgent = user;
+      req.headers.authorization = `Bearer ${pass.join(':')}`;
+    }
     try {
       if (onAdmin(req)) return await adminRoot(req, res, url, path, { send, deny });
       let am;
@@ -1333,7 +1385,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Agents get only what a worker needs to find its checkout, for the projects their token may reach.
       if (req.method === 'GET' && path === '/api/projects' && who.role === 'agent') {
         return send(200, hub.projects().filter((p) => !caller.scope || caller.scope.includes(p.slug))
-          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner })));
+          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner, sandbox_hosts: JSON.parse(p.sandbox_hosts || '[]') })));
       }
       if (req.method === 'GET' && path === '/api/projects' && url.searchParams.get('archived')) {
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
@@ -1550,8 +1602,38 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
         return send(200, withFeedback(m[2], agent, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), cursor: cursorOf(req), ...caller }))));
       }
-      // git asks for a credential (nuworq git-credential): a token for the repository of the item this
-      // agent holds, minted by the GitHub App for that one repository and an hour. On the record, never shown.
+      // A worker's push (#472): only to the repository of the item it holds, only nuworq/ branches (src/gitproxy.js),
+      // with the hub's token for that one repository, which the worker never sees. On the record either way.
+      if ((m = path.match(/^\/api\/git\/(github\.com\/[^/]+\/[^/]+?)(?:\.git)?\/(info\/refs|git-receive-pack|git-upload-pack)$/))) {
+        const text = (status, msg) => { res.writeHead(status, { 'content-type': 'text/plain' }); return res.end(`nuworq: ${msg}\n`); };
+        const [, repo, service] = m;
+        if (service === 'git-upload-pack' || (service === 'info/refs' && url.searchParams.get('service') !== 'git-receive-pack')) return text(403, 'the hub only takes pushes; fetch from GitHub');
+        if (service === 'git-receive-pack' && req.method !== 'POST') return text(405, 'git-receive-pack takes a POST');
+        if (!app) return text(404, "this hub has no GitHub App, so it can't pass pushes on");
+        if (agentRefused('credential')) return;
+        const { held, other } = heldBy(hub, gitAgent, caller);
+        if (other) return text(403, `${gitAgent} is another agent's name here: pushes go only through the token the agent holding the item uses`);
+        if (!held) return text(403, `${gitAgent} holds no item to push for: claim one (next), then push`);
+        const { it, p } = held;
+        const want = it.repo || hub.remotesOf(p)[0] || '';
+        if (normRemote(repo).toLowerCase() !== want.toLowerCase()) return text(403, `#${it.seq} lands in ${want}, not ${repo}`);
+        let token;
+        try {
+          token = (await itemToken(hub, { agent: gitAgent, it, p, caller, write: true })).token;
+        } catch (e) {
+          if (!(e instanceof UserError)) throw e;
+          return text(e.status || 424, e.message);
+        }
+        const names = (cmds) => cmds.map((c) => c.ref.replace(/^refs\/heads\//, '')).join(', ');
+        return await proxyPush(req, res, {
+          git: `${gh.web}/${want.slice('github.com/'.length)}.git`, service, token,
+          onRefused: (cmds, reasons) => { hub.event(p, { item: it, actor: gitAgent, type: 'push_refused', headline: `The hub refused ${gitAgent}'s push of ${names(cmds)} to ${want}: ${[...new Set(reasons.filter(Boolean))].join('; ')}`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } }); hub.changed(p); },
+          onPushed: (cmds) => { if (cmds.length) { hub.event(p, { item: it, actor: gitAgent, type: 'pushed_via_hub', headline: `${gitAgent} pushed ${names(cmds)} to ${want} through the hub`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } }); hub.changed(p); } },
+        });
+      }
+      // git asks for a credential (nuworq git-credential): a read-only token for the repository of the item this
+      // agent holds, minted by the GitHub App for that one repository and an hour. Pushes go through the hub
+      // (above), so no worker holds a token that writes. On the record, never shown.
       if (path === '/api/agent/credential' && req.method === 'POST') {
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
@@ -1582,40 +1664,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           hub.changed(p);
           return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
         }
-        // A push token is for the agent's own token (#469), never a person's browser session.
+        // A token is for the agent's own token (#469), never a person's browser session.
         if (caller.identity?.session) return deny(403, "a person's browser session gets no push token", 'Push tokens are for the agent that holds the item: its own token asks (nuworq git-credential).');
-        const holding = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
-          .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
-          .filter(({ p }) => !caller.scope || caller.scope.includes(p.slug));
-        const held = holding.find(({ p }) => !caller.identity || hub.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.token_id === caller.identity.id);
-        if (!held && holding.length) return deny(403, `${agent} is another agent's name here`, 'A push token goes only to the token the agent holding the item uses. Pick a name of your own and claim work with next.');
-        if (!held) return deny(409, `${agent || 'this agent'} holds no item to push for`, 'Tokens are for the item you hold: claim one (next), then push.');
-        const { it, p } = held;
-        const repo = it.repo || hub.remotesOf(p)[0] || '';
-        // git asks on every fetch and push: the same agent, item and repository reuse the token while it's good.
-        const key = `${hub.workspace ?? ''}|${agent}|${it.id}|${repo}`;
-        const have = minted.get(key);
-        if (have && Date.parse(have.expires_at) - 5 * 60_000 > Date.now()) {
-          return send(200, { ok: true, username: 'x-access-token', password: have.token, repo: have.repo, expires_at: have.expires_at });
-        }
-        let t;
-        try {
-          t = await appOf(hub).mint(repo);
-          for (const [k, v] of minted) if (Date.parse(v.expires_at) < Date.now()) minted.delete(k);
-          minted.set(key, t);
-        } catch (e) {
-          if (e instanceof UserError) {
-            hub.event(p, { item: it, actor: agent, type: 'credential_refused', headline: `No GitHub token for ${agent} on #${it.seq}: ${e.message}`, summary: e.hint ?? '', data: { agent, repo } });
-            hub.changed(p);
-          }
-          throw e;
-        }
-        hub.event(p, {
-          item: it, actor: agent, type: 'credential',
-          headline: `${agent} got a GitHub token for ${t.repo} on #${it.seq}, until ${new Date(t.expires_at).toISOString().slice(11, 16)} UTC`,
-          data: { agent, item: it.seq, repo: t.repo, expires_at: t.expires_at, token: caller.token?.name ?? null }, // the agent token that asked
-        });
-        hub.changed(p);
+        const { held, other } = heldBy(hub, agent, caller);
+        if (other) return deny(403, `${agent} is another agent's name here`, 'A push token goes only to the token the agent holding the item uses. Pick a name of your own and claim work with next.');
+        if (!held) return deny(409, `${agent || 'this agent'} holds no item to fetch for`, 'Tokens are for the item you hold: claim one (next), then fetch.');
+        const t = await itemToken(hub, { agent, ...held, caller });
         return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.

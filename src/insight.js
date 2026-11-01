@@ -24,7 +24,7 @@ export function projectList(hub, { viewer } = {}) {
   return hub.projects().map((p) => projectLine(hub, p, view(hub, p.slug, { light: true, viewer })));
 }
 
-const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
+const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, sandbox_hosts: json(p.sandbox_hosts, []), pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
 
 // The home: does anything need you, anywhere? One aggregate pulse, every act entry of the viewer's across
 // projects (tagged with its project, ranked as on a project page: byNeed), then one line per project. 5m adds

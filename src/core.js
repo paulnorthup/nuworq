@@ -15,6 +15,7 @@ import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease } from './releases.js';
 import { builtWhatItReviews, reviewRelease } from './security.js';
+import { sandboxHosts } from './sandbox.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
@@ -2166,6 +2167,9 @@ export class Hub extends EventEmitter {
     const lands = !may('build') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'landing' AND holder IS NULL
         AND NOT EXISTS (SELECT 1 FROM prs WHERE prs.item_id = items.id AND prs.state = 'open' AND prs.blocked != 'conflict') ORDER BY stage_since`).all(p.id)
       .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
+      // A runner's worker pushes only nuworq/ branches, through the hub (#472): work on origin that can't land
+      // through the hub's pull request (no GitHub App for it) needs a session or the operator to push main.
+      .filter((i) => !(role === 'worker' && this.remoteMode(p, i) && !this.prMode(p, i)))
       .map((item) => ({ mode: 'land', item }));
     if (p.parked) return [...lands.map(ranked), ...reviews.map(ranked)];
     const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id);
@@ -3818,8 +3822,18 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, security, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, security, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality, sandbox_hosts }, by) {
     const changes = [];
+    // What workers' sandbox may reach besides the hub, GitHub and package registries (#472): hosts, e.g. "api.stripe.com" or "*.example.com".
+    if (sandbox_hosts !== undefined) {
+      let hosts;
+      try { hosts = sandboxHosts(sandbox_hosts); } catch (e) { throw new UserError(e.message, { hint: e.hint }); }
+      if (JSON.stringify(hosts) !== JSON.stringify(json(p.sandbox_hosts, []))) {
+        this.q('UPDATE projects SET sandbox_hosts = ? WHERE id = ?').run(JSON.stringify(hosts), p.id);
+        p.sandbox_hosts = JSON.stringify(hosts);
+        this.event(p, { actor: by, type: 'runner', headline: hosts.length ? `${You(by)} let workers' tests here reach ${hosts.join(', ')}` : `${You(by)} let workers here reach only the hub, GitHub and package registries` });
+      }
+    }
     // The quality bar routing keeps to (#349): how close to the best model's results a cheaper one must come.
     if (model_quality != null && model_quality !== '') {
       const q = str(model_quality).toLowerCase();

@@ -569,6 +569,12 @@ export const MIGRATIONS = [
       if (stale.length) console.log(`Retired ${stale.length} of ${of} active steers: they were about items already done or dropped (#551).`);
     },
   },
+  {
+    // Hosts a project's tests need beyond the hub, GitHub and package registries (#472): workers' sandbox reaches them too.
+    // A JSON list of host names; only a person sets it (settings).
+    name: 'a project can name hosts its workers' tests need',
+    up(db) { addColumn(db, "ALTER TABLE projects ADD COLUMN sandbox_hosts TEXT NOT NULL DEFAULT '[]'"); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
