@@ -255,11 +255,14 @@ export class Directory {
       ON CONFLICT (workspace) DO UPDATE SET plan = excluded.plan, set_by = excluded.set_by, at = excluded.at`).run(workspace, plan, String(by), this.now());
   }
 
-  // Whether any of these emails belongs to the organization (a membership the hub has seen).
-  hasMember(workspace, emails) {
+  // Whether any of these emails belongs to the organization: a membership the hub has seen, whose person is still
+  // there with that email as their own (they signed in with it, #470). spaces: the Workspaces registry.
+  hasMember(workspace, emails, spaces) {
     if (!emails.length) return false;
-    return !!this.db.prepare(`SELECT 1 FROM memberships m JOIN identities i ON i.id = m.identity_id
-      WHERE m.workspace = ? AND i.email IN (${emails.map(() => '?').join(',')})`).get(workspace, ...emails);
+    const db = spaces.get(workspace)?.db;
+    return !!db && this.db.prepare(`SELECT i.email FROM memberships m JOIN identities i ON i.id = m.identity_id
+      WHERE m.workspace = ? AND i.email IN (${emails.map(() => '?').join(',')})`).all(workspace, ...emails)
+      .some(({ email }) => db.prepare('SELECT 1 FROM people WHERE email = ? AND verified_at IS NOT NULL').get(email));
   }
 
   // Whether a signed-in person created the organization (else the host did, on the command line).
@@ -434,8 +437,8 @@ export class Directory {
     if (sid) this.db.prepare('DELETE FROM hub_sessions WHERE hash = ?').run(sha(sid));
   }
 
-  // Remember that this email belongs to a workspace (no-op for an email the hub has never seen sign in:
-  // it is recorded when they first do, from the workspaces' people).
+  // Remember that this email belongs to a workspace (no-op for an email the hub has never seen sign in).
+  // Only for an email its owner just proved there: their sign-in, or the workspace they made (#470).
   join(email, workspace, { created = false } = {}) {
     const i = this.identity(email);
     if (!i) return;
@@ -444,12 +447,13 @@ export class Directory {
   }
 
   // An identity's organizations, checked against each workspace's people: { workspace, handle, role, created }.
-  // spaces: the Workspaces registry. Memberships whose workspace or person is gone are forgotten.
+  // spaces: the Workspaces registry. Memberships whose workspace or person is gone are forgotten; a person only
+  // counts with the email as their own (they signed in with it), never one an owner typed for them (#470).
   orgsOf(identity, spaces) {
     const out = [];
     for (const m of this.db.prepare('SELECT * FROM memberships WHERE identity_id = ? ORDER BY at').all(identity.id)) {
       const hub = spaces.get(m.workspace);
-      const p = hub?.db.prepare('SELECT handle, role FROM people WHERE email = ? ORDER BY id').get(identity.email);
+      const p = hub?.db.prepare('SELECT handle, role FROM people WHERE email = ? AND verified_at IS NOT NULL ORDER BY id').get(identity.email);
       if (!p) {
         this.db.prepare('DELETE FROM memberships WHERE identity_id = ? AND workspace = ?').run(identity.id, m.workspace);
         continue;

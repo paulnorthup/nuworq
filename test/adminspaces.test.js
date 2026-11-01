@@ -119,7 +119,9 @@ describe('the admin host lists workspaces and sets their plans', () => {
     const acme = spaces.get('acme');
     assert.equal(acme.appWiring('@ann'), null);
     acme.db.prepare("INSERT INTO people (handle, email, role, created_at) VALUES ('paul', ?, 'member', 0)").run(PAUL);
-    assert.ok(acme.appWiring('@paul')?.gaps.events.length);
+    assert.equal(acme.appWiring('@paul'), null, 'not by an email someone typed for him (#470)');
+    acme.db.prepare("UPDATE people SET verified_at = 1 WHERE handle = 'paul'").run();
+    assert.ok(acme.appWiring('@paul')?.gaps.events.length, 'by the email he signed in with');
     acme.db.prepare("DELETE FROM people WHERE handle = 'paul'").run();
   });
   after(() => { for (const s of [server, p.server]) { s.close(); s.closeAllConnections(); } spaces.close(); });

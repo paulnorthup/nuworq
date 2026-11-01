@@ -77,7 +77,7 @@ describe('sign in with GitHub or Google', () => {
     stubUrl = `http://127.0.0.1:${await listen(p.server)}`;
     hub = new Hub();
     auth = new Auth(hub.db);
-    auth.addPerson('ann', 'owner', { email: 'ann@example.com' });
+    auth.addPerson('ann', 'owner', { email: 'ann@example.com', verified: true }); // as the host's person add does
     hub.tx(() => hub.project('p', { create: true }));
     server = createServer(hub, { auth: 'required', oauth: config(stubUrl) });
     port = await listen(server);
@@ -182,8 +182,8 @@ describe('one provider app serves every workspace', () => {
     stubUrl = `http://127.0.0.1:${await listen(p.server)}`;
     spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-oauth-')) });
     for (const ws of ['acme', 'globex']) spaces.create(ws);
-    new Auth(spaces.get('acme').db).addPerson('ann', 'owner', { email: 'ann@acme.com' });
-    new Auth(spaces.get('globex').db).addPerson('gus', 'owner', { email: 'gus@globex.com' });
+    new Auth(spaces.get('acme').db).addPerson('ann', 'owner', { email: 'ann@acme.com', verified: true });
+    new Auth(spaces.get('globex').db).addPerson('gus', 'owner', { email: 'gus@globex.com', verified: true });
     server = createServer(spaces, { baseDomain: BASE, publicUrl: `http://auth.${BASE}`, oauth: config(stubUrl) });
     port = await listen(server);
   });

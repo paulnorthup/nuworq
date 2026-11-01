@@ -181,8 +181,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const wiringFor = (hub) => (viewer) => {
     const found = wiring.app === app ? wiring.found : null;
     if (!found) return null;
-    const who = viewer ? hub.q('SELECT role, email FROM people WHERE handle = ?').get(String(viewer).replace(/^@/, '').toLowerCase()) : null;
-    if (spaces) return who?.email && spaces.owners.includes(who.email.toLowerCase()) ? found : null;
+    const who = viewer ? hub.q('SELECT role, email, verified_at FROM people WHERE handle = ?').get(String(viewer).replace(/^@/, '').toLowerCase()) : null;
+    // A hub owner by an email they signed in with, never one typed for them (#470).
+    if (spaces) return who?.email && who.verified_at && spaces.owners.includes(who.email.toLowerCase()) ? found : null;
     return !viewer || !who || who.role === 'owner' ? found : null;
   };
   // Whether the app reaches anything (Get started): installed anywhere on a single hub; on a workspaces hub,
@@ -336,10 +337,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (baseDomain) return `${new URL(authOrigin(req)).protocol}//${ws}.${baseDomain}`;
     return `${authOrigin(req)}/w/${encodeURIComponent(ws)}`;
   };
-  const joined = (hub, person, role, invitedBy) => {
+  // held: the role an owner typed for them before they signed in, which waits for an owner to confirm it (#470).
+  const joined = (hub, person, role, invitedBy, held) => {
     const who = `@${person.handle}`;
+    const wait = held ? ` until an owner confirms the ${held} role they were added with (POST /api/people/role {"handle":"${person.handle}","role":"${held}"})` : '';
     for (const p of hub.projects()) {
-      hub.event(p, { actor: who, type: 'joined', headline: `${who} joined as ${role}${invitedBy ? `, invited by ${invitedBy}` : ''}` });
+      hub.event(p, { actor: who, type: 'joined', headline: `${who} joined as ${role}${invitedBy ? `, invited by ${invitedBy}` : ''}${wait}` });
       hub.changed(p);
     }
   };
@@ -415,7 +418,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const r = scopeOf(hub).authz.signInByEmail(email, provider);
     if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
     spaces?.directory.join(email, flow.ws);
-    if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
+    if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy, r.held);
     return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}${dev ? `&${dev}` : ''}`);
   }
   const sameOrigin = (req) => {
@@ -771,7 +774,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       try { spaces.create(slug); } catch (e) { if (earlyAccess?.gate && !owner) dir.returnGrant(b.grant); throw e; }
       const hub = spaces.get(slug);
       const authz = scopeOf(hub).authz;
-      const person = authz.addPerson(Auth.handleOf(me.email.split('@')[0]), 'owner', { email: me.email });
+      const person = authz.addPerson(Auth.handleOf(me.email.split('@')[0]), 'owner', { email: me.email, verified: true });
       dir.join(me.email, slug, { created: true });
       return send(200, { ok: true, ...org({ workspace: slug, handle: person.handle, role: 'owner', created: true }) });
     }
@@ -783,7 +786,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const r = hub && scopeOf(hub).authz.signInByEmail(me.email, me.provider);
       if (!r) return deny(404, `${me.email} isn't a member of "${ws}"`, 'Ask an owner there for an invite (to this email).');
       dir.join(me.email, ws);
-      if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
+      if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy, r.held);
       return redirect(res, `${homeOf(req, ws)}/api/oauth/finish?ticket=${sso.ticket(ws, r.sid)}`);
     }
     return deny(405, `use ${path === '/api/orgs' ? 'POST' : 'GET'}`);
@@ -965,7 +968,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         let r;
         try { r = authz.acceptInvite(b.token, b.handle); } catch (e) { return deny(400, e.message, 'Pick another handle: lowercase letters, digits, ., _ or -.'); }
         res.setHeader('set-cookie', sessionCookie(req, r.sid, cookiePath));
-        if (r.person.email) spaces?.directory.join(r.person.email, ws);
+        // No membership from the invite's email: a link proves no email (#470). Their first sign-in with it makes one.
         joined(hub, r.person, r.person.role, r.invitedBy);
         return send(200, { ok: true, person: `@${r.person.handle}`, role: r.person.role });
       }
@@ -1134,8 +1137,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (personRole !== 'owner') return deny(403, 'only an owner manages people', 'Ask an owner of this workspace.');
         const b = await body(req);
         try {
+          // A typed email is a hint for matching their first sign-in, not who they are: no membership from it (#470).
           const person = path === '/api/people' ? authz.addPerson(b.handle, b.role, { name: b.name, email: b.email }) : authz.setRole(b.handle, b.role);
-          if (person.email) spaces?.directory.join(person.email, ws);
           return send(200, { ok: true, person });
         } catch (e) {
           throw new UserError(e.message);
@@ -1481,7 +1484,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const own = who.person && personRole !== 'owner' ? by : null; // null: every channel
       if (req.method === 'GET' && path === '/api/notify') {
         // One of the hub's owners: which channels here hear about early-access requests (#251), maybe none.
-        const email = who.person && spaces && hub.db.prepare('SELECT email FROM people WHERE handle = ?').get(who.person.handle)?.email?.toLowerCase();
+        const email = who.person && spaces && hub.db.prepare('SELECT email FROM people WHERE handle = ? AND verified_at IS NOT NULL').get(who.person.handle)?.email?.toLowerCase();
         const requests = email && earlyAccess?.owners?.includes(email) ? requestChannels(hub.db, who.person.handle).map((c) => c.id) : null;
         return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null, requests });
       }
