@@ -9,6 +9,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
+import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -334,7 +335,9 @@ async function agentToken(client, flags) {
   const me = await client.get('/api/me');
   if (me.auth !== 'required') return null;
   // A machine connected with an agent token (nuworq connect) hands that one on.
-  const t = flags['agent-token'] || envVar('AGENT_TOKEN') || (me.role === 'agent' ? client.settings.token : null);
+  // NUWORQ_AGENT_TOKEN_FILE: how an installed runner keeps its --agent-token off its command line (#477).
+  const fromFile = () => { try { return readFileSync(envVar('AGENT_TOKEN_FILE'), 'utf8').trim() || null; } catch { return null; } };
+  const t = flags['agent-token'] || envVar('AGENT_TOKEN') || (envVar('AGENT_TOKEN_FILE') && fromFile()) || (me.role === 'agent' ? client.settings.token : null);
   const how = 'Create one on the hub host: nuworq token create <name> --role agent --project <project>. Pass it with --agent-token or NUWORQ_AGENT_TOKEN.';
   if (!t || t === true) throw new HubError('This hub requires login, so workers need their own agent token', { hint: how });
   const who = await createClient({ url: client.settings.url, token: t }).get('/api/me');
@@ -377,7 +380,7 @@ async function worker(flags) {
     target = { ...target, repo: routes.find((r) => r.project === target.slug)?.repo ?? null };
   }
   const token = flags.run ? await agentToken(client, flags) : null;
-  const { name, worktree, main, origin, cwd, cmd } = await setupOrClone(target, agent, flags, s, client, token);
+  const { name, worktree, main, origin, cwd, cmd, tokenAt } = await setupOrClone(target, agent, flags, s, client, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
@@ -392,9 +395,10 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
     return;
   }
   const { spawn } = await import('node:child_process');
-  const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['inherit', 'pipe', 'inherit'] });
+  const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['inherit', 'pipe', 'inherit'], env: withoutTokens() });
   const usage = await tapUsage(child, agent, flags, (l) => console.log(l));
   await new Promise((done) => child.on('close', (code) => { process.exitCode = code ?? 1; done(); }));
+  dropTokenFile(tokenAt);
   await reportUsage(s, token, target.slug, name, usage());
 }
 
@@ -419,8 +423,6 @@ async function reportUsage(s, token, project, name, usage) {
   }
 }
 
-const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
-
 // The branch work lands on: main, or (in a repo without one) the branch the main checkout is on.
 function mainBranch(home) {
   const git = (...a) => { try { return execFileSync('git', ['-C', home, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
@@ -436,8 +438,20 @@ const hasOrigin = (home) => {
 // server knows projects by remote, and has no folder for them here); with neither, this folder.
 // target.repo: in a project with several repositories, the one its most useful work is in: the
 // project's folder only when that is a clone of it, else this machine's checkout of it.
+// flags.chosen (nuworq run, #477): the folders the person chose on this machine. The hub's folder for a project
+// counts only when it is one of them, and a checkout found by remote only inside one.
 function homeOf(target, flags) {
   if (flags.here) return process.cwd();
+  if (flags.chosen) {
+    const ok = (p) => inChosen(p, flags.chosen);
+    const home = target.path && ok(target.path) && existsSync(target.path) && (!target.repo || repoRemote(target.path) === target.repo)
+      ? target.path
+      : target.repo || target.remotes?.length ? checkoutOf(target.repo ? [target.repo] : target.remotes) : null;
+    if (home && ok(home)) return home;
+    throw new HubError(home ? `${home} isn't a folder you chose for workers on this machine` : `${target.name ?? target.slug} has no folder you chose for workers on this machine`, {
+      hint: 'Run `nuworq run` in a terminal to choose the folders workers may use, or add one with `nuworq run --folder <path>`.',
+    });
+  }
   if (target.repo) {
     const recorded = target.path && existsSync(target.path) ? repoRemote(target.path) : '';
     return recorded === target.repo ? target.path : checkoutOf([target.repo]);
@@ -458,6 +472,8 @@ async function cloneHome(target, flags, s, client, token, missing) {
   const remote = missing.missing;
   const github = /^github\.com\/[^/]+\/[^/]+$/.test(remote);
   if (flags.here || !(remote.startsWith('/') || github)) throw missing;
+  // A path remote is a folder on this machine: only a hub on this machine may have one cloned (#477).
+  if (remote.startsWith('/') && !loopback(s.url)) throw missing;
   if (github) {
     const info = await client.get('/api/info').catch(() => ({}));
     if (!info.github_app || info.github_app === 'create') throw missing;
@@ -465,15 +481,19 @@ async function cloneHome(target, flags, s, client, token, missing) {
   const dir = cloneDir(remote);
   const cant = (why) => new HubError(`Couldn't clone ${remote} into ${dir}: ${why}`, { hint: missing.hint });
   if (existsSync(dir)) throw cant('something else is there');
-  const helper = `!node ${JSON.stringify(BIN)} git-credential --project ${target.slug}`;
+  if (flags.chosen && !inChosen(dir, flags.chosen)) throw cant("that isn't inside a folder you chose for workers; run `nuworq run` in a terminal to choose one");
+  const helper = `!node ${sq(BIN)} git-credential --project ${sq(checkName('project', target.slug))}`;
+  const file = token ?? s.token ? tokenFile(dirname(HUB_FILE), `clone-${randomBytes(3).toString('hex')}`, token ?? s.token) : null;
   try {
     execFileSync('git', ['-c', 'credential.https://github.com.helper=', '-c', `credential.https://github.com.helper=${helper}`, '-c', 'credential.https://github.com.useHttpPath=true',
       'clone', '-q', github ? `https://${remote}.git` : remote, dir], {
       stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', NUWORQ_URL: s.url, ...(token ?? s.token ? { NUWORQ_TOKEN: token ?? s.token } : {}) },
+      env: { ...withoutTokens(), GIT_TERMINAL_PROMPT: '0', NUWORQ_URL: s.url, ...(file ? { NUWORQ_TOKEN_FILE: file } : {}) },
     });
   } catch (e) {
-    throw cant(String(e.stderr ?? e.message).trim().split('\n').filter(Boolean).pop() ?? 'git clone failed');
+    throw cant(redact(String(e.stderr || '').trim().split('\n').filter(Boolean).pop() ?? 'git clone failed'));
+  } finally {
+    dropTokenFile(file);
   }
   console.log(`Cloned ${remote} into ${dir}`);
   return dir;
@@ -538,7 +558,12 @@ function workerSettings() {
 function workerSetup(target, agent, flags, s, token = null) {
   const home = homeOf(target, flags);
 
-  const name = String(flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
+  // Names from the hub (and --as) reach shells and file names: plain names only (#477).
+  checkName('project', target.slug);
+  const name = checkName('worker name', flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
+  // Its agent token goes in a 0600 file the MCP server and the credential helper read; only the file's path is
+  // in the commands and the environment (#477).
+  const tokenAt = token ? tokenFile(dirname(HUB_FILE), name, token) : null;
   const isRepo = existsSync(join(home, '.git'));
   // With an origin (GitHub), work starts from main there and lands by pushing to it.
   const origin = isRepo && hasOrigin(home);
@@ -557,7 +582,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     ...(model && agent !== 'opencode' ? { NUWORQ_MODEL: model } : {}),
     // A worker nuworq run started says so at checkin, with its runner (#238); a runner's token says it too.
     ...(flags.run ? { NUWORQ_ROLE: 'worker', NUWORQ_RUNNER: hostname() } : {}),
-    ...(token ? { NUWORQ_TOKEN: token } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
+    ...(tokenAt ? { NUWORQ_TOKEN_FILE: tokenAt } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
   };
   const task = [
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
@@ -596,7 +621,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   if (worktree && origin) {
     // A fetch over HTTPS from GitHub gets a read-only token for the project's repository from the hub's
     // GitHub App: the worker holds no item yet. git asks its own helpers first, and SSH needs none.
-    const reader = `!NUWORQ_URL=${s.url}${token ? ` NUWORQ_TOKEN=${token}` : ''} node ${JSON.stringify(BIN)} git-credential --project ${target.slug} --as ${name}`;
+    const reader = `!NUWORQ_URL=${sq(s.url)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --project ${sq(target.slug)} --as ${sq(name)}`;
     setup.push(`git -C ${sq(home)} -c ${sq(`credential.https://github.com.helper=${reader}`)} -c credential.https://github.com.useHttpPath=true fetch -q origin`,
       `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
   } else if (worktree) setup.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
@@ -604,7 +629,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   // Pushes over HTTPS to GitHub get a one-repo, one-hour token from the hub's GitHub App, asked for by git
   // itself: this worker's processes only (no config file changes), and the agent never sees the token.
   if (origin) {
-    const helper = `!NUWORQ_URL=${s.url}${token ? ` NUWORQ_TOKEN=${token}` : ''} node ${JSON.stringify(BIN)} git-credential --as ${name}`;
+    const helper = `!NUWORQ_URL=${sq(s.url)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --as ${sq(name)}`;
     lines.push(`export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0=${sq(helper)} GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath GIT_CONFIG_VALUE_1=true`);
   }
   // Workers each running a Node project's whole suite on every core at once saturate the machine: their test
@@ -650,7 +675,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     lines.push(`codex exec${json}${model ? ` -m ${sq(model)}` : ''} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
   }
   return {
-    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd,
+    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd, tokenAt,
     checkout: setup.join(' && '), start: lines.join(' && \\\n'), cmd: [...setup, ...lines].join(' && \\\n'),
   };
 }
@@ -670,11 +695,18 @@ async function runService(flags) {
   }
   let args;
   try { args = svc.serviceArgs(process.argv.slice(3)); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+  lockDown(dirname(HUB_FILE));
+  // The folders its workers may use, chosen now while there's a terminal to ask in (#477).
+  await chooseWorkFolders(flags, await createClient(flags).get('/api/projects').catch(() => []), resolveSettings(flags));
+  // --agent-token never goes on the service's command line, where ps shows it: a 0600 file it reads instead.
+  const taken = svc.takeToken(args);
+  args = taken.args;
+  const agentTokenFile = taken.token ? tokenFile(dirname(HUB_FILE), 'run-agent', taken.token) : null;
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
   // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
   const cwd = process.cwd();
   // NUWORQ_SERVICE: it knows it's the service, so it may exit to move onto a newly installed nuworq (#456).
-  const env = { ...svc.serviceEnv(process.env, { repos: besideOf(cwd) }), NUWORQ_SERVICE: svc.LABEL };
+  const env = { ...svc.serviceEnv(process.env, { repos: besideOf(cwd) }), NUWORQ_SERVICE: svc.LABEL, ...(agentTokenFile ? { NUWORQ_AGENT_TOKEN_FILE: agentTokenFile } : {}) };
   const r = await svc.install({ ...where, command: [svc.stableNode(process.execPath), BIN, 'run', ...args], env, log, cwd })
     .catch((e) => { throw new HubError(e.message, { hint: e.hint ?? 'Run it without --install to see what goes wrong.' }); });
   // Loaded isn't running (#250): only report success once the runner is up.
@@ -696,6 +728,31 @@ async function runService(flags) {
   console.log(dim(`  Then run nuworq run --install again from here, or install it with NUWORQ_REPOS=<the folder holding your checkouts>.`));
 }
 
+// The folders workers may use on this machine (#477), kept in ~/.nuworq/folders.json: those chosen before, any
+// --folder given now, and, in a terminal, each place this runner looks for checkouts (beside this folder, and
+// NUWORQ_REPOS) that the person says yes to. A folder the hub names is offered only by a hub on this machine,
+// and still asked about. A service, with no terminal, uses only what was chosen.
+async function chooseWorkFolders(flags, projects, s) {
+  const dir = dirname(HUB_FILE);
+  const given = [flags.folder].flat().filter((f) => typeof f === 'string' && f).map((f) => resolve(f));
+  let chosen = given.length ? chooseFolders(dir, given) : chosenFolders(dir);
+  const local = loopback(s.url) ? (projects ?? []).filter((p) => !p.remotes?.length && p.path).map((p) => p.path) : [];
+  const offer = toOffer([besideOf(process.cwd()), ...String(envVar('REPOS') ?? '').split(delimiter), ...local], chosen);
+  if (offer.length && process.stdin.isTTY && process.stdout.isTTY) {
+    const { createInterface } = await import('node:readline/promises');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const yes = [];
+    try {
+      for (const f of offer) if (/^y(es)?$/i.test((await rl.question(`Let workers work in checkouts inside ${bold(f)}? [y/N] `)).trim())) yes.push(f);
+    } finally { rl.close(); }
+    if (yes.length) chosen = chooseFolders(dir, yes);
+  }
+  if (!chosen.length) {
+    console.log(`${amber('!')} No folder is chosen for workers on this machine, so none will start. Run ${bold('nuworq run')} in a terminal to choose, or ${bold('nuworq run --folder <path>')}.`);
+  }
+  return chosen;
+}
+
 // Keep up to --workers headless workers on waiting work in the projects the human opted in.
 async function runCmd(flags) {
   if (flags.install || flags.uninstall) return runService(flags);
@@ -710,7 +767,8 @@ async function runCmd(flags) {
   const { createWriteStream } = await import('node:fs');
   const { run, cleanWorktree, cleanBranch, sweep, sweepLine } = await import('../src/runner.js');
   const logs = join(dirname(HUB_FILE), 'logs');
-  mkdirSync(logs, { recursive: true });
+  lockDown(dirname(HUB_FILE)); // 0700 folders and 0600 files, again on every start (#477)
+  const chosen = await chooseWorkFolders(flags, await hubProjects(client), s);
   const git = async (args) => (await promisify(execFile)('git', args, { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout;
   // The branches of a project's done and dropped items; merged: those whose PR merged (#455).
   const finishedOf = async (slug) => {
@@ -732,7 +790,7 @@ async function runCmd(flags) {
     const homes = new Map();
     for (const target of await hubProjects(client)) {
       let home;
-      try { home = homeOf(target, {}); } catch { continue; }
+      try { home = homeOf(target, { chosen }); } catch { continue; }
       if (home && existsSync(join(home, '.git')) && !homes.has(home)) homes.set(home, target);
     }
     for (const [home, target] of homes) {
@@ -756,36 +814,41 @@ async function runCmd(flags) {
     const routed = r.model ? { model: r.model, job: r } : {};
     let setup;
     try {
-      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true, ...routed }, s, client, token);
+      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true, chosen, ...routed }, s, client, token);
     } catch (e) {
       // This machine can't work on the project (no checkout of it here): the runner leaves it to others.
       if (e instanceof HubError) e.skip = true;
       throw e;
     }
-    const { name, home, worktree, cwd, checkout, start } = setup;
+    const { name, home, worktree, cwd, checkout, start, tokenAt } = setup;
     const log = join(logs, `${name}.log`);
     // Its worktree, at the latest main. When git can't do that (e.g. it can't reach origin), the agent never
     // starts: the runner leaves the project alone for a while and the others go on.
     if (checkout) {
       try {
-        await promisify(execFile)('/bin/sh', ['-c', checkout], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout: 5 * 60_000 });
+        await promisify(execFile)('/bin/sh', ['-c', checkout], { env: { ...withoutTokens(), GIT_TERMINAL_PROMPT: '0' }, timeout: 5 * 60_000 });
       } catch (e) {
-        const err = String(e.stderr || e.message).trim();
-        writeFileSync(log, `${err}\n`);
+        // git's own words only: the error's message holds the whole command.
+        const err = redact(String(e.stderr || (e.killed ? 'timed out' : `exited with ${e.code ?? 'an error'}`)).trim());
+        writeFileSync(log, `${err}\n`, { mode: 0o600 });
+        dropTokenFile(tokenAt);
         const said = err.split('\n').find((l) => /^(fatal|error):/.test(l)) ?? err.split('\n').pop();
         throw Object.assign(new HubError(`couldn't update its checkout: ${said}`, { hint: `log: ${log}` }), { skip: true, pause: true });
       }
     }
-    const out = createWriteStream(log);
-    // Its own process group, so stopping it stops the agent too, not just the shell.
-    const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const usage = await tapUsage(child, agent, { ...flags, ...routed }, (l) => out.write(`${l}\n`));
-    child.stderr.pipe(out, { end: false });
+    const out = createWriteStream(log, { mode: 0o600 });
+    // Its own process group, so stopping it stops the agent too, not just the shell. Never the runner's tokens.
+    const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: withoutTokens() });
+    // Its log holds no tokens (#477).
+    const usage = await tapUsage(child, agent, { ...flags, ...routed }, (l) => out.write(`${redact(l)}\n`));
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (c) => out.write(redact(c)));
     return {
       name, project: target.slug, worktree, where: dim(`${worktree ?? cwd}  log: ${log}`),
       kill: (sig) => { try { process.kill(-child.pid, sig); } catch {} },
       exited: new Promise((done) => child.on('close', async (code, sig) => {
         out.end();
+        dropTokenFile(tokenAt);
         await reportUsage(s, token, target.slug, name, usage());
         // Its worktree goes with it, unless something there would be lost; and its branch, once its item is
         // done or dropped and all of it is on origin (#444).
@@ -814,8 +877,10 @@ async function runCmd(flags) {
     // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`),
     launch, workers, sweep: (running) => sweepAll(running), sweptAt,
+    // What it prints and logs: no tokens, and no control characters from hub text (#477).
+    log: (line) => console.log(safe(line)),
     // How this runner is, on every poll (#171), with the workers' agent token: a runner token names the runner.
-    report: (state) => reporter.post('/api/runner', { name: hostname(), machine: hostname(), ...state }),
+    report: (state) => reporter.post('/api/runner', JSON.parse(redact(JSON.stringify({ name: hostname(), machine: hostname(), ...state })))),
     // Asked of the hub, not the routes: a quick worker can claim and exit between two polls. A minute
     // of slack covers clocks that differ.
     claimed: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).claims > 0,
@@ -1513,6 +1578,8 @@ ${bold('Setup')}
                                          key its owner token, from NUWORQ_LLM_PROXY_TOKEN.
                                          On a hub with login, --run needs --agent-token (or
                                          NUWORQ_AGENT_TOKEN): workers never get your own token.
+                                         Workers work only in folders you chose here: run asks in a
+                                         terminal; --folder <path> adds one (~/.nuworq/folders.json).
                                          It reports what this machine has (macos/linux, docker, gpu;
                                          add more with --has). --browser (Claude only): the worker gets a
                                          headless Chrome (Playwright MCP, local pages only) to check UI

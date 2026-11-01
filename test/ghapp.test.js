@@ -321,7 +321,8 @@ describe('workers ask git for tokens through the helper', () => {
     const port = await listen(server);
     try {
       const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${port}`, '--project', 'api', '--as', 'w1'], { env: { ...process.env, HOME: dir }, cwd: dir });
-      assert.match(stdout, /export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential\.https:\/\/github\.com\.helper GIT_CONFIG_VALUE_0='!NUWORQ_URL=http:\/\/127\.0\.0\.1:\d+ node "[^"]+" git-credential --as w1'/);
+      // Every value in it quoted (#477): git runs the helper through sh.
+      assert.match(stdout, /export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential\.https:\/\/github\.com\.helper GIT_CONFIG_VALUE_0='!NUWORQ_URL='\\''http:\/\/127\.0\.0\.1:\d+'\\'' node '\\''[^']+'\\'' git-credential --as '\\''w1'\\'''/);
       assert.match(stdout, /GIT_CONFIG_KEY_1=credential\.https:\/\/github\.com\.useHttpPath GIT_CONFIG_VALUE_1=true/);
       assert.doesNotMatch(execFileSync('git', ['-C', home, 'config', '--list', '--local'], { encoding: 'utf8' }), /credential/);
     } finally { server.close(); }
