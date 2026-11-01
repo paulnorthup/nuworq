@@ -866,9 +866,16 @@ async function runCmd(flags) {
     };
   };
 
-  const workers = num(flags.workers, 1);
+  // --workers auto (#533): as many as the machine has room for, up to --max-workers (half its cores by default).
+  const { autoMax } = await import('../src/runner.js');
+  const { loadavg, availableParallelism, freemem } = await import('node:os');
+  const machine = () => ({ load: loadavg()[0], cores: availableParallelism(), free: process.availableMemory?.() || freemem() });
+  const auto = flags.workers === 'auto';
+  const workers = auto ? 'auto' : num(flags.workers, 1);
+  const maxWorkers = auto ? num(flags['max-workers'], autoMax(availableParallelism())) : undefined;
   const reporter = createClient({ url: s.url, token: token ?? s.token });
-  console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`up to ${workers} ${agent} worker${workers > 1 ? 's' : ''} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
+  const howMany = auto ? `as many ${agent} workers as this machine has room for (up to ${maxWorkers})` : `up to ${workers} ${agent} worker${workers > 1 ? 's' : ''}`;
+  console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`${howMany} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
   // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
   const startedOn = installed(ROOT);
   const { supervised } = await import('../src/service.js');
@@ -878,7 +885,7 @@ async function runCmd(flags) {
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`),
-    launch, workers, sweep: (running) => sweepAll(running), sweptAt,
+    launch, workers, maxWorkers, machine, sweep: (running) => sweepAll(running), sweptAt,
     // What it prints and logs: no tokens, and no control characters from hub text (#477).
     log: (line) => console.log(safe(line)),
     // How this runner is, on every poll (#171), with the workers' agent token: a runner token names the runner.
@@ -886,6 +893,7 @@ async function runCmd(flags) {
     // Asked of the hub, not the routes: a quick worker can claim and exit between two polls. A minute
     // of slack covers clocks that differ.
     claimed: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).claims > 0,
+    took: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).first ?? null,
     maxRuns: num(flags['max-runs'], Infinity),
     untilIdle: !!flags['until-idle'],
     maxMinutes: num(flags['max-minutes'], Infinity),
@@ -1586,9 +1594,12 @@ ${bold('Setup')}
                                          add more with --has). --browser (Claude only): the worker gets a
                                          headless Chrome (Playwright MCP, local pages only) to check UI
                                          work with, and has "browser".
-  run [--workers 1] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--max-usd X] [--poll 30] [--has tags] [--browser] [--until-idle]
+  run [--workers 1|auto] [--max-workers M] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--max-usd X] [--poll 30] [--has tags] [--browser] [--until-idle]
                                          keep up to N workers on waiting work in projects you opted in
-                                         (UI: "Let nuworq run staff this project"); waits for work, or
+                                         (UI: "Let nuworq run staff this project"). --workers auto: one
+                                         more only while the 1-minute load is under 80% of the cores and
+                                         2 GB of memory is free, at least one, up to --max-workers (half
+                                         the cores by default); it says why when it holds. Waits for work, or
                                          with --until-idle exits when the queue is empty. Workers that
                                          keep failing pause it (5m, then longer, up to 30m), and a project
                                          whose checkout can't be updated waits the same way while the
