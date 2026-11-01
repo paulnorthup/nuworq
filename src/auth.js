@@ -80,13 +80,17 @@ export class Auth {
     return this.db.prepare('SELECT * FROM people WHERE handle = ?').get(String(handle ?? '').replace(/^@/, '').toLowerCase()) ?? null;
   }
 
-  addPerson(handle, role = 'member', { name = '', email = '' } = {}) {
+  // verified: they proved the email is theirs (signed in with it), or the host vouches for it. Otherwise the email
+  // is only a hint for matching their first sign-in, never who they are (#470).
+  addPerson(handle, role = 'member', { name = '', email = '', verified = false } = {}) {
     handle = String(handle ?? '').trim().replace(/^@/, '').toLowerCase();
     if (!HANDLE.test(handle)) throw new Error('handle: 1–40 lowercase letters, digits, ., _ or -, starting with a letter or digit');
     if (!PERSON_ROLES.includes(role)) throw new Error(`role must be one of ${PERSON_ROLES.join(', ')}`);
     if (this.person(handle)) throw new Error(`@${handle} already exists`);
-    const r = this.db.prepare('INSERT INTO people (handle, name, email, role, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(handle, String(name).trim(), String(email).trim().toLowerCase(), role, this.now());
+    email = String(email).trim().toLowerCase();
+    const t = this.now();
+    const r = this.db.prepare('INSERT INTO people (handle, name, email, role, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(handle, String(name).trim(), email, role, t, verified && email ? t : null);
     return this.db.prepare('SELECT * FROM people WHERE id = ?').get(Number(r.lastInsertRowid));
   }
 
@@ -158,24 +162,44 @@ export class Auth {
     }
   }
 
-  // Sign in with a verified email from GitHub or Google: the person with that email, else the open invite
-  // bound to it (the person is created with the invite's role and a handle from the email). Else null.
+  // Sign in with a verified email from GitHub or Google: the person who signed in with it before, else the open
+  // invite bound to it (it sets their role; a new person gets a handle from the email), else a person someone made
+  // by typing the email, else null. A role typed for an email before its owner ever signed in doesn't take effect
+  // on its own (#470): unless an invite they accepted gave it, they come in as a viewer, and held is the role an
+  // owner may now confirm.
   signInByEmail(email, provider) {
     email = String(email ?? '').trim().toLowerCase();
     if (!email.includes('@')) return null;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      let p = this.db.prepare('SELECT * FROM people WHERE email = ? ORDER BY id').get(email), invitedBy;
+      const t = this.now();
+      let p = this.db.prepare('SELECT * FROM people WHERE email = ? AND verified_at IS NOT NULL ORDER BY id').get(email), invitedBy, held, joined = false;
       if (!p) {
-        const t = this.now();
+        const typed = this.db.prepare('SELECT * FROM people WHERE email = ? AND verified_at IS NULL ORDER BY id').get(email);
         const inv = this.db.prepare('SELECT * FROM invites WHERE email = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at >= ? ORDER BY id').get(email, t);
-        if (!inv) { this.db.exec('ROLLBACK'); return null; }
-        const stem = Auth.handleOf(email.split('@')[0]).slice(0, 36);
-        let handle = stem;
-        for (let n = 2; this.person(handle); n++) handle = `${stem}-${n}`;
-        p = this.addPerson(handle, inv.role, { email });
-        this.db.prepare('UPDATE invites SET used_at = ?, used_by = ? WHERE id = ?').run(t, p.handle, inv.id);
-        invitedBy = inv.created_by;
+        if (!typed && !inv) { this.db.exec('ROLLBACK'); return null; }
+        if (inv) {
+          if (typed) {
+            this.db.prepare('UPDATE people SET role = ?, verified_at = ? WHERE id = ?').run(inv.role, t, typed.id);
+            p = { ...typed, role: inv.role, verified_at: t };
+          } else {
+            const stem = Auth.handleOf(email.split('@')[0]).slice(0, 36);
+            let handle = stem;
+            for (let n = 2; this.person(handle); n++) handle = `${stem}-${n}`;
+            p = this.addPerson(handle, inv.role, { email, verified: true });
+          }
+          this.db.prepare('UPDATE invites SET used_at = ?, used_by = ? WHERE id = ?').run(t, p.handle, inv.id);
+          invitedBy = inv.created_by;
+          joined = true;
+        } else {
+          // Made by accepting an invite link to this email: that invite gave the role, so it stands.
+          const accepted = this.db.prepare('SELECT 1 FROM invites WHERE used_by = ? AND email = ? AND used_at >= ?').get(typed.handle, email, typed.created_at);
+          const role = accepted ? typed.role : 'viewer';
+          if (role !== typed.role) held = typed.role;
+          joined = !accepted; // accepting the link already said they joined
+          this.db.prepare('UPDATE people SET role = ?, verified_at = ? WHERE id = ?').run(role, t, typed.id);
+          p = { ...typed, role, verified_at: t };
+        }
       }
       // One login token per person and provider, never shown: sessions hang off it, and revoking it signs them out.
       const stem = `${p.handle}-${provider}`.slice(0, 50);
@@ -189,7 +213,7 @@ export class Auth {
       }
       const sid = this.createSession(tok.id);
       this.db.exec('COMMIT');
-      return { person: p, sid, invitedBy, joined: invitedBy !== undefined };
+      return { person: p, sid, invitedBy, joined, held };
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;

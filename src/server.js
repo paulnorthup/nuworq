@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, STAGES, normRemote, slugify, refuseSecrets, providerOf, MIN, HOUR, DAY } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_AGENT_CAN, STAGES, normRemote, slugify, refuseSecrets, providerOf, MIN, HOUR, DAY } from './core.js';
 import { checkLocalModels } from './llmproxy.js';
 import { view, itemView, projectList, homeView, withEntry } from './insight.js';
 import { tools, guide, LISTENER } from './protocol.js';
@@ -181,8 +181,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const wiringFor = (hub) => (viewer) => {
     const found = wiring.app === app ? wiring.found : null;
     if (!found) return null;
-    const who = viewer ? hub.q('SELECT role, email FROM people WHERE handle = ?').get(String(viewer).replace(/^@/, '').toLowerCase()) : null;
-    if (spaces) return who?.email && spaces.owners.includes(who.email.toLowerCase()) ? found : null;
+    const who = viewer ? hub.q('SELECT role, email, verified_at FROM people WHERE handle = ?').get(String(viewer).replace(/^@/, '').toLowerCase()) : null;
+    // A hub owner by an email they signed in with, never one typed for them (#470).
+    if (spaces) return who?.email && who.verified_at && spaces.owners.includes(who.email.toLowerCase()) ? found : null;
     return !viewer || !who || who.role === 'owner' ? found : null;
   };
   // Whether the app reaches anything (Get started): installed anywhere on a single hub; on a workspaces hub,
@@ -336,10 +337,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (baseDomain) return `${new URL(authOrigin(req)).protocol}//${ws}.${baseDomain}`;
     return `${authOrigin(req)}/w/${encodeURIComponent(ws)}`;
   };
-  const joined = (hub, person, role, invitedBy) => {
+  // held: the role an owner typed for them before they signed in, which waits for an owner to confirm it (#470).
+  const joined = (hub, person, role, invitedBy, held) => {
     const who = `@${person.handle}`;
+    const wait = held ? ` until an owner confirms the ${held} role they were added with (POST /api/people/role {"handle":"${person.handle}","role":"${held}"})` : '';
     for (const p of hub.projects()) {
-      hub.event(p, { actor: who, type: 'joined', headline: `${who} joined as ${role}${invitedBy ? `, invited by ${invitedBy}` : ''}` });
+      hub.event(p, { actor: who, type: 'joined', headline: `${who} joined as ${role}${invitedBy ? `, invited by ${invitedBy}` : ''}${wait}` });
       hub.changed(p);
     }
   };
@@ -415,7 +418,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const r = scopeOf(hub).authz.signInByEmail(email, provider);
     if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
     spaces?.directory.join(email, flow.ws);
-    if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
+    if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy, r.held);
     return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}${dev ? `&${dev}` : ''}`);
   }
   const sameOrigin = (req) => {
@@ -771,7 +774,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       try { spaces.create(slug); } catch (e) { if (earlyAccess?.gate && !owner) dir.returnGrant(b.grant); throw e; }
       const hub = spaces.get(slug);
       const authz = scopeOf(hub).authz;
-      const person = authz.addPerson(Auth.handleOf(me.email.split('@')[0]), 'owner', { email: me.email });
+      const person = authz.addPerson(Auth.handleOf(me.email.split('@')[0]), 'owner', { email: me.email, verified: true });
       dir.join(me.email, slug, { created: true });
       return send(200, { ok: true, ...org({ workspace: slug, handle: person.handle, role: 'owner', created: true }) });
     }
@@ -783,7 +786,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const r = hub && scopeOf(hub).authz.signInByEmail(me.email, me.provider);
       if (!r) return deny(404, `${me.email} isn't a member of "${ws}"`, 'Ask an owner there for an invite (to this email).');
       dir.join(me.email, ws);
-      if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy);
+      if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy, r.held);
       return redirect(res, `${homeOf(req, ws)}/api/oauth/finish?ticket=${sso.ticket(ws, r.sid)}`);
     }
     return deny(405, `use ${path === '/api/orgs' ? 'POST' : 'GET'}`);
@@ -965,7 +968,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         let r;
         try { r = authz.acceptInvite(b.token, b.handle); } catch (e) { return deny(400, e.message, 'Pick another handle: lowercase letters, digits, ., _ or -.'); }
         res.setHeader('set-cookie', sessionCookie(req, r.sid, cookiePath));
-        if (r.person.email) spaces?.directory.join(r.person.email, ws);
+        // No membership from the invite's email: a link proves no email (#470). Their first sign-in with it makes one.
         joined(hub, r.person, r.person.role, r.invitedBy);
         return send(200, { ok: true, person: `@${r.person.handle}`, role: r.person.role });
       }
@@ -1066,10 +1069,19 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
 
       // What a token-bearing agent may reach, and its token (name for the record; powers, provenance).
-      const caller = { scope: who.projects ?? null, token: who.via === 'bearer' ? who : null };
+      const caller = { scope: who.projects ?? null, token: who.via === 'bearer' ? who : null, identity: required ? { id: who.id, session: who.via === 'cookie' } : null };
       // A person acts as "@handle" with their role; without accounts the one human is "you", an owner.
       const by = who.person ? `@${who.person.handle}` : HUMAN;
       const personRole = who.person?.role ?? 'owner';
+      // A person on an agent route acts with their role (#469): a viewer with none, a member only as on the human routes.
+      const agentRefused = (op) => {
+        const may = PERSON_AGENT_CAN[personRole];
+        if (!who.person || may === null || may?.includes(op)) return false;
+        deny(403, `a ${personRole} can't ${op === 'credential' ? 'get a push token' : op} here`, personRole === 'viewer'
+          ? 'A viewer only reads. Ask an owner of this workspace for a member role.'
+          : 'Ask an owner of this workspace for a steward role, or connect an agent with its own token (Connect an agent).');
+        return true;
+      };
       // The style guide (#391): every token and component, for the people and agents building screens; signed in only.
       if (req.method === 'GET' && path === '/styleguide') return send(200, withLogo(readFileSync(join(WEB, 'styleguide.html'), 'utf8')), TYPES['.html']);
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
@@ -1125,8 +1137,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (personRole !== 'owner') return deny(403, 'only an owner manages people', 'Ask an owner of this workspace.');
         const b = await body(req);
         try {
+          // A typed email is a hint for matching their first sign-in, not who they are: no membership from it (#470).
           const person = path === '/api/people' ? authz.addPerson(b.handle, b.role, { name: b.name, email: b.email }) : authz.setRole(b.handle, b.role);
-          if (person.email) spaces?.directory.join(person.email, ws);
           return send(200, { ok: true, person });
         } catch (e) {
           throw new UserError(e.message);
@@ -1384,6 +1396,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
         delete b.agent;
+        if (agentRefused(m[2])) return;
         if (m[2] === 'feedback') return send(200, agentFeedback(req, hub, ws, decodeURIComponent(m[1]), agent, b, caller));
         if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
         return send(200, withFeedback(m[2], agent, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller }))));
@@ -1393,6 +1406,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (path === '/api/agent/credential' && req.method === 'POST') {
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
+        if (agentRefused('credential')) return;
         if (!app) return deny(404, "this hub has no GitHub App, so it hands out no GitHub tokens", 'An owner creates one in one click (Connect an agent → GitHub App), or the hub host sets NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE (see docs/GITHUB.md). Until then, push with your own credentials.');
         // A worker cloning a project's repository it has no checkout of (nuworq run): read-only, no item needed.
         if (b.purpose === 'clone') {
@@ -1419,9 +1433,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           hub.changed(p);
           return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
         }
-        const held = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
+        // A push token is for the agent's own token (#469), never a person's browser session.
+        if (caller.identity?.session) return deny(403, "a person's browser session gets no push token", 'Push tokens are for the agent that holds the item: its own token asks (nuworq git-credential).');
+        const holding = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
           .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
-          .find(({ p }) => !caller.scope || caller.scope.includes(p.slug));
+          .filter(({ p }) => !caller.scope || caller.scope.includes(p.slug));
+        const held = holding.find(({ p }) => !caller.identity || hub.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.token_id === caller.identity.id);
+        if (!held && holding.length) return deny(403, `${agent} is another agent's name here`, 'A push token goes only to the token the agent holding the item uses. Pick a name of your own and claim work with next.');
         if (!held) return deny(409, `${agent || 'this agent'} holds no item to push for`, 'Tokens are for the item you hold: claim one (next), then push.');
         const { it, p } = held;
         const repo = it.repo || hub.remotesOf(p)[0] || '';
@@ -1456,6 +1474,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
         delete b.agent;
+        if (agentRefused(m[1])) return;
         if (m[1] === 'feedback') return send(200, agentFeedback(req, hub, ws, '', agent, b, caller));
         if (DECIDES.agent.includes(m[1])) await hub.prefetch('', b, { remote: remoteOf(req), root: rootOf(req), scope: caller.scope });
         return send(200, withFeedback(m[1], agent, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller }))));
@@ -1465,7 +1484,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const own = who.person && personRole !== 'owner' ? by : null; // null: every channel
       if (req.method === 'GET' && path === '/api/notify') {
         // One of the hub's owners: which channels here hear about early-access requests (#251), maybe none.
-        const email = who.person && spaces && hub.db.prepare('SELECT email FROM people WHERE handle = ?').get(who.person.handle)?.email?.toLowerCase();
+        const email = who.person && spaces && hub.db.prepare('SELECT email FROM people WHERE handle = ? AND verified_at IS NOT NULL').get(who.person.handle)?.email?.toLowerCase();
         const requests = email && earlyAccess?.owners?.includes(email) ? requestChannels(hub.db, who.person.handle).map((c) => c.id) : null;
         return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null, requests });
       }

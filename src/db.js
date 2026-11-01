@@ -159,7 +159,8 @@ CREATE TABLE IF NOT EXISTS people (
   name       TEXT NOT NULL DEFAULT '',
   email      TEXT NOT NULL DEFAULT '',
   role       TEXT NOT NULL,               -- owner | steward | member | viewer
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  verified_at INTEGER                     -- when they proved the email is theirs (signed in with it); NULL: a hint someone typed (#470)
 );
 -- Who looks after a project: its "needs you" entries go to them (else to the owners and stewards).
 CREATE TABLE IF NOT EXISTS project_stewards (
@@ -455,11 +456,25 @@ export function openDb(file) {
     'ALTER TABLE notes ADD COLUMN reviewed_at INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN notes_at INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE items ADD COLUMN notes_review INTEGER NOT NULL DEFAULT 0',
+    // An operator question next handed to one operator (#467): who holds it, and until when (a lapsed lease frees it).
+    "ALTER TABLE questions ADD COLUMN held_by TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE questions ADD COLUMN held_until INTEGER NOT NULL DEFAULT 0',
+    // From outside the project (#471): an issue whose author has no write access, and a reply to a reporter
+    // question from such a person, held for a person to pass on ('' = none), with where it was written.
+    'ALTER TABLE issues ADD COLUMN outsider INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE questions ADD COLUMN held_reply TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE questions ADD COLUMN held_url TEXT NOT NULL DEFAULT ''",
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,
   ]) {
     try { db.exec(sql); } catch { /* already there */ }
   }
+  // An email counts as a person's own only once they signed in with it (#470). People from before who already
+  // have a login keep theirs; rows someone made by typing an email wait for its owner's first sign-in.
+  try {
+    db.exec('ALTER TABLE people ADD COLUMN verified_at INTEGER');
+    try { db.exec(`UPDATE people SET verified_at = created_at WHERE email != '' AND id IN (SELECT person_id FROM tokens WHERE role = 'human' AND person_id IS NOT NULL)`); } catch { /* no logins yet */ }
+  } catch { /* already there */ }
   return db;
 }

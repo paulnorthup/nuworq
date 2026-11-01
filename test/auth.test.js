@@ -263,10 +263,13 @@ describe('agent tokens limited to projects', () => {
     assert.deepEqual(all.json.branches, ['nuworq/9-beta']);
   });
 
-  test('each agent records the tokens that acted under its name', async () => {
-    await request(ctx.port, 'POST', '/api/p/alpha/agent/checkin', { body: {}, headers: as(other, 'w1') });
-    assert.equal(ctx.hub.q("SELECT tokens FROM agents WHERE name = 'w1'").get().tokens, 'alpha-box,spare-box');
+  test('an agent name belongs to the token that first used it: another token is refused (#469)', async () => {
+    const r = await request(ctx.port, 'POST', '/api/p/alpha/agent/checkin', { body: {}, headers: as(other, 'w1') });
+    assert.equal(r.status, 403);
+    assert.match(r.json.error, /"w1" is another agent's name here/);
+    assert.match(r.json.hint, /Pick a name of your own/);
+    assert.equal(ctx.hub.q("SELECT tokens FROM agents WHERE name = 'w1'").get().tokens, 'alpha-box');
     const { view } = await import('../src/insight.js');
-    assert.deepEqual(view(ctx.hub, 'alpha').agents.find((x) => x.name === 'w1').tokens, ['alpha-box', 'spare-box']);
+    assert.deepEqual(view(ctx.hub, 'alpha').agents.find((x) => x.name === 'w1').tokens, ['alpha-box']);
   });
 });

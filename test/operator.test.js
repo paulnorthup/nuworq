@@ -116,6 +116,60 @@ describe('questions to an operator', () => {
     assert.equal(acts().length, 0);
   });
 
+  // #467: two operator sessions never act on the same question.
+  test('next holds the question for one operator: the second gets other work, answer from it is refused', () => {
+    const { hub, q } = setup();
+    hub.agentOp('o', 'checkin', 'op1', { has: ['operator'] });
+    hub.agentOp('o', 'checkin', 'op2', { has: ['operator'] });
+    const first = hub.agentOp('o', 'next', 'op1');
+    assert.equal(first.mode, 'answer');
+    assert.equal(first.question.id, q);
+    assert.deepEqual(first.question.lease, { holder: 'op1', expires_in: '20m' });
+    assert.match(first.hint, /yours for 20m/);
+    assert.equal(hub.agentOp('o', 'next', 'op1', { claim: false }).question.id, q, 'still the holder\'s');
+    const second = hub.agentOp('o', 'next', 'op2', { claim: false });
+    assert.notEqual(second.mode, 'answer');
+    assert.throws(() => hub.agentOp('o', 'answer', 'op2', { question: q, answer: 'yes' }),
+      (e) => e.status === 409 && /held by op1/.test(e.message) && /leave it to them/.test(e.hint));
+    assert.throws(() => hub.agentOp('o', 'ask', 'op2', { escalates: q, question: 'OK?', evidence: ['x'] }), /held by op1/);
+    // Who holds it shows in checkin and look.
+    const job = (r) => r.agents.find((a) => a.agent === 'op1').job;
+    assert.equal(job(hub.agentOp('o', 'look', 'op2', {})), `answering question ${q}`);
+    assert.equal(job(hub.agentOp('o', 'checkin', 'op2', {})), `answering question ${q}`);
+    // Answering frees it.
+    assert.equal(hub.agentOp('o', 'answer', 'op1', { question: q, answer: 'It runs.' }).ok, true);
+    assert.equal(job(hub.agentOp('o', 'look', 'op2', {})), null);
+  });
+
+  test('a peek holds nothing; a second question goes to the second operator', () => {
+    const { hub, q } = setup();
+    hub.agentOp('o', 'checkin', 'op1', { has: ['operator'] });
+    hub.agentOp('o', 'checkin', 'op2', { has: ['operator'] });
+    hub.agentOp('o', 'next', 'op1', { claim: false });
+    assert.equal(hub.agentOp('o', 'next', 'op2', { claim: false }).question.id, q, 'a peek left it free');
+    hub.agentOp('o', 'next', 'op1');
+    const q2 = hub.agentOp('o', 'ask', 'w1', { question: 'Is the VM up?', assumption: 'yes', to: 'operator' }).question;
+    assert.equal(hub.agentOp('o', 'next', 'op2').question.id, q2);
+    assert.equal(hub.agentOp('o', 'next', 'op1', { claim: false }).question.id, q, 'each keeps its own');
+  });
+
+  test('a lapsed lease frees it; progress on its item renews it, and signoff lets it go', () => {
+    const { hub, q, tick } = setup();
+    hub.agentOp('o', 'checkin', 'op1', { has: ['operator'] });
+    hub.agentOp('o', 'checkin', 'op2', { has: ['operator'] });
+    hub.agentOp('o', 'next', 'op1');
+    tick(15 * 60_000);
+    const r = hub.agentOp('o', 'progress', 'op1', { item: '#1', headline: 'Running the migration on a copy' });
+    assert.equal(r.ok, true, 'progress on the parked item is fine while holding its question');
+    tick(15 * 60_000); // 30 minutes after next, 15 after progress: still held
+    assert.notEqual(hub.agentOp('o', 'next', 'op2', { claim: false }).mode, 'answer');
+    tick(6 * 60_000); // lapsed
+    assert.equal(hub.agentOp('o', 'next', 'op2').question.id, q);
+    assert.throws(() => hub.agentOp('o', 'answer', 'op1', { question: q, answer: 'late' }), /held by op2/);
+    hub.agentOp('o', 'signoff', 'op2', {});
+    assert.equal(hub.agentOp('o', 'answer', 'op1', { question: q, answer: 'It runs.' }).ok, true, 'free again after signoff');
+  });
+
   test('answer is a tool every client sees', () => {
     const t = tools().find((x) => x.name === 'answer');
     assert.ok(t);

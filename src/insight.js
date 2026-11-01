@@ -7,6 +7,7 @@ import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, waitsForOk, dur, p
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
+import { PASS_ON } from './issues.js';
 import { humanCost, verification } from './outcomes.js';
 import { OPERATOR_TAGS } from './protocol.js';
 import { wiringEntry } from './appwiring.js';
@@ -138,18 +139,22 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   // A question to an issue's reporter comes to you only once they've had reporter_wait hours to answer on GitHub.
   const wait = p.reporter_wait * HOUR;
   // A question to an operator is an operator session's to answer (next mode "answer"), never yours.
-  for (const q of openQs.filter((q) => q.blocking && q.audience !== 'operator' && !(q.reporter && t - q.at < wait))) {
+  // A reply held from someone outside the project (#471) comes to you at once, to pass on or answer yourself.
+  for (const q of openQs.filter((q) => q.blocking && q.audience !== 'operator' && !(q.reporter && !q.held_reply && t - q.at < wait))) {
     const it = byId.get(q.item_id);
     // An operator's escalation carries the question it was asked, who asked it, and what the operator found.
     const orig = q.escalates ? hub.q('SELECT question, asked_by FROM questions WHERE id = ?').get(q.escalates) : null;
+    const held = q.reporter && q.held_reply;
     push({
-      key: `q:${q.id}`, level: 'act', kind: 'question', at: q.reporter ? q.at + wait : q.at,
+      key: `q:${q.id}`, level: 'act', kind: 'question', at: q.reporter && !held ? q.at + wait : q.at,
       headline: q.question,
       sub: [it?.title, orig ? `${q.asked_by} (operator) escalated ${orig.asked_by}'s question ${dur(t - q.at)} ago` : `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${dur(t - q.at)} ago`,
-        q.reporter && 'no reply yet', it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
-      why: [orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
+        held ? `@${q.reporter} replied; they have no write access, so it waits for you to pass it on` : q.reporter && 'no reply yet',
+        it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
+      why: [held && `@${q.reporter} replied on GitHub (${q.held_url}):\n\n${q.held_reply.split('\n').map((l) => `> ${l}`).join('\n')}`,
+        orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
-      question: { id: q.id, options: json(q.options, []), asked_by: q.asked_by },
+      question: { id: q.id, options: [...(held ? [PASS_ON] : []), ...json(q.options, [])], asked_by: q.asked_by },
       agent: q.asked_by, presence: presence(q.asked_by),
       steps: json(q.steps, []),
       // The steps this viewer has ticked (#162), counting from 1; each person ticks their own.

@@ -13,7 +13,7 @@ import { takeIssue, closeLanded, PR_GRACE } from '../src/issues.js';
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const PEM = privateKey.export({ type: 'pkcs8', format: 'pem' });
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
-const issue = (number) => ({ number, title: `Issue ${number}`, body: '', state: 'open', labels: [], html_url: `https://github.com/acme/api/issues/${number}` });
+const issue = (number) => ({ number, title: `Issue ${number}`, body: '', state: 'open', labels: [], author_association: 'OWNER', html_url: `https://github.com/acme/api/issues/${number}` });
 
 // GitHub's issues API for acme/api: each issue's state, and every call the hub makes. down: answer 500.
 function github() {

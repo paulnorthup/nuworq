@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Workspaces } from '../src/workspaces.js';
 import { createServer } from '../src/server.js';
+import { Auth } from '../src/auth.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const PAUL = 'paul@paulnorthup.com';
@@ -65,6 +66,7 @@ describe('plan limits', () => {
 
       // Paul's organization: free by default, but he belongs to it, so it is never limited.
       const { op: pop } = org(spaces, 'pauls');
+      new Auth(spaces.get('pauls').db).addPerson('paul', 'owner', { email: PAUL, verified: true });
       spaces.directory.identify(PAUL, 'github');
       spaces.directory.join(PAUL, 'pauls', { created: true });
       assert.equal(spaces.planOf('pauls'), 'unlimited');

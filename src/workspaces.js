@@ -102,6 +102,8 @@ export class Workspaces {
       src.prepare('VACUUM INTO ?').run(this.file(s));
     } finally { src.close(); }
     const hub = this.get(s); // brings the copy's schema up to date
+    // The host adopting its own hub vouches for its people's emails (#470).
+    hub.db.prepare("UPDATE people SET verified_at = COALESCE(verified_at, created_at) WHERE email != ''").run();
     for (const { email } of hub.db.prepare("SELECT email FROM people WHERE email IS NOT NULL AND email != ''").all()) {
       this.directory.identify(email, 'github');
       this.directory.join(email, s);
@@ -147,7 +149,7 @@ export class Workspaces {
   planInfo(slug) {
     const b = this.directory.billingOf(slug);
     const billing = b ? { status: b.status, period_end: b.period_end, cancel_at_period_end: b.cancel_at_period_end, plan: b.plan, line: billingLine(b, this.directory.now()) } : null;
-    if (this.directory.hasMember(slug, this.owners)) return { plan: 'unlimited', source: 'owners', set_by: null, set_at: null, billing };
+    if (this.directory.hasMember(slug, this.owners, this)) return { plan: 'unlimited', source: 'owners', set_by: null, set_at: null, billing };
     const set = this.directory.planSet(slug);
     if (set) return { plan: set.plan, source: 'set', set_by: set.set_by || null, set_at: set.at, billing };
     if (paid(b, this.directory.now())) return { plan: 'unlimited', source: 'billing', set_by: null, set_at: null, billing };
