@@ -455,6 +455,9 @@ export function openDb(file) {
     'ALTER TABLE notes ADD COLUMN reviewed_at INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE projects ADD COLUMN notes_at INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE items ADD COLUMN notes_review INTEGER NOT NULL DEFAULT 0',
+    // An operator question next handed to one operator (#467): who holds it, and until when (a lapsed lease frees it).
+    "ALTER TABLE questions ADD COLUMN held_by TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE questions ADD COLUMN held_until INTEGER NOT NULL DEFAULT 0',
     // Sessions from before roles that declared the operator tag were operators.
     `UPDATE agents SET role = 'operator' WHERE role = 'session' AND has LIKE '%"operator"%'`,
     ...PR_TWINS,

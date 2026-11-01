@@ -145,7 +145,7 @@ export const OPS = [
   },
   {
     name: 'answer',
-    description: 'Operators only (checked in with has: ["operator"]): answer a question an agent asked with to: "operator". next hands you one as mode "answer". The asker sees your answer at its next checkin, and parked work goes back to ready.',
+    description: 'Operators only (checked in with has: ["operator"]): answer a question an agent asked with to: "operator". next hands you one as mode "answer" and holds it for you for 20 minutes, so another operator doesn\'t act on it too. The asker sees your answer at its next checkin, and parked work goes back to ready.',
     params: {
       question: { type: 'integer', description: 'The question id, from next.' },
       answer: s('What you found or decided, so the asker can go on. If only the human can settle it, say so.'),

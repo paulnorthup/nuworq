@@ -1228,7 +1228,10 @@ export class Hub extends EventEmitter {
     const held = this.q(`SELECT seq, stage, tidy FROM items WHERE project_id = ? AND holder = ?
       UNION SELECT i.seq, i.stage, i.tidy FROM attempts t JOIN items i ON i.id = t.item_id
         WHERE i.project_id = ? AND t.agent = ? AND t.stage = 'active' AND t.closed = 0 ORDER BY seq`).all(p.id, a.name, p.id, a.name);
-    const job = held.map((i) => `${i.tidy && i.stage === 'active' ? 'tidying' : JOBS[i.stage] ?? 'holding'} #${i.seq}`).join(', ') || null;
+    // An operator question it holds (#467) is a job too, so the others see who has it.
+    const qs = this.q(`SELECT id FROM questions WHERE project_id = ? AND held_by = ? AND held_until >= ? AND status = 'open' ORDER BY id`).all(p.id, a.name, this.now());
+    const job = [...held.map((i) => `${i.tidy && i.stage === 'active' ? 'tidying' : JOBS[i.stage] ?? 'holding'} #${i.seq}`),
+      ...qs.map((q) => `answering question ${q.id}`)].join(', ') || null;
     return { role: a.role || 'session', where: a.runner ? `${a.runner} runner` : a.machine || null, job };
   }
 
@@ -1238,11 +1241,25 @@ export class Hub extends EventEmitter {
       .all(p.id, this.now() - 30 * MIN).map((a) => ({ agent: a.name, ...this.presenceOf(p, a) }));
   }
 
-  // The operator question to answer first: blocking before assumptions, then oldest.
-  // One already escalated to the human waits for the human's answer instead.
-  operatorQuestion(p) {
+  // The operator question to answer first: one this operator already holds, then blocking before assumptions,
+  // then oldest. One already escalated to the human waits for the human's answer instead, and one another
+  // operator holds (#467) waits for that operator until its lease lapses.
+  operatorQuestion(p, agent) {
     return this.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'open'
-      AND NOT EXISTS (SELECT 1 FROM questions e WHERE e.escalates = q.id AND e.status = 'open') ORDER BY blocking DESC, at, id LIMIT 1`).get(p.id) ?? null;
+      AND (held_by = '' OR held_by = ? OR held_until < ?)
+      AND NOT EXISTS (SELECT 1 FROM questions e WHERE e.escalates = q.id AND e.status = 'open')
+      ORDER BY held_by = ? AND held_until >= ? DESC, blocking DESC, at, id LIMIT 1`).get(p.id, agent, this.now(), agent, this.now()) ?? null;
+  }
+
+  // Who holds an operator question right now (#467), or null when nobody does or the lease lapsed.
+  questionHolder(q) {
+    return q.held_by && q.held_until >= this.now() ? q.held_by : null;
+  }
+
+  // Progress on an item renews the leases of the operator questions on it that this agent holds; how many.
+  renewQuestions(item, agent) {
+    return Number(this.q(`UPDATE questions SET held_until = ? WHERE item_id = ? AND held_by = ? AND held_until >= ? AND status = 'open'`)
+      .run(this.now() + LEASE_MS, item.id, agent, this.now()).changes);
   }
 
   heldBy(p, agent) {
@@ -2417,6 +2434,16 @@ function requireSteps(question, steps) {
   }
 }
 
+// An operator question another operator holds (#467) is theirs to settle until their lease lapses.
+function heldElsewhere(hub, q, agent) {
+  const holder = hub.questionHolder(q);
+  if (holder && holder !== agent) {
+    throw new UserError(`Question ${q.id} is held by ${holder} (lease ends in ${dur(q.held_until - hub.now())})`, {
+      status: 409, hint: `${holder} is settling it; leave it to them and call next. If they go quiet, the lease lapses and it's free again.`,
+    });
+  }
+}
+
 // An operator carries a question it may not settle alone (risky, irreversible, a product call) up to the human:
 // one precise question with its evidence. The human's answer to it answers the original too (HUMAN_OPS.answer).
 function escalate(p, agent, args) {
@@ -2432,6 +2459,7 @@ function escalate(p, agent, args) {
   if (this.q(`SELECT 1 FROM questions WHERE escalates = ? AND status = 'open'`).get(orig.id)) {
     throw new UserError(`Question ${orig.id} is already escalated`, { status: 409, hint: "The human's answer will settle it. Call next." });
   }
+  heldElsewhere(this, orig, agent);
   const question = layered(args.question, args.context, args.detail, 'question', { whole: true });
   const evidence = evidenceList(args.evidence);
   if (!evidence.length) throw new UserError('An escalation needs evidence', { hint: 'Pass evidence: what you ran or checked, e.g. [{ "label": "dry run: 3 tables dropped", "url": "https://…" }], so the human can decide without redoing it.' });
@@ -2444,6 +2472,8 @@ function escalate(p, agent, args) {
     VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?, ?, ?)`).run(p.id, orig.item_id, agent, question.headline, question.summary, question.detail,
     JSON.stringify(options), this.now(), orig.id, JSON.stringify(evidence), JSON.stringify(steps));
   const id = Number(r.lastInsertRowid);
+  // Escalating ends the lease: the human's answer settles it now.
+  this.q(`UPDATE questions SET held_by = '', held_until = 0 WHERE id = ?`).run(orig.id);
   this.event(p, {
     item, actor: agent, type: 'question', headline: `${agent} escalates ${orig.asked_by}'s question: ${question.headline}`,
     summary: `${orig.asked_by} asked an operator: ${orig.question}${question.summary ? `\n\n${question.summary}` : ''}`,
@@ -2475,8 +2505,10 @@ const AGENT_OPS = {
 
   next(p, agent, args) {
     // An operator answers what agents can't settle alone before anything else: each answer unparks someone's work.
-    const oq = this.isOperator(p, agent) ? this.operatorQuestion(p) : null;
+    const oq = this.isOperator(p, agent) ? this.operatorQuestion(p, agent) : null;
     if (oq) {
+      // Held for this operator like an item (#467), so a second operator's next moves on; a peek holds nothing.
+      if (args.claim !== false) this.q('UPDATE questions SET held_by = ?, held_until = ? WHERE id = ?').run(agent, this.now() + LEASE_MS, oq.id);
       const item = this.itemById(oq.item_id);
       return {
         mode: 'answer',
@@ -2484,9 +2516,10 @@ const AGENT_OPS = {
           id: oq.id, question: oq.question, context: oq.context || undefined, detail: oq.detail || undefined,
           options: json(oq.options, []).length ? json(oq.options, []) : undefined, assumption: oq.assumption || undefined,
           blocking: !!oq.blocking, asked_by: oq.asked_by, asked: `${dur(this.now() - oq.at)} ago`,
+          ...(args.claim !== false ? { lease: { holder: agent, expires_in: dur(LEASE_MS) } } : {}),
         },
         ...(item ? this.context(p, item, agent) : {}),
-        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}. Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. Read the hub first: an earlier answer, waiver or decision may settle it. Only if it needs what only the human can do (their accounts, credentials or keys, signing, money, a CAPTCHA, or an irreversible step or product call no decision covers), escalate instead: ask with escalates: ${oq.id}, one precise question, and your evidence.`,
+        hint: `${oq.asked_by} asked an operator${item ? ` about #${item.seq}` : ''}${oq.blocking && item?.stage === 'waiting' ? `, and #${item.seq} is parked until you answer` : ''}.${args.claim !== false ? ` It's yours for ${dur(LEASE_MS)}: other operators leave it to you${item ? `, and progress on #${item.seq} renews it` : ''}.` : ''} Settle it (run it, check it, decide it), then call answer with question ${oq.id} and what you found. Read the hub first: an earlier answer, waiver or decision may settle it. Only if it needs what only the human can do (their accounts, credentials or keys, signing, money, a CAPTCHA, or an irreversible step or product call no decision covers), escalate instead: ask with escalates: ${oq.id}, one precise question, and your evidence.`,
       };
     }
     const holding = this.heldBy(p, agent).filter((i) => ['active', 'proposed', 'landing'].includes(i.stage));
@@ -2573,6 +2606,16 @@ const AGENT_OPS = {
 
   progress(p, agent, args) {
     const item = this.item(p, args.item);
+    // An operator settling a question on it (#467) keeps the question: progress renews that lease too.
+    const answering = this.renewQuestions(item, agent) > 0;
+    if (!this.holds(item, agent) && answering) {
+      if (str(args.headline)) {
+        const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
+        this.event(p, { item, actor: agent, type: 'progress', headline, summary, detail });
+        this.setStatus(p, agent, `#${item.seq}: ${headline}`);
+      }
+      return { ok: true, lease_expires_in: dur(LEASE_MS), hint: `Your question on #${item.seq} is yours for ${dur(LEASE_MS)} more.` };
+    }
     if (!str(args.headline) && this.holds(item, agent)) {
       // A silent heartbeat: renews the lease, adds nothing to the record.
       this.renew(item, agent);
@@ -2667,9 +2710,11 @@ const AGENT_OPS = {
     if (!q) throw new UserError(`No question ${args.question}`, { status: 404, hint: 'Call next: it hands an operator the question to answer, with its id.' });
     if (q.audience !== 'operator') throw new UserError(`Question ${q.id} is for ${q.reporter ? `@${q.reporter}, the issue's reporter` : 'the human'}, not an operator`, { status: 403, hint: 'Operators answer only questions asked with to: "operator". Call next for those.' });
     if (q.status !== 'open') throw new UserError(`Question ${q.id} is already ${q.status}`, { status: 409, hint: 'Call next for the next one.' });
+    heldElsewhere(this, q, agent);
     // Settled after all: the escalation no longer needs the human.
     this.q(`UPDATE questions SET status = 'withdrawn' WHERE escalates = ? AND status = 'open'`).run(q.id);
     HUMAN_OPS.answer.call(this, p, { question: q.id, answer: args.answer }, agent);
+    this.q(`UPDATE questions SET held_by = '', held_until = 0 WHERE id = ?`).run(q.id);
     const item = this.itemById(q.item_id);
     return {
       ok: true,
@@ -2894,6 +2939,8 @@ const AGENT_OPS = {
     for (const item of held) {
       AGENT_OPS.handoff.call(this, p, agent, { item: item.seq, headline: note, summary: args.summary });
     }
+    // Operator questions it held (#467) are free again for the next operator.
+    this.q(`UPDATE questions SET held_by = '', held_until = 0 WHERE project_id = ? AND held_by = ?`).run(p.id, agent);
     this.q('UPDATE agents SET signed_off = 1, status = ? WHERE project_id = ? AND name = ?').run(note, p.id, agent);
     this.event(p, { actor: agent, type: 'signoff', headline: `${agent} signed off: ${note}`, summary: str(args.summary) });
     return { ok: true, handed_off: held.map((i) => `#${i.seq}`) };
