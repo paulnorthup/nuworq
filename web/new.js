@@ -35,6 +35,7 @@ export const NEW = {
   'show-dropped': '2026-10-31', // #442: dropped work leaves the board; All work's "Show dropped" at 30m brings it back
   'always-show': '2026-10-31', // #443: Always show on a field note, so every agent gets it whatever it works on
   'verified-install': '2026-11-01', // #473: Connect an agent's install checks the release's signature before installing it
+  'security-reviews': '2026-11-01', // #480: Settings' Security reviews switch: a review before each release, an area each month
 };
 
 const DAYS = 7;

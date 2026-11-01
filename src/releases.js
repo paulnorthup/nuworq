@@ -5,6 +5,7 @@
 // item's summary, which a person may edit before signing: a redraft then only adds what it doesn't mention.
 import { SYSTEM, UserError } from './core.js';
 import { lastRelease, tagAt } from './git.js';
+import { reviewRelease } from './security.js';
 
 export const RELEASES = { milestone: 'per milestone', off: 'off' };
 
@@ -35,7 +36,7 @@ function contents(hub, p) {
   const last = lastRelease(hub.repoFor(p)?.path) ?? { version: '0.0.0', tag: null, at: 0 };
   const prev = hub.q(`SELECT MAX(release_through) AS t FROM items WHERE project_id = ? AND release = 1 AND stage = 'done'`).get(p.id).t ?? 0;
   const since = Math.max(prev, last.at);
-  const items = hub.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? AND release = 0 AND sweep = 0 AND tidy = '' ORDER BY seq`).all(p.id, since);
+  const items = hub.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? AND release = 0 AND sweep = 0 AND tidy = '' AND security = '' ORDER BY seq`).all(p.id, since);
   const milestones = items.filter((it) => isMilestone(hub, it));
   const version = nextVersion(last.version, { breaking: items.some((it) => it.breaking), milestone: milestones.length > 0 });
   return { last, items, milestones, version };
@@ -72,6 +73,7 @@ export function draftRelease(hub, p, by = SYSTEM) {
     hub.patch(it, { release: 1, release_draft: draft, release_through: through });
     if (it.stage !== 'ready') hub.move(it, 'ready', by); // drafted from what landed: nothing to shape
     hub.event(p, { item: it, actor: by, type: 'release', headline: `${by === SYSTEM ? 'nuworq' : by} drafted ${title}: ${items.length} item${items.length === 1 ? '' : 's'} landed ${since}` });
+    reviewRelease(hub, p, it, by); // security reviews on (#480): it waits for a review of what it ships
     return it;
   }
   // Untouched, the summary is redrafted whole; edited by a person, only what it doesn't mention is added.

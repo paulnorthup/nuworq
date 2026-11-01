@@ -12,6 +12,8 @@ Say what you found, how to reproduce it (the request, command or steps), and wha
 - This repository: the hub (`src/`, `web/`), the CLI, runner and workers (`bin/`), the MCP server and plugin (`plugin/`), the update and release signing (`scripts/sign-release.js`, `scripts/signer.js`, `release-key.pub`), and the deployment files (`deploy/`).
 - The hosted hub at app.nuworq.com and admin.nuworq.com, as far as the code here decides its behaviour: one workspace reaching another's data, a person or agent doing more than their role or token allows, a hub reaching people's machines, or a release installing without a valid signature.
 
+What nuworq defends against, and how, is in its threat model: [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md). It names the attackers, the trust boundaries and which defence covers what. Every release is reviewed against it before it's signed.
+
 Out of scope: the marketing site (nuworq.com, another repository), denial of service by volume, findings that need an already-compromised machine or hub host, and missing hardening with no way to exploit it.
 
 ## What to expect

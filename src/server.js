@@ -15,6 +15,7 @@ import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOw
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
 import { freshen } from './freshness.js';
+import { securityUp } from './security.js';
 import { sweepMirrors } from './git.js';
 import { walkthrough } from './walkthrough.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
@@ -328,7 +329,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     // Workspaces nobody uses close; one closed workspace a tick opens for its sweep (and closes again later).
     if (spaces) { spaces.closeIdle(IDLE_MS); spaces.wake(WAKE_MS); }
     for (const hub of hubs()) {
-      try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
+      try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); securityUp(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
       // Which branches being built lack what landed (#535), so heartbeats tell them to rebase without running git.
       hub.refreshBehind().catch((e) => console.error('checking branches against main failed', e));
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
