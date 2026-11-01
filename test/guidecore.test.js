@@ -55,23 +55,25 @@ describe('each kind of job\'s rules arrive in the hint next gives for it', () =>
   });
 
   test('tidy', () => {
-    const { human, agent } = world();
+    const { hub, human, agent } = world();
     human('create', { title: 'Workers', acceptance: 'x' });
     human('create', { title: 'Start workers', acceptance: 'x', parent: '#1' });
     human('create', { title: 'Loose end', acceptance: 'x' });
     agent('a', 'checkin');
+    hub.tidyAll(); // a sweep finds the drift (#536)
     const r = agent('a', 'next');
     assert.equal(r.mode, 'tidy');
     assert.ok(r.hint.includes(MODE_RULES.tidy));
   });
 
   test('a field-notes review', () => {
-    const { human, agent, tick } = world();
+    const { hub, human, agent, tick } = world();
     human('create', { title: 'Exports retry', acceptance: 'x' });
     agent('a', 'checkin');
     agent('a', 'learn', { note: 'Storage timeouts surface as ETIMEDOUT.', item: '#1' });
     tick(1000);
     human('update', { item: '#1', stage: 'done' });
+    hub.tidyAll(); // a sweep finds the drift (#536)
     const r = agent('a', 'next');
     assert.equal(r.mode, 'tidy');
     assert.match(r.title, /field notes/);

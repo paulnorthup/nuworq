@@ -12,7 +12,8 @@ function setup() {
   const hub = new Hub({ clock: () => now });
   hub.tx(() => hub.project('p', { create: true, name: 'App' }));
   const human = (op, args) => hub.humanOp('p', op, args);
-  const agent = (op, name, args = {}) => hub.agentOp('p', op, name, args);
+  // The sweep turns drift into a tidy job (#536): here it runs before each claiming next, as if one had just passed.
+  const agent = (op, name, args = {}) => { if (op === 'next' && args.claim !== false) hub.tidyAll(); return hub.agentOp('p', op, name, args); };
   human('create', { title: 'Workers', acceptance: 'x' });
   human('create', { title: 'Start workers', acceptance: 'x', parent: '#1' });
   human('create', { title: 'Stop workers', acceptance: 'x', parent: '#1' });

@@ -323,6 +323,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return work.finally(() => hub._running--);
   };
   checkApp();
+  // Drift that built up while the hub was down becomes its tidy job now, not a sweep later (#536).
+  for (const hub of hubs()) try { hub.tidyAll(); } catch (e) { console.error('checking milestones and field notes failed', e); }
   const sweeper = setInterval(() => {
     checkApp();
     sweepMirrors(); // mirrors are the process's, not one hub's
@@ -330,6 +332,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (spaces) { spaces.closeIdle(IDLE_MS); spaces.wake(WAKE_MS); }
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); securityUp(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
+      try { hub.tidyAll(); } catch (e) { console.error('checking milestones and field notes failed', e); } // #536
       // Which branches being built lack what landed (#535), so heartbeats tell them to rebase without running git.
       hub.refreshBehind().catch((e) => console.error('checking branches against main failed', e));
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
