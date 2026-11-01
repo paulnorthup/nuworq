@@ -1386,7 +1386,9 @@ ${pkg ? `    Install (once):     npm install -g ${base}/nuworq.tgz\n` : ''}    C
     Shell:              nuworq guide
     Tool schemas:       ${base}/api/tools?format=openai`)}`);
   });
-  const stop = () => { server.close(); process.exit(0); };
+  // Drained first (#545): requests in flight finish, waits answer and streams reconnect. A second signal doesn't wait.
+  let stopping = false;
+  const stop = async () => { if (stopping) process.exit(0); stopping = true; await server.drain(); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }
@@ -1469,7 +1471,8 @@ ${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w
     // Pushes: each workspace's own channels, linking to its own address.
     pushes = notifyWorkspaces(spaces, (name) => workspaceUrl(name, { baseDomain, publicUrl, url }));
   });
-  const stop = () => { pushes?.stop(); server.close(); spaces.close(); process.exit(0); };
+  let stopping = false;
+  const stop = async () => { if (stopping) process.exit(0); stopping = true; pushes?.stop(); await server.drain(); spaces.close(); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }

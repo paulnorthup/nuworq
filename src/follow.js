@@ -15,7 +15,7 @@ import { DatabaseSync } from 'node:sqlite';
 const short = (sha) => String(sha).slice(0, 7);
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const STOP_GRACE_MS = 5000;
+const STOP_GRACE_MS = 12_000; // past the hub's own 10 s drain (#545), so it's never cut short
 const HEALTHY_MS = 15_000;
 const TEST_TIMEOUT_MS = 10 * 60_000;
 export const KEEP_BACKUPS = 10;
