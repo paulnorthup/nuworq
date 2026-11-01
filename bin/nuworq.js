@@ -48,69 +48,13 @@ function readStdin() {
   }
   return stdinCache;
 }
-const text = (v) => (v === '-' ? readStdin().trim() : v);
 
-const isRef = (s) => typeof s === 'string' && /^#?\d+$/.test(s);
-const rest = (pos, from) => pos.slice(from).join(' ').trim() || undefined;
 const refs = (v) => (v ? String(v).split(/[\s,]+/).filter(Boolean) : undefined);
-const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
-const layers = (f) => ({ summary: text(f.summary), detail: text(f.detail) });
 
 function need(v, what) {
   if (v === undefined || v === '' || v === true) throw new HubError(`missing ${what}`, { hint: `See: nuworq help` });
   return v;
 }
-
-// positional + flag shapes for each agent operation
-// --evidence "label|url", repeatable.
-const evidenceFlags = (list) => list?.map((e) => {
-  const [label, ...url] = String(e).split('|');
-  return clean({ label: label.trim(), url: url.join('|').trim() || undefined });
-});
-
-const AGENT_CMDS = {
-  checkin: (p, f) => ({ model: f.model, client: f.client, status: text(f.status), has: refs(f.has ?? envVar('HAS')) }),
-  next: (p, f) => ({ claim: f.peek ? false : undefined }),
-  claim: (p, f) => ({ item: need(p[0], '<item>'), touching: refs(f.touching) }),
-  progress: (p, f) => ({ item: need(p[0], '<item>'), headline: rest(p, 1) || undefined, ...layers(f), touching: refs(f.touching) }),
-  ask: (p, f) => {
-    const item = isRef(p[0]) ? p[0] : undefined;
-    return {
-      item,
-      question: need(rest(p, item ? 1 : 0), '<question>'),
-      context: text(f.context), detail: text(f.detail),
-      options: f.option, assumption: text(f.assume ?? f.assumption),
-      blocking: f.blocking ? true : undefined, to: f.to,
-      escalates: f.escalates, evidence: evidenceFlags(f.evidence),
-    };
-  },
-  answer: (p) => ({ question: need(p[0], '<question-id>'), answer: need(rest(p, 1), '<answer>') }),
-  withdraw: (p) => ({ question: need(p[0], '<question-id>'), reason: need(rest(p, 1), '<reason>') }),
-  submit: (p, f) => ({
-    item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f), acceptance: text(f.acceptance),
-    evidence: evidenceFlags(f.evidence),
-  }),
-  handoff: (p, f) => ({ item: need(p[0], '<item>'), headline: need(rest(p, 1), '<headline>'), ...layers(f) }),
-  propose: (p, f) => ({
-    title: need(rest(p, 0), '<title>'), ...layers(f), acceptance: text(f.acceptance),
-    priority: f.priority, parent: f.parent, depends_on: refs(f['depends-on']), needs: refs(f.needs), size: f.size, repo: f.repo,
-  }),
-  refine: (p, f) => ({
-    item: need(p[0], '<item>'), title: text(f.title), ...layers(f), acceptance: text(f.acceptance),
-    priority: f.priority, depends_on: refs(f['depends-on']), needs: f.needs === undefined ? undefined : refs(f.needs) ?? [], size: f.size, repo: f.repo,
-    drop: f.drop, // a person's answer that says to drop it (#207)
-  }),
-  review: (p, f) => ({ item: need(p[0], '<item>'), verdict: need(p[1], '<accept|reject>'), headline: need(rest(p, 2), '<headline>'), attempt: f.attempt, ...layers(f) }),
-  comment: (p, f) => {
-    const item = isRef(p[0]) && p.length > 1 ? p[0] : undefined;
-    return { item, headline: need(rest(p, item ? 1 : 0), '<headline>'), ...layers(f) };
-  },
-  ack: (p) => ({ steer: need(p[0], '<steer-id>'), response: rest(p, 1) }),
-  feedback: (p, f) => ({ text: need(text(rest(p, 0) ?? f.text), '<what happened>'), item: f.item }),
-  look: (p, f) => ({ item: p[0], stage: f.stage, notes: f.notes }),
-  retire: (p, f) => ({ notes: need(p.length ? p : undefined, '<note-id>').map(Number), reason: need(text(f.reason), '--reason'), into: f.into }),
-  signoff: (p, f) => ({ headline: rest(p, 0), summary: text(f.summary) }),
-};
 
 const tty = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -1845,12 +1789,17 @@ async function main() {
   if (cmd === 'disconnect') return disconnect();
   if (cmd === 'git-credential') return gitCredential(pos, flags);
 
-  const shape = AGENT_CMDS[cmd];
-  if (!shape) throw unknownCommand(cmd, (await import('../src/help.js')).nearest(cmd));
-  const agent = flags.as || envVar('AGENT');
+  // The agent commands come from the protocol (#521, src/agentargs.js), which parses their flags itself.
+  const { POSITIONAL, agentArgs } = await import('../src/agentargs.js');
+  if (!Object.hasOwn(POSITIONAL, cmd)) throw unknownCommand(cmd, (await import('../src/help.js')).nearest(cmd));
+  let args;
+  try { args = agentArgs(cmd, argv, { read: () => readStdin().trim() }); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+  const { body, common } = args;
+  if (cmd === 'checkin' && body.has === undefined && envVar('HAS')) body.has = refs(envVar('HAS'));
+  const agent = common.as || envVar('AGENT');
   if (!agent) throw new HubError('who are you?', { hint: 'Pass --as <name> (e.g. --as claude-1) or set NUWORQ_AGENT. Keep the same name for your whole session.' });
-  const client = createClient(flags);
-  const result = await client.call(cmd, clean(shape(pos, flags)), { agent });
+  const client = createClient(common);
+  const result = await client.call(cmd, body, { agent });
   console.log(JSON.stringify(result)); // compact, like the hub's own responses (#528)
 }
 
