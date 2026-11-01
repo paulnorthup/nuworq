@@ -315,7 +315,7 @@ async function waitCmd(flags) {
   // or timed-out connection (#406: an answer long overdue counts as one) is waited out with backoff (about 2 s doubling to 30 s), quietly and keeping
   // `since`, so nothing is lost or repeated. Away for long (10 minutes), it says so once and keeps trying.
   const first = Number(flags['retry-ms']) || 2000, cap = 15 * first, longMs = Number(flags['down-ms']) || 600_000;
-  let away = null, told = false;
+  let away = null, told = false, crowded = false;
   for (let since = 0, backoff = first; ;) {
     let r;
     try {
@@ -331,11 +331,20 @@ async function waitCmd(flags) {
         backoff = Math.min(backoff * 2, cap);
         continue;
       }
+      // Too many listeners already wait on this token (#479), e.g. ones left from sessions that ended: say so once,
+      // then keep trying with the same backoff, so this one starts hearing as soon as a place frees up.
+      if (flags.follow && e instanceof HubError && e.status === 429) {
+        if (!crowded) console.log(`nuworq: ${e.message}; waiting for a place. ${e.hint ?? ''}`.trim());
+        crowded = true;
+        await new Promise((res) => setTimeout(res, backoff));
+        backoff = Math.min(backoff * 2, cap);
+        continue;
+      }
       if (!flags.follow || agent || e.status !== 403 || !/^no operator has checked in/.test(e.message) || Date.now() >= until) throw e;
       await new Promise((res) => setTimeout(res, Math.min(settle / 12, Math.max(0, until - Date.now()))));
       continue;
     }
-    away = null, told = false, backoff = first;
+    away = null, told = false, crowded = false, backoff = first;
     since = r.at;
     for (const e of r.events) console.log(describeEvent(e));
     if (r.events.length && !flags.follow) return;
@@ -1346,7 +1355,7 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const plans = /^(1|on|true|yes)$/i.test(String(flags.plans ?? envVar('PLANS') ?? ''));
   // The hub's owners: one list for everything that asks (--owners, NUWORQ_HUB_OWNERS, or NUWORQ_OWNERS).
   const owners = String(flags.owners ?? envVar('HUB_OWNERS') ?? envVar('OWNERS') ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags), plans, owners });
+  const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags), backups: join(dataHome(flags), 'backups'), plans, owners });
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
@@ -1390,7 +1399,7 @@ ${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w
 async function workspace(pos, flags) {
   const { Workspaces } = await import('../src/workspaces.js');
   const owners = String(flags.owners ?? envVar('HUB_OWNERS') ?? envVar('OWNERS') ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const spaces = new Workspaces({ dir: workspacesDir(flags), owners });
+  const spaces = new Workspaces({ dir: workspacesDir(flags), backups: join(dataHome(flags), 'backups'), owners });
   const [sub, name] = pos;
   try {
     if (sub === 'create') {
@@ -1428,7 +1437,7 @@ ${dim(`  Give someone a login: nuworq token create <name> --role human --workspa
     }
     if (sub === 'remove') {
       spaces.remove(need(name, '<name>'));
-      return console.log(`${green('Removed')} workspace ${bold(name)} and its database. A running hub stops serving it at once.`);
+      return console.log(`${green('Removed')} workspace ${bold(name)}, its database and its backups. A running hub stops serving it at once.`);
     }
   } catch (e) {
     throw e.hint || e.status ? new HubError(e.message, { hint: e.hint }) : e;

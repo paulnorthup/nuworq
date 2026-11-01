@@ -42,7 +42,7 @@ Tokens and session cookies travel in plain HTTP on your LAN. That's fine on a ho
 2. Run nuworq on loopback with `--auth --trust-proxy`. The systemd unit already does this.
 3. Edit the name in [deploy/Caddyfile](../deploy/Caddyfile) and run Caddy. It gets the certificate and adds HSTS.
 
-`--trust-proxy` makes nuworq believe `X-Forwarded-For/-Proto/-Host`. Use it **only** when a proxy you control is the sole way in. Otherwise anyone can claim to be on HTTPS, or spoof an IP to dodge the login rate limit.
+`--trust-proxy` makes nuworq believe `X-Forwarded-For/-Proto/-Host`. Use it **only** when a proxy you control is the sole way in. Otherwise anyone can claim to be on HTTPS, or spoof an IP to dodge the login rate limit. With it, the client's address for the rate limits is Cloudflare's `CF-Connecting-IP` when there is one, else the rightmost `X-Forwarded-For` entry that isn't loopback or a private network (the leftmost is whatever the client wrote). The hub sends HSTS itself whenever `--public-url` is https, so it holds behind a tunnel as well as behind Caddy.
 
 ### Docker
 ```bash
@@ -341,6 +341,8 @@ sqlite3 /var/lib/nuworq/nuworq.db ".backup '/backups/nuworq-$(date +%F).db'"   #
 Or stop the service and copy the `.db` file. To restore, put the file back and start nuworq. Tokens are in the same file, so a backup is also a credential store: keep it private.
 
 `serve --follow` also copies the database before every move to a new commit, into `<data-dir>/backups/<sha>.db`, named after the commit it left (with `--workspaces`, `backups/<sha>/<workspace>.db`). It keeps the last 10. If the new hub doesn't come up healthy, it puts that copy back before starting the old code, because the new code may have migrated the database. If the copy can't be made (a full disk, say), the hub stays where it is and the log says why. These copies sit on the same disk, so they don't replace off-machine backups.
+
+**How long copies are kept.** `--follow`'s copies: the last 10 moves, which is days to weeks, depending on how often main moves. `nuworq workspace adopt`'s dated copy (`nuworq.db.before-workspaces-<time>`): until the workspace is removed. `nuworq workspace remove <name>` deletes the workspace's database, its copy in every `backups/<sha>/` folder, and the dated copy it was adopted from, so nothing of it (its GitHub secret, channel URLs, people's emails) stays on the hub's disk. Off-machine backups you make yourself are yours to expire.
 
 ### Upgrading a deployment from before the rename
 nuworq used to be called Trellis, and so did these recipes: the `trellis` user, `/opt/trellis`, `/var/lib/trellis/trellis.db` and `trellis.service`; in Docker, the `trellis` service, the `trellis-data` volume and `/data/trellis.db`. The code still answers to the old names: `bin/trellis.js` runs nuworq, and old tokens (`trl_…`), sessions, `TRELLIS_*` variables and `trellis/<agent>` branches keep working.

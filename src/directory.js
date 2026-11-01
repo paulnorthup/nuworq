@@ -9,7 +9,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { SESSION_MS } from './auth.js';
 import { paid } from './billing.js';
 
@@ -88,7 +88,7 @@ export class Directory {
         github     TEXT NOT NULL DEFAULT '',
         building   TEXT NOT NULL DEFAULT '',      -- what they would build, in their words
         state      TEXT NOT NULL DEFAULT 'new',   -- new | approved | declined
-        ip_hash    TEXT NOT NULL DEFAULT '',      -- sha256 of the address it came from, never the address
+        ip_hash    TEXT NOT NULL DEFAULT '',      -- HMAC of the address it came from (ipHash), never the address
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         decided_by TEXT NOT NULL DEFAULT '',
@@ -278,6 +278,19 @@ export class Directory {
   // ── early access ──
 
   // Ask to come in. The same email again is the same request, brought up to date; it keeps the first source it had.
+  // An address as access requests keep it: an HMAC under a key only this database holds, so the 2^32 IPv4
+  // addresses can't be tried one by one to undo it. Made on first use; hashes from before it (plain sha256,
+  // which could be undone that way) are cleared then.
+  ipHash(ip) {
+    let key = this.db.prepare("SELECT value FROM settings WHERE key = 'ip_key'").get()?.value;
+    if (!key) {
+      key = randomBytes(32).toString('hex');
+      this.db.prepare("INSERT INTO settings (key, value) VALUES ('ip_key', ?)").run(key);
+      this.db.prepare("UPDATE access_requests SET ip_hash = '' WHERE ip_hash != ''").run();
+    }
+    return createHmac('sha256', key).update(String(ip)).digest('hex');
+  }
+
   request({ email, github = '', building = '', source = '', ip = '' }) {
     email = String(email ?? '').trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('a valid email is required');
@@ -287,7 +300,7 @@ export class Directory {
       ON CONFLICT (email) DO UPDATE SET github = CASE WHEN excluded.github != '' THEN excluded.github ELSE github END,
         building = CASE WHEN excluded.building != '' THEN excluded.building ELSE building END,
         source = CASE WHEN source = '' THEN excluded.source ELSE source END, ip_hash = excluded.ip_hash, updated_at = excluded.updated_at`)
-      .run(email, clip(github, 60).replace(/^@/, ''), clip(building, 2000), sourceOf(source), ip ? sha(ip).toString('hex') : '', t, t);
+      .run(email, clip(github, 60).replace(/^@/, ''), clip(building, 2000), sourceOf(source), ip ? this.ipHash(ip) : '', t, t);
     return this.db.prepare('SELECT id, email, source, state, created_at, updated_at FROM access_requests WHERE email = ?').get(email);
   }
 
@@ -394,6 +407,14 @@ export class Directory {
 
   // How far feedback goes on its own (#296), as a project's autonomy: ask (each piece waits for Approve or
   // Decline, the default), balanced (proposed at once; shaped items wait for an owner's OK) or full.
+  // A hub-wide setting by key: its value, or null. With a value, sets it ('' removes it).
+  setting(key, value) {
+    if (value === undefined) return this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null;
+    if (value === '') this.db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    else this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(key, String(value));
+    return value || null;
+  }
+
   feedbackAutonomy() {
     return this.db.prepare("SELECT value FROM settings WHERE key = 'feedback_autonomy'").get()?.value ?? 'ask';
   }

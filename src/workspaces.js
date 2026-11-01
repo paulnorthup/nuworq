@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Hub, UserError } from './core.js';
 import { Directory } from './directory.js';
 import { paid, billingLine } from './billing.js';
+import { forgetWorkspace } from './follow.js';
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 export const RESERVED = new Set(['www', 'api', 'app', 'admin', 'w', 'static', 'login', 'auth', 'hub']);
@@ -23,14 +24,16 @@ export class Workspaces {
   // repos: where hubs keep mirrors of repositories they have no checkout of; each workspace gets
   // its own folder there, like its own database. keys: per-repository deploy keys, likewise one
   // folder per workspace, so one workspace's key never fetches for another.
+  // backups: where serve --follow keeps its copies of every workspace (src/follow.js); removing one deletes its copies.
   // plans: whether plan limits apply (off by default: early access changes nothing). owners: the hub
   // owner's emails; an organization they belong to is never limited.
-  constructor({ dir, clock, repos = null, keys = null, plans = false, owners = [] } = {}) {
+  constructor({ dir, clock, repos = null, keys = null, backups = null, plans = false, owners = [] } = {}) {
     if (!dir) throw new Error('Workspaces needs a directory');
     this.dir = dir;
     this.clock = clock;
     this.repos = repos;
     this.keys = keys;
+    this.backups = backups;
     this.plans = !!plans;
     this.owners = owners.map((e) => String(e).trim().toLowerCase()).filter(Boolean);
     this.open = new Map(); // slug → Hub
@@ -163,6 +166,7 @@ export class Workspaces {
       this.directory.join(email, s);
     }
     if (!this.directory.rootWorkspace()) this.directory.setRootWorkspace(s);
+    this.directory.setting(`adopted:${s}`, backup); // removing the workspace removes this copy too
     return { workspace: s, file: this.file(s), backup };
   }
 
@@ -285,6 +289,10 @@ export class Workspaces {
     if (!existsSync(this.file(s))) throw new UserError(`No workspace "${s}"`, { status: 404 });
     this.evict(s);
     for (const f of [this.file(s), `${this.file(s)}-wal`, `${this.file(s)}-shm`]) rmSync(f, { force: true });
+    // And every copy of it: follow's, and the dated copy of the single hub it was adopted from (#479).
+    forgetWorkspace(this.backups, s);
+    const adopted = (this._directory || existsSync(join(this.dir, 'directory.sqlite'))) && this.directory.setting(`adopted:${s}`);
+    if (adopted) { rmSync(adopted, { force: true }); this.directory.setting(`adopted:${s}`, ''); }
   }
 
   evict(slug) {
