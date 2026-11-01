@@ -446,6 +446,8 @@ describe('database backups, on real files', () => {
 
 describe('a smoke boot on copies of the live data, for real (#544)', () => {
   const ROOT = realpathSync(new URL('..', import.meta.url));
+  // ROOT as it is checked out: smoke() checks out any other commit in next, and next is this checkout here.
+  const HEAD = execFileSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-smokes-')));
   const smokes = () => readdirSync(tmpdir()).filter((f) => f.startsWith('nuworq-smoke-')).sort();
   const columns = (file) => { const d = new DatabaseSync(file); try { return d.prepare('PRAGMA table_info(items)').all().map((c) => c.name); } finally { d.close(); } };
@@ -464,7 +466,7 @@ describe('a smoke boot on copies of the live data, for real (#544)', () => {
     hub.db.close();
     const before = smokes();
     const sys = system({ repo: ROOT, dir: join(root, 'hub-src'), next: ROOT, url: 'http://127.0.0.1:1', store: backups({ dir: join(root, 'backups'), db }) });
-    assert.deepEqual(await sys.smoke('abcdef1234'), { ok: true });
+    assert.deepEqual(await sys.smoke(HEAD), { ok: true });
     assert.deepEqual(smokes(), before, 'the copies are removed');
     assert.ok(!existsSync(join(home, '.nuworq', 'hub.json')), "a smoke boot doesn't tell this machine's agents about itself");
   });
@@ -477,13 +479,13 @@ describe('a smoke boot on copies of the live data, for real (#544)', () => {
     spaces.create('beta');
     spaces.close();
     const sys = system({ repo: ROOT, dir: join(root, 'hub-src'), next: ROOT, url: 'http://127.0.0.1:1', store: backups({ dir: join(root, 'backups'), workspaces: ws }) });
-    assert.deepEqual(await sys.smoke('abcdef1234'), { ok: true });
+    assert.deepEqual(await sys.smoke(HEAD), { ok: true });
     const broken = new DatabaseSync(join(ws, 'beta.db'));
     broken.exec('DROP TABLE items; CREATE VIEW items AS SELECT 1 AS id');
     broken.close();
-    const r = await sys.smoke('abcdef1234');
+    const r = await sys.smoke(HEAD);
     assert.equal(r.ok, false, "a workspace that can't open fails the boot, though nothing asked for it");
-    assert.match(r.failed, /^it exited with code 1 at abcdef1: \w*Error: /);
+    assert.match(r.failed, new RegExp(`^it exited with code 1 at ${HEAD.slice(0, 7)}: \\w*Error: `));
   });
 
   test("in a repo, a commit whose migration fails on the live data doesn't boot, and names why; the live database is untouched", async () => {
@@ -520,12 +522,13 @@ http.createServer((req, res) => res.end('{"ok":true}')).listen(Number(at('--port
     process.env.NUWORQ_TOKEN_FOR_SMOKE_TEST = 'secret';
     try {
       const before = smokes();
-      assert.deepEqual(await sys.test(good), { ok: true });
+      // No sys.test first: a commit CI passed (#543) reaches smoke() with nothing checked out for it yet.
       assert.deepEqual(await sys.smoke(good), { ok: true }, 'booted while the live database is open');
       assert.deepEqual(await sys.test(bad), { ok: true }, 'its tests pass: only real data shows it');
       const r = await sys.smoke(bad);
       assert.equal(r.ok, false);
       assert.equal(r.failed, `it exited with code 1 at ${bad.slice(0, 7)}: Error: no such table: nope`);
+      assert.deepEqual(await sys.smoke(good), { ok: true }, 'it boots the commit asked for, not the one last tested');
       assert.deepEqual(smokes(), before, 'the copies are removed either way');
       assert.deepEqual(columns(db), ['id', 'title'], 'only the copies were migrated');
     } finally {

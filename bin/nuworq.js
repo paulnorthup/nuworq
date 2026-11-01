@@ -1382,6 +1382,15 @@ ${pkg ? `    Install (once):     npm install -g ${base}/nuworq.tgz\n` : ''}    C
 // are tested in a second worktree there (hub-next). See src/follow.js.
 // This process only works out the settings and hands over to src/follow.js run on its own (#546), which
 // loads only node: modules: a commit that changes the CLI moves the hub and never restarts the supervisor.
+// A commit goes live once CI's required check passed for it (#543), asked of GitHub with the hub's own App
+// (src/followhub.js ci): the suite isn't run again here. The supervisor gets only where the app is ({ app }), or
+// null without one or for a remote not on GitHub: then the suite runs here, as before.
+async function followCi(repo, data) {
+  const { appFromEnv, appFromFile } = await import('../src/ghapp.js');
+  const app = join(data, 'github-app.json');
+  return (appFromEnv() ?? appFromFile(app)) && repoRemote(repo).startsWith('github.com/') ? { app } : null;
+}
+
 async function serveFollow(flags) {
   const host = String(flags.host || envVar('HOST') || '127.0.0.1');
   const port = Number(flags.port || envVar('PORT') || 4747);
@@ -1394,6 +1403,7 @@ async function serveFollow(flags) {
     repo,
     // Copied before every move, to <data>/backups: the one database, or every workspace's.
     store: flags.demo ? null : { dir: join(data, 'backups'), ...(flags.workspaces ? { workspaces: workspacesDir(flags) } : { db: resolve(dbPath(flags)) }) },
+    ci: await followCi(repo, data),
     dir: join(data, 'hub-src'),
     next: join(data, 'hub-next'),
     args,
