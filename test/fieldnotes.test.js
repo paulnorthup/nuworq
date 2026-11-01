@@ -11,7 +11,8 @@ function setup({ autonomy = 'full' } = {}) {
   const hub = new Hub({ clock: () => now });
   hub.tx(() => hub.project('p', { create: true, name: 'App' }));
   const human = (op, args) => hub.humanOp('p', op, args);
-  const agent = (op, name, args = {}) => hub.agentOp('p', op, name, args);
+  // The sweep turns drift into a tidy job (#536): here it runs before each claiming next, as if one had just passed.
+  const agent = (op, name, args = {}) => { if (op === 'next' && args.claim !== false) hub.tidyAll(); return hub.agentOp('p', op, name, args); };
   human('settings', { autonomy });
   human('create', { title: 'Data moves in and out', acceptance: 'x' });
   human('create', { title: 'Exports retry when storage times out', acceptance: 'x', parent: '#1' });

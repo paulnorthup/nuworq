@@ -1730,6 +1730,17 @@ export class Hub extends EventEmitter {
     };
   }
 
+  // Drift in each project's groups becomes a tidy job (#202), and field notes due a look a review (#443). On the
+  // sweep timer and once at start (#536), so no claim pays for the scan; a drift waits at most one sweep.
+  tidyAll() {
+    for (const p of this.projects()) {
+      const last = () => this.q('SELECT MAX(id) AS id FROM events WHERE project_id = ?').get(p.id).id ?? 0;
+      const was = last();
+      this.tx(() => { tidyUp(this, p); reviewUp(this, p); });
+      if (last() !== was) this.changed(p); // a job opened or closed: the page and waiting agents hear of it
+    }
+  }
+
   // Expired leases go back to the queue. Run before every operation and on a timer.
   sweep() {
     const t = this.now();
@@ -2743,9 +2754,7 @@ const AGENT_OPS = {
       };
     }
     const repo = this.caller?.remote ?? '';
-    // Groups that drifted become a tidy job before anything is picked (#202), and field notes due for a look a
-    // review (#443); a peek changes nothing.
-    if (args.claim !== false) { tidyUp(this, p); reviewUp(this, p); }
+    // Drifted groups (#202) and field notes due a look (#443) become jobs on the sweep timer (tidyAll, #536), not here.
     const pick = this.pick(p, agent, { powers: this.caller?.powers, repo });
     if (!pick) {
       if (p.parked) return { mode: 'idle', hint: 'The human has parked this project: start nothing new. Signoff.' };
