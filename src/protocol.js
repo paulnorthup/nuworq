@@ -117,8 +117,8 @@ export const OPS = [
   },
   {
     name: 'progress',
-    description: 'Report a meaningful milestone on an item you hold (not every step). Renews your lease and returns any steering from the human. During long stretches without a milestone, call it with no headline every ~15 minutes: a silent heartbeat that only renews the lease.',
-    params: { item: ITEM, ...LAYERS, headline: s('One line, ≤100 characters, outcome first. Omit for a silent heartbeat.'), touching: TOUCHING, usage: USAGE },
+    description: 'Report a meaningful milestone on an item you hold (not every step). Returns any steering from the human.',
+    params: { item: ITEM, ...LAYERS, headline: s('One line, ≤100 characters, outcome first.'), touching: TOUCHING, usage: USAGE },
     required: ['item'],
   },
   {
@@ -486,7 +486,7 @@ Hub: ${url} · project: ${project} (change with --project).
    - **review**: check someone else's submission against done_means. Check \`breaking\` too: set when the change makes someone act (see **shape**), and saying accurately who must do what. Reject when it's missing, wrong, or set on a change that breaks nobody. Reject any item but a release that changes the version (see Releases below).
    - **land**: accepted work to put on main: rebase its branch onto main, run the checks, fast-forward main, then ${c('submit')}. Land jobs come first, because finished work that isn't on main helps nobody.
    - **tidy**: the milestones drifted; put them right (see Tidy jobs below). No branch.
-3. Work. As soon as you know which files you'll change, post ${c('progress', cli ? '<item> "<headline>" --touching "<paths>"' : '')} with \`touching\`, so others steer clear. Then post it at real milestones. You hold a 20-minute lease: in long stretches, a ${c('progress')} with no headline is a silent heartbeat. If you go quiet, the item returns to the queue.
+3. Work. As soon as you know which files you'll change, post ${c('progress', cli ? '<item> "<headline>" --touching "<paths>"' : '')} with \`touching\`, so others steer clear. Then post it at real milestones. Your lease renews by itself while you work: with each call you make, and while \`nuworq run\` runs your worker. If you go quiet, the item returns to the queue.
 4. A question?
    - Can you make a reasonable call? ${c('ask')} with an \`assumption\` and keep going.
    - Truly blocked? ${c('ask')} with \`blocking\`. The item parks; take other work with ${c('next')}.
