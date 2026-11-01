@@ -48,6 +48,38 @@ here (nuworq staff), and start an operator (operator --start). --yes or --no
 answers each without asking; with no terminal, it's no.
 ```
 
+### nuworq up
+
+```text
+nuworq up: bring this machine's setup up: the runner with automatic workers, and
+  an operator in its own terminal for each unparked project
+
+Usage
+  nuworq up [--dry-run]
+
+Flags
+  --dry-run       print what it would do, and the table, and do nothing
+  --yes           staff the projects that aren't, without asking
+  --no            don't staff them, and don't ask again
+  --budget <usd>  with staffing: the daily cap for their workers (default: 20)
+
+Example
+  nuworq up
+
+The runner: it installs nuworq run as a service with --workers auto, restarts
+one whose flags differ, and leaves one that matches alone. Unstaffed projects
+that aren't parked: it asks once whether to staff them; a no is remembered.
+
+Operators: each unparked project with no operator on the hub gets Claude Code
+with /nuworq:operator in its clone here: in tmux when it is installed (the
+nuworq session, a window per project: tmux attach -t nuworq), else a Terminal or
+iTerm window on a Mac, else it prints the command. A project with no clone here
+is skipped, with where to clone it. Parked projects get none.
+
+Run it again any time: it starts only what is missing, and ends with a table of
+each project and the runner. nuworq down stops what it started.
+```
+
 ### nuworq run
 
 ```text
@@ -941,6 +973,19 @@ Example
   nuworq staff nuworq --budget 20
 
 On a hub with logins, an owner approves it in the browser.
+```
+
+### nuworq down
+
+```text
+nuworq down: stop the operators nuworq up started (each signs itself off) and
+  the runner service
+
+Usage
+  nuworq down
+
+Example
+  nuworq down
 ```
 
 ### nuworq disconnect

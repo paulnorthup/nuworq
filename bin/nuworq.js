@@ -235,19 +235,25 @@ async function allowCmd(flags) {
 // can't take one: then it prints the line to paste. has: typed capabilities, or null for the bare line, which
 // detects them (#494). Its routine commands are allowed for this session (--settings), destructive ones still ask.
 async function startOperator(folder, has = null) {
+  const { line, settings, cant } = await operatorLaunch(has);
+  if (cant) return console.log(`${amber('!')} ${cant}. Open Claude Code in ${folder} and type:\n\n${line}\n`);
+  console.log(`${green('●')} Starting the operator: Claude Code in ${folder}, with ${bold(line)} sent.`);
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync('claude', ['--settings', settings, line], { cwd: folder, stdio: 'inherit' });
+  if (r.error) console.log(`${amber('!')} Couldn't start Claude Code (${r.error.message}). Open it in ${folder} and type: ${line}`);
+}
+
+// The operator line, the --settings that allow its routine commands, and why this Claude Code can't take them (cant:
+// not on PATH, or no first-prompt argument), for startOperator and nuworq up.
+async function operatorLaunch(has = null) {
   const { pluginInstalled } = await import('../src/connect.js');
   const { rules, sshHost, localOf } = await import('../src/operator.js');
   const line = operatorStart(has, { plugin: pluginInstalled(homedir()) });
   const settings = JSON.stringify({ permissions: rules({ host: sshHost(localOf(OPERATOR_FILE).infra_check) }) });
   let help = '';
   try { help = execFileSync('claude', ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 }); } catch {}
-  if (!/\[prompt\]/.test(help)) {
-    return console.log(`${amber('!')} ${help ? "This Claude Code can't take a first prompt" : "Claude Code isn't on PATH"}. Open Claude Code in ${folder} and type:\n\n${line}\n`);
-  }
-  console.log(`${green('●')} Starting the operator: Claude Code in ${folder}, with ${bold(line)} sent.`);
-  const { spawnSync } = await import('node:child_process');
-  const r = spawnSync('claude', ['--settings', settings, line], { cwd: folder, stdio: 'inherit' });
-  if (r.error) console.log(`${amber('!')} Couldn't start Claude Code (${r.error.message}). Open it in ${folder} and type: ${line}`);
+  const cant = /\[prompt\]/.test(help) ? null : help ? "This Claude Code can't take a first prompt" : "Claude Code isn't on PATH";
+  return { line, settings, cant };
 }
 
 // Staff a project with workers on this machine, up to a daily budget (#490): the hub turns staffing on, at once
@@ -286,6 +292,147 @@ async function staffCmd(pos, flags) {
   const usd = await budgetOf(mode, ask, flags.budget);
   for (const l of await staffProject(at.project, usd, flags)) console.log(l);
   await runService({ ...flags, folder: besideOf(process.cwd()) }, { argv: [] });
+}
+
+// nuworq up (#559, src/up.js): the runner with --workers auto, staffing for unstaffed projects (asked once), and an
+// operator in its own terminal for each unparked project with none. Safe to run again: it starts only what's missing.
+// --dry-run says what it would do. The operators it starts write their pids in ~/.nuworq/operators, for nuworq down.
+const UP_FILE = join(dirname(HUB_FILE), 'up.json');
+const PIDS = join(dirname(HUB_FILE), 'operators');
+const pidOf = (slug) => join(PIDS, `${checkName('project', slug)}.pid`);
+// The pid of an operator up started that still runs: alive, and still claude (not a pid since reused).
+function runningPid(file) {
+  let pid;
+  try { pid = Number(readFileSync(file, 'utf8').trim()); } catch { return null; }
+  if (!(pid > 0)) return null;
+  try { process.kill(pid, 0); } catch { return null; }
+  try { return /claude/.test(execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })) ? pid : null; } catch { return null; }
+}
+
+async function upCmd(flags) {
+  const { upPlan, readService, launcherFor, launchCommands, operatorShell, upTable, SESSION } = await import('../src/up.js');
+  const svc = await import('../src/service.js');
+  const { userInfo } = await import('node:os');
+  const dryRun = !!flags['dry-run'];
+  const client = createClient(flags);
+  const projects = await hubProjects(client);
+  if (!Array.isArray(projects) || !projects.length) return console.log(dim('The hub has no projects yet: add one on the hub (+ Project), then run nuworq up again.'));
+  const saved = (() => { try { return JSON.parse(readFileSync(UP_FILE, 'utf8')); } catch { return {}; } })();
+  const declined = Array.isArray(saved.declined) ? saved.declined : [];
+
+  // The runner: its service file, read back, and whether it's up.
+  const s = svc.serviceFor({ platform: process.platform, home: homedir(), uid: userInfo().uid });
+  const read = s && existsSync(s.file) ? readService(readFileSync(s.file, 'utf8'), process.platform) : null;
+  let up = false;
+  if (read) { try { up = s.up(execFileSync(s.status[0], s.status.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })); } catch {} }
+  const runner = { supported: !!s, args: read?.args ?? null, cwd: read?.cwd && existsSync(read.cwd) ? read.cwd : null, up };
+
+  // Each project's clone here, found as the runner finds them: from where it runs, beside it, and NUWORQ_REPOS.
+  const from = runner.cwd ?? process.cwd();
+  const clones = {};
+  for (const p of projects) {
+    if (p.path && existsSync(p.path) && (p.remotes ?? []).length <= 1) { clones[p.slug] = { folder: p.path }; continue; }
+    if (!(p.remotes ?? []).length) { clones[p.slug] = { hint: `link ${p.name ?? p.slug}'s repository on the hub, or run nuworq operator --start in its folder` }; continue; }
+    try { clones[p.slug] = { folder: checkoutOf(p.remotes, { cwd: from }) }; } catch (e) { clones[p.slug] = { hint: e.hint ?? e.message }; }
+  }
+  const local = Object.fromEntries(projects.filter((p) => runningPid(pidOf(p.slug))).map((p) => [p.slug, true]));
+
+  // Staffing, asked once for every unparked project that isn't staffed; a no is remembered.
+  const first = upPlan({ projects, declined, clones, local, runner });
+  if (first.staff.length) {
+    const names = first.staff.map((p) => p.name ?? p.slug).join(', ');
+    const mode = flags.yes ? 'yes' : flags.no ? 'no' : process.stdin.isTTY && process.stdout.isTTY ? 'ask' : 'no';
+    if (dryRun) console.log(`Would ask: staff ${names} with workers on this machine?`);
+    else {
+      const { answerer, budgetOf } = await import('../src/setup.js');
+      if (await answerer(mode, askLine)(`Not staffed: ${names}. Staff ${first.staff.length > 1 ? 'them' : 'it'} with workers on this machine? Its runner starts Claude Code workers on waiting work, on your Claude account, up to a daily cap you set next.`)) {
+        const usd = await budgetOf(mode, askLine, flags.budget);
+        for (const p of first.staff) {
+          try {
+            for (const l of await staffProject(p, usd, flags)) console.log(l);
+            p.runner = true;
+          } catch (e) { console.log(`${amber('!')} Couldn't staff ${p.name ?? p.slug}: ${e.message}${e.hint ? ` (${e.hint})` : ''}`); }
+        }
+      } else if (mode === 'ask' || flags.no) {
+        mkdirSync(dirname(UP_FILE), { recursive: true, mode: 0o700 });
+        writeFileSync(UP_FILE, `${JSON.stringify({ ...saved, declined: [...new Set([...declined, ...first.staff.map((p) => p.slug)])] }, null, 2)}\n`, { mode: 0o600 });
+        console.log(dim(`Not staffed; nuworq up won't ask again. Later: nuworq staff <project>, or its Settings on the hub.`));
+      }
+    }
+  }
+  const plan = upPlan({ projects, declined, clones, local, runner });
+  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
+  const via = launcherFor({ tmux: onPath('tmux'), platform: process.platform, iterm: existsSync('/Applications/iTerm.app') });
+  const starting = plan.rows.filter((r) => r.operator.state === 'start');
+  if (dryRun) {
+    const where = { tmux: `tmux (the ${SESSION} session, a window per project)`, iterm: 'iTerm windows', terminal: 'Terminal windows', print: 'nowhere: it would print the commands' }[via];
+    if (starting.length) console.log(`Would start ${starting.length === 1 ? 'an operator' : `${starting.length} operators`} in ${where}.`);
+    console.log(upTable(plan, { dryRun: true }));
+    return;
+  }
+
+  // The runner, installed or restarted with --workers auto.
+  if (plan.runner.action === 'install' || plan.runner.action === 'restart') {
+    const before = process.exitCode;
+    try {
+      await runService(flags, { argv: plan.runner.args, cwd: plan.runner.cwd ?? process.cwd() });
+      if (process.exitCode && process.exitCode !== before) plan.runner = { ...plan.runner, action: 'failed', why: "it didn't come up; see the lines above" };
+    } catch (e) { plan.runner = { ...plan.runner, action: 'failed', why: e.message }; }
+    console.log('');
+  }
+
+  // The operators, each in its own terminal.
+  let attach = false;
+  if (starting.length) {
+    const { line, settings, cant } = await operatorLaunch(null);
+    if (cant) for (const r of starting) r.operator = { state: 'skip', why: `${cant}; open Claude Code in ${r.operator.folder} and type ${line}` };
+    else {
+      mkdirSync(PIDS, { recursive: true, mode: 0o700 });
+      const windows = starting.map((r) => ({ name: r.slug, folder: r.operator.folder, shell: operatorShell({ folder: r.operator.folder, pidFile: pidOf(r.slug), settings, line }), row: r }));
+      if (via === 'print') {
+        console.log(`No tmux, and no Terminal to open: start each operator in its own terminal with:`);
+        for (const w of windows) { console.log(`  ${bold(w.row.name)}: ${w.shell}`); w.row.operator = { state: 'skip', why: 'start it with the command above' }; }
+      } else {
+        let exists = false;
+        if (via === 'tmux') { try { execFileSync('tmux', ['has-session', '-t', SESSION], { stdio: 'ignore' }); exists = true; } catch {} }
+        const cmds = launchCommands(via, windows, { exists });
+        windows.forEach((w, i) => {
+          try {
+            execFileSync(cmds[i][0], cmds[i].slice(1), { stdio: ['ignore', 'ignore', 'pipe'] });
+            w.row.operator = { state: 'started', why: { tmux: `tmux window ${SESSION}:${w.name}`, iterm: 'an iTerm window', terminal: 'a Terminal window' }[via] };
+            if (via === 'tmux') attach = true;
+          } catch (e) {
+            // The first tmux window makes the session: when it fails, the next one has to make it instead.
+            if (via === 'tmux' && i === 0 && !exists && cmds[1]) cmds[1] = launchCommands(via, [windows[1]])[0];
+            w.row.operator = { state: 'skip', why: `couldn't open it: ${String(e.stderr || e.message).trim().split('\n')[0]}` };
+          }
+        });
+      }
+    }
+  }
+  console.log(upTable(plan));
+  if (attach) console.log(`\nThe operators run in tmux: ${bold(`tmux attach -t ${SESSION}`)}`);
+  const parkedOps = plan.rows.filter((r) => r.parked && r.operator.state === 'running');
+  if (parkedOps.length) console.log(`${amber('!')} ${parkedOps.map((r) => r.name).join(', ')} ${parkedOps.length > 1 ? 'are' : 'is'} parked but still has an operator: end that session.`);
+}
+
+// nuworq down (#559): stop the operators nuworq up started (each session signs itself off as it ends, #558), and the
+// runner service.
+async function downCmd(flags) {
+  const { readdirSync } = await import('node:fs');
+  let files = [];
+  try { files = readdirSync(PIDS).filter((f) => f.endsWith('.pid')); } catch {}
+  let stopped = 0;
+  for (const f of files) {
+    const pid = runningPid(join(PIDS, f));
+    if (pid) {
+      try { process.kill(pid, 'SIGTERM'); stopped++; console.log(`${green('●')} Stopped the operator for ${bold(f.replace(/\.pid$/, ''))} (pid ${pid}).`); } catch {}
+    }
+    rmSync(join(PIDS, f), { force: true });
+  }
+  if (!stopped) console.log(dim('No operator nuworq up started is running.'));
+  await runService({ ...flags, uninstall: true });
+  console.log(dim('Bring it all back with: nuworq up'));
 }
 
 // One line typed at the terminal, after a prompt (on stderr, so piped output stays clean).
@@ -796,8 +943,9 @@ function workerSetup(target, agent, flags, s, token = null) {
 
 // `nuworq run --install [run flags]`: the same runner as a LaunchAgent (macOS) or systemd user unit (Linux), so
 // it outlives the terminal and comes back after a reboot. --uninstall stops and removes it (#172).
-// argv: the run flags the service keeps (connect and staff pass their own: #490).
-async function runService(flags, { argv = process.argv.slice(3) } = {}) {
+// argv: the run flags the service keeps (connect and staff pass their own: #490). cwd: where it starts, this folder
+// unless given (nuworq up keeps the folder an installed runner had: #559).
+async function runService(flags, { argv = process.argv.slice(3), cwd = process.cwd() } = {}) {
   const svc = await import('../src/service.js');
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
@@ -819,7 +967,6 @@ async function runService(flags, { argv = process.argv.slice(3) } = {}) {
   const agentTokenFile = taken.token ? tokenFile(dirname(HUB_FILE), 'run-agent', taken.token) : null;
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
   // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
-  const cwd = process.cwd();
   // NUWORQ_SERVICE: it knows it's the service, so it may exit to move onto a newly installed nuworq (#456).
   const env = { ...svc.serviceEnv(process.env, { repos: besideOf(cwd) }), NUWORQ_SERVICE: svc.LABEL, ...(agentTokenFile ? { NUWORQ_AGENT_TOKEN_FILE: agentTokenFile } : {}) };
   const r = await svc.install({ ...where, command: [svc.stableNode(process.execPath), BIN, 'run', ...args], env, log, cwd })
@@ -1808,6 +1955,8 @@ async function main() {
   }
   if (cmd === 'operator') return operatorCmd(flags);
   if (cmd === 'staff') return staffCmd(pos, flags);
+  if (cmd === 'up') return upCmd(flags);
+  if (cmd === 'down') return downCmd(flags);
   if (cmd === 'wait') return waitCmd(flags);
   if (cmd === 'skill' && flags.plugin) {
     // The Claude Code plugin (src/plugin.js): <dir> (default this checkout's plugin/), plus the marketplace
