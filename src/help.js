@@ -159,6 +159,7 @@ export const COMMANDS = [
       ['--public-url <u>', "the hub's address as people reach it, for links"],
       ['--follow', 'keep the hub on the latest main that passes its tests'],
       ['--workspaces', 'one process, many workspaces (one database each); login always required'],
+      ['--workspace <name>', "with --follow --workspaces: where a red main is reported (default: the workspace whose project has this repository)"],
       ['--data-dir <d>', 'where workspaces, backups and mirrors live'],
       ['--base-domain <d>', 'serve workspaces at <name>.<d> as well as /w/<name>/'],
       ['--workspace-cap <n>', 'workspaces one signed-in person may create'],
