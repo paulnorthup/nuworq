@@ -1481,7 +1481,8 @@ function newProject() {
       <details><summary>Or add one by name</summary>` : `<p class="lead">${why} Agents also create projects when they check in to a new name.</p>`}
     <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
     <label>Repository (optional): its git remote, so agents in a clone find the project<input id="np-remote" placeholder="e.g. github.com/acme/llm-proxy"></label>
-    <label>Mission (optional): the north star every agent reads<textarea id="np-mission" placeholder="What is this for? What matters most?"></textarea></label></div>
+    <label>Mission (optional): the north star every agent reads<textarea id="np-mission" placeholder="What is this for? What matters most?"></textarea></label>
+    <label class="check-label"><input type="checkbox" id="np-staff"> Let <code>nuworq run</code> staff it: it starts headless workers whenever work is waiting, and they can cost money. Off until you say; Settings changes it later.</label></div>
     ${picker ? '</details>' : ''}
     <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="create-project">Create by name</button></div>`);
   if (!picker) return setTimeout(() => $('#np-name')?.focus(), 0);
@@ -1927,6 +1928,8 @@ const ACTIONS = {
     if (!name) return toast('Name it', true);
     try {
       const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('np-mission'), remote: val('np-remote') || undefined }) });
+      // Either answer is the answer (#491): the project page doesn't ask again.
+      await api(`/api/p/${encodeURIComponent(r.slug)}/human/settings`, { method: 'POST', body: JSON.stringify({ runner: !!$('#np-staff')?.checked }) });
       closeModal();
       go(r.slug);
     } catch (e) { toastError(e); }
