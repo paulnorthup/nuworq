@@ -158,7 +158,7 @@ describe('nuworq connect', () => {
       assert.ok(!out.stdout.includes(saved.token), 'the token is never printed');
       // No plugin and no one at a terminal to ask (#432): it says how to get the plugin, and writes the skills,
       // generated, pointing at this hub's guide, under names that keep clear of a person's own.
-      assert.match(out.stdout, /Claude Code takes nuworq best as its plugin, with \/nuworq:shaper and \/nuworq:operator: claude plugin marketplace add paulnorthup\/nuworq && claude plugin install nuworq@nuworq/);
+      assert.match(out.stdout, /Claude Code takes nuworq best as its plugin, with \/nuworq:shaper and \/nuworq:operator: claude plugin marketplace add paulnorthup\/nuworq#release && claude plugin install nuworq@nuworq/);
       const skillFile = join(m.home, '.claude', 'skills', 'nuworq', 'SKILL.md');
       const planFile = join(m.home, '.claude', 'skills', 'nuworq-shaper', 'SKILL.md');
       assert.equal(readFileSync(skillFile, 'utf8'), skill({ url }));
@@ -301,7 +301,7 @@ describe('nuworq connect', () => {
       const yes = machine();
       assert.equal(installWithClaude(yes.env), null);
       assert.deepEqual(yes.read.claude(), PLUGIN_INSTALL.map((a) => a.join(' ')));
-      assert.deepEqual(PLUGIN_INSTALL, [['plugin', 'marketplace', 'add', 'paulnorthup/nuworq'], ['plugin', 'install', 'nuworq@nuworq']]);
+      assert.deepEqual(PLUGIN_INSTALL, [['plugin', 'marketplace', 'add', 'paulnorthup/nuworq#release'],['plugin', 'install', 'nuworq@nuworq']]);
     } finally {
       server.close();
     }

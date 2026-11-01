@@ -78,7 +78,7 @@ export const STEPS = [
     key: 'agent', title: 'Start an agent', glance: 'Work beside one in Claude Code, or let workers run on their own.',
     hand: [
       'Beside you: install the Claude Code plugin once (two commands), open Claude Code in a clone of the project\'s repository, and say "Work on <project> using nuworq". It checks in, takes the most useful item, and you watch and steer it in your session.',
-      '`claude plugin marketplace add paulnorthup/nuworq`',
+      '`claude plugin marketplace add paulnorthup/nuworq#release`',
       '`claude plugin install nuworq@nuworq`',
       'On their own: workers are headless agents, each in its own git worktree with a branch per item. One worker, wherever work is waiting:',
       '`nuworq worker --agent claude --run`',

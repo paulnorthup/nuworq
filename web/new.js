@@ -34,6 +34,7 @@ export const NEW = {
   'finished-milestones': '2026-10-31', // #442: a finished milestone is one line in Recently finished, opening to its parts
   'show-dropped': '2026-10-31', // #442: dropped work leaves the board; All work's "Show dropped" at 30m brings it back
   'always-show': '2026-10-31', // #443: Always show on a field note, so every agent gets it whatever it works on
+  'verified-install': '2026-11-01', // #473: Connect an agent's install checks the release's signature before installing it
 };
 
 const DAYS = 7;

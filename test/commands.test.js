@@ -49,7 +49,7 @@ describe('a where as clean commands', () => {
 
   test("Connect's plugin install is two commands, each with its own Copy", () => {
     const c = connectCommands({ url: 'https://app.nuworq.com' });
-    assert.deepEqual(copied(commandBlocks(c.plugin)), ['claude plugin marketplace add paulnorthup/nuworq', 'claude plugin install nuworq@nuworq']);
+    assert.deepEqual(copied(commandBlocks(c.plugin)), ['claude plugin marketplace add paulnorthup/nuworq#release','claude plugin install nuworq@nuworq']);
   });
 });
 

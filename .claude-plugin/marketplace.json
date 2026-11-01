@@ -9,7 +9,12 @@
   "plugins": [
     {
       "name": "nuworq",
-      "source": "./plugin",
+      "source": {
+        "source": "git-subdir",
+        "url": "paulnorthup/nuworq",
+        "path": "plugin",
+        "ref": "release"
+      },
       "description": "The nuworq MCP server, the /nuworq:shaper and /nuworq:operator commands, the skill workers load on their own, and the operator's listener."
     }
   ]

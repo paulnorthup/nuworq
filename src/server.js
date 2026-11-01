@@ -147,16 +147,14 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // The newest signed release in packageDir, whichever commit the hub runs now (#254). Checked against the
   // release key this checkout pins; installs check it again against their own.
   const releases = new Map();
-  const release = () => {
-    let key = null;
-    try { key = readFileSync(join(source, 'release-key.pub'), 'utf8').trim() || null; } catch {}
-    return newestSigned(packageDir, key, releases);
-  };
+  const releaseKey = () => { try { return readFileSync(join(source, 'release-key.pub'), 'utf8').trim() || null; } catch { return null; } };
+  const release = () => newestSigned(packageDir, releaseKey(), releases);
   // /api/info's package: the running commit's, and release: the newest signed one, which installs update to.
+  // key: release-key.pub's base64 line, for the first install's signature check (web/connect.js, #473).
   const packageInfo = (at) => {
     const r = release();
     return { url: `${at}/nuworq.tgz`, sha256: built.sha256, commit: built.commit.slice(0, 7),
-      release: r ? { url: `${at}/nuworq-${r.commit}.tgz`, sha256: r.sha256, commit: r.commit, time: r.time } : null };
+      release: r ? { url: `${at}/nuworq-${r.commit}.tgz`, sha256: r.sha256, commit: r.commit, time: r.time, key: releaseKey()?.replace(/-----[A-Z ]+-----|\s/g, '') } : null };
   };
   const gh = { web: 'https://github.com', api: 'https://api.github.com', ...github };
   let app = githubApp && !(githubApp instanceof GitHubApp) ? new GitHubApp({ api: gh.api, web: gh.web, ...githubApp }) : githubApp;
@@ -876,6 +874,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!sig) return deny(404, "this hub's package isn't signed", 'Installed copies keep their version until a signed release is served (docs/DEPLOY.md, "Signed releases").');
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-cache' });
         return res.end(`${sig}\n`);
+      }
+      // The newest signed release and its signature under one name (#473), for a first install that checks the
+      // signature before installing (README, Connect an agent).
+      if (req.method === 'GET' && (path === '/nuworq-release.tgz' || path === '/nuworq-release.tgz.sig')) {
+        await pkg;
+        const r = release();
+        if (!r) return deny(404, 'this hub serves no signed release', 'Install the package of the commit it runs: /nuworq.tgz.');
+        const sig = path.endsWith('.sig');
+        res.writeHead(200, sig ? { 'content-type': 'text/plain', 'cache-control': 'no-cache' }
+          : { 'content-type': 'application/gzip', etag: `"${r.sha256}"`, 'cache-control': 'no-cache', 'content-disposition': 'attachment; filename="nuworq-release.tgz"' });
+        return res.end(sig ? `${signatureOf(r)}\n` : await readFile(r.file));
       }
       // What the packages are, for installs deciding whether to update (src/update.js) and for signing one
       // (scripts/sign-release.js): /api/info's package with its newest signed release, plus the running commit in
