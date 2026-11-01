@@ -128,6 +128,7 @@ function detectHas(flags) {
     onPath('claude') && 'claude-cli',
     onPath('codex') && 'codex-cli',
     onPath('opencode') && 'opencode',
+    onPath('pi') && 'pi',
     onPath('gh') && 'gh',
     flags.browser && 'browser', // --browser: the worker gets one (workerSetup)
     ...(refs(flags.has) ?? []),
@@ -504,23 +505,27 @@ async function waitCmd(flags) {
 // Prints the command, or runs it with --run.
 function agentOf(flags) {
   const agent = String(flags.agent || 'claude').toLowerCase();
-  if (!['claude', 'codex', 'opencode'].includes(agent)) {
-    throw new HubError(`unknown agent "${agent}"`, { hint: 'Use --agent claude, codex or opencode. For anything else, give it the nuworq MCP server (nuworq init) and let it check in.' });
+  if (!['claude', 'codex', 'opencode', 'pi'].includes(agent)) {
+    throw new HubError(`unknown agent "${agent}"`, { hint: 'Use --agent claude, codex, opencode or pi. For anything else, give it the nuworq MCP server (nuworq init) and let it check in.' });
   }
   if (agent === 'opencode' && (typeof flags.model !== 'string' || !flags.model.includes('/'))) {
     throw new HubError('opencode needs a model: --model <provider>/<model>', { hint: 'e.g. --model ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is configured for you), or any provider in your opencode config. A ~27B tool-calling model is reliable; see docs/OPEN-WEIGHT.md.' });
+  }
+  if (agent === 'pi' && (typeof flags.model !== 'string' || !flags.model.includes('/'))) {
+    throw new HubError('pi needs a model: --model <provider>/<model>', { hint: "e.g. --model ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is configured for you), or a pi built-in provider such as anthropic/claude-sonnet-5-5 with its key in the environment (ANTHROPIC_API_KEY): pi workers don't get your ~/.pi/agent sign-ins. See docs/OPEN-WEIGHT.md." });
   }
   // Codex would take the server the same way, but its sandbox keeps it from serving the app to look at.
   if (flags.browser && agent !== 'claude') {
     throw new HubError('--browser is for Claude workers only', { hint: 'Use --agent claude --browser, or leave out --browser.' });
   }
-  // Through llm-proxy: opencode with --model proxy/<model> (its OpenAI Chat Completions, /v1, with a personal key),
-  // Claude Code and Codex with --proxy (its provider routes, /anthropic and /openai). Provider routes answer only
+  // Through llm-proxy: opencode and pi with --model proxy/<model> (its OpenAI Chat Completions, /v1, with a personal
+  // key), Claude Code and Codex with --proxy (its provider routes, /anthropic and /openai). Provider routes answer only
   // the proxy's owner token, and only on its LAN or tailnet address: on its public hostname they answer 403.
   const proxied = String(flags.model ?? '').startsWith('proxy/');
+  const byModel = agent === 'opencode' || agent === 'pi';
   if (flags.proxy === undefined && !proxied) return agent;
-  if (agent !== 'opencode' && proxied) throw new HubError(`--agent ${agent} doesn't take a proxy/<model> model`, { hint: `Give --agent ${agent} --proxy http://host:4100: it goes through llm-proxy's ${agent === 'claude' ? 'Anthropic' : 'OpenAI'} route with its own models.` });
-  if (agent === 'opencode' && !proxied) throw new HubError('--proxy needs a proxy/<model> model', { hint: 'e.g. --agent opencode --model proxy/gpt-5 --proxy http://studio.local:8080' });
+  if (!byModel && proxied) throw new HubError(`--agent ${agent} doesn't take a proxy/<model> model`, { hint: `Give --agent ${agent} --proxy http://host:4100: it goes through llm-proxy's ${agent === 'claude' ? 'Anthropic' : 'OpenAI'} route with its own models.` });
+  if (byModel && !proxied) throw new HubError('--proxy needs a proxy/<model> model', { hint: `e.g. --agent ${agent} --model proxy/gpt-5 --proxy http://studio.local:8080` });
   if (!/^https?:\/\/[^/]/.test(proxyUrl(flags))) {
     throw new HubError(`${proxied ? '--model proxy/<model>' : '--proxy'} needs llm-proxy's address`, {
       hint: proxied ? 'Give --proxy http://host:port (or set NUWORQ_LLM_PROXY_URL), and its key in NUWORQ_LLM_PROXY_KEY.'
@@ -609,7 +614,7 @@ async function worker(flags) {
     target = { ...target, repo: routes.find((r) => r.project === target.slug)?.repo ?? null };
   }
   const token = flags.run ? await agentToken(client, flags) : null;
-  const { name, worktree, main, origin, cwd, cmd, tokenAt } = await setupOrClone(target, agent, flags, s, client, token);
+  const { name, worktree, main, origin, cwd, cmd, tokenAt, piDir } = await setupOrClone(target, agent, flags, s, client, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
@@ -619,6 +624,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
       claude: `Headless agents can't ask permission: they may only use the tools in --allowedTools (the project's own test and build commands; change with --allow). Their shell runs in Claude Code's sandbox: it writes only in the worktree and temp, and reaches only the hub, GitHub, the project's registries and the hosts its settings add. ${origin ? 'Pushes go through the hub, which takes nuworq/ branches only; the hub lands work on main.' : 'Never git push.'}`,
       codex: `Codex runs in its workspace-write sandbox; the nuworq MCP server runs outside it, so it can reach the hub.`,
       opencode: `opencode has no sandbox, so it runs only on projects without a remote, and never git pushes (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
+      pi: `pi has no sandbox, so it runs only on projects without a remote, and never git pushes (nuworq's pi extension blocks it). Its config is a folder of its own (${piDir}): none of your pi extensions, skills, MCP servers or sign-ins follow it in. Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
     }[agent] + '\nAdd --run to start it now.'));
     if (s.token) console.log(dim('Replace <agent-token> with an agent token (nuworq token create <name> --role agent --project <p>). With --run, pass it as --agent-token.'));
     return;
@@ -628,6 +634,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
   const usage = await tapUsage(child, agent, flags, (l) => console.log(l));
   await new Promise((done) => child.on('close', (code) => { process.exitCode = code ?? 1; done(); }));
   dropTokenFile(tokenAt);
+  dropPiDir(piDir);
   await reportUsage(s, token, target.slug, name, usage());
 }
 
@@ -765,6 +772,31 @@ const browserServer = (name) => ({
     '--allowed-origins', 'http://127.0.0.1:*;http://localhost:*', '--output-dir', join(tmpdir(), 'nuworq-browser', name)],
 });
 
+// A pi worker's config folder (#495), ~/.nuworq/pi/<worker>, made fresh each start: mcp.json with the nuworq server
+// (direct exposure: its tools as they are; the token only as the path of its file, #477), and models.json for the
+// provider of --model. Ollama and llm-proxy (proxy/<model>, OpenAI Chat Completions) are providers it adds; any other
+// is one of pi's built-in ones, which only gets the x-client-name header, and its key from the environment.
+const PI_GUARD = fileURLToPath(new URL('../src/piguard.js', import.meta.url));
+function piConfig(name, { env, model, label, proxy }) {
+  const dir = join(dirname(HUB_FILE), 'pi', checkName('worker name', name));
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const [provider, ...rest] = model.split('/');
+  const id = rest.join('/');
+  const headers = { 'x-client-name': label };
+  const providers = provider === 'ollama'
+    ? { ollama: { baseUrl: process.env.OLLAMA_URL || 'http://localhost:11434/v1', api: 'openai-completions', apiKey: 'ollama', headers, models: [{ id }] } }
+    // The key spends money: pi reads it from the worker's environment ($NAME), so it's in neither argv nor this file.
+    : provider === 'proxy'
+      ? { proxy: { name: 'llm-proxy', baseUrl: `${proxy}/v1`, api: 'openai-completions', apiKey: '$NUWORQ_LLM_PROXY_KEY', headers, models: [{ id }] } }
+      : { [provider]: { headers } };
+  const write = (f, v) => writeFileSync(join(dir, f), `${JSON.stringify(v, null, 2)}\n`, { mode: 0o600 });
+  write('mcp.json', { mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env: { ...env, NUWORQ_MODEL: id }, exposure: 'direct' } } });
+  write('models.json', { providers });
+  return dir;
+}
+const dropPiDir = (dir) => { try { if (dir) rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } };
+
 // A Claude worker runs only what the runner gives it (#360). --strict-mcp-config drops the person's own MCP
 // servers; plugins come from settings, so every plugin installed on this machine is turned off for the worker.
 // Otherwise one installed for a checkout (--scope local) follows into every worktree of it, with its own MCP
@@ -819,10 +851,10 @@ function workerSetup(target, agent, flags, s, token = null) {
   const isRepo = existsSync(join(home, '.git'));
   // With an origin (GitHub), work starts from main there and lands by pushing to it.
   const origin = isRepo && hasOrigin(home);
-  // opencode has no sandbox to keep its shell in (#472): it runs only where there is nothing to push to.
-  if (agent === 'opencode' && origin) {
-    throw new HubError(`opencode workers aren't started for ${target.name}: it has a remote, and opencode has no sandbox`, {
-      hint: "opencode's shell could read this machine's keys and reach any host, so it works only on projects without an origin. Use --agent claude (its shell runs in Claude Code's sandbox) or --agent codex (workspace-write).",
+  // opencode and pi have no sandbox to keep their shell in (#472): they run only where there is nothing to push to.
+  if ((agent === 'opencode' || agent === 'pi') && origin) {
+    throw new HubError(`${agent} workers aren't started for ${target.name}: it has a remote, and ${agent} has no sandbox`, {
+      hint: `${agent}'s shell could read this machine's keys and reach any host, so it works only on projects without an origin. Use --agent claude (its shell runs in Claude Code's sandbox) or --agent codex (workspace-write).`,
     });
   }
   const worktree = isRepo && !flags.here ? join(`${home}.worktrees`, name) : null;
@@ -832,12 +864,12 @@ function workerSetup(target, agent, flags, s, token = null) {
   const browser = agent === 'claude' && !!flags.browser; // --browser: a headless Chrome to look at UI work with
   const tags = detectHas(flags);
   // The model it runs on, when one is named (--model, or the job's under model routing, #347): the agent starts on
-  // it, and checks in saying so. opencode names its own (provider/model) below.
+  // it, and checks in saying so. opencode and pi name their own (provider/model) below.
   const model = typeof flags.model === 'string' && flags.model ? flags.model : '';
   const env = {
     NUWORQ_URL: s.url, NUWORQ_PROJECT: target.slug, NUWORQ_AGENT: name,
     ...(tags.length ? { NUWORQ_HAS: tags.join(',') } : {}),
-    ...(model && agent !== 'opencode' ? { NUWORQ_MODEL: model } : {}),
+    ...(model && agent !== 'opencode' && agent !== 'pi' ? { NUWORQ_MODEL: model } : {}),
     // A worker nuworq run started says so at checkin, with its runner (#238); a runner's token says it too.
     ...(flags.run ? { NUWORQ_ROLE: 'worker', NUWORQ_RUNNER: hostname() } : {}),
     ...(tokenAt ? { NUWORQ_TOKEN_FILE: tokenAt } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
@@ -896,10 +928,11 @@ function workerSetup(target, agent, flags, s, token = null) {
   // NODE_OPTIONS, so the project's test script reads this (nuworq's own does: scripts/run-tests.js).
   if (has('package.json')) lines.push('export NUWORQ_TEST_CONCURRENCY=${NUWORQ_TEST_CONCURRENCY:-2}');
   // Started here (--run), the agent speaks JSON, so its usage can be read and recorded (src/usage.js tap).
-  const json = flags.run ? { claude: ' \\\n  --output-format stream-json --verbose', codex: ' --json', opencode: ' --format json' }[agent] : '';
+  const json = flags.run ? { claude: ' \\\n  --output-format stream-json --verbose', codex: ' --json', opencode: ' --format json', pi: ' --mode json' }[agent] : '';
   // Model traffic says who it is, so llm-proxy (when it goes through one) can be read per worker (#76).
   // Other endpoints ignore the header.
   const label = clientLabel(target.slug, name);
+  let piDir = null;
   if (agent === 'claude') {
     // The runner's own headers (they may carry llm-proxy's x-proxy-token) are expanded by the shell from the
     // inherited variable, so their values are never in argv or printed (#493).
@@ -924,6 +957,14 @@ function workerSetup(target, agent, flags, s, token = null) {
           : { [provider]: { options: { headers } } }, // merged with the provider's own config
     };
     lines.push(`OPENCODE_CONFIG_CONTENT=${sq(JSON.stringify(config))} \\\n  opencode run${json} -m ${sq(model)} ${sq(task)} < /dev/null`);
+  } else if (agent === 'pi') {
+    // pi reads its config from one folder (PI_CODING_AGENT_DIR): this worker's own, written here, so none of the
+    // person's ~/.pi/agent (extensions, skills, prompt templates, MCP servers, sign-ins, AGENTS.md) follows it in, and
+    // nothing lands in the worktree. --no-approve skips a project's .pi folder; its AGENTS.md still loads, as for
+    // Claude. Extensions are off but two: pi's own MCP support (builtin:mcp; --no-extensions drops it too) and nuworq's guard
+    // (src/piguard.js, from this package: no git push). No codemode, so no tool reaches bash around the guard. No session file.
+    piDir = piConfig(name, { env, model, label, proxy: proxyUrl(flags) });
+    lines.push(`PI_CODING_AGENT_DIR=${sq(piDir)} \\\n  pi -p${json} --model ${sq(model)} --no-session --no-approve \\\n  --no-extensions -e builtin:mcp -e ${sq(PI_GUARD)} --no-skills --no-prompt-templates --no-themes \\\n  -- ${sq(task)} < /dev/null`);
   } else {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',')}}`;
     // Codex's built-in openai provider takes no headers; a custom one (how traffic reaches llm-proxy) does.
@@ -936,7 +977,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     lines.push(`codex exec${json}${model ? ` -m ${sq(model)}` : ''} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
   }
   return {
-    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd, tokenAt,
+    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd, tokenAt, piDir,
     checkout: setup.join(' && '), start: lines.join(' && \\\n'), cmd: [...setup, ...lines].join(' && \\\n'),
   };
 }
@@ -1102,7 +1143,7 @@ async function runCmd(flags) {
       if (e instanceof HubError) e.skip = true;
       throw e;
     }
-    const { name, home, worktree, cwd, checkout, start, tokenAt } = setup;
+    const { name, home, worktree, cwd, checkout, start, tokenAt, piDir } = setup;
     const log = join(logs, `${name}.log`);
     // Its worktree, at the latest main. When git can't do that (e.g. it can't reach origin), the agent never
     // starts: the runner leaves the project alone for a while and the others go on.
@@ -1114,6 +1155,7 @@ async function runCmd(flags) {
         const err = redact(String(e.stderr || (e.killed ? 'timed out' : `exited with ${e.code ?? 'an error'}`)).trim());
         writeFileSync(log, `${err}\n`, { mode: 0o600 });
         dropTokenFile(tokenAt);
+        dropPiDir(piDir);
         const said = err.split('\n').find((l) => /^(fatal|error):/.test(l)) ?? err.split('\n').pop();
         throw Object.assign(new HubError(`couldn't update its checkout: ${said}`, { hint: `log: ${log}` }), { skip: true, pause: true });
       }
@@ -1131,6 +1173,7 @@ async function runCmd(flags) {
       exited: new Promise((done) => child.on('close', async (code, sig) => {
         out.end();
         dropTokenFile(tokenAt);
+        dropPiDir(piDir);
         await reportUsage(s, token, target.slug, name, usage());
         // Its worktree goes with it, unless something there would be lost; and its branch, once its item is
         // done or dropped and all of it is on origin (#444).
@@ -1403,6 +1446,9 @@ ${bold('opencode')}  ${dim('(~/.config/opencode/opencode.json)')}
     "nuworq": { "type": "local", "command": ["node", ${q}, "mcp"], "enabled": true }
   }
 
+${bold('pi')}  ${dim('(1.4+, ~/.pi/agent/mcp.json)')}
+  pi mcp add nuworq --exposure direct -- node ${q} mcp
+
 ${bold('Any other MCP client')}
   command: node
   args:    [${q}, "mcp"]
@@ -1414,7 +1460,8 @@ ${bold('Shell-only agents')}  ${dim('(add to AGENTS.md or CLAUDE.md)')}
 ${bold('Headless worker')}  ${dim('(asks the hub where work is waiting; own worktree, a branch per item; --run starts it)')}
   node ${q} worker --agent claude --run
   node ${q} worker --agent codex --run
-  node ${q} worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run`);
+  node ${q} worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run
+  node ${q} worker --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --run`);
 }
 
 // The hub's own files: workspaces, the --follow worktrees, and mirrors of repositories it has no checkout of.
@@ -1511,7 +1558,7 @@ hint: Create one, then start again:
   Auth: ${authLine}
 ${dim(`
   Connect an agent (on any machine):
-${pkg ? `    Install (once):     npm install -g ${base}/nuworq.tgz\n` : ''}    Connect (once):     nuworq connect ${base}   (logs in, registers nuworq with Claude Code, Codex and opencode)
+${pkg ? `    Install (once):     npm install -g ${base}/nuworq.tgz\n` : ''}    Connect (once):     nuworq connect ${base}   (logs in, registers nuworq with Claude Code, Codex, opencode and pi)
     Keep workers going: nuworq run --workers 3 --agent claude   (add --browser for UI checks; Ctrl-C stops)
     Shell:              nuworq guide
     Tool schemas:       ${base}/api/tools?format=openai`)}`);

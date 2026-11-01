@@ -36,7 +36,7 @@ export function connectCommands(info, page = null, slug = 'my-project') {
     // signed release's lines are joined with && (#473), so a signature that doesn't verify stops it before npm runs.
     setup: pkg && key ? `${verifiedInstall(pkg.replace(/\/nuworq\.tgz$/, ''), key).split('\n').join(' && ')} && nuworq connect ${url}`
       : pkg ? `npm install -g ${pkg} && nuworq connect ${url}` : `nuworq connect ${url}`,
-    // Log in through the browser, save the token and the address, register nuworq with Claude Code and Codex.
+    // Log in through the browser, save the token and the address, register nuworq with the agent tools installed.
     connect: `nuworq connect ${url}`,
     // Then the one command (#559): the runner with automatic workers, and an operator per unparked project. Again any time.
     up: 'nuworq up',
@@ -50,9 +50,12 @@ export function connectCommands(info, page = null, slug = 'my-project') {
     claude: 'claude mcp add --scope user nuworq -- nuworq mcp',
     codex: '[mcp_servers.nuworq]\ncommand = "nuworq"\nargs = ["mcp"]\ndefault_tools_approval_mode = "approve"',
     mcp: 'command: nuworq\nargs: ["mcp"]',
+    // pi (1.4+, #495): its own CLI registers the server; its workers take a <provider>/<model>.
+    pi: 'pi mcp add nuworq --exposure direct -- nuworq mcp',
+    piWorker: 'nuworq worker --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --run',
     guide: `nuworq guide --project ${slug}`,
   };
 }
 
 // The commands meant for a shell, for checking: none may hold a placeholder.
-export const shellCommands = (c) => [c.setup, c.install, c.connect, c.up, c.run, c.worker, c.plugin, c.claude, c.guide].filter(Boolean);
+export const shellCommands = (c) => [c.setup, c.install, c.connect, c.up, c.run, c.worker, c.plugin, c.claude, c.pi, c.piWorker, c.guide].filter(Boolean);

@@ -34,6 +34,18 @@ const OPENCODE = [
   { type: 'text', part: { type: 'text', text: 'On it.' } },
   { type: 'step_finish', part: { type: 'step-finish', tokens: { input: 5000, output: 400, reasoning: 100, cache: { read: 0, write: 0 } }, cost: 0 } },
 ].map((e) => JSON.stringify(e));
+// pi -p --mode json (1.4.0): a session header, then events; each assistant message_end carries that call's usage.
+const piUsage = (input, output, cacheRead, total) => ({ input, output, cacheRead, cacheWrite: 0, totalTokens: input + output + cacheRead, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total } });
+const PI = [
+  { type: 'session', version: 3, id: 'u1', timestamp: '2026-11-01T10:00:00.000Z', cwd: '/r' },
+  { type: 'agent_start' },
+  { type: 'message_end', message: { role: 'user', content: 'Work on demo', timestamp: 1 } },
+  { type: 'message_update', usage: piUsage(10, 1, 0, 0), assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Check' } },
+  { type: 'message_end', message: { role: 'assistant', provider: 'anthropic', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'Checking in.' }, { type: 'toolCall', id: 'c1', name: 'checkin', arguments: {} }], usage: piUsage(3000, 200, 1000, 0.012), stopReason: 'toolUse' } },
+  { type: 'tool_execution_end', toolCallId: 'c1', toolName: 'checkin', result: { content: [] }, isError: false },
+  { type: 'message_end', message: { role: 'assistant', provider: 'anthropic', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'Done.' }], usage: piUsage(4000, 300, 3000, 0.02), stopReason: 'stop' } },
+  { type: 'agent_end', messages: [], willRetry: false },
+].map((e) => JSON.stringify(e));
 
 const feed = (agent, lines, opts) => { const t = tap(agent, opts); const shown = lines.map((l) => t.line(l)).filter((x) => x != null); return { shown, usage: t.usage() }; };
 
@@ -59,6 +71,17 @@ describe('usage from agent CLI output', () => {
   test('opencode through llm-proxy: tokens, cost left to the hub to measure', () => {
     const { usage } = feed('opencode', OPENCODE, { model: 'proxy/gpt-5' });
     assert.deepEqual(usage, { input_tokens: 5000, output_tokens: 500, cost_usd: null, model: 'gpt-5' });
+  });
+
+  test('pi: assistant message_end usage adds up (cached input included) with its cost; the log keeps only the text', () => {
+    const { shown, usage } = feed('pi', PI);
+    assert.deepEqual(shown, ['Checking in.', 'Done.']);
+    assert.equal(usage.input_tokens, 11000);
+    assert.equal(usage.output_tokens, 500);
+    assert.ok(Math.abs(usage.cost_usd - 0.032) < 1e-9);
+    assert.equal(usage.model, 'anthropic/claude-sonnet-5-5', 'named from the messages when the runner gave none');
+    // On a local model pi prices it at $0: cost unknown, as for opencode.
+    assert.deepEqual(feed('pi', PI, { model: 'ollama/qwen3:8b' }).usage, { input_tokens: 11000, output_tokens: 500, cost_usd: null, model: 'qwen3:8b' });
   });
 
   test('split keeps the totals exact', () => {

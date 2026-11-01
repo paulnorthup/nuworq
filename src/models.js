@@ -4,7 +4,7 @@
 // (sent back, stalled, handed off, lease lost) steps its next attempt up one tier. A share of building jobs tries
 // a cheaper model (trials, #348), so there is data to go on.
 
-export const AGENTS = ['claude', 'codex', 'opencode'];
+export const AGENTS = ['claude', 'codex', 'opencode', 'pi'];
 export const ROTE = ['land', 'tidy'];
 const MAX_TIERS = 6;
 

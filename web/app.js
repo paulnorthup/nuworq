@@ -1209,7 +1209,7 @@ function connectStep(r) {
     <h2>${esc(r.name)} is ready</h2>
     ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
     ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${commandBlocks(c.clone)}` : ''}
-    <h4>Set it up for ${esc(S.me.org)}</h4><p class="lead">Paste it in a terminal, in a clone of the repository. It installs nuworq (Node 24 or newer), signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code and Codex if they're installed. Then it asks to staff ${esc(r.name)} with workers and start an operator.</p>${commandBlocks(c.setup)}
+    <h4>Set it up for ${esc(S.me.org)}</h4><p class="lead">Paste it in a terminal, in a clone of the repository. It installs nuworq (Node 24 or newer), signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code, Codex, opencode and pi if they're installed. Then it asks to staff ${esc(r.name)} with workers and start an operator.</p>${commandBlocks(c.setup)}
     <h4>Then, and after any restart</h4><p class="lead">The runner with automatic workers, and an operator for each project that isn't parked, each in its own terminal. It starts only what's missing.</p>${commandBlocks(c.up)}
     <h4>Start a worker in a clone of the repository</h4>${commandBlocks(c.worker)}
     <div class="foot"><button class="btn primary" data-action="goto-new" data-slug="${esc(r.slug)}">Open the board</button></div>`);
@@ -1243,7 +1243,7 @@ function staffingModal(back) {
       <div class="s">${m.on ? 'On: building starts on the top model below and landing and tidying on the cheapest, until results show a cheaper one meets the quality bar. A failed attempt steps up one. Reviews and shaping always use the top one.' :'Off: every worker runs on its runner\'s own model.'}</div></div>
       <button class="switch" role="switch" aria-checked="${m.on}" aria-labelledby="set-models" data-action="${m.on ? 'models-off' : 'models-on'}"></button></div>
     <div class="form">${tier('claude', 'Claude models, cheapest first')}
-    <details><summary>Codex and opencode</summary>${tier('codex', 'Codex models, cheapest first')}${tier('opencode', 'opencode models (provider/model), cheapest first')}</details>
+    <details><summary>Codex, opencode and pi</summary>${tier('codex', 'Codex models, cheapest first')}${tier('opencode', 'opencode models (provider/model), cheapest first')}${tier('pi', 'pi models (provider/model), cheapest first')}</details>
     <label data-new="model-trials">Building jobs that try one model down, percent<input id="st-trial" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.trial ?? 10}"></label>
     <label>Building jobs raced against the top model, percent<input id="st-race" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.race ?? 0}"></label></div>
     <p class="faint">Trials teach nuworq what each model can do. Only rote and standard items that aren't "now" or operator-only, while there's budget left today. 0 turns one off.</p>
@@ -1252,7 +1252,7 @@ function staffingModal(back) {
       <p class="faint">Once a model has 20 finished jobs of a kind (building standard items, say), and so has the top one, each job of that kind runs on the cheapest model that meets the bar. Until then: the top model for building, the cheapest for landing and tidying.</p></fieldset>
     <div class="foot"><button class="btn ghost" data-action="staffing-pause" data-paused="${s.paused ? 1 : 0}">${s.paused ? 'Resume' : 'Pause'}</button><button class="btn primary" data-action="staffing-save">Save</button></div>`);
 }
-const tiersTyped = () => Object.fromEntries(['claude', 'codex', 'opencode'].map((a) => [a, val(`st-tiers-${a}`)]));
+const tiersTyped = () => Object.fromEntries(['claude', 'codex', 'opencode', 'pi'].map((a) => [a, val(`st-tiers-${a}`)]));
 // The switch redraws the dialog in its new state, keeping what was typed and not yet saved.
 async function modelRouting(on) {
   const back = !!$('#modal [data-staffing]')?.dataset.back;
@@ -1357,6 +1357,7 @@ async function connect() {
     <h4>The Claude Code plugin</h4><p class="lead">The MCP server and the nuworq skills in one install. Connect this machine all the same: the plugin holds no token.</p>${commandBlocks(c.plugin)}
     <h4>Claude Code</h4>${commandBlocks(c.claude)}
     <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}
+    <h4>pi (1.4 or newer)</h4><p class="lead">Connect registers it when pi is installed; by hand, it's one command. pi workers get a config folder of their own, so your pi extensions, skills and sign-ins stay out: give the model's provider key in the environment. pi has no sandbox, so its workers run only on projects without a remote.</p>${commandBlocks(c.pi)}${commandBlocks(c.piWorker)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}
     <h4>Any agent with a shell (no MCP needed)</h4>${commandBlocks(c.guide)}
     <p class="lead" style="margin-top:var(--sp-2)">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>

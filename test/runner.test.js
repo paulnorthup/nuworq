@@ -105,6 +105,72 @@ describe('nuworq worker --agent opencode', () => {
   });
 });
 
+describe('nuworq worker --agent pi', () => {
+  test('prints a pi -p run whose config is a folder of its own (nuworq MCP, the model\'s provider), nothing in the repo', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-pi-')));
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-pi-home-')));
+    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: repo, stdio: 'ignore' });
+    g('init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'f'), 'x');
+    g('add', '.');
+    g('commit', '-q', '-m', 'init');
+    const hub = new Hub();
+    hub.tx(() => hub.project('pp', { create: true }));
+    hub.humanOp('pp', 'settings', { path: repo });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const env = { ...process.env, HOME: home, NUWORQ_TOKEN: '', NUWORQ_LLM_PROXY_KEY: 'llmp_secret' };
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'pp', '--agent', 'pi', ...a], { env });
+    try {
+      const { stdout } = await cli('--model', 'ollama/qwen3:8b', '--as', 'pi-1');
+      const dir = join(home, '.nuworq', 'pi', 'pi-1');
+      const guard = fileURLToPath(new URL('../src/piguard.js', import.meta.url));
+      assert.ok(stdout.includes(`PI_CODING_AGENT_DIR='${dir}' \\\n  pi -p --model 'ollama/qwen3:8b' --no-session --no-approve \\\n  --no-extensions -e builtin:mcp -e '${guard}' --no-skills --no-prompt-templates --no-themes \\\n  -- 'Work on`), stdout);
+      assert.match(stdout, /git switch -c <branch> main`, or `git switch <branch>` if it exists.*Never work in the main checkout.*' < \/dev\/null/);
+      assert.match(stdout, /pi has no sandbox, so it runs only on projects without a remote/);
+      // Its folder holds only what nuworq wrote: no extensions, skills, sign-ins or AGENTS.md of the person's.
+      assert.deepEqual(readdirSync(dir).sort(), ['mcp.json', 'models.json']);
+      const mcp = JSON.parse(readFileSync(join(dir, 'mcp.json'), 'utf8')).mcpServers.nuworq;
+      assert.deepEqual([mcp.command, mcp.args, mcp.exposure], ['node', [BIN, 'mcp'], 'direct']);
+      assert.equal(mcp.env.NUWORQ_PROJECT, 'pp');
+      assert.equal(mcp.env.NUWORQ_AGENT, 'pi-1');
+      assert.equal(mcp.env.NUWORQ_MODEL, 'qwen3:8b');
+      assert.deepEqual(JSON.parse(readFileSync(join(dir, 'models.json'), 'utf8')).providers.ollama,
+        { baseUrl: 'http://localhost:11434/v1', api: 'openai-completions', apiKey: 'ollama', headers: { 'x-client-name': 'nuworq/pp/pi-1' }, models: [{ id: 'qwen3:8b' }] });
+      assert.deepEqual(readdirSync(repo).sort(), ['.git', 'f'], 'no config file left in the repo');
+
+      // A built-in provider only gets the header; llm-proxy is a provider of its own, keyed from the environment.
+      await cli('--model', 'anthropic/claude-sonnet-5-5', '--as', 'pi-2');
+      assert.deepEqual(JSON.parse(readFileSync(join(home, '.nuworq', 'pi', 'pi-2', 'models.json'), 'utf8')).providers, { anthropic: { headers: { 'x-client-name': 'nuworq/pp/pi-2' } } });
+      await cli('--model', 'proxy/gpt-5', '--proxy', 'http://studio.local:8080/', '--as', 'pi-3');
+      const proxy = readFileSync(join(home, '.nuworq', 'pi', 'pi-3', 'models.json'), 'utf8');
+      assert.deepEqual(JSON.parse(proxy).providers.proxy, { name: 'llm-proxy', baseUrl: 'http://studio.local:8080/v1', api: 'openai-completions', apiKey: '$NUWORQ_LLM_PROXY_KEY', headers: { 'x-client-name': 'nuworq/pp/pi-3' }, models: [{ id: 'gpt-5' }] });
+      assert.ok(!proxy.includes('llmp_secret'), 'the key stays in the environment');
+
+      await assert.rejects(cli(), (e) => /pi needs a model: --model <provider>\/<model>/.test(e.stderr));
+      await assert.rejects(cli('--model', 'ollama/qwen3:8b', '--proxy', 'http://x:1'), (e) => /--proxy needs a proxy\/<model> model/.test(e.stderr));
+      // With somewhere to push, it isn't started (#472): pi has no sandbox for its shell.
+      g('remote', 'add', 'origin', 'https://github.com/acme/pp.git');
+      await assert.rejects(cli('--model', 'ollama/qwen3:8b', '--as', 'pi-4'), (e) => /pi workers aren't started for pp: it has a remote, and pi has no sandbox/.test(e.stderr) && /--agent claude/.test(e.stderr));
+    } finally {
+      server.close();
+    }
+  });
+
+  test("nuworq's pi extension blocks git push in pi's bash tool, and nothing else", async () => {
+    const { default: guard, blocked } = await import('../src/piguard.js');
+    let handler;
+    guard({ on: (event, fn) => { assert.equal(event, 'tool_call'); handler = fn; } });
+    for (const command of ['git push origin HEAD:main', 'git -C /x push', 'cd a && git push --force']) {
+      assert.equal(handler({ toolName: 'bash', input: { command } })?.block, true, command);
+    }
+    for (const [toolName, command] of [['bash', 'git status'], ['bash', 'git commit -m "push the button"'], ['bash', 'npm test'], ['read', 'git push']]) {
+      assert.equal(blocked(toolName, { command }), undefined, `${toolName}: ${command}`);
+    }
+  });
+});
+
 describe('nuworq worker --agent claude', () => {
   test('may land (rebase, fast-forward this one main checkout) but not push or run other git -C commands', async () => {
     const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-land-')));

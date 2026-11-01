@@ -19,7 +19,7 @@ Flags
   --token <t>     use this token instead of signing in through the browser; -
                   reads one line (hidden)
   --no-browser    print the sign-in link and code instead of opening the browser
-  --no-mcp        don't add the MCP server to Claude Code, Codex or opencode
+  --no-mcp        don't add the MCP server to Claude Code, Codex, opencode or pi
   --skills        without the nuworq plugin in Claude Code, write the server and
                   skills without asking
   --off           the same as nuworq disconnect
@@ -98,8 +98,9 @@ Flags
                       (at least one), and it says why when it holds (default: 1)
   --max-workers <m>   with --workers auto: the most at once (default: half the
                       cores)
-  --agent <name>      claude, codex or opencode (default: claude)
-  --model <m>         the model workers use; opencode needs <provider>/<model>
+  --agent <name>      claude, codex, opencode or pi (default: claude)
+  --model <m>         the model workers use; opencode and pi need
+                      <provider>/<model>
   --folder <path>     a folder workers may work in, added to
                       ~/.nuworq/folders.json
   --until-idle        exit once no work is waiting, instead of waiting for more
@@ -129,8 +130,8 @@ Environment
   NUWORQ_LLM_PROXY_URL    llm-proxy's address, instead of --proxy
   NUWORQ_LLM_PROXY_TOKEN  llm-proxy's owner token, for Claude and Codex workers
                           with --proxy
-  NUWORQ_LLM_PROXY_KEY    a personal llm-proxy key, for opencode with --model
-                          proxy/<model>
+  NUWORQ_LLM_PROXY_KEY    a personal llm-proxy key, for opencode and pi with
+                          --model proxy/<model>
 
 Example
   nuworq run --workers 3 --agent claude
@@ -231,8 +232,8 @@ Usage
 
 Flags
   --run              start it; without --run it prints the command
-  --agent <name>     claude, codex or opencode (default: claude)
-  --model <m>        the model; opencode needs <provider>/<model>, e.g.
+  --agent <name>     claude, codex, opencode or pi (default: claude)
+  --model <m>        the model; opencode and pi need <provider>/<model>, e.g.
                      ollama/qwen3.8:27b-mtp-q4_K_M
   --project <p>      that project, instead of where the hub routes it
   --here             work in this folder, not its own worktree
@@ -242,7 +243,7 @@ Flags
   --browser          a headless Chrome (Playwright MCP, local pages only) to
                      check UI work with; Claude only
   --proxy <url>      go through llm-proxy: its LAN or tailnet address for claude
-                     and codex; opencode with --model proxy/<model>
+                     and codex; opencode and pi with --model proxy/<model>
   --agent-token <t>  with --run on a hub with login: the agent token it gets
                      (never your own)
 
@@ -250,13 +251,16 @@ Environment
   NUWORQ_AGENT_TOKEN      the agent token, instead of --agent-token
   NUWORQ_LLM_PROXY_URL    llm-proxy's address, instead of --proxy
   NUWORQ_LLM_PROXY_TOKEN  llm-proxy's owner token, for claude and codex
-  NUWORQ_LLM_PROXY_KEY    a personal llm-proxy key, for opencode
+  NUWORQ_LLM_PROXY_KEY    a personal llm-proxy key, for opencode and pi
 
 Example
   nuworq worker --agent claude --run
 
 It works in its own git worktree, with a branch per item, and reports what this
-machine has (macos/linux, docker, gpu). Ollama is set up for opencode for you.
+machine has (macos/linux, docker, gpu). Ollama is set up for opencode and pi for
+you. pi gets a config folder of its own (~/.nuworq/pi/<name>), so your pi
+extensions, skills, MCP servers and sign-ins stay out: give its provider key in
+the environment.
 ```
 
 ## Run a hub
@@ -1016,7 +1020,7 @@ Example
 ### nuworq init
 
 ```text
-nuworq init: print the MCP setup for Claude Code, Codex, opencode and other
+nuworq init: print the MCP setup for Claude Code, Codex, opencode, pi and other
   agents; --project pins this folder
 
 Usage
