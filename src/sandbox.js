@@ -21,10 +21,11 @@ const REGISTRIES = [
 
 // What no worker reads, whatever its task says: keys, the person's nuworq login, cloud and GitHub CLI credentials,
 // and the harnesses' own logins: Claude Code's OAuth token (in this file on Linux; macOS keeps it in the Keychain)
-// and opencode's provider keys (#580). Denying them costs the worker nothing: claude itself runs outside the
-// sandbox and its permission rules, which hold only for the shell it starts and for its file tools, so it still
-// reads its own login.
-export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude/.credentials.json', '~/.config/opencode'];
+// and opencode's config and data: `opencode auth login` keeps provider keys in its XDG data dir (auth.json, and
+// mcp-auth.json for MCP logins), next to its sessions (#580, #581). Denying them costs the worker nothing: claude
+// itself runs outside the sandbox and its permission rules, which hold only for the shell it starts and for its
+// file tools, so it still reads its own login.
+export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude/.credentials.json', '~/.config/opencode', '~/.local/share/opencode'];
 
 // A project's extra hosts, as a person gives them: a list, or names split by commas or spaces. Host names only
 // ("api.example.com", "*.example.com", "localhost:8080"), never a URL or a path.
