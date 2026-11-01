@@ -26,7 +26,7 @@ import { getStarted, facts, finished, finish } from './getstarted.js';
 import { guidePage } from './userguide.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
 import { writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
 import { liveView, LIVE_TTL_MS } from './live.js';
 import { waitFor } from './wait.js';
@@ -792,6 +792,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return deny(405, `use ${path === '/api/orgs' ? 'POST' : 'GET'}`);
   }
 
+  const inFlight = new Set(); // idempotency keys being applied now (#524), in memory: a restart forgets them
   const server = http.createServer(async (req, res) => {
     // A client that hangs up mid-request (e.g. after an oversized body is refused) must never crash the hub.
     req.on('error', () => {});
@@ -799,7 +800,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const url = new URL(req.url, 'http://local');
     let path = url.pathname;
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+    let answered = null; // a write with an idempotency key keeps its answer (#524)
     const send = (status, body, type = 'application/json; charset=utf-8') => {
+      answered?.(status, body, type);
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
       res.end(type.startsWith('application/json') ? JSON.stringify(body, null, 2) : body);
     };
@@ -1087,6 +1090,26 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
       if (req.method === 'POST' && path === '/api/me/revoke') return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
+      // A write sent again with the same idempotency key (#524: the client retries writes through a proxy's 502 or
+      // a dropped connection) gets the answer the first one got, and is applied once. One still being applied is
+      // a 409 the client waits out. Keys are per caller and agent, so nobody replays someone else's answer.
+      const key = req.method === 'POST' && path.startsWith('/api/') && String(req.headers['idempotency-key'] ?? '').slice(0, 200);
+      if (key) {
+        const id = createHash('sha256').update(`${ws ?? ''}\n${who.id ?? who.name ?? ''}\n${header(req, 'agent') ?? ''}\n${path}\n${key}`).digest('hex');
+        const old = replyTo(hub, id);
+        if (old) return send(old.status, old.body);
+        if (inFlight.has(id)) {
+          res.setHeader('x-nuworq-replay', 'pending');
+          return deny(409, 'this call is still being applied', 'The client tries it again in a moment and gets its answer.');
+        }
+        inFlight.add(id);
+        res.on('close', () => inFlight.delete(id));
+        answered = (status, body, type) => {
+          answered = null;
+          inFlight.delete(id);
+          if (status < 500 && type.startsWith('application/json')) keepReply(hub, id, status, body);
+        };
+      }
       // The hub's GitHub App: whether it has one, and the one-click page that creates it (owners, single hub).
       if (req.method === 'GET' && (path === '/api/github/app' || path === '/api/info')) freshSlug();
       // ?fresh: just back from installing it on GitHub, so ask GitHub again rather than trust the last minute's answer.
@@ -1587,6 +1610,18 @@ function siteOf(publicUrl) {
 
 // x-nuworq-<name>, else the old x-trellis-<name> that clients from before the rename send.
 const header = (req, name) => req.headers[`x-nuworq-${name}`] ?? req.headers[`x-trellis-${name}`];
+
+// The answers to writes sent with an idempotency key (#524), kept 10 minutes in the hub's database, so a retry
+// after a proxy's 502 or a restart gets the first answer instead of applying the write again.
+const REPLY_MS = 10 * MIN;
+function replyTo(hub, id) {
+  const r = hub.q('SELECT status, body FROM replies WHERE id = ? AND at >= ?').get(id, hub.now() - REPLY_MS);
+  return r ? { status: r.status, body: JSON.parse(r.body) } : null;
+}
+function keepReply(hub, id, status, body) {
+  hub.q('DELETE FROM replies WHERE at < ?').run(hub.now() - REPLY_MS);
+  hub.q('INSERT OR REPLACE INTO replies (id, status, body, at) VALUES (?, ?, ?, ?)').run(id, status, JSON.stringify(body ?? null), hub.now());
+}
 const rootOf = (req) => { try { return decodeURIComponent(header(req, 'root') ?? ''); } catch { return ''; } };
 const remoteOf = (req) => { try { return decodeURIComponent(header(req, 'remote') ?? ''); } catch { return ''; } };
 const sessionOf = (req) => parseKeys(header(req, 'session')); // the caller's Claude Code session (#335)
