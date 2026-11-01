@@ -156,9 +156,11 @@ export function createClient(opts = {}) {
   let seen = saved(settings);
   // Each x-nuworq-* header goes out under its old x-trellis-* name too, so hubs not yet updated still understand.
   const named = (h) => Object.fromEntries(Object.entries(h).flatMap(([k, v]) => [[`x-nuworq-${k}`, v], [`x-trellis-${k}`, v]]));
+  // The cursor of the last reply this session got (#539): the hub counts as sent only what it names.
+  let cursor = '';
   const headers = (extra = {}) => ({
     'content-type': 'application/json',
-    ...named({ root: encodeURIComponent(settings.root), ...(settings.remote ? { remote: encodeURIComponent(settings.remote) } : {}), ...(opts.session?.length ? { session: opts.session.join(',') } : {}), ...extra }),
+    ...named({ root: encodeURIComponent(settings.root), ...(settings.remote ? { remote: encodeURIComponent(settings.remote) } : {}), ...(opts.session?.length ? { session: opts.session.join(',') } : {}), ...(opts.session?.length && cursor ? { cursor } : {}), ...extra }),
     ...(settings.token ? { authorization: `Bearer ${settings.token}` } : {}),
   });
 
@@ -294,6 +296,8 @@ export function createClient(opts = {}) {
       const d = typeof data === 'object' && data ? data : { error: clip(String(data)), hint: 'Try again in a minute.' };
       throw new HubError(d.error || `HTTP ${res.status} from ${host}`, { status: res.status, hint: d.hint });
     }
+    // Received: the next call says so. The agent itself never needs it.
+    if (data && typeof data === 'object' && typeof data.cursor === 'string') { cursor = data.cursor; delete data.cursor; }
     return data;
   }
 

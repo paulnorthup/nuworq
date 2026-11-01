@@ -1539,7 +1539,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (agentRefused(m[2])) return;
         if (m[2] === 'feedback') return send(200, agentFeedback(req, hub, ws, decodeURIComponent(m[1]), agent, b, caller));
         if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
-        return send(200, withFeedback(m[2], agent, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller }))));
+        return send(200, withFeedback(m[2], agent, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), cursor: cursorOf(req), ...caller }))));
       }
       // git asks for a credential (nuworq git-credential): a token for the repository of the item this
       // agent holds, minted by the GitHub App for that one repository and an hour. On the record, never shown.
@@ -1617,7 +1617,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (agentRefused(m[1])) return;
         if (m[1] === 'feedback') return send(200, agentFeedback(req, hub, ws, '', agent, b, caller));
         if (DECIDES.agent.includes(m[1])) await hub.prefetch('', b, { remote: remoteOf(req), root: rootOf(req), scope: caller.scope });
-        return send(200, withFeedback(m[1], agent, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), ...caller }))));
+        return send(200, withFeedback(m[1], agent, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), cursor: cursorOf(req), ...caller }))));
       }
       // Push channels: hub-wide (or workspace-wide) ones, and personal ones that get only what that person owns.
       // Agent tokens never reach these. An owner manages them all; a person manages their own.
@@ -1769,6 +1769,7 @@ function keepReply(hub, id, status, body) {
 const rootOf = (req) => { try { return decodeURIComponent(header(req, 'root') ?? ''); } catch { return ''; } };
 const remoteOf = (req) => { try { return decodeURIComponent(header(req, 'remote') ?? ''); } catch { return ''; } };
 const sessionOf = (req) => parseKeys(header(req, 'session')); // the caller's Claude Code session (#335)
+const cursorOf = (req) => String(header(req, 'cursor') ?? '').slice(0, 64); // the last reply the session got (#539)
 
 const TOO_BIG = () => new UserError('Request body too large (limit 1MB)', { status: 413, hint: 'Keep detail to what a person would read; put long logs in the repo and reference them.' });
 
