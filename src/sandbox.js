@@ -4,7 +4,7 @@
 // Its allowlist names the project's own test and build commands, never an interpreter (node, python3, …) that
 // would run anything. Setting names: https://code.claude.com/docs/en/sandboxing (checked 2026-11-01).
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 export const HOSTS_HINT = 'Give host names only, e.g. api.stripe.com or *.example.com, separated by commas.';
 
@@ -36,10 +36,29 @@ const has = (home, f) => existsSync(join(home, f));
 // The registries a project in home uses.
 export const registriesOf = (home) => REGISTRIES.filter(([files]) => files.some((f) => has(home, f))).flatMap(([, hosts]) => hosts);
 
+// What of the checkout's .git a worker writes to commit, fetch and rebase in its worktree: objects, refs and their
+// logs, and its own worktree's folder (its HEAD, index and rebase state). Not hooks or config: an unsandboxed git
+// there (the runner's next fetch, or the person) would run what a worker put in them, as the person.
+export const gitWrites = (home, name) => [
+  ...['objects', 'refs', 'logs', 'packed-refs', 'packed-refs.lock', 'shallow', 'shallow.lock', 'rr-cache'].map((p) => join(home, '.git', p)),
+  ...(name ? [join(home, '.git', 'worktrees', name)] : []),
+];
+
+// Never written, whatever else is: what git runs or reads its settings from. Exact paths, not globs: on Linux a
+// sandbox path takes only a trailing /** (code.claude.com/docs/en/settings-reference, "Sandbox settings").
+// The worktree's own .git file too: pointed at a folder of the worker's making, the runner's git there (its
+// cleanup when the worker exits) would read that folder's config.
+export const gitDenies = (home, worktree) => [
+  ...['hooks', 'config', 'config.lock', 'config.worktree', 'modules', 'info', 'commondir'].map((p) => join(home, '.git', p)),
+  ...(worktree ? ['config.worktree', 'commondir', 'gitdir'].map((p) => join(home, '.git', 'worktrees', basename(worktree), p)) : []),
+  ...(worktree ? [join(worktree, '.git')] : []),
+];
+
 // Claude Code's sandbox for a worker: hub is the hub's address, home the project's checkout (its .git holds the
-// worktree's objects and refs), hosts what a person added for the project's tests. landsHere: the project has no
-// origin, so work lands by fast-forwarding the checkout itself, which the worker may then write.
-export function sandboxSettings({ hub, home, hosts = [], landsHere = false }) {
+// worktree's objects and refs), worktree the worker's own (its folder in .git/worktrees has its name), hosts what a
+// person added for the project's tests. landsHere: the project has no origin, so work lands by fast-forwarding the
+// checkout itself, which the worker may then write, all but its .git's hooks and config.
+export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = false }) {
   const hubHost = hub ? new URL(hub).host : '';
   return {
     enabled: true,
@@ -52,7 +71,8 @@ export function sandboxSettings({ hub, home, hosts = [], landsHere = false }) {
       allowLocalBinding: true, // tests and the demo server listen on loopback
     },
     filesystem: {
-      allowWrite: [landsHere ? home : join(home, '.git')],
+      allowWrite: landsHere ? [home] : gitWrites(home, worktree && basename(worktree)),
+      denyWrite: gitDenies(home, worktree),
       denyRead: DENY_READ,
     },
   };

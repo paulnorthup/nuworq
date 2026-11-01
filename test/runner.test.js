@@ -173,7 +173,12 @@ describe('nuworq worker --agent claude', () => {
       const { sandbox } = JSON.parse(stdout.match(/--settings '([^']*)'/)[1]);
       assert.deepEqual({ ...sandbox, network: undefined, filesystem: undefined }, { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false, network: undefined, filesystem: undefined });
       assert.deepEqual(sandbox.network, { allowedDomains: [`127.0.0.1:${server.address().port}`, 'github.com', '*.github.com', '*.githubusercontent.com', 'registry.npmjs.org', 'api.stripe.com'], strictAllowlist: true, allowLocalBinding: true });
-      assert.deepEqual(sandbox.filesystem.allowWrite, [join(repo, '.git')], 'its worktree (the working directory) and temp, and the checkout\'s .git for its commits');
+      // Its worktree (the working directory) and temp, and of the checkout's .git only what its commits need: never
+      // hooks or config, which an unsandboxed git there would run (test/sandbox.test.js).
+      assert.ok(sandbox.filesystem.allowWrite.includes(join(repo, '.git', 'objects')) && sandbox.filesystem.allowWrite.includes(join(repo, '.git', 'worktrees', 'c-2')));
+      assert.ok(!sandbox.filesystem.allowWrite.includes(join(repo, '.git')), 'not all of .git');
+      for (const p of ['hooks', 'config']) assert.ok(sandbox.filesystem.denyWrite.includes(join(repo, '.git', p)), p);
+      assert.ok(sandbox.filesystem.denyWrite.includes(join(`${repo}.worktrees`, 'c-2', '.git')), "its worktree's own .git file");
       for (const p of ['~/.ssh', '~/.nuworq', '~/.aws', '~/.config/gh', '~/.git-credentials']) assert.ok(sandbox.filesystem.denyRead.includes(p), p);
       assert.match(stdout, /^export NODE_USE_ENV_PROXY=1(?= && \\\n)/m, "Node's fetch goes through the sandbox's proxy too");
       assert.match(stdout, /detached at origin\/main/);
@@ -186,7 +191,7 @@ describe('nuworq worker --agent claude', () => {
       assert.equal(val({ NUWORQ_TEST_CONCURRENCY: '4' }), '4');
       assert.doesNotMatch(stdout, /NODE_OPTIONS/, 'Node refuses --test-concurrency there');
 
-      const setup = stdout.match(/^git -C '[^']*' -c credential\.helper= -c credential\.https:\/\/github\.com\.helper= -c '[^']*' -c \S+ fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
+      const setup = stdout.match(/^git -C '[^']*' -c credential\.helper= -c credential\.https:\/\/github\.com\.helper= -c '(?:[^']|'\\'')*' -c \S+ fetch -q origin && \\\n\{ \[ -d '[^']*\.worktrees\/c-2' \] \|\| git -C '[^']*' worktree add -q --detach '[^']*\.worktrees\/c-2' 'origin\/main'; \}/m)?.[0];
       assert.ok(setup, 'fetch first, then the worktree detached at origin/main');
       // It holds no item yet, so over HTTPS the fetch gets the project's read-only token; the person's own helpers are reset.
       // Every value in the helper is quoted (#477): git runs it through sh.
@@ -236,6 +241,7 @@ describe('nuworq worker --browser', () => {
       assert.deepEqual(plain.settings.enabledPlugins, { 'nuworq@nuworq': false, 'other@market': false }, 'every installed plugin off');
       assert.equal(plain.settings.sandbox.enabled, true);
       assert.deepEqual(plain.settings.sandbox.filesystem.allowWrite, [repo], 'no origin: it lands by fast-forwarding this checkout, so it may write there');
+      for (const p of ['hooks', 'config']) assert.ok(plain.settings.sandbox.filesystem.denyWrite.includes(join(repo, '.git', p)), `all but its .git/${p}`);
       assert.ok(!plain.allow.some((a) => /^Bash\(node/.test(a)), 'no node to run anything with');
       assert.ok(plain.noSkills, 'no skills either: ~/.claude/skills holds nuworq-operator, and it isn\'t a plugin (#368)');
       assert.ok(!plain.allow.includes('mcp__playwright'));
