@@ -317,7 +317,7 @@ export const OPS = [
   },
   {
     name: 'look',
-    description: 'Look around. With item: its full context. Without: the board by stage, decisions and your field notes.',
+    description: 'Look around. With item: its full context. Without: counts and the top 5 per stage, decisions and your field notes. With stage: that stage in full.',
     params: {
       item: { ...ITEM, description: 'Optional.' },
       stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'done'] },

@@ -32,6 +32,7 @@ import { liveView, LIVE_TTL_MS } from './live.js';
 import { waitFor } from './wait.js';
 import { parseKeys } from './session.js';
 import { tmpdir } from 'node:os';
+import { gzipSync } from 'node:zlib';
 import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, ownCheckout, PACKAGE_NAME } from './package.js';
 import { runningCommit } from './update.js';
 import { LOGO, FAVICON, withLogo } from '../web/logo.js';
@@ -39,6 +40,17 @@ import { verifySignature, applyEvent, billingState, failing, paymentEntry, porta
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
+
+// A response body, gzipped when the client accepts it (#528): JSON and text only, and only when big enough that
+// it pays. Vary tells caches the body depends on the header. Streams (the SSE one) never come through here.
+const GZIP_MIN = 1024;
+export function encode(req, body, type) {
+  if (!/^(application\/json|text\/|image\/svg)/.test(type)) return { headers: {}, body };
+  const headers = { vary: 'Accept-Encoding' };
+  const takes = /(^|,)\s*gzip\s*(;\s*q=(?!0(\.0*)?\s*(,|$))[\d.]+)?\s*(,|$)/i.test(String(req.headers['accept-encoding'] ?? ''));
+  if (!takes || Buffer.byteLength(body) < GZIP_MIN) return { headers, body };
+  return { headers: { ...headers, 'content-encoding': 'gzip' }, body: gzipSync(body) };
+}
 const MAX_BODY = 1024 * 1024;
 // The ops that decide on git state (landing, the submit check): their mirror is fetched first (hub.prefetch).
 const DECIDES = { human: ['accept'], agent: ['submit', 'review'] };
@@ -854,8 +866,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     let answered = null, applying = null; // a write with an idempotency key keeps its answer, and is applied once (#524)
     const send = (status, body, type = 'application/json; charset=utf-8') => {
       answered?.(status, body, type);
-      res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
-      res.end(type.startsWith('application/json') ? JSON.stringify(body, null, 2) : body);
+      // Compact, and gzipped for a client that takes it: agents pay for every byte (#528).
+      const out = encode(req, type.startsWith('application/json') ? JSON.stringify(body) : body, type);
+      // Beside a Vary already set (CORS's Origin), not over it.
+      const vary = [res.getHeader('vary'), out.headers.vary].filter(Boolean).join(', ');
+      res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...out.headers, ...(vary ? { vary } : {}) });
+      res.end(out.body);
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     try {
