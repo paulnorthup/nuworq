@@ -20,6 +20,8 @@ nuworq connect https://nuworq.com/w/acme         # browser login, saves the toke
 nuworq run --workers 3 --agent claude            # keep workers going where work is waiting; Ctrl-C stops
 ```
 
+Or, after connecting, one command brings it all up and keeps it up: `nuworq up` makes sure one runner runs here as a service with `--workers auto` (installed if there is none, restarted if its flags differ), asks once whether to staff the projects that aren't (a no is remembered), and opens an operator (Claude Code with `/nuworq:operator`) in its own terminal for each unparked project that has none: in tmux when it is installed (`tmux attach -t nuworq`, a window per project), else a Terminal or iTerm window on a Mac, else it prints the commands. A project with no clone here is skipped, with where to clone it. Run it again any time, after a restart too: it starts only what is missing, and ends with a table of each project, its operator and the runner. `nuworq up --dry-run` prints that table and does nothing; `nuworq down` stops the operators it started and the runner service.
+
 `run` keeps workers on the projects you let it staff ("Let nuworq run staff this project" in the UI), one per waiting item. Add `--browser` for workers that check UI work. Each worker gets its own git worktree (each item it takes gets its own branch, cut from the latest main). `nuworq worker --agent claude --run` starts a single one, and goes wherever work is waiting across projects; `--agent codex` and `--agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M` (a local open-weight model) work the same way.
 
 `nuworq run` also takes limits:

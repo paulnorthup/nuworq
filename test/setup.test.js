@@ -81,7 +81,8 @@ describe('connect asks one question at a time (#490)', () => {
     assert.deepEqual(ran(m.log), ['staff app 20', 'install runner', 'start operator']);
     assert.match(p.asked[0], /^Staff App with workers on this machine\? .*background service.*spend on your Claude account, up to a daily cap/);
     assert.match(p.asked[2], /^Start an operator now\? It opens Claude Code in \/src\/app with \/nuworq:operator: .*uses your Claude account/);
-    assert.match(m.log.at(-2), /^say Last, to plan work with a shaper: open \/src\/app in the Claude Code app and type \/nuworq:shaper\.$/);
+    assert.match(m.log.at(-3), /^say Last, to plan work with a shaper: open \/src\/app in the Claude Code app and type \/nuworq:shaper\.$/);
+    assert.match(m.log.at(-2), /^say From now on, and after any restart: nuworq up /, 'then the one command (#559)');
   });
 
   test('no to each: nothing runs, and each no prints the command for later', async () => {

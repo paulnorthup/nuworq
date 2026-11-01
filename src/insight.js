@@ -24,7 +24,12 @@ export function projectList(hub, { viewer } = {}) {
   return hub.projects().map((p) => projectLine(hub, p, view(hub, p.slug, { light: true, viewer })));
 }
 
-const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, sandbox_hosts: json(p.sandbox_hosts, []), pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
+const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, sandbox_hosts: json(p.sandbox_hosts, []), operators: liveOperators(hub, p), pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
+
+// The operator sessions a project has (#559), for nuworq up: checked in as operators, not signed off, and seen in the
+// last day. An idle operator only listens, which leaves last_seen alone, and one that ends signs itself off (#558).
+export const liveOperators = (hub, p) => hub.q(`SELECT name, machine, last_seen FROM agents WHERE project_id = ? AND role = 'operator' AND signed_off = 0 AND last_seen > ? ORDER BY last_seen DESC`)
+  .all(p.id, hub.now() - DAY).map((a) => ({ name: a.name, machine: a.machine || null, last_seen: dur(hub.now() - a.last_seen) }));
 
 // The home: does anything need you, anywhere? One aggregate pulse, every act entry of the viewer's across
 // projects (tagged with its project, ranked as on a project page: byNeed), then one line per project. 5m adds

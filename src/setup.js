@@ -89,6 +89,8 @@ export async function finishSetup({ mode, ask, say, project, folder, clone, plug
 
   // The shaper, for planning with a person: the desktop app, in the project's folder.
   say(`Last, to plan work with a shaper: open ${folder ?? `${name}'s clone`} in the Claude Code app and type ${plugin ? '/nuworq:shaper' : '/nuworq-shaper'}.`);
+  // From then on (#559): one command brings the runner and every project's operator up, again after a restart.
+  say(`From now on, and after any restart: nuworq up keeps the runner going and an operator open for each project that isn't parked.`);
   if (out.operator) await actions.startOperator();
   return out;
 }
