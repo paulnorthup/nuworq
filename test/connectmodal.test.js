@@ -60,6 +60,8 @@ describe('connect an agent: commands that paste and run', () => {
     assert.ok(lines[1].startsWith("node -e '") && lines[1].endsWith(` nuworq-release.tgz ${KEY}`));
     assert.equal(lines[2], 'npm install -g ./nuworq-release.tgz');
     assert.ok(readFileSync(new URL('../README.md', import.meta.url), 'utf8').includes(c.install), 'the README\'s lines, with the key this repository pins');
+    // The one-paste setup (#490) runs the same lines joined by &&, so a check that fails stops npm and connect.
+    assert.equal(c.setup, `${lines.join(' && ')} && nuworq connect https://app.nuworq.com`);
     assert.equal(connectCommands({ ...REMOTE, package: { url: 'https://nuworq.com/nuworq.tgz', release: null } }).verified, false, 'no signed release: nothing to check');
   });
 
