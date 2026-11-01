@@ -13,6 +13,12 @@ const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 export const RESERVED = new Set(['www', 'api', 'app', 'admin', 'w', 'static', 'login', 'auth', 'hub']);
 export const PLANS = ['free', 'unlimited'];
 export const FREE_AGENTS = 1; // agents working at once on the Free plan
+// How long a workspace nobody uses stays open, and how often a closed one is opened for its sweep (#525).
+export const IDLE_MS = 10 * 60_000, WAKE_MS = 5 * 60_000;
+
+// Whether an agent holds a lease there: its lapse must be seen on time, so the workspace stays open.
+const inMotion = (hub) => !!hub.db.prepare(`SELECT 1 FROM items WHERE lease_until > ?
+  UNION ALL SELECT 1 FROM attempts WHERE closed = 0 AND lease_until > ? LIMIT 1`).get(hub.now(), hub.now());
 
 export class Workspaces {
   // repos: where hubs keep mirrors of repositories they have no checkout of; each workspace gets
@@ -31,7 +37,17 @@ export class Workspaces {
     this.plans = !!plans;
     this.owners = owners.map((e) => String(e).trim().toLowerCase()).filter(Boolean);
     this.open = new Map(); // slug → Hub
+    // Each open workspace costs memory and timers, so one nobody uses closes again (#525): when it was last used
+    // (a request), last woken for its sweep, who wants to hear it open, and what may hold it open.
+    this.used = new Map();
+    this.woken = new Map();
+    this.openers = [];
+    this.holds = [(hub) => inMotion(hub)];
     mkdirSync(dir, { recursive: true });
+  }
+
+  now() {
+    return this.clock?.() ?? Date.now();
   }
 
   file(slug) {
@@ -60,10 +76,12 @@ export class Workspaces {
     return readdirSync(this.dir).filter((f) => f.endsWith('.db')).map((f) => f.slice(0, -3)).sort();
   }
 
-  // The workspace's hub, or null if there is no such workspace. Never creates one.
-  get(slug) {
+  // The workspace's hub, or null if there is no such workspace. Never creates one. touch: false for the hub's own
+  // bookkeeping (dashboards, sweeps), which doesn't count as use and so doesn't keep it open.
+  get(slug, { touch = true } = {}) {
     let s;
     try { s = Workspaces.check(slug); } catch { return null; }
+    if (touch) this.used.set(s, this.now());
     let hub = this.open.get(s);
     // Removed from the host (nuworq workspace remove) while we had it open: let it go.
     if (hub && !existsSync(this.file(s))) {
@@ -77,8 +95,44 @@ export class Workspaces {
       hub.planLimit = () => (this.planOf(s) === 'free' ? FREE_AGENTS : null);
       hub.repoGuard = (remote) => this.repoTaken(s, remote);
       this.open.set(s, hub);
+      for (const fn of this.openers) {
+        try { fn(s, hub); } catch (e) { console.error('opening a workspace failed', e); }
+      }
     }
     return hub ?? null;
+  }
+
+  // Call fn(name, hub) each time a workspace opens.
+  onOpen(fn) {
+    this.openers.push(fn);
+  }
+
+  // Keep a workspace open while hold(hub) says so, e.g. a browser streaming it or a push about to go out.
+  holdOpen(hold) {
+    this.holds.push(hold);
+  }
+
+  // Close each open workspace nobody has used for idleMs and nothing holds open. Returns the names closed.
+  closeIdle(idleMs) {
+    const t = this.now(), closed = [];
+    for (const [s, hub] of this.open) {
+      if (t - (this.used.get(s) ?? 0) < idleMs || this.holds.some((hold) => hold(hub))) continue;
+      this.evict(s);
+      closed.push(s);
+    }
+    return closed;
+  }
+
+  // Open the closed workspace that has gone longest without a sweep, if that's over everyMs: its leases lapse,
+  // preconditions get checked and pushes go out while nobody uses it. It closes again with closeIdle. Returns its
+  // hub, or null.
+  wake(everyMs) {
+    const t = this.now();
+    const since = (s) => Math.max(this.used.get(s) ?? 0, this.woken.get(s) ?? 0);
+    const due = this.list().filter((s) => !this.open.has(s) && t - since(s) >= everyMs).sort((a, b) => since(a) - since(b))[0];
+    if (!due) return null;
+    this.woken.set(due, t);
+    return this.get(due, { touch: false });
   }
 
   create(slug) {
@@ -165,7 +219,7 @@ export class Workspaces {
   // made it, how many people and projects, the agents holding work now, and when anything last happened.
   overview() {
     const rows = this.list().map((name) => {
-      const hub = this.get(name);
+      const hub = this.get(name, { touch: false });
       const n = (sql) => hub.db.prepare(sql).get().n ?? null;
       const last = Math.max(n('SELECT MAX(at) AS n FROM events') ?? 0, n('SELECT MAX(last_seen) AS n FROM agents') ?? 0);
       return {
@@ -188,7 +242,7 @@ export class Workspaces {
     const seen = new Map(); // workspace → { connected, landed }
     const reached = (ws) => {
       if (!seen.has(ws)) {
-        const hub = this.get(ws);
+        const hub = this.get(ws, { touch: false });
         const n = (sql) => (hub ? hub.db.prepare(sql).get().n : 0);
         seen.set(ws, { connected: n('SELECT COUNT(*) AS n FROM agents') > 0, landed: n("SELECT COUNT(*) AS n FROM items WHERE stage = 'done'") > 0 });
       }
@@ -222,7 +276,7 @@ export class Workspaces {
   repoTaken(slug, remote) {
     if (this.planOf(slug) !== 'free') return null;
     return this.list().find((other) => other !== slug && this.planOf(other) === 'free'
-      && this.get(other)?.projects().some((p) => this.get(other).remotesOf(p).includes(remote))) ?? null;
+      && this.get(other, { touch: false })?.projects().some((p) => this.get(other, { touch: false }).remotesOf(p).includes(remote))) ?? null;
   }
 
   // A signed-in person's free organizations that still exist: one is the most they may create.

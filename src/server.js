@@ -10,7 +10,7 @@ import { view, itemView, projectList, homeView, withEntry } from './insight.js';
 import { tools, guide, LISTENER } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
-import { Workspaces } from './workspaces.js';
+import { Workspaces, IDLE_MS, WAKE_MS } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, notifyFeedback, composeFixed, deliver, workspaceUrl, requestChannels, setWeekly } from './notify.js';
 import { receive, receiveApp } from './github.js';
 import { runChecks } from './precondition.js';
@@ -302,29 +302,39 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return s;
   };
   const hubs = () => (spaces ? spaces.hubs() : [target]);
+  // A workspace a browser is streaming stays open (#525).
+  spaces?.holdOpen((hub) => (scopes.get(hub)?.clients.size ?? 0) > 0);
+  // And so does one with background work still running against its database.
+  spaces?.holdOpen((hub) => hub._running > 0);
+  const running = (hub, work) => {
+    hub._running = (hub._running ?? 0) + 1;
+    return work.finally(() => hub._running--);
+  };
   checkApp();
   const sweeper = setInterval(() => {
     checkApp();
     sweepMirrors(); // mirrors are the process's, not one hub's
+    // Workspaces nobody uses close; one closed workspace a tick opens for its sweep (and closes again later).
+    if (spaces) { spaces.closeIdle(IDLE_MS); spaces.wake(WAKE_MS); }
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
       // Which branches being built lack what landed (#535), so heartbeats tell them to rebase without running git.
       hub.refreshBehind().catch((e) => console.error('checking branches against main failed', e));
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
       // Release preconditions read GitHub through the app where it's installed.
-      runChecks(hub, { shared: !!spaces, github: { api: gh.api, app } }).catch((e) => console.error('checking preconditions failed', e));
+      running(hub, runChecks(hub, { shared: !!spaces, github: { api: gh.api, app } })).catch((e) => console.error('checking preconditions failed', e));
       // Landing work's pull requests, as GitHub has them (no webhook may reach the hub): ready ones merge,
       // merged ones land, closed or conflicting ones become land jobs. At most once a minute.
-      if (hub.github) hub.mergeReady().catch((e) => console.error('checking pull requests failed', e));
+      if (hub.github) running(hub, hub.mergeReady()).catch((e) => console.error('checking pull requests failed', e));
       // Whether each local model a routing project lists can take work, as llm-proxy says (#349). At most once a minute.
       if (!spaces && Date.now() - (hub._localChecked ?? 0) >= MIN) {
         hub._localChecked = Date.now();
         checkLocalModels(hub, (m) => providerOf(m) === 'Open-weight').catch((e) => console.error('checking local models failed', e));
       }
       // Issues whose work has landed close on GitHub (a hub that has served a request knows its public address).
-      if (app && hub._app === app) for (const p of hub.projects()) closeLanded(hub, p, hub.github.app).catch((e) => console.error('closing issues failed', e));
+      if (app && hub._app === app) for (const p of hub.projects()) running(hub, closeLanded(hub, p, hub.github.app)).catch((e) => console.error('closing issues failed', e));
       // Questions to issue reporters that GitHub refused when asked go out again.
-      if (app && hub._app === app) for (const p of hub.projects()) askReporters(hub, p, hub.github.app).catch((e) => console.error('asking reporters failed', e));
+      if (app && hub._app === app) for (const p of hub.projects()) running(hub, askReporters(hub, p, hub.github.app)).catch((e) => console.error('asking reporters failed', e));
     }
     // Feedback whose work landed: its sender hears once (#297).
     if (feedbackOn) try { tellFixed(); } catch (e) { console.error('telling senders their feedback is fixed failed', e); }
