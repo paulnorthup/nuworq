@@ -209,7 +209,7 @@ describe('fit hints: what items need and what agents have', () => {
     assert.match(ops, /to: "operator"/);
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     assert.match(readme, /### Operators/);
-    assert.match(readme, /\/nuworq:operator <your capabilities>/);
+    assert.match(readme, /\n\/nuworq:operator\n```\nCapabilities are optional/);
     for (const tag of ['claude-cli', 'infra', 'github-admin']) assert.ok(readme.includes(`\`${tag}\``), tag);
     for (const old of ['nuworq-infra', 'homelab-vm']) {
       assert.ok(!guide().includes(old) && !ops.includes(old), `the guide no longer says ${old}`);

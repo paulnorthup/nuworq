@@ -17,7 +17,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -208,37 +208,92 @@ async function operatorCmd(flags) {
   const project = resolveSettings(flags).project ?? basename(process.cwd());
   const { has, renamed } = operatorHas(flags);
   if (renamed.length) console.log(dim(`Tag renamed: ${renamed.join(', ')}.`));
+  const op = await import('../src/operator.js');
+  // This machine's own infra check (#494): set by its person, kept in ~/.nuworq/operator.json, never from the hub.
+  if (flags['infra-check'] !== undefined || flags.without === 'infra' || flags.with === 'infra') {
+    const check = typeof flags['infra-check'] === 'string' ? flags['infra-check'].trim() : undefined;
+    const now = op.saveLocal(OPERATOR_FILE, { ...(check !== undefined ? { infra_check: check || null } : {}), ...(flags.without === 'infra' ? { without_infra: true } : flags.with === 'infra' ? { without_infra: null } : {}) });
+    console.log(now.without_infra ? `This machine declares no ${bold('infra')}: it can't reach ${project}'s live systems. Undo: nuworq operator --with infra`
+      : now.infra_check ? `${bold('infra')} is declared only while ${bold(now.infra_check)} passes. Clear it: nuworq operator --infra-check ""`
+      : `${bold('infra')} is declared: a person starts this attended operator here.`);
+    return;
+  }
+  if (flags.detect) return detectCmd(flags);
+  // --allow takes a value elsewhere (worker --allow <tools>), so a flag after it here arrives as its value.
+  if (flags.allow) return allowCmd(typeof flags.allow === 'string' && flags.allow.startsWith('--') ? { ...flags, [flags.allow.slice(2)]: true } : flags);
   // --start: open Claude Code here as the operator, as connect does on a yes (#490).
-  if (flags.start) return startOperator(process.cwd(), has);
-  console.log(`${bold('Declare:')} ${has.join(', ')}${flags.has ? '' : dim('  (detected; add what else this session can really do with --has, e.g. --has macos,browser,claude-cli,infra)')}
-${dim('infra: the live infrastructure of the project the session checks in to (servers and VMs, DNS, cloud accounts, deploys).')}
-${bold('Start it:')} open Claude Code in ${project}'s folder (the terminal or the desktop app's Code tab) and type:
+  if (flags.start) return startOperator(process.cwd(), flags.has ? has : null);
+  console.log(`${bold('Start it:')} open Claude Code in ${project}'s folder (the terminal or the desktop app's Code tab) and type:
 
-${operatorStart(has)}
+${operatorStart(flags.has ? has : null)}
 
+${flags.has ? `It declares ${has.join(', ')}.` : `Capabilities are optional: left out, it detects what this session can do (see nuworq operator --detect).`}
 It works until nothing waits, then stays idle and listens: each new operator item, operator question or answer
-starts a turn on its own. No /loop.${dim(` (Without the nuworq plugin: ${operatorStart(has, { plugin: false })}.)`)}`);
+starts a turn on its own. No /loop. ${dim('nuworq operator --start opens it for you, with its routine commands allowed.')}${dim(` (Without the nuworq plugin: ${operatorStart(flags.has ? has : null, { plugin: false })}.)`)}`);
 }
 
-// The tags an operator session declares: the platform, and browser when a Chrome or Chromium is installed;
-// --has replaces what was detected. renamed: old tag names given, with their new ones.
+const OPERATOR_FILE = join(dataDir(), 'operator.json');
+
+// The tags typed with --has, with old names renamed. renamed: old tag names given, with their new ones.
 function operatorHas(flags) {
-  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
-  const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
-    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
-  const detected = [{ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform], chrome && 'browser'].filter(Boolean);
-  const given = (flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase());
+  const given = (refs(flags.has) ?? []).map((t) => String(t).toLowerCase());
   const has = ['operator', ...new Set(given.map((t) => TAG_ALIASES[t] ?? t).filter((t) => t !== 'operator'))];
   const renamed = [...new Set(given.filter((t) => TAG_ALIASES[t]))].map((t) => `${t} is now ${TAG_ALIASES[t]}`);
   return { has, renamed };
 }
 
+// What this session can do (#494, src/operator.js): the project's repositories come from the hub, else this
+// folder's origin.
+async function detectOperator(flags) {
+  const { detect, localOf } = await import('../src/operator.js');
+  const { execFile } = await import('node:child_process');
+  const run = (cmd, args) => new Promise((ok) => execFile(cmd, args, { encoding: 'utf8', timeout: 20_000 }, (e, out, err) => ok({ ok: !e, out: e ? `${err || e.message}` : out })));
+  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
+  const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
+    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
+  const named = resolveSettings(flags).project;
+  const here = repoRemote();
+  const projects = await createClient({ ...flags, retryMs: 0 }).get('/api/projects').catch(() => []);
+  const p = (Array.isArray(projects) ? projects : []).find((x) => (named ? x.slug === named : (x.remotes ?? []).includes(here)));
+  const repos = p?.remotes?.length ? p.remotes : here ? [here] : [];
+  return detect({ run, chrome, repos, local: localOf(OPERATOR_FILE) });
+}
+
+// nuworq operator --detect: what to declare, and why each tag is in or out. The last line is the one the operator
+// says first.
+async function detectCmd(flags) {
+  const { declared } = await import('../src/operator.js');
+  const { has, found } = await detectOperator(flags);
+  console.log(`${bold('Declare:')} ${has.join(',')}`);
+  for (const f of found) console.log(`  ${f.ok ? green('✓') : dim('✗')} ${f.tag}: ${f.why}`);
+  console.log(declared(found));
+}
+
+// nuworq operator --allow [--off]: the operator's routine commands without prompts, in this project's
+// .claude/settings.local.json, after a yes; --off takes exactly those rules out again.
+async function allowCmd(flags) {
+  const { rules, applyRules, sshHost, localOf } = await import('../src/operator.js');
+  const r = rules({ host: sshHost(localOf(OPERATOR_FILE).infra_check) });
+  const file = join(repoRoot(), '.claude', 'settings.local.json');
+  if (!flags.off) {
+    console.log(`Lets the operator run these without asking, in ${file}:\n  ${r.allow.join(' ')}\nThese still ask: ${r.deny.join(' ')}`);
+    const { answerer } = await import('../src/setup.js');
+    const mode = flags.yes ? 'yes' : process.stdin.isTTY && process.stdout.isTTY ? 'ask' : 'no';
+    if (!await answerer(mode, askLine)('Add them?')) return console.log(dim(mode === 'no' ? 'Nothing changed: run it at a terminal, or with --yes.' : 'Nothing changed.'));
+  }
+  const done = applyRules(file, r, { off: !!flags.off });
+  console.log(flags.off ? `Removed ${done.removed} rule${done.removed === 1 ? '' : 's'} from ${file}.` : `Added ${done.added} rule${done.added === 1 ? '' : 's'} to ${file}. Undo: nuworq operator --allow --off`);
+}
+
 // Claude Code in folder as the operator (#490): `claude "<the operator line>"` starts it with the line already
 // sent, and gives the terminal back when the session ends. A Claude Code whose help shows no [prompt] argument
-// can't take one: then it prints the line to paste.
-async function startOperator(folder, has) {
+// can't take one: then it prints the line to paste. has: typed capabilities, or null for the bare line, which
+// detects them (#494). Its routine commands are allowed for this session (--settings), destructive ones still ask.
+async function startOperator(folder, has = null) {
   const { pluginInstalled } = await import('../src/connect.js');
+  const { rules, sshHost, localOf } = await import('../src/operator.js');
   const line = operatorStart(has, { plugin: pluginInstalled(homedir()) });
+  const settings = JSON.stringify({ permissions: rules({ host: sshHost(localOf(OPERATOR_FILE).infra_check) }) });
   let help = '';
   try { help = execFileSync('claude', ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 }); } catch {}
   if (!/\[prompt\]/.test(help)) {
@@ -246,7 +301,7 @@ async function startOperator(folder, has) {
   }
   console.log(`${green('●')} Starting the operator: Claude Code in ${folder}, with ${bold(line)} sent.`);
   const { spawnSync } = await import('node:child_process');
-  const r = spawnSync('claude', [line], { cwd: folder, stdio: 'inherit' });
+  const r = spawnSync('claude', ['--settings', settings, line], { cwd: folder, stdio: 'inherit' });
   if (r.error) console.log(`${amber('!')} Couldn't start Claude Code (${r.error.message}). Open it in ${folder} and type: ${line}`);
 }
 
@@ -1132,7 +1187,7 @@ async function setUp(flags, mode) {
   const remote = at.project.remotes?.[0];
   const { mirrorSource } = await import('../src/git.js');
   const clone = at.folder || !remote ? null : `git clone ${mirrorSource(remote) ?? remote} ${cloneDir(remote)}`;
-  const { has } = operatorHas(flags);
+  const has = flags.has ? operatorHas(flags).has : null; // none typed: the operator detects them (#494)
   await finishSetup({
     mode, ask: askLine, say, project: at.project, folder: at.folder, clone, budget: flags.budget,
     plugin: pluginInstalled(homedir()),

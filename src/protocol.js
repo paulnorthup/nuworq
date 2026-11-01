@@ -1,6 +1,7 @@
 // The agent protocol, defined once. MCP tools, OpenAI/Anthropic function schemas,
 // the CLI and the agent guide are all generated from this list, so every model sees the same thing.
 import { createHash } from 'node:crypto';
+import { OPERATOR_GIT_CMDS } from './operator.js';
 
 const s = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const ITEM = s('The item, e.g. "#12".');
@@ -47,10 +48,12 @@ export const TAG_ALIASES = { 'nuworq-infra': 'infra', 'homelab-vm': 'infra' };
 
 // What a person types to start an operator session, one text for the guide, the README and `nuworq operator`:
 // the plugin's operator skill with the tags to check in with. Invoking it starts the plugin's listener (no /loop).
-// has: the capabilities besides "operator"; without it, a placeholder for the reader's own.
+// has: the capabilities besides "operator"; without it, the bare line, whose session detects them (#494).
 // plugin: false for a machine without the plugin, whose copy `nuworq connect` wrote as nuworq-operator (#432).
+// The git commands an operator runs without prompts (src/operator.js rules), as the guide lists them.
+const OPERATOR_GIT = OPERATOR_GIT_CMDS.join(', ');
 export function operatorStart(has = null, { plugin = true } = {}) {
-  const tags = has ? has.filter((t) => t !== 'operator').join(',') : '<your capabilities>';
+  const tags = has ? has.filter((t) => t !== 'operator').join(',') : '';
   return `/${plugin ? 'nuworq:operator' : USER_SKILLS.operator} ${tags}`.trim();
 }
 // The names the skills go by (#432). In the plugin, Claude Code shows them as nuworq:<name>, so a person sees
@@ -395,6 +398,8 @@ You are the operator only when the person started you as one (they typed \`/nuwo
 - **Take operator work first:** \`next\` hands you questions asked \`to: "operator"\` (mode answer). Settle each and \`answer\` it.
 - **Build only the live step:** take an item yourself only when it is the step on real infrastructure. Its code, docs and tests are for workers; you answer their operator questions.
 - **You may** run \`claude\`, work on the hub's infrastructure, VMs and GitHub admin, and verify on real systems, within your own permission prompts. Declare only the capabilities you really have.
+- **What you can do is detected:** with nothing typed after \`${operatorStart()}\`, \`nuworq operator --detect\` proves each capability here (the OS; \`claude-cli\` when \`claude\` runs; \`github-admin\` when \`gh\` is admin on every repository of the project; \`browser\` when Chrome or Chromium is installed; \`infra\` unless this machine was set \`--without infra\`, or only while its own \`--infra-check "<command>"\` passes, kept in ~/.nuworq and never taken from the hub).
+- **Routine commands run without prompts:** \`nuworq\`, git (${OPERATOR_GIT}, and \`git remote -v\` / \`get-url\`), gh for reading, pull requests, runs and GET api calls (\`gh api repos/…\`, path first), and ssh to the host in this machine's infra check. Force-pushes, deleting or rewriting remote refs (\`--delete\`, \`origin :x\`, \`--mirror\`, \`--prune\`), deleting, moving or force-resetting branches and tags, discarding work (\`checkout\`, \`switch -f\` / \`--discard-changes\`, \`worktree remove --force\`), changing remotes, gh api writes and gh deletes still ask. \`nuworq operator --start\` passes these rules to the session it starts; \`nuworq operator --allow\` adds them to the project's .claude/settings.local.json after a yes (\`--allow --off\` takes them out). Every other command still asks: you read text others wrote, and your prompts are the last check against an instruction planted there.
 ${operatorAsks().map((r) => `- ${r}`).join('\n')}
 - **Never pass operator powers on:** workers you start don't get \`operator\`, your tokens, or your permissions.
 
@@ -462,16 +467,16 @@ export function operatorSkill({ url = '', name = PLUGIN_SKILLS.operator } = {}) 
   };
   return `---
 name: ${name}
-description: Start this session as nuworq's operator. Only a person invokes it, with this machine's capabilities, e.g. ${operatorStart(['macos', 'browser', 'claude-cli'], { plugin: name === PLUGIN_SKILLS.operator })} (nuworq operator prints the line).
+description: Start this session as nuworq's operator. Only a person invokes it, as ${operatorStart(null, { plugin: name === PLUGIN_SKILLS.operator })}; capabilities are optional (left out, it detects what this session can do), e.g. ${operatorStart(['macos', 'browser', 'claude-cli'], { plugin: name === PLUGIN_SKILLS.operator })}.
 disable-model-invocation: true
-argument-hint: <capabilities, e.g. macos,browser,claude-cli>
+argument-hint: [capabilities, optional: detected when left out]
 ---
 
 # Operator for nuworq
 
 The person started you as the operator: a trusted, attended session with their permissions and safety checks. Capabilities they gave you: $ARGUMENTS
 
-1. **Check in:** ${op('checkin')} with \`has\` = \`["operator"]\` plus each capability above, comma-separated (none given: just \`["operator"]\`). Declare nothing else. ${op('ack')} any steering.
+1. **Check in:** ${op('checkin')} with \`has\` = \`["operator"]\` plus each capability above, comma-separated. None given: run \`nuworq operator --detect\` and use the tags on its \`Declare:\` line, which it proves on this machine. Declare nothing else. Your first line to the person is the last line --detect printed (e.g. "Operator: macos, claude-cli, github-admin (admin on acme/api), infra"), or with typed capabilities "Operator: " and those. ${op('ack')} any steering.
 2. **Work until nothing waits:** take ${op('next')} again and again. Mode answer is an operator question: settle it and ${op('answer')} it. ${OPERATOR_NEXT} Stop when it says there is nothing for you.
 3. **Then go idle. Don't loop, poll or sleep:** end your turn. A listener runs \`${OPERATOR_WAIT}\`, which holds one open request to the hub and prints one line when something is there for you, e.g. "nuworq: operator work waiting (#219). Run next." Each line starts a new turn: ${op('checkin')} if it is an answer or steering, then ${op('next')} as in step 2, then go idle again.
    - **Check it is running before you trust it:** \`pgrep -lf -P "$PPID" "nuworq wait --operator"\`. The nuworq plugin should have started it when this skill ran, but it may not have (an older Claude Code, no workspace trust, or a feature flag). \`-P "$PPID"\` matches only this session's listener, not another operator session's on this machine. A line back means it is running: nothing to do.
