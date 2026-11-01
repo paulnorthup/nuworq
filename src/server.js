@@ -54,6 +54,9 @@ export function encode(req, body, type) {
 }
 const MAX_BODY = 1024 * 1024;
 const KEEP_ALIVE_MS = 120_000, KEEP_ALIVE_HINT_S = 5; // kept vs advertised idle time of a connection (#515)
+// Shutting down (#545): how long requests in flight get to finish, and what a live stream is told before it ends.
+const DRAIN_MS = 10_000;
+const RECONNECT = 'retry: 1000\n\n';
 // The ops that decide on git state (landing, the submit check): their mirror is fetched first (hub.prefetch).
 const DECIDES = { human: ['accept'], agent: ['submit', 'review'] };
 
@@ -858,10 +861,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   }
 
   const inFlight = new Set(); // idempotency keys being applied now (#524), in memory: a restart forgets them
+  // Shutting down (#545): see server.drain below. open: the responses not yet finished.
+  const draining = new AbortController(), open = new Set();
   const server = http.createServer(async (req, res) => {
     // A client that hangs up mid-request (e.g. after an oversized body is refused) must never crash the hub.
     req.on('error', () => {});
     res.on('error', () => {});
+    open.add(res);
+    res.on('close', () => open.delete(res));
+    if (draining.signal.aborted) res.setHeader('connection', 'close');
     const url = new URL(req.url, 'http://local');
     let path = url.pathname;
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
@@ -1310,6 +1318,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (!hold(req, res, hub, who, 'stream')) return tooMany('streams', MAX_HELD.stream);
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(': hello\n\n');
+        if (draining.signal.aborted) return res.end(RECONNECT);
         clients.add(res);
         req.on('close', () => clients.delete(res));
         return;
@@ -1671,7 +1680,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const only = named ? slugify(named) : here?.slug;
         const scope = only ? (caller.scope && !caller.scope.includes(only) ? [] : [only]) : caller.scope;
         const r = await waitFor(hub, header(req, 'agent'), {
-          since: Number(url.searchParams.get('since')) || 0, scope, tokenId: caller.token?.id ?? null, session: sessionOf(req), signal: done.signal,
+          since: Number(url.searchParams.get('since')) || 0, scope, tokenId: caller.token?.id ?? null, session: sessionOf(req), signal: done.signal, drain: draining.signal,
           ...(timeout > 0 ? { ms: timeout * 1000 } : {}),
         });
         if (!done.signal.aborted) send(200, r);
@@ -1726,6 +1735,21 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   server.package = pkg; // resolves to the built package, or null when this hub serves none
 
   server.on('close', () => { clearInterval(sweeper); clearInterval(keepalive); });
+  // Shutting down without dropping work (#545): accept no more connections; answer waits now, empty; tell streams
+  // to reconnect (to whichever hub answers next) and end them; let requests in flight finish, each on a connection
+  // that closes after it. Resolves once every connection is gone, or after ms with the rest cut.
+  server.drain = (ms = DRAIN_MS) => new Promise((resolve) => {
+    draining.abort();
+    for (const res of open) if (!res.headersSent) res.setHeader('connection', 'close');
+    for (const s of scopes.values()) for (const res of s.clients) { s.clients.delete(res); res.end(RECONNECT); }
+    // A kept-alive connection whose response just finished goes at once, not at its idle timeout.
+    const idle = () => setImmediate(() => server.closeIdleConnections());
+    for (const res of open) res.once('finish', idle);
+    server.on('request', (_, res) => res.once('finish', idle));
+    const cut = setTimeout(() => server.closeAllConnections(), ms);
+    server.close(() => { clearTimeout(cut); resolve(); });
+    server.closeIdleConnections();
+  });
   return server;
 }
 

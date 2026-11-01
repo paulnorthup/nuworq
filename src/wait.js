@@ -107,9 +107,9 @@ function seen(hub, operators) {
 
 // Waits until there is something, or ms pass. Resolves { events, at }: pass at as since next time.
 // agent: the operator's name, or '' for this token's operators (session: the ones of the caller's session).
-// signal: the caller went away.
+// signal: the caller went away. drain: the hub is shutting down (#545): it answers now, as if the time were up.
 // Refusals throw before any waiting.
-export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, session = [], ms = WAIT_MS, signal } = {}) {
+export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, session = [], ms = WAIT_MS, signal, drain } = {}) {
   const operators = operatorsOf(hub, agent, { scope, tokenId, session });
   seen(hub, operators);
   ms = Math.min(Math.max(0, ms), MAX_WAIT_MS);
@@ -121,6 +121,7 @@ export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, s
       clearTimeout(timer);
       hub.off('change', check);
       signal?.removeEventListener('abort', quit);
+      drain?.removeEventListener('abort', end);
       if (events) seen(hub, operators);
       resolve({ events: events ?? [], at: hub.now() });
     };
@@ -130,12 +131,15 @@ export function waitFor(hub, agent, { since = 0, scope = null, tokenId = null, s
       if (events.length) finish(events.map(({ at: _, ...e }) => e));
     }
     const quit = () => finish(null);
-    hub.on('change', check);
-    signal?.addEventListener('abort', quit);
     // A last look before the empty answer: its at becomes the next since, so anything a change event didn't
     // announce would otherwise be skipped for good (#406).
-    timer = setTimeout(() => { check(); finish([]); }, ms);
+    const end = () => { check(); finish([]); };
+    hub.on('change', check);
+    signal?.addEventListener('abort', quit);
+    drain?.addEventListener('abort', end);
+    timer = setTimeout(end, ms);
     check();
+    if (drain?.aborted) end();
   });
 }
 
