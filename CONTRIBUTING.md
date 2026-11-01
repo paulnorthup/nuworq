@@ -8,3 +8,5 @@ node bin/nuworq.js serve --demo        # the UI with demo data, in memory
 ```
 
 Requirements: Node 24+. No dependencies, and none get added (see the project's decisions on the hub).
+
+Found a security problem? Don't open an issue: report it privately, as [SECURITY.md](SECURITY.md) says.

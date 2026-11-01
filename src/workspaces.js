@@ -121,7 +121,7 @@ export class Workspaces {
     const out = { bound: [], elsewhere: [] };
     for (const raw of ids) {
       const id = Number(raw);
-      if (!Number.isSafeInteger(id) || id <= 0) throw new UserError(`"${raw}" is not an installation id`, { hint: "It's the number at the end of the installation's settings URL, e.g. https://github.com/settings/installations/176604514." });
+      if (!Number.isSafeInteger(id) || id <= 0) throw new UserError(`"${raw}" is not an installation id`, { hint: "It's the number at the end of the installation's settings URL, e.g. https://github.com/settings/installations/12345678." });
       if (this.directory.bindInstallation(id, s)) out.bound.push(id);
       else out.elsewhere.push({ id, workspace: this.directory.installation(id) });
     }
