@@ -317,6 +317,13 @@ CREATE TABLE IF NOT EXISTS get_started (
   how TEXT NOT NULL,                          -- complete | hidden
   at  INTEGER NOT NULL
 );
+-- The answers to writes sent with an idempotency key (#524), so a retried write applies once. Kept 10 minutes.
+CREATE TABLE IF NOT EXISTS replies (
+  id     TEXT PRIMARY KEY,                    -- sha256 of workspace, caller, agent, path and the key
+  status INTEGER NOT NULL,
+  body   TEXT NOT NULL,
+  at     INTEGER NOT NULL
+);
 `;
 
 // One record per pull request (#261). The hub records a PR it opens under the normalized remote
