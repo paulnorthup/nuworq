@@ -868,7 +868,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       answered?.(status, body, type);
       // Compact, and gzipped for a client that takes it: agents pay for every byte (#528).
       const out = encode(req, type.startsWith('application/json') ? JSON.stringify(body) : body, type);
-      res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...out.headers });
+      // Beside a Vary already set (CORS's Origin), not over it.
+      const vary = [res.getHeader('vary'), out.headers.vary].filter(Boolean).join(', ');
+      res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...out.headers, ...(vary ? { vary } : {}) });
       res.end(out.body);
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
