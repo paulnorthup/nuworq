@@ -14,7 +14,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // names on every answer (#541), and agent calls. state.tools null: the real tools for the role asked; state.roles
 // records each tools request (so its length counts them). checkin answers with state.role.
 function fakeHub(port = 0) {
-  const state = { protocol: 'p1', tools: [{ name: 'checkin', description: 'Hub checkin', inputSchema: { type: 'object' } }, { name: 'brand_new', description: 'Only the hub knows this one', inputSchema: { type: 'object' } }], guide: '# The hub\'s own guide\n', roles: [], role: 'session' };
+  const state = { protocol: 'p1', tools: [{ name: 'checkin', description: 'Hub checkin', inputSchema: { type: 'object' } }, { name: 'brand_new', description: 'Only the hub knows this one', inputSchema: { type: 'object' } }], guide: '# The hub\'s own guide\n', roles: [], role: 'session', calls: [], hang: false };
   const json = (res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   const server = http.createServer((req, res) => {
     res.setHeader('x-nuworq-protocol', state.protocol);
@@ -23,8 +23,12 @@ function fakeHub(port = 0) {
       state.roles.push(url.searchParams.get('role'));
       return json(res, state.tools ?? tools('mcp', '', { role: url.searchParams.get('role') }));
     }
+    // Every agent call, by op and agent; state.hang: a sign-off that never gets an answer.
+    const op = url.pathname.match(/\/agent\/([a-z]+)$/)?.[1];
+    if (op) state.calls.push({ op, agent: req.headers['x-nuworq-agent'], project: url.pathname.match(/\/api\/p\/([^/]+)\//)?.[1] ?? null });
+    if (op === 'signoff' && state.hang) return;
     if (url.pathname.endsWith('/agent/checkin')) { req.resume(); return req.on('end', () => json(res, { ok: true, project: 'demo', role: state.role })); }
-    if (url.pathname.includes('/api/agent/')) { req.resume(); return req.on('end', () => json(res, { ok: true })); }
+    if (op) { req.resume(); return req.on('end', () => json(res, { ok: true })); }
     if (req.url.startsWith('/api/guide')) { res.writeHead(200, { 'content-type': 'text/markdown' }); return res.end(state.guide); }
     res.writeHead(404); res.end('{}');
   });
@@ -48,7 +52,8 @@ function mcp(port) {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: n, method, params }) + '\n');
     return (await until((m) => m.id === n)).result;
   };
-  return { ask, until, seen, close: () => child.kill() };
+  const exited = new Promise((r) => child.on('exit', (code, sig) => r({ code, sig })));
+  return { ask, until, seen, child, exited, close: () => child.kill() };
 }
 
 describe('the MCP server bridges to the hub\'s current protocol', () => {
@@ -134,5 +139,59 @@ describe('the hub names its protocol on every answer (#541)', () => {
         assert.equal(res.headers.get('x-nuworq-protocol'), protocolVersion(), path);
       }
     } finally { server.close(); server.closeAllConnections(); }
+  });
+});
+
+// #558: a session that ends signs its agent off, so the hub stops listing it and what it held goes back at once.
+describe('the MCP server signs its agent off when the session ends', () => {
+  const signoffs = (hub) => hub.state.calls.filter((c) => c.op === 'signoff');
+  for (const [how, stop] of [['stdin ends', (s) => s.child.stdin.end()], ['SIGTERM', (s) => s.child.kill('SIGTERM')], ['SIGHUP', (s) => s.child.kill('SIGHUP')]]) {
+    test(`${how}: it signs off "Session ended" as the agent that checked in, then exits`, async () => {
+      const hub = await fakeHub();
+      const s = mcp(hub.port);
+      try {
+        await s.ask('initialize', { protocolVersion: '2025-06-18', clientInfo: { name: 'claude-code' } });
+        await s.ask('tools/call', { name: 'checkin', arguments: {} });
+        const agent = hub.state.calls.find((c) => c.op === 'checkin').agent;
+        assert.match(agent, /^claude-code-[0-9a-f]{4}$/);
+        stop(s);
+        assert.deepEqual(await s.exited, { code: 0, sig: null });
+        assert.deepEqual(signoffs(hub), [{ op: 'signoff', agent, project: 'demo' }], 'once, in the project the hub sent it to');
+      } finally { s.close(); hub.server.close(); }
+    });
+  }
+
+  test('a session that never checked in, or already signed off, signs off nothing', async () => {
+    const hub = await fakeHub();
+    const never = mcp(hub.port);
+    const done = mcp(hub.port);
+    try {
+      await never.ask('initialize', { protocolVersion: '2025-06-18' });
+      await never.ask('tools/call', { name: 'next', arguments: {} }); // a call, but no checkin
+      never.child.stdin.end();
+      assert.equal((await never.exited).code, 0);
+      await done.ask('initialize', { protocolVersion: '2025-06-18' });
+      await done.ask('tools/call', { name: 'checkin', arguments: {} });
+      await done.ask('tools/call', { name: 'signoff', arguments: { headline: 'Done for today' } });
+      done.child.kill('SIGTERM');
+      assert.equal((await done.exited).code, 0);
+      assert.equal(signoffs(hub).length, 1, 'only the one it made itself');
+    } finally { never.close(); done.close(); hub.server.close(); }
+  });
+
+  test("a hub that doesn't answer holds the exit about 2 s, no longer", async () => {
+    const hub = await fakeHub();
+    hub.state.hang = true;
+    const s = mcp(hub.port);
+    try {
+      await s.ask('initialize', { protocolVersion: '2025-06-18' });
+      await s.ask('tools/call', { name: 'checkin', arguments: {} });
+      const t = Date.now();
+      s.child.stdin.end();
+      assert.equal((await s.exited).code, 0);
+      const ms = Date.now() - t;
+      assert.ok(ms >= 1500 && ms < 4000, `${ms}ms`);
+      assert.equal(signoffs(hub).length, 1, 'it tried');
+    } finally { s.close(); hub.server.closeAllConnections(); hub.server.close(); }
   });
 });

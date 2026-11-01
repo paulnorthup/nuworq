@@ -1938,6 +1938,12 @@ export class Hub extends EventEmitter {
     const marks = this._marks = []; // a throw leaves it to the next operation, which starts its own
     const result = this.tx(() => {
       this.ownsAgent(p, agent, identity);
+      // A session that ends signs off by itself, and the runner signs off a worker that exited (#558): an agent that
+      // already did, or never checked in here, has nothing to hand back, so it isn't put on the record again.
+      if (op === 'signoff') {
+        const a = this.q('SELECT signed_off FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
+        if ((!a || a.signed_off) && !this.heldBy(p, agent).length) return { ok: true, handed_off: [] };
+      }
       // The runner posts a worker's usage after it exited: that's bookkeeping, not the agent being here.
       const presence = op === 'usage' ? null : this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
       // Arriving, or coming back, shows on the page; being seen again a minute later doesn't.

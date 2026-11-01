@@ -25,6 +25,7 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
   let clientName = '';
   // Its role picks its tools (#529): a runner's workers say so at start; any other session learns it at checkin.
   let role = envVar('ROLE', env) || 'session';
+  let present = false; // it checked in through this server, and hasn't signed off since
 
   const log = (...a) => process.stderr.write(`[nuworq-mcp] ${a.join(' ')}\n`);
   const write = (msg) => output.write(JSON.stringify(msg) + '\n');
@@ -116,6 +117,9 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
           fromHub = (await fetchProtocol()) ?? fromHub;
           write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
         }
+        // Whether this session is on the hub's list, for the sign-off when it ends (#558).
+        if (name === 'checkin' && result?.ok !== false) present = true;
+        if (name === 'signoff' && result?.ok !== false) present = false;
         // nuworq updated itself under this session (#436): said once, in the next checkin.
         if (name === 'checkin' && result && typeof result === 'object') {
           const updated = takeNews(updateDir, 'mcp');
@@ -165,5 +169,19 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
       for (const m of Array.isArray(msg) ? msg : [msg]) handle(m);
     }
   });
-  input.on('end', () => process.exit(0));
+  // The session ended (#558): its client closed stdin, or it was told to stop. Its agent signs off, handing back
+  // what it held, so the hub stops listing it at once instead of an hour later. At most END_MS for the hub: one
+  // that doesn't answer leaves it to the lease. Only an agent that checked in here, and hasn't signed off since.
+  let ending = null;
+  const end = () => ending ??= (async () => {
+    if (present && agent) {
+      const bye = meta.call('signoff', { headline: 'Session ended' }, { agent, project }).catch(() => {});
+      await Promise.race([bye, new Promise((r) => setTimeout(r, END_MS).unref())]);
+    }
+    process.exit(0);
+  })();
+  input.on('end', end);
+  for (const sig of ['SIGTERM', 'SIGHUP', 'SIGINT']) process.on(sig, end);
 }
+
+const END_MS = 2000;

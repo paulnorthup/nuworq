@@ -998,6 +998,9 @@ async function runCmd(flags) {
     // of slack covers clocks that differ.
     claimed: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).claims > 0,
     took: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).first ?? null,
+    // A worker that exited without signing off (#558), say it crashed: what it held goes back now, not at its lease's end.
+    // At most 5 s, since it counts as running until then.
+    signoff: (w) => Promise.race([reporter.call('signoff', { headline: 'Worker exited' }, { agent: w.name, project: w.project }), new Promise((r) => setTimeout(r, 5000).unref())]),
     maxRuns: num(flags['max-runs'], Infinity),
     untilIdle: !!flags['until-idle'],
     maxMinutes: num(flags['max-minutes'], Infinity),
