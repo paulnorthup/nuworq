@@ -1200,7 +1200,7 @@ function connectStep(r) {
     <h2>${esc(r.name)} is ready</h2>
     ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
     ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${commandBlocks(c.clone)}` : ''}
-    <h4>Connect it to ${esc(S.me.org)}</h4><p class="lead">It signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code and Codex if they're installed.</p>${commandBlocks(c.connect ?? c.guide)}
+    <h4>Set it up for ${esc(S.me.org)}</h4><p class="lead">Paste it in a terminal, in a clone of the repository. It installs nuworq (Node 24 or newer), signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code and Codex if they're installed. Then it asks to staff ${esc(r.name)} with workers and start an operator.</p>${commandBlocks(c.setup)}
     <h4>Start a worker in a clone of the repository</h4>${commandBlocks(c.worker)}
     <div class="foot"><button class="btn primary" data-action="goto-new" data-slug="${esc(r.slug)}">Open the board</button></div>`);
 }
@@ -1332,16 +1332,14 @@ async function connect() {
   const where = S.view?.project.path;
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
-    <h4>1. Install nuworq (once)</h4>
-    ${c.install ? `<p class="lead">From this hub: Node 24+, no other dependencies, and it keeps itself up to date.</p>${commandBlocks(c.install)}`
-      : '<p class="lead">This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed.</p>'}
-    <h4>2. Connect this machine (once)</h4><p class="lead">It logs you in through the browser, saves this machine's token, and registers nuworq with Claude Code, Codex and opencode if they're installed. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.connect)}
-    <h4>3. Keep workers going</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${commandBlocks(c.run)}
+    <h4>Set up this machine (once)</h4>
+    <p class="lead">Paste it in a terminal, in a clone of the project. ${c.install ? 'It installs nuworq from this hub (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), and keeps it up to date.' : 'This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed first.'} It signs you in through the browser, then asks, one at a time, to install the Claude Code plugin, staff the project with workers here, and start an operator. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.setup)}
+    <h4>Workers by hand</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${commandBlocks(c.run)}
     <p class="lead">One worker on its own, wherever work is waiting:</p>${commandBlocks(c.worker)}
-    <h4>Optional: the Claude Code plugin</h4><p class="lead">The MCP server and both nuworq skills in one install, instead of <code>claude mcp add</code> and copying the skills by hand. Connect this machine (step 2) all the same: the plugin holds no token.</p>${commandBlocks(c.plugin)}
     ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
     ${z() >= 2 ? `<h3>Setting up by hand</h3><p class="lead">What <code>nuworq connect</code> does for you. No token or address goes in these: connect saved both, and <code>nuworq mcp</code> reads them.</p>
+    <h4>The Claude Code plugin</h4><p class="lead">The MCP server and the nuworq skills in one install. Connect this machine all the same: the plugin holds no token.</p>${commandBlocks(c.plugin)}
     <h4>Claude Code</h4>${commandBlocks(c.claude)}
     <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}

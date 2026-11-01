@@ -17,7 +17,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -206,14 +206,10 @@ async function operatorCmd(flags) {
     return;
   }
   const project = resolveSettings(flags).project ?? basename(process.cwd());
-  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
-  const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
-    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
-  const detected = [{ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform], chrome && 'browser'].filter(Boolean);
-  const given = (flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase());
-  const has = ['operator', ...new Set(given.map((t) => TAG_ALIASES[t] ?? t).filter((t) => t !== 'operator'))];
-  const renamed = [...new Set(given.filter((t) => TAG_ALIASES[t]))].map((t) => `${t} is now ${TAG_ALIASES[t]}`);
+  const { has, renamed } = operatorHas(flags);
   if (renamed.length) console.log(dim(`Tag renamed: ${renamed.join(', ')}.`));
+  // --start: open Claude Code here as the operator, as connect does on a yes (#490).
+  if (flags.start) return startOperator(process.cwd(), has);
   console.log(`${bold('Declare:')} ${has.join(', ')}${flags.has ? '' : dim('  (detected; add what else this session can really do with --has, e.g. --has macos,browser,claude-cli,infra)')}
 ${dim('infra: the live infrastructure of the project the session checks in to (servers and VMs, DNS, cloud accounts, deploys).')}
 ${bold('Start it:')} open Claude Code in ${project}'s folder (the terminal or the desktop app's Code tab) and type:
@@ -222,6 +218,83 @@ ${operatorStart(has)}
 
 It works until nothing waits, then stays idle and listens: each new operator item, operator question or answer
 starts a turn on its own. No /loop.${dim(` (Without the nuworq plugin: ${operatorStart(has, { plugin: false })}.)`)}`);
+}
+
+// The tags an operator session declares: the platform, and browser when a Chrome or Chromium is installed;
+// --has replaces what was detected. renamed: old tag names given, with their new ones.
+function operatorHas(flags) {
+  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
+  const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
+    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
+  const detected = [{ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform], chrome && 'browser'].filter(Boolean);
+  const given = (flags.has ? refs(flags.has) ?? [] : detected).map((t) => String(t).toLowerCase());
+  const has = ['operator', ...new Set(given.map((t) => TAG_ALIASES[t] ?? t).filter((t) => t !== 'operator'))];
+  const renamed = [...new Set(given.filter((t) => TAG_ALIASES[t]))].map((t) => `${t} is now ${TAG_ALIASES[t]}`);
+  return { has, renamed };
+}
+
+// Claude Code in folder as the operator (#490): `claude "<the operator line>"` starts it with the line already
+// sent, and gives the terminal back when the session ends. A Claude Code whose help shows no [prompt] argument
+// can't take one: then it prints the line to paste.
+async function startOperator(folder, has) {
+  const { pluginInstalled } = await import('../src/connect.js');
+  const line = operatorStart(has, { plugin: pluginInstalled(homedir()) });
+  let help = '';
+  try { help = execFileSync('claude', ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 }); } catch {}
+  if (!/\[prompt\]/.test(help)) {
+    return console.log(`${amber('!')} ${help ? "This Claude Code can't take a first prompt" : "Claude Code isn't on PATH"}. Open Claude Code in ${folder} and type:\n\n${line}\n`);
+  }
+  console.log(`${green('●')} Starting the operator: Claude Code in ${folder}, with ${bold(line)} sent.`);
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync('claude', [line], { cwd: folder, stdio: 'inherit' });
+  if (r.error) console.log(`${amber('!')} Couldn't start Claude Code (${r.error.message}). Open it in ${folder} and type: ${line}`);
+}
+
+// Staff a project with workers on this machine, up to a daily budget (#490): the hub turns staffing on, at once
+// on a hub without logins, else once an owner approves it in the browser. Returns the lines to print.
+async function staffProject(project, budget, flags) {
+  const client = createClient(flags);
+  const r = await client.post('/api/staff', { project: project.slug, budget, machine: hostname().split('.')[0] });
+  const name = project.name ?? project.slug;
+  const done = `${green('●')} Staffed ${bold(name)}: its workers may spend up to $${budget} a day (change it in ${name}'s Settings).`;
+  if (r.staffed) return [done];
+  console.log(`To staff ${name}, an owner approves it at ${bold(r.verify_url_complete)} (the code ${bold(r.user_code)}). It expires in ${Math.round(r.expires_in / 60)} minutes.`);
+  if (process.stdout.isTTY && !flags['no-browser']) {
+    const { spawn } = await import('node:child_process');
+    const opener = { darwin: 'open', win32: 'explorer' }[process.platform] ?? 'xdg-open';
+    try { spawn(opener, [r.verify_url_complete], { stdio: 'ignore', detached: true }).on('error', () => {}).unref(); } catch {}
+  }
+  const hub = createClient({ url: client.settings.url, token: '', retryMs: 0 });
+  let wait = r.interval ?? 5;
+  for (;;) {
+    await new Promise((ok) => setTimeout(ok, wait * 1000));
+    const p = await hub.post('/api/device/poll', { device_code: r.device_code }).catch((e) => { throw new HubError(`it wasn't approved: ${e.message}`, { hint: e.hint }); });
+    if (p.status === 'approved') return [done];
+    if (p.status === 'slow_down') wait = (p.interval ?? wait) + 1;
+  }
+}
+
+// nuworq staff [<project>] [--budget usd]: connect's staffing question on its own (#490). The project is the
+// one this folder is a clone of, unless named; the runner is installed from here.
+async function staffCmd(pos, flags) {
+  const { chooseProject, budgetOf } = await import('../src/setup.js');
+  const mode = flags.yes ? 'yes' : process.stdin.isTTY && process.stdout.isTTY ? 'ask' : 'yes';
+  const ask = askLine;
+  const projects = await hubProjects(createClient(flags));
+  const at = await chooseProject({ projects, named: pos[0] ?? flags.project, remote: repoRemote(), root: repoRoot(), mode, ask, say: console.log });
+  if (at.none) throw new HubError(at.none, { hint: 'nuworq staff <project> [--budget 20]' });
+  const usd = await budgetOf(mode, ask, flags.budget);
+  for (const l of await staffProject(at.project, usd, flags)) console.log(l);
+  await runService({ ...flags, folder: besideOf(process.cwd()) }, { argv: [] });
+}
+
+// One line typed at the terminal, after a prompt (on stderr, so piped output stays clean).
+async function askLine(prompt) {
+  const { createInterface } = await import('node:readline');
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const said = await new Promise((resolve) => { rl.question(prompt, resolve); rl.once('close', () => resolve('')); });
+  rl.close();
+  return said;
 }
 
 // An operator waiting on the hub (#283): one line when there is something for it, then exit; --follow
@@ -684,7 +757,8 @@ function workerSetup(target, agent, flags, s, token = null) {
 
 // `nuworq run --install [run flags]`: the same runner as a LaunchAgent (macOS) or systemd user unit (Linux), so
 // it outlives the terminal and comes back after a reboot. --uninstall stops and removes it (#172).
-async function runService(flags) {
+// argv: the run flags the service keeps (connect and staff pass their own: #490).
+async function runService(flags, { argv = process.argv.slice(3) } = {}) {
   const svc = await import('../src/service.js');
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
@@ -696,7 +770,7 @@ async function runService(flags) {
     return console.log(r.removed ? `${green('Removed')} the ${r.kind} ${dim(r.file)}: the runner has stopped.` : dim(`No runner was installed (${r.file}).`));
   }
   let args;
-  try { args = svc.serviceArgs(process.argv.slice(3)); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+  try { args = svc.serviceArgs(argv); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
   lockDown(dirname(HUB_FILE));
   // The folders its workers may use, chosen now while there's a terminal to ask in (#477).
   await chooseWorkFolders(flags, await createClient(flags).get('/api/projects').catch(() => []), resolveSettings(flags));
@@ -985,7 +1059,9 @@ async function connect(pos, flags) {
   // Connecting again replaces the old token: revoke it first. The tools set up last time stay recorded.
   const old = readConnection();
   const notes = [old?.token && old.token !== token ? await revokeSaved(old) : null];
-  if (!flags['no-mcp']) notes.push(await offerPlugin(flags));
+  // A person at the terminal is asked; --yes and --no answer for them, and with no terminal it's a no (#490).
+  const mode = flags.yes ? 'yes' : flags.no ? 'no' : process.stdin.isTTY && process.stdout.isTTY ? 'ask' : 'no';
+  if (!flags['no-mcp']) notes.push(await offerPlugin(flags, mode));
   const { registerMcp } = await import('../src/connect.js');
   const mcp = flags['no-mcp'] ? { added: old?.added ?? [], lines: [] } : registerMcp({ bin: BIN, home: homedir(), kept: old?.added ?? [], url });
   // Written whole with mode 600 and moved into place, so the token is never in a file others can read.
@@ -997,22 +1073,48 @@ async function connect(pos, flags) {
   console.log(`${green('Connected')} to ${bold(url)}${me.auth === 'required' ? ` as ${me.name} (${me.role} token)` : dim(' (it needs no login)')}.
 ${[...notes.filter(Boolean), ...mcp.lines.map((l) => `  ${l}`)].join('\n')}${notes.some(Boolean) || mcp.lines.length ? '\n' : ''}${dim(`Saved in ${CONNECT_FILE}, readable only by you. The CLI, the MCP server and nuworq run on this machine use it
 now; NUWORQ_URL and NUWORQ_TOKEN still win. Undo all of it: nuworq disconnect`)}`);
+  if (!flags['no-mcp']) await setUp({ ...flags, url, token }, mode);
+}
+
+// The rest of the setup, once connected (#490, src/setup.js): workers for the project this folder is a clone of,
+// an operator, and how to start a shaper.
+async function setUp(flags, mode) {
+  const { chooseProject, finishSetup } = await import('../src/setup.js');
+  const { pluginInstalled } = await import('../src/connect.js');
+  const say = (l) => console.log(l);
+  const projects = await createClient(flags).get('/api/projects').catch(() => null);
+  if (!projects) return say(dim("Couldn't list the hub's projects, so nothing more was set up."));
+  const root = (() => { try { execFileSync('git', ['rev-parse', '--show-toplevel'], { stdio: 'ignore' }); return repoRoot(); } catch { return null; } })();
+  const at = await chooseProject({ projects, named: flags.project, remote: repoRemote(), root, mode, ask: askLine, say });
+  say('');
+  if (at.none) return say(at.none);
+  const remote = at.project.remotes?.[0];
+  const { mirrorSource } = await import('../src/git.js');
+  const clone = at.folder || !remote ? null : `git clone ${mirrorSource(remote) ?? remote} ${cloneDir(remote)}`;
+  const { has } = operatorHas(flags);
+  await finishSetup({
+    mode, ask: askLine, say, project: at.project, folder: at.folder, clone, budget: flags.budget,
+    plugin: pluginInstalled(homedir()),
+    actions: {
+      staff: (p, usd) => staffProject(p, usd, flags),
+      installRunner: async () => { await runService({ ...flags, folder: besideOf(at.folder ?? process.cwd()) }, { argv: [] }); return []; },
+      startOperator: () => startOperator(at.folder, has),
+    },
+  });
 }
 
 // Claude Code takes nuworq as its plugin (#432): one copy of the skills, shown as /nuworq:shaper and
 // /nuworq:operator. Without it, connect asks a person at the terminal to install it, and writes the MCP server
 // and the skills itself only when they decline (or the install fails). With no one to ask, or --skills, it
 // writes them as before and says how to get the plugin.
-async function offerPlugin(flags) {
+// mode (#490): 'ask' asks; 'yes' installs it; 'no' says how.
+async function offerPlugin(flags, mode) {
   const { pluginInstalled, claudeCode, installPlugin, PLUGIN_INSTALL } = await import('../src/connect.js');
   if (!claudeCode() || pluginInstalled(homedir())) return null;
   const how = PLUGIN_INSTALL.map((a) => `claude ${a.join(' ')}`).join(' && ');
-  if (flags.skills || !process.stdin.isTTY) return dim(`Claude Code takes nuworq best as its plugin, with /nuworq:shaper and /nuworq:operator: ${how}, then connect again.`);
-  const { createInterface } = await import('node:readline');
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const said = await new Promise((resolve) => rl.question('Install the nuworq plugin for Claude Code (its MCP server, /nuworq:shaper and /nuworq:operator)? [Y/n] ', resolve));
-  rl.close();
-  if (/^\s*n/i.test(said)) return null;
+  if (flags.skills || mode === 'no') return dim(`Claude Code takes nuworq best as its plugin, with /nuworq:shaper and /nuworq:operator: ${how}, then connect again.`);
+  const { answerer } = await import('../src/setup.js');
+  if (!await answerer(mode, askLine)('Install the nuworq plugin for Claude Code? It adds its MCP server and the /nuworq:shaper and /nuworq:operator commands, and costs nothing.', { def: true })) return null;
   const failed = installPlugin();
   return failed ? amber(`${failed}. Added the server and skills to Claude Code directly instead.`) : `  Claude Code: installed the ${bold('nuworq')} plugin (${how}).`;
 }
@@ -1548,7 +1650,12 @@ ${bold('Setup')}
                                          Claude Code without the nuworq plugin: it offers to install it first;
                                          --skills writes the server and skills instead without asking.
                                          --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
-  disconnect                             revoke that token, remove what connect added, forget the hub
+                                         Then, one at a time: staff the project this folder is a clone of with
+                                         workers here (nuworq staff), and start an operator (operator --start).
+                                         --yes or --no answers each without asking; with no terminal, it's no.
+  staff [<project>] [--budget 20]        turn on staffing for the project (an owner approves it in the browser on
+                                         a hub with logins), with a daily cap, and install nuworq run here
+  disconnect                            revoke that token, remove what connect added, forget the hub
   skill [--dir d]                        write the nuworq, nuworq-shaper and nuworq-operator skills for Claude (generated; connect does them without the plugin)
   skill --plugin [dir]                   write the Claude Code plugin (MCP server, skills, listener; default: plugin/)
   mcp                                    run the stdio MCP server (one per agent session)
@@ -1560,7 +1667,8 @@ ${bold('Setup')}
                                          tags: claude-cli, infra (the project's live infrastructure: servers and
                                          VMs, DNS, cloud accounts, deploys), github-admin, browser. First, one
                                          line if this nuworq is too old for the operator listener. --check <level>:
-                                         only that line (exit 1), or nothing when it is new enough
+                                         only that line (exit 1), or nothing when it is new enough. --start: open
+                                         Claude Code here with that line already sent
   wait --operator [--follow] [--as name] [--project p | --all-projects]
                                          block until there is something for an operator (its work, a question
                                          to it, an answer, steering) and print one line; --follow: one per event.
@@ -1725,6 +1833,7 @@ async function main() {
     return console.log(guide({ project: s.project ?? 'whichever project the hub sends you to', url: s.url, via: flags.via || 'cli', command: CLI }));
   }
   if (cmd === 'operator') return operatorCmd(flags);
+  if (cmd === 'staff') return staffCmd(pos, flags);
   if (cmd === 'wait') return waitCmd(flags);
   if (cmd === 'skill' && flags.plugin) {
     // The Claude Code plugin (src/plugin.js): <dir> (default this checkout's plugin/), plus the marketplace

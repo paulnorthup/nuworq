@@ -88,7 +88,7 @@ const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^POST \/api\/staff$/,/^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 const REPO_PAGE = 30; // repositories per page in "+ Project"
 
@@ -1082,6 +1082,28 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           : 'Ask an owner of this workspace for a steward role, or connect an agent with its own token (Connect an agent).');
         return true;
       };
+      // A connected machine asks to staff a project with its workers, up to a daily budget (#490, nuworq connect).
+      // Without logins it's done. With them, an agent token can't change settings (#469): an owner approves it in
+      // the browser, as a device login, and their approval turns it on (see /api/device/approve).
+      if (req.method === 'POST' && path === '/api/staff') {
+        const b = await body(req);
+        const p = hub.project(String(b.project ?? ''));
+        if (caller.scope && !caller.scope.includes(p.slug)) return deny(403, `this token can't reach ${p.slug}`, 'Connect with a token for that project.');
+        const budget = Math.round(Number(b.budget) * 100) / 100;
+        if (!(budget > 0)) throw new UserError('budget is dollars per day, more than 0', { hint: 'e.g. 20.' });
+        // No logins, or a person whose role may change settings: done.
+        if (who.role !== 'agent') {
+          if (!PERSON_CAN[personRole]?.includes('settings')) return deny(403, `a ${personRole} can't staff projects`, 'Ask an owner of this workspace.');
+          hub.humanOp(p.slug, 'settings', { runner: true, run_budget: budget }, by);
+          return send(200, { ok: true, staffed: true });
+        }
+        const ip = clientIp(req);
+        if (recent(starts, ip).length >= DEVICE_MAX_STARTS) return deny(429, 'too many requests started', 'Wait 10 minutes, then try again.');
+        recent(starts, ip).push(Date.now());
+        const d = devices.start(b.machine, { project: p.slug, name: p.name, budget, token: caller.token.name });
+        const verify = `${origin(req)}${base}/device.html`;
+        return send(200, { ok: true, ...d, verify_url: verify, verify_url_complete: `${verify}?code=${d.user_code}` });
+      }
       // The style guide (#391): every token and component, for the people and agents building screens; signed in only.
       if (req.method === 'GET' && path === '/styleguide') return send(200, withLogo(readFileSync(join(WEB, 'styleguide.html'), 'utf8')), TYPES['.html']);
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
@@ -1150,11 +1172,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const peek = devices.peek(b.user_code);
         if (!peek.ok) return deny(410, peek.error, 'Check the code the CLI shows, or start the device login again.');
-        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
+        const staff = peek.request.staff;
+        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, ...(staff ? { staff } : {}), expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
         const approve = b.approve !== false;
         if (approve && personRole === 'viewer') return deny(403, "a viewer can't connect machines", 'Ask an owner for a member role.');
+        if (approve && staff && !PERSON_CAN[personRole]?.includes('settings')) return deny(403, `a ${personRole} can't staff projects`, 'Ask an owner of this workspace to approve it.');
         let d;
         try { d = devices.decide(b.user_code, who.person.handle, approve); } catch (e) { throw new UserError(e.message); }
+        // A staffing request (#490): the approver's yes turns staffing on, with the daily budget the machine asked for.
+        if (approve && staff) {
+          hub.humanOp(staff.project, 'settings', { runner: true, run_budget: staff.budget }, by);
+          return send(200, { ok: true, machine: d.machine, approved: true, staff });
+        }
         if (d.name) {
           for (const p of hub.projects()) {
             hub.event(p, { actor: by, type: 'connected', headline: `${by} connected ${d.machine} (agent token ${d.name})` });
