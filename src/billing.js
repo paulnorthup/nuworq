@@ -116,7 +116,7 @@ export async function pushFailed(hub, b, settings, opts = {}) {
   if (!e || !channels.length) return [];
   const title = `nuworq: payment failed for ${hub.workspace ?? 'your workspace'}`;
   const msg = { title, url: settings, text: [title, e.headline, `→ ${settings}`].join('\n'), entries: [] };
-  return Promise.all(channels.map((c) => deliver(hub.db, c, msg, opts)));
+  return Promise.all(channels.map((c) => deliver(hub.db, c, msg, { guard: true, ...opts }))); // billing is a shared host's
 }
 
 const ms = (s) => (Number(s) > 0 ? Number(s) * 1000 : null);

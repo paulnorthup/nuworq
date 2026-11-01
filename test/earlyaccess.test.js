@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,6 +28,9 @@ async function hub({ gate = true } = {}) {
 }
 
 describe('early access', () => {
+  // The hub host's setting (#474): the push sinks here are local.
+  before(() => { process.env.NUWORQ_ALLOW_PRIVATE_HOSTS = '127.0.0.1'; });
+  after(() => { delete process.env.NUWORQ_ALLOW_PRIVATE_HOSTS; });
   test('the form: a passing Turnstile token is stored; none or a bad one is refused; the same email is one request; 5 an hour per address', async () => {
     const h = await hub();
     try {

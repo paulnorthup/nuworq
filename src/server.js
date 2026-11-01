@@ -540,7 +540,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const db = f.kind === 'person' && spaces.get(f.workspace)?.db;
       if (!db) continue;
       const msg = composeFixed(f, `${workspaceUrl(f.workspace, { baseDomain, publicUrl })}/#/feedback`);
-      for (const c of requestChannels(db, f.sender.replace(/^@/, ''))) deliver(db, c, msg).catch((e) => console.error('telling a sender feedback is fixed failed', e));
+      for (const c of requestChannels(db, f.sender.replace(/^@/, ''))) deliver(db, c, msg, { guard: true }).catch((e) => console.error('telling a sender feedback is fixed failed', e));
     }
   };
 
@@ -1493,7 +1493,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'POST' && path === '/api/notify') {
         const b = await body(req);
-        const c = addChannel(hub.db, b.kind, b.url, hub.now(), { person: own ?? b.person });
+        const c = addChannel(hub.db, b.kind, b.url, hub.now(), { person: own ?? b.person, guard: !!spaces });
         hub.emit('change', { project: null, at: hub.now() });
         return send(200, { ok: true, ...c });
       }
@@ -1512,7 +1512,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { ok: true, weekly: weekly !== false });
       }
       if (req.method === 'POST' && path === '/api/notify/test') {
-        const results = await testChannels(hub.db, { baseUrl: (!spaces && publicUrl) || origin(req) + base, now: () => hub.now() });
+        const results = await testChannels(hub.db, { baseUrl: (!spaces && publicUrl) || origin(req) + base, now: () => hub.now(), guard: !!spaces });
         hub.emit('change', { project: null, at: hub.now() });
         return send(200, { ok: results.every((r) => r.ok), results });
       }

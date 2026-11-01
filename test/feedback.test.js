@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { mkdtempSync } from 'node:fs';
@@ -56,6 +56,9 @@ async function hub({ feedbackProject = 'nuworq/nuworq', sweepMs } = {}) {
 }
 
 describe('feedback about nuworq (#295)', () => {
+  // The hub host's setting (#474): the push sinks here are local.
+  before(() => { process.env.NUWORQ_ALLOW_PRIVATE_HOSTS = '127.0.0.1'; });
+  after(() => { delete process.env.NUWORQ_ALLOW_PRIVATE_HOSTS; });
   test('a person sends it with only the page, the version and the browser; the owners see it, newest first', async () => {
     const h = await hub();
     try {
