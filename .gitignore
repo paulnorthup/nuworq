@@ -4,3 +4,10 @@ node_modules/
 *.db-wal
 *.db-shm
 .claude/settings.local.json
+# Keys, environment files and release artifacts never go in a commit.
+*.pem
+*.key
+.env
+.env.*
+*.tgz
+*.tgz.sig

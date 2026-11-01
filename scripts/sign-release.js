@@ -5,7 +5,8 @@
 //   node scripts/sign-release.js sign <nuworq.tgz> <release-key.pem>   writes <nuworq.tgz>.sig
 //   node scripts/sign-release.js release <hub> <release-key.pem> [<scp destination>]
 //                                                      the package the hub serves now: fetched, checked, signed
-//                                                      as nuworq-<commit>.tgz.sig, and copied beside it with scp.
+//                                                      as ~/.nuworq/signatures/nuworq-<commit>.tgz.sig, and copied
+//                                                      beside it with scp.
 //                                                      Run it in a checkout of nuworq: the package must be a
 //                                                      release, its version tagged vX.Y.Z on that commit (#400)
 //   node scripts/sign-release.js watch <hub> <release-key.pem> <scp destination> [--install]
@@ -18,7 +19,8 @@
 // release-key.pub update only to a package it verifies (src/update.js).
 import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sign, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileInTarball, releaseOf, versionOf, changelogEntry } from '../src/update.js';
 
@@ -65,7 +67,10 @@ if (cmd === 'keygen' && a) {
   if (!tagged) throw new Error(`${short} says it is ${version}, but there is no ${tag} tag (looked in this checkout and its origin): sign a release only once its item has landed and the hub tagged it`);
   if (!tagged.startsWith(p.commit) && !p.commit.startsWith(tagged)) throw new Error(`${tag} is ${tagged.slice(0, 7)}, not ${short} as the hub serves: wait until the hub runs ${tag}, then sign`);
   if (changelogEntry(fileInTarball(bytes, 'CHANGELOG.md'), version, { first: true }) == null) throw new Error(`${short}'s CHANGELOG.md doesn't begin with ${version} (a "## ${version}" heading first), so installs couldn't say what changed`);
-  const file = `nuworq-${p.commit}.tgz.sig`;
+  // Into a folder of its own, not the checkout it runs in, so a signature never ends up in a commit.
+  const sigs = join(homedir(), '.nuworq', 'signatures');
+  mkdirSync(sigs, { recursive: true });
+  const file = join(sigs, `nuworq-${p.commit}.tgz.sig`);
   writeFileSync(file, signed(bytes, key));
   const made = rel.time ? `, made ${new Date(rel.time * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
   console.log(`Signed ${version} (${short}${made}): wrote ${file}`);
