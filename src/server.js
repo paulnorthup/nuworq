@@ -92,7 +92,8 @@ const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form
 const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
 // Addresses a proxy in front of the hub connects from: loopback and private networks (cloudflared, Caddy, a load balancer).
 const TRUSTED_HOP = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::ffff:(127|10)\.|f[cd][0-9a-f]{2}:|unknown$)/i;
-export const MAX_HELD = { stream: 20, wait: 4 }; // open streams (browser tabs) and operator waits per sign-in or token
+// Open streams (browser tabs) and operator waits per sign-in or token, and waits per listener on it.
+export const MAX_HELD = { stream: 20, wait: 32, listener: 2 };
 export const MAX_CONNECTIONS = 2000; // sockets the hub keeps open at once; past it, new ones are dropped
 export const LIMITER_MAX = 10_000; // addresses each per-address limit remembers
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
@@ -318,14 +319,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (feedbackOn) try { tellFixed(); } catch (e) { console.error('telling senders their feedback is fixed failed', e); }
   }, sweepMs);
   // Requests held open (/api/stream, /api/wait), counted per hub and per token, sign-in, or (local mode) address,
-  // so no one caller ties up the hub's connections. True: counted until the response closes; false: at the cap.
+  // so no one caller ties up the hub's connections. A wait is also counted per listener (its --as name, else the
+  // session keys it sends): one machine's operators share a token, each with a listener of its own, and a
+  // duplicate listener is what's refused. True: counted until the response closes; false: at a cap.
   const held = new Map();
   const hold = (req, res, hub, who, kind) => {
-    const key = `${kind}|${hub.workspace ?? ''}|${who.via === 'local' ? `ip:${clientIp(req)}` : `${who.via}:${who.id ?? who.name}`}`;
-    const n = held.get(key) ?? 0;
-    if (n >= MAX_HELD[kind]) return false;
-    held.set(key, n + 1);
-    res.once('close', () => { const m = (held.get(key) ?? 1) - 1; if (m > 0) held.set(key, m); else held.delete(key); });
+    const caller = `${kind}|${hub.workspace ?? ''}|${who.via === 'local' ? `ip:${clientIp(req)}` : `${who.via}:${who.id ?? who.name}`}`;
+    const listener = kind === 'wait' ? String(header(req, 'agent') ?? '').trim() || sessionOf(req).sort().join(',') : '';
+    const caps = [[caller, MAX_HELD[kind]], ...(listener ? [[`${caller}|${listener}`, MAX_HELD.listener]] : [])];
+    if (caps.some(([k, max]) => (held.get(k) ?? 0) >= max)) return false;
+    for (const [k] of caps) held.set(k, (held.get(k) ?? 0) + 1);
+    res.once('close', () => { for (const [k] of caps) { const m = (held.get(k) ?? 1) - 1; if (m > 0) held.set(k, m); else held.delete(k); } });
     return true;
   };
   const keepalive = setInterval(() => { for (const s of scopes.values()) for (const res of s.clients) res.write(': ping\n\n'); }, 25_000);
@@ -1550,7 +1554,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // and kinds only, or empty after a few minutes. ?since= the last answer's at, so each event comes once.
       if (req.method === 'GET' && path === '/api/wait') {
         if (url.searchParams.get('for') !== 'operator') return deny(400, 'wait for what?', 'Only operators wait: GET /api/wait?for=operator.');
-        if (!hold(req, res, hub, who, 'wait')) return tooMany('waits', MAX_HELD.wait);
+        if (!hold(req, res, hub, who, 'wait')) return tooMany('waits', `${MAX_HELD.listener} per listener, ${MAX_HELD.wait} per token`);
         const done = new AbortController();
         res.on('close', () => done.abort());
         const timeout = Number(url.searchParams.get('timeout'));
