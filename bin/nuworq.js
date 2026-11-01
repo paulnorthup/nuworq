@@ -112,7 +112,7 @@ const AGENT_CMDS = {
   signoff: (p, f) => ({ headline: rest(p, 0), summary: text(f.summary) }),
 };
 
-const tty = process.stdout.isTTY;
+const tty = process.stdout.isTTY && !process.env.NO_COLOR;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const bold = c('1'), dim = c('2'), amber = c('33'), green = c('32'), grey = c('90');
 const stateColor = (s) => ({ 'needs-you': amber, flowing: green, stalled: amber }[s] ?? grey);
@@ -1579,172 +1579,6 @@ async function notify(pos, flags) {
   throw new HubError('usage: nuworq notify add ntfy|slack|webhook <url> | list | remove <id> | test');
 }
 
-const HELP = `${bold('nuworq')}: a hub where humans facilitate and AI agents coordinate work.
-
-${bold('Human')}
-  serve [--port 4747] [--host 127.0.0.1] [--db path] [--demo] [--auth] [--trust-proxy] [--public-url u] [--follow]
-                                         run the hub and web UI. Loopback: no login.
-                                         Any other host (or --auth): tokens required.
-                                         --follow: keep the hub on the latest main that passes its tests
-  token create <name> --role human|agent [--project a,b]
-                                         create a token (shown once); run on the hub host.
-                                         --project limits an agent token to those projects
-  token list | token revoke <name|id>    see or revoke tokens (revoking logs out sessions)
-                                         human tokens act as a person: --person <handle>
-                                         (default: one named like the token, created as owner)
-  person add <handle> --role owner|steward|member|viewer [--email e]
-  person list | person set-role <handle> <role> | person remove <handle>   (revokes tokens they minted)
-  invite create --role steward [--email e] [--public-url u] | invite list | invite revoke <id>
-                                         a single-use, 7-day link that adds a person with that role
-  token create <name> [--powers shape,build,review] [--minted-by <handle> | --runner [name]]
-                                         agent tokens: what they may do, and who answers for them
-                                         owners do everything; stewards steer, decide, answer and
-                                         accept; members comment and propose; viewers read
-                                         --workspace <name>: that workspace's tokens
-  serve --workspaces [--data-dir d] [--base-domain example.com]
-                                         one process, many workspaces (one database each),
-                                         at <name>.<base-domain> or /w/<name>/. Login always required.
-                                         [--workspace-cap 5]: workspaces one signed-in person may create
-                                         [--early-access]: making a workspace takes an approved request
-                                         (owners: --owners or NUWORQ_HUB_OWNERS emails; form at /early-access with
-                                         NUWORQ_TURNSTILE_SITEKEY, checked with NUWORQ_TURNSTILE_SECRET)
-                                         [--admin-host admin.example.com] (with --public-url): the owners'
-                                         dashboard; early-access requests are decided only there
-                                         [--feedback-project <workspace>/<project>] (with --admin-host): feedback
-                                         about nuworq is on; approving a piece proposes it there
-  workspace create|remove <name> | list  manage workspaces on the hub host
-  workspace adopt <name> [--db file]     turn a single hub's database into workspace <name> (a copy is kept);
-                                         tokens saved with the hub's root address keep working there, and
-                                         its GitHub App's installations are bound to it
-  workspace bind-installation <id> <workspace>   GitHub App deliveries for installation <id> reach <workspace>
-  notify add ntfy|slack|webhook <url> [--person bea]   push one batched message when something new needs you
-                                         (--person: a channel for bea, only what bea owns)
-  notify list | remove <id> | test       see, remove or test push channels (run on the hub host)
-  status [--all]                         the 30-second view
-
-${bold('Agents')}  (every command takes --as <name>, --project, --url)
-  checkin [--model m] [--client c] [--has "docker,macos"]
-                                         start here: mission, decisions, steering, answers.
-                                         --has: what your machine can do (or NUWORQ_HAS)
-  next [--peek]                          claim the most useful work
-  claim <item> [--touching "a,b"]        claim a specific item
-  progress <item> [headline] [--touching "src/db,src/api.js"]
-                                         milestone update (no headline = silent heartbeat); renews your lease
-  ask [<item>] <question> [--assume a] [--option x]... [--blocking] [--to human|reporter|operator]
-  ask <question> --escalates <question-id> --evidence "label|url"...
-                                         operators only: carry a question up to the human, with evidence
-  answer <question-id> <answer>          operators only: answer a question asked to: operator
-  withdraw <question-id> <reason>        take back your own open question: answered another way, or moot
-  submit <item> <headline> [--evidence "label|url"]...
-  handoff <item> <headline>              release with where you left off
-  propose <title> [--acceptance] [--priority now|soon|later] [--parent] [--depends-on "#1,#2"]
-          [--needs "docker,linux-vm"] [--size small|large] [--repo github.com/acme/api]
-  refine <item> [--title] [--acceptance] [--priority] [--depends-on] [--needs] [--size] [--repo]
-  review <item> <accept|reject> <headline> [--attempt n|agent]   (raced items: which attempt to keep)
-  comment [<item>] <headline>
-  ack <steer-id> [response]
-  look [<item>] [--stage s] [--notes all]
-  retire <note-id>... --reason r [--into <note-id>]
-                                         in a field-notes review: retire notes whose lesson is built in
-  signoff [headline]
-  Text flags: --summary, --detail (use "-" to read from stdin)
-
-${bold('Setup')}
-  init [--force]                         write .nuworq.json; print MCP config for Claude Code, Codex, opencode
-  connect <url> | <workspace> --hub <url> [--token t|-] [--no-browser] [--no-mcp] [--skills]
-                                         use that hub from this machine: log in through the browser (a code
-                                         you approve), save it in ~/.nuworq/connect.json (only you can read it),
-                                         and add the nuworq MCP server to Claude Code, Codex and opencode here.
-                                         Claude Code without the nuworq plugin: it offers to install it first;
-                                         --skills writes the server and skills instead without asking.
-                                         --token t (or NUWORQ_TOKEN) skips the browser; --token - reads one line
-                                         Then, one at a time: staff the project this folder is a clone of with
-                                         workers here (nuworq staff), and start an operator (operator --start).
-                                         --yes or --no answers each without asking; with no terminal, it's no.
-  staff [<project>] [--budget 20]        turn on staffing for the project (an owner approves it in the browser on
-                                         a hub with logins), with a daily cap, and install nuworq run here
-  disconnect                            revoke that token, remove what connect added, forget the hub
-  skill [--dir d]                        write the nuworq, nuworq-shaper and nuworq-operator skills for Claude (generated; connect does them without the plugin)
-  skill --plugin [dir]                   write the Claude Code plugin (MCP server, skills, listener; default: plugin/)
-  mcp                                    run the stdio MCP server (one per agent session)
-  git-credential get --as <name>         git credential helper: a one-repo, one-hour GitHub token for the item
-                                         <name> holds, from the hub's GitHub App (workers set it up themselves)
-  guide [--via cli|tools]                the agent guide
-  operator [--project p] [--has tags]    print the tags an operator session declares and the line that starts it
-                                         to paste into Claude Code in the project folder (runs nothing). Operator
-                                         tags: claude-cli, infra (the project's live infrastructure: servers and
-                                         VMs, DNS, cloud accounts, deploys), github-admin, browser. First, one
-                                         line if this nuworq is too old for the operator listener. --check <level>:
-                                         only that line (exit 1), or nothing when it is new enough. --start: open
-                                         Claude Code here with that line already sent
-  wait --operator [--follow] [--as name] [--project p | --all-projects]
-                                         block until there is something for an operator (its work, a question
-                                         to it, an answer, steering) and print one line; --follow: one per event.
-                                         Without --as: the operator of the Claude Code session that started
-                                         it (else the operators that checked in with this token).
-                                         Only this folder's project, unless --project or --all-projects.
-  tools [--format mcp|openai|anthropic] [--prefix p]   tool schemas
-  worker [--agent claude|codex|opencode] [--model provider/model] [--run] [--project p] [--here] [--as name] [--allow tools] [--has tags] [--browser]
-                                         start a headless worker where work is waiting (the hub routes it),
-                                         in its own git worktree, a branch per item (--here: no worktree). Without
-                                         --run it prints the command instead. opencode needs --model,
-                                         e.g. ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is set up for you).
-                                         --model proxy/<model> --proxy <url> (or NUWORQ_LLM_PROXY_URL) routes
-                                         opencode through llm-proxy, key from NUWORQ_LLM_PROXY_KEY (also on run);
-                                         --agent claude|codex --proxy <url> sends Claude Code or Codex through its
-                                         Anthropic or OpenAI route: <url> is its LAN or tailnet address, and the
-                                         key its owner token, from NUWORQ_LLM_PROXY_TOKEN.
-                                         On a hub with login, --run needs --agent-token (or
-                                         NUWORQ_AGENT_TOKEN): workers never get your own token.
-                                         Workers work only in folders you chose here: run asks in a
-                                         terminal; --folder <path> adds one (~/.nuworq/folders.json).
-                                         It reports what this machine has (macos/linux, docker, gpu;
-                                         add more with --has). --browser (Claude only): the worker gets a
-                                         headless Chrome (Playwright MCP, local pages only) to check UI
-                                         work with, and has "browser".
-  run [--workers 1|auto] [--max-workers M] [--agent claude|codex|opencode] [--model m] [--max-runs M] [--max-minutes T] [--max-usd X] [--poll 30] [--has tags] [--browser] [--until-idle]
-                                         keep up to N workers on waiting work in projects you opted in
-                                         (UI: "Let nuworq run staff this project"). --workers auto: one
-                                         more only while the 1-minute load is under 80% of the cores and
-                                         2 GB of memory is free, at least one, up to --max-workers (half
-                                         the cores by default); it says why when it holds. Waits for work, or
-                                         with --until-idle exits when the queue is empty. Workers that
-                                         keep failing pause it (5m, then longer, up to 30m), and a project
-                                         whose checkout can't be updated waits the same way while the
-                                         others go on. Logs: ~/.nuworq/logs. --max-usd stops launching
-                                         once workers' reported spend reaches X (codex and local models
-                                         report no cost, so they don't count against it).
-                                         --browser: each worker gets a browser, as with worker --browser.
-                                         A worker's worktree is removed when it exits, unless it holds
-                                         uncommitted changes or commits on no branch (then it says where).
-                                         Its branch goes too once its item is done or dropped and on origin.
-  run --sweep [--dry-run]                remove leftovers now (the runner does it weekly): worktrees and
-                                         nuworq/* branches of done or dropped items, idle worktrees with
-                                         no branch, and stale worktree records. Never your checkout, never
-                                         uncommitted or unpushed work. --dry-run lists what would go.
-  run --install [run flags] | run --uninstall
-                                         the same runner as a service: a LaunchAgent (macOS) or systemd
-                                         user unit (Linux) that survives closed terminals and reboots;
-                                         installing again replaces it. Log: ~/.nuworq/logs/run.log
-                                         Install from a checkout: it runs there and finds the ones beside it
-  update                               install the hub's newer nuworq now, if it is signed by the release key
-                                         this install pinned (otherwise, or offline, it keeps this version and
-                                         says why). Every command checks by itself at most every 10 minutes;
-                                         NUWORQ_NO_UPDATE=1 turns that off. After one updates it in the
-                                         background, the next command says once what changed.
-  changes                                this version's changelog lines again
-  prompt [--as name]                     just the worker prompt text, for other agents
-  seed                                   add the nuworq roadmap project to your hub's database
-
-Env: NUWORQ_URL (default ${DEFAULT_URL}), NUWORQ_PROJECT, NUWORQ_AGENT, NUWORQ_MODEL, NUWORQ_DB,
-     NUWORQ_TOKEN (a token the CLI and MCP server send to a hub that requires login),
-     NUWORQ_PUBLIC_URL (the hub's address as you reach it, used for links in push messages),
-     NUWORQ_LLM_PROXY_URL and NUWORQ_LLM_PROXY_KEY (serve: measured usage for agents that send
-     x-client-name: nuworq/<project>/<agent> through llm-proxy; a read-only key), and behind Cloudflare
-     Access NUWORQ_LLM_PROXY_ACCESS_ID and NUWORQ_LLM_PROXY_ACCESS_SECRET (a service token; serve only),
-     NUWORQ_LLM_PROXY_TOKEN (llm-proxy's owner token, for Claude and Codex workers with --proxy)
-Deploying on a VM or the internet: docs/DEPLOY.md`;
-
 // git's credential helper protocol (git help credential): for "get" on github.com, a token from the hub's
 // GitHub App for the repository of the item this agent holds. Anything else, or a different repository,
 // gets no answer, and git goes on to its other helpers. Errors go to stderr, where git shows them.
@@ -1793,10 +1627,22 @@ async function selfUpdate(flags, { force = false } = {}) {
   }
 }
 
+const unknownCommand = (cmd, near) => new HubError(`unknown command "${cmd}"`, { hint: `${near ? `Did you mean ${near}? ` : ''}See: nuworq help` });
+
 async function main() {
   const [cmd, ...argv] = process.argv.slice(2);
   const { pos, flags } = parse(argv);
-  if (!cmd || cmd === 'help' || flags.help || flags.h || cmd === '--help' || cmd === '-h') return console.log(HELP);
+  // Help (#481): a bare nuworq, one command's (help <command>, <command> --help), or all of it.
+  if (!cmd || cmd === 'help' || flags.help || flags.h || cmd === '--help' || cmd === '-h') {
+    const help = await import('../src/help.js');
+    const o = { width: process.stdout.isTTY ? process.stdout.columns || 80 : 80, style: { bold, dim } };
+    const want = cmd === 'help' ? pos[0] : cmd?.startsWith('-') ? undefined : cmd;
+    if (!want) return console.log(help.bare(o));
+    if (want === 'all') return console.log(flags.markdown ? help.reference({ markdown: true }) : help.reference(o));
+    const one = help.commandHelp(want, o);
+    if (!one) throw unknownCommand(want, help.nearest(want));
+    return console.log(one);
+  }
 
   if (cmd === 'serve') return serve(flags);
   if (cmd === 'update') {
@@ -1883,7 +1729,7 @@ async function main() {
   if (cmd === 'git-credential') return gitCredential(pos, flags);
 
   const shape = AGENT_CMDS[cmd];
-  if (!shape) throw new HubError(`unknown command "${cmd}"`, { hint: 'See: nuworq help' });
+  if (!shape) throw unknownCommand(cmd, (await import('../src/help.js')).nearest(cmd));
   const agent = flags.as || envVar('AGENT');
   if (!agent) throw new HubError('who are you?', { hint: 'Pass --as <name> (e.g. --as claude-1) or set NUWORQ_AGENT. Keep the same name for your whole session.' });
   const client = createClient(flags);

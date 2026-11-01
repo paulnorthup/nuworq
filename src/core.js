@@ -300,7 +300,6 @@ export class Hub extends EventEmitter {
     // links in PR bodies.
     this.github = null;
     this.publicUrl = '';
-    this.touchedItems = new Map(); // project id → seqs its events named since its last change (changed())
     this._opening = new Map(); // item id → the pull request being opened for it
     this._prPass = { at: 0, running: null }; // the periodic look at landing PRs (mergeReady)
     this._mergeFailed = new Map(); // item id → why GitHub last wouldn't merge its ready PR (on the record once)
@@ -346,12 +345,8 @@ export class Hub extends EventEmitter {
     }
   }
 
-  // A change in p, for whoever watches (the browsers' live stream, waiting operators): its project, and the items
-  // its events were about since the last one (#502), so a screen showing something else needn't refetch.
   changed(p) {
-    const items = [...(this.touchedItems.get(p.id) ?? [])].map((seq) => `#${seq}`);
-    this.touchedItems.delete(p.id);
-    this.emit('change', { project: p.slug, ...(items.length === 1 ? { item: items[0] } : {}), items, at: this.now() });
+    this.emit('change', { project: p.slug, at: this.now() });
   }
 
   // ── projects ────────────────────────────────────────────────────────────
@@ -943,7 +938,6 @@ export class Hub extends EventEmitter {
   }
 
   event(p, { item = null, actor, type, headline, summary = '', detail = '', data = {} }) {
-    if (item?.seq) { if (!this.touchedItems.has(p.id)) this.touchedItems.set(p.id, new Set()); this.touchedItems.get(p.id).add(item.seq); }
     // Every claim records the role it was taken in (#238), so time and cost split by role, and the model it runs
     // on and the job it is (#347), so each model's cost and record can be told per job.
     if (CLAIM_TYPES.includes(type)) {
