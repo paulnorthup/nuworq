@@ -136,6 +136,7 @@ describe('nuworq worker --agent pi', () => {
       assert.equal(mcp.env.NUWORQ_PROJECT, 'pp');
       assert.equal(mcp.env.NUWORQ_AGENT, 'pi-1');
       assert.equal(mcp.env.NUWORQ_MODEL, 'qwen3:8b');
+      assert.equal(mcp.env.NUWORQ_CLIENT, 'pi', 'it checks in as pi, whatever client the model names');
       assert.deepEqual(JSON.parse(readFileSync(join(dir, 'models.json'), 'utf8')).providers.ollama,
         { baseUrl: 'http://localhost:11434/v1', api: 'openai-completions', apiKey: 'ollama', headers: { 'x-client-name': 'nuworq/pp/pi-1' }, models: [{ id: 'qwen3:8b' }] });
       assert.deepEqual(readdirSync(repo).sort(), ['.git', 'f'], 'no config file left in the repo');

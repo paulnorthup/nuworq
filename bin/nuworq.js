@@ -791,7 +791,7 @@ function piConfig(name, { env, model, label, proxy }) {
       ? { proxy: { name: 'llm-proxy', baseUrl: `${proxy}/v1`, api: 'openai-completions', apiKey: '$NUWORQ_LLM_PROXY_KEY', headers, models: [{ id }] } }
       : { [provider]: { headers } };
   const write = (f, v) => writeFileSync(join(dir, f), `${JSON.stringify(v, null, 2)}\n`, { mode: 0o600 });
-  write('mcp.json', { mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env: { ...env, NUWORQ_MODEL: id }, exposure: 'direct' } } });
+  write('mcp.json', { mcpServers: { nuworq: { command: 'node', args: [BIN, 'mcp'], env: { ...env, NUWORQ_MODEL: id, NUWORQ_CLIENT: 'pi' }, exposure: 'direct' } } });
   write('models.json', { providers });
   return dir;
 }
