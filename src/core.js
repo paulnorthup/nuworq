@@ -1,7 +1,7 @@
 // The hub's state and every operation agents and humans can perform.
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
 import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase } from './git.js';
 import { findSecret } from './secrets.js';
@@ -1775,6 +1775,7 @@ export class Hub extends EventEmitter {
   // Expired leases go back to the queue. Run before every operation and on a timer.
   sweep() {
     const t = this.now();
+    this.q('DELETE FROM session_cursors WHERE at < ?').run(t - DAY); // sessions quiet for a day (#539)
     const expired = this.q(`SELECT i.*, p.slug FROM items i JOIN projects p ON p.id = i.project_id
       WHERE i.holder IS NOT NULL AND i.lease_until < ?`).all(t);
     const lapsed = this.q(`SELECT * FROM attempts WHERE stage = 'active' AND closed = 0 AND lease_until < ?`).all(t);
@@ -1839,7 +1840,7 @@ export class Hub extends EventEmitter {
   // remote: the agent's repository (normalized origin remote), which finds the project on any machine.
   // identity: who is calling when the hub has logins, { id: the token behind it, session: a person's browser
   // session }; the agent name is bound to the first token that uses it (bindAgent). null: no logins.
-  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [], identity = null } = {}) {
+  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [], cursor = '', identity = null } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     refuseSecrets(args);
@@ -1927,17 +1928,24 @@ export class Hub extends EventEmitter {
       if (trimmed && r && typeof r === 'object') r.hint = `${trimmed} ${r.hint ?? ''}`.trim();
       // A session gets the mission, decisions, field notes and who's here once, then what changed (#539). A checkin
       // after a break starts it over; look with notes: "all" sends everything and does too.
+      // Only what the session says it received counts as sent: each reply carries a cursor id, and the client echoes
+      // the last one it got (x-nuworq-cursor). A reply lost on the way (a proxy's 502 after the hub answered) is
+      // never acknowledged, so its retry is trimmed against what came before it, and loses nothing.
       if (session.length && SESSION_OPS.includes(op) && r && typeof r === 'object') {
         const all = op === 'look' && args?.notes === 'all';
         const over = all || (op === 'checkin' && (presence.fresh || presence.gap > 30 * MIN || presence.wasSignedOff));
         const key = [p.id, agent, session[0]];
-        this.q('DELETE FROM session_cursors WHERE at < ?').run(this.now() - DAY);
-        const was = over ? {} : json(this.q('SELECT sent FROM session_cursors WHERE project_id = ? AND agent = ? AND session = ?').get(...key)?.sent, {});
-        const { cursor, unchanged } = sendOnce(r, was, { all });
+        const row = over ? null : this.q('SELECT sent, pending, pending_id FROM session_cursors WHERE project_id = ? AND agent = ? AND session = ?').get(...key);
+        const got = row && cursor && cursor === row.pending_id ? json(row.pending, {}) : json(row?.sent, {});
+        const { cursor: sending, unchanged } = sendOnce(r, got, { all });
         if (unchanged) r.unchanged = unchanged;
         if (all) this.q('DELETE FROM session_cursors WHERE project_id = ? AND agent = ? AND session = ?').run(...key);
-        else this.q(`INSERT INTO session_cursors (project_id, agent, session, sent, at) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT (project_id, agent, session) DO UPDATE SET sent = excluded.sent, at = excluded.at`).run(...key, JSON.stringify(cursor), this.now());
+        else {
+          r.cursor = randomUUID();
+          this.q(`INSERT INTO session_cursors (project_id, agent, session, sent, pending, pending_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (project_id, agent, session) DO UPDATE SET sent = excluded.sent, pending = excluded.pending, pending_id = excluded.pending_id, at = excluded.at`)
+            .run(...key, JSON.stringify(got), JSON.stringify(sending), r.cursor, this.now());
+        }
       }
       if (!slug) r.project ??= p.slug; // so clients can stay with the project they were sent to
       if (['checkin', 'next'].includes(op)) {

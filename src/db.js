@@ -335,7 +335,9 @@ CREATE TABLE IF NOT EXISTS session_cursors (
   project_id INTEGER NOT NULL,
   agent      TEXT NOT NULL,
   session    TEXT NOT NULL,
-  sent       TEXT NOT NULL DEFAULT '{}',      -- { mission, autonomy: fingerprint, decisions, field_notes: [fingerprints], agents: { name: fingerprint } }
+  sent       TEXT NOT NULL DEFAULT '{}',      -- what it acknowledged: { mission, autonomy: fingerprint, decisions, field_notes: [fingerprints], agents: { name: fingerprint } }
+  pending    TEXT NOT NULL DEFAULT '{}',      -- what the last reply sent, counted once the session echoes pending_id
+  pending_id TEXT NOT NULL DEFAULT '',        -- that reply's cursor
   at         INTEGER NOT NULL,
   PRIMARY KEY (project_id, agent, session)
 );

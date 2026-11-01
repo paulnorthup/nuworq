@@ -1,6 +1,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { tmpdir } from 'node:os';
 import { Hub } from '../src/core.js';
+import { createServer } from '../src/server.js';
+import { createClient } from '../src/client.js';
 
 const MIN = 60_000;
 // A project with a mission, 6 decisions, 12 field notes and an item, on a clock the test moves.
@@ -12,8 +16,16 @@ function setup() {
   for (let i = 0; i < 6; i++) hub.humanOp('p', 'decide', { body: `Decision ${i}: a standing rule about how agents work here.` });
   for (let i = 0; i < 12; i++) hub.agentOp('p', 'learn', `n${i}`, { note: `Field note ${i}: run the build before the tests; they import from dist.` });
   hub.humanOp('p', 'create', { title: 'Fix the thing', acceptance: 'x' });
-  const op = (o, args = {}, session = ['0123456789abcdef']) => hub.agentOp('p', o, 'w1', args, { session });
-  return { hub, op, tick: (ms) => { t += ms; } };
+  // As the client does: each call echoes the cursor of the last reply its session got, and the agent never sees it.
+  const got = {};
+  const op = (o, args = {}, session = ['0123456789abcdef']) => {
+    const r = hub.agentOp('p', o, 'w1', args, { session, cursor: got[session[0]] ?? '' });
+    if (typeof r.cursor === 'string') { got[session[0]] = r.cursor; delete r.cursor; }
+    return r;
+  };
+  // A reply the agent never got: the hub built it, but no cursor is echoed for it.
+  const lost = (o, args = {}, session = ['0123456789abcdef']) => hub.agentOp('p', o, 'w1', args, { session, cursor: got[session[0]] ?? '' });
+  return { hub, op, lost, tick: (ms) => { t += ms; } };
 }
 const size = (r) => JSON.stringify(r).length;
 
@@ -75,5 +87,63 @@ describe('an agent session is sent the mission, decisions, field notes and who i
     assert.ok(op('checkin').mission, 'after 30 quiet minutes');
     assert.ok(op('checkin', {}, ['fedcba9876543210']).mission, 'another session');
     assert.equal(op('checkin', {}, []).decisions.length, 6, 'the CLI, which sends no session');
+  });
+
+  test('a reply that never arrived counts for nothing: its retry carries what it carried', () => {
+    const { hub, op, lost } = setup();
+    op('checkin');
+    hub.humanOp('p', 'decide', { body: 'Decision 6: made while the agent worked.' });
+    assert.deepEqual(lost('checkin').decisions, ['Decision 6: made while the agent worked.'], 'the reply a proxy dropped');
+    const retry = op('checkin');
+    assert.deepEqual(retry.decisions, ['Decision 6: made while the agent worked.'], 'the retry still has it');
+    assert.ok(!('mission' in retry), 'and still leaves out what the session did get');
+    assert.equal(op('checkin').decisions, undefined, 'once that reply is acknowledged, it is sent');
+  });
+
+  test('a session that never echoes a cursor (an older client) is sent everything every time', () => {
+    const { hub } = setup();
+    const call = () => hub.agentOp('p', 'checkin', 'w1', {}, { session: ['0123456789abcdef'] });
+    call();
+    assert.equal(call().decisions.length, 6);
+  });
+});
+
+// Through HTTP (#539): the client echoes each reply's cursor, and a reply a proxy drops after the hub answered is
+// retried with the old one.
+describe('the cursor over HTTP', () => {
+  test('a checkin whose reply a proxy turned into a 502 gets its decisions on the retry', async () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('p', { create: true }));
+    hub.humanOp('p', 'decide', { body: 'Decision 0: the first.' });
+    const server = createServer(hub, {});
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    let drop = false, seen = [];
+    // A proxy in front of the hub: when told to, it lets the hub answer, then sends the agent a 502 instead.
+    const proxy = http.createServer(async (req, res) => {
+      const body = await new Promise((r) => { let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => r(b)); });
+      seen.push(req.headers['x-nuworq-cursor'] ?? '');
+      const answer = await fetch(`http://127.0.0.1:${server.address().port}${req.url}`, { method: req.method, headers: Object.fromEntries(Object.entries(req.headers).filter(([k]) => k !== 'host' && k !== 'content-length')), body: body || undefined });
+      const text = await answer.text();
+      if (drop) { drop = false; res.writeHead(502, { 'content-type': 'text/html' }); return res.end('<html>Bad gateway</html>'); }
+      res.writeHead(answer.status, { 'content-type': 'application/json' });
+      res.end(text);
+    });
+    await new Promise((r) => proxy.listen(0, '127.0.0.1', r));
+    try {
+      const c = createClient({ url: `http://127.0.0.1:${proxy.address().port}`, project: 'p', token: '', cwd: tmpdir(), session: ['0123456789abcdef'] });
+      const first = await c.call('checkin', {}, { agent: 'w1' });
+      assert.equal(first.decisions.length, 1);
+      assert.equal(first.cursor, undefined, 'the agent never sees the cursor');
+      hub.humanOp('p', 'decide', { body: 'Decision 1: made while the agent worked.' });
+      drop = true;
+      const retried = await c.call('checkin', {}, { agent: 'w1' });
+      assert.deepEqual(retried.decisions, ['Decision 1: made while the agent worked.']);
+      assert.equal(seen[1], seen[2], 'the retry echoed the cursor the lost reply never replaced');
+      assert.ok(seen[1], 'the second call echoed the first reply\'s cursor');
+      assert.equal((await c.call('checkin', {}, { agent: 'w1' })).decisions, undefined, 'then nothing new');
+    } finally {
+      proxy.close();
+      server.close();
+    }
   });
 });
