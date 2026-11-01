@@ -52,6 +52,7 @@ export function encode(req, body, type) {
   return { headers: { ...headers, 'content-encoding': 'gzip' }, body: gzipSync(body) };
 }
 const MAX_BODY = 1024 * 1024;
+const KEEP_ALIVE_MS = 120_000, KEEP_ALIVE_HINT_S = 5; // kept vs advertised idle time of a connection (#515)
 // The ops that decide on git state (landing, the submit check): their mirror is fetched first (hub.prefetch).
 const DECIDES = { human: ['accept'], agent: ['submit', 'review'] };
 
@@ -864,6 +865,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (hsts) res.setHeader('strict-transport-security', HSTS);
     res.setHeader('x-nuworq-protocol', protocolVersion()); // an MCP process refetches tools and guide when it changes (#541)
     let answered = null, applying = null; // a write with an idempotency key keeps its answer, and is applied once (#524)
+    // Clients hear a short idle timeout though the hub keeps connections far longer (#515):
+    // advertising the long one made Node's fetch hold requests on a reused connection.
+    res.setHeader('keep-alive', `timeout=${KEEP_ALIVE_HINT_S}`);
     const send = (status, body, type = 'application/json; charset=utf-8') => {
       answered?.(status, body, type);
       // Compact, and gzipped for a client that takes it: agents pay for every byte (#528).
@@ -1709,6 +1713,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
   });
   server.maxConnections = maxConnections;
+  // A proxy in front (cloudflared keeps idle origin connections 90 s) must close a kept-alive
+  // connection before the hub does: Node's 5 s default reset reused connections whenever a slow
+  // request blocked the loop, and proxies don't retry a POST on a reset one (#515).
+  server.keepAliveTimeout = KEEP_ALIVE_MS;
+  server.headersTimeout = KEEP_ALIVE_MS + 5_000;
   if (!spaces) server.auth = scopeOf(target).authz;
   server.package = pkg; // resolves to the built package, or null when this hub serves none
 
