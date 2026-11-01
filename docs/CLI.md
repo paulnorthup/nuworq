@@ -250,6 +250,9 @@ Flags
                               tests
   --workspaces                one process, many workspaces (one database each);
                               login always required
+  --workspace <name>          with --follow --workspaces: where a red main is
+                              reported (default: the workspace whose project has
+                              this repository)
   --data-dir <d>              where workspaces, backups and mirrors live
   --base-domain <d>           serve workspaces at <name>.<d> as well as
                               /w/<name>/

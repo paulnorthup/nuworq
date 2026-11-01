@@ -179,6 +179,26 @@ export function firstFailure(out) {
   return path.join(' › ');
 }
 
+// On a hub with workspaces (#561): which workspace has the project that lives in repo, read straight from the
+// workspaces' databases (read-only). Matched by the repository's remote, or by its folder for a project that names
+// one. workspace: only that one (serve --follow --workspace). { workspace, project }, or null when none has it.
+export function findWorkspace({ workspaces, workspace = null, repo, remote = '' }) {
+  if (!workspaces || !existsSync(workspaces)) return null;
+  const names = workspace ? [String(workspace).toLowerCase()] : readdirSync(workspaces).filter((f) => f.endsWith('.db')).map((f) => f.slice(0, -3)).sort();
+  for (const name of names) {
+    const file = join(workspaces, `${name}.db`);
+    if (!existsSync(file)) continue;
+    let d;
+    try {
+      d = new DatabaseSync(file, { readOnly: true });
+      const p = d.prepare(`SELECT slug FROM projects WHERE archived_at = 0 AND ((? <> '' AND id IN (SELECT project_id FROM project_remotes WHERE remote = ?)) OR path = ?) ORDER BY id LIMIT 1`)
+        .get(remote, remote, repo);
+      if (p) return { workspace: name, project: p.slug };
+    } catch { /* not a workspace's database, or one from before projects had remotes */ } finally { d?.close(); }
+  }
+  return null;
+}
+
 async function answers(url) {
   try { return (await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
 }
@@ -195,7 +215,8 @@ function place(repo, path, sha) {
 // candidates are tested in. args: the hub's serve flags. url: where the hub answers. cwd: the hub's
 // working directory (relative --db paths mean what they did).
 // store: where the database is copied before each move (see backups()); null: no copies (--demo).
-export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null, smokeMs = SMOKE_MS }) {
+// workspaces: the workspaces' folder when the hub serves them, and workspace the one to report a red main in.
+export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null, smokeMs = SMOKE_MS, workspaces = null, workspace = null }) {
   let child = null;
   let testing = null;
   let smoking = null;
@@ -327,21 +348,42 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
     // Main is red: one "fix main" item at priority now, in the project that lives in this repo, through
     // the hub's human API (on a hub with login, that needs a human NUWORQ_TOKEN). Returns "#12 in nuworq", or null.
     // running: the commit the hub runs (the red one itself when the supervisor just started on it).
+    // With workspaces, every API path names one (#561): the workspace whose project lives in this repo, from their
+    // databases (findWorkspace), its hub at /w/<workspace>/, with a human token of that workspace in NUWORQ_TOKEN.
     async redMain(sha, failed, running) {
-      const { createClient } = await import('./client.js');
-      const hub = createClient({ url, cwd: repo });
-      const project = hub.settings.project ?? (await hub.where()).project;
-      if (!project) return null;
+      const { createClient, repoRemote, HubError } = await import('./client.js');
+      let hub, project, ws = null;
+      if (workspaces) {
+        const remote = repoRemote(repo);
+        const found = findWorkspace({ workspaces, workspace, repo, remote });
+        if (!found) {
+          throw new Error(`no ${workspace ? `project in workspace ${workspace}` : `workspace in ${workspaces} has a project`} for ${remote || repo}. Link the repository to its project there, or name the workspace with serve --follow --workspace <name>`);
+        }
+        ({ workspace: ws, project } = found);
+        hub = createClient({ url: `${url}/w/${encodeURIComponent(ws)}`, cwd: repo });
+      } else {
+        hub = createClient({ url, cwd: repo });
+        project = hub.settings.project ?? (await hub.where()).project;
+        if (!project) return null;
+      }
       const hubIs = running === sha
         ? 'The hub runs it anyway, since it just started and had nothing older to run.'
         : `The hub stays on ${short(running)}, the last commit that passed.`;
-      const r = await hub.post(`/api/p/${encodeURIComponent(project)}/human/create`, {
-        title: `main fails its tests at ${short(sha)}: ${failed}`.slice(0, 160),
-        summary: `\`npm test\` fails on main at ${sha} (${failed}). ${hubIs} Fix main before anything else: everything that lands next builds on it.`,
-        acceptance: '`npm test` passes on main, and the hub moves onto it by itself.',
-        priority: 'now',
-      });
-      return `${r.item} in ${project}`;
+      let r;
+      try {
+        r = await hub.post(`/api/p/${encodeURIComponent(project)}/human/create`, {
+          title: `main fails its tests at ${short(sha)}: ${failed}`.slice(0, 160),
+          summary: `\`npm test\` fails on main at ${sha} (${failed}). ${hubIs} Fix main before anything else: everything that lands next builds on it.`,
+          acceptance: '`npm test` passes on main, and the hub moves onto it by itself.',
+          priority: 'now',
+        });
+      } catch (e) {
+        if (ws && e instanceof HubError && [401, 403].includes(e.status)) {
+          throw new Error(`workspace ${ws} refused it (${e.message}): give serve --follow a human token of that workspace in NUWORQ_TOKEN, e.g. from nuworq token create follow --role human --workspace ${ws}`);
+        }
+        throw e;
+      }
+      return `${r.item} in ${ws ? `${ws}/` : ''}${project}`;
     },
     // Files of the supervisor's own code that differ between two commits (either side's import graph).
     ownCode(from, to) {
@@ -509,8 +551,8 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
 }
 
 // Run it: start the hub, check main every few seconds, and stop the hub on SIGINT, SIGTERM or SIGHUP.
-export async function follow({ repo, dir, next, args, url, branch = 'main', every = 10_000, log, store = null }) {
-  const sys = system({ repo, dir, next, args, url, store });
+export async function follow({ repo, dir, next, args, url, branch = 'main', every = 10_000, log, store = null, workspaces = null, workspace = null }) {
+  const sys = system({ repo, dir, next, args, url, store, workspaces, workspace });
   const f = follower(sys, { branch, log });
   let timer;
   let stopping = false;

@@ -1368,7 +1368,9 @@ async function serveFollow(flags) {
       next: join(data, 'hub-next'),
       args,
       url: `http://${probe.includes(':') ? `[${probe}]` : probe}:${port}`,
-      log: (line) => console.log(`${dim(`[follow ${new Date().toTimeString().slice(0, 8)}]`)} ${line}`),
+      // A red main is reported in the workspace whose project lives in this repo (#561).
+      ...(flags.workspaces ? { workspaces: workspacesDir(flags), workspace: typeof flags.workspace === 'string' ? flags.workspace : null } : {}),
+      log:(line) => console.log(`${dim(`[follow ${new Date().toTimeString().slice(0, 8)}]`)} ${line}`),
     });
   } catch (e) {
     throw new HubError(`--follow couldn't start the hub: ${e.message}`, { hint: `It follows the main branch of ${repo}, the git checkout this nuworq runs from. Without --follow, serve runs this copy as it is.` });

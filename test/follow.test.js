@@ -5,9 +5,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, exis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { follower, system, firstFailure, backups, KEEP_BACKUPS, importGraph, RESTART_EXIT } from '../src/follow.js';
+import { follower, system, firstFailure, backups, findWorkspace, KEEP_BACKUPS, importGraph, RESTART_EXIT } from '../src/follow.js';
 import { Hub } from '../src/core.js';
 import { Workspaces } from '../src/workspaces.js';
+import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
 
 // A pretend world: main's head, which commits pass their tests or start healthy, and what happened.
@@ -566,6 +567,49 @@ describe('the real world, in a scratch repo', () => {
       assert.deepEqual(items.map((i) => ({ ...i })), [{ title: 'main fails its tests at abcdef1: math › adds', priority: 'now', stage: 'ready' }]);
     } finally {
       server.close();
+    }
+  });
+
+  test('on a hub with workspaces, red main becomes the item in the workspace whose project has the repo (#561)', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-redws-')));
+    const repo = join(root, 'repo');
+    mkdirSync(repo);
+    execFileSync('git', ['init', '-q', repo]);
+    execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'git@github.com:acme/app.git']);
+    const spaces = new Workspaces({ dir: join(root, 'ws') });
+    for (const name of ['acme', 'other']) {
+      spaces.create(name);
+      const h = spaces.get(name);
+      h.tx(() => h.project('app', { create: true }));
+    }
+    // Only acme's project has this repository; other has a project of the same name for another one.
+    const acme = spaces.get('acme');
+    acme.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(acme.project('app').id, 'github.com/acme/app', 0);
+    spaces.get('other').q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(spaces.get('other').project('app').id, 'github.com/other/app', 0);
+    const token = new Auth(acme.db).createToken('follow', 'human');
+    const server = createServer(spaces);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const saved = process.env.NUWORQ_TOKEN;
+    try {
+      assert.deepEqual(findWorkspace({ workspaces: join(root, 'ws'), repo, remote: 'github.com/acme/app' }), { workspace: 'acme', project: 'app' });
+      const sys = (o = {}) => system({ repo, dir: join(root, 'hub-src'), url, workspaces: join(root, 'ws'), ...o });
+
+      // No token: the workspace refuses, and the error says what to give serve --follow.
+      delete process.env.NUWORQ_TOKEN;
+      await assert.rejects(sys().redMain('abcdef1234567890', 'math › adds', '1234567abcdef'), /workspace acme refused it .*NUWORQ_TOKEN.*--workspace acme/);
+
+      process.env.NUWORQ_TOKEN = token;
+      assert.equal(await sys().redMain('abcdef1234567890', 'math › adds', '1234567abcdef'), '#1 in acme/app');
+      assert.deepEqual(acme.q('SELECT title, priority, stage FROM items').all().map((i) => ({ ...i })), [{ title: 'main fails its tests at abcdef1: math › adds', priority: 'now', stage: 'ready' }]);
+      assert.equal(spaces.get('other').q('SELECT COUNT(*) AS n FROM items').get().n, 0, 'the other workspace is untouched');
+
+      // A workspace named that has no project for the repo: the error names the repo and how to configure it.
+      await assert.rejects(sys({ workspace: 'other' }).redMain('abcdef1234567890', 'math › adds', '1234567abcdef'), /no project in workspace other for github\.com\/acme\/app\. Link the repository .* --workspace <name>/);
+    } finally {
+      if (saved === undefined) delete process.env.NUWORQ_TOKEN; else process.env.NUWORQ_TOKEN = saved;
+      server.close();
+      spaces.close();
     }
   });
 });
