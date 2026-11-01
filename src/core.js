@@ -1,6 +1,7 @@
 // The hub's state and every operation agents and humans can perform.
 // HTTP, MCP and the CLI are thin transports over this file.
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
 import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase } from './git.js';
 import { findSecret } from './secrets.js';
@@ -172,6 +173,48 @@ export function layered(headline, summary = '', detail = '', what = 'headline', 
     }
   }
   return { headline, summary, detail, moved };
+}
+
+// What an agent session hasn't been sent yet (#539). r: a checkin, next, claim or look response, trimmed in place to
+// what changed since sent (the session's cursor). The mission and autonomy, and each decision, field note and
+// agent's presence, are sent once and again only when they change. Decisions and agents are compared as whole
+// lists: one retired or gone resends the list. Field notes add up, since each response picks its own ten.
+// all: send everything (look with notes: "all"). Returns the new cursor, and the line saying what was left out.
+const SENT_ONCE = ['mission', 'autonomy'];
+const SESSION_OPS = ['checkin', 'next', 'claim', 'look'];
+const fingerprint = (v) => createHash('sha256').update(JSON.stringify(v ?? null)).digest('base64url').slice(0, 12);
+const counted = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+export function sendOnce(r, sent = {}, { all = false } = {}) {
+  const cursor = { ...sent }, same = [];
+  for (const k of SENT_ONCE.filter((x) => x in r)) {
+    const f = fingerprint(r[k]);
+    if (!all && sent[k] === f) { delete r[k]; same.push(k); }
+    cursor[k] = f;
+  }
+  if (Array.isArray(r.decisions)) {
+    const now = r.decisions.map(fingerprint), had = new Set(sent.decisions ?? []);
+    // A decision retired or reworded since: the whole list again, so nothing stale is kept.
+    const fresh = all || (sent.decisions ?? []).some((f) => !now.includes(f)) ? r.decisions : r.decisions.filter((_, i) => !had.has(now[i]));
+    if (fresh.length < r.decisions.length) same.push(counted(r.decisions.length - fresh.length, fresh.length ? 'other decision' : 'decision'));
+    if (fresh.length) r.decisions = fresh; else delete r.decisions;
+    cursor.decisions = now;
+  }
+  if (Array.isArray(r.field_notes)) {
+    const had = new Set(sent.field_notes ?? []);
+    const fresh = all ? r.field_notes : r.field_notes.filter((n) => !had.has(fingerprint(n)));
+    if (fresh.length < r.field_notes.length) same.push(counted(r.field_notes.length - fresh.length, fresh.length ? 'other note' : 'note'));
+    if (fresh.length) r.field_notes = fresh; else { delete r.field_notes; delete r.field_notes_hidden; }
+    cursor.field_notes = [...new Set([...had, ...r.field_notes?.map(fingerprint) ?? []])].slice(-200);
+  }
+  if (Array.isArray(r.agents)) {
+    const now = Object.fromEntries(r.agents.map((a) => [a.agent, fingerprint(a)])), had = sent.agents ?? {};
+    const gone = Object.keys(had).some((a) => !(a in now));
+    const fresh = all || gone ? r.agents : r.agents.filter((a) => had[a.agent] !== now[a.agent]);
+    if (fresh.length < r.agents.length) same.push(counted(r.agents.length - fresh.length, fresh.length ? 'other agent' : 'agent'));
+    if (fresh.length) r.agents = fresh; else delete r.agents;
+    cursor.agents = now;
+  }
+  return { cursor, unchanged: same.length ? `${same.join(', ')}: as this session was last sent them. To see them again: look with notes: "all".` : '' };
 }
 
 // What an agent's call should be told about its first line (#387): a long question is kept whole but should
@@ -1882,6 +1925,20 @@ export class Hub extends EventEmitter {
       if (renamed) r.hint = `${renamed} ${r.hint ?? ''}`.trim();
       const trimmed = layeredNote(op, args ?? {});
       if (trimmed && r && typeof r === 'object') r.hint = `${trimmed} ${r.hint ?? ''}`.trim();
+      // A session gets the mission, decisions, field notes and who's here once, then what changed (#539). A checkin
+      // after a break starts it over; look with notes: "all" sends everything and does too.
+      if (session.length && SESSION_OPS.includes(op) && r && typeof r === 'object') {
+        const all = op === 'look' && args?.notes === 'all';
+        const over = all || (op === 'checkin' && (presence.fresh || presence.gap > 30 * MIN || presence.wasSignedOff));
+        const key = [p.id, agent, session[0]];
+        this.q('DELETE FROM session_cursors WHERE at < ?').run(this.now() - DAY);
+        const was = over ? {} : json(this.q('SELECT sent FROM session_cursors WHERE project_id = ? AND agent = ? AND session = ?').get(...key)?.sent, {});
+        const { cursor, unchanged } = sendOnce(r, was, { all });
+        if (unchanged) r.unchanged = unchanged;
+        if (all) this.q('DELETE FROM session_cursors WHERE project_id = ? AND agent = ? AND session = ?').run(...key);
+        else this.q(`INSERT INTO session_cursors (project_id, agent, session, sent, at) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (project_id, agent, session) DO UPDATE SET sent = excluded.sent, at = excluded.at`).run(...key, JSON.stringify(cursor), this.now());
+      }
       if (!slug) r.project ??= p.slug; // so clients can stay with the project they were sent to
       if (['checkin', 'next'].includes(op)) {
         const where = normDir(p.path);

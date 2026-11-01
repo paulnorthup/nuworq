@@ -329,6 +329,16 @@ CREATE TABLE IF NOT EXISTS deliveries (
   id TEXT PRIMARY KEY,
   at INTEGER NOT NULL
 );
+-- What each agent session has been sent (#539): after the first delivery, checkin, next, claim and look send only
+-- what changed. session: the first of its x-nuworq-session keys. Kept a day after its last call.
+CREATE TABLE IF NOT EXISTS session_cursors (
+  project_id INTEGER NOT NULL,
+  agent      TEXT NOT NULL,
+  session    TEXT NOT NULL,
+  sent       TEXT NOT NULL DEFAULT '{}',      -- { mission, autonomy: fingerprint, decisions, field_notes: [fingerprints], agents: { name: fingerprint } }
+  at         INTEGER NOT NULL,
+  PRIMARY KEY (project_id, agent, session)
+);
 `;
 
 // One record per pull request (#261). The hub records a PR it opens under the normalized remote
