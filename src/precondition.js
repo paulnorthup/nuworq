@@ -6,7 +6,7 @@
 
 import { UserError, SYSTEM } from './core.js'; // used only at call time, so the import cycle is harmless
 import { envVar } from './names.js';
-import { lookup } from 'node:dns/promises';
+import { outbound, blockedAddress } from './outbound.js';
 
 const str = (v) => (v == null ? '' : String(v).trim());
 export const FIRST_RETRY = 60_000, MAX_RETRY = 3_600_000, PER_HOST = 10_000, CHECK_MS = 10_000;
@@ -143,8 +143,8 @@ export function credentialAllows(name, host, env = process.env) {
     .some((a) => (a.startsWith('.') ? h.endsWith(a) || h === a.slice(1) : h === a));
 }
 
-// Loopback, private, link-local (cloud metadata) and unique-local addresses.
-export const privateAddress = (ip) => /^(127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::$|f[cd][0-9a-f]{2}:|fe80:|::ffff:(127|10|192\.168|169\.254)\.)/i.test(ip);
+// Any address that isn't public unicast (outbound.js has the ranges).
+export const privateAddress = blockedAddress;
 
 // One check: { ok, detail }. Never throws. shared: a hub with workspaces, whose tenants get neither the
 // host's credentials nor its private network, and see whether a value matched, never the value.
@@ -208,15 +208,11 @@ async function checkRelease(pre, { fetch: get = fetch, timeoutMs = CHECK_MS, git
 }
 
 // GET the precondition's URL: { res, body }, or { ok: false, detail } when it can't be asked.
-async function fetchUrl(pre, { fetch: get = fetch, env = process.env, timeoutMs = CHECK_MS, shared = false, resolve = lookup } = {}) {
+// A shared hub reaches only public addresses (outbound.js), and says only that it couldn't check: the reason, which
+// could map its network, goes to its log.
+async function fetchUrl(pre, { fetch: get = fetch, env = process.env, timeoutMs = CHECK_MS, shared = false, resolve, allow } = {}) {
   const headers = {};
-  if (shared) {
-    env = {};
-    const host = new URL(pre.url).hostname.replace(/^\[|\]$/g, '');
-    let ip;
-    try { ({ address: ip } = await resolve(host)); } catch { return { ok: false, detail: `${host} doesn't resolve` }; }
-    if (/^localhost$/i.test(host) || privateAddress(ip)) return { ok: false, detail: `${host} is a private address, which a shared hub doesn't check` };
-  }
+  if (shared) env = {};
   if (pre.credential) {
     const value = envVar(`CRED_${pre.credential}`, env);
     if (!value) return { ok: false, detail: `NUWORQ_CRED_${pre.credential} isn't set on the hub's host` };
@@ -231,10 +227,13 @@ async function fetchUrl(pre, { fetch: get = fetch, env = process.env, timeoutMs 
   try {
     // No redirects on a shared hub (one could lead to an address it just refused), nor with a credential
     // (one could carry it to a host it isn't allowed for).
-    res = await get(pre.url, { headers, signal: AbortSignal.timeout(timeoutMs), redirect: shared || pre.credential ? 'manual' : 'follow' });
+    res = await outbound(pre.url, { fetch: get, headers, timeoutMs, guard: shared, resolve, allow, redirect: shared || pre.credential ? 'manual' : 'follow' });
     body = await res.text();
   } catch (e) {
-    return { ok: false, detail: `${new URL(pre.url).host} didn't answer (${e.cause?.code ?? e.name})` };
+    const why = e.cause?.code ?? e.code ?? e.name;
+    if (!shared) return { ok: false, detail: `${new URL(pre.url).host} didn't answer (${why})` };
+    console.error(`precondition check of ${new URL(pre.url).host} failed: ${e.code === 'EBLOCKED' ? e.message : why}`);
+    return { ok: false, detail: `couldn't check ${new URL(pre.url).host}: a shared hub reaches only public addresses that answer` };
   }
   return { res, body };
 }

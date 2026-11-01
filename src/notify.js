@@ -3,6 +3,7 @@
 import { view } from './insight.js';
 import { outcomes } from './outcomes.js';
 import { MIN, HOUR, DAY, SYSTEM, UserError } from './core.js';
+import { outbound, privateLiteral } from './outbound.js';
 
 const WEEK = 7 * DAY;
 
@@ -29,8 +30,8 @@ export function mask(url) {
 // ── channels (hub-wide, stored in the database) ──
 
 // person: "@handle" (or "handle") for a personal channel: it gets only what that person owns. '' or
-// absent: a hub-wide channel, which gets every "needs you".
-export function addChannel(db, kind, url, now = Date.now(), { person = '' } = {}) {
+// absent: a hub-wide channel, which gets every "needs you". guard: a shared hub, which sends only to public addresses.
+export function addChannel(db, kind, url, now = Date.now(), { person = '', guard = false } = {}) {
   const who = normPerson(person);
   if (who && !personExists(db, who)) throw new UserError(`no person ${who} here`, { status: 404, hint: 'See: nuworq person list' });
   kind = String(kind ?? '').toLowerCase();
@@ -41,6 +42,7 @@ export function addChannel(db, kind, url, now = Date.now(), { person = '' } = {}
   let u;
   try { u = new URL(raw); } catch { throw new UserError('a channel needs a URL', { hint: KINDS[kind] }); }
   if (!['http:', 'https:'].includes(u.protocol)) throw new UserError('channel URLs must be http or https', { hint: KINDS[kind] });
+  if (guard && privateLiteral(u.href)) throw new UserError('a shared hub sends only to public addresses', { hint: `Use a public URL, e.g. ${KINDS[kind]}` });
   if (db.prepare('SELECT 1 FROM channels WHERE url = ?').get(u.href)) throw new UserError('that channel is already set up', { hint: 'See: nuworq notify list' });
   const r = db.prepare('INSERT INTO channels (kind, url, created_at, person) VALUES (?, ?, ?, ?)').run(kind, u.href, now, who);
   return { id: Number(r.lastInsertRowid), kind, url: mask(u.href), person: who || null };
@@ -74,30 +76,32 @@ export function removeChannel(db, id) {
 
 // ── sending ──
 
-async function send(c, msg, { fetch, timeout }) {
-  const signal = AbortSignal.timeout(timeout);
+async function send(c, msg, opts) {
   const res = c.kind === 'ntfy'
-    ? await fetch(c.url, { method: 'POST', body: msg.text, signal, headers: { Title: msg.title, Tags: 'seedling', ...(msg.url ? { Click: msg.url } : {}) } })
-    : await fetch(c.url, {
-      method: 'POST', signal, headers: { 'content-type': 'application/json' },
+    ? await outbound(c.url, { ...opts, method: 'POST', body: msg.text, headers: { Title: msg.title, Tags: 'seedling', ...(msg.url ? { Click: msg.url } : {}) } })
+    : await outbound(c.url, {
+      ...opts, method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(c.kind === 'slack' ? { text: msg.text } : msg),
     });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 // Send to one channel, retrying once. Records the outcome on the channel so the UI can say it's failing.
-export async function deliver(db, c, msg, { fetch = globalThis.fetch, timeout = 5000, retryDelay = 2000, now = Date.now } = {}) {
+// guard: a shared hub (see outbound.js). Its people see only "couldn't deliver"; the reason goes to the hub's log,
+// so a channel can't be used to map the network the hub runs on.
+export async function deliver(db, c, msg, { fetch = globalThis.fetch, timeout = 5000, retryDelay = 2000, now = Date.now, guard = false, allow, resolve } = {}) {
   let error;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, retryDelay));
     try {
-      await send(c, msg, { fetch, timeout });
+      await send(c, msg, { fetch, timeoutMs: timeout, guard, allow, resolve });
       db.prepare(`UPDATE channels SET failing_since = NULL, last_error = '' WHERE id = ?`).run(c.id);
       return { id: c.id, kind: c.kind, ok: true };
     } catch (e) {
       error = e?.name === 'TimeoutError' ? `no answer in ${timeout / 1000}s` : String(e?.cause?.code ?? e?.cause?.errors?.[0]?.code ?? e?.cause?.message ?? e?.message ?? e);
     }
   }
+  if (guard) { console.error(`push to channel ${c.id} (${mask(c.url)}) failed: ${error}`); error = "couldn't deliver"; }
   db.prepare('UPDATE channels SET failing_since = COALESCE(failing_since, ?), last_error = ? WHERE id = ?').run(now(), error, c.id);
   return { id: c.id, kind: c.kind, ok: false, error };
 }
@@ -263,7 +267,7 @@ export function notifyWorkspaces(spaces, baseUrlFor, { every = 30_000, ...opts }
       if (notifiers.has(name)) continue;
       const hub = spaces.get(name);
       if (!hub) continue;
-      const n = new Notifier(hub, { baseUrl: baseUrlFor(name), ...opts }).start();
+      const n = new Notifier(hub, { baseUrl: baseUrlFor(name), guard: true, ...opts }).start(); // a shared host
       hub.once('closed', () => { n.stop(); if (notifiers.get(name) === n) notifiers.delete(name); });
       notifiers.set(name, n);
     }
@@ -309,7 +313,7 @@ export function requestChannels(db, handle) {
 // Push one new request to the owners. Never throws: a channel that fails is recorded on it, as for any push.
 export async function notifyOwners(spaces, owners, request, url, opts = {}) {
   const msg = composeRequest(request, url);
-  return Promise.all(ownerChannels(spaces, owners).map(({ db, c }) => deliver(db, c, msg, opts)));
+  return Promise.all(ownerChannels(spaces, owners).map(({ db, c }) => deliver(db, c, msg, { guard: true, ...opts })));
 }
 
 // New feedback about nuworq (#295), batched into one push: who sent each piece from which workspace, the start of
@@ -324,7 +328,7 @@ export function composeFeedback(list, url = '') {
 
 export async function notifyFeedback(spaces, owners, list, url, opts = {}) {
   const msg = composeFeedback(list, url);
-  return Promise.all(ownerChannels(spaces, owners).map(({ db, c }) => deliver(db, c, msg, opts)));
+  return Promise.all(ownerChannels(spaces, owners).map(({ db, c }) => deliver(db, c, msg, { guard: true, ...opts })));
 }
 
 // Feedback someone sent is fixed (#297): the one push its sender gets, with the start of their words.

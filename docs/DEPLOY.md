@@ -296,6 +296,9 @@ nuworq token revoke <name|id>                      # also logs out that token's 
 ### Credentials for preconditions
 An item can wait on an outside URL (a precondition), and the check may send a credential the hub's host keeps: `NUWORQ_CRED_<NAME>=<value>`. Agents pick the URL, so also say where each credential may go: `NUWORQ_CRED_<NAME>_HOSTS=api.vendor.com,.vendor.io` (a leading dot covers subdomains). Without that list the credential is sent nowhere. It never follows a redirect. A hub with workspaces sends no credentials at all.
 
+### Only the public internet, on a hub with workspaces
+Notification channels and precondition URLs are chosen by people and agents, so a hub with workspaces reaches only public addresses with them. It resolves each host once and connects to the address it checked. It refuses loopback, private, link-local, CGNAT and Tailscale (100.64/10), IPv4-mapped private, benchmarking (198.18/15), multicast and unspecified addresses, and it never follows a redirect. People see only "couldn't deliver" or "couldn't check"; the reason goes to the hub's log. To allow a private host anyway, e.g. a LAN ntfy, name it on the hub's host: `NUWORQ_ALLOW_PRIVATE_HOSTS=ntfy.lan,192.168.1.5` (exact names, comma-separated). It is off by default, and nothing in a workspace can set it. A hub of your own (`nuworq serve`) reaches your network as before.
+
 A release precondition (`{ kind: "release", repo: "acme/api", min: "2.1.0" }`) reads the repository's latest GitHub release through the hub's GitHub App when the app is installed there (a read-only token), and through GitHub's public API otherwise. A hub with workspaces uses the app only for the project's own repositories.
 
 ### Early access (workspaces hubs)
