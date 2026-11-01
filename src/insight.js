@@ -595,8 +595,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const a = agents.find((x) => x.name === agent);
     return {
       item: ref(it), title: it.title, priority: it.priority, repo: repoTag(remotes, it), agent, model: a?.model ?? '', provider: providerOf(a?.model),
-      last: last ? { headline: last.headline, summary: last.summary, ago: dur(t - last.at), type: last.type } : null,
-      for: dur(t - since), lease_left: dur(lease - t), attempt: it.attempts,
+      last: last ? { headline: last.headline, summary: last.summary, ago: dur(t - last.at), at: last.at, type: last.type } : null,
+      for: dur(t - since), since_at: since, lease_left: dur(lease - t), lease_until: lease, attempt: it.attempts,
       quiet: lease - t < LEASE_MS - 10 * MIN, // no milestone or heartbeat in 10 minutes
       touching: json(touching, []),
       heads_up: hub.headsUp(p, agent, it) ?? null,
@@ -612,7 +612,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   // ── queues ──
   const brief = (it) => ({
     item: ref(it), title: it.title, priority: it.priority, stage: it.stage, holder: it.holder,
-    needs: json(it.needs, []), size: it.size || null, repo: repoTag(remotes, it), by: it.created_by, ago: dur(t - it.stage_since), summary: it.summary,
+    needs: json(it.needs, []), size: it.size || null, repo: repoTag(remotes, it), by: it.created_by, ago: dur(t - it.stage_since), at: it.stage_since, summary: it.summary,
     blocked_by: unmet(it).map(ref), last_worker: it.last_worker, attempts: it.attempts,
     handoff: json(it.handoff, null),
     ...(it.feedback ? { feedback: true } : {}), // approved feedback about nuworq (#295)
@@ -647,7 +647,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const via = tok?.runner ? `runner ${tok.runner}` : tok?.handle ? `via @${tok.handle}` : null;
     return {
       name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), tokens: a.tokens ? a.tokens.split(',') : [], via, has: json(a.has, []),
-      status, present: isPresent(a, holding, t), line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
+      status, present: isPresent(a, holding, t), line: a.status, holding, last_seen: dur(idle), seen_at: a.last_seen, first_seen: dur(t - a.first_seen),
       ...hub.presenceOf(p, a, snap), // role, where it runs, its current job (#238)
       record: {
         landed: rec.landed ?? 0, sent_back: rec.sent_back ?? 0, stalls: rec.stalls ?? 0,
@@ -659,10 +659,10 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     };
   });
 
-  const decisions = hub.decisions(p).map((d) => ({ id: d.id, body: d.body, ago: dur(t - d.at) }));
+  const decisions = hub.decisions(p).map((d) => ({ id: d.id, body: d.body, ago: dur(t - d.at), at: d.at }));
   const notes = hub.q(`SELECT n.*, i.seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
       WHERE n.project_id = ? AND n.kind = 'learning' AND n.active = 1 ORDER BY n.always DESC, n.at DESC`).all(p.id)
-    .map((n) => ({ id: n.id, body: n.body, by: n.author, item: n.seq ? `#${n.seq}` : null, ago: dur(t - n.at), always: !!n.always }));
+    .map((n) => ({ id: n.id, body: n.body, by: n.author, item: n.seq ? `#${n.seq}` : null, ago: dur(t - n.at), at: n.at, always: !!n.always }));
   const activity = hub.q(`SELECT e.*, i.seq AS item_seq FROM events e LEFT JOIN items i ON i.id = e.item_id
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
@@ -1026,7 +1026,7 @@ export function itemView(hub, slug, ref) {
       };
     });
   const steers = hub.q(`SELECT * FROM notes WHERE item_id = ? AND kind = 'steer' ORDER BY at`).all(it.id)
-    .map((n) => ({ id: n.id, body: n.body, active: !!n.active, ago: dur(t - n.at), acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
+    .map((n) => ({ id: n.id, body: n.body, active: !!n.active, ago: dur(t - n.at), at: n.at, acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
   const agentNames = [...new Set(events.filter((e) => !isHuman(e.actor) && !isSystem(e.actor)).map((e) => e.actor))];
   const models = Object.fromEntries(agentNames.map((n) => [n, hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, n)?.model ?? '']));
   const parent = hub.itemById(it.parent_id);
@@ -1036,11 +1036,11 @@ export function itemView(hub, slug, ref) {
     stage: it.stage, stage_label: STAGES[it.stage].label, stage_blurb: STAGES[it.stage].blurb, court: courtOf(it.stage, p.autonomy),
     priority: it.priority, effective_priority: hub.effectiveLabel(p, it) ?? null, needs: json(it.needs, []), size: it.size || null, repo: repoTag(hub.remotesOf(p), it),
     model_why: it.route_why || null, // which model routing picked for its job, and why (#349)
-    created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
-    holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
+    created_by: it.created_by, created: dur(t - it.created_at), created_at: it.created_at, in_stage: dur(t - it.stage_since), stage_since: it.stage_since,
+    holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null, lease_until: it.holder ? it.lease_until : null,
     race: it.race,
     ...(waitsForOk(p, it) ? { waits_for_ok: true } : {}), // a shaped proposal waits for a person's approval (#296)
-    racers: it.race > 1 ? hub.attemptsOf(it).map((a) => ({ agent: a.agent, model: a.model, stage: a.stage, lease_left: a.lease_until ? dur(a.lease_until - t) : null })) : [],
+    racers: it.race > 1 ? hub.attemptsOf(it).map((a) => ({ agent: a.agent, model: a.model, stage: a.stage, lease_left: a.lease_until ? dur(a.lease_until - t) : null, lease_until: a.lease_until || null })) : [],
     submissions: hub.submissions(it),
     implementer: it.implementer, last_worker: it.last_worker,
     attempts: it.attempts, stalls: it.stalls, rejections: it.rejections,

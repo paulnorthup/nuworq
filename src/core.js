@@ -37,6 +37,10 @@ export class UserError extends Error {
 
 export const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 const RUNNER_DOWN_POLLS = 3; // a runner silent for this many of its poll intervals is down (#171)
+// How long an agent can be unseen before the page says something new about it (#530): quiet on its work (10m),
+// away (30m), not present (1h), and a day, when "no operator connected" turns on.
+const TIME_FLIPS = [10 * MIN, 30 * MIN, HOUR, DAY];
+const TIME_FLIP_MS = 5_000;
 export const LEASE_MS = 20 * MIN;
 export const HANDOFF_COOLDOWN = 30 * MIN; // work you just handed off isn't offered straight back to you
 const HEADLINE_MAX = 140;
@@ -1015,9 +1019,9 @@ export class Hub extends EventEmitter {
           last_seen: dur(t - r.seen_at), running: s.running ?? 0, workers: s.workers ?? 0, spent: s.spent ?? 0,
           ...(s.auto ? { auto: true, holding: s.holding ?? null } : {}),
           stopped: s.stopped ?? null,
-          paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t) } : null,
+          paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t), until: s.paused.until } : null,
           // Why it leaves this project alone, if it does; and how many others it leaves alone.
-          skipping: skip ? { reason: skip.reason, ...(skip.until > t ? { for: dur(skip.until - t) } : {}) } : null,
+          skipping: skip ? { reason: skip.reason, ...(skip.until > t ? { for: dur(skip.until - t), until: skip.until } : {}) } : null,
           skipping_others: (s.skipping ?? []).filter((x) => x.project !== slug).length,
         };
       });
@@ -1821,6 +1825,7 @@ export class Hub extends EventEmitter {
   // Expired leases go back to the queue. Run before every operation and on a timer.
   sweep() {
     const t = this.now();
+    this.timeFlips(t);
     this.q('DELETE FROM session_cursors WHERE at < ?').run(t - DAY); // sessions quiet for a day (#539)
     const expired = this.q(`SELECT i.*, p.slug FROM items i JOIN projects p ON p.id = i.project_id
       WHERE i.holder IS NOT NULL AND i.lease_until < ?`).all(t);
@@ -1875,6 +1880,26 @@ export class Hub extends EventEmitter {
     });
     for (const p of touched.values()) this.changed(p);
     return expired.length + lapsed.length;
+  }
+
+  // What only time changes (#530): an agent going quiet, away or a day unseen (so "no operator connected"), a
+  // runner going down. Pages don't refetch on a timer, so the hub says so when one flips since the last look.
+  // At most every TIME_FLIP_MS, so the sweep before each operation stays cheap.
+  timeFlips(t = this.now()) {
+    if (this._flipsAt == null) { this._flipsAt = t; return; }
+    const prev = this._flipsAt;
+    if (t - prev < TIME_FLIP_MS) return;
+    this._flipsAt = t;
+    // Seen at s, an agent crosses idle b once t - b reaches s: s in (prev - b, t - b].
+    const crossed = TIME_FLIPS.map(() => '(last_seen > ? AND last_seen <= ?)').join(' OR ');
+    const ids = this.q(`SELECT DISTINCT project_id FROM agents WHERE ${crossed}`).all(...TIME_FLIPS.flatMap((b) => [prev - b, t - b]));
+    for (const { project_id } of ids) {
+      const p = this.q('SELECT * FROM projects WHERE id = ?').get(project_id);
+      if (p) this.changed(p, { kind: 'time' });
+    }
+    const down = this.q('SELECT 1 FROM runners WHERE seen_at + ? * poll_ms > ? AND seen_at + ? * poll_ms <= ? LIMIT 1')
+      .get(RUNNER_DOWN_POLLS, prev, RUNNER_DOWN_POLLS, t);
+    if (down) this.changed(null, { kind: 'time' }); // a runner shows on every project it staffs
   }
 
   // ── agent operations ────────────────────────────────────────────────────
