@@ -4,6 +4,7 @@
 // The agent commands take what they do, and what their flags mean, from the protocol's OPS, so they can't drift.
 import { readFileSync } from 'node:fs';
 import { OPS } from './protocol.js';
+import { POSITIONAL, usage as agentUsage, flags as agentFlags } from './agentargs.js';
 import { DEFAULT_URL } from './client.js';
 
 const VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return ''; } })();
@@ -16,9 +17,6 @@ export const GROUPS = [
   ['protocol', 'For agents (through MCP)'],
   ['more', 'Also'],
 ];
-
-// A flag's meaning from OPS: the param's description, without "Optional." and only its first sentence.
-const P = (param) => ({ param });
 
 // Every command main() dispatches. label: how the bare screen names it (default: its name); brief: its line there;
 // under: listed on another command's line. flags: [flag, what it does, default?]; env: [variable, what it's for].
@@ -381,51 +379,46 @@ export const COMMANDS = [
   },
 ];
 
-// The agent commands, from the CLI's side: usage and flags. What they do comes from OPS.
+// The agent commands: their usage and flags come from OPS through src/agentargs.js (#521), so every parameter
+// shows; here only an example each, and the older spellings still accepted.
 const AGENT = {
-  checkin: { usage: ['checkin [--model m] [--client c] [--has tags]'], flags: [['--model <m>', P('model')], ['--client <c>', P('client')], ['--has <tags>', P('has')], ['--status <s>', P('status')]], env: [['NUWORQ_HAS', 'instead of --has']], example: 'nuworq checkin --as claude-1 --has docker,macos' },
-  next: { usage: ['next [--peek]'], flags: [['--peek', 'look without claiming']], example: 'nuworq next --as claude-1' },
-  claim: { usage: ['claim <item> [--touching paths]'], flags: [['--touching <a,b>', P('touching')]], example: 'nuworq claim 12 --as claude-1' },
-  progress: { usage: ['progress <item> [headline] [--touching paths]'], flags: [['--touching <a,b>', P('touching')]], example: 'nuworq progress 12 "Parser done" --touching src/parse.js --as claude-1' },
+  checkin: { env: [['NUWORQ_HAS', 'instead of --has']], example: 'nuworq checkin --as claude-1 --has docker,macos' },
+  next: { flags: [['--peek', 'the same as --claim=false']], example: 'nuworq next --as claude-1' },
+  claim: { example: 'nuworq claim 12 --as claude-1' },
+  progress: { example: 'nuworq progress 12 "Parser done" --touching src/parse.js --as claude-1' },
   ask: {
-    usage: ['ask [<item>] <question> [flags]', 'ask <question> --escalates <question-id> --evidence "label|url"...'],
-    flags: [['--assume <a>', P('assumption')], ['--option <x>', 'a likely answer; repeat it for more'], ['--blocking', P('blocking')], ['--to <who>', 'human, reporter or operator'], ['--context <c>', P('context')], ['--escalates <id>', P('escalates')], ['--evidence <label|url>', 'what you checked; repeat it for more']],
-    example: 'nuworq ask 12 "Keep the old flag?" --assume "yes, as an alias" --as claude-1',
+    flags: [['--assume <a>', 'the same as --assumption'], ['--option <x>', 'one likely answer; repeat it for more']],
+    example: 'nuworq ask 12 "Keep the old flag?" --assumption "yes, as an alias" --as claude-1',
   },
-  answer: { usage: ['answer <question-id> <answer>'], example: 'nuworq answer 40 "Done: it is installed" --as operator-1' },
-  withdraw: { usage: ['withdraw <question-id> <reason>'], example: 'nuworq withdraw 40 "Paul answered in chat" --as claude-1' },
-  submit: { usage: ['submit <item> <headline> [--evidence "label|url"]...'], flags: [['--evidence <label|url>', 'proof it meets done_means; repeat it for more'], ['--acceptance <a>', P('acceptance')]], example: 'nuworq submit 12 "Parser handles tabs" --evidence "npm test: 48 passed" --as claude-1' },
-  handoff: { usage: ['handoff <item> <headline>'], example: 'nuworq handoff 12 "Parser half done; tests next" --as claude-1' },
-  propose: {
-    usage: ['propose <title> [flags]'],
-    flags: [['--acceptance <a>', P('acceptance')], ['--priority <p>', 'now, soon or later'], ['--parent <item>', P('parent')], ['--depends-on <#1,#2>', P('depends_on')], ['--needs <tags>', P('needs')], ['--size <s>', 'small or large'], ['--repo <r>', P('repo')]],
-    example: 'nuworq propose "Parse tabs in headers" --priority soon --as claude-1',
-  },
-  refine: {
-    usage: ['refine <item> [flags]'],
-    flags: [['--title <t>', P('title')], ['--acceptance <a>', P('acceptance')], ['--priority <p>', 'now, soon or later'], ['--depends-on <#1,#2>', P('depends_on')], ['--needs <tags>', P('needs')], ['--size <s>', 'small or large'], ['--repo <r>', P('repo')], ['--drop <question-id>', P('drop')]],
-    example: 'nuworq refine 12 --priority now --as claude-1',
-  },
-  review: { usage: ['review <item> <accept|reject> <headline> [--attempt n|agent]'], flags: [['--attempt <n|agent>', P('attempt')]], example: 'nuworq review 12 accept "Tests pass; matches done_means" --as claude-2' },
-  comment: { usage: ['comment [<item>] <headline>'], example: 'nuworq comment 12 "Heads-up: parse.js moved" --as claude-1' },
-  ack: { usage: ['ack <steer-id> [response]'], example: 'nuworq ack 7 "Switching to the smaller fix" --as claude-1' },
-  feedback: { usage: ['feedback <what happened> [--item i]'], flags: [['--item <i>', P('item')]], example: 'nuworq feedback "next gave me an item I can\'t build" --as claude-1' },
-  look: { usage: ['look [<item>] [--stage s] [--notes all]'], flags: [['--stage <s>', 'one stage of the board'], ['--notes all', P('notes')]], example: 'nuworq look 12 --as claude-1' },
-  retire: { usage: ['retire <note-id>... --reason r [--into <note-id>]'], flags: [['--reason <r>', P('reason')], ['--into <note-id>', P('into')]], example: 'nuworq retire 31 --reason "built into checkin" --as claude-1' },
-  signoff: { usage: ['signoff [headline]'], example: 'nuworq signoff "Nothing left for me" --as claude-1' },
+  answer: { example: 'nuworq answer 40 "Done: it is installed" --as operator-1' },
+  withdraw: { example: 'nuworq withdraw 40 "Paul answered in chat" --as claude-1' },
+  submit: { example: 'nuworq submit 12 "Parser handles tabs" --evidence "npm test: 48 passed" --as claude-1' },
+  handoff: { example: 'nuworq handoff 12 "Parser half done; tests next" --as claude-1' },
+  propose: { example: 'nuworq propose "Parse tabs in headers" --priority soon --as claude-1' },
+  refine: { example: 'nuworq refine 12 --priority now --as claude-1' },
+  review: { example: 'nuworq review 12 accept "Tests pass; matches done_means" --as claude-2' },
+  comment: { example: 'nuworq comment 12 "Heads-up: parse.js moved" --as claude-1' },
+  ack: { example: 'nuworq ack 7 "Switching to the smaller fix" --as claude-1' },
+  learn: { example: 'nuworq learn "npm test needs Node 24: older ones lack node:sqlite" --as claude-1' },
+  feedback: { example: 'nuworq feedback "next gave me an item I can\'t build" --as claude-1' },
+  look: { example: 'nuworq look 12 --as claude-1' },
+  retire: { example: 'nuworq retire 31 --reason "built into checkin" --as claude-1' },
+  signoff: { example: 'nuworq signoff "Nothing left for me" --as claude-1' },
 };
-const AGENT_NOTE = 'Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url. --summary and --detail add the 5- and 30-minute versions ("-" reads one from stdin).';
+const AGENT_NOTE = 'Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url. Each <argument> can be given as its flag instead. "-" as a value reads it from stdin; a list takes "a,b" or JSON, and a list of objects "x|y" per flag, repeated.';
 
 const firstSentence = (s) => String(s ?? '').replace(/^Optional\.\s*/, '').match(/^.*?\.(?=\s|$)/)?.[0].replace(/\.$/, '') ?? String(s ?? '');
 const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 
-for (const [name, a] of Object.entries(AGENT)) {
-  const op = OPS.find((o) => o.name === name);
-  if (!op) throw new Error(`help: no protocol op "${name}"`);
+for (const op of OPS) {
+  const a = AGENT[op.name];
+  if (!a) throw new Error(`help: no example for protocol op "${op.name}"`);
+  const positional = new Set(POSITIONAL[op.name].map((s) => s.replace(/[?.]+$/, '')));
   COMMANDS.push({
-    name, group: 'protocol', ...a,
+    name: op.name, group: 'protocol', ...a,
     does: lower(firstSentence(op.description)),
-    flags: (a.flags ?? []).map(([f, d, def]) => [f, typeof d === 'string' ? d : lower(firstSentence(op.params?.[d.param]?.description ?? (() => { throw new Error(`help: ${name} has no param "${d.param}"`); })())), def]),
+    usage: [agentUsage(op.name)],
+    flags: [...agentFlags(op.name).filter(([, param]) => !positional.has(param)).map(([f, , schema]) => [f, lower(firstSentence(schema.description ?? (schema.enum ? `one of ${schema.enum.join(', ')}` : '')))]), ...(a.flags ?? [])],
     notes: [...(a.notes ?? []), AGENT_NOTE],
   });
 }

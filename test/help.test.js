@@ -6,18 +6,18 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { COMMANDS, bare, commandHelp, reference, nearest, command, wrap } from '../src/help.js';
 import { OPS } from '../src/protocol.js';
+import { POSITIONAL } from '../src/agentargs.js';
 
 // The CLI's help (#481): one table, three views.
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 const cli = (...a) => promisify(execFile)(process.execPath, [BIN, ...a], { env: { ...process.env, NUWORQ_NO_UPDATE: '1' } });
 const source = readFileSync(BIN, 'utf8');
 
-// What main() dispatches: its `cmd === '…'` branches and the agent commands (AGENT_CMDS).
+// What main() dispatches: its `cmd === '…'` branches and the agent commands (POSITIONAL, one per op, #521).
 function dispatched() {
   const main = source.slice(source.indexOf('async function main()'));
   const named = [...main.matchAll(/cmd === '([a-z][\w-]*)'/g)].map((m) => m[1]);
-  const agents = source.slice(source.indexOf('const AGENT_CMDS = {'), source.indexOf('\n};', source.indexOf('const AGENT_CMDS = {')));
-  return new Set([...named, ...[...agents.matchAll(/^ {2}([a-z]+): /gm)].map((m) => m[1])]);
+  return new Set([...named, ...Object.keys(POSITIONAL)]);
 }
 const wide = (text, max = 80) => text.split('\n').filter((l) => l.length > max);
 
@@ -74,9 +74,9 @@ describe('the CLI help comes from one table (#481)', () => {
       const first = op.description.match(/^.*?\.(?=\s|$)/)[0].replace(/\.$/, '');
       assert.equal(command(op.name).does, first.charAt(0).toLowerCase() + first.slice(1), op.name);
     }
-    // A flag reads its param: e.g. ask --assume is the first sentence of assumption's description.
+    // A flag reads its param: e.g. ask --assumption is the first sentence of assumption's description.
     const assumption = OPS.find((o) => o.name === 'ask').params.assumption.description;
-    assert.equal(command('ask').flags.find(([f]) => f.startsWith('--assume'))[1], assumption.charAt(0).toLowerCase() + assumption.slice(1).replace(/\.$/, ''));
+    assert.equal(command('ask').flags.find(([f]) => f.startsWith('--assumption '))[1], assumption.charAt(0).toLowerCase() + assumption.slice(1).replace(/\.$/, ''));
   });
 
   test('help all is the full reference, and docs/CLI.md is generated from it', async () => {
@@ -96,7 +96,7 @@ describe('the CLI help comes from one table (#481)', () => {
     assert.match(b, /^\*Get going\*$/m);
     const claim = commandHelp('claim', { style });
     assert.match(claim, /^\*nuworq claim\*: claim a specific item/);
-    assert.match(claim, /^ {2}nuworq \*claim\* _<item>_ \[--touching paths\]$/m);
+    assert.match(claim, /^ {2}nuworq \*claim\* _<item>_ \[flags\]$/m);
   });
 
   test('NO_COLOR or no terminal: nothing is styled', async () => {

@@ -1,5 +1,5 @@
 // The agent protocol, defined once. MCP tools, OpenAI/Anthropic function schemas,
-// the CLI and the agent guide are all generated from this list, so every model sees the same thing.
+// the CLI (src/agentargs.js) and the agent guide are all generated from this list, so every model sees the same thing.
 import { createHash } from 'node:crypto';
 import { OPERATOR_GIT_CMDS } from './operator.js';
 
@@ -502,9 +502,11 @@ export const GUIDE_MAX = 3500;
 
 export function guide({ project = '<project>', url = 'http://127.0.0.1:4747', via = 'tools', command = 'nuworq' } = {}) {
   const cli = via === 'cli';
-  const c = cli
-    ? (op, args = '') => `\`${command} ${op}${args ? ' ' + args : ''}\``
-    : (op) => `\`${op}\``;
+  // Every operation the guide names is one in OPS (#521), as the skills' op() checks: a renamed one fails here.
+  const c = (op, args = '') => {
+    if (!OPS.some((o) => o.name === op)) throw new Error(`guide names "${op}", which is not an operation`);
+    return cli ? `\`${command} ${op}${args ? ' ' + args : ''}\`` : `\`${op}\``;
+  };
   // The core only (#527): at most GUIDE_MAX characters, so a client that cuts long instructions shows it whole.
   // What each kind of job needs arrives in next's hint for it (MODE_RULES).
   return `# nuworq: coordination for agents working on ${project}

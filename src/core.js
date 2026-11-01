@@ -17,6 +17,7 @@ import { builtWhatItReviews, reviewRelease } from './security.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
+import { unknownField } from './agentargs.js';
 import { slugify, normRemote } from './text.js';
 import { Snapshot } from './snapshot.js';
 import { commandParts } from '../web/commands.js';
@@ -1800,6 +1801,9 @@ export class Hub extends EventEmitter {
   agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [], identity = null } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
+    // A field the operation doesn't take is a typo, never silently dropped (#521).
+    const odd = unknownField(op, args);
+    if (odd) throw new UserError(`${op} has no field "${odd.field}"${odd.near ? `: did you mean "${odd.near}"?` : ''}`, { hint: `See the ${op} tool's parameters, or: nuworq help ${op}` });
     refuseSecrets(args);
     this.sweep();
     const agent = this.requireAgent(name);
