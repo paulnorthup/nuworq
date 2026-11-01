@@ -141,15 +141,23 @@ function apply(spaces, event, prices) {
   if (event.type === 'checkout.session.completed') {
     const ws = String(o.client_reference_id ?? '');
     if (!spaces.has(ws) || !o.subscription) return { ok: true, ignored: 'no workspace or subscription' };
-    // The subscription's own events carry its state; this only fills one in when they haven't come yet.
-    dir.setBilling(idOf(o.subscription), { workspace: ws, customer: idOf(o.customer) }, { at, status: o.payment_status === 'paid' ? 'active' : null, fill: true });
+    // The subscription's own events carry its state; this only fills one in when they haven't come yet. A checkout
+    // doesn't say what it sold (#478), so with prices configured it only names the workspace: the subscription's
+    // events, which do, decide whether it's paid.
+    const status = o.payment_status === 'paid' && !Object.keys(prices).length ? 'active' : null;
+    dir.setBilling(idOf(o.subscription), { workspace: ws, customer: idOf(o.customer) }, { at, status, fill: true });
     return { ok: true, workspace: ws };
   }
   if (/^customer\.subscription\.(created|updated|deleted)$/.test(event.type)) {
     const items = o.items?.data ?? [];
     const known = Object.keys(prices);
-    // With prices configured, a subscription to some other product of the same Stripe account isn't ours.
-    if (known.length && !items.some((i) => known.includes(i.price?.id))) return { ok: true, ignored: 'not a nuworq price' };
+    // With prices configured, a subscription to some other product of the same Stripe account isn't ours. One the
+    // hub keeps (a checkout named it, or it was ours and changed to another price) pays for nothing from now on.
+    if (known.length && !items.some((i) => known.includes(i.price?.id))) {
+      if (!dir.billingRow(o.id)) return { ok: true, ignored: 'not a nuworq price' };
+      const row = dir.setBilling(o.id, { customer: idOf(o.customer) }, { at, status: 'canceled', plan: null });
+      return { ok: true, workspace: row?.workspace ?? null, paid_for: 'nothing: not a nuworq price' };
+    }
     const plan = prices[items.find((i) => prices[i.price?.id])?.price?.id] ?? null;
     // Newer API versions keep the period on each item; older ones on the subscription.
     const end = ms(o.current_period_end) ?? (Math.max(0, ...items.map((i) => ms(i.current_period_end) ?? 0)) || null);

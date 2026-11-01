@@ -114,10 +114,24 @@ export class GitHubApp {
       const r = await this.call('GET', `/user/installations?per_page=100&page=${page}`, null, tok);
       if (r.status !== 200) throw new UserError(`GitHub didn't list your installations (${r.status})`, { status: 502, hint: 'Try the install again in a minute.' });
       const list = r.json.installations ?? [];
-      if (list.some((i) => Number(i.id) === Number(id))) return true;
+      const found = list.find((i) => Number(i.id) === Number(id));
+      if (found) return this.manages(found.account, tok);
       if (list.length < 100) return false;
     }
     return false;
+  }
+
+  // Seeing an installation isn't owning it (#478): /user/installations lists ones a person can merely read. The
+  // installer must be the account it's on, or an active admin of that organization, as GitHub says to their token.
+  async manages(account, tok) {
+    const login = String(account?.login ?? '');
+    if (!login) return false;
+    if (account.type === 'Organization') {
+      const r = await this.call('GET', `/user/memberships/orgs/${encodeURIComponent(login)}`, null, tok);
+      return r.status === 200 && r.json?.state === 'active' && r.json?.role === 'admin';
+    }
+    const r = await this.call('GET', '/user', null, tok);
+    return r.status === 200 && String(r.json?.login ?? '').toLowerCase() === login.toLowerCase();
   }
 
   // The app's own credential: a JWT signed with its key, good for ~10 minutes (backdated a minute for clock skew).

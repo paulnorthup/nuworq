@@ -324,6 +324,11 @@ CREATE TABLE IF NOT EXISTS replies (
   body   TEXT NOT NULL,
   at     INTEGER NOT NULL
 );
+-- GitHub deliveries this hub acted on (X-GitHub-Delivery), so a replayed one changes nothing (#478). Kept a week.
+CREATE TABLE IF NOT EXISTS deliveries (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
+);
 `;
 
 // One record per pull request (#261). The hub records a PR it opens under the normalized remote

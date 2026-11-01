@@ -86,7 +86,10 @@ describe('a shared hub keeps organizations apart', () => {
   test('an app installation belongs to the organization it was installed from; others get no token for its repositories', async () => {
     // GitHub: one installation (42) that reaches acme/api.
     // Installers: code "alice" is a person who can see installation 42 (and 7); "mallory" sees only 99.
-    const mints = [], users = { alice: [42, 7], mallory: [99] };
+    // "reader" sees 42 too, as a plain member of acme, and 8, on carol's account (#478).
+    const mints = [], users = { alice: [42, 7], mallory: [99], reader: [42, 8] };
+    const accounts = { 42: { login: 'acme', type: 'Organization' }, 7: { login: 'alice', type: 'User' }, 8: { login: 'carol', type: 'User' }, 99: { login: 'mallory', type: 'User' } };
+    const roles = { alice: { acme: 'admin' }, reader: { acme: 'member' } };
     const api = http.createServer(async (req, res) => {
       const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
       let raw = '';
@@ -97,8 +100,12 @@ describe('a shared hub keeps organizations apart', () => {
       }
       if (req.url.startsWith('/user/installations')) {
         const who = String(req.headers.authorization).replace('Bearer ghu_', '');
-        return users[who] ? json(200, { total_count: users[who].length, installations: users[who].map((id) => ({ id })) }) : json(401, {});
+        return users[who] ? json(200, { total_count: users[who].length, installations: users[who].map((id) => ({ id, account: accounts[id] })) }) : json(401, {});
       }
+      const who = String(req.headers.authorization).replace('Bearer ghu_', '');
+      if (req.url === '/user') return users[who] ? json(200, { login: who }) : json(401, {});
+      const org = req.url.match(/^\/user\/memberships\/orgs\/([^/?]+)$/)?.[1];
+      if (org) return roles[who]?.[org] ? json(200, { state: 'active', role: roles[who][org] }) : json(404, {});
       if (req.url === '/repos/acme/api/installation') return json(200, { id: 42 });
       if (req.url === '/app/installations/42/access_tokens') { mints.push(1); return json(201, { token: 'ghs_x', expires_at: new Date(Date.now() + 3600e3).toISOString() }); }
       json(404, {});
@@ -120,12 +127,19 @@ describe('a shared hub keeps organizations apart', () => {
       // A real state from bravo, but an installation_id its installer can't see: alpha's, forged into the redirect.
       const forged = await installed(installState(app, 'bravo'), 42, 'mallory');
       assert.equal(forged.status, 403);
-      assert.match((await forged.json()).error, /can't see installation 42/);
+      assert.match((await forged.json()).error, /installation 42 isn't on your account or an organization you're an admin of/);
       assert.equal(spaces.directory.installation(42), null, 'nothing bound');
       const noCode = await installed(installState(app, 'bravo'), 42, '');
       assert.equal(noCode.status, 400);
       assert.match((await noCode.json()).hint, /Request user authorization \(OAuth\) during installation/);
       assert.equal((await installed(installState(app, 'bravo'), 42, 'expired')).status, 400, 'a code GitHub refuses binds nothing');
+      // Seeing an installation isn't owning it (#478): a member of acme who isn't its admin, and a collaborator on
+      // carol's repositories, bind nothing.
+      assert.equal((await installed(installState(app, 'bravo'), 42, 'reader')).status, 403, "acme's plain member");
+      assert.equal((await installed(installState(app, 'bravo'), 8, 'reader')).status, 403, "carol's collaborator");
+      assert.equal(spaces.directory.installation(42), null);
+      assert.equal(spaces.directory.installation(8), null);
+      assert.equal(await app.installedBy('alice', 7), true, 'an installation on your own account is yours');
 
       const ok = await installed(installState(app, 'alpha'));
       assert.equal(ok.status, 302);
