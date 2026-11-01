@@ -43,6 +43,7 @@ export const SYSTEM = 'nuworq';
 const GITHUB = 'github'; // holds accepted work while the hub opens its pull request
 const PR_LEASE = 2 * MIN;
 const PR_PASS = MIN; // how often the hub looks at landing work's pull requests itself (mergeReady)
+const CI_RECENT = 30 * DAY; // checks recorded this recently mean CI checks the project's pull requests (ciGated)
 const MIRROR_RETRY = 5 * MIN; // after GitHub refuses the app a token for a mirror, ask again this often
 // The hub's own entries on the record: SYSTEM, GitHub's (webhooks, the pull requests it opens), or
 // "trellis" in events recorded before the rename. None of them is an agent.
@@ -463,6 +464,15 @@ export class Hub extends EventEmitter {
     const repo = this.repoOf(p, item);
     if (!this.github.covers(repo)) return false;
     return !this.appTrouble(p, item) || !!this.q(`SELECT 1 FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
+  }
+
+  // Whether CI checks the item's pull request before it merges (#532): it lands through one, and the project says
+  // so (ci 'on') or the hub recorded checks for its commits lately. Then CI runs the whole suite and workers run
+  // only the tests near their change; elsewhere they run it themselves before submitting. Any recorded check counts:
+  // the hub doesn't know which checks are required, and auto-merge waits on the required ones anyway.
+  ciGated(p, item) {
+    if (p.ci === 'off' || !this.prMode(p, item)) return false;
+    return p.ci === 'on' || !!this.q('SELECT 1 FROM checks WHERE project_id = ? AND at > ? LIMIT 1').get(p.id, this.now() - CI_RECENT);
   }
 
   // Why the GitHub App can't reach the item's repository right now (see mirrorTrouble), or null.
@@ -2206,7 +2216,7 @@ export class Hub extends EventEmitter {
     const where = this.remotesOf(p).length > 1 ? `This is in ${this.repoOf(p, item)}. ` : '';
     if (this.prMode(p, item)) {
       const pr = this.conflictedPr(item);
-      if (pr) return where + PR_REBASE_HINT(item, pr, base);
+      if (pr) return where + PR_REBASE_HINT(item, pr, base, this.ciGated(p, item));
       if (unseen) return where + PR_LAND_HINT(item);
       if (this.prFailed(item)) return `${where}The hub couldn't open a pull request for it (see its history), so land it by hand. ${LAND_HINT(item, p, base, remote)}`;
       const open = this.q(`SELECT number FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
@@ -2234,7 +2244,9 @@ export class Hub extends EventEmitter {
     const sweep = item.sweep ? ` ${MODE_RULES.fresh}` : '';
     // Operator-only work (only an operator builds it): it builds only its live step.
     const live = operatorOnly(item) ? ` ${MODE_RULES.operator}` : '';
-    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo) + release + sweep + live;
+    // Tests (#532): where CI checks the pull request, the whole suite is CI's; elsewhere it's the builder's.
+    const tests = item.branch ? ` ${this.ciGated(p, item) ? CI_TESTS : OWN_TESTS}` : '';
+    return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo) + tests + release + sweep + live;
   }
 
   // The branch git found for the latest submission, when the item has none of its own (older work).
@@ -2328,15 +2340,20 @@ const LAND_HINT = (item, p, base = 'main', remote = false, unseen = false) => re
   `5. submit #${item.seq}. The hub checks that ${base} contains the branch and marks it done.`,
 ].join(' ');
 
+// The testing rule a work job's hint carries (#532): CI's suite where it checks the pull request, else the builder's.
+const CI_TESTS = 'Tests: run the ones near your change. Not the whole suite: CI runs it on the pull request, and a failing check sends the work back naming it.';
+const OWN_TESTS = 'Tests: run the ones near your change as you work, and the whole suite once, just before you submit.';
+
 // Remote work that lands through a pull request: the lander only pushes; the hub opens the PR.
 const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
 const PR_OPEN_HINT = (item) => `${item.branch} is on origin but has no pull request yet. Submit #${item.seq}: the hub opens one with auto-merge on, and GitHub's merge marks it done. Don't push to main yourself.`;
 
 // Its pull request conflicts with main: rebase the branch and push it again; the PR and its auto-merge stay.
-const PR_REBASE_HINT = (item, pr, base = 'main') => [
+// ci: CI checks the PR (ciGated), so the lander runs only the tests near what the rebase touched.
+const PR_REBASE_HINT = (item, pr, base = 'main', ci = false) => [
   `PR #${pr.number} for #${item.seq} conflicts with ${base} (${pr.url}). Rebase it; the pull request and its auto-merge stay as they are.`,
   `1. git fetch origin, then git switch ${item.branch}, then git rebase origin/${base}. Resolve conflicts keeping both intents. If resolving changed what the reviewer approved, submit with conflicts (what you changed and why) instead, and it goes back for review.`,
-  `2. Run the project's checks (e.g. npm test).`,
+  ci ? '2. Run the tests near what the rebase touched. Not the whole suite: CI runs it on the pull request.' : `2. Run the project's checks (e.g. npm test).`,
   `3. git push origin ${item.branch} --force-with-lease.`,
   `4. submit #${item.seq}. GitHub merges the PR once its checks pass, and the hub marks it done.`,
 ].join(' ');
@@ -3666,7 +3683,7 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, github_secret, issue_label, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
     const changes = [];
     // The quality bar routing keeps to (#349): how close to the best model's results a cheaper one must come.
     if (model_quality != null && model_quality !== '') {
@@ -3764,6 +3781,18 @@ const HUMAN_OPS = {
     if (issue_label != null && str(issue_label) !== p.issue_label) {
       this.q('UPDATE projects SET issue_label = ? WHERE id = ?').run(str(issue_label), p.id);
       this.event(p, { actor: by, type: 'github', headline: str(issue_label) ? `${You(by)} set GitHub issues to come in only with the label "${str(issue_label)}"` : `${You(by)} let every open GitHub issue come in` });
+    }
+    // Whether CI checks pull requests here (#532): "auto" (the hub tells from the checks it records), "on" or "off".
+    if (ci != null && ci !== '') {
+      const said = str(ci).toLowerCase();
+      if (!['auto', 'on', 'off'].includes(said)) throw new UserError('ci must be auto, on or off', { hint: 'auto: the hub tells from the checks it records on pull requests; on or off: you say whether CI checks them.' });
+      const v = said === 'auto' ? '' : said;
+      if (v !== (p.ci ?? '')) {
+        this.q('UPDATE projects SET ci = ? WHERE id = ?').run(v, p.id);
+        this.event(p, { actor: by, type: 'settings', headline: v === 'on' ? `${You(by)} said CI checks ${p.name}'s pull requests: workers leave the whole suite to it`
+          : v === 'off' ? `${You(by)} said CI doesn't check ${p.name}'s pull requests: workers run the whole suite before submitting`
+            : `${You(by)} let the hub tell from recorded checks whether CI checks ${p.name}'s pull requests` });
+      }
     }
     // Either answer to "may nuworq run staff it?" is the answer: the project doesn't ask again.
     if (runner != null && !p.staff_asked) this.q('UPDATE projects SET staff_asked = 1 WHERE id = ?').run(p.id);
