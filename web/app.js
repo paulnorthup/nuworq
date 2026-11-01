@@ -62,15 +62,18 @@ const MAC = /Mac|iP(hone|ad)/.test(navigator.platform);
 
 const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>');
 
+const MD_INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(^|[\s(])(https?:\/\/[^\s<)]+)/gm;
+const codeOnly = (t) => t.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
 function md(text) {
   if (!text) return '';
   const blocks = [];
   let s = String(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => { blocks.push(`<pre>${esc(code.replace(/\n$/, ''))}</pre>`); return `\u0000${blocks.length - 1}\u0000`; });
-  s = esc(s)
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  // One pass: each piece of text becomes code, bold, a link or an address once, and markup made here is never
+  // scanned again (a URL inside a link's address would otherwise close its href early).
+  const a = (href, label) => `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
+  s = esc(s).replace(MD_INLINE, (m, code, bold, label, href, lead, url) =>
+    code != null ? `<code>${code}</code>` : bold != null ? `<strong>${codeOnly(bold)}</strong>` : label != null ? a(href, codeOnly(label)) : `${lead}${a(url, url)}`);
   return s.split(/\n{2,}/).map((par) => {
     const ls = par.split('\n');
     const bullet = /^\s*([-*•]|\d+\.)\s+/;
@@ -604,6 +607,11 @@ const stepWhere = (where) => (!where ? '' : /^https?:\/\/\S+$/i.test(where.trim(
   ? `<a class="step-where" href="${esc(where.trim())}" target="_blank" rel="noopener">${esc(where.trim())}</a>`
   : commandBlocks(where));
 
+// Steps an agent wrote say so above their Copy buttons: their commands are the agent's words, not the hub's.
+// A person ('you', '@handle') or the hub itself ('nuworq') wrote the rest.
+const stepsBy = (asker) => (!asker || asker === 'you' || asker === 'nuworq' || String(asker).startsWith('@') ? ''
+  : `<div class="steps-by">Written by ${esc(asker)}, an agent, not by nuworq. Read each command before you run it.</div>`);
+
 // A question's steps as a checklist the person ticks off (#162), shown at every depth. The row is the tick target;
 // a URL opens in a new tab, each command gets a Copy button. Ticks are the viewer's own and survive a reload.
 function stepList(a) {
@@ -611,6 +619,7 @@ function stepList(a) {
   const q = a.question.id;
   return `<div class="steps" data-new="step-checklist">
     <div class="steps-head"><span class="label">Steps</span><span class="steps-count">${[...done].filter((n) => n <= a.steps.length).length} of ${a.steps.length} done</span></div>
+    ${stepsBy(a.question.asked_by)}
     <ol>${a.steps.map((s, i) => {
       const n = i + 1;
       const on = done.has(n);

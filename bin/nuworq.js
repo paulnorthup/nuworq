@@ -1147,7 +1147,7 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const plans = /^(1|on|true|yes)$/i.test(String(flags.plans ?? envVar('PLANS') ?? ''));
   // The hub's owners: one list for everything that asks (--owners, NUWORQ_HUB_OWNERS, or NUWORQ_OWNERS).
   const owners = String(flags.owners ?? envVar('HUB_OWNERS') ?? envVar('OWNERS') ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags), plans, owners });
+  const spaces = new Workspaces({ dir, repos: reposDir(flags), keys: keysDir(flags), backups: join(dataHome(flags), 'backups'), plans, owners });
   const baseDomain = String(flags['base-domain'] || envVar('BASE_DOMAIN') || '').toLowerCase().replace(/^\.+|\.+$/g, '');
   const { oauthFromEnv } = await import('../src/oauth.js');
   const publicUrl = String(flags['public-url'] || envVar('PUBLIC_URL') || '').replace(/\/+$/, '');
@@ -1191,7 +1191,7 @@ ${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w
 async function workspace(pos, flags) {
   const { Workspaces } = await import('../src/workspaces.js');
   const owners = String(flags.owners ?? envVar('HUB_OWNERS') ?? envVar('OWNERS') ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const spaces = new Workspaces({ dir: workspacesDir(flags), owners });
+  const spaces = new Workspaces({ dir: workspacesDir(flags), backups: join(dataHome(flags), 'backups'), owners });
   const [sub, name] = pos;
   try {
     if (sub === 'create') {
@@ -1229,7 +1229,7 @@ ${dim(`  Give someone a login: nuworq token create <name> --role human --workspa
     }
     if (sub === 'remove') {
       spaces.remove(need(name, '<name>'));
-      return console.log(`${green('Removed')} workspace ${bold(name)} and its database. A running hub stops serving it at once.`);
+      return console.log(`${green('Removed')} workspace ${bold(name)}, its database and its backups. A running hub stops serving it at once.`);
     }
   } catch (e) {
     throw e.hint || e.status ? new HubError(e.message, { hint: e.hint }) : e;
