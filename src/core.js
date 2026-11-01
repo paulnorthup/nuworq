@@ -17,6 +17,7 @@ import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeA
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
 import { slugify, normRemote } from './text.js';
+import { Snapshot } from './snapshot.js';
 import { commandParts } from '../web/commands.js';
 export { slugify, normRemote };
 
@@ -303,6 +304,7 @@ export class Hub extends EventEmitter {
     this.keys = keys;
     this.hosted = hosted;
     this._stmts = new Map();
+    this._snaps = new Map(); // project id → its snapshot (snap)
     this._unreachable = new Set(); // repositories the hub has said it can't reach
     this._behind = new Map(); // item id → whether its branch lacks its base, as refreshBehind last found (#535)
     // The app's read tokens for the hub's own mirrors, per remote: { token, expires_at } once minted,
@@ -352,10 +354,30 @@ export class Hub extends EventEmitter {
       return r;
     } catch (e) {
       this.db.exec('ROLLBACK');
+      this._snaps.clear(); // a rollback undoes changes without turning SQLite's counters back
       throw e;
     } finally {
       this._inTx = false;
     }
+  }
+
+  // A project's snapshot (src/snapshot.js, #538): its live state loaded once, for as long as nothing in the
+  // database changes. p: the project or its id.
+  snap(p) {
+    const id = p?.id ?? p;
+    return this.current(id) ?? this._snaps.set(id, new Snapshot(this, id, this.dbVersion())).get(id);
+  }
+
+  // The project's snapshot if one is loaded and nothing has changed since, else null: single-item reads use it
+  // when it's there, and their own query when it isn't.
+  current(id) {
+    const s = this._snaps.get(id);
+    return s && s.version === this.dbVersion() ? s : null;
+  }
+
+  dbVersion() {
+    const v = this.q('SELECT total_changes() AS c, data_version AS v FROM pragma_data_version').get();
+    return `${v.c}:${v.v}`;
   }
 
   changed(p) {
@@ -1169,7 +1191,9 @@ export class Hub extends EventEmitter {
   }
 
   // What must finish first: explicit dependencies, and an umbrella item's own children.
-  unmetDeps(item) {
+  // snap: the project's snapshot, when the caller asks about many items (#538).
+  unmetDeps(item, snap = this.current(item.project_id)) {
+    if (snap) return snap.unmetOf(item);
     const deps = this.deps(item).filter((d) => !['done', 'dropped'].includes(d.stage));
     const kids = this.q(`SELECT * FROM items WHERE parent_id = ? AND stage NOT IN ('done', 'dropped') ORDER BY seq`).all(item.id);
     return [...deps, ...kids.filter((k) => !deps.some((d) => d.id === k.id))];
@@ -1209,9 +1233,12 @@ export class Hub extends EventEmitter {
   // Proposals an agent could claim to shape right now. An issue flagged stale waits for the human's
   // "close these?" answer, not for shaping (Keep them all clears the flag).
   shapeable(p) {
-    return this.q(`SELECT * FROM items i WHERE project_id = ? AND stage = 'proposed' AND holder IS NULL
-      AND NOT EXISTS (SELECT 1 FROM issues s WHERE s.item_id = i.id AND s.stale != '' AND s.state = 'open') ORDER BY seq`).all(p.id)
-      .filter((i) => !this.openQuestions(i, { blocking: true }).length)
+    const items = this.q(`SELECT * FROM items i WHERE project_id = ? AND stage = 'proposed' AND holder IS NULL
+      AND NOT EXISTS (SELECT 1 FROM issues s WHERE s.item_id = i.id AND s.stale != '' AND s.state = 'open') ORDER BY seq`).all(p.id);
+    // Those with an open blocking question, in one query (#538).
+    const asked = new Set(items.length ? this.q(`SELECT DISTINCT item_id FROM questions WHERE item_id IN (SELECT value FROM json_each(?)) AND status = 'open' AND blocking`)
+      .all(JSON.stringify(items.map((i) => i.id))).map((q) => q.item_id) : []);
+    return items.filter((i) => !asked.has(i.id))
       .filter((i) => !(waitsForOk(p, i) && i.acceptance)); // shaped, waiting for the human's approval
   }
 
@@ -1286,12 +1313,15 @@ export class Hub extends EventEmitter {
 
   // Who an agent is and what it is doing, for checkin, look and the project page (#238): its role, where it runs
   // (its runner, or the machine it said), and its current job ("building #12"), or null when it holds nothing.
-  presenceOf(p, a) {
-    const held = this.q(`SELECT seq, stage, tidy FROM items WHERE project_id = ? AND holder = ?
+  // snap: the project's snapshot, when the caller asks about many agents (#538).
+  presenceOf(p, a, snap = this.current(p.id)) {
+    const mine = snap?.holds.get(a.name);
+    const held = snap ? mine?.items ?? [] : this.q(`SELECT seq, stage, tidy FROM items WHERE project_id = ? AND holder = ?
       UNION SELECT i.seq, i.stage, i.tidy FROM attempts t JOIN items i ON i.id = t.item_id
         WHERE i.project_id = ? AND t.agent = ? AND t.stage = 'active' AND t.closed = 0 ORDER BY seq`).all(p.id, a.name, p.id, a.name);
     // An operator question it holds (#467) is a job too, so the others see who has it.
-    const qs = this.q(`SELECT id FROM questions WHERE project_id = ? AND held_by = ? AND held_until >= ? AND status = 'open' ORDER BY id`).all(p.id, a.name, this.now());
+    const qs = snap ? (mine?.questions ?? []).filter((q) => q.held_until >= this.now())
+      : this.q(`SELECT id FROM questions WHERE project_id = ? AND held_by = ? AND held_until >= ? AND status = 'open' ORDER BY id`).all(p.id, a.name, this.now());
     const job = [...held.map((i) => `${i.tidy && i.stage === 'active' ? 'tidying' : JOBS[i.stage] ?? 'holding'} #${i.seq}`),
       ...qs.map((q) => `answering question ${q.id}`)].join(', ') || null;
     return { role: a.role || 'session', where: a.runner ? `${a.runner} runner` : a.machine || null, job };
@@ -1299,8 +1329,9 @@ export class Hub extends EventEmitter {
 
   // The agents seen here in the last half hour, as presenceOf says, for checkin and look.
   presentAgents(p) {
+    const snap = this.snap(p);
     return this.q('SELECT * FROM agents WHERE project_id = ? AND signed_off = 0 AND last_seen > ? ORDER BY last_seen DESC LIMIT 30')
-      .all(p.id, this.now() - 30 * MIN).map((a) => ({ agent: a.name, ...this.presenceOf(p, a) }));
+      .all(p.id, this.now() - 30 * MIN).map((a) => ({ agent: a.name, ...this.presenceOf(p, a, snap) }));
   }
 
   // The operator question to answer first: one this operator already holds, then blocking before assumptions,
@@ -1854,7 +1885,8 @@ export class Hub extends EventEmitter {
     if (answers.length) this.q(`UPDATE questions SET seen_by_asker = 1 WHERE id IN (${answers.map(() => '?').join(',')})`).run(...answers.map((a) => a.id));
     const holding = this.heldBy(p, agent);
     const steers = this.pendingSteers(p, agent);
-    const count = (stage) => this.q('SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND stage = ?').get(p.id, stage).n;
+    const stages = new Map(this.q('SELECT stage, COUNT(*) AS n FROM items WHERE project_id = ? GROUP BY stage').all(p.id).map((r) => [r.stage, r.n]));
+    const count = (stage) => stages.get(stage) ?? 0;
     const board = { ready: count('ready'), active: count('active'), waiting_on_human: count('waiting'), verifying: count('verifying'), proposed: count('proposed') };
     const reopened = answers.filter((a) => a.item_seq && a.blocking && this.itemById(a.item_id)?.stage === 'ready');
 
@@ -1972,9 +2004,10 @@ export class Hub extends EventEmitter {
       .map((item) => ({ mode: 'land', item }));
     if (p.parked) return [...lands.map(ranked), ...reviews.map(ranked)];
     const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id);
+    const snap = this.snap(p); // what each waits on, from one load (#538)
     // The freshness sweep (src/freshness.js) waits while now or soon work is ready, whoever can take it.
-    const urgent = open.some((i) => !i.sweep && ranked({ item: i }).priority !== 'later' && !this.unmetDeps(i).length);
-    const ready = open.filter((i) => fresh(i) && !this.unmetDeps(i).length && !(i.sweep && urgent))
+    const urgent = open.some((i) => !i.sweep && ranked({ item: i }).priority !== 'later' && !this.unmetDeps(i, snap).length);
+    const ready = open.filter((i) => fresh(i) && !this.unmetDeps(i, snap).length && !(i.sweep && urgent))
       .map((item) => ({ mode: item.tidy ? 'tidy' : 'work', item })); // a tidy job (src/tidy.js) keeps the groups true
     // Races with an open slot this agent hasn't taken a turn in. A slot goes to a different model first:
     // an agent on a model already in the race sees it after other work of the same priority.
