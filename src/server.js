@@ -291,6 +291,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     sweepMirrors(); // mirrors are the process's, not one hub's
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
+      // Which branches being built lack what landed (#535), so heartbeats tell them to rebase without running git.
+      hub.refreshBehind().catch((e) => console.error('checking branches against main failed', e));
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
       // Release preconditions read GitHub through the app where it's installed.
       runChecks(hub, { shared: !!spaces, github: { api: gh.api, app } }).catch((e) => console.error('checking preconditions failed', e));
