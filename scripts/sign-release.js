@@ -10,11 +10,14 @@
 //                                                      Run it in a checkout of nuworq: the package must be a
 //                                                      release, its version tagged vX.Y.Z on that commit (#400)
 //   node scripts/sign-release.js watch <hub> <release-key.pem> <scp destination> [--install]
-//                                                      every few minutes, sign each new vX.Y.Z tag on origin's main,
-//                                                      built from GitHub (scripts/signer.js, #430). Run it in a checkout
-//                                                      of nuworq. --install: as a service (LaunchAgent / systemd user
-//                                                      unit), logging to ~/.nuworq/logs/signer.log; watch --uninstall
-//                                                      stops and removes it
+//                                                      every few minutes, sign each new vX.Y.Z tag on origin's main
+//                                                      that a person approved, built from GitHub (scripts/signer.js,
+//                                                      #430). Run it in a checkout of nuworq. --install: as a service
+//                                                      (LaunchAgent / systemd user unit), logging to
+//                                                      ~/.nuworq/logs/signer.log; watch --uninstall stops and removes it
+//   node scripts/sign-release.js approve <vX.Y.Z> <release-key.pem>
+//                                                      approve one release for the signer (#473), at a terminal: it
+//                                                      shows the tag's commit and changelog, and you type the tag
 // The .sig goes beside the hub's package (nuworq-<commit>.tgz in its package folder); installs that pinned
 // release-key.pub update only to a package it verifies (src/update.js).
 import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sign, verify } from 'node:crypto';
@@ -85,10 +88,44 @@ if (cmd === 'keygen' && a) {
   }
 } else if (cmd === 'watch' && (a === '--uninstall' || (a && b && c))) {
   await watchCmd();
+} else if (cmd === 'approve' && a && b) {
+  await approveCmd(a, b);
 } else {
   console.error('usage: sign-release.js keygen <dir> | sign <nuworq.tgz> <release-key.pem> | release <hub> <release-key.pem> [<scp destination>]\n'
-    + '       | watch <hub> <release-key.pem> <scp destination> [--install] | watch --uninstall');
+    + '       | watch <hub> <release-key.pem> <scp destination> [--install] | watch --uninstall | approve <vX.Y.Z> <release-key.pem>');
   process.exit(2);
+}
+
+// Where approvals are kept: beside the signer's state, signed with the key, so only its holder makes one.
+async function approvalsDir() {
+  const { dataDir } = await import('../src/names.js');
+  return join(dataDir(), 'release-approvals');
+}
+
+// approve: a person says a release may be signed (#473). Only at a terminal, and only after typing the tag back:
+// an agent with a shell has no terminal to answer at. The approval names the commit, so a tag moved later
+// isn't approved.
+async function approveCmd(tag, pem) {
+  const { repoRoot } = await import('../src/client.js');
+  const { proposedRelease, writeApproval } = await import('./signer.js');
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error('approve needs a person at a terminal: run it yourself, in a terminal on the machine that holds the release key');
+  }
+  const repo = repoRoot(process.cwd());
+  if (!repo) throw new Error('run approve in a checkout of nuworq: it reads the release tag from its origin (GitHub)');
+  const key = createPrivateKey(readFileSync(pem));
+  const r = await proposedRelease(repo, tag);
+  if (!r) throw new Error(`origin has no release tag ${tag} (a vX.Y.Z tag): a release is tagged when its item lands`);
+  console.log(`${r.tag} is ${r.commit}\n  ${r.subject}\n\nWhat it ships (its CHANGELOG.md entry):\n${r.changes.split('\n').map((l) => `  ${l}`).join('\n') || '  (none)'}\n`);
+  if (r.refusal) console.log(`The signer will refuse it anyway: ${r.refusal}.\n`);
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const typed = (await rl.question(`Type ${r.tag} to approve signing it, or anything else to stop: `)).trim();
+  rl.close();
+  if (typed !== r.tag) return console.log('Not approved. Nothing changed.');
+  const dir = await approvalsDir();
+  writeApproval(dir, key, r);
+  console.log(`Approved ${r.tag} (${r.commit.slice(0, 7)}), kept in ${dir}. The signer signs it at its next round (within 5 minutes), and the plugin's release branch moves to it.`);
 }
 
 // watch: the signer (scripts/signer.js), in the foreground, or installed as a service with --install.
@@ -126,14 +163,30 @@ async function watchCmd() {
   }
   // A signed release is said on its release item, when this machine is connected to a hub (nuworq connect).
   const conn = connected();
-  const comment = !conn ? undefined : async (r) => {
-    const client = createClient({ url: conn.url, cwd: repo });
-    const as = { agent: 'nuworq-signer' };
+  const client = conn && createClient({ url: conn.url, cwd: repo });
+  const as = { agent: 'nuworq-signer' };
+  const itemOf = async (version) => {
     const look = async (stage) => (await client.call('look', stage ? { stage } : {}, as)).board;
-    const item = signer.releaseItem(await look(), r.version) ?? signer.releaseItem(await look('done'), r.version);
-    await client.call('comment', { item: item ?? undefined, headline: `Signed v${r.version} (${r.short})` }, as);
+    return signer.releaseItem(await look(), version) ?? signer.releaseItem(await look('done'), version) ?? undefined;
   };
+  const comment = !conn ? undefined : async (r) => {
+    await client.call('comment', { item: await itemOf(r.version), headline: `Signed v${r.version} (${r.short})` }, as);
+  };
+  // A release waiting for approval is a question to the human, so it shows under Needs you. Answering it on the
+  // hub approves nothing: only the approve command, where the key is, does.
+  const approvals = await approvalsDir();
+  const ask = !conn ? undefined : async (r) => (await client.call('ask', {
+    item: await itemOf(r.version), to: 'human', blocking: true,
+    question: `Approve release ${r.tag} (${r.short})? It isn't signed, and reaches no one's machine, until you do`,
+    context: `${r.tag} is tagged on main. The signer signs it, and moves the plugin's release branch to it, only once you approve it where the release key lives. Answering here doesn't approve it.`,
+    steps: [
+      { do: `Read what ${r.tag} ships`, where: `the release item, or CHANGELOG.md at ${r.short}`, check: 'you want all of it on people\'s machines' },
+      { do: `Approve it on the machine that holds the release key, in a terminal`, where: `cd ${repo} && node scripts/sign-release.js approve ${r.tag} ${resolve(pem)}`, check: `it shows ${r.short} and its changelog; type ${r.tag} and it prints "Approved ${r.tag}"` },
+      { do: 'Wait for the signer', where: join(dataDir(), 'logs', 'signer.log'), check: `within 5 minutes it logs "signed v${r.version}", the release item gets "Signed v${r.version} (${r.short})", and this question goes away. To not ship it, do nothing.` },
+    ],
+  }, as)).question;
+  const withdraw = !conn ? undefined : (id, reason) => client.call('withdraw', { question: id, reason }, as);
   const scp = (file, to) => exec('scp', ['-q', '-o', 'BatchMode=yes', file, to]);
-  console.log(`Signing each new release tag for ${new URL(hub).origin} from ${repo}, every ${signer.EVERY / 60_000} minutes.`);
-  await signer.watch({ repo, hub, key, dest, scp, comment, log: (l) => console.log(l), stateFile: join(dataDir(), 'signer.json') });
+  console.log(`Signing each new release tag for ${new URL(hub).origin} from ${repo} once you approve it (approve <vX.Y.Z>), every ${signer.EVERY / 60_000} minutes.`);
+  await signer.watch({ repo, hub, key, dest, scp, approvals, comment, ask, withdraw, log: (l) => console.log(l), stateFile: join(dataDir(), 'signer.json') });
 }
