@@ -147,6 +147,11 @@ export function serviceEnv(env = process.env, { repos } = {}) {
   return Object.fromEntries(kept.sort(([a], [b]) => a.localeCompare(b)));
 }
 
+// Whether this process is the installed runner, so its service starts it again when it exits (#456): the
+// NUWORQ_SERVICE its definition sets, or launchd's own XPC_SERVICE_NAME (installs from before the marker).
+// Not systemd's INVOCATION_ID: a terminal started by a systemd service passes it on to every shell.
+export const supervised = (env = process.env) => env.NUWORQ_SERVICE === LABEL || env.XPC_SERVICE_NAME === LABEL;
+
 // The node a service runs: the first `node` on PATH (e.g. /opt/homebrew/bin/node) when it is this very binary,
 // so `brew upgrade node` doesn't pull the versioned Cellar path from under it (#225); else execPath itself.
 export function stableNode(execPath, { path = process.env.PATH ?? '', real = realpathSync } = {}) {

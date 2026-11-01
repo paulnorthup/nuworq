@@ -9,7 +9,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
-import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges } from '../src/update.js';
+import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(BIN), '..');
@@ -655,7 +655,8 @@ async function runService(flags) {
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
   // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
   const cwd = process.cwd();
-  const env = svc.serviceEnv(process.env, { repos: besideOf(cwd) });
+  // NUWORQ_SERVICE: it knows it's the service, so it may exit to move onto a newly installed nuworq (#456).
+  const env = { ...svc.serviceEnv(process.env, { repos: besideOf(cwd) }), NUWORQ_SERVICE: svc.LABEL };
   const r = await svc.install({ ...where, command: [svc.stableNode(process.execPath), BIN, 'run', ...args], env, log, cwd })
     .catch((e) => { throw new HubError(e.message, { hint: e.hint ?? 'Run it without --install to see what goes wrong.' }); });
   // Loaded isn't running (#250): only report success once the runner is up.
@@ -785,7 +786,12 @@ async function runCmd(flags) {
   const workers = num(flags.workers, 1);
   const reporter = createClient({ url: s.url, token: token ?? s.token });
   console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`up to ${workers} ${agent} worker${workers > 1 ? 's' : ''} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
-  await run({
+  // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
+  const startedOn = installed(ROOT);
+  const { supervised } = await import('../src/service.js');
+  const r = await run({
+    updated: () => { const now = installed(ROOT); return differs(startedOn, now) ? `${startedOn.label} → ${now.label}` : null; },
+    supervised: supervised(),
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
     routes: () => client.get(`/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`),
@@ -805,6 +811,8 @@ async function runCmd(flags) {
       process.on('SIGTERM', fn);
     },
   });
+  // Exit 0 and the service (KeepAlive, Restart=always) starts it again, on the new code.
+  if (r.restart) process.exit(0);
 }
 
 // One line from stdin, for a secret: not echoed when typed at a terminal.

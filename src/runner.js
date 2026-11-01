@@ -146,8 +146,12 @@ const KILL_GRACE_MS = 10_000;
 // report(state): tells the hub how this runner is, once per poll and once more when it stops (#171); a
 // report that fails is let go (the hub shows the runner down until one gets through).
 // sweep(running): the weekly sweep (#444), run once sweptAt (when it last ran) is a week old; it says what it removed.
+// updated(): checked between rounds (#456); "<from> → <to>" once the package installed under this runner differs
+// from the one it started on, else null. supervised: a service (launchd, systemd) restarts it when it exits, so it
+// stops launching, lets running workers finish, and returns restart: true; started by hand, it only says so, once.
 export async function run({
   routes, launch, claimed = async () => true, log = console.log, report = async () => {}, sweep, sweptAt = 0,
+  updated = () => null, supervised = false,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
@@ -164,6 +168,7 @@ export async function run({
   let wake = () => {};
   let hubDown = false;
   let idle = false;
+  let moved = null; // "<from> → <to>": the installed package changed under this runner
   const cant = new Map(); // project → why this machine can't work on it, as last said
   const resting = new Map(); // project → { until, ms }: its checkout couldn't be updated, so it waits until then
   const stop = (reason) => { if (!stopping) { stopping = true; why = reason; } wake(); };
@@ -217,6 +222,18 @@ export async function run({
         w.killedAt = t;
       } else if (w.killedAt && t - w.killedAt > KILL_GRACE_MS) {
         w.kill('SIGKILL');
+      }
+    }
+
+    if (!moved && !stopping) {
+      let change = null;
+      try { change = updated(); } catch {}
+      if (change) {
+        moved = change;
+        if (supervised) {
+          stop(`nuworq updated ${moved}`);
+          if (running.length) log(`nuworq updated ${moved}: restarting onto it once ${running.length} running worker(s) finish; starting no new ones.`);
+        } else log(`nuworq updated ${moved}, but this runner still runs the old code: restart it (Ctrl-C, then nuworq run again) to use the new one.`);
       }
     }
 
@@ -311,5 +328,7 @@ export async function run({
   const failed = done.filter((d) => d.code !== 0).length;
   const each = done.map((d) => `${d.name}@${d.project}:${d.code}`).join(', ');
   log(`Done: ${why}. ${launched} launched, ${done.length - failed} exited cleanly, ${failed} failed${each ? ` (${each})` : ''}${spent || maxUsd !== Infinity ? `; $${spent.toFixed(2)} spent` : ''}.`);
-  return { launched, done, why, spent };
+  const restart = !!(supervised && moved && !interrupted);
+  if (restart) log(`nuworq updated ${moved}: restarting onto it`);
+  return { launched, done, why, spent, restart };
 }

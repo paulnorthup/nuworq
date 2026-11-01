@@ -26,6 +26,19 @@ const running = (root) => { try { return releaseOf(readFileSync(join(root, 'src'
 // The commit an installed package was built from, or null.
 export const runningCommit = (root) => running(root)?.commit ?? null;
 
+// What is installed at root right now, read from disk each time (#456): { commit, version, label }, e.g. label
+// "0.4.0 (bf34a25)". A process compares it with what it read when it started, to tell the package changed under it.
+export function installed(root) {
+  const commit = runningCommit(root);
+  let version = null;
+  try { version = versionOf(readFileSync(join(root, 'package.json'), 'utf8')); } catch {}
+  const label = [version, commit && (version ? `(${commit.slice(0, 7)})` : commit.slice(0, 7))].filter(Boolean).join(' ') || 'unknown';
+  return { commit, version, label };
+}
+
+// Whether two installed() reads name different packages: by commit when both have one, else by version.
+export const differs = (a, b) => (a.commit && b.commit ? a.commit !== b.commit : a.version !== b.version);
+
 const pinnedKey = (root) => {
   try { return readFileSync(join(root, 'release-key.pub'), 'utf8').trim(); } catch { return null; }
 };
