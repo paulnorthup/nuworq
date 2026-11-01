@@ -47,7 +47,9 @@ describe('only real changes travel (#517)', () => {
   });
 
   test('presence that changes travels: a new agent, one back after a while, a tag gained', () => {
-    const { hub, changes, tick } = setup();
+    const { hub, changes: all, tick } = setup();
+    // Its going quiet and away while unseen are time changes (#530), counted in ago.test.js.
+    const changes = { get length() { return all.filter((c) => c.kind !== 'time').length; } };
     hub.agentOp('acme', 'checkin', 'claude-a');
     assert.equal(changes.length, 1, 'a new agent');
     tick(31 * MIN);
