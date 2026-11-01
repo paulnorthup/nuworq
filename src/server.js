@@ -675,7 +675,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const id = Number(url.searchParams.get('installation_id'));
       if (!ws || !spaces.has(ws) || !id) return deny(400, "this install didn't start from a workspace on this hub, or its link expired", 'Open your workspace, then Connect → Install the GitHub App, and finish the install within the hour.');
       if (!(await app.installedBy(url.searchParams.get('code'), id))) {
-        return deny(403, `GitHub says installation ${id} isn't on your account or an organization you're an admin of, so it isn't bound to ${ws}`, 'Install the app from your workspace on your own account, or on an organization where you are an admin, and let GitHub send you back here.');
+        return deny(403, `GitHub says installation ${id} isn't on your account or a GitHub organization you're an admin of, so it isn't bound to ${ws}`, 'Install the app from your workspace on your own account, or on a GitHub organization where you are an admin, and let GitHub send you back here.');
       }
       if (!dir.bindInstallation(id, ws)) return deny(409, 'that installation belongs to another workspace on this hub', 'Install the app for this workspace on its own account or repositories.');
       return redirect(res, `/w/${encodeURIComponent(ws)}/#github-installed`);

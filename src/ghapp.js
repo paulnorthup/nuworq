@@ -127,7 +127,7 @@ export class GitHubApp {
   async manages(account, tok) {
     const login = String(account?.login ?? '');
     if (!login) return false;
-    if (account.type === 'Organization') {
+    if (account.type !== 'User') {
       const r = await this.call('GET', `/user/memberships/orgs/${encodeURIComponent(login)}`, null, tok);
       return r.status === 200 && r.json?.state === 'active' && r.json?.role === 'admin';
     }

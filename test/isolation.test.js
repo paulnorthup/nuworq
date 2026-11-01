@@ -127,7 +127,7 @@ describe('a shared hub keeps organizations apart', () => {
       // A real state from bravo, but an installation_id its installer can't see: alpha's, forged into the redirect.
       const forged = await installed(installState(app, 'bravo'), 42, 'mallory');
       assert.equal(forged.status, 403);
-      assert.match((await forged.json()).error, /installation 42 isn't on your account or an organization you're an admin of/);
+      assert.match((await forged.json()).error, /installation 42 isn't on your account or a GitHub organization you're an admin of/);
       assert.equal(spaces.directory.installation(42), null, 'nothing bound');
       const noCode = await installed(installState(app, 'bravo'), 42, '');
       assert.equal(noCode.status, 400);

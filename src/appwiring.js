@@ -13,7 +13,7 @@ const PERMISSIONS = {
   metadata: { label: 'Metadata', without: "the hub can't see the repositories" },
   issues: { label: 'Issues', without: "GitHub issues won't come in as work, and the hub can't comment on or close them" },
   vulnerability_alerts: { label: 'Dependabot alerts', without: "Dependabot alerts won't come in as work" },
-  members: { label: 'Members', org: true, without: "an organization's admins can't connect its installation to their workspace" },
+  members: { label: 'Members', org: true, without: "a GitHub organization's admins can't connect its installation to their workspace" },
 };
 const EVENTS = {
   issues: { label: 'Issues', without: "new GitHub issues won't come in as work" },
