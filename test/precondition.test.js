@@ -296,3 +296,55 @@ describe('version preconditions: work that waits for a version', () => {
     } finally { gh.closeAllConnections(); gh.close(); }
   });
 });
+
+describe('date preconditions: work that waits for a day', () => {
+  test('a date: forgiving input, a day alone starts at midnight UTC', async () => {
+    assert.deepEqual(normPrecondition({ kind: 'date', after: '2026-11-08' }), { kind: 'date', after: '2026-11-08' });
+    assert.deepEqual(normPrecondition({ kind: 'date', after: '2026-11-08T09:30:00+01:00' }), { kind: 'date', after: '2026-11-08T08:30:00.000Z' });
+    assert.throws(() => normPrecondition({ kind: 'date' }), /needs after/);
+    assert.throws(() => normPrecondition({ kind: 'date', after: 'next week' }), /isn't a date/);
+    assert.throws(() => normPrecondition({ kind: 'date', after: '2026-13-40' }), /isn't a date/);
+    const pre = { kind: 'date', after: '2026-11-08' };
+    assert.deepEqual(await check(pre, { now: Date.UTC(2026, 10, 7, 23, 59) }), { ok: false, detail: 'not 2026-11-08 yet' });
+    assert.deepEqual(await check(pre, { now: Date.UTC(2026, 10, 8) }), { ok: true, detail: "it's 2026-11-08 or later" });
+    const refine = tools('mcp').find((t) => t.name === 'refine').inputSchema.properties.precondition.properties;
+    assert.ok(refine.kind.enum.includes('date') && refine.after);
+  });
+
+  test('a date: outside, asking no one and nothing, until the day; then ready on the sweep', async () => {
+    const { hub, advance, item } = setup(); // 2026-10-29 09:00 UTC
+    let fetched = 0;
+    const fetch = async () => { fetched++; throw new Error('no network'); };
+    hub.agentOp('w', 'propose', 'shaper', { title: 'Check the live hub a week on', acceptance: 'x', precondition: { kind: 'date', after: '2026-11-01' } });
+    assert.equal(item(1).stage, 'outside');
+    assert.equal(hub.q(`SELECT COUNT(*) n FROM questions`).get().n, 0, 'no question for a person');
+    assert.notEqual(hub.agentOp('w', 'next', 'builder').item, '#1');
+    assert.equal(hub.agentOp('w', 'look', 'builder', { item: '#1' }).precondition.waits_for, "it's 2026-11-01 or later");
+
+    await runChecks(hub, { fetch });
+    assert.equal(item(1).stage, 'outside');
+    assert.equal(item(1).next_check, Date.UTC(2026, 10, 1), 'looks again on the day, no backoff');
+    advance(MIN);
+    await runChecks(hub, { fetch });
+    assert.equal(item(1).check_fails, 1, 'not due before the day');
+
+    // Waiting on purpose is not overdue, however long it is.
+    hub.humanOp('w', 'settings', { wait_days: 1 });
+    advance(2 * 24 * 60 * MIN);
+    assert.equal(view(hub, 'w').attention.filter((a) => a.kind === 'outside-overdue').length, 0);
+
+    advance(24 * 60 * MIN); // 2026-11-01 09:01
+    await runChecks(hub, { fetch });
+    assert.equal(item(1).stage, 'ready');
+    assert.equal(fetched, 0);
+    assert.match(hub.q(`SELECT headline FROM events WHERE type = 'precondition_passed'`).get().headline, /#1's precondition passed: it's 2026-11-01 or later; it's ready/);
+
+    // A day already come leaves the work ready at once, proposed or refined.
+    hub.agentOp('w', 'propose', 'shaper', { title: 'Past', acceptance: 'x', precondition: { kind: 'date', after: '2026-10-01' } });
+    assert.equal(item(2).stage, 'ready');
+    hub.agentOp('w', 'refine', 'shaper', { item: '#2', precondition: { kind: 'date', after: '2026-12-01' } });
+    assert.equal(item(2).stage, 'outside');
+    hub.agentOp('w', 'refine', 'shaper', { item: '#2', precondition: { kind: 'date', after: '2026-10-31' } });
+    assert.equal(item(2).stage, 'ready');
+  });
+});

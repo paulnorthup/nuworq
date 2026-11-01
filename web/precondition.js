@@ -28,9 +28,11 @@ export function preconditionSection(it, { editing = false, now = Date.now() } = 
   const last = pre?.last_check;
   const status = !pre ? '' : pre.met ? `passed${last ? ` ${ago(now - last.at)} ago` : ''}`
     : pre.kind === 'ask' ? 'waiting for your answer, under Questions'
+    : pre.kind === 'date' ? 'ready by itself then'
     : last ? `last check ${ago(now - last.at)} ago: ${last.detail}` : 'not checked yet';
+  // A date needs no "check now": the hub knows the day.
   const acts = !open ? '' : editing ? ''
-    : `<div class="answer-row">${it.stage === 'outside' && pre.kind !== 'ask' ? `<button class="btn small" data-action="check-now" data-item="${esc(it.item)}">Check now</button>` : ''}
+    : `<div class="answer-row">${it.stage === 'outside' && !['ask', 'date'].includes(pre.kind) ? `<button class="btn small" data-action="check-now" data-item="${esc(it.item)}">Check now</button>` : ''}
       <button class="btn ghost small" data-action="edit-pre">Edit</button>
       <button class="btn ghost small" data-action="remove-pre" data-item="${esc(it.item)}">Remove</button></div>`;
   const form = editing ? `<div class="inline-form"><input data-draft="pre:${esc(it.item)}" id="pre:${esc(it.item)}" value="${esc(preconditionText(pre))}" placeholder="A URL that must answer 200, or a question for a person">
