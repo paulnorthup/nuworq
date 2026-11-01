@@ -325,7 +325,7 @@ async function upCmd(flags) {
   const read = s && existsSync(s.file) ? readService(readFileSync(s.file, 'utf8'), process.platform) : null;
   let up = false;
   if (read) { try { up = s.up(execFileSync(s.status[0], s.status.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })); } catch {} }
-  const runner = { supported: !!s, args: read?.args ?? null, cwd: read?.cwd && existsSync(read.cwd) ? read.cwd : null, up };
+  const runner = { supported: !!s, args: read?.args ?? null, cwd: read?.cwd && existsSync(read.cwd) ? read.cwd : null, tokenFile: read?.tokenFile && existsSync(read.tokenFile) ? read.tokenFile : null, up };
 
   // Each project's clone here, found as the runner finds them: from where it runs, beside it, and NUWORQ_REPOS.
   const from = runner.cwd ?? process.cwd();
@@ -375,7 +375,7 @@ async function upCmd(flags) {
   if (plan.runner.action === 'install' || plan.runner.action === 'restart') {
     const before = process.exitCode;
     try {
-      await runService(flags, { argv: plan.runner.args, cwd: plan.runner.cwd ?? process.cwd() });
+      await runService(flags, { argv: plan.runner.args, cwd: plan.runner.cwd ?? process.cwd(), agentTokenFile: plan.runner.tokenFile });
       if (process.exitCode && process.exitCode !== before) plan.runner = { ...plan.runner, action: 'failed', why: "it didn't come up; see the lines above" };
     } catch (e) { plan.runner = { ...plan.runner, action: 'failed', why: e.message }; }
     console.log('');
@@ -944,8 +944,9 @@ function workerSetup(target, agent, flags, s, token = null) {
 // `nuworq run --install [run flags]`: the same runner as a LaunchAgent (macOS) or systemd user unit (Linux), so
 // it outlives the terminal and comes back after a reboot. --uninstall stops and removes it (#172).
 // argv: the run flags the service keeps (connect and staff pass their own: #490). cwd: where it starts, this folder
-// unless given (nuworq up keeps the folder an installed runner had: #559).
-async function runService(flags, { argv = process.argv.slice(3), cwd = process.cwd() } = {}) {
+// unless given (nuworq up keeps the folder an installed runner had: #559). agentTokenFile: the token file an installed
+// runner had, kept when no --agent-token is given (nuworq up restarting it: #582).
+async function runService(flags, { argv = process.argv.slice(3), cwd = process.cwd(), agentTokenFile: kept = null } = {}) {
   const svc = await import('../src/service.js');
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
@@ -964,7 +965,7 @@ async function runService(flags, { argv = process.argv.slice(3), cwd = process.c
   // --agent-token never goes on the service's command line, where ps shows it: a 0600 file it reads instead.
   const taken = svc.takeToken(args);
   args = taken.args;
-  const agentTokenFile = taken.token ? tokenFile(dirname(HUB_FILE), 'run-agent', taken.token) : null;
+  const agentTokenFile = taken.token ? tokenFile(dirname(HUB_FILE), 'run-agent', taken.token) : kept;
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
   // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
   // NUWORQ_SERVICE: it knows it's the service, so it may exit to move onto a newly installed nuworq (#456).

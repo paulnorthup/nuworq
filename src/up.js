@@ -8,24 +8,33 @@ export const SESSION = 'nuworq'; // the tmux session operators open in, one wind
 
 const unxml = (s) => String(s).replace(/&(lt|gt|quot|apos|amp);/g, (_, e) => ({ lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' }[e]));
 
-// The runner's service definition (src/service.js wrote it), read back: { args, cwd } where args are its run flags
-// (what follows `run`). null when there is no definition, or one this can't read.
+// One systemd word, unquoted: what service.js's word() wrote, back as it was.
+const unword = (s) => s.replace(/\\(.)/g, '$1').replace(/\$\$/g, '$').replace(/%%/g, '%');
+
+// The runner's service definition (src/service.js wrote it), read back: { args, cwd, tokenFile } where args are its
+// run flags (what follows `run`) and tokenFile its NUWORQ_AGENT_TOKEN_FILE, the --agent-token it was installed with
+// (#582). null when there is no definition, or one this can't read.
 export function readService(text, platform) {
   if (!text) return null;
-  let command = null, cwd = null;
+  let command = null, cwd = null, tokenFile = null;
   if (platform === 'darwin') {
     const array = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text);
     if (array) command = [...array[1].matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => unxml(m[1]));
     const dir = /<key>WorkingDirectory<\/key>\s*<string>([\s\S]*?)<\/string>/.exec(text);
     if (dir) cwd = unxml(dir[1]);
+    const vars = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(text);
+    const token = vars && /<key>NUWORQ_AGENT_TOKEN_FILE<\/key>\s*<string>([\s\S]*?)<\/string>/.exec(vars[1]);
+    if (token) tokenFile = unxml(token[1]);
   } else if (platform === 'linux') {
     const exec = /^ExecStart=(.*)$/m.exec(text);
-    if (exec) command = [...exec[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\(.)/g, '$1').replace(/\$\$/g, '$').replace(/%%/g, '%'));
+    if (exec) command = [...exec[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => unword(m[1]));
     const dir = /^WorkingDirectory=(.*)$/m.exec(text);
     if (dir) cwd = dir[1].replace(/%%/g, '%');
+    const token = /^Environment="NUWORQ_AGENT_TOKEN_FILE=((?:[^"\\]|\\.)*)"$/m.exec(text);
+    if (token) tokenFile = unword(token[1]);
   }
   const at = command?.indexOf('run') ?? -1;
-  return at < 0 ? null : { args: command.slice(at + 1), cwd };
+  return at < 0 ? null : { args: command.slice(at + 1), cwd, tokenFile };
 }
 
 // --workers auto, in place of any --workers the flags had; the rest stay.
@@ -46,23 +55,28 @@ const isAuto = (args = []) => args.some((a, i) => a === '--workers=auto' || (a =
 //   declined: slugs whose staffing the person said no to before;
 //   clones: { [slug]: { folder } } for a local clone, { [slug]: { hint } } for none (the hint says where to clone);
 //   local: { [slug]: true } for an operator this machine started that still runs (it may not have checked in yet);
-//   runner: { supported, args, cwd, up } from its service file (args null: none installed) and its status.
-// Returns { runner: { action: 'install' | 'restart' | 'keep' | 'none', why, args, cwd }, staff: [projects to ask about],
-// rows: [{ slug, name, parked, staffed, operator: { state: 'running' | 'start' | 'skip', why, folder } }] }.
+//   runner: { supported, args, cwd, tokenFile, up } from its service file (args null: none installed) and its status.
+// Returns { runner: { action: 'install' | 'restart' | 'keep' | 'none', why, args, cwd, tokenFile }, staff: [projects
+// to ask about], rows: [{ slug, name, parked, staffed, operator: { state: 'running' | 'start' | 'skip', why, folder } }] }.
+// A restart keeps the runner's tokenFile, so it keeps the --agent-token it was installed with (#582).
 export function upPlan({ projects = [], declined = [], clones = {}, local = {}, runner = {} }) {
   let r;
+  const keep = { cwd: runner.cwd, ...(runner.tokenFile ? { tokenFile: runner.tokenFile } : {}) };
   if (runner.supported === false) r = { action: 'none', why: "this platform has no service manager nuworq knows: run `nuworq run --workers auto` under your own" };
   else if (!runner.args) r = { action: 'install', why: 'no runner is installed here', args: ['--workers', 'auto'] };
-  else if (!isAuto(runner.args)) r = { action: 'restart', why: `its flags were ${runner.args.join(' ') || 'none'}`, args: autoArgs(runner.args), cwd: runner.cwd };
-  else if (!runner.up) r = { action: 'restart', why: "it isn't running", args: runner.args, cwd: runner.cwd };
+  else if (!isAuto(runner.args)) r = { action: 'restart', why: `its flags were ${runner.args.join(' ') || 'none'}`, args: autoArgs(runner.args), ...keep };
+  else if (!runner.up) r = { action: 'restart', why: "it isn't running", args: runner.args, ...keep };
   else r = { action: 'keep', why: 'it runs with --workers auto', args: runner.args };
   const staff = projects.filter((p) => !p.parked && !p.runner && !declined.includes(p.slug));
   const rows = projects.map((p) => {
-    const ops = p.operators ?? [];
+    // A hub older than #559 doesn't list operators: none listed isn't none running, so start none (#582).
+    const listed = Array.isArray(p.operators);
+    const ops = listed ? p.operators : [];
     const who = ops.length ? ops.map((o) => (o.machine ? `${o.name} on ${o.machine}` : o.name)).join(', ') : local[p.slug] ? 'started here' : null;
     let operator;
     if (who) operator = { state: 'running', why: p.parked ? `${who}; ${p.name ?? p.slug} is parked, so stop it` : who };
     else if (p.parked) operator = { state: 'skip', why: 'parked' };
+    else if (!listed) operator = { state: 'skip', why: "the hub doesn't say which operators run; update it" };
     else if (clones[p.slug]?.folder) operator = { state: 'start', folder: clones[p.slug].folder };
     else operator = { state: 'skip', why: `no clone here: ${clones[p.slug]?.hint ?? 'clone its repository first'}` };
     return { slug: p.slug, name: p.name ?? p.slug, parked: !!p.parked, staffed: !!p.runner, operator };
