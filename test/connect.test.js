@@ -93,6 +93,10 @@ describe('nuworq connect', () => {
     const calls = join(home, 'claude-calls');
     writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho "$*" >> ${JSON.stringify(calls)}\n[ "$2" = get ] && exit 1\nexit 0\n`);
     chmodSync(join(bin, 'claude'), 0o755);
+    // pi: a stub too, so this machine's own pi (if any) is never what answers.
+    const piCalls = join(home, 'pi-calls');
+    writeFileSync(join(bin, 'pi'), `#!/bin/sh\necho "PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR $*" >> ${JSON.stringify(piCalls)}\nexit 0\n`);
+    chmodSync(join(bin, 'pi'), 0o755);
     mkdirSync(join(home, '.codex'));
     const toml = '[mcp_servers.other]\ncommand = "other"\n';
     writeFileSync(join(home, '.codex', 'config.toml'), toml);
@@ -102,6 +106,7 @@ describe('nuworq connect', () => {
     const env = envFor(home, { PATH: `${bin}${delimiter}${process.env.PATH}` });
     const read = {
       claude: () => (existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : []),
+      pi: () => (existsSync(piCalls) ? readFileSync(piCalls, 'utf8').trim().split('\n') : []),
       codex: () => readFileSync(join(home, '.codex', 'config.toml'), 'utf8'),
       opencode: () => JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8')),
     };
@@ -149,12 +154,13 @@ describe('nuworq connect', () => {
       assert.match(out.stdout, /Claude Code: added the nuworq MCP server/);
       assert.match(out.stdout, /Codex: added the nuworq MCP server/);
       assert.match(out.stdout, /opencode: added the nuworq MCP server/);
+      assert.match(out.stdout, /pi: added the nuworq MCP server \(\S+\/\.pi\/agent\/mcp\.json\)/);
 
       assert.equal(statSync(m.file).mode & 0o777, 0o600);
       const saved = JSON.parse(readFileSync(m.file, 'utf8'));
       assert.equal(saved.url, url);
       assert.ok(saved.token.startsWith('nwq_'));
-      assert.deepEqual(saved.added.map((a) => a.tool), ['claude', 'codex', 'opencode', 'skill']);
+      assert.deepEqual(saved.added.map((a) => a.tool), ['claude', 'codex', 'opencode', 'pi', 'skill']);
       assert.ok(!out.stdout.includes(saved.token), 'the token is never printed');
       // No plugin and no one at a terminal to ask (#432): it says how to get the plugin, and writes the skills,
       // generated, pointing at this hub's guide, under names that keep clear of a person's own.
@@ -174,6 +180,7 @@ describe('nuworq connect', () => {
       assert.deepEqual(m.read.opencode().mcp.other, m.oc.mcp.other);
       assert.equal(m.read.opencode().theme, 'dark');
       assert.deepEqual(m.read.opencode().mcp.nuworq.command, ['node', BIN, 'mcp']);
+      assert.deepEqual(m.read.pi(), [`PI_CODING_AGENT_DIR= mcp add nuworq --exposure direct -- node ${BIN} mcp`]);
       for (const text of [m.read.codex(), JSON.stringify(m.read.opencode())]) assert.ok(!text.includes(saved.token));
 
       // No env, no flags: the CLI reaches the hub with the saved agent token.
@@ -190,6 +197,7 @@ describe('nuworq connect', () => {
       assert.equal(m.read.codex(), m.toml, 'Codex config is exactly as before');
       assert.deepEqual(m.read.opencode(), m.oc, 'opencode config has its own entries and nothing else');
       assert.equal(m.read.claude().at(-1), 'mcp remove --scope user nuworq');
+      assert.equal(m.read.pi().at(-1), 'PI_CODING_AGENT_DIR= mcp remove nuworq');
       assert.ok(!existsSync(skillFile) && !existsSync(dirname(skillFile)), 'the skill is gone too');
       assert.ok(!existsSync(planFile) && !existsSync(dirname(planFile)), 'and the shaper skill');
 
@@ -219,7 +227,7 @@ describe('nuworq connect', () => {
       assert.equal(await role(one), null);
       assert.equal(await role(two), 'agent');
       assert.equal(m.read.codex().match(/\[mcp_servers\.nuworq\]/g).length, 1);
-      assert.deepEqual(JSON.parse(readFileSync(m.file, 'utf8')).added.map((a) => a.tool), ['claude', 'codex', 'opencode', 'skill'], 'still recorded for disconnect, the skill once');
+      assert.deepEqual(JSON.parse(readFileSync(m.file, 'utf8')).added.map((a) => a.tool), ['claude', 'codex', 'opencode', 'pi', 'skill'], 'still recorded for disconnect, the skill once');
       await cli(['disconnect'], { env: m.env });
       assert.equal(m.read.codex(), m.toml);
 
@@ -258,7 +266,7 @@ describe('nuworq connect', () => {
       assert.doesNotMatch(r.stdout, /takes nuworq best as its plugin/, 'nothing to suggest');
       assert.deepEqual(fresh.read.claude(), [], 'no second MCP server');
       assert.ok(!existsSync(skillDir(fresh.home)), 'no second copy of the skills');
-      assert.deepEqual(JSON.parse(readFileSync(fresh.file, 'utf8')).added.map((a) => a.tool), ['codex', 'opencode']);
+      assert.deepEqual(JSON.parse(readFileSync(fresh.file, 'utf8')).added.map((a) => a.tool), ['codex', 'opencode', 'pi']);
 
       // Connected before the plugin: connecting again removes the server and skills it added, and says so.
       const before = machine();
@@ -270,7 +278,7 @@ describe('nuworq connect', () => {
       assert.match(again.stdout, /left to the nuworq plugin.*; removed what an earlier connect added: its MCP server and the nuworq, nuworq-shaper and nuworq-operator skills in \S+\.claude\/skills/);
       assert.equal(before.read.claude().at(-1), 'mcp remove --scope user nuworq');
       for (const name of Object.keys(userSkills())) assert.ok(!existsSync(join(before.home, '.claude', 'skills', name)), `${name} is gone`);
-      assert.deepEqual(JSON.parse(readFileSync(before.file, 'utf8')).added.map((a) => a.tool), ['codex', 'opencode']);
+      assert.deepEqual(JSON.parse(readFileSync(before.file, 'utf8')).added.map((a) => a.tool), ['codex', 'opencode', 'pi']);
     } finally {
       server.close();
     }

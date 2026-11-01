@@ -98,7 +98,9 @@ export function runMcp({ input = process.stdin, output = process.stdout, env = p
         // Whoever launched us knows the model better than the model does (open-weight ones say "unknown").
         const model = envVar('MODEL', env);
         if (model) args.model = model;
-        if (!args.client && clientName) args.client = clientName;
+        // And the tool it runs in: models copy the schema's example ("claude-code") whatever they run in (#495).
+        if (envVar('CLIENT', env)) args.client = envVar('CLIENT', env);
+        else if (!args.client && clientName) args.client = clientName;
         // Whoever launched us detected what this machine can do (nuworq worker sets it).
         const has = envVar('HAS', env);
         if (args.has == null && has) args.has = has.split(',');

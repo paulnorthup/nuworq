@@ -45,7 +45,7 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
 
   test("its shell doesn't read Claude Code's or opencode's own logins (#580, #581)", () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
-    for (const p of ['~/.claude/.credentials.json', '~/.config/opencode', '~/.local/share/opencode']) assert.ok(filesystem.denyRead.includes(p), p);
+    for (const p of ['~/.claude/.credentials.json', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent']) assert.ok(filesystem.denyRead.includes(p), p);
   });
 
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
@@ -101,7 +101,7 @@ describe("a worker's file tools stay where its shell does (#472)", () => {
   test("its file tools don't read or edit Claude Code's or opencode's own logins (#580, #581)", () => {
     const perms = filePermissions({ home, worktree });
     for (const r of ['Read(~/.claude/.credentials.json)', 'Edit(~/.claude/.credentials.json)', 'Read(~/.config/opencode)', 'Read(~/.config/opencode/**)', 'Edit(~/.config/opencode)', 'Edit(~/.config/opencode/**)', 'Read(~/.local/share/opencode)', 'Read(~/.local/share/opencode/**)', 'Edit(~/.local/share/opencode)', 'Edit(~/.local/share/opencode/**)']) assert.ok(perms.deny.includes(r), r);
-    for (const p of [join(me, '.claude', '.credentials.json'), join(me, '.config', 'opencode', 'opencode.json'), join(me, '.config', 'opencode', 'auth.json'), join(me, '.local', 'share', 'opencode', 'auth.json'), join(me, '.local', 'share', 'opencode', 'mcp-auth.json')]) {
+    for (const p of [join(me, '.claude', '.credentials.json'), join(me, '.config', 'opencode', 'opencode.json'), join(me, '.config', 'opencode', 'auth.json'), join(me, '.local', 'share', 'opencode', 'auth.json'), join(me, '.local', 'share', 'opencode', 'mcp-auth.json'), join(me, '.pi', 'agent', 'auth.json'), join(me, '.pi', 'agent', 'models.json')]) {
       for (const tool of ['Read', 'Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
     }
     assert.ok(may(perms, 'Read', join(me, '.claude', 'settings.json')), 'the rest of ~/.claude stays readable');

@@ -45,7 +45,8 @@ export function split(u, weights) {
 // a person (the log stays readable), or null to show nothing; usage() is what the run cost so far.
 // Which CLIs: claude (-p --output-format stream-json --verbose: the final `result` event has
 // total_cost_usd and usage; `system/init` names the model), codex (exec --json: `turn.completed`
-// carries token counts, no cost), opencode (run --format json: `step_finish` parts carry tokens and cost).
+// carries token counts, no cost), opencode (run --format json: `step_finish` parts carry tokens and cost),
+// pi (-p --mode json: an assistant `message_end` carries its usage, cost.total among it).
 export function tap(agent, { model = '' } = {}) {
   let input = 0, output = 0, cost = null, seen = false, name = model;
   const add = (i, o, c) => { seen = true; input += Number(i) || 0; output += Number(o) || 0; if (c != null && Number.isFinite(Number(c))) cost = (cost ?? 0) + Number(c); };
@@ -76,6 +77,14 @@ export function tap(agent, { model = '' } = {}) {
       }
       if (e.type === 'text') return e.part?.text ?? null;
       return null;
+    },
+    // pi -p --mode json: each assistant message's message_end carries that call's usage, priced from pi's catalog.
+    pi(e) {
+      if (e.type !== 'message_end' || e.message?.role !== 'assistant') return null;
+      const u = e.message.usage ?? {};
+      add((u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0), u.output, u.cost?.total);
+      if (!name && e.message.provider && e.message.model) name = `${e.message.provider}/${e.message.model}`;
+      return text(e.message.content);
     },
   };
   const parse = parsers[agent];
