@@ -30,6 +30,24 @@ describe('the runner', () => {
     assert.equal(readService('<plist/>', 'darwin'), null);
   });
 
+  test('#582: a restart keeps the token file the runner was installed with, on launchd and systemd', () => {
+    const command = [NODE, BIN, 'run', '--workers', '2'];
+    const tokenFile = '/h/.nuworq/run-agent 50%$x.token';
+    const env = { PATH: '/usr/bin', NUWORQ_SERVICE: 'dev.nuworq.run', NUWORQ_AGENT_TOKEN_FILE: tokenFile };
+    for (const [platform, write] of [['darwin', launchdPlist], ['linux', systemdUnit]]) {
+      const read = readService(write({ command, env, log: '/l', cwd: '/src/a' }), platform);
+      assert.equal(read.tokenFile, tokenFile, platform);
+      const plan = upPlan({ projects: [], runner: { supported: true, ...read, up: true } });
+      assert.deepEqual([plan.runner.action, plan.runner.tokenFile], ['restart', tokenFile], platform);
+      // The new service, written with that file in its env as runService does, still has it.
+      const again = write({ command: [NODE, BIN, 'run', ...plan.runner.args], env: { ...env, NUWORQ_AGENT_TOKEN_FILE: plan.runner.tokenFile }, log: '/l', cwd: plan.runner.cwd });
+      assert.equal(readService(again, platform).tokenFile, tokenFile, platform);
+      const none = readService(write({ command, env: { PATH: '/usr/bin' }, log: '/l' }), platform);
+      assert.equal(none.tokenFile, null, platform);
+      assert.equal('tokenFile' in upPlan({ projects: [], runner: { supported: true, ...none, up: false } }).runner, false, platform);
+    }
+  });
+
   test('--workers auto replaces any --workers, and keeps the rest', () => {
     assert.deepEqual(autoArgs(['--workers', '3', '--agent', 'codex']), ['--agent', 'codex', '--workers', 'auto']);
     assert.deepEqual(autoArgs(['--workers=1']), ['--workers', 'auto']);
@@ -77,6 +95,18 @@ describe('staffing and operators', () => {
     assert.deepEqual(op['llm-proxy'], { state: 'skip', why: 'no clone here: git clone github.com/p/llm-proxy /src/llm-proxy' });
     assert.equal(op['cancer-hub'].state, 'running');
     assert.match(op['cancer-hub'].why, /op-old; cancer-hub is parked, so stop it/);
+  });
+
+  test("#582: a hub that doesn't list operators gets none started, and up says why", () => {
+    const projects = day().map(({ operators, ...p }) => p);
+    const plan = upPlan({ projects, clones, runner: auto });
+    const op = Object.fromEntries(plan.rows.map((r) => [r.slug, r.operator]));
+    const why = "the hub doesn't say which operators run; update it";
+    for (const slug of ['llm-proxy', 'nuworq', 'nuworq-site']) assert.deepEqual(op[slug], { state: 'skip', why }, slug);
+    assert.deepEqual(op['cancer-hub'], { state: 'skip', why: 'parked' });
+    assert.deepEqual(plan.rows.filter((r) => r.operator.state === 'start'), []);
+    // One this machine started still reads as running.
+    assert.equal(upPlan({ projects, clones, local: { nuworq: true }, runner: auto }).rows.find((r) => r.slug === 'nuworq').operator.state, 'running');
   });
 
   test('the table: each project, parked, staffed, its operator, then the runner', () => {
