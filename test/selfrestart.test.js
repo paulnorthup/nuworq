@@ -139,7 +139,8 @@ describe('nuworq run, when its package is replaced on disk (#456)', () => {
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
     const exited = new Promise((r) => child.on('exit', (code) => r(code)));
-    const until = async (re) => { for (let i = 0; i < 300 && !re.test(out); i++) await tick(50); assert.match(out, re); };
+    // Up to 30s: a cold node starting the whole CLI on a loaded CI runner can take a while to its first round.
+    const until = async (re) => { for (let i = 0; i < 600 && !re.test(out); i++) await tick(50); assert.match(out, re); };
     const update = () => writeFileSync(join(pkg, 'src', 'commit.txt'), `${'b'.repeat(40)} 1793462999\n`);
     return { child, exited, until, update, out: () => out, close: () => { child.kill('SIGKILL'); server.close(); } };
   }
