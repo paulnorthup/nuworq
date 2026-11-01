@@ -800,7 +800,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     const url = new URL(req.url, 'http://local');
     let path = url.pathname;
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
-    let answered = null; // a write with an idempotency key keeps its answer (#524)
+    let answered = null, applying = null; // a write with an idempotency key keeps its answer, and is applied once (#524)
     const send = (status, body, type = 'application/json; charset=utf-8') => {
       answered?.(status, body, type);
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -1102,11 +1102,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           res.setHeader('x-nuworq-replay', 'pending');
           return deny(409, 'this call is still being applied', 'The client tries it again in a moment and gets its answer.');
         }
-        inFlight.add(id);
-        res.on('close', () => inFlight.delete(id));
+        inFlight.add(applying = id);
+        // Kept as it's sent, before the key leaves inFlight (in the finally below), so a retry finds one or the other.
         answered = (status, body, type) => {
           answered = null;
-          inFlight.delete(id);
           if (status < 500 && type.startsWith('application/json')) keepReply(hub, id, status, body);
         };
       }
@@ -1586,6 +1585,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (e instanceof UserError) return send(e.status, { ok: false, error: e.message, ...(e.hint ? { hint: e.hint } : {}) });
       console.error(e);
       send(500, { ok: false, error: String(e?.message ?? e) });
+    } finally {
+      // Only once the handler is done (#524), never when the connection drops: a proxy giving up mid-write is what
+      // the retry is for, and the write may still be applying.
+      if (applying) inFlight.delete(applying);
     }
   });
   if (!spaces) server.auth = scopeOf(target).authz;

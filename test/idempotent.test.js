@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { Hub } from '../src/core.js';
 import { createServer as hubServer } from '../src/server.js';
@@ -62,6 +62,40 @@ describe('a write retried through a 502 is applied once', () => {
       } finally { s.close(); }
     });
   }
+
+  test('a connection dropped while the write is still applying: the retry waits as pending, then gets its answer, applied once', async () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('p', { create: true }));
+    const { item } = hub.agentOp('p', 'propose', 'b1', { title: 'Slow', acceptance: 'works' });
+    hub.agentOp('p', 'claim', 'b1', { item });
+    // submit fetches the mirror first (hub.prefetch): held open here until the test lets it go.
+    let release;
+    const held = new Promise((r) => { release = r; });
+    hub.prefetch = () => held;
+    const hs = hubServer(hub);
+    const port = await listen(hs);
+    const headers = { 'content-type': 'application/json', 'x-nuworq-agent': 'b1', 'idempotency-key': 'slow-1' };
+    const body = JSON.stringify({ item, headline: 'Built' });
+    try {
+      // The first try: sent, then its connection dropped mid-write, as a proxy giving up does.
+      await new Promise((done) => {
+        const req = request({ host: '127.0.0.1', port, method: 'POST', path: '/api/p/p/agent/submit', headers }, () => {});
+        req.on('error', () => done());
+        req.end(body, () => setTimeout(() => { req.destroy(); done(); }, 50));
+      });
+      await new Promise((r) => setTimeout(r, 50));
+      const retry = await fetch(`http://127.0.0.1:${port}/api/p/p/agent/submit`, { method: 'POST', headers, body });
+      assert.equal(retry.status, 409);
+      assert.equal(retry.headers.get('x-nuworq-replay'), 'pending');
+      await retry.text();
+      release();
+      await new Promise((r) => setTimeout(r, 50));
+      const again = await fetch(`http://127.0.0.1:${port}/api/p/p/agent/submit`, { method: 'POST', headers, body });
+      assert.equal(again.status, 200);
+      assert.equal((await again.json()).ok, true, "the first try's answer");
+      assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE type = 'submitted'`).get().n, 1, 'applied once');
+    } finally { hs.close(); hs.closeAllConnections(); }
+  });
 
   test("a key is the caller's own: another agent's call with the same key is its own write", async () => {
     const s = await setup(false);
