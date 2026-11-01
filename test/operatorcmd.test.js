@@ -22,23 +22,56 @@ describe('nuworq operator', () => {
     cwd: home, env: { HOME: home, PATH: join(process.execPath, '..'), NO_COLOR: '1', NUWORQ_NO_UPDATE: '1', NUWORQ_URL: 'http://127.0.0.1:9' },
   });
 
-  test('prints the has list and the /nuworq:operator line with that list, and no /loop', async () => {
+  test('prints the bare /nuworq:operator line (capabilities are detected when it starts), and no /loop', async () => {
     const { stdout } = await run('--project', 'nuworq');
-    const declared = stdout.match(/^Declare: (.+?)(  |$)/m)[1].split(', ');
-    assert.equal(declared[0], 'operator');
-    assert.ok(declared.includes({ darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform]), 'the platform is detected');
-    assert.ok(stdout.includes(`\n${operatorStart(declared)}\n`), 'the shared start line, on its own line');
-    assert.match(stdout, /^\/nuworq:operator \S+$/m);
-    assert.match(stdout, /\(Without the nuworq plugin: \/nuworq-operator \S+\.\)/, 'and the copy connect writes without the plugin (#432)');
+    assert.ok(stdout.includes(`\n${operatorStart()}\n`), 'the shared start line, on its own line');
+    assert.match(stdout, /^\/nuworq:operator$/m, 'nothing typed after it (#494)');
+    assert.match(stdout, /Capabilities are optional: left out, it detects what this session can do \(see nuworq operator --detect\)/);
+    assert.match(stdout, /\(Without the nuworq plugin: \/nuworq-operator\.\)/, 'and the copy connect writes without the plugin (#432)');
     assert.match(stdout, /nuworq's folder/);
     assert.doesNotMatch(stdout, /^\/loop/m, 'no /loop line to paste');
   });
 
-  test('--has replaces what was detected; operator is implied, not repeated', async () => {
+  test('--has types them instead; operator is implied, not repeated', async () => {
     const { stdout } = await run('--project', 'acme', '--has', 'claude-cli,Browser,operator');
-    assert.match(stdout, /^Declare: operator, claude-cli, browser$/m);
+    assert.match(stdout, /^It declares operator, claude-cli, browser\.$/m);
     assert.match(stdout, /^\/nuworq:operator claude-cli,browser$/m);
     assert.doesNotMatch(stdout, /macos|linux/);
+  });
+
+  // #494: the one place detection lives, with a reason for each tag in or out.
+  test('--detect says what to declare and why; the infra check is this machine\'s own', async () => {
+    const d = await run('--detect');
+    assert.match(d.stdout, /^Declare: operator,/);
+    assert.match(d.stdout, /✗ claude-cli: claude doesn't run here/, 'PATH holds no claude');
+    assert.match(d.stdout, /✓ infra: a person started this attended operator here/);
+    assert.match(d.stdout.trim().split('\n').at(-1), /^Operator: /);
+    assert.match((await run('--infra-check', 'false')).stdout, /infra is declared only while false passes/);
+    assert.match((await run('--detect')).stdout, /✗ infra: its check failed \(false\)/);
+    assert.match((await run('--infra-check', 'true')).stdout, /only while true passes/);
+    assert.match((await run('--detect')).stdout, /✓ infra: its check passed \(true\)/);
+    assert.match((await run('--without', 'infra')).stdout, /declares no infra/);
+    assert.match((await run('--detect')).stdout, /✗ infra: this machine was set --without infra/);
+    await run('--with', 'infra');
+    await run('--infra-check', '');
+    assert.match((await run('--detect')).stdout, /✓ infra: a person started/);
+  });
+
+  test('--allow writes the rules into the project\'s settings.local.json only on a yes, and --off takes exactly those out', async () => {
+    const proj = mkdtempSync(join(tmpdir(), 'nuworq-allow-'));
+    const file = join(proj, '.claude', 'settings.local.json');
+    mkdirSync(join(proj, '.claude'));
+    writeFileSync(file, JSON.stringify({ permissions: { allow: ['Bash(ls:*)'] }, model: 'x' }));
+    const at = (...a) => promisify(execFile)(process.execPath, [BIN, 'operator', ...a], { cwd: proj, env: { HOME: home, PATH: join(process.execPath, '..'), NO_COLOR: '1', NUWORQ_NO_UPDATE: '1', NUWORQ_URL: 'http://127.0.0.1:9' } });
+    assert.match((await at('--allow')).stdout, /Nothing changed: run it at a terminal, or with --yes/, 'no terminal: no yes');
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).permissions.allow, ['Bash(ls:*)']);
+    assert.match((await at('--allow', '--yes')).stdout, /Added \d+ rules to .*settings\.local\.json\. Undo: nuworq operator --allow --off/);
+    const cfg = JSON.parse(readFileSync(file, 'utf8'));
+    assert.equal(cfg.model, 'x', 'the rest stays');
+    assert.ok(cfg.permissions.allow.includes('Bash(nuworq:*)') && cfg.permissions.allow.includes('Bash(ls:*)'));
+    assert.ok(cfg.permissions.deny.includes('Bash(git push --force:*)'));
+    await at('--allow', '--off');
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { permissions: { allow: ['Bash(ls:*)'] }, model: 'x' });
   });
 
   // #419: the plugin updates the skill, never the CLI the listener runs.
@@ -61,11 +94,11 @@ describe('nuworq operator', () => {
     try {
       const old = (await at('--project', 'acme', '--has', 'macos')).stdout.split('\n');
       assert.match(old[0], /is older than the operator listener needs; update it: /);
-      assert.match(old[1], /^Declare: operator, macos$/);
+      assert.match(old[1], /^Start it: /);
       assert.match((await at('--check', '1').catch((e) => e)).stdout, /is older than the operator listener needs/, 'the hub wins over a lower --check');
       level = LISTENER;
       const current = await at('--project', 'acme', '--has', 'macos');
-      assert.ok(current.stdout.startsWith('Declare: operator, macos\n'), 'nothing before it');
+      assert.ok(current.stdout.startsWith('Start it: '), 'nothing before it');
       assert.equal((await at('--check', String(LISTENER))).stdout, '');
     } finally {
       hub.close();
@@ -97,7 +130,7 @@ describe('one start line for the skill, the README and the command; no /loop any
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     assert.ok(readme.includes(operatorStart()));
     assert.ok(readme.includes(OPERATOR_WAIT));
-    assert.match(readme, /`nuworq operator --project <project>`/);
+    assert.match(readme, /Capabilities are optional\. Left out, the session runs `nuworq operator --detect`/);
     for (const text of [g, readme, skill(), operatorSkill()]) assert.doesNotMatch(text, /\/loop (Work|Run)|paste the \/loop/);
   });
 
@@ -137,8 +170,10 @@ describe('an operator keeps work moving and asks the human only for what only th
 // then idles on the listener instead of looping.
 describe('the operator skill', () => {
   const s = operatorSkill();
-  test('only a person invokes it, with capabilities as its argument', () => {
-    assert.match(s, /^---\nname: operator\ndescription: .+ e\.g\. \/nuworq:operator macos,browser,claude-cli .+\ndisable-model-invocation: true\nargument-hint: .+\n---\n/);
+  test('only a person invokes it, with capabilities as an optional argument; none given, it detects them', () => {
+    assert.match(s, /^---\nname: operator\ndescription: .+capabilities are optional.+ e\.g\. \/nuworq:operator macos,browser,claude-cli\.\ndisable-model-invocation: true\nargument-hint: \[capabilities, optional: detected when left out\]\n---\n/);
+    assert.match(s, /None given: run `nuworq operator --detect` and use the tags on its `Declare:` line/);
+    assert.match(s, /Your first line to the person is the last line --detect printed/);
     assert.match(operatorSkill({ name: 'nuworq-operator' }), /^---\nname: nuworq-operator\ndescription: .+ e\.g\. \/nuworq-operator macos/, 'the copy in ~/.claude/skills names its own command');
     assert.match(s, /\$ARGUMENTS/);
   });

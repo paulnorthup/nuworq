@@ -1,15 +1,15 @@
 ---
 name: operator
-description: Start this session as nuworq's operator. Only a person invokes it, with this machine's capabilities, e.g. /nuworq:operator macos,browser,claude-cli (nuworq operator prints the line).
+description: Start this session as nuworq's operator. Only a person invokes it, as /nuworq:operator; capabilities are optional (left out, it detects what this session can do), e.g. /nuworq:operator macos,browser,claude-cli.
 disable-model-invocation: true
-argument-hint: <capabilities, e.g. macos,browser,claude-cli>
+argument-hint: [capabilities, optional: detected when left out]
 ---
 
 # Operator for nuworq
 
 The person started you as the operator: a trusted, attended session with their permissions and safety checks. Capabilities they gave you: $ARGUMENTS
 
-1. **Check in:** `checkin` with `has` = `["operator"]` plus each capability above, comma-separated (none given: just `["operator"]`). Declare nothing else. `ack` any steering.
+1. **Check in:** `checkin` with `has` = `["operator"]` plus each capability above, comma-separated. None given: run `nuworq operator --detect` and use the tags on its `Declare:` line, which it proves on this machine. Declare nothing else. Your first line to the person is the last line --detect printed (e.g. "Operator: macos, claude-cli, github-admin (admin on acme/api), infra"), or with typed capabilities "Operator: " and those. `ack` any steering.
 2. **Work until nothing waits:** take `next` again and again. Mode answer is an operator question: settle it and `answer` it. An operator's `next` hands it operator questions first, then reviews and landing, then operator-only items (the live steps). It never offers an operator ordinary work: workers build that, and an operator claims an item only when the person asks. Stop when it says there is nothing for you.
 3. **Then go idle. Don't loop, poll or sleep:** end your turn. A listener runs `nuworq wait --operator --follow`, which holds one open request to the hub and prints one line when something is there for you, e.g. "nuworq: operator work waiting (#219). Run next." Each line starts a new turn: `checkin` if it is an answer or steering, then `next` as in step 2, then go idle again.
    - **Check it is running before you trust it:** `pgrep -lf -P "$PPID" "nuworq wait --operator"`. The nuworq plugin should have started it when this skill ran, but it may not have (an older Claude Code, no workspace trust, or a feature flag). `-P "$PPID"` matches only this session's listener, not another operator session's on this machine. A line back means it is running: nothing to do.
