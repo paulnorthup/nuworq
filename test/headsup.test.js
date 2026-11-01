@@ -92,10 +92,38 @@ describe('no request path runs git to say main moved', () => {
     git(repo, 'merge', '-q', '--ff-only', one.branch);
     op('a1', 'submit', { item: '#1', headline: 'Landed' });
     await hub.refreshBehind();
+    // The landing's own refresh (refreshBehindSoon) may be queued behind that one: let it run before counting.
+    await new Promise((r) => setImmediate(r));
+    await hub.refreshBehind();
     const g = countGit();
     try { await hub.refreshBehind(); } finally { g.restore(); }
     assert.ok(g.calls().length > 0, 'it looks at the heads');
     assert.ok(!g.calls().some((c) => c.includes('merge-base')), g.calls().join('\n'));
+  });
+
+  test('refreshes run one at a time: overlapping calls never interleave their git (#557)', async () => {
+    const { hub, repo, git, op, build, tick } = setup();
+    hub.humanOp('demo', 'create', { title: 'First', acceptance: 'x' });
+    hub.humanOp('demo', 'create', { title: 'Second', acceptance: 'x' });
+    const one = op('a1', 'next'), two = op('a2', 'next');
+    build('a1', one.branch, 'first');
+    build('a2', two.branch, 'second');
+    tick(60_000);
+    op('a1', 'submit', { item: '#1', headline: 'Done' });
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    op('a1', 'next');
+    git(repo, 'merge', '-q', '--ff-only', one.branch);
+    op('a1', 'submit', { item: '#1', headline: 'Landed' });
+    let running = 0, most = 0;
+    const check = hub.checkBehind.bind(hub);
+    hub.checkBehind = async () => { most = Math.max(most, ++running); try { return await check(); } finally { running--; } };
+    const a = hub.refreshBehind(), b = hub.refreshBehind(), c = hub.refreshBehind();
+    assert.equal(b, c, 'calls made while one is queued share it');
+    await Promise.all([a, b, c]);
+    await new Promise((r) => setImmediate(r));
+    await hub.refreshBehind();
+    assert.equal(most, 1, 'never two at once');
+    assert.match(op('a2', 'progress', { item: '#2' }).heads_up, /main moved since you started/);
   });
 
   test('a landing refreshes it soon after, off the request', async () => {
