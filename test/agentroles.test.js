@@ -287,4 +287,49 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.notEqual(r.status, 200);
     assert.match(r.json.error, /can't review your own work/);
   });
+
+  test('next, peeking or claiming, never offers a review that review refuses (#665)', async () => {
+    hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
+    const clearer = auth.createToken('clearer-665', 'agent');
+    const clear = async () => { // earlier tests' reviews go first
+      for (const { id } of hub.q("SELECT id FROM items WHERE stage = 'verifying'").all()) {
+        assert.equal((await op('review', { token: clearer, agent: 'clearer-665', body: { item: `#${id}`, verdict: 'accept', headline: 'ok' } })).status, 200);
+      }
+    };
+    const build = async (token, agent, title) => {
+      const { item } = hub.humanOp('api', 'create', { title, acceptance: 'x', priority: 'now' });
+      assert.equal((await op('claim', { token, agent, body: { item } })).status, 200, `${agent} claims ${item}`);
+      assert.equal((await op('submit', { token, agent, body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+      return item;
+    };
+    await clear();
+
+    // claude-d25d's loop (feedback #8): two names on one non-runner token; one builds, the other asks for work.
+    const device = auth.createToken('loop-device', 'agent');
+    const mine = await build(device, 'loop-builder', 'Built by one name of the device');
+    const never = (r, how) => {
+      assert.equal(r.status, 200, `${how}: ${JSON.stringify(r.json)}`);
+      assert.doesNotMatch(JSON.stringify(r.json), /can't review your own work/, how);
+      assert.ok(!(r.json.mode === 'review' && r.json.item === mine), `${how} doesn't offer the review it would refuse`);
+    };
+    // It is offered other ready work instead, peeking and claiming alike.
+    hub.humanOp('api', 'create', { title: 'Work for anyone', acceptance: 'x' });
+    const peek = await op('next', { token: device, agent: 'loop-reviewer', body: { claim: false } });
+    never(peek, 'peek');
+    assert.equal(peek.json.mode, 'work', 'it peeks at other work');
+    const claimed = await op('next', { token: device, agent: 'loop-reviewer' });
+    never(claimed, 'claim');
+    assert.deepEqual([claimed.json.mode, claimed.json.item], ['work', peek.json.item], 'it claims the work it peeked at');
+    assert.equal(hub.item(hub.project('api'), mine).stage, 'verifying', 'the review waits for someone else');
+    await clear();
+
+    // #658's rule: two runner workers on one runner token can each be offered the other's review.
+    const runner = auth.createToken('loop-runner', 'agent', { runner: 'loop-box' });
+    const a = await build(runner, 'loop-worker-a', 'Built by runner worker A');
+    const b = await build(runner, 'loop-worker-b', 'Built by runner worker B');
+    for (const [agent, theirs] of [['loop-worker-a', b], ['loop-worker-b', a]]) {
+      const r = await op('next', { token: runner, agent, body: { claim: false } });
+      assert.deepEqual([r.json.mode, r.json.item], ['review', theirs], `${agent}: ${JSON.stringify(r.json)}`);
+    }
+  });
 });
