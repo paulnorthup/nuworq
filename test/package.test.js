@@ -2,7 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -13,6 +13,7 @@ import { fileInTarball, releaseOf, update, describeUpdate } from '../src/update.
 import { Workspaces } from '../src/workspaces.js';
 import { LISTENER } from '../src/protocol.js';
 import { connectCommands, VERIFY } from '../web/connect.js';
+import { writeApproval } from '../scripts/signer.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
@@ -227,17 +228,20 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
     // Its release key, the public half committed at the root, as on main once the key is made.
     for (const k of ['key', 'other']) { mkdirSync(join(dir, k)); execFileSync(process.execPath, [SIGN, 'keygen', join(dir, k)]); }
     copyFileSync(join(dir, 'key', 'release-key.pub'), join(clone, 'release-key.pub'));
-    // A release (#400): its version's CHANGELOG entry first. No origin to fetch tags from: only the clone's count.
+    // A release (#400): its version's CHANGELOG entry first. Its origin, standing in for GitHub, is a bare repository
+    // of its own: release signs only what is on its main, tagged there (#603).
     version = JSON.parse(readFileSync(join(clone, 'package.json'), 'utf8')).version;
     if (tagged) execFileSync('git', ['-C', clone, 'tag', '-f', `v${version}`, 'HEAD'], { stdio: 'ignore' });
     writeFileSync(join(clone, 'CHANGELOG.md'), `# Changelog\n\n## ${version} (2026-10-31)\n\n- Signed releases\n`);
-    execFileSync('git', ['-C', clone, 'remote', 'remove', 'origin']);
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', join(dir, 'origin.git')]);
+    execFileSync('git', ['-C', clone, 'remote', 'set-url', 'origin', join(dir, 'origin.git')]);
     // The real release's tag came with the clone once main is tagged; these tests tag their own commit.
     try { execFileSync('git', ['-C', clone, 'tag', '-d', `v${version}`], { stdio: 'ignore' }); } catch {}
     execFileSync('git', ['-C', clone, 'add', 'release-key.pub', 'CHANGELOG.md']);
     execFileSync('git', ['-C', clone, '-c', 'user.name=t', '-c', 'user.email=t@t.test', 'commit', '-qm', 'release key']);
     [commit, time] = execFileSync('git', ['-C', clone, 'log', '-1', '--format=%H %ct'], { encoding: 'utf8' }).trim().split(' ');
     time = Number(time);
+    execFileSync('git', ['-C', clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main']);
     const spaces = new Workspaces({ dir: join(dir, 'workspaces') });
     spaces.create('acme');
     server = createServer(spaces, { source: clone, packageDir: join(dir, 'cache') });
@@ -273,17 +277,23 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
 
   test('release refuses a version that has no tag on the commit the hub serves (#400)', async () => {
     const key = join(dir, 'key', 'release-key.pem');
-    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`says it is ${version.replace(/\./g, '\\.')}, but there is no v${version.replace(/\./g, '\\.')} tag`));
+    const v = version.replace(/\./g, '\\.');
+    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`not signed: origin has no v${v} tag`));
     execFileSync('git', ['-C', clone, 'tag', `v${version}`, `${commit}~1`]);
-    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`v${version.replace(/\./g, '\\.')} is [0-9a-f]{7}, not ${commit.slice(0, 7)} as the hub serves`));
+    execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `v${version}`]);
+    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`v${v} is [0-9a-f]{7} on origin, not ${commit.slice(0, 7)} as the hub serves`));
+    execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `:refs/tags/v${version}`]);
     execFileSync('git', ['-C', clone, 'tag', '-d', `v${version}`]);
     assert.ok(!existsSync(join(clone, `nuworq-${commit}.tgz.sig`)), 'nothing signed');
   });
 
   test('release signs what the hub serves; put beside it, installs take it', async () => {
-    const out = clone; // a checkout of nuworq, where the release's tag is
+    const out = clone; // a checkout of nuworq, whose origin has the release's tag
     execFileSync('git', ['-C', clone, 'tag', `v${version}`, commit]);
+    execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `v${version}`]);
     const home = mkdtempSync(join(tmpdir(), 'nuworq-rel-home-'));
+    // Approved where the key is (#473), as release checks (#603).
+    writeApproval(join(home, '.nuworq', 'release-approvals'), createPrivateKey(readFileSync(join(dir, 'key', 'release-key.pem'))), { tag: `v${version}`, commit });
     const { stdout } = await run(process.execPath, [SIGN, 'release', `${url}/w/acme`, join(dir, 'key', 'release-key.pem')], { cwd: out, env: { ...process.env, HOME: home } });
     const sig = `nuworq-${commit}.tgz.sig`;
     const wrote = join(home, '.nuworq', 'signatures', sig); // its own folder, never the checkout (#475)
