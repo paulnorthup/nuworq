@@ -1,6 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readCommands, refusedRef, refusal } from '../src/gitproxy.js';
+import http from 'node:http';
+import { once } from 'node:events';
+import { readCommands, refusedRef, refusal, proxyPush } from '../src/gitproxy.js';
 
 // The ref updates at the head of a push (#472), as git sends them: pkt-lines, capabilities after a NUL on the first.
 const pkt = (s) => `${(Buffer.byteLength(s) + 4).toString(16).padStart(4, '0')}${s}`;
@@ -40,5 +42,98 @@ describe('the hub reads a push before passing it on', () => {
     assert.ok(banded.startsWith(pkt('\x02nuworq: no main.\n')), 'the reason as a remote: line');
     assert.ok(banded.endsWith('0000'));
     assert.ok(banded.includes(`\x01${pkt('unpack ok\n')}`));
+  });
+});
+
+// #738: GitHub hanging, or cut off, never hangs the worker's push with it. A local server plays GitHub; the hub's
+// side is proxyPush behind a plain http server, as src/server.js mounts it.
+describe('the push proxy when GitHub hangs or goes', () => {
+  const BRANCH = 'nuworq/1-x';
+  const PUSH = Buffer.concat([Buffer.from(pkt(`${A} ${B} refs/heads/${BRANCH}\0report-status\n`) + '0000'), Buffer.from('PACK')]);
+  const listen = async (handler) => {
+    const s = http.createServer(handler);
+    s.listen(0, '127.0.0.1');
+    await once(s, 'listening');
+    s.open = 0; // sockets open right now
+    s.on('connection', (c) => { s.open++; c.on('close', () => s.open--); });
+    return s;
+  };
+  const url = (s) => `http://127.0.0.1:${s.address().port}`;
+  // The hub: every request a push through proxyPush to the fake GitHub.
+  const hubFor = (github, timeoutMs) => listen((req, res) => {
+    const service = req.url.startsWith('/info/refs') ? 'info/refs' : 'git-receive-pack';
+    proxyPush(req, res, { git: `${url(github)}/o/r.git`, service, token: 't', branch: BRANCH, timeoutMs });
+  });
+  // One request to the hub, as git sends it: its status, its body, and how long it took.
+  const ask = (hub, service) => new Promise((resolve, reject) => {
+    const t = Date.now();
+    const post = service === 'git-receive-pack';
+    const r = http.request(`${url(hub)}/${post ? 'git-receive-pack' : 'info/refs?service=git-receive-pack'}`, { method: post ? 'POST' : 'GET' }, (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('error', () => {});
+      res.on('close', () => resolve({ status: res.statusCode, body, ms: Date.now() - t, cut: !res.complete }));
+    });
+    r.on('error', (e) => resolve({ error: e.code, ms: Date.now() - t }));
+    r.end(post ? PUSH : undefined);
+    setTimeout(() => reject(new Error('the hub never answered')), 10_000).unref();
+  });
+  const until = async (ok, ms = 5000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 20))) if (ok()) return true;
+    return false;
+  };
+  const close = (...servers) => { for (const s of servers) { s.closeAllConnections(); s.close(); } };
+
+  test('GitHub accepting and never answering: info/refs and receive-pack both end with "GitHub didn\'t answer"', async () => {
+    const github = await listen(() => {}); // takes the request, says nothing
+    const hub = await hubFor(github, 300);
+    for (const service of ['info/refs', 'git-receive-pack']) {
+      const r = await ask(hub, service);
+      assert.equal(r.status, 502, service);
+      assert.ok(!r.cut, `${service}: a whole answer`);
+      assert.equal(r.body, "nuworq: GitHub didn't answer in 0.3s. Try the push again in a minute.\n", `${service}: git shows it as remote: nuworq: …`);
+      assert.ok(r.ms < 3000, `${service} ended in ${r.ms}ms, not when git gives up`);
+    }
+    assert.ok(await until(() => github.open === 0), 'the hub hangs up on GitHub too');
+    close(hub, github);
+  });
+
+  test('GitHub unreachable says so, in the same line git shows', async () => {
+    const gone = await listen(() => {});
+    const port = gone.address().port;
+    close(gone);
+    await once(gone, 'close');
+    const hub = await listen((req, res) => proxyPush(req, res, { git: `http://127.0.0.1:${port}/o/r.git`, service: 'info/refs', token: 't', branch: BRANCH }));
+    const r = await ask(hub, 'info/refs');
+    assert.equal(r.status, 502);
+    assert.match(r.body, /^nuworq: couldn't reach GitHub \(ECONNREFUSED\)\. Try the push again in a minute\.\n$/);
+    close(hub);
+  });
+
+  test('a worker that hangs up mid-push: the hub hangs up on GitHub', async () => {
+    const github = await listen(() => {});
+    const hub = await hubFor(github, 60_000);
+    const r = http.request(`${url(hub)}/git-receive-pack`, { method: 'POST' });
+    r.on('error', () => {});
+    r.write(PUSH); // the commands and the start of the pack; the rest never comes
+    assert.ok(await until(() => github.open === 1), 'the push reached GitHub');
+    r.destroy();
+    assert.ok(await until(() => github.open === 0), 'and its request to GitHub is cut, not left open for a minute');
+    close(hub, github);
+  });
+
+  test('GitHub cut off mid-answer: the worker is cut off too, and the hub carries on', async () => {
+    const github = await listen((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/x-git-receive-pack-advertisement' });
+      res.write('001f# service=git-receive-pack\n');
+      setTimeout(() => res.socket.destroy(), 50);
+    });
+    const hub = await hubFor(github, 60_000);
+    const r = await ask(hub, 'info/refs');
+    assert.ok(r.cut || r.error, 'the worker sees the answer end early');
+    // Still serving: a process-level error would have ended the test run here.
+    const again = await ask(hub, 'info/refs');
+    assert.ok(again.cut || again.error);
+    close(hub, github);
   });
 });
