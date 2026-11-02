@@ -134,17 +134,21 @@ export function distillDue(hub, p) {
 }
 
 const sourceOf = (n) => `${n.kind === 'learning' ? 'note' : n.kind} ${n.id}`;
-const DISTILL = (hub, p) => {
+// then: it follows the tidy part, so it reads "Then distill…"; alone it starts its own sentence (#719). Each list is
+// a paragraph of its own, so the drawer renders it as a list.
+const DISTILL = (hub, p, then) => {
   const { rows } = memoryInputs(hub, p);
   // Decisions and steers by id and words (checkin gives their words only); field notes by id: look with notes "all".
   const stale = rows.filter((n) => n.kind === 'learning' && !n.gist).map((n) => n.id);
-  return `\nThen distill memory for people with distill: Direction today (at most ${DIRECTION_MAX} plain lines a person reads in a minute, from the decisions, people's steering and the notes that matter, each naming its source as "decision 12", "steer 40", "note 7" or "#468"), and a one-line gist a person understands without looking anything up for each decision and field note without one, or whose gist no longer fits. For each field note also recommend keep, retire (why: where the lesson lives now, or what supersedes it) or decide (a draft decision for a person to accept).\n${
-    rows.filter((n) => n.kind !== 'learning').map((n) => `* ${sourceOf(n)}${n.gist ? ` (gist: ${n.gist})` : ''}: ${clip(n.body)}`).join('\n')}${
-    stale.length ? `\n* field notes without a gist: ${stale.join(', ')} (look with notes "all" for their words)` : ''}`;
+  const list = [
+    ...rows.filter((n) => n.kind !== 'learning').map((n) => `- ${sourceOf(n)}${n.gist ? ` (gist: ${n.gist})` : ''}: ${clip(n.body)}`),
+    ...(stale.length ? [`- field notes without a gist: ${stale.join(', ')} (look with notes "all" for their words)`] : []),
+  ];
+  return `${then ? 'Then distill' : 'Distill'} memory for people with distill: Direction today (at most ${DIRECTION_MAX} plain lines a person reads in a minute, from the decisions, people's steering and the notes that matter, each naming its source as "decision 12", "steer 40", "note 7" or "#468"), and a one-line gist a person understands without looking anything up for each decision and field note without one, or whose gist no longer fits. For each field note also recommend keep, retire (why: where the lesson lives now, or what supersedes it) or decide (a draft decision for a person to accept).${list.length ? `\n\n${list.join('\n')}` : ''}`;
 };
 
-const SUMMARY = (hub, p, due) => `${due.length ? `Tidy these field notes: merge duplicates into one, and retire each note whose lesson is now in the code, the agents' guide or a test.\n${
-  due.map(({ n, why }) => `- note ${n.id}${n.seq ? ` (about #${n.seq})` : ''}${why === 'weekly' ? '' : `, ${why}`}: ${clip(n.body)}`).join('\n')}\n` : ''}${DISTILL(hub, p)}`;
+const SUMMARY = (hub, p, due) => `${due.length ? `Tidy these field notes: merge duplicates into one, and retire each note whose lesson is now in the code, the agents' guide or a test.\n\n${
+  due.map(({ n, why }) => `- note ${n.id}${n.seq ? ` (about #${n.seq})` : ''}${why === 'weekly' ? '' : `, ${why}`}: ${clip(n.body)}`).join('\n')}\n\n` : ''}${DISTILL(hub, p, due.length > 0)}`;
 const ACCEPTANCE = [
   '- Each note listed is kept, merged or retired. Keep it when its lesson still saves the next agent time.',
   '- A merge is one learn with the combined lesson, then retire with into set to its id and the duplicates in notes.',
