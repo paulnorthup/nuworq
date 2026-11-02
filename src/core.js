@@ -3477,7 +3477,11 @@ const AGENT_OPS = {
       JSON.stringify(options), blocking ? 1 : 0, assumption, this.now(), issue?.author ?? '', issue?.repo ?? '', issue?.number ?? 0, operator ? 'operator' : '', JSON.stringify(steps));
     const id = Number(r.lastInsertRowid);
     let parked = false;
-    if (blocking && item && ['active', 'ready'].includes(item.stage) && !this.racing(item)) {
+    // Work another agent holds keeps going (#731): an operator may park it, anyone else only tells its holder.
+    const theirs = blocking && item?.stage === 'active' && item.holder && item.holder !== agent && !this.racing(item) && !this.isOperator(p, agent) ? item.holder : null;
+    if (theirs) {
+      this.addNote(p, 'steer', `${agent} asked about #${item.seq} (question ${id}), blocking: "${question.headline}". You still hold #${item.seq}; keep going, and check whether your work answers it.`, null, theirs, agent, { notice: true });
+    } else if (blocking && item && ['active', 'ready'].includes(item.stage) && !this.racing(item)) {
       // A race doesn't park for one racer's question: the others keep going.
       this.move(item, 'waiting', agent, { holder: null, lease_until: null, last_worker: item.holder || item.last_worker });
       parked = true;
@@ -3502,6 +3506,8 @@ const AGENT_OPS = {
         : blocking
         ? parked
           ? `#${item.seq} is parked until ${operator ? 'an operator' : 'the human'} answers. Don't wait: call next and take other work. The answer will be in your next checkin.`
+          : theirs
+          ? `Asked. ${theirs} holds #${item.seq} and keeps it; they've been told about your question. The answer will be in your next checkin.`
           : "Asked. Keep working on anything that doesn't depend on the answer; it will appear in your next checkin."
         : 'Assumption recorded; keep going. If the human overrides it, it will arrive as steering.') + tidiedHint(tidied),
     };
