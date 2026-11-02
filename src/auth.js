@@ -307,6 +307,14 @@ export class Auth {
       // May it act as an operator (#609)? A steward's or owner's token, one made on the hub host (no person minted
       // it), or one given the operate power by name. A member's device login isn't, nor is a runner's token.
       out.operator = !row.runner && (out.powers.includes(OPERATE) || full?.minted_by == null || OPERATOR_MINTERS.includes(full?.minter_role));
+      // Never more than its minter may do now (#629), read on every call, so demoting the minter narrows it at once.
+      // actsAs: the role whose agent-route limits it takes (PERSON_AGENT_CAN). A member's device login acts as a member
+      // does (no shape, build or review), a viewer's token not at all. Powers named for it on the hub host
+      // (nuworq token create --powers) are the host's own grant, and stand while its minter is a member. Runner
+      // tokens and ones made on the hub host have no minter.
+      const minter = full?.minted_by != null ? full.minter_role ?? null : null;
+      out.actsAs = minter === 'viewer' || (minter === 'member' && !full.powers) ? minter : null;
+      if (out.actsAs) { out.powers = []; out.operator = false; }
       if (row.runner) out.runner = row.runner; // a runner's token: the runner it reports as (#171)
     }
     if (row.role === 'human') {

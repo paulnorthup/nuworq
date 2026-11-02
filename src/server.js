@@ -1256,12 +1256,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const by = who.person ? `@${who.person.handle}` : HUMAN;
       const personRole = who.person?.role ?? 'owner';
       // A person on an agent route acts with their role (#469): a viewer with none, a member only as on the human routes.
+      // An agent token acts with its minter's role as it is now (#629, Auth.identity), so a member's machine can't do
+      // what the member can't.
+      const agentRole = who.person ? personRole : who.role === 'agent' ? who.actsAs ?? null : null;
       const agentRefused = (op) => {
-        const may = PERSON_AGENT_CAN[personRole];
-        if (!who.person || may === null || may?.includes(op)) return false;
-        deny(403, `a ${personRole} can't ${op === 'credential' ? 'get a push token' : op} here`, personRole === 'viewer'
-          ? 'A viewer only reads. Ask an owner of this workspace for a member role.'
-          : 'Ask an owner of this workspace for a steward role, or connect an agent with its own token (Connect an agent).');
+        const may = PERSON_AGENT_CAN[agentRole];
+        if (!agentRole || may === null || may?.includes(op)) return false;
+        const what = op === 'credential' ? 'get a push token' : op;
+        if (!who.person) {
+          deny(403, `this token can't ${what} here: it was minted by a ${agentRole}`, agentRole === 'viewer'
+            ? 'Its minter is a viewer now, and a viewer\'s tokens do nothing. An owner of this workspace can give them a role again.'
+            : 'A member\'s machine checks in, looks, proposes and comments. For one that builds and reviews, a steward or owner connects it, or an owner makes its minter a steward.');
+        } else {
+          deny(403, `a ${agentRole} can't ${what} here`, agentRole === 'viewer'
+            ? 'A viewer only reads. Ask an owner of this workspace for a member role.'
+            : 'Ask an owner of this workspace for a steward role, or connect an agent with its own token (Connect an agent).');
+        }
         return true;
       };
       // A connected machine asks to staff a project with its workers, up to a daily budget (#490, nuworq connect).
@@ -1378,7 +1388,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const peek = devices.peek(b.user_code);
         if (!peek.ok) return deny(410, peek.error, 'Check the code the CLI shows, or start the device login again.');
         const staff = peek.request.staff;
-        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, ...(staff ? { staff } : {}), expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
+        // role: the approver's, so the page says what the machine will be able to do (#629).
+        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, role: personRole, ...(staff ? { staff } : {}), expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
         const approve = b.approve !== false;
         if (approve && personRole === 'viewer') return deny(403, "a viewer can't connect machines", 'Ask an owner for a member role.');
         if (approve && staff && !PERSON_CAN[personRole]?.includes('settings')) return deny(403, `a ${personRole} can't staff projects`, 'Ask an owner of this workspace to approve it.');
