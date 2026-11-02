@@ -235,7 +235,7 @@ describe('nuworq worker --agent claude', () => {
       assert.ok(!allow.some((a) => /^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no blanket git');
       // The project's own commands (#472): its npm scripts by name, never an interpreter that runs anything.
       assert.deepEqual(allow.filter((a) => /npm|node|python|cargo|go /.test(a)), ['Bash(npm test:*)', 'Bash(npm ci)', 'Bash(npm install)', 'Bash(npm run lint:*)']);
-      assert.match(stdout, /git switch -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*only nuworq\/ branches: main and tags are the hub.*where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch \(`git push origin <branch> --force-with-lease`\), then submit; the hub puts it on main/);
+      assert.match(stdout, /git switch --no-track -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*only nuworq\/ branches: main and tags are the hub.*where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch \(`git push origin <branch> --force-with-lease`\), then submit; the hub puts it on main/);
       assert.doesNotMatch(stdout, /<branch>:main/);
       // Its shell runs in Claude Code's sandbox, from --settings so no file in the repository loosens it.
       const { sandbox, permissions } = JSON.parse(stdout.match(/--settings '([^']*)'/)[1]);

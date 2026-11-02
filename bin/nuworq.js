@@ -106,7 +106,7 @@ Your session:
 1. checkin. Read the mission, standing decisions and steering, and ack each steer.
 2. Loop: next → do the work in this repository → progress at real milestones → submit with evidence (tests run, branch and commits), or handoff with where you left off if you can't finish.
    Work in your own git worktree, never in the main checkout. ${remote
-    ? 'For each item the hub names a branch: create it from the latest main on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/main\`, or \`git switch <branch>\` if it exists. Push it (\`git push origin <branch>\`) before you submit.'
+    ? 'For each item the hub names a branch: create it from the latest main on origin with \`git fetch origin\`, then \`git switch --no-track -c <branch> origin/main\`, or \`git switch <branch>\` if it exists. Push it (\`git push origin <branch>\`) before you submit.'
     : 'For each item the hub names a branch: create it from the latest main with \`git switch -c <branch> main\`, or \`git switch <branch>\` if it exists.'}
 3. Got a question? Prefer ask with an assumption and keep going. Only block if you truly can't proceed, and then take other work.
 4. Propose work you notice instead of growing your current item.
@@ -913,7 +913,9 @@ function workerSettings(sandbox, { own = false } = {}) {
 // A worker's git, set in its environment (#472). credential.helper's empty value drops every helper set before it
 // (osxkeychain, gh, the person's own), and so do the github.com ones; then nuworq's, the only one. Pushes for
 // github.com, by HTTPS or SSH address, go to the hub's /api/git/. SSH addresses fetch over HTTPS too, and the
-// SSH agent is unset, so no SSH key of the person's is ever used.
+// SSH agent is unset, so no SSH key of the person's is ever used. No branch it makes tracks another (#724): git
+// would write that into the checkout's .git/config, which its sandbox denies (#606), for `git switch -c <b>
+// origin/main` and for `git switch <b>` when only origin has <b>. Its pushes name the branch, so it needs no upstream.
 function gitEnv({ hub, tokenAt, name, project }) {
   // Every value quoted, and the token only as the path of its 0600 file (#477).
   const helper = `!NUWORQ_URL=${sq(hub)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --project ${sq(project)} --as ${sq(name)}`;
@@ -922,6 +924,7 @@ function gitEnv({ hub, tokenAt, name, project }) {
     ['credential.helper', ''], ['credential.https://github.com.helper', ''], ['credential.helper', helper], ['credential.useHttpPath', 'true'],
     ['url.https://github.com/.insteadOf', 'git@github.com:'], ['url.https://github.com/.insteadOf', 'ssh://git@github.com/'],
     [`url.${through}.pushInsteadOf`, 'https://github.com/'], [`url.${through}.pushInsteadOf`, 'git@github.com:'], [`url.${through}.pushInsteadOf`, 'ssh://git@github.com/'],
+    ['branch.autoSetupMerge', 'false'],
   ];
   return `unset SSH_AUTH_SOCK && export GIT_CONFIG_COUNT=${config.length} ${config.map(([k, v], i) => `GIT_CONFIG_KEY_${i}=${sq(k)} GIT_CONFIG_VALUE_${i}=${sq(v)}`).join(' ')}`;
 }
@@ -977,7 +980,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   };
   const task = [
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
-    worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. Your pushes go through the hub, which takes only nuworq/ branches: ${main} and tags are the hub's. To land accepted work, follow the hub's steps: rebase onto origin/${main}; where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch (\`git push origin <branch> --force-with-lease\`), then submit; the hub puts it on ${main}. Never work in the main checkout, ${home}.`
+    worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch --no-track -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. Your pushes go through the hub, which takes only nuworq/ branches: ${main} and tags are the hub's. To land accepted work, follow the hub's steps: rebase onto origin/${main}; where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch (\`git push origin <branch> --force-with-lease\`), then submit; the hub puts it on ${main}. Never work in the main checkout, ${home}.`
       : worktree ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} with \`git switch -c <branch> ${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, and include the branch and commit in your evidence when you submit. Never work in the main checkout, ${home}.` : '',
     browser && (has('bin/nuworq.js')
       ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login. When you ship a visible UI feature, add its key with today\'s date to web/new.js and data-new="<key>" to its element, so people see it\'s new.'

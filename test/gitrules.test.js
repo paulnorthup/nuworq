@@ -20,7 +20,7 @@ const runs = (cmd) => ALLOW.some((r) => matches(r, cmd)) && !DENY.some((r) => ma
 describe('worker allowlist refuses git options that run a program (#625)', () => {
   test('its everyday git still runs', () => {
     for (const cmd of ['git status', 'git diff origin/main --stat', 'git log --oneline -5', 'git add src/a.js', 'git commit -m "Fix it"',
-      'git switch -c nuworq/12-x origin/main', 'git rebase origin/main', 'git rebase --continue', 'git fetch origin', 'git fetch -q origin main',
+      'git switch -c nuworq/12-x origin/main', 'git switch --no-track -c nuworq/12-x origin/main', 'git rebase origin/main', 'git rebase --continue', 'git fetch origin', 'git fetch -q origin main',
       'git push origin nuworq/12-x', 'git push origin nuworq/12-x --force-with-lease', `git -C ${HOME} merge --ff-only nuworq/12-x`]) {
       assert.ok(runs(cmd), cmd);
     }

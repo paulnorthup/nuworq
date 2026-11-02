@@ -358,6 +358,8 @@ describe('workers ask git for tokens through the helper', () => {
       assert.equal(asWorker('remote', 'get-url', '--push', 'origin'), `http://127.0.0.1:${port}/api/git/github.com/acme/api.git`);
       assert.equal(asWorker('remote', 'get-url', 'origin'), 'https://github.com/acme/api.git');
       assert.equal(execFileSync('/bin/sh', ['-c', `SSH_AUTH_SOCK=/tmp/agent.sock; ${line} && echo "[$SSH_AUTH_SOCK]"`], { encoding: 'utf8' }).trim(), '[]');
+      // No branch it makes tracks another, so none writes the checkout's .git/config (#724).
+      assert.equal(asWorker('config', 'branch.autoSetupMerge'), 'false');
       assert.doesNotMatch(execFileSync('git', ['-C', home, 'config', '--list', '--local'], { encoding: 'utf8' }), /credential|insteadof/i);
     } finally { server.close(); }
   });

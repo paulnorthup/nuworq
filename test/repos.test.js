@@ -94,7 +94,7 @@ describe('each item names its repo', () => {
     assert.equal(j1.item, '#1');
     assert.equal(j1.repo, WEB, "the claim names the item's repo");
     assert.match(j1.hint, new RegExp(`This is in ${WEB}`));
-    assert.match(j1.hint, /git switch -c nuworq\/1-web-page origin\/main/);
+    assert.match(j1.hint, /git switch --no-track -c nuworq\/1-web-page origin\/main/);
     const j2 = op('a2', 'next');
     assert.equal(j2.repo, API);
 
@@ -155,7 +155,7 @@ describe('each item names its repo', () => {
     assert.equal(hub.repoFor(p, hub.item(p, '#2')).mode, 'remote');
     const j1 = op('a1', 'next'), j2 = op('a2', 'next');
     assert.match(j1.hint, /git switch -c nuworq\/1-api-thing main/, 'local: cut from main in the checkout');
-    assert.match(j2.hint, /git switch -c nuworq\/2-web-thing origin\/main/, 'web: cut from origin, pushed for review');
+    assert.match(j2.hint, /git switch --no-track -c nuworq\/2-web-thing origin\/main/, 'web: cut from origin, pushed for review');
     assert.match(j2.hint, /git push origin nuworq\/2-web-thing/);
   });
 
