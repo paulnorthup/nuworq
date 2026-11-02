@@ -91,6 +91,7 @@ describe('the workspace registry', () => {
     assert.equal(d.bindInstallation(4242, 'acme'), true);
     spaces.setPlan('acme', 'unlimited', 'owner');
     d.setting('adopted:acme', join(dir, 'gone.db'));
+    d.giveFeedback({ kind: 'agent', sender: 'claude-1', workspace: 'acme', text: 'The old tenant\'s private words' });
     assert.equal(d.installation(4242), 'acme');
 
     spaces.remove('acme');
@@ -105,6 +106,9 @@ describe('the workspace registry', () => {
     assert.equal(d.db.prepare("SELECT COUNT(*) AS n FROM memberships WHERE workspace = 'acme'").get().n, 1);
     assert.equal(d.setting('adopted:acme'), null);
     assert.equal(d.useGrant(code, next, 'acme'), false, 'the old grant stays used');
+    // Feedback stays for the owners, but the next acme's claude-1 sees none of the old one's at checkin.
+    assert.deepEqual(d.feedbackFrom({ kind: 'agent', sender: 'claude-1', workspace: 'acme' }), []);
+    assert.deepEqual(d.db.prepare('SELECT workspace FROM feedback').all().map((f) => f.workspace), ['acme (removed)']);
   });
 });
 
