@@ -50,6 +50,7 @@ export class Auth {
       'ALTER TABLE tokens ADD COLUMN minted_by INTEGER', // agent tokens: the person accountable for them
       'ALTER TABLE tokens ADD COLUMN runner TEXT', // or a named runner (CI, cloud agents) that outlives any one person
       'ALTER TABLE tokens ADD COLUMN powers TEXT', // JSON subset of shape/build/review; NULL means all
+      'ALTER TABLE tokens ADD COLUMN from_token INTEGER', // a runner token: the device login it was minted from (#656)
     ]) {
       try { db.exec(sql); } catch { /* already there */ }
     }
@@ -268,6 +269,34 @@ export class Auth {
     return token;
   }
 
+  // A machine's runner token (#656), minted from its device login (an agent token with no runner): the workers
+  // `nuworq run` starts share it, so the hub tells them apart from the person's own sessions and they may review each
+  // other's work. The same person answers for it; it reaches the same projects with the same powers and never
+  // operates. Its runner is the device login's name (e.g. paul@laptop). Minting again replaces the last one, and
+  // revoking the device login (nuworq disconnect) revokes it too.
+  runnerToken(fromId) {
+    const from = this.db.prepare('SELECT * FROM tokens WHERE id = ? AND revoked_at IS NULL').get(fromId);
+    if (!from || from.role !== 'agent') throw new Error('only an agent token can mint a runner token');
+    if (from.runner) throw new Error('this is a runner token already');
+    const powers = from.powers ? JSON.parse(from.powers).filter((x) => x !== OPERATE) : null;
+    if (powers && !powers.length) throw new Error('this token has no powers a worker could use');
+    const root = `${from.name.slice(0, 50)}.runner`;
+    let name = root;
+    for (let n = 2; this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name); n++) name = `${root}-${n}`;
+    const token = TOKEN_PREFIXES[0] + randomBytes(32).toString('base64url');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const old of this.db.prepare('SELECT id FROM tokens WHERE from_token = ? AND revoked_at IS NULL').all(from.id)) this.revoke(old.id);
+      this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, minted_by, runner, powers, created_at, projects, from_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(name, 'agent', sha(token), token.slice(0, 8), from.minted_by, from.name, powers ? JSON.stringify(powers) : null, this.now(), from.projects, from.id);
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+    return { token, name, runner: from.name };
+  }
+
   listTokens() {
     return this.db.prepare(`SELECT t.id, t.name, t.role, t.prefix, t.created_at, t.last_used_at, t.revoked_at, t.projects, p.handle AS person,
         m.handle AS minted_by, t.runner, t.powers
@@ -322,6 +351,8 @@ export class Auth {
     if (!t) return null;
     this.db.prepare('UPDATE tokens SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?').run(this.now(), t.id);
     this.db.prepare('DELETE FROM sessions WHERE token_id = ?').run(t.id);
+    // A device login's runner token goes with it (#656).
+    for (const r of this.db.prepare('SELECT id FROM tokens WHERE from_token = ? AND revoked_at IS NULL').all(t.id)) this.revoke(r.id);
     return { id: t.id, name: t.name, role: t.role };
   }
 

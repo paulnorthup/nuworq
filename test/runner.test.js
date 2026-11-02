@@ -489,6 +489,33 @@ describe('workers on a hub that requires login', () => {
       server.close();
     }
   });
+
+  test("a machine connected with an agent token gives its workers a runner token minted from it, kept for the next start (#656)", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-rtok-')));
+    const bin = join(dir, 'bin');
+    execFileSync('mkdir', [bin]);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho ran\n', { mode: 0o755 });
+    const hub = new Hub();
+    hub.tx(() => hub.project('lock', { create: true }));
+    hub.humanOp('lock', 'settings', { path: dir });
+    const server = createServer(hub, { auth: 'required' });
+    server.auth.addPerson('pat', 'member');
+    const device = server.auth.createToken('pat@box', 'agent', { mintedBy: 'pat' }); // what nuworq connect saved
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-rtok-home-'));
+    const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, NUWORQ_TOKEN: device, NUWORQ_AGENT_TOKEN: '', NUWORQ_AGENT_TOKEN_FILE: '' };
+    const cli = () => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'lock', '--here', '--as', 'w', '--run'], { env, cwd: dir });
+    const runners = () => server.auth.listTokens().filter((t) => t.runner && !t.revoked_at);
+    try {
+      assert.match((await cli()).stdout, /carry the runner token pat@box\.runner/);
+      const kept = readFileSync(join(home, '.nuworq', 'tokens', 'runner.token'), 'utf8').trim();
+      assert.deepEqual([server.auth.verifyToken(kept).runner, runners().length], ['pat@box', 1]);
+      assert.doesNotMatch((await cli()).stdout, /carry the runner token/, 'the next start uses the kept one');
+      assert.deepEqual(runners().map((t) => t.name), ['pat@box.runner'], 'and mints no other');
+    } finally {
+      server.close();
+    }
+  });
 });
 
 describe('a worker started --here', () => {
