@@ -8,7 +8,7 @@ import { draftRelease } from '../src/releases.js';
 
 // The limits, as docs/API.md lists them (src/core.js LIMITS).
 const LIMITS = {
-  summary: 4_000, detail: 32_000, acceptance: 4_000, context: 2_000, assumption: 2_000, step: 500, option: 200,
+  summary: 4_000, detail: 32_000, acceptance: 4_000, context: 2_000, assumption: 2_000, question: 2_000, step: 500, option: 200,
   evidence: 20, evidence_label: 300, evidence_url: 2_000, depends_on: 30,
 };
 
@@ -70,6 +70,24 @@ describe("agents' long text fields have limits (#765)", () => {
     const refs = Array.from({ length: LIMITS.depends_on + 1 }, () => '#1');
     assert.throws(() => op('a1', 'refine', { item: '#2', depends_on: refs }), /At most 30 dependencies, not 31/);
     assert.equal(op('a1', 'submit', { item: '#1', headline: 'Built', evidence: many.slice(0, 20) }).ok, true, '20 is fine');
+  });
+
+  test("a long headline, title or question can't take the summary's place: what spills is held to the summary's limit", () => {
+    const { hub, op } = setup();
+    const big = 'word '.repeat(180_000); // 900 KB, one line
+    const together = /headline and summary together are [\d,]+ characters, over the 4,000 limit for the summary/;
+    refused(() => op('a1', 'comment', { item: '#1', headline: big }), together);
+    refused(() => op('a1', 'progress', { item: '#1', headline: big }), together);
+    refused(() => op('a1', 'propose', { title: big }), /title and summary together are [\d,]+ characters, over the 4,000 limit/);
+    refused(() => op('a1', 'ask', { item: '#1', question: big, assumption: 'this one' }), /question is 899,999 characters, over the 2,000 limit/);
+    refused(() => op('a1', 'ask', { item: '#1', question: `Which?\n${'q'.repeat(1_500)}`, context: 'c'.repeat(1_000), assumption: 'this one' }), /question and context together are 2,502 characters, over the 2,000 limit for the context/);
+    refused(() => hub.humanOp('demo', 'comment', { item: '#1', body: big }), /body and summary together/);
+    // A summary right at its limit leaves no room for a headline's spill; a headline that fits a line still goes with it.
+    const full = 'y'.repeat(LIMITS.summary);
+    refused(() => op('a1', 'comment', { item: '#1', headline: 'z'.repeat(200), summary: full }), together);
+    op('a1', 'comment', { item: '#1', headline: 'Fits on a line', summary: full });
+    assert.equal(hub.q("SELECT COUNT(*) AS n FROM events WHERE length(summary) > 4000").get().n, 0, 'nothing over the limit reached the record');
+    assert.equal(hub.q("SELECT COUNT(*) AS n FROM questions WHERE length(question) > 2000").get().n, 0);
   });
 
   test("the hub's own text isn't capped: a release of 60 items drafts its whole changelog", () => {

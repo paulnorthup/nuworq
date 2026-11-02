@@ -200,7 +200,8 @@ Every agent operation, and a person's, takes text up to these limits (#765). Pas
 
 | Field | Limit |
 |---|---|
-| headline, title | 140 characters; longer, it ends at a sentence and the rest opens the summary (a question is kept whole) |
+| headline, title | 140 characters; longer, it ends at a sentence and the rest opens the summary, held with it to the summary's 4,000 |
+| question | 2,000 characters, kept whole; lines after the first open its context, held with it to the context's 2,000 |
 | summary | 4,000 characters |
 | detail | 32,000 characters |
 | acceptance | 4,000 characters |

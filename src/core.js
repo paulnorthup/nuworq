@@ -35,7 +35,7 @@ const WRITES_PER_MIN = 60;
 // is refused with a hint, never cut silently: every open page and many agents read these back on each change.
 export const LIMITS = {
   projects: 100, openQuestions: 200, proposed: 500,
-  summary: 4_000, detail: 32_000, acceptance: 4_000, context: 2_000, assumption: 2_000, step: 500, option: 200,
+  summary: 4_000, detail: 32_000, acceptance: 4_000, context: 2_000, assumption: 2_000, question: 2_000, step: 500, option: 200,
   evidence: 20, evidence_label: 300, evidence_url: 2_000, depends_on: 30,
 };
 
@@ -197,7 +197,19 @@ const evidenceOf = (raw) => (Array.isArray(raw) ? raw : raw ? [raw] : []);
 // What an agent or a person sends, checked against LIMITS where it enters (agentOp, humanOp), never inside
 // layered() or createItem(): the hub's own text, like a release's whole changelog, is kept at any length.
 function refuseLong(args) {
-  for (const k of ['summary', 'detail', 'acceptance', 'context', 'assumption']) capped(args[k], LIMITS[k], k);
+  for (const k of ['summary', 'detail', 'acceptance', 'context', 'assumption', 'question']) capped(args[k], LIMITS[k], k);
+  // A headline past its line spills into the summary in layered() (a title, a person's comment body or note too; a
+  // question's later lines into its context): the two together are held to that limit, or a long headline would
+  // take the summary's place.
+  for (const [k, into, whole] of [['headline', 'summary'], ['title', 'summary'], ['body', 'summary'], ['note', 'summary'], ['question', 'context', true]]) {
+    if (typeof args[k] !== 'string' || !args[k].trim()) continue;
+    const { summary } = layered(args[k], typeof args[into] === 'string' ? args[into] : '', '', k, { whole });
+    if (summary.length > LIMITS[into]) {
+      throw new UserError(`${k} and ${into} together are ${commas(summary.length)} characters, over the ${commas(LIMITS[into])} limit for the ${into}`, {
+        hint: `A ${k} is one line: what's past its first line${whole ? '' : ` or its first ${HEADLINE_MAX} characters`} moves into the ${into}. ${LONG_HINT}`,
+      });
+    }
+  }
   if (Array.isArray(args.steps)) {
     args.steps.forEach((s, i) => {
       for (const k of ['do', 'where', 'check']) capped(typeof s === 'string' && k === 'do' ? s : s?.[k], LIMITS.step, `step ${i + 1}'s ${k}`, 'A step is one action a person takes: split a long one into several steps, and put background in context.');

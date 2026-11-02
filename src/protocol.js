@@ -150,7 +150,7 @@ export const OPS = [
     description: 'Ask a question. Prefer non-blocking: give the assumption you proceed with; blocking parks the item.',
     params: {
       item: { ...ITEM, description: 'Optional. The item this is about.' },
-      question: s('The question, one line.'),
+      question: s('The question, one line. At most 2,000 characters.'),
       context: s('Why it matters and what you know. At most 2,000 characters.'),
       detail: s('Optional. Findings, trade-offs, links.'),
       options: { type: 'array', maxItems: 6, items: { type: 'string' }, description: 'Optional. Likely answers, one click each, 200 characters each at most.' },
@@ -551,7 +551,7 @@ Model traffic through llm-proxy? Label it \`x-client-name: nuworq/<project>/<you
 - Your role (worker, shaper, operator, session) is fixed at checkin; ${c('next')} offers only what it may take.
 
 ## Write in layers (0-30-5-30)
-- headline: one line, outcome first ("Retries added; 2 flaky tests remain").
+- headline: one line, outcome first ("Retries added; 2 flaky tests remain"). Past 140 characters, the rest moves into the summary and counts toward its limit.
 - summary: the 5-minute version (at most 4,000 characters). detail: the 30-minute version (32,000). Long logs go in the repo.
 Say nothing when nothing is worth saying. Responses are small: ${c('look')} for more.
 `;
