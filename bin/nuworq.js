@@ -1303,7 +1303,7 @@ async function runCmd(flags) {
   // After a worker exits (#618): origin's refs fetched by the runner itself, then every other branch or tag it moved
   // goes back, said in the runner's output and on the worker's item.
   const guardRefs = async ({ home, branch, name, project, before }) => {
-    const siblings = await Promise.all([...live].filter((w) => worktreeTrusted(w)).map((w) => git(['-C', w, 'symbolic-ref', '-q', '--short', 'HEAD']).then((b) => b.trim(), () => '')));
+    const siblings = await Promise.all([...live].filter((w) => worktreeTrusted(w, home)).map((w) => git(['-C', w, 'symbolic-ref', '-q', '--short', 'HEAD']).then((b) => b.trim(), () => '')));
     await git(['-C', home, 'fetch', '-q', '--prune', 'origin']).catch(() => {});
     const g = await restoreRefs(home, before, git, { own: [branch], live: siblings }).catch((e) => {
       console.error(dim(`  couldn't check what ${name} did to ${home}'s branches: ${String(e.stderr || e.message).trim().split('\n')[0]}`));

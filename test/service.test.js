@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, renameSync, symlinkSync, writeFileSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
@@ -248,10 +248,18 @@ describe("a worker's worktree goes when it exits (#172)", () => {
     const r = await sweep({ home: dir, finished: new Set(), git: spy, idle: async () => 2 * 86400_000 });
     assert.deepEqual(r.kept.filter((k) => k.why === 'its worktree pointers were changed').map((k) => k.what), [`${basename(dir)}.worktrees/a`]);
     assert.ok(!calls.some((c) => c.includes(a) || c.includes(b)), 'no git with -C in a changed worktree');
+    // Its admin folder swapped for a symlink to a look-alike elsewhere (commondir "../..", gitdir back at this .git):
+    // the shape alone passes, so every caller checks against the checkout.
+    const c = add(dir, 'c');
+    mkdirSync(join(evil, 'worktrees'));
+    renameSync(join(dir, '.git', 'worktrees', 'c'), join(evil, 'worktrees', 'c'));
+    symlinkSync(join(evil, 'worktrees', 'c'), join(dir, '.git', 'worktrees', 'c'));
+    assert.equal(worktreeTrusted(c), true, 'without home, only the shape is checked');
+    assert.equal(worktreeTrusted(c, dir), false);
     // The runner checks before its exit cleanup, and says so.
     const cli = readFileSync(new URL('../bin/nuworq.js', import.meta.url), 'utf8');
     assert.match(cli, /const trusted = worktreeTrusted\(worktree, home\);\n\s*if \(!trusted\) console\.log\(amber\(`  \$\{name\}'s worktree pointers were changed; left as it is`\)\);/);
-    assert.match(cli, /\[\.\.\.live\]\.filter\(\(w\) => worktreeTrusted\(w\)\)/, 'and before asking a sibling for its branch');
+    assert.match(cli, /\[\.\.\.live\]\.filter\(\(w\) => worktreeTrusted\(w, home\)\)/, 'and before asking a sibling for its branch, against the checkout');
   });
 
   test('a clean worktree is removed', async () => {
