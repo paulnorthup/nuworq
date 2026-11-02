@@ -28,6 +28,14 @@ const needsLine = (cards, where = '') => {
   return `${head}${!now ? '' : n === 1 ? ' now' : now === n ? ', all now' : `, ${now} now`}.`;
 };
 const NEEDS_LINE = /^(Nothing needs you\.|\d+ things?( across \d+ projects)? needs? you( now|, all now|, \d+ now)?\.)/;
+// A steer as one plain line (#550): an answer's change of course is what to do instead; anything else, its first
+// sentence. The whole text stays behind it.
+export const plainSteer = (body) => {
+  const s = String(body ?? '').replace(/^Change of course(?: on #\d+)?: you assumed "[\s\S]*?"\. Instead: /, '').trim();
+  const first = s.match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] ?? s;
+  const line = first.length > 160 ? `${first.slice(0, 159)}…` : first;
+  return line.charAt(0).toUpperCase() + line.slice(1);
+};
 
 // viewer: the person looking ("@handle"), so "needs you" counts only their own; none in local mode.
 export function projectList(hub, { viewer } = {}) {
@@ -553,8 +561,11 @@ function build(hub, p, t, { light = false } = {}) {
     });
   }
 
+  // Your steering: what a person wrote (#550). An operator's answer to a worker and the hub's own notices reach agents
+  // all the same, but a person can't judge them: they show on their item, or as facts in the history.
   const steers = hub.q(`SELECT n.*, i.seq AS item_seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
-      WHERE n.project_id = ? AND n.kind = 'steer' AND n.active = 1 AND n.at > ? ORDER BY n.at DESC`).all(p.id, t - 3 * DAY)
+      WHERE n.project_id = ? AND n.kind = 'steer' AND n.active = 1 AND n.notice = 0 AND n.at > ? ORDER BY n.at DESC`).all(p.id, t - 3 * DAY)
+    .filter((n) => isHuman(n.author))
     .map((n) => {
       const acks = hub.q('SELECT * FROM acks WHERE note_id = ? ORDER BY at').all(n.id);
       return { id: n.id, body: n.body, by: n.author, item: n.item_seq ? `#${n.item_seq}` : null, at: n.at, acks: acks.map((a) => ({ agent: a.agent, response: a.response, at: a.at })) };
@@ -1142,8 +1153,17 @@ export function itemView(hub, slug, ref) {
         escalation: orig ? { question: orig.question, asked_by: orig.asked_by } : undefined,
       };
     });
-  const steers = hub.q(`SELECT * FROM notes WHERE item_id = ? AND kind = 'steer' ORDER BY at`).all(it.id)
+  // A person's steering on it, and what agents and the hub told each other about it (#550): an operator's change of
+  // course, a drop or move notice to whoever held it (sent to the holder, so it names the item rather than sits on it).
+  const allSteers = hub.q(`SELECT * FROM notes WHERE kind = 'steer' AND (item_id = ? OR (project_id = ? AND item_id IS NULL AND notice = 1 AND body GLOB ?)) ORDER BY at`)
+    .all(it.id, p.id, `#${it.seq} was *`);
+  const steers = allSteers.filter((n) => isHuman(n.author) && !n.notice)
     .map((n) => ({ id: n.id, body: n.body, by: n.author, active: !!n.active, ago: dur(t - n.at), at: n.at, acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
+  const told = allSteers.filter((n) => !isHuman(n.author) || n.notice).map((n) => {
+    const from = n.notice ? 'nuworq' : hub.q('SELECT role FROM agents WHERE project_id = ? AND name = ?').get(p.id, n.author)?.role === 'operator' ? 'Operator' : n.author;
+    const retires = !n.active ? 'Retired.' : n.item_id ? `Retires when #${it.seq} lands.` : '';
+    return { id: n.id, from, author: n.author, to: n.target || 'every agent', line: plainSteer(n.body), body: n.body, retires, at: n.at };
+  });
   const agentNames = [...new Set(events.filter((e) => !isHuman(e.actor) && !isSystem(e.actor)).map((e) => e.actor))];
   const models = Object.fromEntries(agentNames.map((n) => [n, hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, n)?.model ?? '']));
   const parent = hub.itemById(it.parent_id);
@@ -1171,7 +1191,7 @@ export function itemView(hub, slug, ref) {
     fixed_by: hub.q('SELECT seq, title, stage FROM items WHERE fixes = ? ORDER BY seq').all(it.id).map((f) => ({ item: `#${f.seq}`, title: f.title, stage: f.stage })),
     evidence: submit?.data?.evidence ?? [], git: submit?.data?.git ?? null, git_warning: gitWarning(submit?.data?.git), submission: submit ?? null,
     prs: prsOf(hub, p, it),
-    questions, steers, lifecycle,
+    questions, steers, told, lifecycle,
     // Why it keeps bouncing, in one line (#564), while it's open and outside landing: whether or not a person can help.
     bounce: OPEN_STAGES.includes(it.stage) && it.stage !== 'landing' && it.stalls + it.rejections >= 2
       ? bounceOf(hub, p, it, {
