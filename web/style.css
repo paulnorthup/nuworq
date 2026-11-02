@@ -995,6 +995,8 @@ a:not([class]):active, a.step-where:active, .link:active, .ref:active, .zoom-mor
 .btn.primary:disabled:hover { background: var(--ink); }
 .btn.ghost:disabled:hover, .seg button:disabled:hover { background: none; color: var(--muted); }
 /* Where content is on its way: quiet blocks the size of what comes, never a loading line. */
+/* A project drawn from what the app holds while its view is on its way (#503): a still word beside its name. */
+.updating { margin-left: var(--sp-2); font-size: var(--fs-2); font-weight: var(--fw-2); color: var(--muted); letter-spacing: 0; vertical-align: middle; }
 .ph { display: block; background: var(--sunken); border-radius: var(--r-s); height: 14px; margin: var(--sp-2) 0; }
 .ph.h { height: 22px; width: 60%; margin-bottom: var(--sp-4); }
 .ph.s { width: 85%; }
