@@ -99,6 +99,42 @@ describe("serve --follow goes by CI's test check", () => {
     assert.equal(w.up, 'bbbbbbb2');
   });
 
+  test("a busy main while GitHub won't answer: the 30 minutes run from the first commit, and the newest goes live (#690)", async () => {
+    const w = world({ aaaaaaa1: { state: 'passed' } });
+    const f = await run(w);
+    w.ci = async () => { throw new Error('GitHub answered 422'); };
+    const shas = ['bbbbbbb2', 'ccccccc3', 'ddddddd4', 'eeeeeee5', 'fffffff6', 'ggggggg7', 'hhhhhhh8'];
+    for (const [i, sha] of shas.entries()) {
+      w.t = i * 5 * 60_000;
+      w.main = sha;
+      await f.tick();
+      assert.equal(w.up, 'aaaaaaa1', `no move ${i * 5} minutes in`);
+    }
+    assert.ok(w.said.includes("can't ask GitHub about ggggggg (GitHub answered 422); still waiting, and its tests run here after 5 minutes"));
+    w.t = 31 * 60_000;
+    await f.tick();
+    assert.deepEqual(w.log.filter((l) => l.startsWith('test')), ['test hhhhhhh8'], 'the suite runs once, on the newest');
+    assert.equal(w.up, 'hhhhhhh8');
+  });
+
+  test('a real pending run on a newer commit still waits for its verdict, however long the wait (#690)', async () => {
+    const ci = { aaaaaaa1: { state: 'passed' }, bbbbbbb2: { state: 'pending', missing: true }, ccccccc3: { state: 'pending' } };
+    const w = world(ci);
+    const f = await run(w);
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    w.t = 20 * 60_000;
+    w.main = 'ccccccc3';
+    await f.tick();
+    w.t = 45 * 60_000;
+    await f.tick();
+    assert.equal(w.up, 'aaaaaaa1');
+    assert.ok(!w.log.some((l) => l.startsWith('test')), 'no suite here while CI runs');
+    ci.ccccccc3 = { state: 'passed' };
+    await f.tick();
+    assert.equal(w.up, 'ccccccc3');
+  });
+
   test('without GitHub: the suite runs here, as before, said once', async () => {
     const w = world(null);
     const f = await run(w);

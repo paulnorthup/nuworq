@@ -449,14 +449,17 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
   // runs. Without GitHub (no app, not a GitHub remote, said once), or a check that never shows up within
   // CI_WAIT_MS or ends without a verdict, the suite runs here as before. GitHub failing to answer (no install on
   // the repo, no checks:read, a revoked key) counts as a check that never showed up: said once, then the suite.
+  // The CI_WAIT_MS clock runs from the first commit waited on, not the newest (#690): a main that moves every few
+  // minutes while GitHub can't say would otherwise never go live. The newest commit is the one tested anyway.
   async function verdict(sha) {
     if (sys.ci) {
       let c;
       try { c = await sys.ci(sha); } catch (e) { c = { state: 'pending', missing: true, error: e.message.split('\n')[0] }; }
-      if (state.waiting?.sha !== sha) state.waiting = { sha, since: now() };
+      if (state.waiting?.sha !== sha) state.waiting = { sha, since: state.waiting?.since ?? now() };
       if (c?.error && !state.waiting.unasked) {
         state.waiting.unasked = true;
-        log(`can't ask GitHub about ${short(sha)} (${c.error}); still waiting, and its tests run here after ${CI_WAIT_MS / 60_000} minutes`);
+        const left = Math.max(1, Math.ceil((CI_WAIT_MS - (now() - state.waiting.since)) / 60_000));
+        log(`can't ask GitHub about ${short(sha)} (${c.error}); still waiting, and its tests run here after ${left} minute${left === 1 ? '' : 's'}`);
       }
       if (c?.state === 'passed') return { ok: true, by: 'CI' };
       if (c?.state === 'failed') return { ok: false, failed: c.failed };
