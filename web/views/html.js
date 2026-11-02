@@ -14,20 +14,26 @@ export const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many
 export const needYou = (n) => `${plural(n, 'thing')} ${n === 1 ? 'needs' : 'need'} you`;
 export const MAC = /Mac|iP(hone|ad)/.test(navigator.platform);
 
-export const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>');
+// A flag in a sentence or in inline code stays whole on a phone (#716): a line never ends in "--" or "--can-".
+// Only flags: a long slug or class name ("nuworq-716-commands-…") may still wrap at its hyphens, so it never widens the page.
+const FLAG = /(^|[\s(])(--[A-Za-z][\w-]*)/g;
+const flags = (h) => h.replace(FLAG, '$1<span class="flag">$2</span>');
+const codeHtml = (c) => `<code>${flags(c)}</code>`;
+const codeOnly = (h) => h.replace(/`([^`\n]+)`|[^`]+/g, (m, c) => (c != null ? codeHtml(c) : flags(m)));
+export const inline = (t) => codeOnly(esc(t));
 
-const MD_INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(^|[\s(])(https?:\/\/[^\s<)]+)/gm;
-const codeOnly = (t) => t.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+const MD_INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(^|[\s(])(https?:\/\/[^\s<)]+)|(^|[\s(])(--[A-Za-z][\w-]*)/gm;
 
 export function md(text) {
   if (!text) return '';
   const blocks = [];
-  let s = String(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => { blocks.push(`<pre>${esc(code.replace(/\n$/, ''))}</pre>`); return `\u0000${blocks.length - 1}\u0000`; });
+  let s = String(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => { blocks.push(`<pre class="code">${esc(code.replace(/\n$/, ''))}</pre>`); return `\u0000${blocks.length - 1}\u0000`; });
   // One pass: each piece of text becomes code, bold, a link or an address once, and markup made here is never
   // scanned again (a URL inside a link's address would otherwise close its href early).
   const a = (href, label) => `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
-  s = esc(s).replace(MD_INLINE, (m, code, bold, label, href, lead, url) =>
-    code != null ? `<code>${code}</code>` : bold != null ? `<strong>${codeOnly(bold)}</strong>` : label != null ? a(href, codeOnly(label)) : `${lead}${a(url, url)}`);
+  s = esc(s).replace(MD_INLINE, (m, code, bold, label, href, lead, url, flagLead, flag) =>
+    code != null ? codeHtml(code) : bold != null ? `<strong>${codeOnly(bold)}</strong>` : label != null ? a(href, codeOnly(label))
+      : url != null ? `${lead}${a(url, url)}` : `${flagLead}<span class="flag">${flag}</span>`);
   return s.split(/\n{2,}/).map((par) => {
     const ls = par.split('\n');
     const bullet = /^\s*([-*•]|\d+\.)\s+/;

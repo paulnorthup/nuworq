@@ -238,8 +238,8 @@ describe('the page', () => {
   const app = appSource();
   // md() and stepsBy() as the page has them, run on their own.
   const slice = (from, to) => app.slice(app.indexOf(from), app.indexOf(to, app.indexOf(from)));
-  const src = [slice('const esc =', '\n'), slice('const MD_INLINE', 'function providerOf'), slice('const stepsBy', '\n\n')].join('\n').replace(/^export /gm, '');
-  const { md, stepsBy } = new Function(`${src}; return { md, stepsBy };`)();
+  const src = [slice('const esc =', '\n'), slice('const FLAG', 'function providerOf'), slice('const stepsBy', '\n\n')].join('\n').replace(/^export /gm, '');
+  const { md, inline, stepsBy } = new Function(`${src}; return { md, inline, stepsBy };`)();
 
   test('md() links in one pass: a URL inside a link never breaks out of its href', () => {
     const out = md('[x](https://a.test/(https://b.test/" onmouseover="alert(1))');
@@ -250,6 +250,27 @@ describe('the page', () => {
     assert.equal((label.match(/<a /g) ?? []).length, 1, "a link's label isn't linked again");
     assert.equal(md('go to https://a.test/x now'), '<p>go to <a href="https://a.test/x" target="_blank" rel="noopener">https://a.test/x</a> now</p>');
     assert.equal(md('**bold `code`** and `https://not.a.link`'), '<p><strong>bold <code>code</code></strong> and <code>https://not.a.link</code></p>');
+  });
+
+  test('a flag stays whole on a phone (#716): in a sentence and in inline code, never in a URL or a word', () => {
+    const f = (x) => `<span class="flag">${x}</span>`;
+    assert.equal(inline('Run `nuworq run --workers 1` (add --here), not a-b or x--y'),
+      `Run <code>nuworq run ${f('--workers')} 1</code> (add ${f('--here')}), not a-b or x--y`);
+    assert.equal(inline('`--here` and a lone ` tick'), `<code>${f('--here')}</code> and a lone \` tick`);
+    assert.equal(md('takes --can-read-keys, `--browser` or https://a.test/--x'),
+      `<p>takes ${f('--can-read-keys')}, <code>${f('--browser')}</code> or <a href="https://a.test/--x" target="_blank" rel="noopener">https://a.test/--x</a></p>`);
+    assert.equal(md('**`--b` --c**'), `<p><strong><code>${f('--b')}</code> ${f('--c')}</strong></p>`);
+    assert.equal(inline('`--staff nuworq-app docs/a-b.md`'), `<code>${f('--staff')} nuworq-app docs/a-b.md</code>`, 'a word or path still wraps');
+    const slug = 'nuworq-716-commands-on-a-phone-wrap-only-at-spaces-and-more';
+    assert.equal(md(`The branch \`${slug}\` is pushed.`), `<p>The branch <code>${slug}</code> is pushed.</p>`, 'a long kebab word wraps at its hyphens');
+  });
+
+  test('a command scrolls in its block (#716), but prose in a pre (a Detail) still wraps', () => {
+    const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
+    assert.match(css, /^pre \{[^}]*white-space: pre-wrap;/m, 'a Detail wraps');
+    assert.match(css, /^\.copyable pre, pre\.code \{ white-space: pre;/m, 'a command or code block scrolls');
+    assert.match(md('```\nnuworq run --workers 1\n```'), /<pre class="code">nuworq run --workers 1<\/pre>/);
+    assert.match(readFileSync(new URL('../web/copy.js', import.meta.url), 'utf8'), /<div class="copyable"><pre>/, 'every Copy block is .copyable');
   });
 
   test("an agent's steps say who wrote them and that the hub didn't; a person's and the hub's say nothing", () => {

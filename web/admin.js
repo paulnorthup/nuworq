@@ -145,9 +145,8 @@ async function loadFeedback() {
   const el = $('#fb-list');
   try {
     const { on, project, autonomy, groups: all } = await api('/api/feedback/groups');
-    $('#fb-lead').textContent = on
-      ? `What got in people's and agents' way, for ${project}. The same report from many senders is one group: decide it once.`
-      : 'Feedback is off on this hub: the host turns it on with --feedback-project <workspace>/<project> (NUWORQ_FEEDBACK_PROJECT).';
+    if (on) $('#fb-lead').textContent = `What got in people's and agents' way, for ${project}. The same report from many senders is one group: decide it once.`;
+    else $('#fb-lead').innerHTML = 'Feedback is off on this hub: the host turns it on with <code class="flag">--feedback-project</code> <code>&lt;workspace&gt;/&lt;project&gt;</code> (<code>NUWORQ_FEEDBACK_PROJECT</code>).';
     $('#fb-level').innerHTML = on ? fbLevel(autonomy) : '';
     markNew($('#fb-level'));
     const groups = all.filter((g) => !fbState || (fbState === 'new' ? g.state === 'new' : g.state !== 'new'));
@@ -255,7 +254,7 @@ async function loadSpaces() {
   const el = $('#spaces');
   try {
     const { enforced, workspaces } = await api('/api/workspaces');
-    el.innerHTML = `${enforced ? '' : '<p class="faint">Plans aren\'t enforced on this hub (start it with --plans): changes are stored and apply once they are.</p>'}
+    el.innerHTML = `${enforced ? '' : '<p class="faint">Plans aren\'t enforced on this hub (start it with <code class="flag">--plans</code>): changes are stored and apply once they are.</p>'}
       ${workspaces.length ? workspaces.map(space).join('') : '<p class="faint">No workspaces yet.</p>'}`;
   } catch (e) { el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
 }

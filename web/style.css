@@ -183,7 +183,9 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 textarea { resize: vertical; min-height: 60px; }
 input[type=checkbox] { width: auto; }
 code { font-family: var(--mono); font-size: smaller; background: var(--sunken); padding: var(--sp-h) var(--sp-1); border-radius: var(--r-s); }
+.flag { white-space: nowrap; } /* a flag in a sentence stays whole (#716): web/views/html.js marks them */
 pre { font-family: var(--mono); font-size: var(--fs-2); line-height: 1.5; background: var(--sunken); padding: var(--sp-3) var(--sp-3); border-radius: var(--r-m); overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: var(--sp-2) 0; }
+.copyable pre, pre.code { white-space: pre; word-break: normal; } /* a command or code block scrolls sideways in its block: a wrap would split a flag after its dashes (#716); prose in a pre (a Detail) still wraps */
 h1, h2, h3 { margin: 0; font-weight: 600; }
 /* Figures that are compared line up digit for digit (#391): counts, costs, durations, percentages. */
 .badge, .count, .age, .stage .n, .agent-card .stats b, .since b, .throughput, .flow .cost, .an-figs, .g-count, .funnel .n,
