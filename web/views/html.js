@@ -14,11 +14,11 @@ export const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many
 export const needYou = (n) => `${plural(n, 'thing')} ${n === 1 ? 'needs' : 'need'} you`;
 export const MAC = /Mac|iP(hone|ad)/.test(navigator.platform);
 
-// A flag in a sentence stays whole on a phone (#716): a line never ends in "--" or "--can-". In inline code, so
-// does any hyphenated word ("nuworq-app"); a path or URL may still wrap, so it never widens the page.
+// A flag in a sentence or in inline code stays whole on a phone (#716): a line never ends in "--" or "--can-".
+// Only flags: a long slug or class name ("nuworq-716-commands-…") may still wrap at its hyphens, so it never widens the page.
 const FLAG = /(^|[\s(])(--[A-Za-z][\w-]*)/g;
 const flags = (h) => h.replace(FLAG, '$1<span class="flag">$2</span>');
-const codeHtml = (c) => `<code>${c.replace(/(^|\s)([^\s/]*-[^\s/]*)/g, '$1<span class="flag">$2</span>')}</code>`;
+const codeHtml = (c) => `<code>${flags(c)}</code>`;
 const codeOnly = (h) => h.replace(/`([^`\n]+)`|[^`]+/g, (m, c) => (c != null ? codeHtml(c) : flags(m)));
 export const inline = (t) => codeOnly(esc(t));
 

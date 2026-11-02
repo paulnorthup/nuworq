@@ -260,7 +260,9 @@ describe('the page', () => {
     assert.equal(md('takes --can-read-keys, `--browser` or https://a.test/--x'),
       `<p>takes ${f('--can-read-keys')}, <code>${f('--browser')}</code> or <a href="https://a.test/--x" target="_blank" rel="noopener">https://a.test/--x</a></p>`);
     assert.equal(md('**`--b` --c**'), `<p><strong><code>${f('--b')}</code> ${f('--c')}</strong></p>`);
-    assert.equal(inline('`--staff nuworq-app docs/a-b.md`'), `<code>${f('--staff')} ${f('nuworq-app')} docs/a-b.md</code>`, 'a path still wraps');
+    assert.equal(inline('`--staff nuworq-app docs/a-b.md`'), `<code>${f('--staff')} nuworq-app docs/a-b.md</code>`, 'a word or path still wraps');
+    const slug = 'nuworq-716-commands-on-a-phone-wrap-only-at-spaces-and-more';
+    assert.equal(md(`The branch \`${slug}\` is pushed.`), `<p>The branch <code>${slug}</code> is pushed.</p>`, 'a long kebab word wraps at its hyphens');
   });
 
   test("an agent's steps say who wrote them and that the hub didn't; a person's and the hub's say nothing", () => {
