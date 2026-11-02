@@ -280,10 +280,17 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     };
     const review = (agent, item) => op('review', { token: device, agent, body: { item, verdict: 'accept', headline: 'looks right' } });
     const built = await build('mbp-w1', 'Built by one worker of the runner');
+    // Feedback #7 (#661): the sibling's next offers that review, and its review is accepted, never refused.
+    const offered = (await op('next', { token: device, agent: 'mbp-w2', body: { claim: false } })).json;
+    assert.ok(offered.item && !/own work/.test(JSON.stringify(offered)), JSON.stringify(offered));
+    assert.ok(hub.claimable(hub.project('api'), 'mbp-w2').some((o) => o.mode === 'review' && `#${o.item.seq}` === built), JSON.stringify(offered));
     assert.equal((await review('mbp-w2', built)).status, 200, "a sibling worker reviews it, as before #622");
     // #622's case stands: two plain sessions on one token are one builder.
     const own = await build('mbp-session', 'Built by a session on the device token');
-    const r = await review('mbp-other-session', own);
+    // ...and next offers the other session a different job, never that review or the refusal (#654/#660).
+    const other = (await op('next', { token: device, agent: 'mbp-other-session', body: { claim: false } })).json;
+    assert.ok(other.item !== own && !/own work/.test(JSON.stringify(other)), JSON.stringify(other));
+    const r =await review('mbp-other-session', own);
     assert.notEqual(r.status, 200);
     assert.match(r.json.error, /can't review your own work/);
   });
