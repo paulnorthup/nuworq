@@ -43,7 +43,7 @@ describe('the guide follows Get started', () => {
       assert.ok(!!s.auto !== !!s.none, `${s.key} says either what nuworq does for you or that it can't`);
     }
     for (const e of ESSENTIALS) assert.ok(e.glance && e.body.length, `${e.key} has a glance and a body`);
-    assert.deepEqual(ESSENTIALS.map((e) => e.key), ['autonomy', 'depth', 'notifications', 'operator']);
+    assert.deepEqual(ESSENTIALS.map((e) => e.key), ['autonomy', 'depth', 'notifications', 'the-operator']);
   });
 
   test('the Get started card links the guide, and each undone step to its section', () => {
@@ -56,6 +56,14 @@ describe('the guide follows Get started', () => {
 });
 
 describe('the page', () => {
+  test('no two elements share an id: #operator opens Start an operator, #the-operator the essential (#592)', () => {
+    const html = guidePage({ version: 'v1', base: '' });
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), [], 'every id is unique');
+    assert.match(html, /<h4 id="operator">\d\. Start an operator<\/h4>/, "Get started's How? still lands on the setup step's part");
+    assert.match(html, /<details id="the-operator"><summary><span class="t"><b>The operator<\/b>/, 'the essential has its own id');
+  });
+
   test('one screen lists the steps; each opens for the details; commands get a Copy button', () => {
     const html = guidePage({ version: 'v1.2.3 · abc1234', base: '/w/acme' });
     assert.match(html, /This guide describes nuworq v1\.2\.3 · abc1234/);
