@@ -2257,17 +2257,19 @@ export class Hub extends EventEmitter {
     // holds it too, since that answer is usually the live evidence (#298); the builder's questions to the
     // human don't: the reviewer judges the assumption. And a reviewer who handed it off doesn't get it
     // back until something new arrives on it: an answer, a new submission or a comment.
+    // Not the caller's own work, by implementedBy's rule (#660): any of the names its token works under (#622).
+    const names = this.namesOf(p.id, agent ?? ''), marks = names.map(() => '?').join(',');
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
-        AND COALESCE(implementer, '') != ?
-        AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
-        AND NOT EXISTS (SELECT 1 FROM events r WHERE r.item_id = items.id AND r.actor = ? AND r.type = 'rebased' AND r.at >= items.stage_since
+        AND COALESCE(implementer, '') NOT IN (${marks})
+        AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent IN (${marks}) AND a.stage = 'submitted' AND a.closed = 0)
+        AND NOT EXISTS (SELECT 1 FROM events r WHERE r.item_id = items.id AND r.actor IN (${marks}) AND r.type = 'rebased' AND r.at >= items.stage_since
           AND json_extract(r.data, '$.conflicts') = 1)
         AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.item_id = items.id AND q.status = 'open' AND CASE WHEN q.audience = 'operator'
           THEN ? = 0 ELSE q.at >= items.stage_since AND q.asked_by != COALESCE(items.implementer, '') END)
         AND NOT EXISTS (SELECT 1 FROM events h WHERE h.item_id = items.id AND h.actor = ? AND h.type = 'handoff' AND h.at >= items.stage_since
           AND NOT EXISTS (SELECT 1 FROM events n WHERE n.item_id = items.id AND n.at > h.at AND n.actor != h.actor
             AND n.type IN ('answered', 'assumption_confirmed', 'question_withdrawn', 'submitted', 'comment')))
-      ORDER BY stage_since`).all(p.id, agent, agent, agent, operator ? 1 : 0, agent ?? '').filter(reviewable).map((item) => ({ mode: 'review', item }));
+      ORDER BY stage_since`).all(p.id, ...names, ...names, ...names, operator ? 1 : 0, agent ?? '').filter(reviewable).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
     // An open pull request lands it: GitHub's merge marks it done. Unless it conflicts with main: then an
