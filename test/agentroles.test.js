@@ -287,7 +287,10 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.equal((await review('mbp-w2', built)).status, 200, "a sibling worker reviews it, as before #622");
     // #622's case stands: two plain sessions on one token are one builder.
     const own = await build('mbp-session', 'Built by a session on the device token');
-    const r = await review('mbp-other-session', own);
+    // ...and next offers the other session a different job, never that review or the refusal (#654/#660).
+    const other = (await op('next', { token: device, agent: 'mbp-other-session', body: { claim: false } })).json;
+    assert.ok(other.item !== own && !/own work/.test(JSON.stringify(other)), JSON.stringify(other));
+    const r =await review('mbp-other-session', own);
     assert.notEqual(r.status, 200);
     assert.match(r.json.error, /can't review your own work/);
   });
