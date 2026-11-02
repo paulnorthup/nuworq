@@ -194,10 +194,10 @@ describe('calibration', () => {
 
   test('difficulty that spreads cost more than size predicts it better', () => {
     const items = [
-      ...[0.4, 0.5, 0.6].map((c) => item('rote', null, c)),
+      ...[0.4, 0.5, 0.6].map((c) => item('rote', 'small', c)),
       ...[1.4, 1.5, 1.6].map((c) => item('standard', 'large', c)),
-      ...[3, 4, 5].map((c) => item('hard', null, c, 2)),
-      ...[1.3, 1.5, 1.4].map((c) => item('standard', null, c)),
+      ...[3, 4, 5].map((c) => item('hard', 'small', c, 2)),
+      ...[1.3, 1.5, 1.4].map((c) => item('standard', 'small', c)),
     ];
     const c = calibration(items);
     assert.equal(c.predicts, 'difficulty');
@@ -215,6 +215,38 @@ describe('calibration', () => {
     assert.equal(calibration(unrated).predicts, null);
     assert.match(calibrationSection(calibration(unrated), { esc: String }), /Not enough rated work yet to tell: 0 of 3 landed items were rated/);
     assert.match(calibrationSection(calibration([]), { esc: String }), /Too little has landed/);
+  });
+
+  test('unrated and unsized items count under no rating, and the comparison leaves them out (#720)', () => {
+    const items = [
+      ...[0.4, 0.5, 0.6].map((c) => item('rote', 'small', c)),
+      ...[3, 4, 5].map((c) => item('hard', 'large', c)),
+      // Unrated, unsized and dear: counted as standard and small, they would make size look like it spreads cost.
+      ...[9, 10, 11].map((c) => ({ ...item('standard', null, c), rated: false })),
+      item('standard', null, 1),
+    ];
+    const c = calibration(items);
+    assert.equal(c.landed, 10);
+    assert.equal(c.rated, 7);
+    assert.equal(c.sized, 6);
+    assert.deepEqual(c.by_difficulty.map((g) => [g.key, g.landed]), [['rote', 3], ['standard', 1], ['hard', 3]]);
+    assert.deepEqual(c.by_size.map((g) => [g.key, g.landed, g.median_cost]), [['small', 3, 0.5], ['large', 3, 4]]);
+    assert.equal(c.rated, c.by_difficulty.reduce((a, g) => a + g.landed, 0), 'the verdict\'s rated count is what the rows show');
+    assert.equal(c.spread.difficulty.cost, 8);
+    assert.equal(c.spread.size.cost, 8);
+    assert.equal(c.predicts, 'neither');
+    const html = calibrationSection(c, { esc: String });
+    assert.match(html, /Not rated <span class="s">3<\/span>/);
+    assert.match(html, /Not rated <span class="s">4<\/span>/);
+
+    // None rated: no group counts them, and the rows say so.
+    const unrated = [1, 2, 3].map((x) => ({ ...item('standard', null, x), rated: false }));
+    const u = calibration(unrated);
+    assert.deepEqual([...u.by_difficulty, ...u.by_size].map((g) => g.landed), [0, 0, 0, 0, 0]);
+    const uh = calibrationSection(u, { esc: String });
+    assert.match(uh, /0 of 3 landed items were rated/);
+    assert.equal(uh.match(/Not rated <span class="s">3<\/span>/g).length, 2);
+    assert.doesNotMatch(uh, /Standard <span class="s">3/);
   });
 
   test('the workspace outcomes carry it', () => {
