@@ -18,7 +18,7 @@ export const DOT = {
   // notes and bookkeeping: nobody's move changes
   comment: '', created: '', refined: '', regrouped: '', tidied: '', not_chosen: '', question_withdrawn: '', staged: '', check_now: '',
   alert: '', issue: '', duplicate: '', stale: '', ci: '', retired: '', restored: '', always: '', learned: '', ack: '', picked: '', stewards: '',
-  checkin: '', signoff: '', project: '', path: '', remote: '', runner: '', settings: '', github: '', github_app: '', parked: '',
+  checkin: '', signoff: '', project: '', path: '', remote: '', runner: '', settings: '', autonomy: '', github: '', github_app: '', parked: '',
   mission: '', joined: '', connected: '', credential: '', pushed_via_hub: '',
 };
 
