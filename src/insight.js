@@ -4,6 +4,7 @@
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
 import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, waitsForOk, dur, providerOf, MIN, HOUR, DAY, HUMAN, SYSTEM, HANDBACKS, LEASE_MS, isHuman, isSystem, preconditionOut } from './core.js';
+import { randomUUID } from 'node:crypto';
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
@@ -337,14 +338,22 @@ function build(hub, p, t, { light = false } = {}) {
   // How long since at, inside an entry's headline or sub (#689). push takes it out again and sends it beside the
   // text (headline_at, sub_at: [at, as said]), so the page renders it with ago() and its tick keeps it current:
   // a minute passing then redraws no card.
-  const timeIn = (at) => `\u0001${at}\u0002${dur(t - at)}\u0003`;
+  // Titles, questions and headlines in the same sentence are written by agents and outsiders (#781): a mark carries
+  // this view's own random token, so written text can't forge one, and control characters left over are dropped.
+  const mark = randomUUID();
+  const timeIn = (at) => `\u0001${mark}${at}\u0002${dur(t - at)}\u0003`;
+  const marked = new RegExp(`\u0001${mark}(\\d+)\u0002([^\u0003]*)\u0003`, 'g');
   const timed = (a, f) => {
     const times = [];
-    a[f] = a[f].replace(/\u0001(\d+)\u0002([^\u0003]*)\u0003/g, (m, at, said) => (times.push([Number(at), said]), said));
+    a[f] = a[f].replace(marked, (m, at, said) => (times.push([Number(at), said]), said));
     if (times.length) a[`${f}_at`] = times;
   };
   const push = (a) => {
-    for (const f of ['headline', 'sub']) if (typeof a[f] === 'string' && a[f].includes('\u0001')) timed(a, f);
+    for (const f of ['headline', 'sub']) {
+      if (typeof a[f] !== 'string') continue;
+      timed(a, f);
+      a[f] = a[f].replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
+    }
     if (!dismissed.has(a.key)) attention.push(a);
   };
 

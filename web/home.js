@@ -11,11 +11,17 @@ const short = (s) => String(s ?? '').replace(/^(Nothing needs you\.|\d+ things? 
 // wide: lay it out in two columns; gs: the Get started card, if any.
 export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(name), wide = false, gs = '' }) {
   const tag = (p) => `<a class="proj-tag" href="#/p/${encodeURIComponent(p.slug)}">${esc(p.name)}</a>`;
+  // One card that fails to render is left out and logged, and the rest draws (#781).
+  const homeCard = (a) => {
+    try {
+      return a.project
+        ? `<div class="home-card" data-project="${esc(a.project.slug)}">${tag(a.project)}${card(a)}</div>`
+        : `<div class="home-card">${card(a)}</div>`; // project null: the workspace's own (#231)
+    } catch (e) { console.error(`nuworq: left out the entry ${a?.key ?? a?.kind} that failed to render`, e); return ''; }
+  };
   const needs = h.needs.length ? `<section class="sec home-needs"><header><h2>Needs you</h2><span class="count">${h.needs.length}</span>
       <span class="hint" data-new="needs-rank">most important first, across projects</span></header>
-      <div class="cards">${h.needs.map((a) => (a.project
-        ? `<div class="home-card" data-project="${esc(a.project.slug)}">${tag(a.project)}${card(a)}</div>`
-        : `<div class="home-card">${card(a)}</div>`)).join('')}</div></section>` : ''; // project null: the workspace's own (#231)
+      <div class="cards">${h.needs.map(homeCard).join('')}</div></section>` : '';
 
   const live = h.projects.filter((p) => !p.parked), parked = h.projects.filter((p) => p.parked);
   const line = (p) => `<div class="ov-line state-${p.pulse.state} ${p.parked ? 'parked' : ''}" data-action="goto" data-slug="${esc(p.slug)}">
