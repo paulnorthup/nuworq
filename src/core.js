@@ -940,17 +940,23 @@ export class Hub extends EventEmitter {
   // on (cheapest first, local ones only while ready), or null: routing is off, or there is nothing to choose from.
   routePlan(p, item, mode, kind, top = '') {
     if (!p.model_routing) return null;
-    const tiers = tiersOf(p.model_tiers);
+    const tiers = this.tiersFor(p, kind, top);
     const difficulty = difficultyOf(item);
-    // The default tiers stop at the runner's --model when it is one of them (#723): a runner started on Sonnet to
-    // save money doesn't build on Opus just because the project set no tiers of its own.
-    const own = !!json(p.model_tiers, {})[kind]?.length, at = tiers[kind]?.indexOf(top) ?? -1;
-    const list = candidates(tiers[kind]?.length ? (own || at < 0 ? tiers[kind] : tiers[kind].slice(0, at + 1)) : top ? [top] : [], {
+    const list = candidates(tiers.length ? tiers : top ? [top] : [], {
       difficulty, local: (m) => providerOf(m) === 'Open-weight', ready: (m) => !!this.localReady.get(m)?.ready,
     });
     if (!list.length) return null;
     const plan = pickModel(list, { mode, difficulty, stats: this.cellStats(p)[`${mode} ${difficulty}`], quality: p.model_quality });
     return { list, ...plan };
+  }
+
+  // Agent kind's tiers in use on a runner whose --model is top. The default tiers stop at top when it is one of them
+  // (#723): a runner started on Sonnet to save money doesn't build on Opus just because the project set no tiers of
+  // its own. A project's own tiers are never capped.
+  tiersFor(p, kind, top = '') {
+    const tiers = tiersOf(p.model_tiers)[kind] ?? [];
+    const at = json(p.model_tiers, {})[kind]?.length ? -1 : tiers.indexOf(top);
+    return at < 0 ? tiers : tiers.slice(0, at + 1);
   }
 
   // Each cell's results (#349): { 'work standard': { model: { attempts, clean } } } over the last 90 days of jobs,
@@ -1020,7 +1026,7 @@ export class Hub extends EventEmitter {
   // while it is eligible and its agent has a cheaper tier to try. A race makes it a two-slot race.
   decideTrial(p, item, kind, top, priority) {
     if (item.trial || item.stage !== 'ready') return item;
-    if ((tiersOf(p.model_tiers)[kind]?.length ?? (top ? 1 : 0)) < 2) return item;
+    if ((this.tiersFor(p, kind, top).length || (top ? 1 : 0)) < 2) return item;
     const overBudget = this.staffing(p).stopped === 'budget';
     if (!trialEligible(item, { priority, operatorOnly: operatorOnly(item), overBudget })) return item;
     const counts = Object.fromEntries(this.q(`SELECT trial, COUNT(*) AS n FROM items WHERE project_id = ? AND trial != '' GROUP BY trial`).all(p.id).map((r) => [r.trial, r.n]));

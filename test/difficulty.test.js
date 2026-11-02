@@ -130,6 +130,17 @@ describe('trials', () => {
     assert.deepEqual([route('claude-opus-5-5').mode, route('claude-opus-5-5').model], ['land', 'claude-haiku-5-5'], 'a landing job on the cheapest default tier');
   });
 
+  test('a runner on the cheapest default tier has nothing cheaper to try, so no trial is decided (#723)', () => {
+    const { hub, set, row, create } = world();
+    set({ model_trial: 100 });
+    create('Build');
+    const haiku = () => hub.route('', { runner: true, kind: 'claude', model: 'claude-haiku-5-5' })[0];
+    assert.equal(haiku().model, 'claude-haiku-5-5', 'the defaults stop at its --model');
+    assert.equal(row(1).trial, '', 'a one-model list is no trial');
+    assert.equal(hub.route('', { runner: true, kind: 'claude', model: 'claude-sonnet-5-5' })[0].model, 'claude-haiku-5-5', 'a Sonnet runner still tries one down');
+    assert.equal(row(1).trial, 'down');
+  });
+
   test('a raced trial: two slots, the top tier and one down, a model for each worker the runner starts', () => {
     const { hub, set, op, row, route, create } = world();
     set({ model_routing: true, model_tiers: TIERS, model_trial: 0, model_race: 100 });
