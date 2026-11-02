@@ -941,7 +941,7 @@ main.admin { padding-top: var(--sp-6); }
 /* Feedback in groups (#688): who sent it as a bar on a scale shared by the groups in view, what covers it, the
    suggested call first and filled, and once decided, the decision with its Undo. */
 .fb-g-head { display: flex; align-items: flex-start; gap: var(--sp-3); }
-.fb-pick { width: 22px; height: 22px; margin: 1px 0 0; flex: none; accent-color: var(--ink); }
+.fb-pick { width: 22px; height: 22px; margin: 0; flex: none; accent-color: var(--ink); }
 .fb-g-count { display: grid; grid-template-columns: 1fr 2.5em; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0; }
 .fb-g-bar { height: 10px; background: var(--sunken); border-radius: var(--r-s); overflow: hidden; }
 .fb-g-bar span { display: block; height: 100%; background: var(--muted); border-radius: var(--r-s); } /* a count, not a state */
