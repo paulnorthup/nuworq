@@ -143,7 +143,7 @@ describe('staffing', () => {
   test("a running worker's spend so far, as its runner reports it, counts toward the daily budget before it exits (#761)", () => {
     const { hub, clock, p, set, routed } = world();
     set({ run_budget: 10 });
-    const report = (usd, extra = {}) => hub.reportRunner({ name: 'mac', running: 1, workers: 1, poll_seconds: 30, live: ['w1'], spending: [{ name: 'w1', project: 'p', usd }], ...extra });
+    const report = (usd, extra = {}) => hub.reportRunner({ name: 'mac', running: 1, workers: 1, poll_seconds: 30, live: ['w1'], spending: [{ name: 'w1', project: 'p', usd }], ...extra }, { runner: true });
     report(4);
     assert.deepEqual(routed(), ['p'], '$4 of $10 so far');
     report(12);
@@ -154,11 +154,33 @@ describe('staffing', () => {
     hub.agentOp('p', 'usage', 'w1', { usage: { input_tokens: 1, output_tokens: 1, cost_usd: 12.5 } });
     assert.equal(view(hub, 'p').project.staffing.spent_today, 12.5, 'counted once');
     // A runner that went quiet no longer counts what it last said.
-    report(3, { spending: [{ name: 'w2', project: 'p', usd: 3 }] });
+    report(3, { live: ['w2'], spending: [{ name: 'w2', project: 'p', usd: 3 }] });
     set({ run_budget: 20 });
     assert.equal(view(hub, 'p').project.staffing.spent_today, 15.5);
     clock.t += 5 * 30_000;
     assert.equal(view(hub, 'p').project.staffing.spent_today, 12.5, 'down: its workers are gone');
+  });
+
+  test("live spend counts only a runner's own workers (#782)", () => {
+    const { hub, p, set } = world();
+    set({ run_budget: 10 });
+    const said = (w, usd, opts, extra = {}) => hub.reportRunner({ name: 'mac', poll_seconds: 30, live: [w], spending: [{ name: w, project: 'p', usd }], ...extra }, opts);
+    const stopped = () => hub.staffing(p()).stopped;
+    said('w1', 50, { name: '' });
+    assert.equal(stopped(), null, "a non-runner agent token's report counts nothing");
+    hub.agentOp('p', 'checkin', 'w9', { role: 'worker', runner: 'other' });
+    said('w9', 50, { name: 'mac', runner: true });
+    assert.equal(stopped(), null, "another runner's worker counts nothing");
+    hub.reportRunner({ name: 'mac', poll_seconds: 30, live: [], spending: [{ name: 'w3', project: 'p', usd: 50 }] }, { name: 'mac', runner: true });
+    assert.equal(stopped(), null, "a worker the runner doesn't vouch for counts nothing");
+    set({ run_budget: 1000 });
+    said('w1', 1e9, { name: 'mac', runner: true });
+    assert.equal(hub.staffing(p()).spent_today, 100, 'an absurd amount counts at most the ceiling');
+    said('w1', 1e9, { name: 'mac', runner: true }, { worker_usd: 25 });
+    assert.equal(hub.staffing(p()).spent_today, 25, "at most the runner's per-worker cap");
+    set({ run_budget: 10 });
+    said('w1', 12, { name: 'mac', runner: true });
+    assert.equal(stopped(), 'budget', "a real runner's worker still counts");
   });
 
   test('each change is on the record', () => {

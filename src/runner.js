@@ -383,6 +383,8 @@ export async function run({
       live: running.map((w) => w.name),
       // What each has spent so far (#761): the project's daily budget counts it before the worker exits.
       spending: running.filter((w) => !w.gone && spendOf(w) > 0).map((w) => ({ name: w.name, project: w.project, usd: spendOf(w) })),
+      // Its per-worker cap (#782): the hub counts no worker's spend past it.
+      ...(Number.isFinite(workerUsd) ? { worker_usd: workerUsd } : {}),
       skipping: [
         ...[...resting].filter(([, r]) => r.until > t).map(([project, r]) => ({ project, reason: cant.get(project) ?? "its checkout couldn't be updated", until: r.until })),
         ...[...cant].filter(([project]) => !(resting.get(project)?.until > t)).map(([project, reason]) => ({ project, reason })),
