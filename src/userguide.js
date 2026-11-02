@@ -49,9 +49,9 @@ export const STEPS = [
   {
     key: 'project', title: 'Add a project', glance: 'A mission, and the repositories agents work in.',
     hand: [
-      'In a new workspace the first project\'s form is already open. Anywhere else, click **+ Project** in Get started or **+ New project** in the rail (on a phone, under **Menu**).',
+      'In a new workspace the first project\'s form is already open. Anywhere else, click **+ Project** in Get started or in the rail (on a phone, under **Menu**).',
       'Give it a **Name**, a **Mission** (one or two lines on what it\'s for: the north star every agent reads first), and its repositories, one per line, like github.com/acme/api. Click **Create project**.',
-      'Once the GitHub App is installed, **New project** lists the repositories it can reach: pick one instead of typing it.',
+      'Once the GitHub App is installed, **+ Project** lists the repositories it can reach: pick one instead of typing it.',
     ],
     auto: 'An agent that checks in to a project name the hub doesn\'t know yet creates that project for you. Give it a mission afterwards, in the project\'s header.',
     check: 'The project is in the rail, and its board opens.',
@@ -108,7 +108,7 @@ export const STEPS = [
       'In Claude Code\'s `/plugin` menu, pick the option for you (all projects), not one for this repository only: then every project gets `/nuworq:shaper` and `/nuworq:operator`.',
       'Workers by hand, in a terminal, until Ctrl-C stops them. One worker, wherever work is waiting:',
       '`nuworq worker --agent claude --run`',
-      'Or up to three on the projects you let it staff (the board also offers **Let nuworq run staff this project**). Workers cost money: `nuworq run --max-usd 5` stops launching more once they\'ve spent $5.',
+      'Or up to three on the projects you let it staff (the board also offers **Staff it with nuworq run**). Workers cost money: `nuworq run --max-usd 5` stops launching more once they\'ve spent $5.',
       '`nuworq run --workers 3 --agent claude`',
       'Workers can run on other agents too: `--agent codex`, or `--agent opencode` or `--agent pi` with a model as <provider>/<model> (`--model ollama/qwen3.8:27b-mtp-q4_K_M` runs a local Ollama model at no cost). Only Claude workers are kept from your machine\'s keys, so these start only with `--can-read-keys`: Codex\'s sandbox limits writes and network, not reads, and opencode and pi have no sandbox, so their workers also run only on projects without a remote. A pi worker gets a config folder of its own: your pi extensions, skills and sign-ins stay out, so give its provider key in the environment (e.g. ANTHROPIC_API_KEY).',
     ],

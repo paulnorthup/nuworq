@@ -11,7 +11,7 @@ export const SHORTCUTS = [
   { id: 'ln-close', where: 'The quick launcher', keys: ['Esc'], does: 'Back out of a change, or close the launcher', match: (e, c) => e.key === 'Escape' && c.launcher },
   { id: 'help', where: 'Everywhere', keys: ['?'], does: 'Show these shortcuts', match: (e, c) => e.key === '?' && plain(e) && !c.inField },
   { id: 'close', where: 'Everywhere', keys: ['Esc'], does: 'Close the open dialog', match: (e, c) => e.key === 'Escape' && c.modal },
-  { id: 'depth', where: 'A project or All projects', keys: ['1', '2', '3'], does: 'Depth 30s, 5m, 30m', match: (e, c) => ['1', '2', '3'].includes(e.key) && plain(e) && !c.inField },
+  { id: 'depth', where: 'A project or Home', keys: ['1', '2', '3'], does: 'Depth 30s, 5m, 30m', match: (e, c) => ['1', '2', '3'].includes(e.key) && plain(e) && !c.inField },
   { id: 'leave-item', where: 'An open item', keys: ['Esc'], does: 'Back to its project', match: (e, c) => e.key === 'Escape' && c.item },
   { id: 'send', where: 'While typing', keys: ['mod', 'Enter'], does: 'Send your message to the agents', match: (e, c) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && c.compose },
   { id: 'press', where: 'While typing', keys: ['Enter'], does: "Press a one-line field's button", match: (e, c) => e.key === 'Enter' && c.input },

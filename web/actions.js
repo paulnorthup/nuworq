@@ -87,7 +87,7 @@ function staffWords(s) {
 function connectStep(r) {
   const c = connectCommands(S.info ?? { url: location.origin }, location, r.slug);
   const refused = r.refused?.length ? `<div class="bad">${r.refused.map((x) => `<p>✗ Not linked: ${esc(x.error)}.${x.hint ? ` ${esc(x.hint)}` : ''}</p>`).join('')}</div>` : '';
-  modal(`<p class="faint">Step 3 of 3 · connect a machine</p>
+  modal(`<p class="faint">Step 3 of 3 · connect an agent</p>
     <h2>${esc(r.name)} is ready</h2>
     ${r.remotes?.length ? `<p class="lead">Linked: ${r.remotes.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p>` : ''}${refused}
     ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${commandBlocks(c.clone)}` : ''}
@@ -170,11 +170,11 @@ function settingsModal() {
     : 'A public, read-only page of what agents are doing here. Off until you turn it on.',
     sw('live', !!P.live, P.live ? 'live-off' : 'live-on'))}</div>
     ${row('github', 'GitHub', P.github ? 'Connected: pull requests and CI results link to items.' : 'Link pull requests and CI results to items.',
-      `<button class="btn${P.github ? '' : ' primary'}" data-action="github">${P.github ? 'Manage' : 'Connect GitHub'}</button>`)}
+      `<button class="btn${P.github ? '' : ' primary'}" data-action="github">${P.github ? 'Manage' : 'Set up'}</button>`)}
     <h3>This project</h3>
     ${P.parked
       ? row('park', 'Park', 'Parked: no new work starts and nothing here asks for you.', '<button class="btn" data-action="unpark-project">Unpark</button>')
-      : row('park', 'Park', 'Pause it: no new work starts and nothing here asks for you until you unpark it.', '<button class="btn" data-action="park">Park</button>')}
+      : row('park', 'Park', 'Pause it: no new work starts and nothing here asks for you until you unpark it. It stays in your projects; Remove archives it instead.', '<button class="btn" data-action="park">Park</button>')}
     ${row('remove', 'Remove', 'Archive it (history kept), or delete it for good.', '<button class="btn" data-action="remove-project">Remove…</button>')}
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
@@ -219,7 +219,7 @@ async function connect() {
   const where = S.view?.project.path;
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
-    <h4>Set up this machine (once)</h4>
+    <h4>Install and connect, once per machine</h4>
     <p class="lead">Paste it in a terminal, in a clone of the project. ${c.verified ? '<span data-new="verified-install">It downloads this hub\'s newest signed release and checks its signature against nuworq\'s release key; if that doesn\'t match, it stops before anything installs.</span> Then it installs nuworq (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), which keeps itself up to date.' : c.install ? 'It installs nuworq from this hub (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), and keeps it up to date.' : 'This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed first.'} It signs you in through the browser, then asks, one at a time, to install the Claude Code plugin, staff the project with workers here, and start an operator, and says how to start a shaper. That one block is all there is to copy. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.setup)}
     <details class="setup-fold" data-new="setup-folded"><summary>What connect sets up, to do by hand</summary>
     ${setupSection()}
@@ -367,14 +367,14 @@ function newProject() {
   const why = S.info?.workspace ? 'On a hub with workspaces, add a project by name for now: the shared GitHub App would list other workspaces\' repositories.'
     : gh === 'create' ? 'To pick a repository instead, <a href="api/github/app/new">create the GitHub App</a> (one click) and install it on your repositories.'
     : !gh ? 'With the hub\'s GitHub App, you could pick a repository here instead; an owner creates it from Connect an agent.' : '';
-  modal(`<h2>New project</h2>
+  modal(`<h2>+ Project</h2>
     ${picker ? `<p class="lead">Pick a repository the nuworq GitHub App is installed on. Install it on more from GitHub to see them here.</p>
       <div class="form"><label>Search<input id="np-q" placeholder="owner/name"></label></div><div id="np-repos" class="repo-list">${placeholder(4, { head: false })}</div>
       <details><summary>Or add one by name</summary>` : `<p class="lead">${why} Agents also create projects when they check in to a new name.</p>`}
     <div class="form"><label>Name<input id="np-name" placeholder="e.g. llm-proxy"></label>
     <label>Repository (optional): its git remote, so agents in a clone find the project<input id="np-remote" placeholder="e.g. github.com/acme/llm-proxy"></label>
     <label>Mission (optional): the north star every agent reads<textarea id="np-mission" placeholder="What is this for? What matters most?"></textarea></label>
-    <label class="check-label"><input type="checkbox" id="np-staff"> Let <code>nuworq run</code> staff it: it starts headless workers whenever work is waiting, and they can cost money. Off until you say; Settings changes it later.</label></div>
+    <label class="check-label"><input type="checkbox" id="np-staff"> Staff it with <code>nuworq run</code>: it starts headless workers whenever work is waiting, and they can cost money. Off until you say; Settings changes it later.</label></div>
     ${picker ? '</details>' : ''}
     <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="create-project">Create by name</button></div>`);
   if (!picker) return setTimeout(() => $('#np-name')?.focus(), 0);
@@ -602,7 +602,7 @@ export const ACTIONS = {
   'remove-project': () => {
     const P = S.view.project;
     modal(`<h2>Remove ${esc(P.name)}</h2>
-      <p class="lead"><b>Archive</b> takes it out of the project list and stops agents being sent here. Its items and history are kept, and you can restore it from Archived projects.</p>
+      <p class="lead"><b>Archive</b> takes it out of the project list and stops agents being sent here. Its items and history are kept, and you can restore it from Archived projects. To keep it in the list but quiet, Park it instead.</p>
       <p class="lead"><b>Delete</b> removes its items, history, notes and the hub's mirror for good, and tokens limited to it lose it. The repository on GitHub is not touched. Type <code>${esc(P.name)}</code> to delete it.</p>
       <div class="form"><input id="rm-confirm" placeholder="${esc(P.name)}"></div>
       <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn ghost" data-action="delete-project">Delete for good</button><button class="btn primary" data-action="archive-project">Archive</button></div>`);
@@ -640,7 +640,7 @@ export const ACTIONS = {
   },
   'runner-on': () => setting({ runner: true }, '`nuworq run` may now start workers here'),
   'runner-off': () => { if (confirm('Stop nuworq run staffing this project? Runners start no new workers here; running ones finish. Work waits until an agent takes it or you turn it back on.')) setting({ runner: false }, '`nuworq run` will no longer start workers here'); },
-  'staff-not-now': () => human('settings', { runner: false }, 'Not staffed. You can let nuworq run staff it later from Settings'),
+  'staff-not-now': () => human('settings', { runner: false }, 'Not staffed. You can staff it with nuworq run later from Settings'),
   staffing: () => staffingModal(),
   'staffing-from-settings': () => staffingModal(true),
   'staffing-save': async () => {
@@ -816,8 +816,8 @@ export const ACTIONS = {
     try {
       const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ repo: el.dataset.repo, mission: el.dataset.desc }) });
       modal(`<h2>${esc(r.repo.replace('github.com/', ''))} is a project</h2>
-        <p class="lead">Let <code>nuworq run</code> staff this project? It starts workers whenever there is work nobody is on, up to the limits it was started with. You can change this later in the project's settings.</p>
-        <div class="foot"><button class="btn ghost" data-action="staff-new" data-runner="0" data-slug="${esc(r.slug)}">Not now</button><button class="btn primary" data-action="staff-new" data-slug="${esc(r.slug)}">Let run staff it</button></div>`);
+        <p class="lead">Staff it with <code>nuworq run</code>? It starts workers whenever there is work nobody is on, up to the limits it was started with. You can change this later in the project's settings.</p>
+        <div class="foot"><button class="btn ghost" data-action="staff-new" data-runner="0" data-slug="${esc(r.slug)}">Not now</button><button class="btn primary" data-action="staff-new" data-slug="${esc(r.slug)}">Staff it with nuworq run</button></div>`);
     } catch (e) { toastError(e); }
   },
   'goto-new': (el) => { closeModal(); go(el.dataset.slug); },
@@ -877,7 +877,7 @@ export const KEYS = {
   'ln-close': () => { if (L.confirming) { L.confirming = null; drawLauncher({ keep: true }); $('#ln-q')?.focus(); } else closeLauncher(); },
   help: () => { if ($('#modal .shortcuts')) closeModal(); else if ($('#modal').hidden) ACTIONS.shortcuts(); },
   close: () => closeModal(),
-  // 1, 2, 3 set the depth everywhere: a project, and All projects.
+  // 1, 2, 3 set the depth everywhere: a project, and Home.
   depth: (e) => {
     setZoom(Object.keys(Z)[Number(e.key) - 1]);
   },

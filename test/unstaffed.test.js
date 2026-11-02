@@ -32,7 +32,7 @@ describe('nuworq run says when no project is staffed, and offers to staff one', 
     const ps = projects();
     const w = world(['y']);
     await staffCheck({ projects: ps, here: ps[1], ask: w.ask, log: w.log, optIn: w.optIn });
-    assert.match(w.asked[0], /^Let nuworq run staff API, the project of this clone\? Its workers can cost money\. \[y\/N\] $/);
+    assert.match(w.asked[0], /^Staff API, the project of this clone, with nuworq run\? Its workers can cost money\. \[y\/N\] $/);
     assert.deepEqual(w.opted, ['api']);
     assert.equal(ps[1].runner, true);
     assert.match(w.lines.at(-1), /nuworq run now staffs API/);

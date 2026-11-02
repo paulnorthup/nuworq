@@ -53,7 +53,7 @@ describe('the quick launcher (#290)', () => {
 
   test('go places: every project and the workspace pages, by name', () => {
     const labels = commands({ index: index(), role: 'owner', billingOwner: true }).filter((c) => c.kind === 'go').map((c) => c.label);
-    for (const l of ['nuworq', 'nuworq-site', 'All projects', 'Analytics', 'Workspace settings', 'Notifications', 'Connect an agent']) assert.ok(labels.includes(l), l);
+    for (const l of ['nuworq', 'nuworq-site', 'Home', 'Analytics', 'Workspace settings', 'Notifications', 'Connect an agent']) assert.ok(labels.includes(l), l);
     assert.ok(!commands({ index: index(), role: 'member' }).some((c) => c.label === 'Analytics'), 'analytics is for owners');
     assert.equal(rank(index(), 'site', { current: 'nuworq' }).find((c) => c.kind === 'go').run.go, '#/p/site');
   });
@@ -65,7 +65,7 @@ describe('the quick launcher (#290)', () => {
     const auto = set.find((s) => s.label === 'Autonomy: Run with it');
     assert.equal(auto.confirm, 'Autonomy on nuworq: Check with me → Run with it. Agents are told.');
     assert.deepEqual(auto.run, { human: 'settings', slug: 'nuworq', body: { autonomy: 'full' }, msg: 'Autonomy changed; agents have been told' });
-    for (const l of ['Depth 5m', 'Depth 30m', 'Park nuworq', 'Staffing on', '#9 Billing: priority now', '#9 Billing: priority later']) assert.ok(set.some((s) => s.label === l), l);
+    for (const l of ['Depth 5m', 'Depth 30m', 'Park nuworq', 'Staff it with nuworq run', '#9 Billing: priority now', '#9 Billing: priority later']) assert.ok(set.some((s) => s.label === l), l);
     assert.ok(!set.some((s) => s.label === 'Depth 30s' || s.label === 'Autonomy: Check with me' || s.label.endsWith('priority soon')), 'never the setting it already has');
     const html = confirmHtml(auto, { esc });
     assert.match(html, /Check with me → Run with it\. Agents are told\./);

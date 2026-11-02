@@ -1,7 +1,7 @@
 // What just shipped (#130): a tiny "new" tag on a feature for 7 days after it ships, until you've used it.
 // Shipping a visible UI feature? Add its key here with today's date, and data-new="<key>" on its element.
 export const NEW = {
-  home: '2026-10-29', // #126: the home, everything that needs you across projects (the rail's Projects link)
+  home: '2026-10-29', // #126: the home, everything that needs you across projects (the rail's Home link)
   'github-app-status': '2026-10-29', // #94: where the hub's GitHub App stands, in Connect an agent
   'step-checklist': '2026-10-30', // #162: a question's steps as a checklist on its Needs you card
   'dependabot-alerts': '2026-10-30', // #180: whether Dependabot alerts come in, in a project's GitHub dialog
@@ -10,7 +10,7 @@ export const NEW = {
   milestones: '2026-10-31', // #269: groups are called milestones (the project's 30-second Milestones section)
   shortcuts: '2026-10-31', // #274: every keyboard shortcut, on ? (the rail's "? Shortcuts" hint)
   'group-progress': '2026-10-31', // #270: a bar beside each milestone's state, how far along it is (the first line's)
-  'phone-menu': '2026-10-31', // #114: on a phone, the rail's actions (New project, Notifications…) behind the top bar's Menu
+  'phone-menu': '2026-10-31', // #114: on a phone, the rail's actions (+ Project, Notifications…) behind the top bar's Menu
   launcher: '2026-10-31', // #290: ⌘K, or the rail's Search, opens the quick launcher
   'model-routing': '2026-10-31', // #347: cheaper models for rote jobs, a switch and the model tiers in Staffing
   calibration: '2026-10-31', // #348: analytics' Difficulty or size, whether an item's difficulty foretells its cost
@@ -18,7 +18,7 @@ export const NEW = {
   feedback: '2026-10-31', // #295: tell nuworq's developers what got in your way (the rail's Feedback, on hubs that take it)
   'feedback-mine': '2026-10-31', // #297: under the Feedback form, what you sent and what happened to each
   'feedback-autonomy': '2026-10-31', // #296: how far feedback goes on its own (the admin dashboard's Feedback section)
-  guide: '2026-10-31', // #383: the getting-started guide at /guide (the rail's Getting started guide)
+  guide: '2026-10-31', // #383: the getting-started guide at /guide (the rail's Guide)
   'guide-gs': '2026-10-31', // #383: the same guide from Get started's head (each undone step's How? opens its section)
   'ea-sources': '2026-10-31', // #356: on the admin dashboard, how far the people from each early-access source got
   'model-quality': '2026-10-31', // #349: the quality bar routing keeps to, in Staffing
@@ -47,6 +47,7 @@ export const NEW = {
   'retire-in-menu': '2026-11-02', // #651: Retire shows where it's recommended; on other decisions and notes it's behind the row's ⋯
   'question-numbers': '2026-11-02', // #710: each question shows its number (Q207), and ⌘K finds it by q207 or "question 207"
   'operator-question': '2026-11-02', // #712: with no operator connected, its questions are yours: steps to tick and an answer, and How to start an operator
+  'one-name': '2026-11-02', // #708: one name per step of getting going: + Project, Home, Guide, Connect an agent, Staff it with nuworq run (the rail's + Project)
   'feedback-groups': '2026-11-02', // #688: the admin dashboard's feedback in groups: what covers each, a suggested call, one tap, Undo
   'feedback-waiting': '2026-11-02', // #688: for the hub's owners, the home's line of feedback waiting, opening the groups
 };

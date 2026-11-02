@@ -106,9 +106,9 @@ Flags
   --folder <path>     a folder workers may work in, added to
                       ~/.nuworq/folders.json
   --until-idle        exit once no work is waiting, instead of waiting for more
-  --staff <project>   let nuworq run staff that project first (its "Staff it
-                      with nuworq run" switch); with none staffed, run says so
-                      and offers this clone's
+  --staff <project>   staff that project first, the same switch as nuworq staff
+                      ("Staff it with nuworq run"); with none staffed, run says
+                      so and offers this clone's
   --max-runs <n>      stop after starting n workers
   --max-minutes <t>   stop a worker that runs past t minutes; 0: no limit
                       (default: 90)
@@ -147,9 +147,9 @@ Environment
 Example
   nuworq run --workers 3 --agent claude
 
-Opt a project in on the hub (project Settings: "Staff it with nuworq run").
-Workers work only in folders you chose on this machine: run asks in a terminal,
-and --folder adds one.
+Opt a project in with nuworq staff <project>, or on the hub (project Settings:
+"Staff it with nuworq run"). Workers work only in folders you chose on this
+machine: run asks in a terminal, and --folder adds one.
 
 Three workers in a row that fail, however long each ran, pause it (5m, then
 longer, up to 30m), and a project whose checkout can't be updated waits the same
@@ -1013,7 +1013,7 @@ repeated.
 ### nuworq staff
 
 ```text
-nuworq staff: turn on staffing for a project, with a daily cap, and install
+nuworq staff: staff a project with nuworq run, with a daily cap, and install
   nuworq run here
 
 Usage
@@ -1027,6 +1027,10 @@ Flags
 
 Example
   nuworq staff nuworq --budget 20
+
+The way to staff a project from a terminal: it turns on the project's "Staff it
+with nuworq run" switch. nuworq run --staff <project> turns on the same switch,
+for a runner you start by hand.
 
 On a hub with logins, an owner approves it in the browser.
 ```

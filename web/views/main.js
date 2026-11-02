@@ -94,8 +94,8 @@ function project(v) {
         <button class="btn settings-btn" data-action="settings" data-new="project-settings" title="Staffing, freshness, GitHub, park or remove">Settings</button></div>` : ''}
       </div>
     </div>
-    ${!P.runner && P.staffing && !P.staffing.asked && P.runners_here ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
-      <div class="actions"><button class="btn primary" data-action="runner-on">Let run staff it</button><button class="btn ghost" data-action="staff-not-now">Not now</button></div></div>` : ''}
+    ${!P.runner && P.staffing && !P.staffing.asked && P.runners_here ? `<div class="staff-ask"><div><b>Staff it with <code>nuworq run</code>?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
+      <div class="actions"><button class="btn primary" data-action="runner-on">Staff it with nuworq run</button><button class="btn ghost" data-action="staff-not-now">Not now</button></div></div>` : ''}
     ${projectBody(v, empty)}`;
 }
 
@@ -279,10 +279,10 @@ function cardActions(a, hasMore, open, key) {
     </div>`;
   }
   if (a.kind === 'no-agents') {
-    // The one fix first: let nuworq run staff it when that's all it takes; otherwise start an agent.
+    // The one fix first: staff it with nuworq run when that's all it takes; otherwise connect an agent.
     return `<div class="actions">${a.staff
-      ? '<button class="btn primary" data-action="runner-on">Let nuworq run staff this project</button><button class="btn" data-action="connect">Start an agent</button>'
-      : '<button class="btn primary" data-action="connect">Start an agent</button>'}<button class="btn ghost" data-action="park">Park this project</button></div>`;
+      ? '<button class="btn primary" data-action="runner-on">Staff it with nuworq run</button><button class="btn" data-action="connect">Connect an agent</button>'
+      : '<button class="btn primary" data-action="connect">Connect an agent</button>'}<button class="btn ghost" data-action="park">Park this project</button></div>`;
   }
   const moreBtn = hasMore ? `<button class="link" data-action="toggle" data-key="${esc(key)}">${open ? 'Less' : 'Why it needs you'}</button>` : '';
   if (a.kind === 'group-stalled') {
@@ -395,7 +395,7 @@ function worthKnowing(v) {
         : `<button class="btn small" data-action="confirm" data-q="${a.question.id}">Confirm</button><button class="btn small" data-action="reveal" data-key="${r}">Override…</button>`;
     }
     if (a.kind === 'proposal') acts = `<button class="btn small" data-action="open" data-item="${esc(a.item)}">Look</button>` + acts;
-    if (a.start) acts = `<button class="btn small" data-action="connect">Start an agent</button>` + acts;
+    if (a.start) acts = `<button class="btn small" data-action="connect">Connect an agent</button>` + acts;
     if (a.kind === 'notify-failing') acts = `<button class="btn small" data-action="notify">Check it</button>` + acts;
     if (a.kind === 'outside-overdue') acts = `<button class="btn small" data-action="check-now" data-item="${esc(a.item)}">Check now</button><button class="btn small" data-action="open" data-item="${esc(a.item)}">Edit it</button>` + acts;
     if (a.kind === 'peer-review-stuck') acts =`<button class="btn small" data-action="open" data-item="${esc(a.item)}">Verify it</button>` + acts;
@@ -495,7 +495,7 @@ const STAGE_EMPTY = {
   proposed: 'No ideas waiting to be shaped. <button class="link" data-action="toggle-add">+ Work</button>',
   ready: 'Nothing ready: every shaped item is taken or landed. <button class="link" data-action="toggle-add">+ Work</button>',
   outside: 'Nothing is waiting on a check outside this hub.',
-  active: 'No agent is working right now. <button class="link" data-action="connect">Start an agent</button>',
+  active: 'No agent is working right now. <button class="link" data-action="connect">Connect an agent</button>',
   waiting: 'No agent is waiting on an answer from you.',
   verifying: 'Nothing to verify: no submissions are waiting.',
   landing: 'Nothing accepted is waiting to land on main.',
@@ -613,7 +613,7 @@ function agents(v) {
     ${zero('<b>No agent has checked in here yet.</b> The work waits until one does.', '<button class="btn primary small" data-action="connect">Connect an agent</button>')}</section>` : '';
   // Only the agents here now (#441): holding work, or seen in the last hour. The rest wait behind "Show earlier agents" at 30m.
   const live = v.agents.filter((a) => a.present);
-  const nobody = `<span class="age">No agent has been here in the last hour, so nothing moves until one comes back. <button class="link" data-action="connect">Start an agent</button></span>`;
+  const nobody = `<span class="age">No agent has been here in the last hour, so nothing moves until one comes back. <button class="link" data-action="connect">Connect an agent</button></span>`;
   if (z() < 2) {
     return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} here</span></header>
       <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model, { job: true })}<span class="st ${a.status.split(' ')[0]}">${esc(a.status)}${a.holding.length && !a.job ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || nobody}</div></section>`;
@@ -646,12 +646,13 @@ function agents(v) {
 // The machines running `nuworq run` for this project (#171), as each last said: up, paused, skipping this
 // project, stopped, or down (silent for 3 polls). The state leads each row; one line says why.
 function runners(v) {
-  if (!v.project.runner) return '';
+  // Staffed, or a runner has reported here: the Nobody is working card's check points at this section by name.
   const rs = v.runners ?? [];
+  if (!v.project.runner && !rs.length) return '';
   // The staffing in words beside the heading (#213), so it shows without opening Settings.
   const staff = `<span class="right">${esc(staffLine(v.project.staffing))} <button class="link" data-action="staffing">Staffing</button></span>`;
   if (!rs.length) return `<section class="sec"><header><h2>Runners</h2>${staff}</header>
-    ${zero('<b>No runner has reported here.</b> Nothing starts workers until one does.', 'On a machine with a checkout: <code>nuworq run</code>')}</section>`;
+    ${zero('<b>No runner has reported here.</b> No workers start until one does.', 'On a machine with a checkout: <code>nuworq run</code>')}</section>`;
   const why = (r) => r.state === 'down' ? `Silent since ${when(r, 'last_seen', 'seen_at')} ago${r.machine ? ` on ${esc(r.machine)}` : ''}.`
     : r.state === 'stopped' ? `Stopped ${when(r, 'last_seen', 'seen_at')} ago: ${esc(r.stopped)}.`
     : r.state === 'paused' ? `Paused for ${when(r.paused, 'for', 'until', true)}: ${esc(r.paused.reason)}.`

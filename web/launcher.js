@@ -83,7 +83,7 @@ export function commands({ index, current = null, view = null, zoom = '30s', rol
   const go = (label, run, hint = 'Go to') => out.push({ kind: 'go', label, hint, run });
   // Go places
   for (const p of index.projects ?? []) go(p.name, { go: `#/p/${encodeURIComponent(p.slug)}` }, 'Project');
-  go('All projects', { go: '#/' });
+  go('Home', { go: '#/' });
   if (role === 'owner') go('Analytics', { go: '#/analytics' });
   if (billingOwner) go('Workspace settings', { action: 'workspace-settings' });
   go('Notifications', { action: 'notify' });
@@ -105,8 +105,8 @@ export function commands({ index, current = null, view = null, zoom = '30s', rol
       }
       if (P.parked) set(`Unpark ${P.name}`, `Unpark ${P.name}: work starts again, and it can ask for you.`, h({ parked: false }, 'Unparked'));
       else set(`Park ${P.name}`, `Park ${P.name}: no new work starts and nothing here asks for you until you unpark it.`, h({ parked: true }, 'Parked'));
-      if (P.runner) set('Staffing off', `Staffing off on ${P.name}: nuworq run starts no new workers here; running ones finish.`, h({ runner: false }, '`nuworq run` will no longer start workers here'));
-      else set('Staffing on', `Staffing on for ${P.name}: nuworq run starts headless workers whenever work is waiting. They can cost money.`, h({ runner: true }, '`nuworq run` may now start workers here'));
+      if (P.runner) set('Stop staffing it with nuworq run', `Stop staffing ${P.name} with nuworq run: it starts no new workers here; running ones finish.`, h({ runner: false }, '`nuworq run` will no longer start workers here'));
+      else set('Staff it with nuworq run', `Staff ${P.name} with nuworq run: it starts headless workers whenever work is waiting. They can cost money.`, h({ runner: true }, '`nuworq run` may now start workers here'));
     }
     if (can.has('update')) {
       for (const g of view.groups ?? []) {
