@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Hub, UserError } from './core.js';
 import { Directory } from './directory.js';
+import { Auth } from './auth.js';
 import { paid, billingLine } from './billing.js';
 import { forgetWorkspace } from './follow.js';
 
@@ -324,6 +325,51 @@ export class Workspaces {
     const adopted = this.directory.setting(`adopted:${s}`);
     if (adopted) rmSync(adopted, { force: true });
     this.directory.forget(s); // and its name starts clean (#728)
+  }
+
+  // A person's data on request (#769), across the hub: the directory's rows (Directory.forgetPerson), and in every
+  // workspace each person row with that email, verified or typed by an owner. Removing a row revokes its tokens, so
+  // its sessions end at once, and open invites to the email are revoked so signing in again doesn't let them back.
+  // Their handle on items, comments and history stays, as each workspace's record. Refused before anything changes
+  // where they are a workspace's last owner: that workspace is theirs to remove, or to give another owner first.
+  // Returns the directory's counts plus people: ['acme:@ann'], invites: n, last_owner: ['beta'].
+  forgetPerson(email, { dryRun = false } = {}) {
+    const e = String(email).trim().toLowerCase();
+    const found = [];
+    for (const s of this.list()) {
+      const hub = this.get(s, { touch: false });
+      if (!hub) continue;
+      const people = hub.db.prepare('SELECT id, handle, role FROM people WHERE lower(email) = ? ORDER BY id').all(e);
+      const invites = hub.db.prepare('SELECT COUNT(*) AS n FROM invites WHERE lower(email) = ? AND used_at IS NULL AND revoked_at IS NULL').get(e).n;
+      const lastOwner = people.some((p) => p.role === 'owner')
+        && !hub.db.prepare(`SELECT 1 FROM people WHERE role = 'owner' AND lower(email) != ? AND (verified_at IS NOT NULL OR email = '')`).get(e);
+      if (people.length || invites) found.push({ s, hub, people, invites, lastOwner });
+    }
+    const out = {
+      people: found.flatMap((w) => w.people.map((p) => `${w.s}:@${p.handle}`)),
+      invites: found.reduce((n, w) => n + w.invites, 0),
+      last_owner: found.filter((w) => w.lastOwner).map((w) => w.s),
+    };
+    if (dryRun) return { ...this.directory.forgetPerson(e, { dryRun: true }), ...out };
+    if (out.last_owner.length) {
+      throw new UserError(`${e} is the last owner of ${out.last_owner.join(', ')}, so nothing was forgotten`, {
+        hint: `Remove that workspace (nuworq workspace remove <name>), or make someone else its owner (nuworq person set-role <handle> owner --workspace <name>), then run this again.`,
+      });
+    }
+    for (const { hub, people } of found) {
+      const auth = new Auth(hub.db);
+      hub.db.exec('BEGIN IMMEDIATE');
+      try {
+        for (const p of people) {
+          for (const t of hub.db.prepare('SELECT id FROM tokens WHERE (person_id = ? OR minted_by = ?) AND revoked_at IS NULL').all(p.id, p.id)) auth.revoke(t.id);
+          hub.db.prepare('DELETE FROM people WHERE id = ?').run(p.id);
+        }
+        hub.db.prepare('UPDATE invites SET revoked_at = ? WHERE lower(email) = ? AND used_at IS NULL AND revoked_at IS NULL').run(this.now(), e);
+        hub.db.prepare("UPDATE invites SET email = '' WHERE lower(email) = ?").run(e);
+        hub.db.exec('COMMIT');
+      } catch (err) { hub.db.exec('ROLLBACK'); throw err; }
+    }
+    return { ...this.directory.forgetPerson(e), ...out };
   }
 
   evict(slug) {

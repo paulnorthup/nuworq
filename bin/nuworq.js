@@ -1945,20 +1945,28 @@ function reportBinding({ bound, elsewhere }, ws) {
 }
 
 // nuworq person forget <email> [--dry-run]: a privacy request (#769). Removes the person's sign-in, sessions,
-// workspace memberships and early-access request from the hub's directory; --dry-run only lists them.
+// workspace memberships, early-access request and their person row in every workspace (ending its sessions there);
+// --dry-run only lists them.
 async function personForget(email, flags) {
   const { Workspaces } = await import('../src/workspaces.js');
   const e = String(need(email, '<email>')).trim().toLowerCase();
   const dry = !!flags['dry-run'];
   const spaces = new Workspaces({ dir: workspacesDir(flags), backups: join(dataHome(flags), 'backups') });
-  const f = spaces.directory.forgetPerson(e, { dryRun: dry });
-  const count = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
-  console.log(`${dry ? amber('Dry run') : green('Forgot')} ${bold(e)} (hub directory in ${spaces.dir}):
-  ${dry ? 'Would remove' : 'Removed'}: ${count(f.identities, 'sign-in identity', 'sign-in identities')}, ${count(f.sessions, 'session')}, ${count(f.memberships.length, 'workspace membership')}${f.memberships.length ? ` (${f.memberships.join(', ')})` : ''}, ${count(f.access_requests, 'early-access request')}, ${count(f.grants, 'grant')}.
+  try {
+    const f = spaces.forgetPerson(e, { dryRun: dry });
+    const count = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+    const list = (a) => (a.length ? ` (${a.join(', ')})` : '');
+    console.log(`${dry ? amber('Dry run') : green('Forgot')} ${bold(e)} (hub in ${spaces.dir}):
+  ${dry ? 'Would remove' : 'Removed'}: ${count(f.identities, 'sign-in identity', 'sign-in identities')}, ${count(f.sessions, 'hub session')}, ${count(f.memberships.length, 'workspace membership')}${list(f.memberships)}, ${count(f.access_requests, 'early-access request')}, ${count(f.grants, 'grant')}.
+  ${dry ? 'Would remove' : 'Removed'}: ${count(f.people.length, 'workspace person', 'workspace people')}${list(f.people)}, with their sign-ins there, and ${dry ? 'would revoke' : 'revoked'} ${count(f.invites, 'open invite')} to the email.
   ${dry ? 'Would blank' : 'Blanked'} the email on ${count(f.feedback, 'piece of feedback', 'pieces of feedback')} they sent and ${count(f.decisions, 'decision')} they made as an owner.
-  ${dim('Kept: the words of that feedback, under their handle, for the hub\'s owners; Stripe billing records (the law requires them; they hold a customer id, no sign-in);')}
-  ${dim("the person's row inside each workspace (the workspace's own data: its owner removes it); backups, which age out. See docs/DEPLOY.md, Deleting a person's data.")}`);
-  if (dry) console.log(dim('  Nothing was changed. Run it without --dry-run to delete.'));
+  ${dim('Kept: their handle on items, comments and history in each workspace (that workspace\'s record); the words of that feedback, under their handle, for the hub\'s owners;')}
+  ${dim("Stripe billing records (the law requires them; they hold a customer id, no sign-in); backups, which age out. See docs/DEPLOY.md, Deleting a person's data.")}`);
+    if (f.last_owner.length) console.log(amber(`  They are the last owner of ${f.last_owner.join(', ')}: remove it or make someone else its owner first, or forget refuses.`));
+    if (dry) console.log(dim('  Nothing was changed. Run it without --dry-run to delete.'));
+  } catch (e) {
+    throw e.hint ? new HubError(e.message, { hint: e.hint }) : e;
+  } finally { spaces.close(); }
 }
 
 // People (the humans, each with a role) are managed on the hub host too, like tokens.
