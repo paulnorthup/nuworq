@@ -521,7 +521,7 @@ function build(hub, p, t, { light = false } = {}) {
     push({
       key: `budget:${day}`, level: 'act', kind: 'budget-near', at: t,
       headline: `${p.name} has spent $${staff.spent_today.toFixed(2)} of its $${staff.budget.toFixed(2)} daily budget; it resets at 00:00 UTC, in ${dur(day + DAY - t)}`,
-      sub: staff.spent_today >= staff.budget ? 'runners start no new workers here until then; running ones finish' : `${Math.round((staff.spent_today / staff.budget) * 100)}% spent: at 100% runners start no new workers here until it resets`,
+      sub: staff.spent_today >= staff.budget ? 'all spent: no new workers start until then' : `${Math.round((staff.spent_today / staff.budget) * 100)}% spent; at 100% no new workers start`,
       why: "Every agent's recorded cost here today counts, and running workers' spend so far. Raise the budget if the work is worth it, or pause runners: running workers finish, and no new ones start until you resume.",
       actions: ['raise-budget', 'pause-runners'],
     });
