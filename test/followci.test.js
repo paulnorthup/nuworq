@@ -111,15 +111,21 @@ describe("serve --follow goes by CI's test check", () => {
 });
 
 describe("checkOn reads the check's latest run from GitHub", () => {
-  // The hub's GitHub App, faked: mint gives a token, call answers check-runs.
+  // The hub's GitHub App, faked: mint gives a token, call answers check-runs. A run is GitHub Actions' unless it says.
   const app = (runs, status = 200) => {
     const asked = [];
     return {
       asked,
       mint: async (repo, permissions) => { asked.push({ repo, permissions }); return { token: 't' }; },
-      call: async (method, path, body, token) => { asked.push({ method, path, token }); return { status, json: { check_runs: runs } }; },
+      call: async (method, path, body, token) => { asked.push({ method, path, token }); return { status, json: { check_runs: runs.map((r) => ({ app: { slug: 'github-actions' }, ...r })) } }; },
     };
   };
+  test("a test check from another app doesn't count as CI's (#621)", async () => {
+    const other = { app: { slug: 'mallory-checks' }, status: 'completed', conclusion: 'success' };
+    assert.deepEqual(await checkOn(app([other]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true }, 'as if CI had said nothing yet');
+    assert.deepEqual(await checkOn(app([other, { status: 'completed', conclusion: 'failure' }]), 'github.com/acme/api', 'abc1234'), { state: 'failed', failed: "CI's test check: failure" }, "GitHub Actions' run decides, whatever comes first");
+    assert.deepEqual(await checkOn(app([{ app: null, status: 'completed', conclusion: 'success' }]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true }, 'a run that names no app counts for nothing');
+  });
   test('success, in progress, failure, none yet, and no verdict', async () => {
     assert.deepEqual(await checkOn(app([{ status: 'completed', conclusion: 'success' }]), 'github.com/acme/api', 'abc1234'), { state: 'passed' });
     assert.deepEqual(await checkOn(app([{ status: 'in_progress' }]), 'github.com/acme/api', 'abc1234'), { state: 'pending' });
@@ -146,7 +152,9 @@ describe("checkOn reads the check's latest run from GitHub", () => {
 describe("the supervisor asks GitHub through src/followhub.js", () => {
   test('passed, failed and pending come back from a child that read the app file; no app setting, no ci', async () => {
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    const runs = { aaaaaaa1: [{ status: 'completed', conclusion: 'success' }], bbbbbbb2: [{ status: 'completed', conclusion: 'failure' }], ccccccc3: [] };
+    // As GitHub sends them: each run names the app that posted it (#621).
+    const gha = { app: { slug: 'github-actions' } };
+    const runs = { aaaaaaa1: [{ ...gha, status: 'completed', conclusion: 'success' }], bbbbbbb2: [{ ...gha, status: 'completed', conclusion: 'failure' }], ccccccc3: [] };
     const asked = [];
     const gh = createServer((req, res) => {
       asked.push(`${req.method} ${req.url}`);

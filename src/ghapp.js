@@ -265,15 +265,17 @@ export function readInstallState(app, state, now = Date.now()) {
 // --follow (#543): { state: 'passed' }, { state: 'failed', failed }, { state: 'pending' } while it runs or
 // ({ missing: true }) before GitHub has heard of it, or null when it ended without a verdict (skipped, neutral,
 // stale, or cancelled: someone stopped it, nothing failed). Read with a checks:read token for the repository,
-// from the hub's own GitHub App.
+// from the hub's own GitHub App. Only GitHub Actions' run counts (#621): any app with checks:write on the repository
+// can post a check named "test", and a passing one of theirs must never pass for CI's.
 const FAILED = new Set(['failure', 'timed_out', 'action_required', 'startup_failure']);
+export const CI_APP = 'github-actions';
 export async function checkOn(app, repo, sha, name = 'test') {
   const [, owner, nm] = String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/) ?? [];
   if (!owner) return null;
   const { token } = await app.mint(repo, { checks: 'read', metadata: 'read' });
   const r = await app.call('GET', `/repos/${owner}/${nm}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`, undefined, token);
   if (r.status !== 200) throw new Error(`GitHub answered ${r.status} about ${name} on ${sha.slice(0, 7)}`);
-  const run = r.json.check_runs?.[0];
+  const run = r.json.check_runs?.find((c) => c.app?.slug === CI_APP);
   if (!run) return { state: 'pending', missing: true };
   if (run.status !== 'completed') return { state: 'pending' };
   if (run.conclusion === 'success') return { state: 'passed' };
