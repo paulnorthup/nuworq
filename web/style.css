@@ -66,6 +66,7 @@
 
   --on-fill: #ffffff; /* text on a state fill (a badge, a bar segment, a toast) */
   --on-queue: #14161a; /* text on Ready's grey (--queue) */
+  --on-ring: transparent; /* the edge of a chosen segment: light lifts it with --e-1, dark has no shadow so it gets a line (#717) */
   --scrim: rgba(20, 22, 26, .3); /* behind a dialog or the launcher */
   --scrim-soft: rgba(20, 22, 26, .18); /* behind the drawer */
   --hover: rgba(127, 127, 127, .08); /* a row under the pointer: a neutral wash, the same in both themes */
@@ -121,6 +122,7 @@
     --p-google: #007ef0;
     --on-fill: #16181c;
     --on-queue: #16181c;
+    --on-ring: var(--line-strong);
     --scrim: rgba(0, 0, 0, .5);
     --scrim-soft: rgba(0, 0, 0, .5);
     --e-1: none;
@@ -155,6 +157,7 @@
   --p-google: #007ef0;
   --on-fill: #16181c;
   --on-queue: #16181c;
+  --on-ring: var(--line-strong);
   --scrim: rgba(0, 0, 0, .5);
   --scrim-soft: rgba(0, 0, 0, .5);
   --e-1: none;
@@ -253,6 +256,7 @@ html.theming *, html.theming *::before, html.theming *::after { transition-prope
 .seg { display: inline-flex; background: var(--sunken); border-radius: var(--r-m); padding: var(--sp-h); gap: var(--sp-h); }
 .seg button { border: 0; background: none; padding: var(--sp-1) var(--sp-3); border-radius: var(--r-m); font-size: var(--fs-2); color: var(--muted); white-space: nowrap; }
 .seg button.on { background: var(--panel); color: var(--ink); box-shadow: var(--e-1); font-weight: 550; }
+.seg button.on:not(:focus-visible) { outline: var(--rule) solid var(--on-ring); outline-offset: calc(-1 * var(--rule)); }
 .seg-label { font-size: var(--fs-1); color: var(--muted); margin-right: var(--sp-2); align-self: center; }
 .ctl-row { display: flex; align-items: center; }
 /* A header button (Analytics, Settings) ends its control's row at the control's height (#394), not on a row of its own. */
