@@ -66,6 +66,8 @@ describe('the runner', () => {
     assert.match(differ.why, /--workers 2/);
     assert.deepEqual([at({ ...auto, up: false }).action, at({ ...auto, up: false }).why], ['restart', "it isn't running"]);
     assert.equal(at(auto).action, 'keep');
+    const own = ['--workers', 'auto', '--worker-usd', '0', '--max-minutes', '240'];
+    assert.deepEqual([at({ supported: true, args: own, up: true }).action, at({ supported: true, args: own, up: true }).args], ['keep', own], 'caps set with run --install stay');
     assert.equal(at({ supported: false }).action, 'none');
   });
 });
