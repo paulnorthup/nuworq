@@ -214,7 +214,8 @@ describe('feedback arrives in groups (#688)', () => {
       assert.deepEqual(waiting, { groups: 2, pieces: 4, url: `http://${ADMIN}/#feedback` });
       const line = feedbackWaiting(waiting, (s) => String(s));
       assert.match(line, /href="http:\/\/admin.example.test\/#feedback"/);
-      assert.match(line, /4 pieces of feedback wait for you/);
+      assert.match(line, /<span class="badge">4<\/span>/);
+      assert.match(line, /4 pieces of feedback wait for you: open them/);
       assert.match(line, /in 2 groups: 2 decisions/);
       assert.equal(feedbackWaiting(undefined, String), '', 'nothing waits: no line');
     } finally { h.close(); }

@@ -56,10 +56,9 @@ export function feedbackMine(list, esc, ago = () => '') {
 // dashboard. The count is what waits; "in N groups" says how few decisions it takes. Nothing when nothing waits.
 export function feedbackWaiting(w, esc) {
   if (!w?.pieces) return '';
-  const pieces = `${w.pieces} piece${w.pieces === 1 ? '' : 's'} of feedback`;
-  return `<a class="ov-line fb-waiting" href="${esc(w.url)}" target="_blank" rel="noopener">
+  return `<a class="ov-line fb-waiting" href="${esc(w.url)}" target="_blank" rel="noopener" aria-label="${w.pieces} piece${w.pieces === 1 ? '' : 's'} of feedback wait for you: open them">
     <span class="badge">${w.pieces}</span>
-    <div class="body"><b data-new="feedback-waiting">${pieces} ${w.pieces === 1 ? 'waits' : 'wait'} for you</b>
+    <div class="body"><b data-new="feedback-waiting">Feedback waits for you</b>
       <span class="s">${w.groups === w.pieces ? 'each its own report' : `in ${w.groups} group${w.groups === 1 ? '' : 's'}: ${w.groups} decision${w.groups === 1 ? '' : 's'}`}</span></div>
     <span class="s">Open ↗</span>
   </a>`;

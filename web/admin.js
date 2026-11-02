@@ -180,7 +180,7 @@ function fbGroup(g) {
   const who = `${g.senders[0].kind === 'agent' ? 'Agent ' : ''}${esc(g.senders[0].sender)}${g.senders.length > 1 ? ` and ${g.senders.length - 1} more` : ''}`;
   const email = g.senders.length === 1 && lead.email ? ` <span class="faint">${esc(lead.email)}</span>` : '';
   const focus = g.pieces.some((p) => p.id === fbFocus);
-  const s = g.suggest;
+  const s = g.state === 'new' ? g.suggest : null;
   // The suggested call first and filled; the others beside it. Link only when something covers it.
   const acts = s ? [s.action, ...['link', 'approve', 'decline'].filter((a) => a !== s.action && (a !== 'link' || g.known))] : [];
   const d = g.decision;
@@ -196,12 +196,15 @@ function fbGroup(g) {
     <p class="faint">${g.count > 1 ? `First ${esc(ago(g.first_at))}, latest ${esc(ago(g.last_at))}` : `Sent ${esc(ago(g.first_at))}`}${g.count === 1 && sentWith(lead).length ? ` · ${sentWith(lead).map(esc).join(' · ')}` : ''}</p>
     ${g.count > 1 ? `<details class="fb-g-all"><summary>All ${g.count}</summary><ul>${g.pieces.map((p) => `<li><b>${esc(p.sender)}</b> <span class="faint">${esc(ago(p.created_at))}</span><span class="fb-words">${esc(p.text)}</span></li>`).join('')}</ul></details>` : ''}
     ${g.known && g.state === 'new' ? `<p class="fb-known"><b>${esc(g.known.line)}</b> <span class="faint">${esc(g.known.title)}</span></p>` : ''}
-    ${s ? `<p class="fb-suggest"><span class="label">Suggested</span> ${esc(ACT[s.action](s))}: ${esc(s.why)}</p>
-      <input class="fb-note" data-note="${g.id}" aria-label="A note to the senders, if you decline" placeholder="A note to them, if you decline" value="${esc(s.note ?? '')}">
+    ${s ? `<p class="fb-suggest"><span class="label">Suggested</span> ${esc(ACT[s.action](s))}${g.known && s.action === 'link' ? '' : `: ${esc(s.why)}`}</p>
+      ${s.action === 'decline' ? note(g.id, s.note) : `<details class="fb-note-more"><summary>A note, if you decline</summary>${note(g.id, '')}</details>`}
       <div class="admin-acts">${acts.map((a, i) => `<button class="btn${i ? '' : ' primary'}" data-g="${g.id}" data-g-act="${a}"${a === 'link' ? ` data-ref="${esc(s.ref ?? g.known?.ref)}"` : ''}>${esc(ACT[a](a === 'link' ? { ref: s.ref ?? g.known?.ref } : s))}</button>`).join('')}</div>` : ''}
     ${decided ? `<div class="fb-decided"><p>${decided}</p><button class="btn ghost" data-g-undo="${g.id}">Undo</button></div>` : ''}
   </article>`;
 }
+
+// What Decline sends the senders: in the open when declining is the suggestion, else folded away.
+const note = (id, value) => `<input class="fb-note" data-note="${id}" aria-label="A note to the senders, if you decline" placeholder="A note to them, if you decline" value="${esc(value ?? '')}">`;
 
 // Groups ticked together: one tap takes each one's suggestion, or declines them all.
 function fbBulk() {
@@ -227,7 +230,7 @@ async function decideGroups(ids, body, from) {
 
 // How far feedback goes on its own (#296): the project autonomy levels, each with the one line on what it does.
 const LEVELS = {
-  ask: { label: 'Check with me', does: 'Each piece waits here for you to Approve or Decline it.' },
+  ask: { label: 'Check with me', does: 'Each report waits here for you to decide it: link it, make it new work, or decline it.' },
   balanced: { label: 'Keep moving', does: 'Each piece becomes a proposal at once and agents shape it; you approve each shaped item before it\'s built.' },
   full: { label: 'Run with it', does: 'Agents shape, build and land it under the project\'s own autonomy; you see it in the project and here.' },
 };
