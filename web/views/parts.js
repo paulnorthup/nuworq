@@ -37,6 +37,6 @@ export function attemptsGrid(item, attempts, { keep = true } = {}) {
       <div class="h">${esc(s.headline)}</div>
       ${s.branch ? `<div class="touch"><code>${esc(s.branch)}</code>${s.commits?.length ? ` ${s.commits.map((c) => `<code title="${esc(c.subject ?? '')}">${esc(String(c.hash ?? c).slice(0, 7))}</code>`).join(' ')}` : ''}</div>` : ''}
       ${s.evidence?.length ? `<div class="evidence">${s.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
-      ${keep && s.stage === 'submitted' ? `<button class="btn small" data-action="keep" data-item="${esc(item)}" data-attempt="${s.n}">Keep this one</button>` : ''}
+      ${keep && s.stage === 'submitted' ? `<button class="btn small" data-action="keep-attempt" data-item="${esc(item)}" data-attempt="${s.n}">Keep this one</button>` : ''}
     </div>`).join('')}</div>`;
 }

@@ -219,7 +219,7 @@ describe('the color map keeps meanings apart (#188)', () => {
       const body = css.match(new RegExp(`(?:^|\\n)${sel.replace('.', '\\.')} \\{([^}]*)\\}`))[1];
       for (const t of STATE) assert.doesNotMatch(body, new RegExp(`var\\(${t}(-tint|-line)?\\)`), `${sel} uses ${t}`);
     }
-    assert.match(app, /class="btn small" data-action="keep"/, 'race "Keep this one" buttons are peers');
+    assert.match(app, /class="btn small" data-action="keep-attempt"/, 'race "Keep this one" buttons are peers');
   });
 
   test('bar labels use the label tokens: --on-fill on a state, --on-queue on Ready\'s grey (#195, #484)', () => {

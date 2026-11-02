@@ -561,7 +561,8 @@ export const ACTIONS = {
     return human('answer', { question: Number(q), answer }, 'Overridden: the agent will be steered');
   },
   accept: (el) => human('accept', { item: el.dataset.item }, `Accepted ${el.dataset.item}`),
-  keep: async (el) => {
+  // A race's "Keep this one" (#705: not `keep`, which is a field note's Keep below).
+  'keep-attempt': async (el) => {
     const r = await human('accept', { item: el.dataset.item, attempt: el.dataset.attempt });
     if (r?.merge) toast(`Kept ${r.kept}'s attempt on ${el.dataset.item}. Now merge ${r.merge}`);
   },
