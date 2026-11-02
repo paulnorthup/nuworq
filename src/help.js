@@ -450,8 +450,31 @@ const AGENT = {
 };
 const AGENT_NOTE = 'Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url. Each <argument> can be given as its flag instead. "-" as a value reads it from stdin; a list takes "a,b" or JSON, and a list of objects "x|y" per flag, repeated.';
 
-const firstSentence = (s) => String(s ?? '').replace(/^Optional\.\s*/, '').match(/^.*?\.(?=\s|$)/)?.[0].replace(/\.$/, '') ?? String(s ?? '');
+// "e.g." doesn't end a sentence.
+const firstSentence = (s) => String(s ?? '').replace(/^Optional\.\s*/, '').match(/^.*?(?<!\be\.g)\.(?=\s|$)/)?.[0].replace(/\.$/, '') ?? String(s ?? '');
 const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+// The tool definitions leave out what the guide already says, to stay small in an agent's context (#678); a
+// person reading --help gets it here instead.
+const PARAM_TEXT = {
+  headline: 'one line, outcome first', summary: 'the 5-minute version: what, why, what next',
+  detail: 'the 30-minute version: logs, reasoning, alternatives', model: 'your model id', status: 'a one-line status',
+  response: 'how you are adjusting, one line', reason: 'why, one line', question: 'the question id', steer: 'the steer id',
+  title: 'the new title', acceptance: 'what done means', item: 'the item, e.g. 12',
+  // refine's, which its description covers at once ("Fields as propose's").
+  parent: 'the item it is part of; "" makes it top-level', depends_on: 'replaces the dependency list',
+  fixes: 'the landed item this repairs; "" clears it', breaking: 'who must act when it ships; "" clears it',
+  needs: 'tags a taker must have; replaces the list', repo: 'the repository it lands in', size: 'small, or large: multi-step',
+  direction: 'Direction today: at most 7 plain lines, each with its source ("decision 12", "note 7", "#468")',
+  notes: 'a gist per decision and field note; for a note, recommend keep (default), retire or decide, why for retire or decide, and draft (the decision) for decide',
+};
+// A limit is the schema's maxLength (#678): --help says it in words.
+const flagText = (param, schema) => {
+  const text = schema.description ?? PARAM_TEXT[param] ?? (schema.enum ? `one of ${schema.enum.join(', ')}` : '');
+  const max = schema.maxLength ?? schema.items?.maxLength;
+  if (!max) return text;
+  const limit = `at most ${max.toLocaleString('en-US')} characters${schema.items ? ' each' : ''}`;
+  return text ? `${firstSentence(text)}, ${limit}` : limit;
+};
 
 for (const op of OPS) {
   const a = AGENT[op.name];
@@ -461,7 +484,7 @@ for (const op of OPS) {
     name: op.name, group: 'protocol', ...a,
     does: lower(firstSentence(op.description)),
     usage: [agentUsage(op.name)],
-    flags: [...agentFlags(op.name).filter(([, param]) => !positional.has(param)).map(([f, , schema]) => [f, lower(firstSentence(schema.description ?? (schema.enum ? `one of ${schema.enum.join(', ')}` : '')))]), ...(a.flags ?? [])],
+    flags: [...agentFlags(op.name).filter(([, param]) => !positional.has(param)).map(([f, param, schema]) => [f, lower(firstSentence(flagText(param, schema)))]), ...(a.flags ?? [])],
     notes: [...(a.notes ?? []), AGENT_NOTE],
   });
 }

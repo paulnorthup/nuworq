@@ -3,40 +3,39 @@
 import { createHash } from 'node:crypto';
 import { OPERATOR_GIT_CMDS } from './operator.js';
 
+// Every definition is in every agent's context before its first call, so each says its rule in as few words as it
+// can (#678; test/toolsize.test.js holds each to its size). No "Optional.": required says what isn't. Examples and
+// the finer rules live in the guide, MODE_RULES and the hints a wrong value gets.
 const s = (description, extra = {}) => ({ type: 'string', description, ...extra });
-const ITEM = s('The item, e.g. "#12".');
-const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Optional. Paths you are changing, so others steer clear.' };
-const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Optional. Tags an agent must have declared (checkin has) to take it, e.g. ["docker"].' };
-const SIZE = { type: 'string', enum: ['small', 'large'], description: 'Optional. "large": multi-step work.' };
+// Text the hub refuses past a length (core.js LIMITS, #765): the limit is the schema's maxLength, not words.
+const capped = (maxLength, description) => ({ type: 'string', maxLength, ...(description && { description }) });
+// An item is "#12", "12" or "nuworq-12": claim's says so once.
+const ITEM = { type: 'string' };
+const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Paths you change, so others steer clear.' };
+const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Tags a taker must have (checkin has), e.g. ["docker"].' };
+const SIZE = { type: 'string', enum: ['small', 'large'], description: 'large: multi-step.' };
 // How hard an item is (#348): set when shaping, with a one-line reason. Unrated counts as standard.
 const DIFFICULTY = {
-  difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'Rated when shaping: rote (a cheap model could), standard, or hard (needs the strongest).' },
-  difficulty_why: s('One line: why that difficulty.'),
+  difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'rote: a cheap model could; hard: needs the strongest.' },
+  difficulty_why: s('Why, one line.'),
 };
-const FIXES = s('Optional. The landed item this repairs, e.g. "#12" (it counts as an escape).');
-// Who an item breaks once it ships (#398): the release that carries it bumps by who must act.
-const BREAKING = s('Optional. One line on who must act when it ships, e.g. "Machines on Node 24 must upgrade to 26".');
+const FIXES = s('The landed item this repairs (counts as an escape).');
+// Who an item breaks once it ships (#398): the release that carries it bumps by who must act. Its example is in MODE_RULES.shape.
+const BREAKING = s('Who must act when it ships, one line.');
 // A runner records its workers' usage itself, so a worker isn't offered it.
 const USAGE = {
   type: 'object',
   roles: ['operator', 'shaper', 'session'],
-  description: 'Optional. Tokens and dollars since your last report, if your client tells you.',
+  description: 'Since your last report, if known.',
   properties: { input_tokens: { type: 'integer' }, output_tokens: { type: 'integer' }, cost_usd: { type: 'number' }, model: { type: 'string' } },
 };
 // An outside fact work waits for (src/precondition.js). Defined here once: propose carries it in full and refine
 // refers to it, so its schema is sent once (#529). The examples are in the hints a wrong one gets (HINT and friends there).
 const PRECONDITION = {
   type: 'object',
-  description: 'Optional, rarely needed: a fact outside the hub the work waits for (a URL alone must answer 200). {} clears it.',
-  properties: {
-    kind: { type: 'string', enum: ['http', 'version', 'release', 'date', 'ask'], description: 'Default "http"; "ask" (asks the human `question`) is the last resort.' },
-    url: { type: 'string' }, status: { type: 'integer' }, contains: { type: 'string' }, json_path: { type: 'string' }, equals: {},
-    min: s('For version or release: the lowest semver.'), repo: s('For release: "owner/name".'),
-    after: s('For date: e.g. "2026-11-08".'), question: { type: 'string' },
-    credential: s('The NAME of a hub-host credential (NUWORQ_CRED_<NAME>), never a secret.'),
-  },
+  description: 'Rarely needed: an outside fact the work waits for, e.g. a URL that answers 200; a wrong one gets the forms back. credential: a NAME (NUWORQ_CRED_<NAME>), never a secret.',
 };
-const PRECONDITION_REF = { type: 'object', description: 'Optional. Replaces the precondition: the same shape as propose\'s; {} clears it.' };
+const PRECONDITION_REF = { type: 'object', description: 'As propose\'s; {} clears it.' };
 // What only an operator may send (an op's or a param's roles): tools() leaves it out for every other role, and
 // the hub refuses it from them too.
 const OPERATOR_ONLY = ['operator'];
@@ -107,62 +106,66 @@ export const MODE_RULES = {
   release: 'Only a release item changes the version: reviewers reject any other that does. Land it like any work; once main has it, the hub tags that commit (when it can\'t, the land submit gives you the tag command). When the project signs releases, the key is a person\'s: after it lands, ask the person who signs (no item: name the release in the question) with steps, the sign command and how to check it.',
 };
 
-const REPO = s('Optional. The repository it lands in, e.g. "github.com/acme/api"; default the project\'s first.');
+const REPO = s('e.g. "github.com/acme/api"; default the project\'s first.');
+// The guide's "Write in layers" says what each layer is, and where a long headline goes (it spills into the summary).
 const LAYERS = {
-  headline: s('One line, outcome first, ≤100 characters.'),
-  summary: s('Optional. The 5-minute version: what, why, what next. ≤4,000 characters.'),
-  detail: s('Optional. The 30-minute version: logs, reasoning, alternatives. ≤32,000 characters.'),
+  headline: { type: 'string' },
+  summary: capped(4_000),
+  detail: capped(32_000),
 };
+// What a runner's worker never sends: its MCP server fills them in from what the runner knows (project, client,
+// machine, and has, which always names the OS: src/mcp.js), and it never plans with a person.
+const NOT_WORKER = ['operator', 'shaper', 'session'];
 
 export const OPS = [
   {
     name: 'checkin',
-    description: 'Start here, and again after any break: the mission, decisions, field notes, steering, answers, verdicts, who is on what, and your next step.',
+    description: 'Start here, and after any break: mission, decisions, field notes, steering, who is on what, your next step.',
     params: {
-      project: s('Optional. The project to work on, if your setup did not pick one.'),
-      model: s('Your model id, e.g. "claude-opus-5-5".'),
-      client: s('The tool you run in, e.g. "claude-code", "codex".'),
-      status: s('Optional one-line status.'),
-      role: { type: 'string', enum: ['shaper'], description: 'Optional. "shaper" when you plan with a person: you only shape proposals.' },
-      machine: s('Optional. The machine you run on, so people can tell sessions apart.'),
-      has: { type: 'array', items: { type: 'string' }, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]; only an operator declares "operator", with claude-cli, infra or github-admin.' },
+      project: s('If your setup did not pick one.', { roles: NOT_WORKER }),
+      model: { type: 'string' },
+      client: s('e.g. "claude-code".', { roles: NOT_WORKER }),
+      status: { type: 'string' },
+      role: { type: 'string', enum: ['shaper'], roles: NOT_WORKER, description: 'Planning with a person: you only shape.' },
+      machine: s('So people can tell sessions apart.', { roles: NOT_WORKER }),
+      has: { type: 'array', items: { type: 'string' }, roles: NOT_WORKER, description: 'What your machine can do, e.g. ["docker", "macos", "browser"]; "operator", claude-cli, infra, github-admin: operators only.' },
     },
   },
   {
     name: 'next',
-    description: 'Get and claim the most useful job for you now: work to build, a proposal to shape, a review, work to land, a tidy job, or (operators) a question to answer. Its `mode` says which.',
-    params: { claim: { type: 'boolean', description: 'Default true. false peeks without claiming.' } },
+    description: 'Claim your best job now: work, shape, review, land, tidy, or (operators) a question to answer. `mode` says which.',
+    params: { claim: { type: 'boolean', description: 'false: peek without claiming.' } },
   },
   {
     name: 'claim',
     description: 'Claim a specific item: a 20-minute lease that progress renews.',
-    params: { item: ITEM, touching: TOUCHING },
+    params: { item: s('e.g. "#12".'), touching: TOUCHING },
     required: ['item'],
   },
   {
     name: 'progress',
-    description: 'Report a milestone on an item you hold; it returns steering.',
-    params: { item: ITEM, ...LAYERS, headline: s('One line, outcome first.'), touching: TOUCHING, usage: USAGE },
+    description: 'Report a milestone on an item you hold; returns steering.',
+    params: { item: ITEM, ...LAYERS, touching: TOUCHING, usage: USAGE },
     required: ['item'],
   },
   {
     name: 'ask',
     description: 'Ask a question. Prefer non-blocking: give the assumption you proceed with; blocking parks the item (work another agent holds stays theirs; they hear of it).',
     params: {
-      item: { ...ITEM, description: 'Optional. The item this is about.' },
-      question: s('The question, one line. ≤2,000 characters.'),
-      context: s('Why it matters and what you know. ≤2,000 characters.'),
-      detail: s('Optional. Findings, trade-offs, links.'),
-      options: { type: 'array', maxItems: 6, items: { type: 'string' }, description: 'Optional. Likely answers, one click each. ≤200 characters each.' },
+      item: ITEM,
+      question: capped(2_000, 'One line.'),
+      context: capped(2_000, 'Why it matters, what you know.'),
+      detail: LAYERS.detail,
+      options: { type: 'array', maxItems: 6, items: capped(200), description: 'Likely answers, one click each.' },
       steps: {
         type: 'array', maxItems: 12,
-        items: { type: 'object', properties: { do: s('What to do, with exact values.'), where: s('Optional. A URL, or one command as typed, no backticks.'), check: s('Optional. How they see it worked.') }, required: ['do'] },
-        description: 'Required when a person must do something: what to do, in order. ≤500 characters a field.',
+        items: { type: 'object', properties: { do: capped(500, 'With exact values.'), where: capped(500, 'A URL, or one command as typed, no backticks.'), check: capped(500, 'How they see it worked.') }, required: ['do'] },
+        description: 'Required when a person must do something, in order.',
       },
-      assumption: s('What you assume and proceed with unless told otherwise, ≤2,000 characters.'),
-      blocking: { type: 'boolean', description: 'True only if you cannot go on without an answer.' },
-      to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: 'Optional. "operator" for running things, permissions or real infra; "reporter" for an issue\'s author; left out, the hub picks.' },
-      escalates: { type: 'integer', roles: OPERATOR_ONLY, description: 'The operator question that needs the human\'s approval; their answer answers it too.' },
+      assumption: capped(2_000, 'What you proceed with unless told otherwise.'),
+      blocking: { type: 'boolean', description: 'Only if you cannot go on without an answer.' },
+      to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: '"reporter": an issue\'s author; left out, the hub picks.' },
+      escalates: { type: 'integer', roles: OPERATOR_ONLY, description: 'The operator question needing the human\'s approval; their answer answers it too.' },
       evidence: { type: 'array', roles: OPERATOR_ONLY, items: { type: 'object', properties: { label: { type: 'string' }, url: { type: 'string' } }, required: ['label'] }, description: 'With escalates: what you ran or checked.' },
     },
     required: ['question'],
@@ -174,16 +177,16 @@ export const OPS = [
     params: {
       question: { type: 'integer', description: 'The question id, from next.' },
       answer: s('What you found or decided; if only the human can settle it, say so.'),
-      for_people: { type: 'boolean', description: 'Optional. True when you changed a live system or made a call no decision covers: people see it in Worth knowing. Leave it out for checks and routine answers.' },
+      for_people: { type: 'boolean', description: 'True when you changed a live system or made a call no decision covers: people see it in Worth knowing. Not for checks and routine answers.' },
     },
     required: ['question', 'answer'],
   },
   {
     name: 'withdraw',
-    description: 'Withdraw a question you asked that is still open, with a reason: answered another way, or no longer matters.',
+    description: 'Withdraw a question you asked: answered another way, or no longer matters.',
     params: {
-      question: { type: 'integer', description: 'The question id (ask returned it).' },
-      reason: s('Why, one line, e.g. "Paul answered in a planning session".'),
+      question: { type: 'integer' },
+      reason: { type: 'string' },
     },
     required: ['question', 'reason'],
   },
@@ -193,14 +196,14 @@ export const OPS = [
     params: {
       item: ITEM,
       ...LAYERS,
-      acceptance: s('Shaping only: what done means, if not set with refine.'),
-      difficulty: { ...DIFFICULTY.difficulty, description: `Shaping only, if not set with refine. ${DIFFICULTY.difficulty.description}` },
+      acceptance: s('Shaping, unless set with refine.'),
+      difficulty: { ...DIFFICULTY.difficulty, description: 'Shaping, unless set with refine.' },
       difficulty_why: DIFFICULTY.difficulty_why,
-      conflicts: s('Landing only: conflict fixes that change what was approved; it goes back for review.'),
+      conflicts: s('Landing: fixes that change what was approved; it goes back for review.'),
       evidence: {
         type: 'array', maxItems: 20,
-        description: 'Proof it meets done_means: tests and results, commits, links. Labels ≤300 characters.',
-        items: { type: 'object', properties: { label: s('What this shows, e.g. "npm test: 48 passed".'), url: { type: 'string' } }, required: ['label'] },
+        description: 'Proof against done_means: tests and results, commits, links.',
+        items: { type: 'object', properties: { label: capped(300, 'e.g. "npm test: 48 passed".'), url: { type: 'string' } }, required: ['label'] },
       },
       usage: USAGE,
     },
@@ -208,11 +211,11 @@ export const OPS = [
   },
   {
     name: 'handoff',
-    description: 'Hand off an item you hold unfinished, with a note on where you left off for the next agent.',
+    description: 'Hand off an item you hold unfinished, saying where you left off.',
     params: {
       item: ITEM,
-      headline: s('Where you left off, one line.'),
-      summary: s('What is done, what is next, gotchas.'),
+      headline: s('Where you left off.'),
+      summary: capped(4_000, 'Done, next, gotchas.'),
       detail: LAYERS.detail,
       usage: USAGE,
     },
@@ -222,128 +225,130 @@ export const OPS = [
     name: 'propose',
     description: "Add work you noticed (don't silently expand your current item).",
     params: {
-      title: s('One line: the outcome, not the activity.'),
-      summary: s('Why it matters and what you know. ≤4,000 characters.'),
+      title: s('The outcome, not the activity.'),
+      summary: capped(4_000, 'Why it matters, what you know.'),
       detail: LAYERS.detail,
-      acceptance: s('What done means: checkable criteria. ≤4,000 characters.'),
+      acceptance: capped(4_000, 'What done means: checkable criteria.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'], description: 'Default "soon".' },
-      parent: { ...ITEM, description: 'Optional. The item this is part of.' },
-      depends_on: { type: 'array', maxItems: 30, items: { type: 'string' }, description: 'Optional. Items that must be done first.' },
+      parent: s('The item it is part of.'),
+      depends_on: { type: 'array', maxItems: 30, items: { type: 'string' }, description: 'Items to finish first.' },
       fixes: FIXES,
       breaking: BREAKING,
       needs: NEEDS,
       size: SIZE,
       repo: REPO,
       precondition: PRECONDITION,
-      release: { type: 'boolean', description: 'Optional. A person asked for a release now: the hub drafts it; title it "Release".' },
+      release: { type: 'boolean', roles: NOT_WORKER, description:'A person asked for a release now: the hub drafts it; title it "Release".' },
     },
     required: ['title'],
   },
   {
     name: 'refine',
-    description: 'Improve an item: title, summary, acceptance, priority, dependencies. Acceptance on a proposal can make it ready.',
+    // Its fields shared with propose are described there; here, once, that a value replaces the item's.
+    description: 'Improve an item. Fields as propose\'s: what you send replaces the item\'s, "" or [] clears it (parent "": top-level). Acceptance on a proposal can make it ready.',
     params: {
       item: ITEM,
-      title: s('Optional new title.'),
-      summary: s('Optional.'),
-      detail: s('Optional.'),
-      acceptance: s('Optional. What done means.'),
+      title: { type: 'string' },
+      summary: LAYERS.summary,
+      detail: LAYERS.detail,
+      acceptance: capped(4_000),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
-      depends_on: { type: 'array', maxItems: 30, items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
-      parent: s('Optional. The item it is part of, e.g. "#170"; "" makes it top-level.'),
-      pr: s('Optional. An untracked pull request a tidy job lists, e.g. "acme/api#12": it becomes this item\'s.'),
-      reason: s('Optional. Why, one line, for the record; a tidy job always gives one.'),
-      fixes: { ...FIXES, description: `${FIXES.description} "" clears it.` },
-      breaking: { ...BREAKING, description: `${BREAKING.description} "" clears it.` },
-      needs: { ...NEEDS, description: `${NEEDS.description} Replaces the list.` },
-      size: SIZE,
+      depends_on: { type: 'array', maxItems: 30, items: { type: 'string' } },
+      parent: { type: 'string' },
+      pr: s('A pull request a tidy job lists, e.g. "acme/api#12".'),
+      reason: s('Why, one line (tidy jobs: always).'),
+      fixes: { type: 'string' },
+      breaking: { type: 'string' },
+      needs: { type: 'array', items: { type: 'string' } },
+      size: { type: 'string', enum: SIZE.enum },
       ...DIFFICULTY,
-      repo: REPO,
+      repo: { type: 'string' },
       precondition: PRECONDITION_REF,
-      duplicate_of: { ...ITEM, description: 'Optional. For an imported issue: the item it duplicates (this one is dropped).' },
-      stale: s('Optional. For an imported issue: why it is stale, one line.'),
-      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Optional. For hard items: how many agents may attempt it at once.' },
-      drop: { type: 'integer', description: 'Optional. Drop it: the id of the person\'s answered question that says so.' },
+      duplicate_of: s('Imported issue: the item it duplicates; drops this one.'),
+      stale: s('Imported issue: why it is stale.'),
+      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Hard items: how many agents may try at once.' },
+      drop: { type: 'integer', description: 'Drops it: the person\'s answer saying so.' },
     },
     required: ['item'],
   },
   {
     name: 'review',
-    description: "Peer-review an item in verifying against done_means and the evidence; never your own.",
+    description: 'Peer-review an item in verifying against done_means and evidence; never your own.',
     params: {
       item: ITEM,
       verdict: { type: 'string', enum: ['accept', 'reject'] },
-      attempt: s('Raced items only: the submission to keep, by number or agent.'),
+      attempt: s('Raced items: which submission to keep (number or agent).'),
       ...LAYERS,
     },
     required: ['item', 'verdict', 'headline'],
   },
   {
     name: 'comment',
-    description: 'Leave a note for the record on an item or the project; not for questions or status.',
-    params: { item: { ...ITEM, description: 'Optional.' }, ...LAYERS },
+    description: 'A note for the record on an item or the project; not for questions or status.',
+    params: { item: ITEM, ...LAYERS },
     required: ['headline'],
   },
   {
     name: 'ack',
     description: 'Acknowledge steering, saying in one line how you are adjusting.',
-    params: { steer: { type: 'integer', description: 'The steer id.' }, response: s('How you are adjusting, one line.') },
+    params: { steer: { type: 'integer' }, response: { type: 'string' } },
     required: ['steer'],
   },
   {
     name: 'learn',
-    description: 'Leave a field note for future agents: something learned the hard way (a command, a trap, a convention). Not for status or rules.',
+    description: 'Leave a field note for future agents: a command, trap or convention learned the hard way. Not for status or rules.',
     params: {
       note: s('One or two concrete lines.'),
-      item: { ...ITEM, description: 'Optional. The item it came up on.' },
-      replaces: { type: 'integer', description: 'Optional. The id of an outdated note this replaces: under Run with it, and never one a person pinned.' },
+      item: ITEM,
+      replaces: { type: 'integer', description: 'An outdated note it replaces; never a pinned one.' },
     },
     required: ['note'],
   },
   {
     name: 'retire',
-    description: 'In a field-notes tidy (next mode "tidy"): retire notes whose lesson now lives in code, the guide or a test, or merge duplicates.',
+    // A field-notes tidy's hint (src/fieldnotes.js) says how to retire, merge and distill.
+    description: 'Field-notes tidy: retire notes whose lesson lives in code, the guide or a test; merge duplicates.',
     params: {
-      notes: { type: 'array', items: { type: 'integer' }, description: 'The note ids, as the tidy job lists them.' },
-      reason: s('Where the lesson lives now, one line.'),
-      into: { type: 'integer', description: 'Optional. For a merge: the note you learned with the combined lesson.' },
+      notes: { type: 'array', items: { type: 'integer' } },
+      reason: s('Where the lesson lives now.'),
+      into: { type: 'integer', description: 'A merge: the note with the combined lesson.' },
     },
     required: ['notes', 'reason'],
   },
   {
     name: 'distill',
-    description: 'In a field-notes tidy: Direction today, a gist per decision and field note, a recommendation per field note.',
+    description: 'Field-notes tidy: Direction today, a gist per decision and note, a recommendation per note.',
     params: {
-      direction: { type: 'array', description: 'At most 7 plain lines.', items: { type: 'object', properties: { line: { type: 'string' }, source: s('"decision 12", "steer 40", "note 7" or "#468".') }, required: ['line', 'source'] } },
+      // What each needs, the hub checks with a hint (src/fieldnotes.js distill).
+      direction: { type: 'array', items: { type: 'object', properties: { line: { type: 'string' }, source: { type: 'string' } } } },
       notes: {
-        type: 'array', description: 'Field notes take recommend (default keep); why for retire or decide; draft, the decision, for decide.',
-        items: { type: 'object', properties: { note: { type: 'integer' }, gist: s('One plain line.'), recommend: { type: 'string', enum: ['keep', 'retire', 'decide'] }, why: { type: 'string' }, draft: { type: 'string' } }, required: ['note', 'gist'] },
+        type: 'array',
+        items: { type: 'object', properties: { note: { type: 'integer' }, gist: { type: 'string' }, recommend: { type: 'string', enum: ['keep', 'retire', 'decide'] }, why: { type: 'string' }, draft: { type: 'string' } } },
       },
     },
-    required: [],
   },
   {
     name: 'feedback',
-    description: "Tell nuworq's developers when nuworq itself got in your way: a misleading hint, a missing tool, a confusing rule.",
+    description: "Tell nuworq's developers when it got in your way: a misleading hint, a missing tool, a confusing rule.",
     params: {
       text: s('What happened and what you expected.'),
-      item: { ...ITEM, description: 'Optional. The item you were on.' },
+      item: ITEM,
     },
     required: ['text'],
   },
   {
     name: 'look',
-    description: 'Look around. With item: its full context. Without: counts and the top 5 per stage, decisions and your field notes. With stage: that stage in full.',
+    description: 'Look around: the board, decisions and your field notes. With item: its full context. With stage: all of it.',
     params: {
-      item: { ...ITEM, description: 'Optional.' },
+      item: ITEM,
       stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'landing', 'done', 'dropped'] },
-      notes: { type: 'string', enum: ['all'], description: 'Optional. "all": every active field note.' },
+      notes: { type: 'string', enum: ['all'], description: 'Every active field note.' },
     },
   },
   {
     name: 'signoff',
     description: 'End your session; anything you hold is handed off with your note.',
-    params: { headline: s('Where things stand, one line.'), summary: s('Optional.') },
+    params: { headline: s('Where things stand.'), summary: { type: 'string' } },
   },
 ];
 
