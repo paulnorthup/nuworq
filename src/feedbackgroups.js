@@ -17,7 +17,10 @@ const stem = (w) => w.replace(/'s$/, '').replace(/(ing|ed|es|s)$/, '');
 export function features(text, item = '') {
   const t = String(text ?? '');
   const refs = new Set([...`${t} ${item}`.matchAll(/#(\d+)\b/g)].map((m) => `#${m[1]}`));
-  const quotes = new Set([...t.matchAll(/["“`]([^"“”`\n]{12,300})["”`]/g)].map((m) => norm(m[1])));
+  // A quote opens and closes with the same mark. Short code spans (`next`) go first, so the text between two of
+  // them isn't read as one.
+  const unspanned = t.replace(/`[^`\n]{0,11}`/g, ' ');
+  const quotes = new Set([...unspanned.matchAll(/"([^"\n]{12,300})"|“([^“”\n]{12,300})”|`([^`\n]{12,300})`/g)].map((m) => norm(m[1] ?? m[2] ?? m[3])));
   const tools = new Set([
     ...[...t.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]),
     ...[...t.matchAll(/\b([a-z_]+) (?:tool|call)\b/gi)].map((m) => m[1].toLowerCase()),
@@ -32,9 +35,12 @@ const overlap = (a, b) => (a.size && b.size ? shared(a, b) / Math.min(a.size, b.
 const jaccard = (a, b) => (a.size || b.size ? shared(a, b) / new Set([...a, ...b]).size : 0);
 const quoteIn = (q, text) => !!q && text.includes(q);
 
+// Whether two pieces quote the same error: the surest sign they report the same thing.
+export const sameQuote = (a, b) => [...a.quotes].some((q) => [...b.quotes].some((r) => quoteIn(q, r) || quoteIn(r, q)));
+
 // Whether two pieces report the same thing.
 export function sameReport(a, b) {
-  if ([...a.quotes].some((q) => [...b.quotes].some((r) => quoteIn(q, r) || quoteIn(r, q)))) return true;
+  if (sameQuote(a, b)) return true;
   const words = jaccard(a.words, b.words);
   if (shared(a.refs, b.refs) && (shared(a.tools, b.tools) || words >= 0.2)) return true;
   if (shared(a.tools, b.tools) && words >= 0.35) return true;

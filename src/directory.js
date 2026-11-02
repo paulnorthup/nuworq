@@ -12,7 +12,7 @@ import { dirname } from 'node:path';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { SESSION_MS } from './auth.js';
 import { paid } from './billing.js';
-import { features, sameReport } from './feedbackgroups.js';
+import { features, sameReport, sameQuote } from './feedbackgroups.js';
 
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 export const ORG_CAP = 5; // organizations one person may create, unless the host says otherwise
@@ -153,6 +153,7 @@ export class Directory {
     // state may then also be linked: proposal names the item that already covers it, which nothing new made.
     try { this.db.exec('ALTER TABLE feedback ADD COLUMN grp INTEGER'); } catch { /* already there */ }
     this.db.exec('UPDATE feedback SET grp = id WHERE grp IS NULL');
+    this.db.exec('CREATE INDEX IF NOT EXISTS feedback_grp ON feedback (grp)');
     // The workspace a used grant made (#355): it starts on Unlimited.
     try { this.db.exec('ALTER TABLE org_grants ADD COLUMN workspace TEXT'); } catch { /* already there */ }
     // Where an early-access request came from (#356): a ?ref= tag or the referring host, '' when unknown.
@@ -396,10 +397,16 @@ export class Directory {
     // The group it joins (#688): the newest recent group with a piece that reports the same thing. The same sender
     // sending the same report again adds nothing: they get the piece they sent, marked repeat.
     const mine = features(text, item);
-    const recent = this.db.prepare('SELECT id, grp, kind, sender, workspace, text, item FROM feedback WHERE created_at > ? ORDER BY created_at DESC, id DESC').all(t - GROUP_MS);
-    const grp = recent.find((p) => sameReport(mine, features(p.text, p.item)))?.grp ?? null;
+    const recent = this.db.prepare('SELECT id, grp, kind, sender, workspace, text, item FROM feedback WHERE created_at > ? ORDER BY created_at DESC, id DESC').all(t - GROUP_MS)
+      .map((p) => ({ ...p, f: features(p.text, p.item) }));
+    // The same error quoted wins over a looser match.
+    let grp = (recent.find((p) => sameQuote(mine, p.f)) ?? recent.find((p) => sameReport(mine, p.f)))?.grp ?? null;
     const again = grp && recent.find((p) => p.grp === grp && p.kind === kind && p.sender === sender && p.workspace === workspace);
     if (again) return { ...this.feedbackById(again.id), repeat: true };
+    // A group already decided takes a newcomer only when it quotes the same error: a looser match may be another
+    // report, so it starts its own group and waits for an owner, rather than being decided unseen.
+    const decided = grp && !this.db.prepare("SELECT 1 FROM feedback WHERE grp = ? AND state = 'new' LIMIT 1").get(grp);
+    if (decided && !recent.some((p) => p.grp === grp && sameQuote(mine, p.f))) grp = null;
     const sent = this.db.prepare('SELECT COUNT(*) AS n FROM feedback WHERE kind = ? AND sender = ? AND workspace = ? AND created_at > ?').get(kind, sender, workspace, t - DAY_MS).n;
     if (sent >= FEEDBACK_PER_DAY) throw no(429, `${sender} sent ${FEEDBACK_PER_DAY} pieces of feedback today, the most a day allows`, 'Try again tomorrow, or add to one you sent.');
     const r = this.db.prepare(`INSERT INTO feedback (kind, sender, email, workspace, text, item, context, created_at, grp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -408,7 +415,7 @@ export class Directory {
     if (!grp) { this.db.prepare('UPDATE feedback SET grp = id WHERE id = ?').run(id); return this.feedbackById(id); }
     // A group already decided decides the newcomer the same way: linked or approved to the same item, or declined
     // with the same note. Undo puts the whole group back.
-    const lead = this.db.prepare("SELECT * FROM feedback WHERE grp = ? AND state != 'new' ORDER BY decided_at DESC LIMIT 1").get(grp);
+    const lead = decided && this.db.prepare("SELECT * FROM feedback WHERE grp = ? AND state != 'new' ORDER BY decided_at DESC LIMIT 1").get(grp);
     if (lead) {
       this.db.prepare('UPDATE feedback SET state = ?, note = ?, proposal = ?, decided_by = ?, decided_at = ?, auto = ? WHERE id = ?')
         .run(lead.state, lead.note, lead.proposal, lead.decided_by, t, lead.auto, id);
@@ -418,8 +425,11 @@ export class Directory {
 
   // Groups of feedback (#688), the most recently sent first: each with its pieces, oldest first. state: new (any
   // piece waits), or a decision (linked | approved | declined); '' for all.
-  feedbackGroups({ state = '' } = {}) {
-    const rows = this.db.prepare('SELECT id FROM feedback ORDER BY created_at, id').all().map((r) => this.feedbackById(r.id));
+  // One query: only the groups with a waiting piece for 'new', only grp's pieces for one group.
+  feedbackGroups({ state = '', grp = null } = {}) {
+    const where = grp != null ? 'WHERE grp = ?' : state === 'new' ? "WHERE grp IN (SELECT grp FROM feedback WHERE state = 'new')" : '';
+    const rows = this.db.prepare(`SELECT * FROM feedback ${where} ORDER BY created_at, id`).all(...(grp != null ? [Number(grp)] : []))
+      .map((f) => ({ ...f, context: JSON.parse(f.context) }));
     const groups = new Map();
     for (const f of rows) {
       const g = groups.get(f.grp) ?? { id: f.grp, pieces: [] };
@@ -437,7 +447,7 @@ export class Directory {
   }
 
   feedbackGroup(grp) {
-    return this.feedbackGroups().find((g) => g.id === Number(grp)) ?? null;
+    return this.feedbackGroups({ grp })[0] ?? null;
   }
 
   // Decide every waiting piece of a group at once: linked or approved (proposal: the item) or declined (a note).

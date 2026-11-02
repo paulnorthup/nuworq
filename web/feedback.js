@@ -64,7 +64,7 @@ export function feedbackWaiting(w, esc) {
   </a>`;
 }
 
-export const feedbackThanks =() => `<h2>Thanks</h2>
+export const feedbackThanks = () => `<h2>Thanks</h2>
   <p class="lead">It's on its way to the people who build nuworq. They read every piece.</p>
   <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>
   <div id="fb-mine-slot"></div>`;

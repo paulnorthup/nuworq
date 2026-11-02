@@ -73,6 +73,10 @@ async function hub() {
 }
 
 // The day's 18 pieces: 17 agents (16 workers and the operator) hit the same loop, in their own words; one other.
+// These are paraphrases, not the pieces' real texts: the live hub's feedback isn't readable from a worker, and the
+// six proposals that quoted their words were rewritten when shaped. What they keep from the day: the senders'
+// count, the error review answered ("You can't review your own work (#640)") quoted by some and not others, the
+// item named with the tool's item field by some, and wordings that name neither the error nor a tool.
 const LOOP = [
   ['claude-2ab1', '`next` offered me the review of #640, then `review` refused it: "You can\'t review your own work (#640)". I didn\'t build it.', '#640'],
   ['claude-ed13', 'next gave me #640 to review and review said "You can\'t review your own work (#640)". I built #640 myself, but next should know that.'],
@@ -105,6 +109,7 @@ describe('feedback arrives in groups (#688)', () => {
     assert.ok(!f.some((g) => sameReport(other, g)), 'the checkin report is its own');
     assert.deepEqual([...features('`next` offered it; the review tool refused').tools].sort(), ['next', 'review']);
     assert.equal(features('I want to get the next thing done').tools.size, 0, 'a word is not a tool');
+    assert.deepEqual([...features(LOOP[0][1]).quotes], ["you can't review your own work (#640)"], 'the text between two code spans is no quote');
   });
 
   test('a group with nothing known suggests new work, or declining a vague one with a note', () => {
@@ -200,6 +205,48 @@ describe('feedback arrives in groups (#688)', () => {
       assert.equal((await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [other.id], action: 'decline' })).status, 409, 'decided once until undone');
       assert.equal((await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [loop.id], action: 'link', ref: '#999' })).status, 400);
       assert.equal((await h.call('GET', '/api/feedback/groups')).status, 403, 'only on the admin host');
+    } finally { h.close(); }
+  });
+
+  test('several groups are decided all or none: one that can\'t be leaves the others waiting', async () => {
+    const h = await hub();
+    try {
+      await h.send(...LOOP[0]);
+      await h.send(...OTHER);
+      await h.send('claude-0b0b', 'The board scrolls back to the top every time an item moves stage, so I lose my place.');
+      const { groups } = (await h.asPaul('GET', '/api/feedback/groups')).json;
+      const [a, b, c] = groups.map((g) => g.id);
+      await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [b], action: 'decline', note: 'Known.' });
+      const before = h.items().length;
+      // b is decided already: the whole request is refused, and a and c stay as they were.
+      const r = await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [a, b, c], action: 'approve' });
+      assert.equal(r.status, 409);
+      assert.match(r.json.error, new RegExp(`group ${b} was already declined`));
+      const now = (await h.asPaul('GET', '/api/feedback/groups?state=new')).json.groups.map((g) => g.id).sort();
+      assert.deepEqual(now, [a, c].sort(), 'a and c still wait');
+      assert.equal(h.items().length, before, 'no proposal made');
+      // The same group twice is decided once: one proposal.
+      const twice = await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [c, c], action: 'approve' });
+      assert.equal(twice.json.groups.length, 1);
+      assert.equal(h.items().length, before + 1);
+    } finally { h.close(); }
+  });
+
+  test('a newcomer to a decided group is decided with it only when it quotes the same error; else it waits on its own', async () => {
+    const h = await hub();
+    try {
+      await h.send(...LOOP[0]);
+      const loop = (await h.asPaul('GET', '/api/feedback/groups')).json.groups[0];
+      await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [loop.id], action: 'link', ref: '#654' });
+      // Names #640 and next, so it matches loosely; but it's another report and doesn't quote the error.
+      const other = await h.send('claude-0c0c', '`next` offered #640 to build but its branch was missing on origin.', '#640');
+      const f = h.dir.feedbackById(other.feedback);
+      assert.equal(f.state, 'new', 'it waits for an owner');
+      assert.notEqual(f.grp, loop.id, 'in a group of its own');
+      // One quoting the error joins and is linked with it.
+      const same = await h.send('claude-0d0d', 'review said "You can\'t review your own work (#640)" after next offered it.');
+      assert.equal(h.dir.feedbackById(same.feedback).grp, loop.id);
+      assert.equal(h.dir.feedbackById(same.feedback).state, 'linked');
     } finally { h.close(); }
   });
 

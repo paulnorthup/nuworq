@@ -645,27 +645,40 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   };
   // Decide a group (#688): link it to the item that covers it (ref, or the one the hub found), make it new work
   // (one proposal for the whole group), or decline it with a note. 'suggested' takes the group's own suggestion.
-  const decideGroup = (req, g, { action, ref, note }, by) => {
-    if (g.state !== 'new') throw new UserError(`that group was already ${g.state}`, { status: 409, hint: 'Undo it first to decide it again.' });
-    let s = action === 'suggested' ? groupView(g).suggest : { action, ref, note };
+  // Two steps, so several groups are decided all or none: planGroup checks one and says what deciding it does,
+  // with nothing changed; decideGroup does it.
+  const planGroup = (g, { action, ref, note }) => {
+    if (g.state !== 'new') throw new UserError(`group ${g.id} was already ${g.state}`, { status: 409, hint: 'Undo it first to decide it again; nothing was decided.' });
+    const s = action === 'suggested' ? groupView(g).suggest : { action, ref, note };
     if (s.action === 'link') {
       const hub = spaces.get(fbSpace);
       const want = s.ref || (ref ?? '');
       const it = want ? (() => { try { return hub.item(hub.project(fbSlug), want); } catch { return null; } })() : knownOf(g);
-      if (!it || it.stage === 'dropped') throw new UserError(want ? `no open item ${want} in ${fbSpace}/${fbSlug}` : 'nothing on the board covers this group', { status: 400, hint: 'Link it to an item that is on the board, or make it new work.' });
-      spaces.directory.decideGroup(g.id, { state: 'linked', by, proposal: refOf(it) });
-    } else if (s.action === 'approve') {
-      spaces.directory.decideGroup(g.id, { state: 'approved', by, proposal: proposeFeedback(req, g.pieces[0], 'ask', g.pieces.slice(1)) });
-    } else if (s.action === 'decline') {
-      spaces.directory.decideGroup(g.id, { state: 'declined', by, note: note ?? s.note ?? '' });
-    } else throw new UserError('action must be link, approve, decline or suggested', { status: 400, hint: 'link names the item that covers it (ref, e.g. "#654"); decline may carry a note to the senders.' });
+      if (!it || it.stage === 'dropped') throw new UserError(want ? `no open item ${want} in ${fbSpace}/${fbSlug}` : `nothing on the board covers group ${g.id}`, { status: 400, hint: 'Link it to an item that is on the board, or make it new work; nothing was decided.' });
+      return { g, action: 'link', it };
+    }
+    if (s.action === 'approve') {
+      if (!spaces.get(fbSpace)) throw new UserError(`the feedback project's workspace "${fbSpace}" doesn't exist`, { status: 409, hint: 'The hub host fixes --feedback-project (NUWORQ_FEEDBACK_PROJECT).' });
+      return { g, action: 'approve' };
+    }
+    if (s.action === 'decline') return { g, action: 'decline', note: note ?? s.note ?? '' };
+    throw new UserError('action must be link, approve, decline or suggested', { status: 400, hint: 'link names the item that covers it (ref, e.g. "#654"); decline may carry a note to the senders.' });
+  };
+  const decideGroup = (req, { g, action, it, note }, by) => {
+    if (action === 'link') spaces.directory.decideGroup(g.id, { state: 'linked', by, proposal: refOf(it) });
+    else if (action === 'approve') spaces.directory.decideGroup(g.id, { state: 'approved', by, proposal: proposeFeedback(req, g.pieces[0], 'ask', g.pieces.slice(1)) });
+    else spaces.directory.decideGroup(g.id, { state: 'declined', by, note });
     return groupView(spaces.directory.feedbackGroup(g.id));
   };
   // Undo a group's decision: it waits again. New work it made is dropped while it's still only a proposal.
-  const undoGroup = (g, by) => {
-    if (g.state === 'new') return groupView(g);
+  // planUndo checks it first, for the same all-or-none.
+  const planUndo = (g) => {
     const made = g.state === 'approved' && proposalOf({ proposal: g.decision.proposal });
-    if (made && made.stage !== 'proposed') throw new UserError(`#${made.seq} was already shaped, so undoing it would lose that work`, { status: 409, hint: `Drop #${made.seq} in ${fbSpace}/${fbSlug} if it isn't wanted.` });
+    if (made && made.stage !== 'proposed') throw new UserError(`#${made.seq} was already shaped, so undoing it would lose that work`, { status: 409, hint: `Drop #${made.seq} in ${fbSpace}/${fbSlug} if it isn't wanted; nothing was undone.` });
+    return { g, made };
+  };
+  const undoGroup = ({ g, made }, by) => {
+    if (g.state === 'new') return groupView(g);
     if (made) {
       const hub = spaces.get(fbSpace), p = hub.project(fbSlug);
       hub.tx(() => {
@@ -794,12 +807,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     if (req.method === 'POST' && (path === '/api/feedback/groups/decide' || path === '/api/feedback/groups/undo')) {
       const b = await body(req);
-      const ids = [].concat(b.groups ?? b.group ?? []).map(Number);
+      const ids = [...new Set([].concat(b.groups ?? b.group ?? []).map(Number))];
       const groups = ids.map((id) => dir.feedbackGroup(id));
       if (!ids.length) deny(400, 'which groups?', 'Send groups: [ids], as GET /api/feedback/groups lists them.');
       else if (groups.some((g) => !g)) deny(404, `no feedback group ${ids[groups.indexOf(null)]}`);
-      else if (path.endsWith('/undo')) send(200, { ok: true, groups: groups.map((g) => undoGroup(g, me.email)) });
-      else send(200, { ok: true, groups: groups.map((g) => decideGroup(req, g, b, me.email)) });
+      // Every group is checked before any is decided: one that can't be refuses them all.
+      else if (path.endsWith('/undo')) send(200, { ok: true, groups: groups.map(planUndo).map((pl) => undoGroup(pl, me.email)) });
+      else send(200, { ok: true, groups: groups.map((g) => planGroup(g, b)).map((pl) => decideGroup(req, pl, me.email)) });
       return true;
     }
     return false;
