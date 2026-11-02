@@ -162,9 +162,130 @@ function repoTag(remotes, it) {
   return remotes.length > 1 ? (it.repo || remotes[0]).split('/').slice(-2).join('/') : null;
 }
 
-export function view(hub, slug, { light = false, viewer } = {}) {
+// A project's page (#501): built once per change from what the hub holds, kept until the project changes or 15
+// seconds pass (so "5m ago" stays true), shared by every tab, the home and the Notifier. What differs per viewer
+// (whose "needs you" is whose, the steps they ticked, the GitHub App card) is laid on top, then cut to the depth:
+// 30s and 5m send counts and the lists they show; 30m sends the rest, the item list and past agents in pages.
+// No depth: everything, as before.
+export const VIEW_TTL = 15_000;
+export const DEPTHS = ['30s', '5m', '30m'];
+export const PAGE = { all: 100, agents: 50 };
+
+export function view(hub, slug, { light = false, viewer, depth, pages = {} } = {}) {
   const p = hub.project(slug);
-  const t = hub.now();
+  const built = cachedBase(hub, p, light);
+  const v = personalize(hub, p, built, viewer);
+  if (light) return { pulse: v.pulse, attention: v.attention, since: v.since };
+  return DEPTHS.includes(depth) ? atDepth(v, depth, pages) : v;
+}
+
+// Only a hub the server runs caches (cacheViews): there every write a page shows says so (hub.changed); a test
+// that writes the database itself, or moves the clock, reads it built afresh.
+function cachedBase(hub, p, light) {
+  if (!hub.cacheViews) return build(hub, p, hub.now(), { light });
+  const cache = (hub._views ??= new Map());
+  const key = hub.changeOf(p), t = hub.now();
+  const have = cache.get(p.id);
+  if (have && have.key === key && t - have.at < VIEW_TTL) return have;
+  const fresh = { key, at: t, ...build(hub, p, t) };
+  cache.set(p.id, fresh);
+  return fresh;
+}
+
+// The viewer's own page from the shared one: the GitHub App card for those it's for, the steps they ticked, and
+// everyone else's "needs you" as worth knowing, then ranked and counted again for the pulse.
+function personalize(hub, p, { v, priv }, viewer) {
+  const attention = v.attention.map((a) => {
+    if (!a._ticks) return a;
+    return Object.fromEntries(Object.entries(a).map(([k, x]) => (k === '_ticks' ? ['ticked', x[viewer ?? HUMAN] ?? []] : [k, x])));
+  });
+  const wiring = hub.appWiring?.(viewer);
+  if (wiring && !priv.dismissed.has(wiringEntry(wiring).key)) {
+    const a = { ...wiringEntry(wiring), level: 'act', kind: 'app-wiring', hubwide: true, priority: 'now', priority_why: "now: it holds up all of the hub's work", holds: 3 };
+    if (priv.people) a.owners = priv.stewards;
+    attention.splice(priv.wiringAt, 0, a);
+  }
+  if (viewer && priv.people) {
+    for (const [k, a] of attention.entries()) {
+      if (a.level !== 'act' || a.owners.includes(viewer)) continue;
+      attention[k] = { ...a, level: 'know', sub: [a.owners.length ? `needs ${a.owners.join(', ')}` : 'needs a steward (none set)', a.sub].filter(Boolean).join(' · ') };
+    }
+  }
+  attention.sort((a, b) => (a.level !== b.level ? (a.level === 'act' ? -1 : 1) : a.level === 'act' ? byNeed(a, b) : a.at - b.at));
+  const act = attention.filter((a) => a.level === 'act');
+  return { ...v, attention, pulse: pulseOf(p, priv.pulse, act, attention.length) };
+}
+
+// The pulse in one sentence, from what the page counted and what needs this viewer (cards).
+function pulseOf(p, { inFlight, working, shaping, readyFree, shapeable, claimable, finished }, cards, all) {
+  const act = cards.length;
+  const state = p.parked ? 'parked' : act ? 'needs-you' : inFlight ? 'flowing' : claimable ? 'stalled' : 'idle';
+  const needs = needsLine(cards);
+  const sentence = (p.parked
+    ? ['Parked: nothing new starts, and nothing will ask for you here until you unpark it.', act ? `${plural(act, 'thing')} already in progress still ${act === 1 ? 'needs' : 'need'} you.` : '']
+    : [
+      needs,
+      inFlight
+        ? `${plural(working, 'agent')} working on ${plural(inFlight, 'item')}${shaping ? ` (${shaping} being shaped)` : ''}.`
+        : readyFree ? `${plural(readyFree, 'item')} ready, but nobody is working.`
+          : shapeable ? `Nothing is moving: ${plural(shapeable, 'idea')} waiting to be shaped.` : 'No work in flight.',
+      p.seen_at && finished ? `${finished} finished since you last looked.` : '',
+    ]).filter(Boolean).join(' ');
+  return { state, sentence, act, know: all - act, working, active: inFlight };
+}
+
+// The page cut to a depth. Every depth: the pulse, needs you and worth knowing, in motion, Flow (with the last
+// items of each stage, for its stage pills), milestones, runners, and counts of what isn't sent. 5m adds the
+// first of Up next, Recently finished and the field notes, steering and decisions. 30m adds the rest, history,
+// and the item list and earlier agents a page at a time (pages: how many of each the page has asked for).
+// Agents: the ones here now, and any other the page names, so it can say who they are.
+function atDepth(v, depth, pages) {
+  const z = DEPTHS.indexOf(depth);
+  const board = v.all.filter((i) => i.stage !== 'dropped' && !i.old);
+  const light = (i) => ({ item: i.item, title: i.title, stage: i.stage, priority: i.priority, last_worker: i.last_worker, repo: i.repo, at: i.at, ago: i.ago, ...(i.feedback ? { feedback: true } : {}) });
+  const stage_items = {};
+  for (const s of Object.keys(v.stages)) {
+    const here = board.filter((i) => i.stage === s);
+    const fb = here.filter((i) => i.feedback).slice(-25);
+    stage_items[s] = [...new Set([...here.slice(-25), ...fb])].sort((a, b) => a.item.slice(1) - b.item.slice(1)).map(light);
+  }
+  const gone = v.agents.filter((a) => !a.present);
+  const counts = {
+    items: v.all.length, board: board.length, dropped: v.all.length - board.length - v.all.filter((i) => i.old).length,
+    old: v.all.filter((i) => i.old).length, agents: v.agents.length, agents_gone: gone.length,
+    queue: v.queue.length, done: v.done.length, notes: v.notes.length,
+  };
+  const { all, agents, activity, queue, done, notes, steers, decisions, proposed, waiting, verifying, ...out } = v;
+  Object.assign(out, { depth, counts, stage_items });
+  if (z >= 1) Object.assign(out, { queue: z >= 2 ? queue : queue.slice(0, 5), done: z >= 2 ? done : done.slice(0, 5), notes: z >= 2 ? notes : notes.slice(0, 3), steers, decisions });
+  const more = (k) => Math.max(PAGE[k], Number(pages[k]) || 0);
+  if (z >= 2) {
+    const rows = [...board].sort((a, b) => b.item.slice(1) - a.item.slice(1));
+    Object.assign(out, { activity, proposed, waiting, verifying, all: rows.slice(0, more('all')).map(light), dropped: v.all.filter((i) => i.stage === 'dropped').map(light) });
+  }
+  // Since you last looked lists the first 6 of what finished; counts.finished says how many.
+  out.since = { ...v.since, finished: v.since.finished.slice(0, 6) };
+  const earlier = new Set(z >= 2 ? gone.slice(0, more('agents')).map((a) => a.name) : []);
+  const named = namesIn(out, new Set(gone.map((a) => a.name)));
+  const who = (a) => ({ name: a.name, model: a.model, role: a.role, where: a.where, job: a.job, present: false });
+  out.agents = agents.filter((a) => a.present || earlier.has(a.name) || named.has(a.name)).map((a) => (a.present || earlier.has(a.name) ? a : who(a)));
+  if (z >= 2) out.earlier = [...earlier]; // the page of "Show earlier agents", by name
+  return out;
+}
+
+// The names of the given agents that a value mentions anywhere (an actor, a holder, a worker).
+function namesIn(value, names) {
+  const found = new Set();
+  (function walk(o) {
+    if (typeof o === 'string') { if (names.has(o)) found.add(o); return; }
+    if (!o || typeof o !== 'object') return;
+    for (const k in o) walk(o[k]);
+  })(value);
+  return found;
+}
+
+// light: only the pulse, attention and since (the home and the Notifier, uncached).
+function build(hub, p, t, { light = false } = {}) {
   const items = hub.q('SELECT * FROM items WHERE project_id = ? ORDER BY seq').all(p.id);
   const byId = new Map(items.map((i) => [i.id, i]));
   const ref = (i) => `#${i.seq}`;
@@ -217,8 +338,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       question: { id: q.id, options: [...(held ? [PASS_ON] : []), ...json(q.options, [])], asked_by: q.asked_by },
       agent: q.asked_by, presence: presence(q.asked_by),
       steps: json(q.steps, []),
-      // The steps this viewer has ticked (#162), counting from 1; each person ticks their own.
-      ticked: hub.q('SELECT step FROM step_ticks WHERE question_id = ? AND person = ? ORDER BY step').all(q.id, viewer ?? HUMAN).map((r) => r.step),
+      // The steps each person has ticked (#162), counting from 1; each person ticks their own (personalize).
+      _ticks: ticksOf(hub, q.id),
       ...(orig ? { escalation: { question: orig.question, asked_by: orig.asked_by }, evidence: json(q.evidence, []) } : {}),
     });
   }
@@ -300,9 +421,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   }
 
   // The hub's GitHub App is missing events or permissions the hub handles (#220): its owners, with the steps.
-  // The same entry on every project; the home shows it once (hubwide).
-  const wiring = hub.appWiring?.(viewer);
-  if (wiring) push({ ...wiringEntry(wiring), level: 'act', kind: 'app-wiring', hubwide: true });
+  // The same entry on every project; the home shows it once (hubwide). Whose it is differs per viewer: personalize
+  // puts it here.
+  const wiringAt = attention.length;
 
   // Free's limit stopped a second agent here (#228): the workspace's owners can upgrade, while billing is on.
   // Gone once the plan isn't Free, the agent got work, or an hour has passed without another refusal.
@@ -525,22 +646,17 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   }
 
   // With people, every "needs you" has owners: whoever steered the item, else the project's stewards.
-  // The viewer's own stay act; everyone else's become worth knowing, so "needs you" means you.
-  if (hub.hasPeople()) {
+  // The viewer's own stay act; everyone else's become worth knowing (personalize), so "needs you" means you.
+  const people = hub.hasPeople();
+  if (people) {
     const bySeq = new Map(items.map((i) => [ref(i), i]));
     for (const a of attention.filter((x) => x.level === 'act')) {
       // Work kept parked is the parker's to release.
       // Some are the workspace owners' alone (an upgrade).
       a.owners ??= a.parked_by?.startsWith('@') ? [a.parked_by] : hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
-      if (viewer && !a.owners.includes(viewer)) {
-        a.level = 'know';
-        a.sub = [a.owners.length ? `needs ${a.owners.join(', ')}` : 'needs a steward (none set)', a.sub].filter(Boolean).join(' · ');
-      }
     }
   }
   prioritize(hub, p, attention, items);
-  attention.sort((a, b) => (a.level !== b.level ? (a.level === 'act' ? -1 : 1) : a.level === 'act' ? byNeed(a, b) : a.at - b.at));
-  const act = attention.filter((a) => a.level === 'act');
 
   // ── since you last looked ──
   // Counted in SQL; only what finished is loaded (#538).
@@ -562,23 +678,13 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     },
   };
 
-  // ── pulse: one sentence ──
+  // ── pulse: one sentence, counted per viewer (personalize) ──
   const working = new Set([...[...active, ...shaping].map((i) => i.holder).filter(Boolean), ...racers.map((a) => a.agent)]);
-  const state = p.parked ? 'parked' : act.length ? 'needs-you' : inFlight ? 'flowing' : claimable ? 'stalled' : 'idle';
-  const needs = needsLine(act);
-  const sentence = (p.parked
-    ? ['Parked: nothing new starts, and nothing will ask for you here until you unpark it.', act.length ? `${plural(act.length, 'thing')} already in progress still ${act.length === 1 ? 'needs' : 'need'} you.` : '']
-    : [
-      needs,
-      inFlight
-        ? `${plural(working.size, 'agent')} working on ${plural(inFlight, 'item')}${shaping.length ? ` (${shaping.length} being shaped)` : ''}.`
-        : readyFree.length ? `${plural(readyFree.length, 'item')} ready, but nobody is working.`
-          : shapeable.length ? `Nothing is moving: ${plural(shapeable.length, 'idea')} waiting to be shaped.` : 'No work in flight.',
-      p.seen_at && finished.length ? `${finished.length} finished since you last looked.` : '',
-    ]).filter(Boolean).join(' ');
-  const pulse = { state, sentence, act: act.length, know: attention.length - act.length, working: working.size, active: inFlight };
-
-  if (light) return { pulse, attention, since };
+  const priv = {
+    pulse: { inFlight, working: working.size, shaping: shaping.length, readyFree: readyFree.length, shapeable: shapeable.length, claimable, finished: finished.length },
+    wiringAt, dismissed, people, stewards: people ? hub.stewardsOf(p) : [],
+  };
+  if (light) return { v: { pulse: null, attention, since }, priv };
 
   // ── in motion ──
   const lines = [
@@ -663,15 +769,23 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   const activity = hub.q(`SELECT e.*, i.seq AS item_seq FROM events e LEFT JOIN items i ON i.id = e.item_id
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
-  return {
+  const v = {
     project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), fresh: !!p.fresh, security: !!p.security, live: !!p.live, releases: p.releases || 'off', ci: p.ci || 'auto', autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
-    pulse, since, attention, motion, flow,
+    pulse: null, since, attention, motion, flow, // pulse: personalize's
     ...groupsOf(hub, p, items, { agents, openQs, t, stalled: stalledGroups }),
     queue, proposed, waiting, verifying, done,
     agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
     stages: STAGES,
     all: items.map(brief),
   };
+  return { v, priv };
+}
+
+// Who has ticked which of a question's steps: person → the steps, counting from 1.
+function ticksOf(hub, id) {
+  const out = {};
+  for (const r of hub.q('SELECT person, step FROM step_ticks WHERE question_id = ? ORDER BY step').all(id)) (out[r.person] ??= []).push(r.step);
+  return out;
 }
 
 // How to get work that needs capabilities nobody connected has picked up (#201): an operator session for what

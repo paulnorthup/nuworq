@@ -33,6 +33,7 @@ import { predict, placeholder } from './instant.js';
 import { held, viewLoader, loadProject, shell } from './switching.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
+const PAGE = { all: 100, agents: 50 }; // a page of All work and of earlier agents (src/insight.js PAGE)
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
 const WIDE = matchMedia('(min-width: 1024px)');
 WIDE.addEventListener('change', () => render());
@@ -56,8 +57,18 @@ const S = {
   views: new Map(), // slug → the last view seen for it this visit, drawn at once when it opens again (#503)
   loading: null, // the project whose view is on its way: its page is marked as updating
   listStale: true, // the project list may have changed since it was fetched: a live change says so (#503)
+  pages: { all: PAGE.all, agents: PAGE.agents }, // how much of All work and of earlier agents the page asks for (#501)
 };
-const z = () => Z[S.zoom];
+// The depth shown: the one picked, or the one the project's view was fetched at while a deeper one is on its way (#501).
+const z = () => Math.min(Z[S.zoom], S.view?.depth ? Z[S.view.depth] : 2);
+// A project's view brings only what its depth shows (#501): a deeper depth fetches again, a shallower one shows at once.
+function setZoom(zoom) {
+  S.zoom = zoom;
+  store.set('zoom', S.zoom);
+  views.forget(); // views fetched ahead were for the depth before
+  if (S.view?.depth && Z[zoom] > Z[S.view.depth]) refresh({ force: true });
+  else render({ force: true });
+}
 
 // ── utilities ──
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -234,7 +245,11 @@ async function loadProjects() {
   S.listStale = false;
 }
 // A project's view (#503): one request however many ask for it, so a hover, a focus and the click share it.
-const views = viewLoader((slug) => api(`/api/p/${encodeURIComponent(slug)}/view`));
+// A project's view at the picked depth (#501), with the pages of All work and earlier agents the open project asked for.
+const views = viewLoader((slug) => {
+  const more = slug === S.slug ? ['all', 'agents'].filter((k) => S.pages[k] > PAGE[k]).map((k) => `&${k}=${S.pages[k]}`).join('') : '';
+  return api(`/api/p/${encodeURIComponent(slug)}/view?depth=${encodeURIComponent(S.zoom)}${more}`);
+});
 // Fetched ahead as the pointer rests on a project or the launcher highlights it, and kept as the view to draw at once.
 function prefetchView(slug) {
   if (!slug || slug === S.slug) return;
@@ -341,7 +356,7 @@ function route() {
   const linking = !!slug && S.linkRepo === slug;
   const moved = slug !== S.slug;
   if (moved) {
-    S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = linking;
+    S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = linking; S.pages = { all: PAGE.all, agents: PAGE.agents };
     // Another project (#503): the last view seen for it this visit, else nothing until the shell's view arrives.
     S.missing = null; S.loading = slug; S.view = slug ? held(slug, S)?.view ?? null : S.view;
   }
@@ -509,7 +524,7 @@ function project(v) {
     ${S.addRemote
       ? `<div class="inline-form"><input data-draft="remote" id="remote-in" placeholder="github.com/acme/api, or any git remote URL"><button class="btn primary small" data-action="remote-add">Link</button><button class="btn ghost small" data-action="remote-cancel">Cancel</button></div>`
       : `<button class="link" data-action="remote-new" title="Link a git remote: every clone of it, on any machine, reaches this project">+ repo</button>`}</div>`;
-  const empty = !v.all.length && !v.agents.length;
+  const empty = !(v.counts?.items ?? v.all.length) && !(v.counts?.agents ?? v.agents.length);
   return `
     <div class="phead">
       <div class="titles"><h1>${esc(P.name)}${updating(P.slug)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
@@ -903,7 +918,7 @@ function flow(v) {
   let detail = '';
   if (S.stage) {
     const st = f.stages.find((s) => s.stage === S.stage);
-    const here = boardWork(v.all).rows.filter((i) => i.stage === S.stage);
+    const here = v.stage_items?.[S.stage] ?? boardWork(v.all).rows.filter((i) => i.stage === S.stage);
     // Approved feedback about nuworq (#295) is marked, and can be shown on its own.
     const fb = here.some((i) => i.feedback);
     const items = here.filter((i) => !S.onlyFeedback || !fb || i.feedback).slice(-25).reverse();
@@ -993,18 +1008,19 @@ function itemRow(i, extra = '') {
 }
 
 function upNext(v) {
-  if (!v.queue.length) return v.all.length ? `<section class="sec"><header><h2>Up next</h2></header>
+  if (!v.queue.length) return (v.counts?.items ?? v.all.length) ? `<section class="sec"><header><h2>Up next</h2></header>
     ${zero('<b>Nothing ready for an agent to pick up.</b> Everything here is in progress, waiting, still being shaped or finished.', '<button class="link" data-action="toggle-add">+ Work</button>')}</section>` : '';
   const shown = z() >= 2 ? v.queue : v.queue.slice(0, 5);
-  return `<section class="sec"><header><h2>Up next</h2><span class="count">${v.queue.length}</span><span class="hint">ready for any agent, in the order they'll be picked</span></header>
+  const all = v.counts?.queue ?? v.queue.length;
+  return `<section class="sec"><header><h2>Up next</h2><span class="count">${all}</span><span class="hint">ready for any agent, in the order they'll be picked</span></header>
     <div class="rows">${shown.map((i) => itemRow(i)).join('')}</div>
-    ${v.queue.length > shown.length ? `<div class="zoom-more">+${v.queue.length - shown.length} more at 30m</div>` : ''}</section>`;
+    ${all > shown.length ? `<div class="zoom-more">+${all - shown.length} more at 30m</div>` : ''}</section>`;
 }
 
 function finished(v) {
   if (!v.done.length) return '';
   const shown = z() >= 2 ? v.done : v.done.slice(0, 5);
-  return `<section class="sec"><header><h2>Recently finished</h2><span class="count">${v.done.length}</span><span class="hint">last 3 days</span></header>
+  return `<section class="sec"><header><h2>Recently finished</h2><span class="count">${v.counts?.done ?? v.done.length}</span><span class="hint">last 3 days</span></header>
     <div class="rows">${shown.map((i) => i.parts ? finishedMilestone(i) : `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
       <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>${credit(i, who) ? `<div class="s">${credit(i, who)}</div>` : ''}</div>
       <span class="age">${when(i)} ago</span></div>`).join('')}</div></section>`;
@@ -1042,7 +1058,7 @@ function steering(v) {
     ${steers ? `${sub('Steering', 'acknowledged by')}<div class="rows" style="margin-bottom:var(--sp-4)">${steers}</div>` : ''}
     ${decisions ? `${sub('Decisions', 'standing rules, from you')}<div class="rows" style="margin-bottom:var(--sp-4)">${decisions}</div>` : ''}
     ${notes ? `${sub('Field notes', 'what agents learned the hard way, left for the next one')}<div class="rows">${notes}</div>
-      ${v.notes.length > shownNotes.length ? `<div class="zoom-more">${v.notes.length} field notes in all; every one at 30m</div>` : ''}` : ''}
+      ${(v.counts?.notes ?? v.notes.length) > shownNotes.length ? `<div class="zoom-more">${v.counts?.notes ?? v.notes.length} field notes in all; every one at 30m</div>` : ''}` : ''}
   </section>`;
 }
 // A relative time from the hub that keeps ticking (#530): o[at] is when (ms), o[key] the hub's own string, shown
@@ -1057,7 +1073,7 @@ function commits(g) {
 }
 
 function agents(v) {
-  if (!v.agents.length) return v.all.length ? `<section class="sec"><header><h2>Agents</h2></header>
+  if (!(v.counts?.agents ?? v.agents.length)) return (v.counts?.items ?? v.all.length) ? `<section class="sec"><header><h2>Agents</h2></header>
     ${zero('<b>No agent has checked in here yet.</b> The work waits until one does.', '<button class="btn primary small" data-action="connect">Connect an agent</button>')}</section>` : '';
   // Only the agents here now (#441): holding work, or seen in the last hour. The rest wait behind "Show earlier agents" at 30m.
   const live = v.agents.filter((a) => a.present);
@@ -1066,9 +1082,12 @@ function agents(v) {
     return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} here</span></header>
       <div class="agent-strip">${live.map((a) => `<span class="a"${a.tokens.length ? ` title="token: ${esc(a.tokens.join(', '))}"` : ''}>${who(a.name, a.model, { job: true })}<span class="st ${a.status.split(' ')[0]}">${esc(a.status)}${a.holding.length && !a.job ? ` ${a.holding.join(', ')}` : ''}${a.tokens.length > 1 ? ` · <span class="warn">${a.tokens.length} tokens</span>` : ''}</span></span>`).join('') || nobody}</div></section>`;
   }
-  const gone = v.agents.filter((a) => !a.present);
+  // Earlier agents come a page at a time (#501): v.earlier names the ones sent for the list.
+  const gone = v.earlier ? v.agents.filter((a) => v.earlier.includes(a.name)) : v.agents.filter((a) => !a.present);
+  const goneAll = v.counts?.agents_gone ?? gone.length;
   const showGone = S.open.has(`earlier:${S.slug}`);
-  const earlier = gone.length ? `<button class="link earlier" data-action="toggle" data-key="earlier:${esc(S.slug)}" aria-expanded="${showGone}" data-new="present-agents">${showGone ? 'Hide earlier agents' : `Show earlier agents (${gone.length})`}</button>` : '';
+  const earlier = goneAll ? `<button class="link earlier" data-action="toggle" data-key="earlier:${esc(S.slug)}" aria-expanded="${showGone}" data-new="present-agents">${showGone ? 'Hide earlier agents' : `Show earlier agents (${goneAll})`}</button>` : '';
+  const moreGone = showGone && goneAll > gone.length ? ` <button class="link" data-action="more" data-more="agents" data-new="show-more">Show more (${goneAll - gone.length} left)</button>` : '';
   const shown = showGone ? [...live, ...gone] : live;
   return `<section class="sec"><header><h2>Agents</h2><span class="count">${live.length} here</span><span class="hint">first-class participants, each with a track record</span></header>
     ${shown.length ? '' : `<div class="agent-strip">${nobody}</div>`}
@@ -1085,7 +1104,7 @@ function agents(v) {
         <div><b>${a.record.handoffs}</b><span>handoffs</span></div>
       </div>
       <div class="model" style="margin-top:var(--sp-2)">${a.record.assumptions} assumptions · ${a.record.questions} blocking questions · ${a.record.proposed} proposed · ${a.record.learned} field notes${a.record.reviews ? ` · ${a.record.reviews} reviews` : ''}${a.record.races ? ` · won ${a.record.races_won} of ${a.record.races} races` : ''} · seen ${when(a, 'last_seen', 'seen_at')} ago</div>
-    </div>`).join('')}</div>${earlier}</section>`;
+    </div>`).join('')}</div>${earlier}${moreGone}</section>`;
 }
 
 // The machines running `nuworq run` for this project (#171), as each last said: up, paused, skipping this
@@ -1140,19 +1159,23 @@ function activity(v) {
 // Every item on the board (#442): done work older than 3 days and dropped work aren't here; search (⌘K) and
 // analytics find the old, and "Show dropped" brings the dropped back.
 function allWork(v) {
-  if (!v.all.length) return `<section class="sec"><header><h2>All work</h2></header>${zero('<b>No work yet.</b> Every item, in every stage, will be listed here.')}</section>`;
-  const { rows, dropped, old } = boardWork(v.all);
+  if (!(v.counts?.items ?? v.all.length)) return `<section class="sec"><header><h2>All work</h2></header>${zero('<b>No work yet.</b> Every item, in every stage, will be listed here.')}</section>`;
+  // A view fetched by depth (#501) brings the board newest first, a page at a time, and the dropped beside it.
+  const { rows, dropped, old } = v.counts ? { rows: v.all, dropped: v.dropped ?? [], old: v.counts.old } : boardWork(v.all);
+  const board = v.counts?.board ?? rows.length;
   const showDropped = S.open.has('all:dropped');
-  const shown = [...rows, ...(showDropped ? dropped : [])].sort((a, b) => b.item.slice(1) - a.item.slice(1));
+  const floor = rows.length < board ? Number(rows.at(-1)?.item.slice(1) ?? 0) : 0; // dropped work within the page shown
+  const shown = [...rows, ...(showDropped ? dropped.filter((i) => Number(i.item.slice(1)) > floor) : [])].sort((a, b) => b.item.slice(1) - a.item.slice(1));
   const foot = [
     old ? `${plural(old, 'item')} finished more than 3 days ago: <button class="link" data-action="launcher">Search</button> finds them.` : '',
     dropped.length ? `<button class="link" data-action="toggle" data-key="all:dropped" aria-expanded="${showDropped}" data-new="show-dropped">${showDropped ? 'Hide dropped' : `Show dropped (${dropped.length})`}</button>` : '',
   ].filter(Boolean).join(' · ');
-  return `<section class="sec"><header><h2>All work</h2><span class="count">${shown.length}</span></header>
+  const more = board > rows.length ? `<div class="zoom-more"><button class="link" data-action="more" data-more="all" data-new="show-more">Show more (${board - rows.length} older)</button></div>` : '';
+  return `<section class="sec"><header><h2>All work</h2><span class="count">${board + (showDropped ? dropped.length : 0)}</span></header>
     ${shown.length ? `<div class="work-scroll"><table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Worked on by</th><th>In stage</th></tr></thead><tbody>
     ${shown.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : '<span class="age" title="No agent has worked on it yet">—</span>'}</td><td class="age">${when(i)}</td></tr>`).join('')}
     </tbody></table></div>` : zero('<b>Nothing open or recently finished.</b>')}
-    ${foot ? `<div class="zoom-more">${foot}</div>` : ''}</section>`;
+    ${more}${foot ? `<div class="zoom-more">${foot}</div>` : ''}</section>`;
 }
 
 // ── item drawer: 30s header, 5m body, 30m deep dive ──
@@ -1685,7 +1708,7 @@ async function runLauncher(r) {
   if (x.go) location.hash = x.go;
   else if (x.action) ACTIONS[x.action]();
   else if (x.theme) { setTheme(x.theme); toast(`Appearance: ${THEMES.find(([k]) => k === x.theme)[1]}`); }
-  else if (x.zoom) { S.zoom = x.zoom; store.set('zoom', S.zoom); render({ force: true }); toast(`Depth ${x.zoom}`); }
+  else if (x.zoom) { setZoom(x.zoom); toast(`Depth ${x.zoom}`); }
   else if (x.open) openAt(x.open);
   else if (x.human) {
     try {
@@ -1731,7 +1754,9 @@ async function showMine({ scroll = false } = {}) {
 
 const ACTIONS = {
   'an-period': (el) => { S.period = el.dataset.p; S.outcomes = null; render({ force: true }); refresh({ force: true }); },
-  zoom: (el) => { S.zoom = el.dataset.zoom; store.set('zoom', S.zoom); render({ force: true }); },
+  zoom: (el) => setZoom(el.dataset.zoom),
+  // Show more (#501): the next page of All work or of earlier agents.
+  more: (el) => { S.pages[el.dataset.more] += PAGE[el.dataset.more]; refresh({ force: true }); },
   goto: (el) => go(el.dataset.slug),
   open: (el) => go(S.slug ?? S.actSlug, el.dataset.item),
   close: () => { go(S.slug); },
@@ -1949,7 +1974,7 @@ const ACTIONS = {
   },
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
   connect: () => connect(),
-  'connect-deep': () => { S.zoom = '30m'; store.set('zoom', S.zoom); render({ force: true }); connect(); },
+  'connect-deep': () => { setZoom('30m'); connect(); },
   notify: () => notifySettings(),
   'rail-menu': () => { S.railMenu = !S.railMenu; renderRail(); },
   shortcuts: () => modal(shortcutsHtml({ mac: MAC })),
@@ -2110,9 +2135,7 @@ const KEYS = {
   close: () => closeModal(),
   // 1, 2, 3 set the depth everywhere: a project, and All projects.
   depth: (e) => {
-    S.zoom = Object.keys(Z)[Number(e.key) - 1];
-    store.set('zoom', S.zoom);
-    render({ force: true });
+    setZoom(Object.keys(Z)[Number(e.key) - 1]);
   },
   'leave-item': () => go(S.slug),
   send: () => ACTIONS['compose-send'](),
