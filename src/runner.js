@@ -265,6 +265,8 @@ const EMPTIES = 3;
 const PAUSE_MS = 5 * 60_000;
 const MAX_PAUSE_MS = 30 * 60_000;
 const KILL_GRACE_MS = 10_000;
+// The most a runner asks the hub to hold its wait for work (#542): under the 100 s Cloudflare gives an answer.
+const WAIT_MAX_S = 90;
 
 // routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal),
 // exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited }.
@@ -287,9 +289,13 @@ const KILL_GRACE_MS = 10_000;
 // unstaffed(): the line on work waiting in projects it doesn't staff (see unstaffedLine), or null; said the first
 // time nothing is waiting for it (#491), once per run. signoff(worker): signs off a worker that exited, handing back what
 // it held (#558), so a crashed one's item doesn't wait out its lease; the hub ignores it for one that already signed off.
+// waitRoutes({ skip, seconds, signal }) (#542): routes(), but the hub holds the answer until work appears outside
+// skip (projects this machine can't work on now), at most seconds. With nothing to start and room for a worker,
+// the runner waits on it instead of sleeping, so a worker starts about a second after work appears. A hub that
+// answers early with nothing new is an older one that ignores the wait: from then on the runner sleeps instead.
 export async function run({
   routes, launch, claimed = async () => true, took = async () => null, log = console.log, report = async () => {}, sweep, sweptAt = 0,
-  updated = () => null, supervised = false, signoff = async () => {}, machine = () => ({}), maxWorkers, unstaffed = async () => null,
+  updated = () => null, supervised = false, signoff = async () => {}, machine = () => ({}), maxWorkers, unstaffed = async () => null, waitRoutes,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
@@ -312,6 +318,9 @@ export async function run({
   let idle = false;
   let toldUnstaffed = false;
   let moved = null; // "<from> → <to>": the installed package changed under this runner
+  let longPoll = !!waitRoutes; // false once the hub turns out not to hold the answer
+  let quiet = false; // nothing this round it could start, with room for a worker: wait on the hub for work
+  let next = null; // routes the wait brought back, used as the next round's
   const cant = new Map(); // project → why this machine can't work on it, as last said
   const resting = new Map(); // project → { until, ms }: its checkout couldn't be updated, so it waits until then
   const stop = (reason) => { if (!stopping) { stopping = true; why = reason; } wake(); };
@@ -394,9 +403,10 @@ export async function run({
     }
 
     let list = null;
+    quiet = false;
     if (!stopping && t >= pausedUntil) {
       try {
-        list = await routes();
+        list = next ?? await routes();
         if (hubDown) log('The hub is back.');
         hubDown = false;
       } catch (e) {
@@ -486,17 +496,37 @@ export async function run({
         const line = await Promise.resolve().then(unstaffed).catch(() => null);
         if (line) log(line);
       }
+      quiet = !stopping && running.length < most && launched < maxRuns && !list.some((x) => !cant.has(x.project) && !(resting.get(x.project)?.until > t));
       if (waiting) idle = false;
       else if (!running.length && untilIdle) stop(elsewhere ? 'no work this machine can take is waiting' : 'no work is waiting in opted-in projects');
       else if (!running.length && !idle) {
         idle = true;
-        log(`${elsewhere ? 'Nothing this machine can take is waiting' : 'Nothing is waiting in opted-in projects'}; checking every ${pollSeconds}s. Ctrl-C stops.`);
+        log(`${elsewhere ? 'Nothing this machine can take is waiting' : 'Nothing is waiting in opted-in projects'}; ${longPoll ? 'starting a worker as soon as some is' : `checking every ${pollSeconds}s`}. Ctrl-C stops.`);
       }
     }
     if (!stopping && launched >= maxRuns && !running.length) stop(`reached --max-runs ${maxRuns}`);
     if (stopping && !running.length) break;
     if (!hubDown) await tell(state());
-    await Promise.race([sleep(pollSeconds * 1000), new Promise((r) => { wake = r; })]);
+    next = null;
+    const woken = new Promise((r) => { wake = r; });
+    if (quiet && longPoll && !hubDown) {
+      const t0 = now();
+      const gone = new AbortController();
+      const skip = list.filter((x) => cant.has(x.project) || resting.get(x.project)?.until > t0).map((x) => x.project);
+      const seconds = Math.min(pollSeconds, WAIT_MAX_S);
+      const asked = Promise.resolve().then(() => waitRoutes({ skip, seconds, signal: gone.signal })).then((l) => {
+        if (gone.signal.aborted) return;
+        next = l;
+        // Back early with nothing it can start: a hub that ignores the wait. Sleep out the poll as before.
+        if (now() - t0 < seconds * 500 && !l.some((x) => !skip.includes(x.project))) {
+          longPoll = false;
+          next = null;
+          return sleep(pollSeconds * 1000 - (now() - t0));
+        }
+      }, () => (gone.signal.aborted ? null : sleep(pollSeconds * 1000 - (now() - t0)))); // unreachable: the next round's routes() says so
+      await Promise.race([asked, woken]);
+      gone.abort();
+    } else await Promise.race([sleep(pollSeconds * 1000), woken]);
   }
 
   await tell({ ...state(), stopped: why });

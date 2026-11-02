@@ -77,7 +77,7 @@ export const COMMANDS = [
       ['--max-runs <n>', 'stop after starting n workers'],
       ['--max-minutes <t>', 'stop after t minutes'],
       ['--max-usd <x>', "stop starting workers once their reported spend reaches x (codex and local models report none)"],
-      ['--poll <s>', 'seconds between looks at the hub', '30'],
+      ['--poll <s>', 'the most seconds between looks; new work is heard at once', '30'],
       ['--has <tags>', 'what else this machine can do, e.g. browser,linux-vm'],
       ['--browser', 'each worker gets a headless Chrome (Claude only), as with worker --browser'],
       ['--agent-token <t>', 'the agent token workers get on a hub with login'],

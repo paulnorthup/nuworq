@@ -49,7 +49,7 @@ describe('the CLI help comes from one table (#481)', () => {
     assert.equal((await cli('run', '--help')).stdout, run);
     assert.match(run, /^nuworq run: keep up to N headless workers/);
     assert.match(run, /^Usage\n {2}nuworq run \[flags\]\n {2}nuworq run --sweep \[--dry-run\]/m);
-    assert.match(run, /^ {2}--poll <s> +seconds between looks at the hub \(default: 30\)$/m);
+    assert.match(run, /^ {2}--poll <s> +the most seconds between looks; new work is heard at once\n +\(default: 30\)$/m);
     assert.match(run, /^Environment\n {2}NUWORQ_AGENT_TOKEN /m);
     assert.match(run, /^Example\n {2}nuworq run --workers 3 --agent claude$/m);
     for (const c of COMMANDS) {

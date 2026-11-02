@@ -60,6 +60,20 @@ describe('the hub drains on shutdown (#545)', () => {
     assert.ok(Date.now() - t < 2000, `drained in ${Date.now() - t} ms`);
   });
 
+  test("a runner's pending wait for work (#542) answers at once, with the routes as they are", async () => {
+    const { server, port } = await hub();
+    const r = request(port, 'GET', '/api/route?runner=1&wait=60');
+    r.req.end();
+    await until(50);
+    const t = Date.now();
+    const drained = server.drain();
+    const res = await r.answered;
+    assert.equal(res.status, 200);
+    assert.deepEqual(JSON.parse(res.body), []);
+    await drained;
+    assert.ok(Date.now() - t < 2000, `drained in ${Date.now() - t} ms`);
+  });
+
   test('a live stream is told to reconnect, then ended', async () => {
     const { server, port } = await hub();
     const r = request(port, 'GET', '/api/stream');
