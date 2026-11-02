@@ -39,6 +39,7 @@ export const NEW = {
   'needs-rank': '2026-11-01', // #506: Needs you most important first, each card with its priority (the section's hint)
   appearance: '2026-11-01', // #485: Match device, Light or Dark, in the rail's footer (behind Menu on a phone)
   'worth-knowing-lines': '2026-11-01', // #497: Worth knowing holds only what you might act on, one line each, with Got it, all
+  'show-more': '2026-11-01', // #501: at 30m, All work and earlier agents come a page at a time, with Show more for the next
 };
 
 const DAYS = 7;

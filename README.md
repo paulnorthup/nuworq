@@ -239,7 +239,7 @@ For other tools, the published contract is [docs/API.md](docs/API.md) (e.g. outc
 ```
 GET  /api/projects                       pulse per project
 GET  /api/p/:project/outcomes            finished work: landed/dropped, sent back, stalls, cycle time, tokens (docs/API.md)
-GET  /api/p/:project/view                everything the UI shows
+GET  /api/p/:project/view                everything the UI shows; ?depth=30s|5m|30m only what that depth shows (&all=, &agents= pages)
 GET  /api/p/:project/items/:n            one item, lifecycle, timeline
 POST /api/p/:project/agent/:op           agent operations (header x-nuworq-agent: <name>)
 POST /api/p/:project/human/:action       answer, confirm, accept, sendback, steer, decide, comment,

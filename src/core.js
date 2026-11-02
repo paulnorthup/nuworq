@@ -358,6 +358,8 @@ export class Hub extends EventEmitter {
     this._snaps = new Map(); // project id → its snapshot (snap)
     // One counter per hub (a workspace) that goes up with every change, for what caches on it (#517).
     this.changeSeq = 0;
+    this.changedAt = new Map(); // project id → the counter at its last change; a change with no project moves allChanged (#501)
+    this.allChanged = 0;
     this._marks = null; // while an agent operation runs: what it wrote that a view shows (mark())
     this._unreachable = new Set(); // repositories the hub has said it can't reach
     this._behind = new Map(); // item id → whether its branch lacks its base, as refreshBehind last found (#535)
@@ -437,7 +439,14 @@ export class Hub extends EventEmitter {
   // A change a view shows: browsers, listeners and the Notifier hear it. item ("#12") and kind (an event type, or
   // "stage", "item") say what, when one thing changed.
   changed(p, { item = null, kind = null } = {}) {
-    this.emit('change', { project: p?.slug ?? null, item, kind, seq: ++this.changeSeq, at: this.now() });
+    const seq = ++this.changeSeq;
+    if (p?.id != null) this.changedAt.set(p.id, seq); else this.allChanged = seq;
+    this.emit('change', { project: p?.slug ?? null, item, kind, seq, at: this.now() });
+  }
+
+  // The counter at the last change a project's view shows: its own, or one that names no project (#501).
+  changeOf(p) {
+    return Math.max(this.changedAt.get(p.id) ?? 0, this.allChanged);
   }
 
   // Inside an agent operation: it wrote something a view shows, so it ends in a change (agentOp).
@@ -779,7 +788,10 @@ export class Hub extends EventEmitter {
       // Runners follow the project's staffing (#174): paused, or today's budget spent, starts no one new.
       if (runner && this.staffing(p).stopped) continue;
       // A runner on duty here (#185): the project page knows a worker is coming before one checks in.
-      if (runner) this.q('UPDATE projects SET runner_polled_at = ? WHERE id = ?').run(this.now(), p.id);
+      if (runner) {
+        this.q('UPDATE projects SET runner_polled_at = ? WHERE id = ?').run(this.now(), p.id);
+        if (this.now() - (p.runner_polled_at ?? 0) >= 5 * MIN) this.changed(p, { kind: 'runner' }); // on duty again: the page says a worker is coming
+      }
       const all = this.claimable(p, agent, { powers, has });
       // A building trial (#348) is decided before the count: a raced one takes two workers.
       if (runner && kind && p.model_routing && all[0]?.mode === 'work') this.decideTrial(p, all[0].item, kind, model, all[0].priority);

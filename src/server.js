@@ -1024,6 +1024,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const { authz, devices, clients } = scopeOf(hub);
       adopt(hub, req, base);
       hub.appWiring ??= wiringFor(hub);
+      hub.cacheViews = true; // one build of each project's page per change, for every tab, the home and the Notifier (#501)
       // Where Free's limit points its owners (#228): the workspace's settings, where Upgrade is, while it sells.
       if (spaces && canSell(billing) && !hub.upgradeUrl) {
         const page = `${homeOf(req, ws)}/#/settings`;
@@ -1548,7 +1549,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       let m;
       if ((m = path.match(/^\/api\/p\/([^/]+)\/view$/)) && req.method === 'GET') {
         hub.sweep();
-        return send(200, view(hub, decodeURIComponent(m[1]), { viewer }));
+        // depth (30s, 5m, 30m): only what that depth shows (#501); all and agents: how many of each the page has asked for.
+        const depth = url.searchParams.get('depth') || undefined;
+        const pages = { all: url.searchParams.get('all'), agents: url.searchParams.get('agents') };
+        return send(200, view(hub, decodeURIComponent(m[1]), { viewer, depth, pages }));
       }
       // What finished work came to, for other tools (docs/API.md is the contract). Agent tokens read only their projects'.
       if ((m = path.match(/^\/api\/p\/([^/]+)\/outcomes$/)) && req.method === 'GET') {

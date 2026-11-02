@@ -74,9 +74,10 @@ export function predict(view, action, body = {}, { now = Date.now() } = {}) {
     case 'dismiss': dropCards(v, (a) => a.key === body.key); return v;
     case 'unpark': dropCards(v, (a) => a.kind === 'kept-parked' && a.item === body.item); return v;
     case 'steer': case 'comment': case 'decide': {
-      if (!Array.isArray(v.activity)) return null;
+      // Below 30m a project's view has no activity (#501), but a decision still shows at 5m.
+      if (!Array.isArray(v.activity) && !(action === 'decide' && Array.isArray(v.decisions))) return null;
       const [type, said] = MESSAGE[action];
-      v.activity.unshift({ id: `sending-${now}`, type, actor: 'you', item: body.item ?? null, headline: `${said}: ${body.body}`, summary: '', ago: 'now', sending: true });
+      v.activity?.unshift({ id: `sending-${now}`, type, actor: 'you', item: body.item ?? null, headline: `${said}: ${body.body}`, summary: '', ago: 'now', sending: true });
       if (action === 'decide' && Array.isArray(v.decisions)) v.decisions.unshift({ id: `sending-${now}`, body: body.body, ago: 'now' });
       return v;
     }
