@@ -36,6 +36,26 @@ export function toastError(e, lead = '') {
   for (const a of $('#toast').querySelectorAll('a')) a.addEventListener('click', () => { closeModal(); $('#toast').hidden = true; });
 }
 
+// A form refused (#748): the reason under the field it's about, the field marked and focused, not a toast across
+// the screen. Typing in the field clears it. Toasts stay for results of actions.
+export function fieldError(id, msg) {
+  const el = document.getElementById(id);
+  if (!el) return toast(msg, true);
+  let p = document.getElementById(`${id}-err`);
+  if (!p) {
+    p = document.createElement('p');
+    p.id = `${id}-err`;
+    p.className = 'field-err';
+    (el.closest('label, .inline-form') ?? el).after(p);
+    el.addEventListener('input', () => { p.remove(); el.removeAttribute('aria-invalid'); el.removeAttribute('aria-describedby'); }, { once: true });
+  }
+  p.textContent = msg;
+  el.closest('details')?.setAttribute('open', ''); // + Project's "Or add one by name", folded
+  el.setAttribute('aria-invalid', 'true');
+  el.setAttribute('aria-describedby', p.id);
+  el.focus();
+}
+
 // The hub out of reach (#142): say so in a bar that stays, mark what's on screen as possibly out of date, and
 // clear it all by itself once the hub answers again. Shown after a moment, so a hub restarting doesn't flash it.
 const OFFLINE = "Couldn't reach the hub; nothing was changed. Try again when it's back.";
@@ -77,7 +97,7 @@ export async function api(path, opts = {}) {
     throw new Error('Not signed in');
   }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), j);
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status }, j);
   return j;
 }
 // The project list, home, outcomes, views and open item, each kept per URL until a change event says it may have

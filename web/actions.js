@@ -3,7 +3,7 @@ import { ago } from './ago.js';
 import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { proposal, sentToast } from './propose.js';
 import { trialNote } from './trialnote.js';
-import { errorHtml } from './errors.js';
+import { errorHtml, fieldReason } from './errors.js';
 import { toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
 import { shortcutsHtml } from './shortcuts.js';
@@ -14,7 +14,7 @@ import { S, setState, toggleIn, addTo, putIn, removeFrom, PAGE } from './store.j
 import { recent, store, themeNow } from './prefs.js';
 import { go, prefetch } from './router.js';
 import { markNew } from './new.js';
-import { $, api, closeModal, loadProjects, modal, prefetchView, refresh, render, scheduleRefresh, toast, toastError, views } from './ui.js';
+import { $, api, closeModal, loadProjects, modal, fieldError, prefetchView, refresh, render, scheduleRefresh, toast, toastError, views } from './ui.js';
 import { MAC, Z, esc, inline, plural, stepWhere } from './views/html.js';
 import { z } from './views/parts.js';
 
@@ -59,7 +59,8 @@ function foresee(action, body) {
 }
 
 // Archive or delete the open project, then leave it: it is no longer in the list.
-async function removeProject(action, body, msg) {
+// field: the input a refusal is about (#748), the typed name for Delete.
+async function removeProject(action, body, msg, field) {
   try {
     await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
     closeModal();
@@ -67,7 +68,7 @@ async function removeProject(action, body, msg) {
     go('');
     toast(msg);
   } catch (e) {
-    toastError(e);
+    if (field && e.status === 400) fieldError(field, fieldReason(e)); else toastError(e);
   }
 }
 
@@ -627,7 +628,7 @@ export const ACTIONS = {
       <div class="foot"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn ghost" data-action="delete-project">Delete for good</button><button class="btn primary" data-action="archive-project">Archive</button></div>`);
   },
   'archive-project': () => removeProject('archive', {}, 'Archived'),
-  'delete-project': () => removeProject('delete', { confirm: val('rm-confirm') }, 'Deleted'),
+  'delete-project': () => removeProject('delete', { confirm: val('rm-confirm') }, 'Deleted', 'rm-confirm'),
   archived: async () => {
     try {
       const list = await api('/api/projects?archived=1');
@@ -646,7 +647,7 @@ export const ACTIONS = {
       await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/delete`, { method: 'POST', body: JSON.stringify({ confirm: val('rm-archived') }) });
       toast('Deleted for good');
       ACTIONS.archived();
-    } catch (e) { toastError(e); }
+    } catch (e) { if (e.status === 400) fieldError('rm-archived', fieldReason(e)); else toastError(e); }
   },
   'restore-project': async (el) => {
     try {
@@ -773,7 +774,7 @@ export const ACTIONS = {
   'only-feedback': () => { setState({ onlyFeedback: !S.onlyFeedback }); render({ force: true }); },
   'feedback-send': async (el) => {
     const text = val('fb-text');
-    if (!text) return toast('Say what happened first', true);
+    if (!text) return fieldError('fb-text', 'Say what happened.');
     el.disabled = true;
     try {
       await api('/api/feedback', { method: 'POST', body: JSON.stringify({ text, ...S.feedbackCtx }) });
@@ -794,18 +795,19 @@ export const ACTIONS = {
   },
   'github-save': async () => {
     const secret = val('gh-secret');
-    if (!secret) return toast('Enter or generate a secret', true);
+    if (!secret) return fieldError('gh-secret', 'Enter a secret, or press Generate.');
     closeModal();
     await human('settings', { github_secret: secret }, 'GitHub connected: pull requests and CI will link to items');
   },
   'github-disconnect': async () => { closeModal(); await human('settings', { github_secret: '' }, 'GitHub disconnected'); },
   'notify-add': async () => {
+    if (!val('nt-url')) return fieldError('nt-url', 'Paste the channel\'s URL.');
     try {
       const mine = document.getElementById('nt-mine');
       await api('/api/notify', { method: 'POST', body: JSON.stringify({ kind: val('nt-kind'), url: val('nt-url'), ...(mine?.checked ? { person: S.notifyPerson } : {}) }) });
       toast('Channel added: send a test to check it');
       notifySettings();
-    } catch (e) { toastError(e); }
+    } catch (e) { if (e.status === 400) fieldError('nt-url', fieldReason(e)); else toastError(e); }
   },
   'notify-weekly': async (el) => {
     try { await api('/api/notify/weekly', { method: 'POST', body: JSON.stringify({ id: Number(el.dataset.id), weekly: el.dataset.on === '1' }) }); notifySettings(); } catch (e) { toastError(e); }
@@ -853,7 +855,7 @@ export const ACTIONS = {
   logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },
   'first-project': async () => {
     const name = val('fp-name');
-    if (!name) return toast('Name it', true);
+    if (!name) return fieldError('fp-name', 'Give the project a name.');
     try {
       const remotes = val('fp-remotes').split(/[\s,]+/).filter(Boolean);
       const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('fp-mission'), remotes }) });
@@ -864,7 +866,7 @@ export const ACTIONS = {
   },
   'create-project': async () => {
     const name = val('np-name');
-    if (!name) return toast('Name it', true);
+    if (!name) return fieldError('np-name', 'Give the project a name.');
     try {
       const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name, mission: val('np-mission'), remote: val('np-remote') || undefined }) });
       // Either answer is the answer (#491): the project page doesn't ask again.
