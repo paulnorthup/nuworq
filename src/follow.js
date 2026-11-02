@@ -247,8 +247,90 @@ function place(repo, path, sha) {
 // ci: { app: the hub's github-app.json } when GitHub can say whether CI passed a commit (#543), else null: then the suite
 // runs here. sys.ci(sha) asks src/followhub.js, which reads the app (or NUWORQ_GITHUB_APP_*) and calls checkOn.
 // workspaces: the workspaces' folder when the hub serves them, and workspace the one to report a red main in.
-export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null, ci = null, smokeMs = SMOKE_MS, workspaces = null, workspace = null }) {
+// listen: { host, port }, the address the hub is served at, which the supervisor itself holds (#523): it accepts every
+// connection and passes it to the newest hub that is ready, so a new hub starts beside the old one in alt (the other
+// of the two worktrees the hub alternates between) and the port never closes. null: each hub listens itself, as before.
+// It also falls back to that for a commit from before #523 (no src/handoff.js), on any platform.
+export function system({ repo, dir, next = `${dir}-next`, alt = `${dir}-alt`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null, ci = null, smokeMs = SMOKE_MS, workspaces = null, workspace = null, listen = null, log = () => {} }) {
   let child = null;
+  let current = null; // the hub that serves, when it was started to hand over (see spawnHub)
+  let front = null;
+  const HANDOFF = 'src/handoff.js';
+  const capable = (path) => !!listen && existsSync(join(path, HANDOFF));
+  const capableAt = (sha) => { try { git(repo, 'cat-file', '-e', `${sha}:${HANDOFF}`); return !!listen; } catch { return false; } };
+  // The port, held here: connections wait while no hub is ready (a restart, a rollback) and go to the newest one once
+  // it is, so nothing is refused. They are paused until then, so no byte is read that the hub should read.
+  const holdPort = async () => {
+    if (front) return;
+    const waiting = new Set();
+    // Sent, the connection is the hub's: the descriptor was passed, so closing ours ends only our count of it (the
+    // server waits for that count at close).
+    const pass = (h, sock) => h.child.send({ type: 'conn' }, sock, () => sock.destroy());
+    const s = createNetServer({ pauseOnConnect: true }, (sock) => {
+      sock.on('error', () => {});
+      const target = front?.target;
+      if (target && target.child.connected) return pass(target, sock);
+      waiting.add(sock);
+      sock.once('close', () => waiting.delete(sock));
+      setTimeout(() => sock.destroy(), HEALTHY_MS * 2).unref();
+    });
+    await new Promise((resolve, reject) => { s.once('error', reject); s.listen(listen.port, listen.host, resolve); })
+      .catch((e) => { throw new Error(`can't hold ${listen.host}:${listen.port} (${e.message}): something else is using it`); });
+    front = {
+      server: s, target: null,
+      set(h) { this.target = h; for (const sock of waiting) { waiting.delete(sock); if (!sock.destroyed) pass(h, sock); } },
+      async close() { for (const sock of waiting) sock.destroy(); s.close(); await new Promise((r) => setImmediate(r)); },
+    };
+  };
+  const releasePort = async () => { const f = front; front = null; await f?.close(); };
+  // A hub started to hand over: its child process has an IPC channel (src/handoff.js is its side).
+  const spawnHub = (path, sha) => {
+    const h = { dir: path, sha, port: null, commit: null, ready: false, loops: false, exited: false };
+    h.child = spawn(process.execPath, [join(path, bin), 'serve', ...args], {
+      cwd, stdio: ['inherit', 'inherit', 'inherit', 'ipc'], detached: true, env: { ...process.env, NUWORQ_HANDOFF: '1', NUWORQ_COMMIT: sha },
+    });
+    h.child.on('message', (m) => {
+      if (m?.type === 'ready') Object.assign(h, { port: m.port, commit: m.commit, ready: true });
+      else if (m?.type === 'loops') h.loops = !!m.on;
+    });
+    h.child.on('error', () => {});
+    h.child.once('exit', (code, sig) => { h.exited = true; h.why = sig ? `it was stopped (${sig})` : `it exited with code ${code}`; });
+    return h;
+  };
+  const waitFor = async (h, ok, ms) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until && !closed && !h.exited && !ok()) await sleep(50);
+    return ok();
+  };
+  // Whether h came up as the commit it was started on and answers on its private port.
+  const readyHub = async (h, ms = HEALTHY_MS) => {
+    if (!(await waitFor(h, () => h.ready, ms))) return { ok: false, failed: h.exited ? h.why : `it didn't come up within ${ms / 1000}s` };
+    if (h.commit !== h.sha) return { ok: false, failed: `it runs ${short(h.commit)}, not ${short(h.sha)}` };
+    return (await answers(`http://127.0.0.1:${h.port}`)) ? { ok: true } : { ok: false, failed: "it didn't answer /api/health" };
+  };
+  const retire = async (h) => {
+    if (h.exited) return;
+    if (h.child.connected) h.child.send({ type: 'drain' });
+    else killGroup(h.child, 'SIGTERM');
+    await new Promise((resolve) => {
+      const kill = setTimeout(() => killGroup(h.child, 'SIGKILL'), STOP_GRACE_MS);
+      const done = () => { clearTimeout(kill); resolve(); };
+      if (h.exited) return done();
+      h.child.once('exit', done);
+    });
+  };
+  // h serves from now on, and runs the background loops, which the hub it replaces stopped first (old: null when
+  // none runs): never two hubs running them.
+  const promote = async (h, old = null) => {
+    if (old && !old.exited && old.child.connected) {
+      old.child.send({ type: 'quiet' });
+      if (!(await waitFor(old, () => !old.loops, 5000))) { log(`the old hub didn't stop its background loops; stopping it`); await retire(old); }
+    }
+    h.child.send({ type: 'lead' });
+    front.set(h);
+    current = h;
+    child = h.child;
+  };
   let testing = null;
   let smoking = null;
   let fetched = 0;
@@ -269,7 +351,8 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
   // One op of src/followhub.js, run as a short child with the code of the commit the hub runs, which passed (or,
   // for a commit from before #546, the one beside this file); this process loads none of the hub's code.
   const helper = async (op, input) => {
-    const file = existsSync(join(dir, HELPER)) ? join(dir, HELPER) : join(import.meta.dirname, posix.basename(HELPER));
+    const at = current?.dir ?? dir;
+    const file = existsSync(join(at, HELPER)) ? join(at, HELPER) : join(import.meta.dirname, posix.basename(HELPER));
     const out = await new Promise((resolve, reject) => {
       let text = '';
       const p = spawn(process.execPath, [file, op, JSON.stringify(input)], { cwd: repo, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -374,7 +457,38 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
         rmSync(root, { recursive: true, force: true });
       }
     },
+    // Whether sha can go live beside the hub that serves, with no gap: both it and the running hub hand over (#523).
+    canSwap: (sha) => !!current && !current.exited && capableAt(sha),
+    // Start sha beside the running hub, in the worktree it doesn't use; once it is ready as sha, it gets the port's
+    // connections, the old hub stops its background loops, the new one starts them, and the old one drains. The old
+    // hub serves until then, and if the new one doesn't come up it serves on: { ok } or { ok: false, failed }.
+    async swap(sha) {
+      const old = current;
+      const path = old.dir === dir ? alt : dir;
+      try { place(repo, path, sha); } catch (e) { return { ok: false, failed: `couldn't check it out (${e.message.split('\n')[0]})` }; }
+      const h = spawnHub(path, sha);
+      const r = await readyHub(h);
+      if (!r.ok || closed) {
+        await retire(h);
+        return r.ok ? { ok: false, failed: 'stopped' } : r;
+      }
+      await promote(h, old);
+      await retire(old);
+      return { ok: true };
+    },
     async start() {
+      if (capable(dir)) {
+        await holdPort();
+        front.target = null;
+        if (closed) return;
+        let sha;
+        try { sha = git(dir, 'rev-parse', 'HEAD'); } catch { sha = null; }
+        current = spawnHub(dir, sha);
+        child = current.child;
+        return;
+      }
+      await releasePort(); // a hub from before #523 listens itself
+      current = null;
       if (await answers(url)) throw new Error(`something else already answers at ${url}; stop it or pick another --port`);
       if (closed) return;
       // Its own process group: Ctrl-C reaches the supervisor, which stops the hub in order.
@@ -384,6 +498,10 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
     async stop() {
       const c = child;
       child = null;
+      if (current?.child === c) {
+        if (front?.target === current) front.target = null; // connections wait for the next hub
+        current = null;
+      }
       if (!c || c.exitCode != null || c.signalCode != null) return;
       await new Promise((resolve) => {
         const kill = setTimeout(() => c.kill('SIGKILL'), STOP_GRACE_MS);
@@ -392,6 +510,14 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
       });
     },
     async healthy(ms = HEALTHY_MS) {
+      if (current && !front?.target) {
+        // Started to hand over: ready as its commit, then it serves.
+        const h = current;
+        const r = await readyHub(h, ms);
+        if (!r.ok || closed || current !== h) return false;
+        await promote(h);
+        return true;
+      }
       const until = Date.now() + ms;
       while (Date.now() < until && !closed) {
         if (!child || child.exitCode != null || child.signalCode != null) return false;
@@ -433,6 +559,7 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
       if (testing) killGroup(testing, 'SIGTERM');
       if (smoking) killGroup(smoking, 'SIGTERM');
       await this.stop();
+      await releasePort();
     },
   };
 }
@@ -621,9 +748,29 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
         if (!s.skipped) log(`${short(sha)} boots on copies of the live data`);
       }
       sys.pass?.(sha);
-      log(`${short(sha)} ${passed}${state.red ? ` (${branch} is green again)` : ''}; restarting the hub on it`);
-      state.red = false;
       const from = state.running;
+      // With no gap (#523): started beside the running hub, which serves until the new one is ready as this commit.
+      // The copy is taken while it runs (VACUUM INTO reads a consistent snapshot), as for a smoke boot.
+      const beside = !!sys.canSwap?.(sha);
+      log(`${short(sha)} ${passed}${state.red ? ` (${branch} is green again)` : ''}; ${beside ? `starting the hub on it beside ${short(from)}, which serves until it is ready` : 'restarting the hub on it'}`);
+      state.red = false;
+      if (beside) {
+        try {
+          sys.backup?.(from);
+        } catch (e) {
+          state.skip = sha;
+          return log(`couldn't back up the database before moving (${e.message.split('\n')[0]}); staying on ${short(from)} and not trying ${short(sha)} again; the next commit on ${branch} tries again`);
+        }
+        const r = await sys.swap(sha);
+        if (state.closed) return;
+        if (!r.ok) {
+          state.skip = sha;
+          return log(`${short(sha)} didn't come up beside ${short(from)} (${r.failed}); ${short(from)} keeps serving, nothing was dropped, and ${short(sha)} isn't tried again`);
+        }
+        Object.assign(state, { running: sha, good: sha, skip: null });
+        log(`hub moved to ${short(sha)} with no gap: ${short(from)} drained`);
+        return await ownCodeMoved(from, sha);
+      }
       await sys.stop();
       // No copy, no move: the old hub starts again as it was, and this commit waits for the next one.
       try {
@@ -673,8 +820,8 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
 }
 
 // Run it: start the hub, check main every few seconds, and stop the hub on SIGINT, SIGTERM or SIGHUP.
-export async function follow({ repo, dir, next, args, url, branch = 'main', every = 10_000, log, store = null, ci = null, workspaces = null, workspace = null }) {
-  const sys = system({ repo, dir, next, args, url, store, ci, workspaces, workspace });
+export async function follow({ repo, dir, next, alt, args, url, listen = null, branch = 'main', every = 10_000, log, store = null, ci = null, workspaces = null, workspace = null }) {
+  const sys = system({ repo, dir, next, alt, args, url, listen, log, store, ci, workspaces, workspace });
   const f = follower(sys, { branch, log });
   let timer;
   let stopping = false;
