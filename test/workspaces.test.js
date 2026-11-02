@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -109,6 +109,70 @@ describe('the workspace registry', () => {
     // Feedback stays for the owners, but the next acme's claude-1 sees none of the old one's at checkin.
     assert.deepEqual(d.feedbackFrom({ kind: 'agent', sender: 'claude-1', workspace: 'acme' }), []);
     assert.deepEqual(d.db.prepare('SELECT workspace FROM feedback').all().map((f) => f.workspace), ['acme (removed)']);
+  });
+
+  // #749: acme removed before #728, as remove did then: its file gone, its directory rows left behind.
+  function removedBefore728() {
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-ws-'));
+    const spaces = new Workspaces({ dir });
+    const d = spaces.directory;
+    const old = d.identify('old@acme.test', 'github'), next = d.identify('new@other.test', 'github');
+    const { code } = d.decide(d.request({ email: 'old@acme.test', building: 'rockets' }).id, true, 'owner');
+    spaces.create('acme');
+    spaces.create('globex');
+    assert.equal(d.useGrant(code, old, 'acme'), true);
+    d.join('old@acme.test', 'acme', { created: true });
+    d.join('old@acme.test', 'globex', { created: true });
+    d.bindInstallation(4242, 'acme');
+    d.bindInstallation(5151, 'globex');
+    spaces.setPlan('acme', 'unlimited', 'owner');
+    spaces.evict('acme');
+    rmSync(spaces.file('acme'));
+    return { dir, spaces, d, old, next, code };
+  }
+  // #728's checks, on the acme made next.
+  const startsClean = ({ d, old, next, code }) => {
+    d.join('new@other.test', 'acme', { created: true });
+    assert.equal(d.installation(4242), null, 'the old installation routes nowhere');
+    assert.equal(d.plan('acme'), null, 'the default plan');
+    assert.equal(d.madeByGrant('acme'), false, 'no early-access grant');
+    assert.deepEqual(d.created(old), ['globex'], "acme isn't the old creator's any more; globex still is");
+    assert.deepEqual(d.created(next), ['acme']);
+    assert.equal(d.useGrant(code, next, 'acme'), false, 'the old grant stays used');
+    assert.equal(d.installation(5151), 'globex', 'a workspace that still exists keeps its rows');
+  };
+
+  test('names removed before #728: a restart forgets their rows, naming each in one log line (#749)', async () => {
+    const w = removedBefore728();
+    const logs = [];
+    const log = console.log;
+    console.log = (...a) => logs.push(a.join(' '));
+    let server;
+    try {
+      server = createServer(new Workspaces({ dir: w.dir }), { baseDomain: BASE, sweepMs: 60_000 }); // the hub starting again
+    } finally { console.log = log; }
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    await new Promise((r) => server.close(r));
+    assert.deepEqual(logs.filter((l) => /#749/.test(l)), ['nuworq: the directory forgot "acme", a workspace removed earlier: its name starts clean (#749)']);
+    const d = new Workspaces({ dir: w.dir }).directory;
+    assert.deepEqual(d.named().sort(), ['globex']);
+    w.spaces.create('acme');
+    startsClean({ ...w, d });
+  });
+
+  test('creating a name forgets what a workspace of that name left, with no restart in between (#749)', () => {
+    const w = removedBefore728();
+    w.spaces.create('acme');
+    startsClean(w);
+  });
+
+  test("a grant taken while creating binds to the new workspace, not cleared as the old one's (#749)", () => {
+    const w = removedBefore728();
+    const { code } = w.d.decide(w.d.request({ email: 'new@other.test', building: 'boats' }).id, true, 'owner');
+    w.spaces.create('acme', { claim: (s) => assert.equal(w.d.useGrant(code, w.next, s), true) });
+    assert.equal(w.d.madeByGrant('acme'), true, "the new one's own grant");
+    assert.throws(() => w.spaces.create('initech', { claim: () => { throw new Error('no invitation'); } }), /no invitation/);
+    assert.equal(existsSync(w.spaces.file('initech')), false, 'refused: nothing made');
   });
 });
 
