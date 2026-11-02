@@ -1207,7 +1207,7 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted } = await import('../src/runner.js');
   // The worktrees of the workers running now: each one's branch is its own to move (#618).
   const live = new Set();
   const logs = join(dirname(HUB_FILE), 'logs');
@@ -1304,11 +1304,17 @@ async function runCmd(flags) {
         // done or dropped and all of it is on origin (#444).
         if (worktree) {
           live.delete(worktree);
-          const branch = (await git(['-C', worktree, 'symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim();
+          // Its git runs there only while the pointers lead back where the runner made them (#640). Its branch
+          // unknown then, every other ref it moved still goes back (#618).
+          const trusted = worktreeTrusted(worktree, home);
+          if (!trusted) console.log(amber(`  ${name}'s worktree pointers were changed; left as it is`));
+          const branch = trusted ? (await git(['-C', worktree, 'symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim() : '';
           if (refsBefore) await guardRefs({ home, branch, name, project: target.slug, before: refsBefore });
-          const r = await cleanWorktree(worktree, git).catch((e) => ({ kept: true, why: `git couldn't remove it (${String(e.stderr || e.message).trim().split('\n')[0]})` }));
-          if (r.kept) console.log(dim(`  kept ${name}'s worktree, ${worktree}: ${r.why}`));
-          else if (branch) await finishedOf(target.slug).then((f) => cleanBranch(home, branch, f.finished, git, f.merged)).catch(() => false);
+          if (trusted) {
+            const r = await cleanWorktree(worktree, git).catch((e) => ({ kept: true, why: `git couldn't remove it (${String(e.stderr || e.message).trim().split('\n')[0]})` }));
+            if (r.kept) console.log(dim(`  kept ${name}'s worktree, ${worktree}: ${r.why}`));
+            else if (branch) await finishedOf(target.slug).then((f) => cleanBranch(home, branch, f.finished, git, f.merged)).catch(() => false);
+          }
         }
         done(code ?? (sig ? `${sig}` : 1));
       })),
@@ -1319,7 +1325,7 @@ async function runCmd(flags) {
   // After a worker exits (#618): origin's refs fetched by the runner itself, then every other branch or tag it moved
   // goes back, said in the runner's output and on the worker's item.
   const guardRefs = async ({ home, branch, name, project, before }) => {
-    const siblings = await Promise.all([...live].map((w) => git(['-C', w, 'symbolic-ref', '-q', '--short', 'HEAD']).then((b) => b.trim(), () => '')));
+    const siblings = await Promise.all([...live].filter((w) => worktreeTrusted(w, home)).map((w) => git(['-C', w, 'symbolic-ref', '-q', '--short', 'HEAD']).then((b) => b.trim(), () => '')));
     await git(['-C', home, 'fetch', '-q', '--prune', 'origin']).catch(() => {});
     const g = await restoreRefs(home, before, git, { own: [branch], live: siblings }).catch((e) => {
       console.error(dim(`  couldn't check what ${name} did to ${home}'s branches: ${String(e.stderr || e.message).trim().split('\n')[0]}`));

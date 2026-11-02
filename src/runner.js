@@ -1,5 +1,7 @@
 // nuworq run: keep up to N headless workers on waiting work in the projects the human opted in.
 // plan() decides, run() does the I/O; everything outside is injected so tests start no real agents.
+import { readFileSync, realpathSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 
 // What to launch now. routes: the hub's /api/route?runner=1 (value order, one entry per project, with
 // how much is claimable and who holds work there). running: live workers this runner started.
@@ -38,9 +40,31 @@ export function capacity(running, { load = 0, cores = 1, free = Infinity } = {},
   return { workers: running + 1, holding: null };
 }
 
+// Whether the runner's own git may read a worker's worktree (#640): its .git file names a folder in
+// <home>/.git/worktrees, whose commondir is "../.." and whose gitdir points back at this worktree's .git, as git
+// worktree add made them. A worker may write the checkout's .git (to commit), so it could point another worker's
+// folder elsewhere, and the runner's unsandboxed git would then read config from there and run as the person.
+// home: the checkout; without it (a worktree of another project's), only the shape is checked.
+export function worktreeTrusted(worktree, home = null) {
+  try {
+    const dotgit = join(worktree, '.git');
+    const named = readFileSync(dotgit, 'utf8').match(/^gitdir: (.+)$/m)?.[1]?.trim();
+    if (!named) return false;
+    const admin = realpathSync(resolve(worktree, named));
+    if (basename(dirname(admin)) !== 'worktrees') return false;
+    if (readFileSync(join(admin, 'commondir'), 'utf8').trim() !== '../..') return false;
+    if (home && realpathSync(resolve(admin, '../..')) !== realpathSync(join(home, '.git'))) return false;
+    return realpathSync(resolve(admin, readFileSync(join(admin, 'gitdir'), 'utf8').trim())) === realpathSync(dotgit);
+  } catch {
+    return false;
+  }
+}
+const CHANGED = 'its worktree pointers were changed';
+
 // After a worker exits, its worktree goes (#172), unless something in it would be lost: uncommitted changes, or
 // commits no branch holds. git(args) runs git and resolves to its output. Returns { kept, why? }.
 export async function cleanWorktree(worktree, git) {
+  if (!worktreeTrusted(worktree)) return { kept: true, why: CHANGED };
   if ((await git(['-C', worktree, 'status', '--porcelain'])).trim()) return { kept: true, why: 'it has uncommitted changes' };
   if (!(await git(['-C', worktree, 'for-each-ref', '--contains', 'HEAD', '--count=1', 'refs/heads', 'refs/remotes'])).trim()) {
     return { kept: true, why: 'it has commits that are on no branch' };
@@ -154,6 +178,8 @@ export async function sweep({ home, finished, merged = new Set(), git, idle, kee
     if (!ours(t.path) || keep.includes(t.path) || t.prunable || t.branch && !finished.has(t.branch)) continue;
     try {
       if (!t.branch && await idle(t.path) < DETACHED_IDLE_MS) continue;
+      // No git of the runner's in a worktree whose pointers a worker changed (#640).
+      if (!worktreeTrusted(t.path, home)) { out.kept.push({ what: name(t.path), why: CHANGED }); continue; }
       // --no-optional-locks: looking doesn't rewrite its index, so the worktree stays as idle as it was.
       if ((await git(['--no-optional-locks', '-C', t.path, 'status', '--porcelain'])).trim()) { out.kept.push({ what: name(t.path), why: 'uncommitted changes' }); continue; }
       const lacks = await unlanded(t.path, 'HEAD', t.branch, merged, git);
