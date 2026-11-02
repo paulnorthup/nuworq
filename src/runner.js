@@ -2,6 +2,15 @@
 // plan() decides, run() does the I/O; everything outside is injected so tests start no real agents.
 import { readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+
+// The runner's own git (#736): a worker that exited is cleaned up with it, so a hung fetch (a stalled remote) can't
+// keep it in running, and so its lease renewed, for ever. Each call is killed after GIT_MS. file: for tests.
+export const GIT_MS = 2 * 60_000;
+export const runnerGit = ({ timeout = GIT_MS, file = 'git' } = {}) => (args) => new Promise((ok, fail) => {
+  execFile(file, args, { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout, killSignal: 'SIGKILL' },
+    (e, stdout, stderr) => (e ? fail(Object.assign(e, { stderr: stderr || e.stderr })) : ok(stdout)));
+});
 
 // What to launch now. routes: the hub's /api/route?runner=1 (value order, one entry per project, with
 // how much is claimable and who holds work there). running: live workers this runner started.

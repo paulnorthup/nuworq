@@ -1207,13 +1207,13 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, runnerGit } = await import('../src/runner.js');
   // The worktrees of the workers running now: each one's branch is its own to move (#618).
   const live = new Set();
   const logs = join(dirname(HUB_FILE), 'logs');
   lockDown(dirname(HUB_FILE)); // 0700 folders and 0600 files, again on every start (#477)
   const chosen = await chooseWorkFolders(flags, await hubProjects(client), s);
-  const git = async (args) => (await promisify(execFile)('git', args, { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout;
+  const git = runnerGit(); // each call killed after 2 minutes (#736)
   // The branches of a project's done and dropped items; merged: those whose PR merged (#455).
   const finishedOf = async (slug) => {
     const r = await client.get(`/api/finished?project=${encodeURIComponent(slug)}`);
