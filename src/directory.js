@@ -12,12 +12,14 @@ import { dirname } from 'node:path';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { SESSION_MS } from './auth.js';
 import { paid } from './billing.js';
+import { features, sameReport } from './feedbackgroups.js';
 
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 export const ORG_CAP = 5; // organizations one person may create, unless the host says otherwise
 export const GRANT_MS = 14 * 24 * 60 * 60 * 1000; // how long an early-access grant is good for
 export const ADMIN_SESSION_MS = 12 * 60 * 60 * 1000; // a sign-in to the admin host lasts a working day
 export const FEEDBACK_MAX = 4000, FEEDBACK_PER_DAY = 10; // characters a piece of feedback; pieces per sender a day
+export const GROUP_MS = 14 * 24 * 3600_000; // how far back a new piece looks for the group it joins (#688)
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // An early-access request's source (#356), e.g. "hn" or "news.ycombinator.com": lowercased, at most 64 characters
@@ -147,6 +149,10 @@ export class Directory {
     try { this.db.exec('ALTER TABLE feedback ADD COLUMN told_at INTEGER'); } catch { /* already there */ }
     // The level that proposed a piece at once, without an owner's decision (#296): balanced | full; '' when decided.
     try { this.db.exec("ALTER TABLE feedback ADD COLUMN auto TEXT NOT NULL DEFAULT ''"); } catch { /* already there */ }
+    // The group a piece joined as it arrived (#688): the id of the group's first piece. Earlier pieces are their own.
+    // state may then also be linked: proposal names the item that already covers it, which nothing new made.
+    try { this.db.exec('ALTER TABLE feedback ADD COLUMN grp INTEGER'); } catch { /* already there */ }
+    this.db.exec('UPDATE feedback SET grp = id WHERE grp IS NULL');
     // The workspace a used grant made (#355): it starts on Unlimited.
     try { this.db.exec('ALTER TABLE org_grants ADD COLUMN workspace TEXT'); } catch { /* already there */ }
     // Where an early-access request came from (#356): a ?ref= tag or the referring host, '' when unknown.
@@ -386,11 +392,64 @@ export class Directory {
     if (!text) throw no(400, 'what happened?', 'Say what got in your way, or what didn\'t make sense, in a sentence or two.');
     if (text.length > FEEDBACK_MAX) throw no(400, `feedback is at most ${FEEDBACK_MAX} characters (this is ${text.length})`, 'Say the one thing that got in your way; leave logs out.');
     const t = this.now();
+    item = String(item ?? '').slice(0, 80);
+    // The group it joins (#688): the newest recent group with a piece that reports the same thing. The same sender
+    // sending the same report again adds nothing: they get the piece they sent, marked repeat.
+    const mine = features(text, item);
+    const recent = this.db.prepare('SELECT id, grp, kind, sender, workspace, text, item FROM feedback WHERE created_at > ? ORDER BY created_at DESC, id DESC').all(t - GROUP_MS);
+    const grp = recent.find((p) => sameReport(mine, features(p.text, p.item)))?.grp ?? null;
+    const again = grp && recent.find((p) => p.grp === grp && p.kind === kind && p.sender === sender && p.workspace === workspace);
+    if (again) return { ...this.feedbackById(again.id), repeat: true };
     const sent = this.db.prepare('SELECT COUNT(*) AS n FROM feedback WHERE kind = ? AND sender = ? AND workspace = ? AND created_at > ?').get(kind, sender, workspace, t - DAY_MS).n;
     if (sent >= FEEDBACK_PER_DAY) throw no(429, `${sender} sent ${FEEDBACK_PER_DAY} pieces of feedback today, the most a day allows`, 'Try again tomorrow, or add to one you sent.');
-    const r = this.db.prepare(`INSERT INTO feedback (kind, sender, email, workspace, text, item, context, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(kind, sender, String(email).toLowerCase(), workspace, text, String(item ?? '').slice(0, 80), JSON.stringify(context), t);
-    return this.feedbackById(Number(r.lastInsertRowid));
+    const r = this.db.prepare(`INSERT INTO feedback (kind, sender, email, workspace, text, item, context, created_at, grp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(kind, sender, String(email).toLowerCase(), workspace, text, item, JSON.stringify(context), t, grp);
+    const id = Number(r.lastInsertRowid);
+    if (!grp) { this.db.prepare('UPDATE feedback SET grp = id WHERE id = ?').run(id); return this.feedbackById(id); }
+    // A group already decided decides the newcomer the same way: linked or approved to the same item, or declined
+    // with the same note. Undo puts the whole group back.
+    const lead = this.db.prepare("SELECT * FROM feedback WHERE grp = ? AND state != 'new' ORDER BY decided_at DESC LIMIT 1").get(grp);
+    if (lead) {
+      this.db.prepare('UPDATE feedback SET state = ?, note = ?, proposal = ?, decided_by = ?, decided_at = ?, auto = ? WHERE id = ?')
+        .run(lead.state, lead.note, lead.proposal, lead.decided_by, t, lead.auto, id);
+    }
+    return { ...this.feedbackById(id), joined: true };
+  }
+
+  // Groups of feedback (#688), the most recently sent first: each with its pieces, oldest first. state: new (any
+  // piece waits), or a decision (linked | approved | declined); '' for all.
+  feedbackGroups({ state = '' } = {}) {
+    const rows = this.db.prepare('SELECT id FROM feedback ORDER BY created_at, id').all().map((r) => this.feedbackById(r.id));
+    const groups = new Map();
+    for (const f of rows) {
+      const g = groups.get(f.grp) ?? { id: f.grp, pieces: [] };
+      g.pieces.push(f);
+      groups.set(f.grp, g);
+    }
+    return [...groups.values()].map((g) => {
+      const decided = g.pieces.filter((p) => p.state !== 'new').sort((a, b) => b.decided_at - a.decided_at)[0];
+      const waiting = g.pieces.some((p) => p.state === 'new');
+      return {
+        ...g, state: waiting ? 'new' : decided.state, first_at: g.pieces[0].created_at, last_at: g.pieces.at(-1).created_at,
+        ...(decided && !waiting ? { decision: { state: decided.state, by: decided.decided_by, at: decided.decided_at, note: decided.note, proposal: decided.proposal, auto: decided.auto } } : {}),
+      };
+    }).filter((g) => !state || g.state === state).sort((a, b) => b.last_at - a.last_at || b.id - a.id);
+  }
+
+  feedbackGroup(grp) {
+    return this.feedbackGroups().find((g) => g.id === Number(grp)) ?? null;
+  }
+
+  // Decide every waiting piece of a group at once: linked or approved (proposal: the item) or declined (a note).
+  decideGroup(grp, { state, by, note = '', proposal = '', auto = '' }) {
+    return this.db.prepare(`UPDATE feedback SET state = ?, note = ?, proposal = ?, decided_by = ?, decided_at = ?, auto = ? WHERE grp = ? AND state = 'new'`)
+      .run(state, String(note ?? '').trim().slice(0, 1000), proposal, String(by), this.now(), auto, Number(grp)).changes;
+  }
+
+  // Undo a group's decision: every piece waits again. Senders already told it's fixed aren't told again.
+  undoGroup(grp) {
+    return this.db.prepare(`UPDATE feedback SET state = 'new', note = '', proposal = '', decided_by = '', decided_at = NULL, auto = '' WHERE grp = ? AND state != 'new'`)
+      .run(Number(grp)).changes;
   }
 
   feedbackById(id) {
