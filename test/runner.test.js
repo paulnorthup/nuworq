@@ -2,7 +2,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -294,8 +295,14 @@ describe('nuworq worker --browser', () => {
     const config = mkdtempSync(join(tmpdir(), 'nuworq-claude-'));
     mkdirSync(join(config, 'plugins'));
     writeFileSync(join(config, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'nuworq@nuworq': [{ scope: 'local', projectPath: repo }], 'other@market': [{ scope: 'user' }] } }));
+    // A home of its own, with the pinned Playwright MCP server already installed (#626): no network, and never the real ~/.nuworq.
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-ui-home-'));
+    const lock = readFileSync(new URL('../src/browser/package-lock.json', import.meta.url));
+    const mcpCli = join(home, '.nuworq', 'browser', createHash('sha256').update(lock).digest('hex').slice(0, 16), 'node_modules', '@playwright', 'mcp', 'cli.js');
+    mkdirSync(dirname(mcpCli), { recursive: true });
+    writeFileSync(mcpCli, '');
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'ui', '--as', 'b-1', ...a],
-      { env: { ...process.env, NUWORQ_TOKEN: '', CLAUDE_CONFIG_DIR: config } });
+      { env: { ...process.env, HOME: home, NUWORQ_TOKEN: '', CLAUDE_CONFIG_DIR: config } });
     const parts = ({ stdout }) => ({
       strict: /--mcp-config '[^']*' --strict-mcp-config /.test(stdout),
       settings: JSON.parse(stdout.match(/--settings '([^']*)'/)[1]),
@@ -323,8 +330,8 @@ describe('nuworq worker --browser', () => {
 
       const b = parts(await cli('--agent', 'claude', '--browser'));
       assert.deepEqual(b.servers.playwright, {
-        command: 'npx',
-        args: ['-y', '@playwright/mcp@0.0.83', '--headless', '--browser', 'chrome', '--isolated',
+        command: 'node',
+        args: [mcpCli, '--headless', '--browser', 'chrome', '--isolated',
           '--allowed-origins', 'http://127.0.0.1:*;http://localhost:*', '--output-dir', join(tmpdir(), 'nuworq-browser', 'b-1')],
       });
       assert.deepEqual(Object.keys(b.servers), ['nuworq', 'playwright']);
@@ -609,13 +616,42 @@ describe('a worker for a project with no checkout on this machine', () => {
     const url = `http://127.0.0.1:${server.address().port}`;
     const run = (...a) => promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--max-runs', '1', '--until-idle', '--poll', '1', ...a], { env: w.env, cwd: w.home });
     const logs = join(w.home, '.nuworq', 'logs');
+    // The Playwright MCP server as npm ci installed it from the shipped lockfile (#626), already here: no network.
+    const lock = readFileSync(new URL('../src/browser/package-lock.json', import.meta.url));
+    const cli = join(w.home, '.nuworq', 'browser', createHash('sha256').update(lock).digest('hex').slice(0, 16), 'node_modules', '@playwright', 'mcp', 'cli.js');
+    mkdirSync(dirname(cli), { recursive: true });
+    writeFileSync(cli, '');
     try {
       await run();
       assert.deepEqual(readdirSync(w.repos), [], 'without --browser, nothing here can take it');
       await run('--browser');
       const log = readdirSync(logs).map((f) => readFileSync(join(logs, f), 'utf8')).join('');
-      assert.match(log, /^ARG \{"mcpServers":.*"playwright":\{"command":"npx","args":\["-y","@playwright\/mcp@0\.0\.83","--headless"/m, log);
+      assert.ok(log.includes(`"playwright":{"command":"node","args":[${JSON.stringify(cli)},"--headless"`), log);
+      assert.doesNotMatch(log, /npx/, 'nothing fetched at start');
       assert.match(log, /^ARG mcp__nuworq,.*,mcp__playwright\nARG --disallowedTools\nARG mcp__playwright__browser_run_code_unsafe$/m);
+    } finally {
+      server.close();
+    }
+  });
+
+  // #626: what a worker prints goes to its log with every provider and llm-proxy key masked, whatever stream it's on.
+  test('worker logs hold no provider or proxy keys', async () => {
+    const w = far();
+    const KEYS = ['sk-ant-api03-Abc123def456ghi789', 'sk-proj-Zyx987wvu654tsr321', 'sk-proxy-0a1b2c3d4e5f6a7b', 'owner-token-shapeless-9f8e7d6c'];
+    writeFileSync(join(w.dir, 'bin', 'claude'), `#!/bin/sh\necho "anthropic ${KEYS[0]} openai ${KEYS[1]}"\necho "Authorization: Bearer ${KEYS[2]}"\necho "x-proxy-token: ${KEYS[3]}" >&2\necho "the owner token was ${KEYS[3]}" >&2\necho "WORKER DONE"\n`, { mode: 0o755 });
+    const server = createServer(w.hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    try {
+      // The runner's own environment holds the owner token, which has no shape of its own.
+      await promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--max-runs', '1', '--until-idle', '--poll', '1'], { env: { ...w.env, NUWORQ_LLM_PROXY_TOKEN: KEYS[3] }, cwd: w.home });
+      const logs = join(w.home, '.nuworq', 'logs');
+      const log = readdirSync(logs).map((f) => readFileSync(join(logs, f), 'utf8')).join('');
+      assert.match(log, /WORKER DONE/, 'the worker ran and its output is in the log');
+      assert.deepEqual(KEYS.filter((k) => log.includes(k)), [], log);
+      assert.match(log, /anthropic sk-\[redacted\] openai sk-\[redacted\]/);
+      assert.match(log, /Authorization: Bearer \[redacted\]/);
+      assert.match(log, /the owner token was \[redacted\]/);
     } finally {
       server.close();
     }

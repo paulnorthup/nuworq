@@ -3,7 +3,7 @@
 import { writeFileSync, existsSync, readFileSync, mkdirSync, rmSync, renameSync } from 'node:fs';
 import { join, dirname, resolve, delimiter, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
@@ -805,11 +805,36 @@ function codexKey(provider) {
 // Chrome, headless, with a throwaway profile kept in memory, opening local pages only. Playwright says that
 // origin list is no security boundary (redirects aren't checked). Screenshots go to a temp folder, never the worktree.
 // Its one tool that runs code in the server process, outside the allowlist, is denied (Playwright: "RCE-equivalent").
-const PLAYWRIGHT_MCP = '@playwright/mcp@0.0.83';
 const BROWSER_DENY = 'mcp__playwright__browser_run_code_unsafe';
+// The server's code comes from src/browser/package-lock.json, which pins it and its two dependencies by sha512 (#626):
+// npm ci installs exactly that, once, into ~/.nuworq/browser/<the lockfile's hash>, and refuses anything else the
+// registry serves. Never npx, which runs whatever it fetches. No install scripts: it drives this machine's Chrome, so
+// it downloads no browser. A folder is renamed into place only once its install finished.
+const BROWSER_PKG = fileURLToPath(new URL('../src/browser/', import.meta.url));
+function browserMcp() {
+  const lock = readFileSync(join(BROWSER_PKG, 'package-lock.json'));
+  const dir = join(dirname(HUB_FILE), 'browser', createHash('sha256').update(lock).digest('hex').slice(0, 16));
+  const cli = join(dir, 'node_modules', '@playwright', 'mcp', 'cli.js');
+  if (existsSync(cli)) return cli;
+  const tmp = `${dir}.${randomBytes(3).toString('hex')}`;
+  mkdirSync(tmp, { recursive: true, mode: 0o700 });
+  for (const f of ['package.json', 'package-lock.json']) writeFileSync(join(tmp, f), readFileSync(join(BROWSER_PKG, f)));
+  try {
+    execFileSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: tmp, stdio: ['ignore', 'ignore', 'pipe'], timeout: 5 * 60_000 });
+    renameSync(tmp, dir);
+  } catch (e) {
+    rmSync(tmp, { recursive: true, force: true });
+    if (existsSync(cli)) return cli; // another worker installed it meanwhile
+    const why = redact(String(e.stderr || e.message).trim().split('\n').filter(Boolean).pop() ?? 'npm ci failed');
+    throw new HubError(`Couldn't install the browser tools (Playwright MCP, pinned in src/browser/package-lock.json): ${why}`, {
+      hint: 'It needs registry.npmjs.org once. Try again, or leave out --browser.',
+    });
+  }
+  return cli;
+}
 const browserServer = (name) => ({
-  command: 'npx',
-  args: ['-y', PLAYWRIGHT_MCP, '--headless', '--browser', 'chrome', '--isolated',
+  command: 'node',
+  args: [browserMcp(), '--headless', '--browser', 'chrome', '--isolated',
     '--allowed-origins', 'http://127.0.0.1:*;http://localhost:*', '--output-dir', join(tmpdir(), 'nuworq-browser', name)],
 });
 

@@ -20,7 +20,18 @@ export const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 
 // Tokens out of anything logged or sent to the hub: nuworq's (nwq_) and GitHub's (ghs_, ghp_, gho_, ghu_, github_pat_).
 const TOKENS = /\b(nwq|ghs|ghp|gho|ghu|ghr|github_pat)_[A-Za-z0-9_]{4,}/g;
-export const redact = (s) => String(s ?? '').replace(TOKENS, '$1_[redacted]');
+// Model keys too (#626): Anthropic's sk-ant-…, OpenAI's sk-… and sk-proj-…, llm-proxy's sk-proxy-…; a key in a header
+// line, whatever its shape; and the value of any secret in this runner's own environment (llm-proxy's owner token has
+// no shape of its own), a path aside.
+const KEYS = /\bsk-[A-Za-z0-9_-]{8,}/g;
+const HEADERS = /\b(authorization:\s*bearer|x-proxy-token:|x-api-key:)\s*[^\s"',]+/gi;
+const secrets = (env) => Object.entries(env).filter(([k, v]) => /KEY|TOKEN|SECRET|PASSWORD/.test(k) && String(v ?? '').length >= 12 && !/^[/~]/.test(v))
+  .map(([, v]) => String(v)).sort((a, b) => b.length - a.length);
+export const redact = (s, env = process.env) => {
+  let out = String(s ?? '');
+  for (const v of secrets(env)) out = out.split(v).join('[redacted]');
+  return out.replace(TOKENS, '$1_[redacted]').replace(KEYS, 'sk-[redacted]').replace(HEADERS, '$1 [redacted]');
+};
 
 // Text from the hub, safe to print: no control characters (terminal escapes among them); newlines and tabs stay.
 // eslint-disable-next-line no-control-regex
