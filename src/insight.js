@@ -305,9 +305,12 @@ function build(hub, p, t, { light = false } = {}) {
   const ref = (i) => `#${i.seq}`;
   const remotes = hub.remotesOf(p);
   const agents = hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id);
-  // Only what can still be acted on: never a question about work that landed or was dropped (#182).
-  const openQs = hub.q(`SELECT q.* FROM questions q LEFT JOIN items i ON i.id = q.item_id
-    WHERE q.project_id = ? AND q.status = 'open' AND (i.id IS NULL OR i.stage NOT IN ('done', 'dropped')) ORDER BY q.at`).all(p.id);
+  // Only what can still be acted on: never a question about work that landed or was dropped (#182), but steps a
+  // person still has to do for work that landed (#692) are theirs to do, blocking or not, as is an escalation of them.
+  const openQs = hub.q(`SELECT q.* FROM questions q LEFT JOIN items i ON i.id = q.item_id LEFT JOIN questions o ON o.id = q.escalates
+    WHERE q.project_id = ? AND q.status = 'open' AND (i.id IS NULL OR i.stage NOT IN ('done', 'dropped')
+      OR (i.stage = 'done' AND (q.steps != '[]' OR (o.status = 'open' AND o.steps != '[]')))) ORDER BY q.at`).all(p.id);
+  const landedSteps = (q) => byId.get(q.item_id)?.stage === 'done';
   const dismissed = new Set(hub.q('SELECT key FROM dismissals WHERE project_id = ?').all(p.id).map((d) => d.key));
   const snap = hub.snap(p); // dependencies, jobs and records from one load (#538)
   const unmet = (i) => hub.unmetDeps(i, snap);
@@ -335,7 +338,7 @@ function build(hub, p, t, { light = false } = {}) {
   const wait = p.reporter_wait * HOUR;
   // A question to an operator is an operator session's to answer (next mode "answer"), never yours.
   // A reply held from someone outside the project (#471) comes to you at once, to pass on or answer yourself.
-  for (const q of openQs.filter((q) => q.blocking && q.audience !== 'operator' && !(q.reporter && !q.held_reply && t - q.at < wait))) {
+  for (const q of openQs.filter((q) => (q.blocking || landedSteps(q)) && q.audience !== 'operator' && !(q.reporter && !q.held_reply && t - q.at < wait))) {
     const it = byId.get(q.item_id);
     // An operator's escalation carries the question it was asked, who asked it, and what the operator found.
     const orig = q.escalates ? hub.q('SELECT question, asked_by FROM questions WHERE id = ?').get(q.escalates) : null;
@@ -345,7 +348,7 @@ function build(hub, p, t, { light = false } = {}) {
       headline: q.question,
       sub: [it?.title, orig ? `${q.asked_by} (operator) escalated ${orig.asked_by}'s question ${dur(t - q.at)} ago` : `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${dur(t - q.at)} ago`,
         held ? `@${q.reporter} replied; they have no write access, so it waits for you to pass it on` : q.reporter && 'no reply yet',
-        it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
+        it?.stage === 'waiting' && 'work is parked until you answer', landedSteps(q) && `${ref(it)} landed; ${orig ? 'its' : 'these'} steps are still to do`].filter(Boolean).join(' · '),
       why: [held && `@${q.reporter} replied on GitHub (${q.held_url}):\n\n${q.held_reply.split('\n').map((l) => `> ${l}`).join('\n')}`,
         orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
@@ -555,7 +558,7 @@ function build(hub, p, t, { light = false } = {}) {
     });
   }
 
-  for (const q of openQs.filter((q) => !q.blocking)) {
+  for (const q of openQs.filter((q) => !q.blocking && !landedSteps(q))) {
     const it = byId.get(q.item_id);
     push({
       key: `q:${q.id}`, level: 'know', kind: 'assumption', at: q.at,
