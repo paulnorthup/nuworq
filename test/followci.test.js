@@ -111,15 +111,41 @@ describe("serve --follow goes by CI's test check", () => {
 });
 
 describe("checkOn reads the check's latest run from GitHub", () => {
-  // The hub's GitHub App, faked: mint gives a token, call answers check-runs. A run is GitHub Actions' unless it says.
+  // The hub's GitHub App, faked: mint gives a token, call answers check-runs and each run's workflow run (#648). A run
+  // is GitHub Actions', from CI's workflow on the asked commit, unless it says (workflow, on).
   const app = (runs, status = 200) => {
     const asked = [];
+    const all = runs.map((r, i) => ({ app: { slug: 'github-actions' }, check_suite: { id: i + 1 }, ...r }));
+    let sha = null;
     return {
       asked,
       mint: async (repo, permissions) => { asked.push({ repo, permissions }); return { token: 't' }; },
-      call: async (method, path, body, token) => { asked.push({ method, path, token }); return { status, json: { check_runs: runs.map((r) => ({ app: { slug: 'github-actions' }, ...r })) } }; },
+      call: async (method, path, body, token) => {
+        asked.push({ method, path, token });
+        const suite = path.match(/check_suite_id=(\d+)$/)?.[1];
+        if (suite) {
+          const c = all[Number(suite) - 1];
+          return { status: 200, json: { workflow_runs: [{ path: c.workflow ?? '.github/workflows/test.yml', head_sha: c.on ?? sha }] } };
+        }
+        sha = path.match(/commits\/(\w+)\//)?.[1];
+        return { status, json: { check_runs: all } };
+      },
     };
   };
+  test("a test check from a workflow on another branch doesn't count as CI's (#648)", async () => {
+    // A workflow added on a worker's branch posts a passing "test" on main's commit: its run is on its branch's commit.
+    const theirs = { status: 'completed', conclusion: 'success', workflow: '.github/workflows/sneaky.yml', on: 'feedbee1' };
+    assert.deepEqual(await checkOn(app([theirs]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true });
+    // Even named test.yml there, it ran on its own branch's commit.
+    assert.deepEqual(await checkOn(app([{ ...theirs, workflow: '.github/workflows/test.yml' }]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true });
+    // CI's own run on this commit decides, wherever it comes in the list.
+    assert.deepEqual(await checkOn(app([theirs, { status: 'completed', conclusion: 'failure' }]), 'github.com/acme/api', 'abc1234'), { state: 'failed', failed: "CI's test check: failure" });
+    // Without actions:read GitHub refuses the workflow lookup: no verdict here, so the hub runs the suite itself.
+    const denied = app([{ status: 'completed', conclusion: 'success' }]);
+    const call = denied.call;
+    denied.call = async (m, p, b, t) => (/check_suite_id/.test(p) ? { status: 403, json: {} } : call(m, p, b, t));
+    await assert.rejects(checkOn(denied, 'github.com/acme/api', 'abc1234'), /GitHub answered 403 about the workflow of test/);
+  });
   test("a test check from another app doesn't count as CI's (#621)", async () => {
     const other = { app: { slug: 'mallory-checks' }, status: 'completed', conclusion: 'success' };
     assert.deepEqual(await checkOn(app([other]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true }, 'as if CI had said nothing yet');
@@ -139,7 +165,7 @@ describe("checkOn reads the check's latest run from GitHub", () => {
   test('asks for the test check with a checks:read token for that repository', async () => {
     const a = app([{ status: 'completed', conclusion: 'success' }]);
     await checkOn(a, 'github.com/acme/api', 'abc1234');
-    assert.deepEqual(a.asked[0], { repo: 'github.com/acme/api', permissions: { checks: 'read', metadata: 'read' } });
+    assert.deepEqual(a.asked[0], { repo: 'github.com/acme/api', permissions: { checks: 'read', actions: 'read', metadata: 'read' } });
     assert.equal(a.asked[1].path, '/repos/acme/api/commits/abc1234/check-runs?check_name=test&filter=latest');
     assert.equal(a.asked[1].token, 't');
     await assert.rejects(checkOn(app([], 500), 'github.com/acme/api', 'abc1234'), /GitHub answered 500/);
@@ -154,7 +180,8 @@ describe("the supervisor asks GitHub through src/followhub.js", () => {
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
     // As GitHub sends them: each run names the app that posted it (#621).
     const gha = { app: { slug: 'github-actions' } };
-    const runs = { aaaaaaa1: [{ ...gha, status: 'completed', conclusion: 'success' }], bbbbbbb2: [{ ...gha, status: 'completed', conclusion: 'failure' }], ccccccc3: [] };
+    const runs = { aaaaaaa1: [{ ...gha, check_suite: { id: 1 }, status: 'completed', conclusion: 'success' }], bbbbbbb2: [{ ...gha, check_suite: { id: 2 }, status: 'completed', conclusion: 'failure' }], ccccccc3: [] };
+    const suites = { 1: 'aaaaaaa1', 2: 'bbbbbbb2' }; // CI's workflow run behind each (#648)
     const asked = [];
     const gh = createServer((req, res) => {
       asked.push(`${req.method} ${req.url}`);
@@ -163,6 +190,8 @@ describe("the supervisor asks GitHub through src/followhub.js", () => {
       if (req.url === '/app/installations/42/access_tokens') return json(201, { token: 'ghs_t', expires_at: new Date(Date.now() + 3600_000).toISOString() });
       const m = req.url.match(/^\/repos\/acme\/api\/commits\/(\w+)\/check-runs\?check_name=test&filter=latest$/);
       if (m) return json(200, { check_runs: runs[m[1]] ?? [] });
+      const w = req.url.match(/^\/repos\/acme\/api\/actions\/runs\?check_suite_id=(\d+)$/);
+      if (w) return json(200, { workflow_runs: [{ path: '.github/workflows/test.yml', head_sha: suites[w[1]] }] });
       json(404, { message: 'Not Found' });
     });
     await new Promise((r) => gh.listen(0, '127.0.0.1', r));

@@ -62,7 +62,7 @@ export function manifest(base, name) {
     // After installing (or changing which repositories it sees), GitHub sends the person back to the hub.
     setup_url: `${base}/#/`, setup_on_update: true,
     // members (an organization permission): whether the person installing on an organization is its admin (#478).
-    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' },
+    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' },
     default_events: reachable ? APP_EVENTS : [],
   };
 }
@@ -266,16 +266,29 @@ export function readInstallState(app, state, now = Date.now()) {
 // ({ missing: true }) before GitHub has heard of it, or null when it ended without a verdict (skipped, neutral,
 // stale, or cancelled: someone stopped it, nothing failed). Read with a checks:read token for the repository,
 // from the hub's own GitHub App. Only GitHub Actions' run counts (#621): any app with checks:write on the repository
-// can post a check named "test", and a passing one of theirs must never pass for CI's.
+// can post a check named "test", and a passing one of theirs must never pass for CI's. And only the run of the
+// repository's own CI workflow on this very commit (#648): any workflow posts as GitHub Actions, and one added on
+// another branch (a worker's, say) could post a passing "test" on main's commit; its workflow run is on its own
+// branch's commit, never this one. Telling them apart needs actions:read: without it the token isn't minted, and
+// the hub runs the suite itself, as it does whenever GitHub can't say.
 const FAILED = new Set(['failure', 'timed_out', 'action_required', 'startup_failure']);
 export const CI_APP = 'github-actions';
+export const CI_WORKFLOW = '.github/workflows/test.yml';
 export async function checkOn(app, repo, sha, name = 'test') {
   const [, owner, nm] = String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/) ?? [];
   if (!owner) return null;
-  const { token } = await app.mint(repo, { checks: 'read', metadata: 'read' });
+  const { token } = await app.mint(repo, { checks: 'read', actions: 'read', metadata: 'read' });
   const r = await app.call('GET', `/repos/${owner}/${nm}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`, undefined, token);
   if (r.status !== 200) throw new Error(`GitHub answered ${r.status} about ${name} on ${sha.slice(0, 7)}`);
-  const run = r.json.check_runs?.find((c) => c.app?.slug === CI_APP);
+  let run = null;
+  for (const c of (r.json.check_runs ?? []).filter((x) => x.app?.slug === CI_APP)) {
+    const suite = c.check_suite?.id;
+    if (!suite) continue;
+    const w = await app.call('GET', `/repos/${owner}/${nm}/actions/runs?check_suite_id=${suite}`, undefined, token);
+    if (w.status !== 200) throw new Error(`GitHub answered ${w.status} about the workflow of ${name} on ${sha.slice(0, 7)}`);
+    const wr = w.json.workflow_runs?.[0];
+    if (wr?.path === CI_WORKFLOW && wr.head_sha === sha) { run = c; break; }
+  }
   if (!run) return { state: 'pending', missing: true };
   if (run.status !== 'completed') return { state: 'pending' };
   if (run.conclusion === 'success') return { state: 'passed' };

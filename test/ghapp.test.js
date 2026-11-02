@@ -280,7 +280,7 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       const action = html.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&');
       assert.ok(action.startsWith(`${stub}/settings/apps/new?state=`), action);
       const m = JSON.parse(html.match(/name="manifest" value="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
-      assert.deepEqual(m.default_permissions, { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' });
+      assert.deepEqual(m.default_permissions, { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' });
       assert.equal(m.redirect_url, 'http://hub.test/api/github/app/callback');
       assert.equal(m.hook_attributes.url, 'http://hub.test/api/hooks/github-app');
       const state = new URL(action).searchParams.get('state');
