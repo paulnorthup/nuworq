@@ -188,6 +188,12 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.notEqual(r.status, 200);
     assert.match(r.json.error, /can't review your own work/);
     assert.equal(hub.item(hub.project('api'), mine).stage, 'verifying', 'still waiting for someone else');
+    // Nor does next offer it to that name (#660): it offers other work, so the agent isn't stuck on a refusal.
+    hub.humanOp('api', 'create', { title: 'Work for anyone', acceptance: 'x' });
+    const offered = await op('next', { token: tok.box, agent: 'box-reviewer', body: { claim: false } });
+    assert.equal(offered.status, 200);
+    assert.ok(offered.json.item, 'it gets a job');
+    assert.notEqual(offered.json.item, mine, "next doesn't offer the review it would refuse");
     // Another token reviews it.
     assert.equal((await review(tok.other, 'other-reviewer', mine)).status, 200);
     // A runner's workers share its token by design: one may review another's work.
