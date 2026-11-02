@@ -2,7 +2,8 @@
 // a third party. These shapes are specific enough that git SHAs, UUIDs and hashes never match.
 export const SHAPES = [
   ['an AWS access key', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
-  ['a GitHub token', /\bgh[pousr]_[A-Za-z0-9]{36,}\b/],
+  // Installation tokens are JWTs since October 2026: ghs_ and three base64url segments, so - _ and dots.
+  ['a GitHub token', /\bgh[pousr]_(?:[A-Za-z0-9]{36,}\b|[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})/],
   ['a GitHub token', /\bgithub_pat_[A-Za-z0-9_]{22,255}\b/],
   ['an Anthropic API key', /\bsk-ant-[A-Za-z0-9_-]{20,}/],
   // Project/service keys, or the legacy 48-character form (no dashes, so kebab-case prose never matches).
