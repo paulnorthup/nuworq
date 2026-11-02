@@ -108,6 +108,29 @@ describe('a role typed before its person signed in', () => {
     assert.deepEqual([r.person.handle, r.person.role, r.held, r.joined], ['cy', 'steward', undefined, false]);
   });
 
+  // #612: whoever opened the link was signed in as this row without proving its email. The verified sign-in that
+  // claims the row ends what they hold first, so their session never carries the email it now vouches for.
+  test("a verified sign-in never vouches for a session it didn't create", () => {
+    const a = auth();
+    const inv = a.createInvite('owner', { email: 'cy@acme.test', by: '@own' });
+    const opened = a.acceptInvite(inv.token, 'cy'); // anyone with the link
+    const machine = a.createToken('cy@laptop', 'agent', { mintedBy: 'cy' }); // and a machine they connected
+    assert.ok(a.verifySession(opened.sid), 'the link-opener is signed in');
+    assert.ok(a.verifyToken(machine));
+    const r = a.signInByEmail('cy@acme.test', 'github'); // the email's owner, verified
+    assert.equal(r.person.handle, 'cy');
+    assert.equal(a.verifySession(opened.sid), null, "the link-opener's session is over");
+    assert.equal(a.verifyToken(machine), null, 'so is the token for the machine they connected');
+    assert.ok(a.person('cy').verified_at, 'the row is verified now, for its owner alone');
+
+    // The same when a second, open invite to the email meets the row the first link made.
+    const b = auth();
+    const first = b.acceptInvite(b.createInvite('member', { email: 'dee@acme.test' }).token, 'dee');
+    b.createInvite('steward', { email: 'dee@acme.test' });
+    assert.equal(b.signInByEmail('dee@acme.test', 'google').person.role, 'steward');
+    assert.equal(b.verifySession(first.sid), null);
+  });
+
   test('a host-vouched person (person add on the command line) signs in with their role', () => {
     const a = auth();
     a.addPerson('dee', 'steward', { email: 'dee@acme.test', verified: true });
