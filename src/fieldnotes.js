@@ -17,7 +17,7 @@
 // otherwise the person decides with one tap. A review opens when those inputs change (at most hourly) and weekly.
 // Agents still get every note's full text.
 import { createHash } from 'node:crypto';
-import { DAY, HUMAN, SYSTEM, UserError } from './core.js';
+import { DAY, HUMAN, NO_ITEM_HINT, SYSTEM, UserError } from './core.js';
 
 export const NOTES_SHOWN = 10;
 export const ALWAYS_MAX = 3;
@@ -162,7 +162,7 @@ export function distill(hub, p, agent, review, args) {
     const m = String(s ?? '').trim().match(/^(?:(decision|steer|note) (\d+)|#(\d+))$/);
     if (!m) throw new UserError(`Not a source: "${s}"`, { hint: 'Name it as "decision 12", "steer 40", "note 7" or "#468".' });
     if (m[3]) {
-      if (!hub.q('SELECT 1 FROM items WHERE project_id = ? AND seq = ?').get(p.id, Number(m[3]))) throw new UserError(`No item #${m[3]}`, { status: 404 });
+      if (!hub.q('SELECT 1 FROM items WHERE project_id = ? AND seq = ?').get(p.id, Number(m[3]))) throw new UserError(`No item #${m[3]}`, { status: 404, hint: NO_ITEM_HINT });
       return `#${m[3]}`;
     }
     const n = notes.get(Number(m[2]));
