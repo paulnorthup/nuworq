@@ -10,7 +10,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
-import { appFromEnv, appFromFile, GitHubApp, prClient } from '../src/ghapp.js';
+import { appFromEnv, appFromFile, GitHubApp, prClient, limitUntil } from '../src/ghapp.js';
 import { receive } from '../src/github.js';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'nuworq.js');
@@ -511,4 +511,17 @@ describe('the hub lands pull requests GitHub would leave waiting', () => {
     assert.equal(w.events('pr_blocked').length, 1, 'said once');
     assert.deepEqual(w.merges(), []);
   });
+});
+
+// GitHub's rate limit answers (#739): when to call an installation again.
+test('a rate limit is read from retry-after, or from x-ratelimit-reset when none are left; anything else is no limit', () => {
+  const now = 1_000_000_000_000;
+  assert.equal(limitUntil(429, { 'retry-after': '120' }, now), now + 120_000);
+  assert.equal(limitUntil(403, new Headers({ 'retry-after': '30' }), now), now + 30_000, 'a fetch Headers works too');
+  assert.equal(limitUntil(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 600) }, now), now + 600_000);
+  assert.equal(limitUntil(403, { 'x-ratelimit-remaining': '0' }, now), now + 60_000, 'no reset: a minute');
+  assert.equal(limitUntil(429, { 'retry-after': '86400' }, now), now + 3_600_000, 'never past an hour');
+  assert.equal(limitUntil(403, { 'x-ratelimit-remaining': '12' }, now), 0, 'a 403 with calls left is a refusal, not a limit');
+  assert.equal(limitUntil(403, {}, now), 0);
+  assert.equal(limitUntil(200, { 'x-ratelimit-remaining': '0' }, now), 0, 'the last call still succeeded');
 });

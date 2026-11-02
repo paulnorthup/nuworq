@@ -99,19 +99,24 @@ export function installedRepos(hub, p, body) {
   return [...new Set(listed)].filter((r) => hub.remotesOf(p).includes(r));
 }
 
-// GitHub's REST API with an installation token for one repository.
+// GitHub's REST API with an installation token for one repository, through the app, so a rate limit GitHub
+// answers holds every call for that installation until it resets (#739).
 async function asRepo(app, repo) {
   const { token } = await app.mint(repo, ISSUE_PERMISSIONS);
   const [, owner, name] = repo.match(/^github\.com\/([^/]+)\/([^/]+)$/);
-  return async (method, path, body) => {
-    const r = await fetch(`${app.api}/repos/${owner}/${name}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'nuworq', ...(body ? { 'content-type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(10_000),
-    });
-    return { status: r.status, json: await r.json().catch(() => null) };
-  };
+  return (method, path, body) => app.call(method, `/repos/${owner}/${name}${path}`, body, token);
+}
+
+// How the hub retries GitHub for one issue or reporter question that failed (#739): a minute after the first
+// failure, then twice as long each time, at most 6 hours apart. After a day of failures it stops and says so once.
+export const RETRY_FIRST = 60_000, RETRY_MAX = 6 * 3_600_000, GIVE_UP = 24 * 3_600_000;
+const NEVER = Number.MAX_SAFE_INTEGER;
+const retryAt = (tries, now) => now + Math.min(RETRY_FIRST * 2 ** (tries - 1), RETRY_MAX);
+// The next failure of a row that has failed tries times since since (0: it wasn't failing): { tries, since, next }.
+// The last try comes a day after the first failure; failing then, it isn't tried again (next: NEVER).
+function failing(tries, since, now) {
+  since ||= now;
+  return { tries: tries + 1, since, next: now - since >= GIVE_UP ? NEVER : Math.min(retryAt(tries + 1, now), since + GIVE_UP) };
 }
 
 // Every open issue of these repositories comes in (pull requests skipped), then the comments go out.
@@ -172,8 +177,9 @@ export const itemLink = (hub, p) => (item) => (hub.publicUrl ? `${hub.publicUrl.
 
 // Issues whose item is done get closed on GitHub, with one comment: the item's link and the commit on main.
 // Only an issue that is still open: one GitHub closed for a "Fixes #N" merge is just marked closed here. A
-// failure goes on the item's record once, and the next run (the server's sweep) tries again; the comment
-// is recorded as soon as GitHub has it, so it is never posted twice.
+// failure goes on the item's record once, and a later run (the server's sweep) tries again, less and less often
+// (#739), until a day of failures; the comment is recorded as soon as GitHub has it, so it is never posted twice.
+// While GitHub's rate limit holds the installation, its issues wait without counting as failures.
 export async function closeLanded(hub, p, app, { link = itemLink(hub, p) } = {}) {
   // One run per project at a time: the sweep and a webhook may both start one.
   hub._closingIssues ??= new Set();
@@ -189,10 +195,10 @@ export async function closeLanded(hub, p, app, { link = itemLink(hub, p) } = {})
 async function closeEach(hub, p, app, link) {
   const t = hub.now();
   const rows = hub.q(`SELECT s.*, i.stage_since FROM issues s JOIN items i ON i.id = s.item_id
-    WHERE s.project_id = ? AND s.state = 'open' AND i.stage = 'done' ORDER BY s.repo, s.number`).all(p.id)
+    WHERE s.project_id = ? AND s.state = 'open' AND i.stage = 'done' AND s.close_next <= ? ORDER BY s.repo, s.number`).all(p.id, t)
     .filter((r) => t - r.stage_since >= PR_GRACE || !hub.q(`SELECT 1 FROM prs WHERE item_id = ? AND state = 'merged'`).get(r.item_id));
   const repos = new Map(); // repo → its API, one token for all its issues
-  let closed = 0;
+  let closed = 0, tried = 0;
   for (const row of rows) {
     const where = [p.id, row.repo, row.number];
     const item = hub.itemById(row.item_id);
@@ -217,17 +223,31 @@ async function closeEach(hub, p, app, link) {
         hub.event(p, { item, actor: ACTOR, type: 'issue', headline: `Closed ${row.url || `${row.repo}#${row.number}`}: #${item.seq} landed`, data: { url: row.url, state: 'closed' } });
       }
     } catch (e) {
+      if (e.rateLimited) continue; // GitHub said to wait: not this issue's failure
       error = e.message;
     }
-    hub.q('UPDATE issues SET state = ?, close_error = ?, updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?').run(error ? 'open' : 'closed', error, hub.now(), ...where);
-    if (error && !row.close_error) {
+    tried++;
+    const name = row.url || `${row.repo}#${row.number}`;
+    if (!error) {
+      hub.q('UPDATE issues SET state = ?, close_error = ?, close_tries = 0, close_next = 0, close_since = 0, updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?').run('closed', '', hub.now(), ...where);
+      continue;
+    }
+    const f = failing(row.close_tries, row.close_since, hub.now());
+    hub.q('UPDATE issues SET close_error = ?, close_tries = ?, close_next = ?, close_since = ?, updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?').run(error, f.tries, f.next, f.since, hub.now(), ...where);
+    if (!row.close_error) {
       hub.event(p, {
-        item, actor: ACTOR, type: 'issue_close_failed', headline: `The hub couldn't close ${row.url || `${row.repo}#${row.number}`} after #${item.seq} landed: ${clip(error, 120)}`,
-        summary: 'It tries again on its next sweep. The work is done either way.', data: { url: row.url, error },
+        item, actor: ACTOR, type: 'issue_close_failed', headline: `The hub couldn't close ${name} after #${item.seq} landed: ${clip(error, 120)}`,
+        summary: 'It tries again in a minute, then less and less often, for a day. The work is done either way.', data: { url: row.url, error },
+      });
+    }
+    if (f.next === NEVER) {
+      hub.event(p, {
+        item, actor: ACTOR, type: 'issue_close_failed', headline: `The hub stopped trying to close ${name}: it failed for a day (${clip(error, 100)})`,
+        summary: `Close it on GitHub by hand if it should be closed. #${item.seq}'s work is done either way.`, data: { url: row.url, error, gave_up: true },
       });
     }
   }
-  if (rows.length) hub.changed(p);
+  if (tried) hub.changed(p);
   return { closed };
 }
 
@@ -380,14 +400,31 @@ export function reporterIssue(hub, item) {
 }
 
 // Reporter questions not on GitHub yet go out, one comment each. Taken first (-1), as commentIssues does, so
-// two runs never post one twice; given back (0) if GitHub says no, and the sweep tries again.
+// two runs never post one twice; given back (0) if GitHub says no, and a later sweep tries again, backing off as
+// closeLanded does (#739). After a day of failures the hub stops and says so on the item; the question stays open
+// for a person, as one the reporter never answered does.
 export async function askReporters(hub, p, app, { link = itemLink(hub, p) } = {}) {
-  const rows = hub.q(`SELECT * FROM questions WHERE project_id = ? AND reporter != '' AND issue_comment = 0 AND status = 'open' ORDER BY id`).all(p.id);
+  const rows = hub.q(`SELECT * FROM questions WHERE project_id = ? AND reporter != '' AND issue_comment = 0 AND status = 'open' AND issue_next <= ? ORDER BY id`).all(p.id, hub.now());
   let posted = 0;
   const failed = [];
+  // A question GitHub didn't take: tried again later, less and less often.
+  const backOff = (q, why) => {
+    const f = failing(q.issue_tries, q.issue_since, hub.now());
+    hub.q('UPDATE questions SET issue_comment = 0, issue_tries = ?, issue_next = ?, issue_since = ? WHERE id = ?').run(f.tries, f.next, f.since, q.id);
+    failed.push(`${ref({ repo: q.issue_repo, number: q.issue_number })}: ${why}`);
+    if (f.next !== NEVER) return;
+    hub.event(p, {
+      item: hub.itemById(q.item_id), actor: ACTOR, type: 'issue', headline: `The hub stopped trying to put question ${q.id} on ${ref({ repo: q.issue_repo, number: q.issue_number })}: GitHub refused it for a day (${clip(why, 100)})`,
+      summary: 'The question stays open: answer it here, or ask the reporter on GitHub yourself.', data: { question: q.id, error: String(why) },
+    });
+  };
   for (const repo of [...new Set(rows.map((r) => r.issue_repo))]) {
     let gh;
-    try { gh = await asRepo(app, repo); } catch (e) { failed.push(`${repo}: ${e.message}`); continue; }
+    try { gh = await asRepo(app, repo); } catch (e) {
+      if (e.rateLimited) failed.push(`${repo}: ${e.message}`);
+      else for (const q of rows.filter((r) => r.issue_repo === repo)) backOff(q, e.message);
+      continue;
+    }
     for (const q of rows.filter((r) => r.issue_repo === repo)) {
       if (hub.q('UPDATE questions SET issue_comment = -1 WHERE id = ? AND issue_comment = 0').run(q.id).changes !== 1) continue;
       const item = hub.itemById(q.item_id);
@@ -403,13 +440,12 @@ export async function askReporters(hub, p, app, { link = itemLink(hub, p) } = {}
             'Reply here with a comment; your answer goes straight back to the work.',
           ].filter(Boolean).join('\n\n'),
         });
-      } catch (e) { r = { status: e.message }; }
-      if (r.status !== 201) {
-        hub.q('UPDATE questions SET issue_comment = 0 WHERE id = ?').run(q.id);
-        failed.push(`${ref({ repo, number: q.issue_number })}: ${r.status}`);
-        continue;
+      } catch (e) {
+        if (e.rateLimited) { hub.q('UPDATE questions SET issue_comment = 0 WHERE id = ?').run(q.id); continue; } // not its failure
+        r = { status: e.message };
       }
-      hub.q('UPDATE questions SET issue_comment = ? WHERE id = ?').run(r.json?.id || 1, q.id);
+      if (r.status !== 201) { backOff(q, r.status); continue; }
+      hub.q('UPDATE questions SET issue_comment = ?, issue_tries = 0, issue_next = 0, issue_since = 0 WHERE id = ?').run(r.json?.id || 1, q.id);
       posted++;
     }
   }
