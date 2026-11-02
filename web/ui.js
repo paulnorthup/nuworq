@@ -3,6 +3,7 @@ import { markNew, keepNew } from './new.js';
 import { isTextBox, saveFocus, restoreFocus } from './focus.js';
 import { keepScroll } from './scroll.js';
 import { morph } from './morph.js';
+import { untimed, tick } from './ago.js';
 import { liveGate } from './pace.js';
 import { loadProject } from './switching.js';
 import { dataCache } from './data.js';
@@ -155,7 +156,10 @@ export async function refresh({ force = false, fresh = true, list = true } = {})
 // A focused box counts as typing even while empty (#374): live updates wait until focus leaves it.
 export const typing = () => isTextBox(document.activeElement);
 // A redraw changes only what changed, in place (#392); the "new" tags markNew adds stay for it to look after.
-const paint = (el, html) => morph(el, html, keepNew);
+const paint = (el, html, memory = null) => morph(el, html, { ...keepNew, memory, alike: untimed });
+// The page's sections as last painted (#682): one the same as before but for its ticking times isn't parsed or
+// compared again, and the tick says those times afresh.
+const mainSections = new Map();
 // The regions (#602): each drawn from its pure view (web/views/), and only when a change marked it (web/store.js).
 export const REGIONS = {
   rail: () => {
@@ -164,7 +168,7 @@ export const REGIONS = {
     el.classList.toggle('menu-open', !!S.railMenu); // on a phone the rail's actions sit behind Menu
     return el;
   },
-  main: () => { const el = $('#main'); paint(el, mainHtml()); return el; },
+  main: () => { const el = $('#main'); paint(el, mainHtml(), mainSections); tick(el); return el; },
   drawer: () => {
     const el = $('#drawer'), html = drawerHtml(), show = html != null;
     if (el.hidden === show) el.hidden = $('#scrim').hidden = !show; // untouched when it stays as it is (#392)

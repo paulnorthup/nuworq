@@ -116,7 +116,8 @@ function projectBody(v, empty) {
     worth: z() >= 1 ? worthKnowing(v) : '', flow: flow(v), next: z() >= 1 ? upNext(v) : '', finished: z() >= 1 ? finished(v) : '',
     steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', runners: z() >= 1 ? runners(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
   };
-  const order = (keys) => keys.map((k) => s[k]).join('');
+  // Each marked as a section (web/morph.js), so a live update redraws only the sections whose markup changed (#682).
+  const order = (keys) => keys.map((k) => (s[k] ? `<!--sec:${k}-->${s[k]}<!--/sec:${k}-->` : '')).join('');
   if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'groups', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']), `p:${S.slug}`);
   return order(['pulse', 'composer', 'empty', 'needs', 'groups', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
 }
