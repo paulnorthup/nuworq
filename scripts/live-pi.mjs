@@ -46,7 +46,7 @@ try {
 
   if (VIA === 'run') {
     await H('settings', { runner: true });
-    const out = execFileSync('node', [BIN, 'run', '--url', U, '--agent', 'pi', '--model', `ollama/${MODEL}`, '--workers', '1', '--max-runs', '1', '--max-minutes', MINUTES, '--poll', '5', '--folder', T],
+    const out = execFileSync('node', [BIN, 'run', '--url', U, '--agent', 'pi', '--can-read-keys', '--model', `ollama/${MODEL}`, '--workers', '1', '--max-runs', '1', '--max-minutes', MINUTES, '--poll', '5', '--folder', T],
       { env: { ...process.env, HOME: T }, encoding: 'utf8' });
     console.log(out);
     agent = out.match(/▶ (\S+)/)?.[1] ?? agent;

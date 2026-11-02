@@ -18,7 +18,7 @@ const ROOT = resolve(dirname(BIN), '..');
 // How agents should invoke this CLI: the bare name only if it's really on PATH.
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
-const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect', 'smoke']);
+const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect', 'smoke', 'can-read-keys']);
 const MULTI = new Set(['option', 'evidence']);
 
 function parse(argv) {
@@ -514,6 +514,14 @@ function agentOf(flags) {
   if (agent === 'pi' && (typeof flags.model !== 'string' || !flags.model.includes('/'))) {
     throw new HubError('pi needs a model: --model <provider>/<model>', { hint: "e.g. --model ollama/qwen3.8:27b-mtp-q4_K_M (Ollama is configured for you), or a pi built-in provider such as anthropic/claude-sonnet-5-5 with its key in the environment (ANTHROPIC_API_KEY): pi workers don't get your ~/.pi/agent sign-ins. See docs/OPEN-WEIGHT.md." });
   }
+  // Only Claude Code's sandbox keeps a worker's shell from the machine's keys (#615, DENY_READ in src/sandbox.js).
+  // A hostile hub's task text could have any other harness read them and report them back, so starting one takes
+  // the person saying they know.
+  if (agent !== 'claude' && !flags['can-read-keys']) {
+    throw new HubError(`${agent} workers can read this machine's keys, so they start only with --can-read-keys`, {
+      hint: `${readsKeys(agent)} To start it anyway: add --can-read-keys. To keep the keys out of reach: --agent claude.`,
+    });
+  }
   // Codex would take the server the same way, but its sandbox keeps it from serving the app to look at.
   if (flags.browser && agent !== 'claude') {
     throw new HubError('--browser is for Claude workers only', { hint: 'Use --agent claude --browser, or leave out --browser.' });
@@ -539,6 +547,9 @@ function agentOf(flags) {
   }
   return agent;
 }
+
+// What a harness other than Claude Code can read, in one line (#615).
+const readsKeys = (agent) => `A ${agent} worker's shell can read this machine's keys (~/.ssh, ~/.aws, ~/.nuworq, ~/.config/gh and the rest Claude workers can't): ${agent === 'codex' ? "Codex's workspace-write sandbox limits writes and network, not reads" : `${agent} has no sandbox`}.`;
 
 // A LAN or tailnet host: loopback, private and CGNAT (Tailscale 100.64/10) IPs, single-label names, and
 // local or tailnet suffixes (.local, .lan, .internal, .home.arpa, .ts.net). Anything else is a public hostname.
@@ -618,11 +629,12 @@ async function worker(flags) {
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
+  if (agent !== 'claude') console.log(amber(readsKeys(agent)));
   if (!flags.run) {
     console.log(`\n${cmd}\n`);
     console.log(dim({
       claude: `Headless agents can't ask permission: they may only use the tools in --allowedTools (the project's own test and build commands; change with --allow). Their shell runs in Claude Code's sandbox: it writes only in the worktree and temp, and reaches only the hub, GitHub, the project's registries and the hosts its settings add. ${origin ? 'Pushes go through the hub, which takes nuworq/ branches only; the hub lands work on main.' : 'Never git push.'}`,
-      codex: `Codex runs in its workspace-write sandbox; the nuworq MCP server runs outside it, so it can reach the hub.`,
+      codex: `Codex runs in its workspace-write sandbox (it limits writes and network, not reads); the nuworq MCP server runs outside it, so it can reach the hub.`,
       opencode: `opencode has no sandbox, so it runs only on projects without a remote, and never git pushes (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
       pi: `pi has no sandbox, so it runs only on projects without a remote, and never git pushes (nuworq's pi extension blocks it). Its config is a folder of its own (${piDir}): none of your pi extensions, skills, MCP servers or sign-ins follow it in. Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
     }[agent] + '\nAdd --run to start it now.'));
@@ -854,7 +866,7 @@ function workerSetup(target, agent, flags, s, token = null) {
   // opencode and pi have no sandbox to keep their shell in (#472): they run only where there is nothing to push to.
   if ((agent === 'opencode' || agent === 'pi') && origin) {
     throw new HubError(`${agent} workers aren't started for ${target.name}: it has a remote, and ${agent} has no sandbox`, {
-      hint: `${agent}'s shell could read this machine's keys and reach any host, so it works only on projects without an origin. Use --agent claude (its shell runs in Claude Code's sandbox) or --agent codex (workspace-write).`,
+      hint: `${agent}'s shell could read this machine's keys and reach any host, so it works only on projects without an origin. Use --agent claude (its shell runs in Claude Code's sandbox) or --agent codex --can-read-keys (workspace-write: limited writes and network, but it can read the keys).`,
     });
   }
   const worktree = isRepo && !flags.here ? join(`${home}.worktrees`, name) : null;
@@ -1082,6 +1094,7 @@ async function runCmd(flags) {
   if (flags.install || flags.uninstall) return runService(flags);
   const s = resolveSettings(flags);
   const agent = agentOf(flags);
+  if (agent !== 'claude') console.log(amber(readsKeys(agent)));
   const client = createClient(flags);
   await staffing(client, await hubProjects(client), flags);
   const token = await agentToken(client, flags);
@@ -1474,9 +1487,10 @@ ${bold('Shell-only agents')}  ${dim('(add to AGENTS.md or CLAUDE.md)')}
 
 ${bold('Headless worker')}  ${dim('(asks the hub where work is waiting; own worktree, a branch per item; --run starts it)')}
   node ${q} worker --agent claude --run
-  node ${q} worker --agent codex --run
-  node ${q} worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run
-  node ${q} worker --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --run`);
+  node ${q} worker --agent codex --can-read-keys --run
+  node ${q} worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --can-read-keys --run
+  node ${q} worker --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --can-read-keys --run
+  ${dim("Only Claude workers' shells are kept from this machine's keys; --can-read-keys says you know the others can read them.")}`);
 }
 
 // The hub's own files: workspaces, the --follow worktrees, and mirrors of repositories it has no checkout of.

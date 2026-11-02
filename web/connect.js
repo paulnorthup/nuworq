@@ -55,7 +55,7 @@ export function connectCommands(info, page = null, slug = 'my-project') {
     mcp: 'command: nuworq\nargs: ["mcp"]',
     // pi (1.4+, #495): its own CLI registers the server; its workers take a <provider>/<model>.
     pi: 'pi mcp add nuworq --exposure direct -- nuworq mcp',
-    piWorker: 'nuworq worker --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --run',
+    piWorker: 'nuworq worker --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --can-read-keys --run',
     guide: `nuworq guide --project ${slug}`,
   };
 }
