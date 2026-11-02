@@ -758,7 +758,7 @@ main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--
 .notify-add input { flex: 1; min-width: 0; }
 .copyable { position: relative; }
 .copyable pre { padding-right: var(--sp-15); } /* the text scrolls clear of the Copy button */
-.copyable button { position: absolute; top: 6px; right: 6px; font-size: var(--fs-1); padding: var(--sp-h) var(--sp-2); border-radius: var(--r-s); border: var(--rule) solid var(--line-strong); background: var(--panel); }
+.copyable button:not(.new-tag) { position: absolute; top: 6px; right: 6px; font-size: var(--fs-1); padding: var(--sp-h) var(--sp-2); border-radius: var(--r-s); border: var(--rule) solid var(--line-strong); background: var(--panel); }
 .cmds { display: flex; flex-direction: column; gap: var(--sp-h); min-width: 0; }
 .cmd-join { margin: 0; font-size: var(--fs-2); color: var(--muted); } /* "then" between two commands, each with its own Copy (#379) */
 #toast, .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: var(--sp-2) var(--sp-4); border-radius: var(--r-m); font-size: var(--fs-3); z-index: 40; box-shadow: var(--e-2); max-width: 90vw; }
@@ -792,6 +792,8 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   #rail a.rail-head { gap: var(--sp-2); }
   #rail a.rail-head .is-new::after { right: 50%; transform: translateX(50%); bottom: 100%; } /* clear of the label and its badge (#289) */
   #rail a.rail-head + .new-tag { right: auto; left: anchor(center, -9999px); translate: -50%; bottom: anchor(top, 9999px); }
+  /* At the top of the screen there's no room above: the pill straddles the Search box's edge, clear of its words (#721). */
+  #rail .rail-search + .new-tag { bottom: calc(anchor(top, 9999px) - 8px); }
   .rail-item { width: auto; }
   /* The rail's actions behind Menu (#114): a thumb-sized button across from the brand, the projects on the row below,
      and the list full width under them. */
