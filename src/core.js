@@ -2889,6 +2889,13 @@ const QUIET_OPS = ['look', 'next', 'progress', 'checkin'];
 // Seen again after this long, an agent is back: the page shows it arriving.
 const AWAY_MS = 30 * MIN;
 
+// Whether an agent may turn a field note off (retire, or learn with replaces; #611): never one a person pinned to every
+// agent (always), which stays until a person unpins or retires it, and only where agents retire notes at all.
+function notRetirable(p, n) {
+  if (n.always) throw new UserError(`A person pinned field note ${n.id}, so it stays until a person unpins or retires it`, { status: 403, hint: 'Leave it, or ask the person one question saying why it should go; they unpin or retire it on the project page.' });
+  if (p.autonomy !== 'full') throw new UserError('In this project a person retires field notes', { status: 403, hint: 'Ask the person one question listing the notes to retire or merge and why; they retire them on the project page.' });
+}
+
 const AGENT_OPS = {
   checkin(p, agent, args, presence) {
     if (presence.fresh || presence.gap > AWAY_MS || presence.wasSignedOff) {
@@ -3312,6 +3319,9 @@ const AGENT_OPS = {
     let replaced = null;
     if (args.replaces) {
       replaced = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(Number(args.replaces), p.id);
+      // Replacing turns the old note off, so it answers to retire's rules (#611): never a note a person pinned, and
+      // in a project below "Run with it", never at all.
+      if (replaced) notRetirable(p, replaced);
       if (replaced) this.q('UPDATE notes SET active = 0 WHERE id = ?').run(replaced.id);
     }
     const r = this.q(`INSERT INTO notes (project_id, item_id, kind, author, body, at) VALUES (?, ?, 'learning', ?, ?, ?)`)
@@ -3333,11 +3343,16 @@ const AGENT_OPS = {
     if (!reason) throw new UserError('reason is required', { hint: 'Say where the lesson lives now (a file, the guide section, a test), or for a merge which note carries it.' });
     const review = this.q(`SELECT * FROM items WHERE project_id = ? AND notes_review = 1 AND holder = ? AND stage = 'active'`).get(p.id, agent);
     if (!review) throw new UserError('Only a field-notes review retires notes', { status: 403, hint: 'The hub reviews notes when their item lands and every week. To correct one now, learn a better note with replaces set to its id.' });
-    if (p.autonomy !== 'full') throw new UserError('In this project a person retires field notes', { status: 403, hint: 'Ask the person one question listing the notes to retire or merge and why; they retire them on the project page.' });
     const note = (id) => this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(id, p.id);
     const into = args.into != null ? note(Number(args.into)) : null;
     if (args.into != null && (!into || !into.active || ids.includes(into.id))) throw new UserError(`No active field note ${args.into} to merge into`, { status: 404, hint: 'learn the combined note first, then pass its id as into.' });
     const rows = ids.map((id) => note(id) ?? (() => { throw new UserError(`No field note ${id}`, { status: 404 }); })());
+    // Only the notes this review lists (#611): it was opened for those, and a person sees them in its summary. A merge
+    // may take a duplicate from elsewhere, since its lesson lives on in the note it merges into.
+    const listed = new Set(json(review.tidy, []));
+    const unlisted = into ? [] : rows.filter((n) => !listed.has(`note:${n.id}`)).map((n) => n.id);
+    if (unlisted.length) throw new UserError(`#${review.seq} doesn't list field note${unlisted.length === 1 ? '' : 's'} ${unlisted.join(', ')}`, { status: 403, hint: `Retire only the notes #${review.seq}'s summary lists; a duplicate from elsewhere goes by merging it (into). Another note can wait for its own review.` });
+    for (const n of rows) notRetirable(p, n);
     const done = [];
     for (const n of rows.filter((x) => x.active)) {
       this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
