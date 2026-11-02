@@ -98,7 +98,7 @@ const SECURITY_HEADERS = {
 };
 // A page of the Connect GitHub flow that the hub serves itself: the sign-in card's look (style.css,
 // login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
-const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1">
+const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><script src="${base}/theme.js"></script><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>nuworq · ${title}</title><link rel="icon" href="${FAVICON}"><link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/login.css"></head>
 <body><main class="login"><div class="login-card flow-card"><div class="brand">${LOGO}<span>nuworq</span></div>
 <h1>${title}</h1>${body}</div></main></body></html>`;
@@ -710,7 +710,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', admin: true });
     if (req.method === 'GET' && path === '/api/oauth') return send(200, { providers: sso.list().map((p) => ({ ...p, start: `/auth/${p.name}/start` })) });
     const page = path === '/' ? '/admin.html' : path;
-    if (req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/instant.js', '/style.css'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
+    if (req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/instant.js', '/style.css', '/theme.js'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
     if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'GET /api/early-access/sources', 'POST /api/early-access/decide', 'GET /api/feedback/list', 'POST /api/feedback/decide', 'POST /api/feedback/autonomy', 'GET /api/workspaces', 'POST /api/workspaces/plan', 'GET /api/github/app/wiring'].includes(`${req.method} ${path}`)) {
       return deny(404, 'the admin host serves only the admin dashboard', `Workspaces live at ${publicUrl || 'the hub\'s own address'}.`);
     }
@@ -835,7 +835,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
     const page = path === '/' ? '/join.html' : path;
     if (page === '/guide' && req.method === 'GET') return send(200, guideHtml(''), TYPES['.html']);
-    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css', '/login.css', '/guide.css', '/guide.js', '/copy.js'].includes(page) && req.method === 'GET') {
+    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css', '/login.css', '/guide.css', '/guide.js', '/copy.js', '/theme.js'].includes(page) && req.method === 'GET') {
       return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
     }
     const sid = jarOf(req).get(HUB_COOKIE);
