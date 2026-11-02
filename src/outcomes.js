@@ -222,18 +222,20 @@ export function jobsTaken(hub, p, from, to = hub.now()) {
 
 // ── Calibration (#348): does difficulty predict what an item costs and how many attempts it takes, better than size? ──
 
-// Over landed items (outcomes().items): per difficulty and per size, how many, the median cost and the mean attempts;
-// and for each, the spread: the dearest group's median cost over the cheapest's (groups of MIN_LANDED or more,
+// Over landed items (outcomes().items): per difficulty and per size, how many, the median cost and the mean attempts,
+// counting only items rated with it (#720: an unrated item isn't standard, an unsized one isn't small); and for each, the spread: the dearest group's median cost over the cheapest's (groups of MIN_LANDED or more,
 // priced). predicts: 'difficulty' or 'size' when one spreads cost at least 1.25 times as much as the other, 'neither'
 // when they spread about the same, null when there is too little to tell.
 export function calibration(items) {
   const landed = items.filter((i) => i.outcome === 'landed');
   const costOf = (i) => (i.usage.length && i.usage.every((r) => r.cost_usd != null) ? i.usage.reduce((a, r) => a + r.cost_usd, 0) : null);
-  const group = (key, order) => order.map((k) => {
-    const list = landed.filter((i) => key(i) === k);
+  const rated = landed.filter((i) => i.rated);
+  const sized = landed.filter((i) => i.size);
+  const group = (from, key, order) => order.map((k) => {
+    const list = from.filter((i) => key(i) === k);
     const cost = median(list.map(costOf));
     return {
-      key: k, landed: list.length, rated: list.filter((i) => i.rated).length,
+      key: k, landed: list.length,
       median_cost: cost == null ? null : Math.round(cost * 100) / 100,
       mean_attempts: list.length ? Math.round((10 * list.reduce((a, i) => a + Math.max(i.attempts, 1), 0)) / list.length) / 10 : null,
     };
@@ -242,13 +244,13 @@ export function calibration(items) {
     const known = rows.filter((r) => r.landed >= MIN_LANDED && r[field] != null && r[field] > 0).map((r) => r[field]);
     return known.length >= 2 ? Math.round((100 * Math.max(...known)) / Math.min(...known)) / 100 : null;
   };
-  const by_difficulty = group((i) => i.difficulty, ['rote', 'standard', 'hard']);
-  const by_size = group((i) => i.size ?? 'small', ['small', 'large']);
+  const by_difficulty = group(rated, (i) => i.difficulty, ['rote', 'standard', 'hard']);
+  const by_size = group(sized, (i) => i.size, ['small', 'large']);
   const d = { cost: spread(by_difficulty, 'median_cost'), attempts: spread(by_difficulty, 'mean_attempts') };
   const s = { cost: spread(by_size, 'median_cost'), attempts: spread(by_size, 'mean_attempts') };
   const predicts = d.cost == null || s.cost == null ? (d.cost != null && d.cost >= 1.25 ? 'difficulty' : null)
     : d.cost >= 1.25 * s.cost ? 'difficulty' : s.cost >= 1.25 * d.cost ? 'size' : 'neither';
-  return { landed: landed.length, rated: landed.filter((i) => i.rated).length, by_difficulty, by_size, spread: { difficulty: d, size: s }, predicts };
+  return { landed: landed.length, rated: rated.length, sized: sized.length, by_difficulty, by_size, spread: { difficulty: d, size: s }, predicts };
 }
 
 // Finished items (outcomes().items) grouped by key(item): [[key or null, items]], in first-seen order.

@@ -110,10 +110,12 @@ export function calibrationSection(c, { esc }) {
   const rows = (list) => list.map((g) => `<div class="step"><dt>${LABELS[g.key]} <span class="s">${g.landed}</span></dt>
       <dd><span class="bar" style="width:${max && g.median_cost ? Math.max(2, Math.round((100 * g.median_cost) / max)) : 0}%"></span></dd>
       <dd class="n">${g.median_cost == null ? '—' : money(g.median_cost)}</dd></div>`).join('');
+  // Unrated items (#720) count under no rating: a line of their own, no bar, as they say nothing about cost.
+  const unrated = (n) => (n > 0 ? `<div class="step unrated"><dt>Not rated <span class="s">${n}</span></dt></div>` : '');
   const tries = (list) => list.filter((g) => g.landed).map((g) => `${LABELS[g.key].toLowerCase()} ${g.mean_attempts}`).join(', ');
-  const block = (name, list) => `<div class="an-line"><span class="an-name">${name}</span><dl class="funnel an-cal">${rows(list)}</dl>
+  const block = (name, list, rated) => `<div class="an-line"><span class="an-name">${name}</span><dl class="funnel an-cal">${rows(list)}${unrated(c.landed - rated)}</dl>
       ${tries(list) ? `<div class="an-figs"><span class="fig">Attempts per item: ${esc(tries(list))}</span></div>` : ''}</div>`;
   return `<section class="sec" data-new="calibration"><header><h2>Difficulty or size</h2><span class="hint">median cost per landed item, by rating</span></header>
     <p class="an-verdict">${esc(verdict)}</p>
-    <div class="an-lines">${block('By difficulty', c.by_difficulty)}${block('By size', c.by_size)}</div></section>`;
+    <div class="an-lines">${block('By difficulty', c.by_difficulty, c.rated)}${block('By size', c.by_size, c.sized ?? c.landed)}</div></section>`;
 }
