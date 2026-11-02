@@ -22,11 +22,19 @@ describe('agentLine', () => {
     }
   });
 
-  test('its id only when asked (30m); a place the hub doesn\'t know is left out; no presence is just the name', () => {
+  test('its id only when asked (30m); no presence is just the name', () => {
     assert.equal(agentLine({ role: 'worker', where: 'mac-mini runner', job: 'building #1' }, { name: 'claude-80e7', id: true }), 'Worker · mac-mini runner — building #1 · claude-80e7');
-    assert.equal(agentLine({ role: 'worker', where: null, job: null }, { name: 'claude-80e7' }), 'Worker');
     assert.equal(agentLine({ role: 'something-new', where: 'x' }, { name: 'a' }), 'Agent · x');
     assert.equal(agentLine(null, { name: 'claude-80e7' }), 'claude-80e7');
+  });
+
+  // #713: with no place, the name stands in for it, so two such agents read apart, and at 30m it isn't said twice.
+  test('an agent that doesn\'t say where it runs reads by name', () => {
+    assert.equal(agentLine({ role: 'worker', where: null, job: null }, { name: 'claude-80e7' }), 'Worker claude-80e7');
+    assert.equal(agentLine({ role: 'session', where: null, job: 'building #3' }, { name: 'newbie-1' }), 'Agent newbie-1 — building #3');
+    assert.equal(agentLine({ role: 'session', where: null, job: null }, { name: 'newbie-1', id: true }), 'Agent newbie-1');
+    assert.notEqual(agentLine({ role: 'session' }, { name: 'newbie-1' }), agentLine({ role: 'session' }, { name: 'newbie-2' }));
+    assert.equal(agentLine({ role: 'worker', where: null }), 'Worker', 'no name either: the role alone');
   });
 });
 
