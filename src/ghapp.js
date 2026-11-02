@@ -62,7 +62,7 @@ export function manifest(base, name) {
     // After installing (or changing which repositories it sees), GitHub sends the person back to the hub.
     setup_url: `${base}/#/`, setup_on_update: true,
     // members (an organization permission): whether the person installing on an organization is its admin (#478).
-    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' },
+    default_permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' },
     default_events: reachable ? APP_EVENTS : [],
   };
 }
@@ -264,19 +264,35 @@ export function readInstallState(app, state, now = Date.now()) {
 // What GitHub says of one check (CI's required `test`) on a commit of repo ("github.com/acme/api"), for serve
 // --follow (#543): { state: 'passed' }, { state: 'failed', failed }, { state: 'pending' } while it runs or
 // ({ missing: true }) before GitHub has heard of it, or null when it ended without a verdict (skipped, neutral,
-// stale, or cancelled: someone stopped it, nothing failed). Read with a checks:read token for the repository,
+// stale, or cancelled: someone stopped it, nothing failed). Read with an actions:read token for the repository,
 // from the hub's own GitHub App. Only GitHub Actions' run counts (#621): any app with checks:write on the repository
-// can post a check named "test", and a passing one of theirs must never pass for CI's.
+// can post a check named "test", and a passing one of theirs must never pass for CI's. And only the job of the
+// repository's own CI workflow, run on this very commit for main (#648): any workflow posts as GitHub Actions, so one
+// added on another branch (a worker's, say) could post a passing "test" check run on main's commit, and it would
+// sit in a suite on that commit, even CI's own. A job is a check run the workflow itself made; one posted through the
+// API never is. So the verdict is the "test" job of the newest test.yml run on sha, pushed to main or a pull request
+// into it. That needs actions:read: without it the token isn't minted, and the hub runs the suite itself, as it does
+// whenever GitHub can't say.
 const FAILED = new Set(['failure', 'timed_out', 'action_required', 'startup_failure']);
 export const CI_APP = 'github-actions';
-export async function checkOn(app, repo, sha, name = 'test') {
+export const CI_WORKFLOW = '.github/workflows/test.yml';
+export async function checkOn(app, repo, sha, name = 'test', branch = 'main') {
   const [, owner, nm] = String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/) ?? [];
   if (!owner) return null;
-  const { token } = await app.mint(repo, { checks: 'read', metadata: 'read' });
-  const r = await app.call('GET', `/repos/${owner}/${nm}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`, undefined, token);
-  if (r.status !== 200) throw new Error(`GitHub answered ${r.status} about ${name} on ${sha.slice(0, 7)}`);
-  const run = r.json.check_runs?.find((c) => c.app?.slug === CI_APP);
-  if (!run) return { state: 'pending', missing: true };
+  const { token } = await app.mint(repo, { actions: 'read', metadata: 'read' });
+  const get = async (path, what) => {
+    const r = await app.call('GET', `/repos/${owner}/${nm}${path}`, undefined, token);
+    if (r.status !== 200) throw new Error(`GitHub answered ${r.status} about ${what} on ${sha.slice(0, 7)}`);
+    return r.json;
+  };
+  // Newest first. Its definition is the one on sha: a push to main, or a pull request into main (not one into
+  // another branch, whose merge commit could carry that branch's test.yml).
+  const ci = (wr) => wr.path === CI_WORKFLOW && wr.head_sha === sha && (wr.event === 'push'
+    ? wr.head_branch === branch : wr.event === 'pull_request' && !!wr.pull_requests?.some((p) => p.base?.ref === branch));
+  const wr = ((await get(`/actions/workflows/${CI_WORKFLOW.split('/').pop()}/runs?head_sha=${sha}&per_page=20`, `CI's runs`)).workflow_runs ?? []).find(ci);
+  if (!wr) return { state: 'pending', missing: true };
+  const run = ((await get(`/actions/runs/${wr.id}/jobs?per_page=100`, `the jobs of ${name}`)).jobs ?? []).find((j) => j.name === name);
+  if (!run) return wr.status === 'completed' ? { state: 'pending', missing: true } : { state: 'pending' };
   if (run.status !== 'completed') return { state: 'pending' };
   if (run.conclusion === 'success') return { state: 'passed' };
   if (FAILED.has(run.conclusion)) return { state: 'failed', failed: `CI's ${name} check: ${run.conclusion}${run.html_url ? `, ${run.html_url}` : ''}` };
