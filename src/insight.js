@@ -3,7 +3,7 @@
 //   30s → pulse + the few things that need you, each with the action that moves it on
 //   5m  → what's in motion, where time goes, what's next
 //   30m → every agent, every event, every layer of detail
-import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, waitsForOk, dur, providerOf, MIN, HOUR, DAY, HUMAN, LEASE_MS, isHuman, isSystem, preconditionOut } from './core.js';
+import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, waitsForOk, dur, providerOf, MIN, HOUR, DAY, HUMAN, SYSTEM, HANDBACKS, LEASE_MS, isHuman, isSystem, preconditionOut } from './core.js';
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
 import { WAIT_DAYS } from './precondition.js';
@@ -403,6 +403,18 @@ function build(hub, p, t, { light = false } = {}) {
 
   // Work someone answered on but kept parked: it waits for them to say go.
   for (const it of in_('waiting').filter((i) => i.parked_by && !openQs.some((q) => q.blocking && q.item_id === i.id))) {
+    // Or the hub parked it (#734): handed back again and again with nothing submitted, as when its worker keeps dying.
+    if (it.parked_by === SYSTEM) {
+      const h = json(it.handoff, null);
+      push({
+        key: `parked:${it.id}:${it.stage_since}`, level: 'act', kind: 'kept-parked', at: it.stage_since,
+        headline: `${ref(it)} was handed back ${HANDBACKS} times with nothing submitted; nuworq parked it`,
+        sub: [it.title, h && `last: ${h.by}: "${h.headline}"`].filter(Boolean).join(' · '),
+        why: `Its workers keep stopping before they submit: they hand it back, sign off or exit (a runner's worker that crashes signs off). Read its history for where each one stopped, then clarify it, split it or drop it, and unpark it when it should go back to the agents.${h?.summary ? `\n\nThe last note, from ${h.by}:\n\n${h.summary.split('\n').map((l) => `> ${l}`).join('\n')}` : ''}`,
+        item: ref(it), parked_by: it.parked_by,
+      });
+      continue;
+    }
     const ans = hub.q(`SELECT answer FROM questions WHERE item_id = ? AND status = 'answered' ORDER BY answered_at DESC LIMIT 1`).get(it.id);
     push({
       key: `parked:${it.id}:${it.stage_since}`, level: 'act', kind: 'kept-parked', at: it.updated_at,
