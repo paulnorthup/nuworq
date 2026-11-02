@@ -100,6 +100,20 @@ describe('memory distilled for people (#552)', () => {
     assert.ok(v.activity.some((e) => e.type === 'retired' && /bin\/nuworq\.js/.test(e.summary ?? '')), 'with its reason');
   });
 
+  // #633: #611 stops retire from turning off a note a person pinned; distill's own retire mustn't either.
+  test('a memory distill never retires a pinned field note', () => {
+    const s = setup({ autonomy: 'full' });
+    s.human('always', { note: s.ids.built }); // a person pinned it to every agent
+    review(s);
+    const r = s.agent('distill', 'r1', distillArgs(s.ids));
+    assert.deepEqual(r.retired, [], 'not retired, even under Run with it');
+    assert.deepEqual(r.waiting.sort(), [s.ids.built, s.ids.rule].sort(), 'its retire advice waits for the person, as under lower autonomy');
+    const note = view(s.hub, 'p').notes.find((n) => n.id === s.ids.built);
+    assert.ok(note, 'still active');
+    assert.deepEqual(note.advice, { do: 'retire', why: 'The lesson is now in the runner allowlist, bin/nuworq.js.' }, 'the person sees why, with one tap');
+    assert.equal(note.gist, 'Force pushes need a special form here.');
+  });
+
   test('under lower autonomy a retire waits: the person retires or keeps it with one tap', () => {
     const s = setup({ autonomy: 'balanced' });
     review(s);
