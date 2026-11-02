@@ -2765,9 +2765,11 @@ const SHAPE_HINT = (item, p, repos = []) => [
 // Every claim says where to work: the item's own branch, in a worktree, never the main checkout.
 // remote: the hub has no checkout here, so the branch is cut from origin and pushed there for review.
 // base: the branch it lands on, in the item's repo. repo: named when the project has several.
+// --no-track (#724): cut from origin, git would write the upstream into the checkout's .git/config, which a
+// sandboxed worker may not write (#606); pushes name the branch, so it needs none.
 const WORK_HINT = (item, p, remote = false, base = 'main', repo = '') => !item.branch ? ''
   : remote
-    ? `${repo ? `This is in ${repo}: work in a clone of it. ` : ''}Work on branch ${item.branch}, cut from the latest ${base} on origin: git fetch origin, then git switch -c ${item.branch} origin/${base} (or git switch ${item.branch} if it exists). Work in a git worktree or a clone of your own, not a checkout another agent is using. Commit as you go. Before you submit, push the branch (git push origin ${item.branch}) so reviewers anywhere can see it.`
+    ? `${repo ? `This is in ${repo}: work in a clone of it. ` : ''}Work on branch ${item.branch}, cut from the latest ${base} on origin: git fetch origin, then git switch --no-track -c ${item.branch} origin/${base} (or git switch ${item.branch} if it exists). Work in a git worktree or a clone of your own, not a checkout another agent is using. Commit as you go. Before you submit, push the branch (git push origin ${item.branch}) so reviewers anywhere can see it.`
     : `${repo ? `This is in ${repo}. ` : ''}Work on branch ${item.branch}, cut from the latest ${base}: git switch -c ${item.branch} ${base} (or git switch ${item.branch} if it exists). Work in a git worktree, never in ${p.path || 'the main checkout'} itself: it stays on ${base} so work can land there. Commit as you go.`;
 // remote: main is the one on origin (GitHub). Pushing to it succeeds only as a fast-forward, so a
 // rejected push means main moved; the branch is pushed again too, so the hub can see main contains it.
