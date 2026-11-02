@@ -8,6 +8,8 @@ import { OPERATOR_TAGS } from './protocol.js';
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
 const DAY = 86_400_000;
+// A full stop, unless it already ends a sentence (a quoted question: "… already there?").
+export const sentence = (s) => (/[.?!]"?$/.test(s) ? s : `${s}.`);
 // A send-back's reason as a reviewer wrote it: "x sent back #4: <reason>; #4 …" → the reason, for comparing two.
 const reasonOf = (e) => String(e.headline).replace(/^.*? sent back #\d+: /, '').replace(/; #\d+ (?:is back in the queue|goes back to .*)$/, '').trim();
 const same = (a, b) => a.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === b.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -69,7 +71,7 @@ export function bounceOf(hub, p, it, { agents, openQs, unmet, t }) {
   } else if (deps.length) {
     waits = deps.map((d) => {
       const needs = json(d.needs, []);
-      return `#${d.seq}${needs.length ? ` needs ${capability(needs)}` : d.holder ? ` (${d.holder} is on it)` : ` (${d.stage})`}`;
+      return `#${d.seq}${needs.length ? `, which needs ${capability(needs)}` : d.holder ? ` (${d.holder} is on it)` : ` (${d.stage})`}`;
     }).join('; ');
     if (lacking) step = { kind: 'capability', target: lacking.i, missing: lacking.missing };
   } else if (lacking) {
@@ -87,6 +89,6 @@ export function bounceOf(hub, p, it, { agents, openQs, unmet, t }) {
     if (twice) step = { kind: 'clarify', why: 'two reviewers sent it back for the same reason' };
     else if (stuck) step = { kind: 'clarify', why: `it failed ${times(lastThree.length)} with no new commits between` };
   }
-  const line = `Bounced ${times(failures.length)}: ${happened}. Now it waits on ${waits}.`;
+  const line = `Bounced ${times(failures.length)}: ${happened}. ${sentence(`Now it waits on ${waits}`)}`;
   return { failures: failures.length, happened, waits, step, line };
 }

@@ -11,7 +11,7 @@ import { PASS_ON } from './issues.js';
 import { humanCost, verification } from './outcomes.js';
 import { OPERATOR_TAGS } from './protocol.js';
 import { wiringEntry } from './appwiring.js';
-import { bounceOf } from './bounce.js';
+import { bounceOf, sentence as endSentence } from './bounce.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -412,7 +412,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       key: `struggle:${it.id}:${b.failures}:${s.kind}`, level: 'act', kind: 'struggling', at: it.updated_at,
       headline: it.title,
       sub: `Bounced ${b.failures === 2 ? 'twice' : `${b.failures} times`} · ${s.kind === 'answer' ? `answer question ${s.question.id}` : s.kind === 'capability' ? `start ${s.missing.some((m) => OPERATOR_TAGS.includes(m)) ? 'an operator' : 'an agent'} with ${s.missing.join(', ')}` : 'clarify, split or drop it'}`,
-      why: [`What happened: ${b.happened}.`, `Now it waits on ${b.waits}.`,
+      why: [endSentence(`What happened: ${b.happened}`), endSentence(`Now it waits on ${b.waits}`),
         s.kind === 'clarify' && `It keeps failing the same way: ${s.why}. The intent may be unclear, the acceptance wrong, or it may be too big. Clarify it with a steer, split it, or drop it.`,
       ].filter(Boolean).join('\n\n'),
       item: ref(it), step: s.kind,

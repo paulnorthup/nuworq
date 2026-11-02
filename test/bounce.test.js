@@ -39,7 +39,7 @@ describe('a bouncing item says why, and asks a person only when they can help (#
     sendBack(k, 'claude-r', 'Read and Write bypass the Bash sandbox; add deny rules for ~/.ssh and connect.json');
     assert.deepEqual(cards(), [], 'nothing for a person: the fix is for any worker, the dependency for the operator');
     const line = itemView(hub, 'p', k).bounce;
-    assert.match(line, /^Bounced twice: claude-r sent it back: "Read and Write bypass the Bash sandbox; add deny rules for ~\/\.ssh and connect\.json"; agents went quiet on it once\. Now it waits on #1 needs an operator with claude-cli\.$/);
+    assert.match(line, /^Bounced twice: claude-r sent it back: "Read and Write bypass the Bash sandbox; add deny rules for ~\/\.ssh and connect\.json"; agents went quiet on it once\. Now it waits on #1, which needs an operator with claude-cli\.$/);
   });
 
   test('like #473: rebased after a conflict, its lapses from restarts, an open question to you: Needs you, "answer question N", inline', () => {
@@ -57,7 +57,7 @@ describe('a bouncing item says why, and asks a person only when they can help (#
     assert.equal(c.question.id, question);
     assert.equal(c.sub, `Bounced twice · answer question ${question}`);
     assert.match(c.why, /What happened: GitHub sent it back \(twice in all\): "its checks failed"; 2 leases lapsed while the hub restarted, not counted\./);
-    assert.match(c.why, new RegExp(`Now it waits on your answer to question ${question}: "Is the second ruleset already there\\?"\\.`));
+    assert.match(c.why, new RegExp(`Now it waits on your answer to question ${question}: "Is the second ruleset already there\\?"$`, 'm'));
   });
 
   test('a blocking question already has its card: that card says why the work bounces, with no second card', () => {
