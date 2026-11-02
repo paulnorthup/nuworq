@@ -16,6 +16,7 @@ import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } fro
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease } from './releases.js';
 import { builtWhatItReviews, reviewRelease } from './security.js';
 import { sandboxHosts } from './sandbox.js';
+import { BUDGET as DEFAULT_BUDGET } from './setup.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
@@ -984,6 +985,14 @@ export class Hub extends EventEmitter {
       // Model routing (#347), and the shares of building jobs that try a cheaper model (#348).
       models: { on: !!p.model_routing, tiers: json(p.model_tiers, {}), trial: p.model_trial ?? 10, race: p.model_race ?? 0, quality: p.model_quality || 'balanced', qualities: QUALITY },
     };
+  }
+
+  // A line saying today's budget here is spent and when it resets (#762), or null while there is budget left.
+  budgetSpent(p) {
+    const s = this.staffing(p);
+    if (s.stopped !== 'budget') return null;
+    const resets = (Math.floor(this.now() / DAY) + 1) * DAY;
+    return `Today's $${s.budget.toFixed(2)} budget for workers here is spent ($${s.spent_today.toFixed(2)}): it resets at 00:00 UTC, in ${dur(resets - this.now())}.`;
   }
 
   // How many jobs an agent took since a moment, across the projects a token may reach: tells
@@ -3116,8 +3125,13 @@ const AGENT_OPS = {
       };
     }
     const repo = this.caller?.remote ?? '';
+    // Today's budget spent (#762): a runner's worker takes only reviews of work already submitted; anyone else hears it.
+    const budget = this.budgetSpent(p);
+    const capped = budget && this.roleOf(p, agent) === 'worker';
     // Drifted groups (#202) and field notes due a look (#443) become jobs on the sweep timer (tidyAll, #536), not here.
-    const pick = this.pick(p, agent, { powers: this.caller?.powers, repo });
+    const pick = capped ? this.claimable(p, agent, { powers: this.caller?.powers, repo }).find((x) => x.mode === 'review') ?? null
+      : this.pick(p, agent, { powers: this.caller?.powers, repo });
+    if (!pick && capped) return { mode: 'idle', hint: `${budget} Runner workers take no new work until then. Signoff.` };
     if (!pick) {
       if (p.parked) return { mode: 'idle', hint: 'The human has parked this project: start nothing new. Signoff.' };
       // Nothing in the clone it is in, but work waits in the project's other repositories.
@@ -3141,6 +3155,7 @@ const AGENT_OPS = {
       const workers = this.isOperator(p, agent) ? open.filter((i) => !operatorOnly(i) && !unfit.includes(i) && !this.unmetDeps(i).length) : [];
       return {
         mode: 'idle',
+        ...(budget ? { budget } : {}),
         hint: [
           `Nothing is ready${unfit.length || workers.length ? ' for you' : ''} or waiting to be shaped right now.`,
           workers.length ? `${workers.map((i) => `#${i.seq}`).join(', ')} ${workers.length === 1 ? 'is' : 'are'} ready, but workers build ${workers.length === 1 ? 'it' : 'them'}: an operator takes only the live steps. Go idle; claim one only if the person asks you to.` : '',
@@ -3155,6 +3170,7 @@ const AGENT_OPS = {
     return {
       mode: pick.mode,
       ...this.context(p, pick.item, agent),
+      ...(budget && !capped ? { budget: `${budget} Runner workers take no new work until then; you may.` } : {}),
       hint: pick.mode === 'review'
         ? this.reviewHint(pick.item, `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.${pick.item.race > 1 ? ' It was raced: compare race.submissions and accept with attempt set to the one to keep.' : ''}`)
         : pick.mode === 'land' && args.claim !== false
@@ -4249,7 +4265,10 @@ const HUMAN_OPS = {
     if (runner != null && !p.staff_asked) this.q('UPDATE projects SET staff_asked = 1 WHERE id = ?').run(p.id);
     if (runner != null && !!runner !== !!p.runner) {
       this.q('UPDATE projects SET runner = ? WHERE id = ?').run(runner ? 1 : 0, p.id);
-      this.event(p, { actor: by, type: 'runner', headline: runner ? `${You(by)} let \`nuworq run\` start workers here` : `${You(by)} stopped \`nuworq run\` starting workers here` });
+      // Staffed with no budget set, now or in this change, starts at $20 a day (#762), as connect and staff do.
+      const budgeted = runner && run_budget === undefined && p.run_budget == null;
+      if (budgeted) this.q('UPDATE projects SET run_budget = ? WHERE id = ?').run(DEFAULT_BUDGET, p.id);
+      this.event(p, { actor: by, type: 'runner', headline: runner ? `${You(by)} let \`nuworq run\` start workers here${budgeted ? `, up to $${DEFAULT_BUDGET.toFixed(2)} a day` : ''}` : `${You(by)} stopped \`nuworq run\` starting workers here` });
     }
     if (github_secret != null && str(github_secret) !== p.github_secret) {
       this.q('UPDATE projects SET github_secret = ? WHERE id = ?').run(str(github_secret), p.id);

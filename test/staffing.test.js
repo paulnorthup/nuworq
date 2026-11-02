@@ -102,6 +102,44 @@ describe('staffing', () => {
     assert.throws(() => set({ run_budget: 'lots' }), /more than 0/);
   });
 
+  // #762: route() stops new workers, but one worker took item after item past the budget through next.
+  test("a spent budget stops a runner worker's next claiming work; reviews still come, and a session only hears it", () => {
+    const { hub, p, set } = world();
+    set({ run_budget: 5, autonomy: 'full' });
+    const RUNNER = { token: { name: 'mac-runner', runner: 'mac' } };
+    hub.agentOp('p', 'checkin', 'w0', {}, RUNNER);
+    hub.agentOp('p', 'next', 'w0', {}, RUNNER);
+    hub.agentOp('p', 'submit', 'w0', { item: '#1', headline: 'Done', evidence: [{ label: 'tests pass' }] }, RUNNER);
+    hub.recordUsage(p(), null, 'w0', { input_tokens: 1, output_tokens: 1, cost_usd: 6 }, 'runner');
+    hub.agentOp('p', 'checkin', 'w1', {}, RUNNER);
+    const review = hub.agentOp('p', 'next', 'w1', {}, RUNNER);
+    assert.equal(review.mode, 'review', 'work already submitted is still reviewed');
+    assert.equal(hub.item(p(), '#1').holder, 'w1');
+    hub.agentOp('p', 'review', 'w1', { item: '#1', verdict: 'reject', headline: 'Not yet' }, RUNNER);
+    const idle = hub.agentOp('p', 'next', 'w1', {}, RUNNER);
+    assert.equal(idle.mode, 'idle');
+    assert.match(idle.hint, /\$5\.00 budget .* is spent \(\$6\.00\).*resets at 00:00 UTC, in 4h/);
+    assert.deepEqual(hub.q("SELECT seq FROM items WHERE project_id = ? AND holder = 'w1'").all(p().id), [], 'claims nothing');
+    hub.agentOp('p', 'checkin', 'me');
+    const session = hub.agentOp('p', 'next', 'me');
+    assert.equal(session.mode, 'work', 'an attended session is not refused');
+    assert.match(session.budget, /budget .* is spent/);
+  });
+
+  test('turning staffing on from Settings sets a $20 daily budget when there was none', () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('q', { create: true }));
+    hub.humanOp('q', 'settings', { runner: true });
+    assert.equal(view(hub, 'q').project.staffing.budget, 20, 'the Settings field shows it');
+    hub.humanOp('q', 'settings', { runner: false });
+    hub.humanOp('q', 'settings', { run_budget: 7 });
+    hub.humanOp('q', 'settings', { runner: true });
+    assert.equal(hub.project('q').run_budget, 7, 'a budget already set is kept');
+    hub.tx(() => hub.project('r', { create: true }));
+    hub.humanOp('r', 'settings', { runner: true, run_budget: '' });
+    assert.equal(hub.project('r').run_budget, null, 'cleared on purpose in the same change: no budget');
+  });
+
   test('each change is on the record', () => {
     const { hub, set } = world();
     set({ run_workers: 3, run_budget: 12.5, run_paused: true });
