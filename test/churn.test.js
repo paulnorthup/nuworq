@@ -58,6 +58,18 @@ describe('agents that arrive and leave with nothing', () => {
     assert.equal(hub.claimsSince('w1', t0, { scope: ['other'] }), 0);
   });
 
+  test('and what each handed in (#764): a claim alone is not a submit', () => {
+    const { hub, op, tick } = setup();
+    const t0 = hub.now();
+    op('w1', 'claim', { item: '#1' });
+    assert.equal(hub.submitsSince('w1', t0), 0);
+    tick(1000);
+    op('w1', 'submit', { item: '#1', headline: 'Done', evidence: [{ label: 'tests pass' }] });
+    assert.equal(hub.submitsSince('w1', t0), 1);
+    assert.equal(hub.submitsSince('w2', t0), 0);
+    assert.equal(hub.submitsSince('w1', t0, { scope: ['other'] }), 0);
+  });
+
   test("an agent token may ask (nuworq run uses one), and sees only its projects' claims", async () => {
     const hub = new Hub();
     hub.tx(() => { hub.project('alpha', { create: true }); hub.project('beta', { create: true }); });
@@ -70,10 +82,11 @@ describe('agents that arrive and leave with nothing', () => {
     try {
       const ask = async (token) => {
         const res = await fetch(`http://127.0.0.1:${server.address().port}/api/claims?agent=w1&since=0`, { headers: { authorization: `Bearer ${token}` } });
-        return [res.status, (await res.json()).claims];
+        const body = await res.json();
+        return [res.status, body.claims, body.submitted];
       };
-      assert.deepEqual(await ask(server.auth.createToken('box', 'agent')), [200, 2]);
-      assert.deepEqual(await ask(server.auth.createToken('alpha-box', 'agent', { projects: ['alpha'] })), [200, 1]);
+      assert.deepEqual(await ask(server.auth.createToken('box', 'agent')), [200, 2, 0]);
+      assert.deepEqual(await ask(server.auth.createToken('alpha-box', 'agent', { projects: ['alpha'] })), [200, 1, 0]);
     } finally {
       server.close();
     }

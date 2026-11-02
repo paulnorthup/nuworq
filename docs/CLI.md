@@ -145,9 +145,9 @@ Opt a project in on the hub (project Settings: "Staff it with nuworq run").
 Workers work only in folders you chose on this machine: run asks in a terminal,
 and --folder adds one.
 
-Workers that keep failing pause it (5m, then longer, up to 30m), and a project
-whose checkout can't be updated waits the same way while the others go on. Logs:
-~/.nuworq/logs.
+Three workers in a row that fail, however long each ran, pause it (5m, then
+longer, up to 30m), and a project whose checkout can't be updated waits the same
+way while the others go on. Logs: ~/.nuworq/logs.
 
 A worker's worktree is removed when it exits, unless it holds uncommitted
 changes or commits on no branch (then it says where). Its branch goes too once

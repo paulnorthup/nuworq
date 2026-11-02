@@ -98,7 +98,7 @@ export const COMMANDS = [
     example: 'nuworq run --workers 3 --agent claude',
     notes: [
       'Opt a project in on the hub (project Settings: "Staff it with nuworq run"). Workers work only in folders you chose on this machine: run asks in a terminal, and --folder adds one.',
-      'Workers that keep failing pause it (5m, then longer, up to 30m), and a project whose checkout can\'t be updated waits the same way while the others go on. Logs: ~/.nuworq/logs.',
+      'Three workers in a row that fail, however long each ran, pause it (5m, then longer, up to 30m), and a project whose checkout can\'t be updated waits the same way while the others go on. Logs: ~/.nuworq/logs.',
       "A worker's worktree is removed when it exits, unless it holds uncommitted changes or commits on no branch (then it says where). Its branch goes too once its item is done or dropped and on origin.",
       '--sweep removes worktrees and nuworq/* branches of done or dropped items, idle worktrees with no branch, and stale worktree records. Never your checkout, never uncommitted or unpushed work.',
       '--install makes a LaunchAgent (macOS) or systemd user unit (Linux); installing again replaces it. Install from a checkout: it runs there and finds the ones beside it. Log: ~/.nuworq/logs/run.log.',
