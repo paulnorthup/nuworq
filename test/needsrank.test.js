@@ -99,6 +99,42 @@ describe('each Needs you card carries the priority of the work it holds up', () 
     assert.ok(at < paid.needs.findIndex((n) => n.headline === 'Old soon?'), 'before soon work');
   });
 
+  test('an inherited priority names where it comes from (#506); its own priority names nothing', () => {
+    const { hub } = setup();
+    hub.humanOp('x', 'create', { title: 'Milestone', acceptance: 'x', priority: 'now' }); // #1
+    hub.humanOp('x', 'create', { title: 'Part', acceptance: 'x', priority: 'later', parent: '#1' }); // #2
+    hub.humanOp('x', 'create', { title: 'Lone', acceptance: 'x', priority: 'soon' }); // #3
+    ask(hub, 'x', 'a2', '#2', 'Part?');
+    ask(hub, 'x', 'a3', '#3', 'Lone?');
+    const cards = acts(view(hub, 'x'));
+    assert.deepEqual(cards.map((c) => [c.headline, c.priority, c.priority_from ?? null]), [['Part?', 'now', '#1'], ['Lone?', 'soon', null]]);
+  });
+
+  test("the 30-second line counts what's now (#506)", () => {
+    const { hub } = setup();
+    hub.humanOp('x', 'create', { title: 'A', acceptance: 'x', priority: 'now' }); // #1
+    hub.humanOp('x', 'create', { title: 'B', acceptance: 'x', priority: 'soon' }); // #2
+    hub.humanOp('x', 'create', { title: 'C', acceptance: 'x', priority: 'now' }); // #3
+    const line = () => view(hub, 'x').pulse.sentence.split(/(?<=\.) /)[0];
+    hub.agentOp('x', 'claim', 'a2', { item: '#2' });
+    const { question } = hub.agentOp('x', 'ask', 'a2', { item: '#2', question: 'B?', blocking: true });
+    assert.equal(line(), '1 thing needs you.', 'nothing now: no count');
+    ask(hub, 'x', 'a1', '#1', 'A?');
+    assert.equal(line(), '2 things need you, 1 now.');
+    hub.humanOp('x', 'answer', { question, answer: 'yes' });
+    assert.equal(line(), '1 thing needs you now.');
+    ask(hub, 'x', 'a3', '#3', 'C?');
+    assert.equal(line(), '2 things need you, all now.');
+
+    hub.tx(() => hub.project('y', { create: true }));
+    hub.humanOp('y', 'create', { title: 'D', acceptance: 'x', priority: 'later' });
+    ask(hub, 'y', 'b', '#1', 'D?');
+    const h = homeView(hub);
+    assert.match(h.pulse.sentence, /^3 things across 2 projects need you, 2 now\. /);
+    const paid = withEntry(h, { key: 'payment-failed:s', level: 'act', kind: 'payment-failed', at: hub.now(), headline: 'Payment failed' });
+    assert.match(paid.pulse.sentence, /^4 things need you, 3 now\. /, 'the count is redone, the rest of the line kept');
+  });
+
   test('worth knowing keeps its own order: oldest first', () => {
     const { hub, advance } = setup();
     hub.humanOp('x', 'create', { title: 'Later', acceptance: 'x', priority: 'later' });

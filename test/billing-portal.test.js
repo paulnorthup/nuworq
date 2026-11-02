@@ -140,7 +140,7 @@ describe("a paying owner manages billing in Stripe's portal (#231)", () => {
     assert.equal(e.project, null, "the workspace's own, not a project's");
     assert.equal(e.headline, b.state);
     assert.equal(home.pulse.state, 'needs-you');
-    assert.match(home.pulse.sentence, /^1 thing needs you\./);
+    assert.match(home.pulse.sentence, /^1 thing needs you now\./, 'it holds up all the work, so it is now (#506)');
     assert.deepEqual(e.how.map((s) => s.do.split(' ').slice(0, 2).join(' ')), ['Open Workspace', 'Under Payment', 'Click Return']);
     assert.equal(e.how[0].where, `http://127.0.0.1:${port}/w/acme/#/settings`);
     assert.match(e.how[2].check, /Pro, renews/);

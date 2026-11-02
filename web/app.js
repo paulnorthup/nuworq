@@ -591,7 +591,7 @@ function needsYou(v) {
     ? `<div class="cards">${act.map(card).join('')}</div>`
     : `<div class="zero"><span class="check good">✓</span><div><b>Nothing needs you.</b> ${v.pulse.active ? 'Agents are working; you\'ll see things here when they need a decision, an answer or a verification.' : 'When agents need a decision, an answer or a verification, it shows up here.'}</div></div>`;
   return `<section class="sec"><header><h2>Needs you</h2>${act.length ? `<span class="count">${act.length}</span>` : ''}
-    ${act.length ? '<span class="hint">oldest first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
+    ${act.length ? '<span class="hint" data-new="needs-rank">most important first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
 }
 
 // ── 30s: the milestones (web/milestones.js): one line each; a tap opens its map. ──
@@ -629,6 +629,10 @@ const CARD_LABELS = {
   'plan-limit': 'Free plan limit',
 };
 
+// Why a card sits where it does (#506): the priority of the work it holds up, as the app's priority tag (by weight,
+// never a state color), and "from #468" when it's the milestone's or a dependent's. The hub's reason is its title.
+const cardPriority = (a) => (a.priority ? `<span class="card-prio" title="${esc(a.priority_why ?? '')}"><span class="tag ${esc(a.priority)}">${esc(a.priority)}</span>${a.priority_from ? ` from ${refLink(a.priority_from)}` : ''}</span>` : '');
+
 function card(a) {
   const label = a.kind === 'question' && a.escalation ? 'Escalated by an operator' : CARD_LABELS[a.kind] ?? 'Needs you';
   const key = 'a:' + a.key;
@@ -640,7 +644,7 @@ function card(a) {
       ${a.detail ? `<div class="label">Detail</div>${md(a.detail)}` : ''}
     </div>` : '';
   return `<article class="card kind-${a.kind}">
-    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${named(a.sub, a.agent, a.presence)}</span></div>
+    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${named(a.sub, a.agent, a.presence)}</span>${cardPriority(a)}</div>
     <h3>${esc(a.headline)}</h3>
     ${a.attempts?.length > 1 ? attemptsGrid(a.item, a.attempts) : `${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
     ${commits(a.git)}`}
