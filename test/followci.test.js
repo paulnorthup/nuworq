@@ -135,6 +135,44 @@ describe("serve --follow goes by CI's test check", () => {
     assert.equal(w.up, 'ccccccc3');
   });
 
+  test('a busy main with CI working: a head pushed a moment ago, its check not up yet, starts a fresh wait (#690)', async () => {
+    const w = world({ aaaaaaa1: { state: 'passed' } });
+    const f = await run(w);
+    const shas = ['bbbbbbb2', 'ccccccc3', 'ddddddd4', 'eeeeeee5', 'fffffff6', 'ggggggg7', 'hhhhhhh8'];
+    let check = null;
+    w.ci = async () => check;
+    for (const [i, sha] of shas.entries()) {
+      // Each head: no check run for the first seconds after the push, then CI's run in progress.
+      w.t = i * 6 * 60_000;
+      w.main = sha;
+      check = { state: 'pending', missing: true };
+      await f.tick();
+      w.t += 30_000;
+      check = { state: 'pending' };
+      await f.tick();
+    }
+    assert.ok(!w.log.some((l) => l.startsWith('test')), 'no suite here while CI runs');
+    assert.equal(w.up, 'aaaaaaa1');
+  });
+
+  test("GitHub going quiet after it answered: the clock runs from the first commit it couldn't say about (#690)", async () => {
+    const w = world({ aaaaaaa1: { state: 'passed' }, bbbbbbb2: { state: 'pending' } });
+    const f = await run(w);
+    w.main = 'bbbbbbb2';
+    await f.tick();
+    w.ci = async () => { throw new Error('GitHub answered 422'); };
+    for (const [i, sha] of ['ccccccc3', 'ddddddd4', 'eeeeeee5'].entries()) {
+      w.t = (10 + i * 10) * 60_000;
+      w.main = sha;
+      await f.tick();
+    }
+    assert.equal(w.up, 'aaaaaaa1', '20 minutes since GitHub went quiet');
+    w.t = 41 * 60_000;
+    await f.tick();
+    assert.deepEqual(w.log.filter((l) => l.startsWith('test')), ['test eeeeeee5'], '30 minutes after ccccccc3');
+    assert.equal(w.up, 'eeeeeee5');
+  });
+
   test('without GitHub: the suite runs here, as before, said once', async () => {
     const w = world(null);
     const f = await run(w);
