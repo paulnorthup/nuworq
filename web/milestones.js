@@ -22,7 +22,7 @@ export function milestonesSection(v, { esc, now = Date.now() }) {
 export function whenText(u, now = Date.now()) {
   if (!u.time) return u.text;
   const d = new Date(u.at), day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const hm = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const days = Math.round((day(d) - day(new Date(now))) / 86_400_000);
   return days === 0 ? `${hm} today` : days === 1 ? `${hm} tomorrow` : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${hm}`;
 }
