@@ -176,6 +176,7 @@ export const OPS = [
     params: {
       question: { type: 'integer', description: 'The question id, from next.' },
       answer: s('What you found or decided; if only the human can settle it, say so.'),
+      for_people: { type: 'boolean', description: 'Optional. True when you changed a live system or made a call no decision covers: people see it in Worth knowing. Leave it out for checks and routine answers.' },
     },
     required: ['question', 'answer'],
   },
@@ -397,7 +398,7 @@ Your role comes from how you started and is fixed for the session. \`checkin\` s
 
 ## If you are the operator
 You are the operator only when the person started you as one (they typed \`/nuworq:operator\`, which \`nuworq operator\` prints) and you checked in with \`operator\` in \`has\`. The operator skill says how to listen.
-- **Take operator work first:** \`next\` hands you questions asked \`to: "operator"\` (mode answer). Settle each and \`answer\` it.
+- **Take operator work first:** \`next\` hands you questions asked \`to: "operator"\` (mode answer). Settle each and \`answer\` it. Set \`for_people\` only when you changed a live system or made a call no decision covers: people see those in Worth knowing; your other answers stay in the item's history.
 - **Build only the live step:** take an item yourself only when it is the step on real infrastructure. Its code, docs and tests are for workers; you answer their operator questions.
 - **You may** run \`claude\`, work on the hub's infrastructure, VMs and GitHub admin, and verify on real systems, within your own permission prompts. Declare only the capabilities you really have.
 - **What you can do is detected:** with nothing typed after \`${operatorStart()}\`, \`nuworq operator --detect\` proves each capability here (the OS; \`claude-cli\` when \`claude\` runs; \`github-admin\` when \`gh\` is admin on every repository of the project; \`browser\` when Chrome or Chromium is installed; \`infra\` unless this machine was set \`--without infra\`, or only while its own \`--infra-check "<command>"\` passes, kept in ~/.nuworq and never taken from the hub).
@@ -479,7 +480,7 @@ argument-hint: [capabilities, optional: detected when left out]
 The person started you as the operator: a trusted, attended session with their permissions and safety checks. Capabilities they gave you: $ARGUMENTS
 
 1. **Check in:** ${op('checkin')} with \`has\` = \`["operator"]\` plus each capability above, comma-separated. None given: run \`nuworq operator --detect\` and use the tags on its \`Declare:\` line, which it proves on this machine. Declare nothing else. Your first line to the person is the last line --detect printed (e.g. "Operator: macos, claude-cli, github-admin (admin on acme/api), infra"), or with typed capabilities "Operator: " and those. ${op('ack')} any steering.
-2. **Work until nothing waits:** take ${op('next')} again and again. Mode answer is an operator question: settle it and ${op('answer')} it. ${OPERATOR_NEXT} Stop when it says there is nothing for you.
+2. **Work until nothing waits:** take ${op('next')} again and again. Mode answer is an operator question: settle it and ${op('answer')} it, with \`for_people: true\` only when you changed a live system or made a call no decision covers (people see those in Worth knowing; checks and routine answers stay in the item's history). ${OPERATOR_NEXT} Stop when it says there is nothing for you.
 3. **Then go idle. Don't loop, poll or sleep:** end your turn. A listener runs \`${OPERATOR_WAIT}\`, which holds one open request to the hub and prints one line when something is there for you, e.g. "nuworq: operator work waiting (#219). Run next." Each line starts a new turn: ${op('checkin')} if it is an answer or steering, then ${op('next')} as in step 2, then go idle again.
    - **Check it is running before you trust it:** \`pgrep -lf -P "$PPID" "nuworq wait --operator"\`. The nuworq plugin should have started it when this skill ran, but it may not have (an older Claude Code, no workspace trust, or a feature flag). \`-P "$PPID"\` matches only this session's listener, not another operator session's on this machine. A line back means it is running: nothing to do.
    - **None running** (with or without the plugin): start it yourself with the Monitor tool, command \`${OPERATOR_WAIT}\`, description "nuworq operator listener". Re-arm it when it ends; that is the only time you act without a line.

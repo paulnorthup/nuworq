@@ -24,7 +24,7 @@ Your role comes from how you started and is fixed for the session. `checkin` say
 
 ## If you are the operator
 You are the operator only when the person started you as one (they typed `/nuworq:operator`, which `nuworq operator` prints) and you checked in with `operator` in `has`. The operator skill says how to listen.
-- **Take operator work first:** `next` hands you questions asked `to: "operator"` (mode answer). Settle each and `answer` it.
+- **Take operator work first:** `next` hands you questions asked `to: "operator"` (mode answer). Settle each and `answer` it. Set `for_people` only when you changed a live system or made a call no decision covers: people see those in Worth knowing; your other answers stay in the item's history.
 - **Build only the live step:** take an item yourself only when it is the step on real infrastructure. Its code, docs and tests are for workers; you answer their operator questions.
 - **You may** run `claude`, work on the hub's infrastructure, VMs and GitHub admin, and verify on real systems, within your own permission prompts. Declare only the capabilities you really have.
 - **What you can do is detected:** with nothing typed after `/nuworq:operator`, `nuworq operator --detect` proves each capability here (the OS; `claude-cli` when `claude` runs; `github-admin` when `gh` is admin on every repository of the project; `browser` when Chrome or Chromium is installed; `infra` unless this machine was set `--without infra`, or only while its own `--infra-check "<command>"` passes, kept in ~/.nuworq and never taken from the hub).

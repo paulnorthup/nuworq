@@ -835,10 +835,21 @@ function cardActions(a, hasMore, open, key) {
 }
 
 // ── 5m: worth knowing ──
+// Only what a person might confirm, redirect or fix (#497): one line each, the rest behind Open, at most 5 before
+// "N more", and one tap clears them all.
+const WK_SHOWN = 5;
 function worthKnowing(v) {
   const know = v.attention.filter((a) => a.level === 'know');
   if (!know.length) return '';
-  const rows = know.map((a) => {
+  const allKey = `wk:all:${S.slug}`;
+  const shown = S.open.has(allKey) ? know : know.slice(0, WK_SHOWN);
+  const rows = shown.map((a) => {
+    const open = S.open.has(`wk:${a.key}`);
+    const openBtn = `<button class="btn ghost small" data-action="toggle" data-key="wk:${esc(a.key)}" aria-expanded="${open}">${open ? 'Close' : 'Open'}</button>`;
+    if (!open) {
+      return `<div class="row-item wk-line"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h" title="${esc(a.headline)}">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.headline)}</div></div>
+        <div class="acts">${openBtn}<button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Got it</button></div></div>`;
+    }
     let acts = `<button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Got it</button>`;
     if (a.kind === 'assumption') {
       const r = `ov:${a.question.id}`;
@@ -857,10 +868,13 @@ function worthKnowing(v) {
     else if (a.kind === 'unfit') acts = `<button class="btn small" data-action="needs" data-item="${esc(a.item)}" data-needs="${esc(JSON.stringify(a.keep ?? []))}" title="Drop ${esc((a.missing ?? []).join(', '))} from what it needs">Let any agent take it</button><button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Keep waiting</button>`;
     // "Got it" is for news; next to a real action, dismissing just hides it.
     else if (/data-action="(open|connect|notify)"/.test(acts)) acts = acts.replace('>Got it</button>', '>Hide</button>');
-    return `<div class="row-item"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
-      ${z() >= 2 && a.why ? `<div class="s" style="margin-top:var(--sp-1)">${esc(a.why)}</div>` : ''}${a.how?.length ? howList(a.how) : ''}</div><div class="acts">${acts}</div></div>`;
+    return `<div class="row-item wk-open"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
+      ${a.why ? `<div class="s" style="margin-top:var(--sp-1)">${esc(a.why)}</div>` : ''}${a.how?.length ? howList(a.how) : ''}<div class="acts" style="margin-top:var(--sp-2)">${acts}</div></div><div class="acts">${openBtn}</div></div>`;
   }).join('');
-  return `<section class="sec"><header><h2>Worth knowing</h2><span class="count">${know.length}</span><span class="hint">agents carried on without you; glance and confirm, or redirect</span></header><div class="rows">${rows}</div></section>`;
+  const more = know.length > WK_SHOWN
+    ? `<button class="link wk-more" data-action="toggle" data-key="${esc(allKey)}" aria-expanded="${S.open.has(allKey)}">${S.open.has(allKey) ? 'Show fewer' : `${know.length - WK_SHOWN} more`}</button>` : '';
+  const all = `<button class="btn ghost small" data-action="dismiss-all" data-keys="${esc(JSON.stringify(know.map((a) => a.key)))}">Got it, all</button>`;
+  return `<section class="sec" data-new="worth-knowing-lines"><header><h2>Worth knowing</h2><span class="count">${know.length}</span><span class="hint">agents carried on without you; glance and confirm, or redirect</span><span style="flex:1"></span>${all}</header><div class="rows">${rows}</div>${more}</section>`;
 }
 
 // ── 30s → 5m: what's in motion ──
@@ -1011,7 +1025,9 @@ function steering(v) {
   const steers = v.steers.map((s) => {
     const expected = v.agents.filter((a) => a.present).map((a) => a.name);
     const missing = s.item ? [] : expected.filter((n) => !s.acks.some((x) => x.agent === n));
-    return `<div class="row-item steer-item" data-key="note:${s.id}"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>
+    // A steer made from an agent's answer is the answerer's, not yours (#497).
+    const from = s.by && s.by !== 'you' && !s.by.startsWith('@') ? `<div class="s">from ${who(s.by)}</div>` : '';
+    return `<div class="row-item steer-item" data-key="note:${s.id}"><div class="body"><div class="h">${s.item ? refLink(s.item) + ' ' : ''}${inline(s.body)}</div>${from}
       <div class="acks">${ackList({ acks: s.acks, missing, key: `acks:${s.id}`, open: S.open.has(`acks:${s.id}`), responses: z() >= 2 }, { esc })}</div></div>
       <div class="acts"><span class="age">${ago(s.at)} ago</span><button class="btn ghost small" data-action="retire" data-note="${s.id}" title="Stop delivering it">Retire</button></div></div>`;
   }).join('');
@@ -1023,7 +1039,7 @@ function steering(v) {
     <div class="acts"><span class="age">${when(n)} ago</span><button class="btn ghost small${n.always ? ' on' : ''}" data-action="always" data-note="${n.id}" data-on="${n.always ? 0 : 1}" aria-pressed="${!!n.always}" title="${n.always ? 'Every agent gets it, whatever it works on. Tap to stop' : 'Give it to every agent, whatever it works on (at most 3)'}"${i === 0 ? ' data-new="always-show"' : ''}>${n.always ? 'Always shown' : 'Always show'}</button><button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button></div></div>`).join('');
   const sub = (label, hint) => `<div class="sublabel">${label}<span>${hint}</span></div>`;
   return `<section class="sec"><header><h2>Steering &amp; memory</h2><span class="hint">did your nudges land, and what every agent carries into every session</span></header>
-    ${steers ? `${sub('Your steering', 'acknowledged by')}<div class="rows" style="margin-bottom:var(--sp-4)">${steers}</div>` : ''}
+    ${steers ? `${sub('Steering', 'acknowledged by')}<div class="rows" style="margin-bottom:var(--sp-4)">${steers}</div>` : ''}
     ${decisions ? `${sub('Decisions', 'standing rules, from you')}<div class="rows" style="margin-bottom:var(--sp-4)">${decisions}</div>` : ''}
     ${notes ? `${sub('Field notes', 'what agents learned the hard way, left for the next one')}<div class="rows">${notes}</div>
       ${v.notes.length > shownNotes.length ? `<div class="zoom-more">${v.notes.length} field notes in all; every one at 30m</div>` : ''}` : ''}
@@ -1206,8 +1222,8 @@ function renderDrawer() {
         ${q.blocking ? '' : `<button class="btn" data-action="confirm" data-q="${q.id}">Confirm</button>`}</div></div>` : ''}
     </div>`).join('')}</div>` : '';
 
-  const steers = it.steers.length ? `<div class="d-sec"><div class="label">Your steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
-      <div class="meta">${when(s)} ago</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
+  const steers = it.steers.length ? `<div class="d-sec"><div class="label">Steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
+      <div class="meta">${when(s)} ago${s.by && s.by !== 'you' && !s.by.startsWith('@') ? ` · from ${esc(s.by)}` : ''}</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
 
   const edit = S.editItem ? `<div class="d-sec"><div class="label">Edit</div><div class="add-work" style="margin:0">
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
@@ -1908,6 +1924,7 @@ const ACTIONS = {
   'remove-pre': (el) => human('update', { item: el.dataset.item, precondition: {} }, 'Removed: it no longer waits'),
   'check-now': (el) => human('check', { item: el.dataset.item }, 'The hub checks it on its next sweep'),
   dismiss: (el) => human('dismiss', { key: el.dataset.key }),
+  'dismiss-all': (el) => human('dismiss', { keys: JSON.parse(el.dataset.keys) }),
   // Stripe Checkout for the plan (#228): the hub opens the session, the browser goes there.
   upgrade: async (el) => {
     el.disabled = true;

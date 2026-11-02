@@ -3086,7 +3086,8 @@ const AGENT_OPS = {
     // Settled after all: the escalation no longer needs the human.
     this.q(`UPDATE questions SET status = 'withdrawn' WHERE escalates = ? AND status = 'open'`).run(q.id);
     HUMAN_OPS.answer.call(this, p, { question: q.id, answer: args.answer }, agent);
-    this.q(`UPDATE questions SET held_by = '', held_until = 0 WHERE id = ?`).run(q.id);
+    // for_people (#497): a change on a live system or a call no decision covers shows in Worth knowing for a day.
+    this.q(`UPDATE questions SET held_by = '', held_until = 0, for_people = ? WHERE id = ?`).run(args.for_people === true || args.for_people === 'true' ? 1 : 0, q.id);
     const item = this.itemById(q.item_id);
     return {
       ok: true,
@@ -3793,8 +3794,11 @@ const HUMAN_OPS = {
     }
   },
 
-  dismiss(p, { key }) {
-    this.q('INSERT OR REPLACE INTO dismissals (project_id, key, at) VALUES (?, ?, ?)').run(p.id, str(key), this.now());
+  // keys: several at once, for Worth knowing's "Got it, all" (#497).
+  dismiss(p, { key, keys }) {
+    for (const k of [].concat(keys ?? [], key ?? []).map(str).filter(Boolean)) {
+      this.q('INSERT OR REPLACE INTO dismissals (project_id, key, at) VALUES (?, ?, ?)').run(p.id, k, this.now());
+    }
   },
 
   seen(p) {
