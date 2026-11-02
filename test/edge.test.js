@@ -265,6 +265,14 @@ describe('the page', () => {
     assert.equal(md(`The branch \`${slug}\` is pushed.`), `<p>The branch <code>${slug}</code> is pushed.</p>`, 'a long kebab word wraps at its hyphens');
   });
 
+  test('a command scrolls in its block (#716), but prose in a pre (a Detail) still wraps', () => {
+    const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
+    assert.match(css, /^pre \{[^}]*white-space: pre-wrap;/m, 'a Detail wraps');
+    assert.match(css, /^\.copyable pre, pre\.code \{ white-space: pre;/m, 'a command or code block scrolls');
+    assert.match(md('```\nnuworq run --workers 1\n```'), /<pre class="code">nuworq run --workers 1<\/pre>/);
+    assert.match(readFileSync(new URL('../web/copy.js', import.meta.url), 'utf8'), /<div class="copyable"><pre>/, 'every Copy block is .copyable');
+  });
+
   test("an agent's steps say who wrote them and that the hub didn't; a person's and the hub's say nothing", () => {
     assert.match(stepsBy('claude-1234'), /Written by claude-1234, an agent, not by nuworq/);
     assert.match(stepsBy('<b>x</b>'), /&lt;b&gt;/);

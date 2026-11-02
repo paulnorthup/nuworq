@@ -27,7 +27,7 @@ const MD_INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\
 export function md(text) {
   if (!text) return '';
   const blocks = [];
-  let s = String(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => { blocks.push(`<pre>${esc(code.replace(/\n$/, ''))}</pre>`); return `\u0000${blocks.length - 1}\u0000`; });
+  let s = String(text).replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => { blocks.push(`<pre class="code">${esc(code.replace(/\n$/, ''))}</pre>`); return `\u0000${blocks.length - 1}\u0000`; });
   // One pass: each piece of text becomes code, bold, a link or an address once, and markup made here is never
   // scanned again (a URL inside a link's address would otherwise close its href early).
   const a = (href, label) => `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
