@@ -63,7 +63,7 @@ describe('the home page', () => {
     const gs = '<section class="get-started"></section>';
     let html = homePage(homeView(hub), { ...deps(), wide: true, gs });
     assert.ok(!html.includes('class="cols"'), 'nothing needs you: one column, no empty band');
-    assert.ok(html.indexOf(gs) < html.indexOf('<!--pulse:'), 'Get started first, as on the phone');
+    assert.ok(html.indexOf(gs) < html.indexOf('<!--pulse:'), 'Get started first, as on the phone when nothing needs you');
     hub.agentOp('p2', 'claim', 'bot2', { item: '#1' });
     hub.agentOp('p2', 'ask', 'bot2', { item: '#1', question: 'Which region?', blocking: true });
     html = homePage(homeView(hub), { ...deps(), wide: true, gs });
@@ -71,8 +71,10 @@ describe('the home page', () => {
     assert.ok(main.startsWith('<div class="cols"><div class="col-main">') && main.includes('home-needs'));
     assert.ok(side.indexOf('<!--pulse:') < side.indexOf(gs) && side.indexOf(gs) < side.indexOf('home-projects'), 'pulse, Get started, projects');
     const narrow = homePage(homeView(hub), { ...deps(), gs });
-    assert.ok(!narrow.includes('class="cols"') && narrow.indexOf(gs) < narrow.indexOf('<!--pulse:') && narrow.indexOf('home-needs') < narrow.indexOf('home-projects'), 'the phone: one column, as before');
-  });
+    assert.ok(!narrow.includes('class="cols"'), 'the phone: one column');
+    // #711: on a phone the first card that needs you is on the first screen, so Get started follows Needs you.
+    const at = ['<!--pulse:', 'home-needs', gs, 'home-projects'].map((s) => narrow.indexOf(s));
+    assert.ok(at.every((n, i) => n >= 0 && (i === 0 || at[i - 1] < n)), 'the phone: pulse, Needs you, Get started, projects');  });
 
   test('pulse() and card() are the project page\'s own: one definition each, handed to the home', () => {
     const app = appSource();

@@ -74,7 +74,7 @@ function project(v) {
     `<button class="${P.autonomy === k ? 'on' : ''}" aria-pressed="${P.autonomy === k}" data-action="autonomy" data-level="${k}" title="${esc(o.human)}">${esc(o.label)}</button>`).join('')}</div>`;
   const mission = S.editMission
     ? `<div class="inline-form"><input data-draft="mission" id="mission-in" placeholder="What is this project for? Agents read this first." value="${esc(P.mission)}"><button class="btn primary small" data-action="save-mission">Save</button><button class="btn ghost small" data-action="cancel-mission">Cancel</button></div>`
-    : `<div class="mission ${P.mission ? '' : 'empty'}" data-action="edit-mission" title="Click to edit. Every agent reads the mission at checkin.">${esc(P.mission || 'Add a mission: the north star every agent reads at checkin')}</div>`;
+    : `<div class="mission ${P.mission ? '' : 'empty'}${S.open.has(`mission:${P.slug}`) ? '' : ' clamp'}" data-action="edit-mission" title="Click to edit. Every agent reads the mission at checkin.">${esc(P.mission || 'Add a mission: the north star every agent reads at checkin')}</div>`;
 
   // The repositories this project is: any clone of one, on any machine, finds the project.
   const remotes = `<div class="where">${P.remotes.length ? `Repo ${P.remotes.map((r) => `<code>${esc(r)}</code><button class="link" data-action="remote-remove" data-remote="${esc(r)}" title="Unlink this repository">×</button>`).join(' ')}` : '<span class="faint">No repository linked yet: the first agent that checks in from a clone teaches the hub.</span>'}
@@ -119,7 +119,8 @@ function projectBody(v, empty) {
   // Each marked as a section (web/morph.js), so a live update redraws only the sections whose markup changed (#682).
   const order = (keys) => keys.map((k) => (s[k] ? `<!--sec:${k}-->${s[k]}<!--/sec:${k}-->` : '')).join('');
   if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'groups', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']), `p:${S.slug}`);
-  return order(['pulse', 'composer', 'empty', 'needs', 'groups', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
+  // On a phone (#711) the first card that needs you comes right after the pulse, on the first screen; the composer follows the cards.
+  return order(['pulse', 'needs', 'groups', 'composer', 'empty', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
 }
 
 function emptyProject() {

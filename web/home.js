@@ -41,7 +41,8 @@ export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(n
   // Wide (#141): the work in the main column, the 30-second answer (pulse, Get started, projects) beside it.
   // The same sections either way; with nothing to act on, one column, so no empty band.
   if (wide && (needs || worth || motion)) return columns(`${needs}${worth}${motion}`, `${head}${gs}${projects}`);
-  return `${gs}${head}${needs}${projects}${worth}${motion}`;
+  // One column: with something to act on, its first card follows the pulse on a phone's first screen (#711), Get started after it.
+  return `${needs ? `${head}${needs}${gs}` : `${gs}${head}`}${projects}${worth}${motion}`;
 }
 
 // A project's state dot (#195): its color never speaks alone, so it carries the state as its name and title.

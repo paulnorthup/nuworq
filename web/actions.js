@@ -503,7 +503,11 @@ export const ACTIONS = {
   seen: () => human('seen', {}, 'Marked as seen'),
   theme: (el) => setTheme(el.dataset.appearance),
   autonomy: (el) => human('settings', { autonomy: el.dataset.level }, 'Autonomy changed; agents have been told'),
-  'edit-mission': () => { setState({ editMission: true }); render({ force: true }); setTimeout(() => $('#mission-in')?.focus(), 0); },
+  'edit-mission': (el) => {
+    // A phone clamps a long mission (#711): the first tap shows it whole, the next edits it.
+    if (el && el.scrollHeight > el.clientHeight + 1 && !S.open.has(`mission:${S.slug}`)) { addTo('open', `mission:${S.slug}`); render({ force: true }); return; }
+    setState({ editMission: true }); render({ force: true }); setTimeout(() => $('#mission-in')?.focus(), 0);
+  },
   'cancel-mission': () => { setState({ editMission: false }); clearDraft('mission'); render({ force: true }); },
   'save-mission': async () => { const m = val('mission-in'); setState({ editMission: false }); clearDraft('mission'); await human('settings', { mission: m }, 'Mission saved'); },
   'remote-new': () => { setState({ addRemote: true }); render({ force: true }); setTimeout(() => $('#remote-in')?.focus(), 0); },
