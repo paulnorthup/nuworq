@@ -43,6 +43,7 @@ export const NEW = {
   'setup-that-works': '2026-11-01', // #489: Connect an agent leads with the setup that works: workers, an operator, a shaper
   'agents-told': '2026-11-01', // #550: an item's "Agents told each other", the operators' and the hub's steers, out of Your steering
   'memory-distilled': '2026-11-01', // #552: Steering & memory's Direction today, gists and one-tap recommendations
+  'setup-folded': '2026-11-01', // #644: Connect an agent shows one block to copy; what connect sets up is folded beneath it
 };
 
 const DAYS = 7;
