@@ -942,7 +942,10 @@ export class Hub extends EventEmitter {
     if (!p.model_routing) return null;
     const tiers = tiersOf(p.model_tiers);
     const difficulty = difficultyOf(item);
-    const list = candidates(tiers[kind]?.length ? tiers[kind] : top ? [top] : [], {
+    // The default tiers stop at the runner's --model when it is one of them (#723): a runner started on Sonnet to
+    // save money doesn't build on Opus just because the project set no tiers of its own.
+    const own = !!json(p.model_tiers, {})[kind]?.length, at = tiers[kind]?.indexOf(top) ?? -1;
+    const list = candidates(tiers[kind]?.length ? (own || at < 0 ? tiers[kind] : tiers[kind].slice(0, at + 1)) : top ? [top] : [], {
       difficulty, local: (m) => providerOf(m) === 'Open-weight', ready: (m) => !!this.localReady.get(m)?.ready,
     });
     if (!list.length) return null;

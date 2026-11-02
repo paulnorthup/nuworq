@@ -109,7 +109,8 @@ function staffingModal(back) {
   // An agent with no tiers of its own shows the default ones as its placeholder (#723), and says it uses them.
   const tier = (agent, label) => `<label>${label}<input id="st-tiers-${agent}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(defaults[agent]?.join(', ') ?? 'The runner\'s --model')}" value="${esc((own[agent] ?? []).join(', '))}"></label>`;
   const usesDefault = defaults.claude && !own.claude?.length;
-  const note = trialNote({ on: m.on, trial: m.trial ?? 10, tiers: own, defaults });  modal(`${back ? '<button class="link back" data-action="settings">← Settings</button>' : ''}<h2 data-staffing data-back="${back ? 1 : ''}">Staffing</h2>
+  const note = trialNote({ on: m.on, trial: m.trial ?? 10, tiers: own, defaults });
+  modal(`${back ? '<button class="link back" data-action="settings">← Settings</button>' : ''}<h2 data-staffing data-back="${back ? 1 : ''}">Staffing</h2>
     <p class="lead">What <code>nuworq run</code> does here. Runners follow it at their next poll.</p>
     <div class="form"><label>Workers at once<input id="st-workers" type="number" inputmode="numeric" min="1" max="100" placeholder="Each runner's own --workers" value="${s.workers ?? ''}"></label>
     <label>Daily budget, dollars (UTC days)<input id="st-budget" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="No budget" value="${s.budget ?? ''}"></label></div>
