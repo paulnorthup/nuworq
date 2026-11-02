@@ -32,9 +32,9 @@ import { liveGate } from './pace.js';
 import { predict, placeholder } from './instant.js';
 import { held, viewLoader, loadProject, shell } from './switching.js';
 import { bootData } from './boot.js';
+import { S, setState, toggleIn, addTo, putIn, removeFrom, PAGE } from './store.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
-const PAGE = { all: 100, agents: 50 }; // a page of All work and of earlier agents (src/insight.js PAGE)
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
 const WIDE = matchMedia('(min-width: 1024px)');
 WIDE.addEventListener('change', () => render());
@@ -45,26 +45,13 @@ const store = {
   get: (k, d) => { try { return localStorage.getItem('nuworq:' + k) ?? localStorage.getItem('trellis:' + k) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem('nuworq:' + k, v); } catch {} },
 };
-const S = {
-  projects: [], slug: null, view: null, info: null,
-  analytics: false, period: '14d', outcomes: null, person: null, // the workspace's analytics (#239)
-  itemRef: null, item: null, deep: false,
-  zoom: store.get('zoom', '30s'),
-  open: new Set(), reveal: new Set(), drafts: {},
-  composeKind: 'steer', stage: null, addWork: false, editMission: false, editItem: false,
-  feedAll: false, pending: false,
-  sending: 0, // actions on their way to the hub, already shown (#393)
-  prefetched: new Map(), // ref → { at, item } fetched when the pointer rested on it (#393)
-  views: new Map(), // slug → the last view seen for it this visit, drawn at once when it opens again (#503)
-  loading: null, // the project whose view is on its way: its page is marked as updating
-  listStale: true, // the project list may have changed since it was fetched: a live change says so (#503)
-  pages: { all: PAGE.all, agents: PAGE.agents }, // how much of All work and of earlier agents the page asks for (#501)
-};
+// The app's state lives in web/store.js (#600); the depth picked last in this browser is where it starts.
+setState({ zoom: store.get('zoom', '30s') });
 // The depth shown: the one picked, or the one the project's view was fetched at while a deeper one is on its way (#501).
 const z = () => Math.min(Z[S.zoom], S.view?.depth ? Z[S.view.depth] : 2);
 // A project's view brings only what its depth shows (#501): a deeper depth fetches again, a shallower one shows at once.
 function setZoom(zoom) {
-  S.zoom = zoom;
+  setState({ zoom });
   store.set('zoom', S.zoom);
   views.forget(); // views fetched ahead were for the depth before
   if (S.view?.depth && Z[zoom] > Z[S.view.depth]) refresh({ force: true });
@@ -161,7 +148,7 @@ function toastError(e, lead = '') {
 const OFFLINE = "Couldn't reach the hub; nothing was changed. Try again when it's back.";
 function offline() {
   if (S.offline) return;
-  S.offline = Date.now();
+  setState({ offline: Date.now() });
   clearTimeout(offline.t);
   offline.t = setTimeout(() => {
     if (!S.offline) return;
@@ -174,7 +161,7 @@ function offline() {
 }
 function online() {
   if (!S.offline) return;
-  S.offline = null;
+  setState({ offline: null });
   clearTimeout(offline.t);
   $('#offline')?.remove();
   document.body.classList.remove('offline');
@@ -205,24 +192,24 @@ async function api(path, opts = {}) {
 async function human(action, body = {}, msg) {
   const before = { view: S.view, home: S.home, item: S.item };
   const shown = foresee(action, body);
-  S.sending++;
+  setState({ sending: S.sending + 1 });
   try {
     const slug = S.slug ?? S.actSlug;
     const r = await api(slug ? `/api/p/${encodeURIComponent(slug)}/human/${action}` : `/api/home/${action}`, { method: 'POST', body: JSON.stringify(body) });
-    S.sending--;
+    setState({ sending: S.sending - 1 });
     if (msg) toast(msg);
     await refresh();
     return r;
   } catch (e) {
-    S.sending--;
-    if (shown) { Object.assign(S, before); render({ force: true }); scheduleRefresh(); }
+    setState({ sending: S.sending - 1 });
+    if (shown) { setState(before); render({ force: true }); scheduleRefresh(); }
     toastError(e, shown ? 'Not changed, so it is back as it was: ' : '');
   }
 }
 function foresee(action, body) {
   const next = { view: predict(S.view, action, body), home: predict(S.home, action, body), item: predict(S.item, action, body) };
   if (!next.view && !next.home && !next.item) return false;
-  for (const [k, v] of Object.entries(next)) if (v) S[k] = v;
+  setState(Object.fromEntries(Object.entries(next).filter(([, v]) => v)));
   render({ force: true });
   return true;
 }
@@ -242,8 +229,7 @@ async function removeProject(action, body, msg) {
 
 // ── data ──
 async function loadProjects() {
-  S.projects = await api('/api/projects');
-  S.listStale = false;
+  setState({ projects: await api('/api/projects'), listStale: false });
 }
 // A project's view (#503): one request however many ask for it, so a hover, a focus and the click share it.
 // A project's view at the picked depth (#501), with the pages of All work and earlier agents the open project asked for.
@@ -254,7 +240,7 @@ const views = viewLoader((slug) => {
 // Fetched ahead as the pointer rests on a project or the launcher highlights it, and kept as the view to draw at once.
 function prefetchView(slug) {
   if (!slug || slug === S.slug) return;
-  views.load(slug).then((v) => S.views.set(slug, v), () => {});
+  views.load(slug).then((v) => putIn('views', slug, v), () => {});
 }
 // fresh: false lets an open use the view fetched ahead; a live change or the person's own action asks the hub again.
 // list: false (moving between pages) skips the project list unless a live change marked it stale.
@@ -262,11 +248,11 @@ async function refresh({ force = false, fresh = true, list = true } = {}) {
   // While an action is on its way, a live update would show the screen from before it: the action's own refresh follows.
   if (S.sending && !force) return;
   try {
-    S.missing = null;
+    setState({ missing: null });
     if (S.analytics) {
       await loadProjects();
-      S.outcomes = await api(`/api/outcomes?period=${encodeURIComponent(S.period)}`);
-      S.view = null;
+      setState({ outcomes: await api(`/api/outcomes?period=${encodeURIComponent(S.period)}`) });
+      setState({ view: null });
     } else if (S.slug) {
       // The list and the view at once; the list only when a live change may have changed it.
       const slug = S.slug, ref = S.itemRef;
@@ -275,33 +261,31 @@ async function refresh({ force = false, fresh = true, list = true } = {}) {
         view: () => views.load(slug, { fresh }),
         item: ref ? () => api(`/api/p/${encodeURIComponent(slug)}/items/${encodeURIComponent(ref.replace('#', ''))}`) : null,
       });
-      if (r.projects) { S.projects = r.projects; S.listStale = false; }
+      if (r.projects) setState({ projects: r.projects, listStale: false });
       // No view, from a list held a while: the project may have gone since, so the list decides.
       else if (r.error) await loadProjects();
-      if (r.view) S.views.set(slug, r.view);
+      if (r.view) putIn('views', slug, r.view);
       if (slug !== S.slug) return; // they moved on; this view is kept for when they come back
-      S.loading = null;
+      setState({ loading: null });
       if (!S.projects.some((p) => p.slug === slug)) {
         // A stale link, or a renamed or archived project: say so, rather than quietly showing the home (#143).
         const archived = await api('/api/projects?archived=1').catch(() => []);
-        S.view = null;
-        S.missing = { slug, archived: archived.find((p) => p.slug === slug) ?? null };
+        setState({ view: null, missing: { slug, archived: archived.find((p) => p.slug === slug) ?? null } });
       } else {
         if (r.error) throw r.error;
-        S.view = r.view;
-        if (ref === S.itemRef) S.item = r.item;
+        setState({ view: r.view });
+        if (ref === S.itemRef) setState({ item: r.item });
       }
     } else {
-      S.view = null;
+      setState({ view: null });
       // The home: one request, which also brings the project lines the rail shows.
       // Boot just asked (homeFresh, #599): the first refresh uses that answer.
-      S.home = S.homeFresh ?? await api('/api/home');
-      S.homeFresh = null;
-      S.projects = S.home.projects;
+      setState({ home: S.homeFresh ?? await api('/api/home') });
+      setState({ homeFresh: null, projects: S.home.projects });
       // Get started: asked until it says it's gone (finished or hidden), then never again this visit.
       // Boot just asked (gsFresh, #599): the first refresh uses that answer.
-      if (S.gsFresh) S.gsFresh = false;
-      else if (S.gs?.show !== false) S.gs = await api('/api/get-started').catch(() => S.gs);
+      if (S.gsFresh) setState({ gsFresh: false });
+      else if (S.gs?.show !== false) setState({ gs: await api('/api/get-started').catch(() => S.gs) });
     }
   } catch (e) {
     if (!S.projects.length) $('#main').innerHTML = `<div class="loading">Can't reach the nuworq hub. Is <code>nuworq serve</code> running?</div>`;
@@ -316,8 +300,8 @@ const typing = () => isTextBox(document.activeElement);
 const paint = (el, html) => morph(el, html, keepNew);
 function render({ force = false } = {}) {
   // Nor while they scroll or hold a pointer down (#392): it waits until they let go.
-  if (!force && (typing() || live.busy())) { S.pending = true; return; }
-  S.pending = false;
+  if (!force && (typing() || live.busy())) { setState({ pending: true }); return; }
+  setState({ pending: false });
   const writing = saveFocus(document); // a forced redraw puts the person back where they were writing
   keepScroll(document, () => { // every scrolled area keeps its place, anchored to the row in view (#376)
     renderRail();
@@ -352,8 +336,7 @@ function projectShell(slug) {
 // ── routing ──
 function route() {
   if (!$('#modal').hidden) closeModal(); // a dialog belongs to the page it was opened on (#155)
-  S.railMenu = false;
-  S.analytics = location.hash.startsWith('#/analytics');
+  setState({ railMenu: false, analytics: location.hash.startsWith('#/analytics') });
   const m = location.hash.match(/^#\/p\/([^/]+)(?:\/(\d+))?/);
   const slug = m ? decodeURIComponent(m[1]) : null;
   const ref = m?.[2] ? `#${m[2]}` : null;
@@ -361,13 +344,12 @@ function route() {
   const linking = !!slug && S.linkRepo === slug;
   const moved = slug !== S.slug;
   if (moved) {
-    S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = linking; S.pages = { all: PAGE.all, agents: PAGE.agents };
+    setState({ stage: null, addWork: false, editMission: false, addRemote: linking, pages: { all: PAGE.all, agents: PAGE.agents } });
     // Another project (#503): the last view seen for it this visit, else nothing until the shell's view arrives.
-    S.missing = null; S.loading = slug; S.view = slug ? held(slug, S)?.view ?? null : S.view;
+    setState({ missing: null, loading: slug, view: slug ? held(slug, S)?.view ?? null : S.view });
   }
-  S.linkRepo = null;
-  S.slug = slug;
-  if (ref !== S.itemRef) { S.itemRef = ref; S.item = prefetched(slug, ref); S.deep = z() >= 2; S.editItem = false; S.editPre = false; }
+  setState({ linkRepo: null, slug });
+  if (ref !== S.itemRef) setState({ itemRef: ref, item: prefetched(slug, ref), deep: z() >= 2, editItem: false, editPre: false });
   if (ref) remember(slug, ref);
   // An item opens on this frame: from what was fetched as the pointer rested on it, else as a placeholder.
   if ((moved && slug && !S.analytics) || (ref && S.view?.project.slug === slug)) render({ force: true });
@@ -381,10 +363,10 @@ function prefetch(slug, ref) {
   const had = S.prefetched.get(key);
   if (!slug || !ref || (had && Date.now() - had.at < PREFETCH_FOR)) return;
   const entry = { at: Date.now(), item: null };
-  S.prefetched.set(key, entry);
+  putIn('prefetched', key, entry);
   api(`/api/p/${encodeURIComponent(slug)}/items/${encodeURIComponent(ref.replace('#', ''))}`)
     .then((it) => { entry.item = it; })
-    .catch(() => S.prefetched.delete(key));
+    .catch(() => removeFrom('prefetched', key));
 }
 function prefetched(slug, ref) {
   const had = ref && S.prefetched.get(`${slug} ${ref}`);
@@ -1511,12 +1493,14 @@ async function addWork(ready) {
   if (!body) { $('#nw-title')?.focus(); return toast('Say what should be true when it\'s done', true); }
   await human('create', body, sentToast({ ready, waits: !!pre }));
   clearDraft('nw-title', 'nw-summary', 'nw-acceptance', 'nw-priority', 'nw-pre');
-  S.addWork = S.addMore = false;
+  setState({ addWork: false, addMore: false });
   render({ force: true });
 }
 
+const loadInfo = async () => { if (S.info == null) setState({ info: await api('/api/info').catch(() => ({ url: location.origin })) }); };
+
 async function connect() {
-  S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
+  await loadInfo();
   const slug = S.slug ?? 'my-project';
   const c = connectCommands(S.info, location, slug);
   const url = c.url;
@@ -1549,7 +1533,7 @@ async function connect() {
 async function notifySettings() {
   let n;
   try { n = await api('/api/notify'); } catch (e) { return toastError(e); }
-  S.notifyPerson = n.person; // who "only what needs me" means
+  setState({ notifyPerson: n.person }); // who "only what needs me" means
   const rows = n.channels.map((c) => `<div class="inline-form"><span><b>${esc(c.kind)}</b> <code>${esc(c.url)}</code> <span class="faint">${c.person ? `${c.person === n.person ? 'you' : esc(c.person)}: only what they own` : 'everyone'}${n.requests?.includes(c.id) ? ' · early-access requests reach you here' : ''}</span> ${c.failing ? `<span class="bad">⚠ failing: ${esc(c.last_error)}</span>` : ''}</span>
     <button class="btn ghost small" data-action="notify-weekly" data-id="${c.id}" data-on="${c.weekly ? 0 : 1}" aria-pressed="${c.weekly}" title="Once a week, one line per project: items landed, your actions, cost, escapes">Weekly line: ${c.weekly ? 'on' : 'off'}</button>
     <button class="btn ghost small" data-action="notify-remove" data-id="${c.id}">Remove</button></div>`).join('');
@@ -1580,11 +1564,12 @@ async function notifySettings() {
 async function workspaceSettings({ again = false } = {}) {
   if (again && !$('#ws-settings')) return; // closed meanwhile
   let b;
-  try { b = S.billing = await api('/api/billing'); } catch (e) { return again || toastError(e); }
+  try { b = await api('/api/billing'); } catch (e) { return again || toastError(e); }
+  setState({ billing: b });
   modal(`<h2 id="ws-settings">Workspace settings</h2>${billingSection(b, { esc, done: S.checkoutDone })}`);
   // Back from Checkout: look again soon, until the webhook has made it paid.
   if (S.checkoutDone && b.plan === 'free') setTimeout(() => workspaceSettings({ again: true }), 5000);
-  else S.checkoutDone = false;
+  else setState({ checkoutDone: false });
 }
 
 // Where the hub's GitHub App stands (/api/github/app), one line and its next step, so a person who closed a
@@ -1604,7 +1589,7 @@ function appStatus(st) {
 // it stands now, and open "+ Project" on the repositories it can see.
 async function backFromGitHub() {
   const st = await api('/api/github/app?fresh=1').catch(() => null);
-  if (st) S.info = { ...S.info, github_app: st.slug || S.info?.github_app || true };
+  if (st) setState({ info: { ...S.info, github_app: st.slug || S.info?.github_app || true } });
   if (st?.state === 'installed') toast(`GitHub App installed${st.repositories == null ? '' : ` on ${plural(st.repositories, 'repository', 'repositories')}`}: pick one to make it a project`);
   else if (st) toast('Back from GitHub, but the app isn\'t installed anywhere yet', true);
   newProject();
@@ -1617,7 +1602,7 @@ function alertLines(alerts = []) {
 }
 
 async function githubSettings() {
-  S.info ??= await api('/api/info').catch(() => ({ url: location.origin }));
+  await loadInfo();
   const P = S.view.project;
   const hook = `${S.info.url}/api/hooks/github/${encodeURIComponent(P.slug)}`;
   const st = S.info.workspace ? null : await api('/api/github/app').catch(() => null);
@@ -1772,7 +1757,7 @@ async function runLauncher(r) {
 }
 // An item's flyout, with the box a command needs focused once it's drawn: its answer, or Send back's note.
 function openAt({ slug, item, focus }) {
-  if (focus === 'sendback') S.reveal.add('dsb');
+  if (focus === 'sendback') addTo('reveal', 'dsb');
   const before = location.hash;
   go(slug, item);
   if (location.hash === before) render({ force: true });
@@ -1794,7 +1779,7 @@ $('#launcher').addEventListener('click', (e) => {
 
 // ── events ──
 const val =(id) => (document.getElementById(id)?.value ?? '').trim();
-const clearDraft = (...keys) => keys.forEach((k) => delete S.drafts[k]);
+const clearDraft = (...keys) => removeFrom('drafts', ...keys);
 // What this person sent as feedback and what happened to each (#297), under the Feedback form or its thanks.
 async function showMine({ scroll = false } = {}) {
   const r = await api('/api/feedback/mine').catch(() => null);
@@ -1805,28 +1790,28 @@ async function showMine({ scroll = false } = {}) {
 }
 
 const ACTIONS = {
-  'an-period': (el) => { S.period = el.dataset.p; S.outcomes = null; render({ force: true }); refresh({ force: true }); },
+  'an-period': (el) => { setState({ period: el.dataset.p, outcomes: null }); render({ force: true }); refresh({ force: true }); },
   zoom: (el) => setZoom(el.dataset.zoom),
   // Show more (#501): the next page of All work or of earlier agents.
-  more: (el) => { S.pages[el.dataset.more] += PAGE[el.dataset.more]; refresh({ force: true }); },
+  more: (el) => { const k = el.dataset.more; putIn('pages', k, S.pages[k] + PAGE[k]); refresh({ force: true }); },
   goto: (el) => go(el.dataset.slug),
   open: (el) => go(S.slug ?? S.actSlug, el.dataset.item),
   close: () => { go(S.slug); },
-  deep: () => { S.deep = true; render({ force: true }); },
-  toggle: (el) => { const k = el.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); render({ force: true }); },
-  reveal: (el) => { S.reveal.add(el.dataset.key); render({ force: true }); setTimeout(() => document.getElementById(el.dataset.key.replace('dsb', `sb:${S.itemRef}`))?.focus(), 0); },
-  stage: (el) => { S.stage = S.stage === el.dataset.stage ? null : el.dataset.stage; render({ force: true }); },
+  deep: () => { setState({ deep: true }); render({ force: true }); },
+  toggle: (el) => { toggleIn('open', el.dataset.key); render({ force: true }); },
+  reveal: (el) => { addTo('reveal', el.dataset.key); render({ force: true }); setTimeout(() => document.getElementById(el.dataset.key.replace('dsb', `sb:${S.itemRef}`))?.focus(), 0); },
+  stage: (el) => { setState({ stage: S.stage === el.dataset.stage ? null : el.dataset.stage }); render({ force: true }); },
   seen: () => human('seen', {}, 'Marked as seen'),
   theme: (el) => setTheme(el.dataset.appearance),
   autonomy: (el) => human('settings', { autonomy: el.dataset.level }, 'Autonomy changed; agents have been told'),
-  'edit-mission': () => { S.editMission = true; render({ force: true }); setTimeout(() => $('#mission-in')?.focus(), 0); },
-  'cancel-mission': () => { S.editMission = false; clearDraft('mission'); render({ force: true }); },
-  'save-mission': async () => { const m = val('mission-in'); S.editMission = false; clearDraft('mission'); await human('settings', { mission: m }, 'Mission saved'); },
-  'remote-new': () => { S.addRemote = true; render({ force: true }); setTimeout(() => $('#remote-in')?.focus(), 0); },
-  'remote-cancel': () => { S.addRemote = false; clearDraft('remote'); render({ force: true }); },
-  'remote-add': async () => { const v = val('remote-in'); if (!v) return; S.addRemote = false; clearDraft('remote'); await human('remote', { add: v }, 'Linked: agents in any clone of it find this project'); },
+  'edit-mission': () => { setState({ editMission: true }); render({ force: true }); setTimeout(() => $('#mission-in')?.focus(), 0); },
+  'cancel-mission': () => { setState({ editMission: false }); clearDraft('mission'); render({ force: true }); },
+  'save-mission': async () => { const m = val('mission-in'); setState({ editMission: false }); clearDraft('mission'); await human('settings', { mission: m }, 'Mission saved'); },
+  'remote-new': () => { setState({ addRemote: true }); render({ force: true }); setTimeout(() => $('#remote-in')?.focus(), 0); },
+  'remote-cancel': () => { setState({ addRemote: false }); clearDraft('remote'); render({ force: true }); },
+  'remote-add': async () => { const v = val('remote-in'); if (!v) return; setState({ addRemote: false }); clearDraft('remote'); await human('remote', { add: v }, 'Linked: agents in any clone of it find this project'); },
   'remote-remove': (el) => { if (confirm(`Unlink ${el.dataset.remote}?`)) human('remote', { remove: el.dataset.remote }, 'Unlinked'); },
-  'compose-kind': (el) => { S.composeKind = el.dataset.kind; render({ force: true }); },
+  'compose-kind': (el) => { setState({ composeKind: el.dataset.kind }); render({ force: true }); },
   'compose-send': async () => {
     const body = val('compose');
     if (!body) return;
@@ -1837,11 +1822,11 @@ const ACTIONS = {
       : kind === 'decision' ? await human('decide', { body }, 'Decision recorded: every agent will carry it')
       : await human('steer', { body }, 'Steer sent: agents will acknowledge it');
     // Refused: what they wrote goes back in the box, so nothing is lost.
-    if (!r && !$('#compose').value) { S.drafts.compose = body; $('#compose').value = body; }
+    if (!r && !$('#compose').value) { putIn('drafts', 'compose', body); $('#compose').value = body; }
   },
-  'toggle-add': () => { S.addWork = !S.addWork; if (!S.addWork) S.addMore = false; render({ force: true }); if (S.addWork) setTimeout(() => $('#nw-title')?.focus(), 0); },
-  'nw-priority': (el) => { S.drafts['nw-priority'] = el.dataset.p; render({ force: true }); },
-  'nw-more': () => { S.addMore = true; render({ force: true }); setTimeout(() => $('#nw-acceptance')?.focus(), 0); },
+  'toggle-add': () => { setState({ addWork: !S.addWork }); if (!S.addWork) setState({ addMore: false }); render({ force: true }); if (S.addWork) setTimeout(() => $('#nw-title')?.focus(), 0); },
+  'nw-priority': (el) => { putIn('drafts', 'nw-priority', el.dataset.p); render({ force: true }); },
+  'nw-more': () => { setState({ addMore: true }); render({ force: true }); setTimeout(() => $('#nw-acceptance')?.focus(), 0); },
   'add-work': () => addWork(false),
   'add-ready': () => addWork(true),
   answer: (el) => {
@@ -1873,7 +1858,7 @@ const ACTIONS = {
     const answer = val(src);
     if (!answer) return toast('Say what to do instead', true);
     clearDraft(src);
-    S.reveal.delete(`ov:${q}`);
+    removeFrom('reveal', `ov:${q}`);
     return human('answer', { question: Number(q), answer }, 'Overridden: the agent will be steered');
   },
   accept: (el) => human('accept', { item: el.dataset.item }, `Accepted ${el.dataset.item}`),
@@ -1886,7 +1871,7 @@ const ACTIONS = {
     const note = val(k);
     if (!note) return toast('Say what is missing; the next agent starts from it', true);
     clearDraft(k);
-    S.reveal.delete(k); S.reveal.delete('dsb');
+    removeFrom('reveal', k, 'dsb');
     return human('sendback', { item: el.dataset.item, note }, 'Sent back with your note');
   },
   approve: (el) => human('update', { item: el.dataset.item, stage: 'ready' }, 'Approved: ready for any agent'),
@@ -1974,27 +1959,27 @@ const ACTIONS = {
     const body = val(k);
     if (!body) return;
     clearDraft(k);
-    S.reveal.delete(k);
+    removeFrom('reveal', k);
     return human('steer', { item: el.dataset.item, body }, 'Steer attached to the item');
   },
   'item-steer': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('steer', { item: el.dataset.item, body }, 'Steer attached: whoever works on it must acknowledge'); },
   'item-note': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('comment', { item: el.dataset.item, body }, 'Noted'); },
-  'edit-item': () => { S.editItem = !S.editItem; clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes', 'ei-parent'); render({ force: true }); },
-  'ei-priority': (el) => { S.drafts['ei-priority'] = el.dataset.p; render({ force: true }); },
-  'ei-race': (el) => { S.drafts['ei-race'] = el.dataset.n; render({ force: true }); },
+  'edit-item': () => { setState({ editItem: !S.editItem }); clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes', 'ei-parent'); render({ force: true }); },
+  'ei-priority': (el) => { putIn('drafts', 'ei-priority', el.dataset.p); render({ force: true }); },
+  'ei-race': (el) => { putIn('drafts', 'ei-race', el.dataset.n); render({ force: true }); },
   'save-item': async (el) => {
     const args = { item: el.dataset.item, title: val('ei-title'), summary: val('ei-summary'), acceptance: val('ei-acceptance'), fixes: val('ei-fixes'), parent: val('ei-parent') };
     if (S.drafts['ei-priority']) args.priority = S.drafts['ei-priority'];
     if (S.drafts['ei-race']) args.race = Number(S.drafts['ei-race']);
-    S.editItem = false;
+    setState({ editItem: false });
     clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes', 'ei-parent');
     await human('update', args, 'Saved');
   },
-  'edit-pre': () => { S.editPre = !S.editPre; render({ force: true }); },
+  'edit-pre': () => { setState({ editPre: !S.editPre }); render({ force: true }); },
   'save-pre': async (el) => {
     const k = `pre:${el.dataset.item}`;
     const precondition = toPrecondition(val(k));
-    S.editPre = false;
+    setState({ editPre: false });
     clearDraft(k);
     await human('update', { item: el.dataset.item, precondition }, Object.keys(precondition).length ? 'Saved: it waits until that holds' : 'Removed: it no longer waits');
   },
@@ -2029,25 +2014,25 @@ const ACTIONS = {
   promote: async (el) => { await human('promote', { note: Number(el.dataset.note) }, 'A decision now: every agent gets it, and the note is retired'); },
   // Direction today names its sources: show that row, opening every note if it's one of the hidden ones.
   'memory-src': (el) => {
-    S.open.add(`memory:${S.slug}`);
+    addTo('open', `memory:${S.slug}`);
     render({ force: true });
     $(`#main [data-key="note:${el.dataset.note}"]`)?.scrollIntoView({ block: 'center' });
   },
-  'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
+  'feed-all': () => { setState({ feedAll: !S.feedAll }); render({ force: true }); },
   connect: () => connect(),
   'connect-deep': () => { setZoom('30m'); connect(); },
   notify: () => notifySettings(),
-  'rail-menu': () => { S.railMenu = !S.railMenu; renderRail(); },
+  'rail-menu': () => { setState({ railMenu: !S.railMenu }); renderRail(); },
   shortcuts: () => modal(shortcutsHtml({ mac: MAC })),
   launcher: () => (L.open ? closeLauncher() : openLauncher()),
   'workspace-settings': () => workspaceSettings(),
   feedback: (_el, { mine = false } = {}) => {
-    S.feedbackCtx = attached({ href: location.href, version: S.feedback?.version, ua: navigator.userAgent });
+    setState({ feedbackCtx: attached({ href: location.href, version: S.feedback?.version, ua: navigator.userAgent }) });
     modal(feedbackForm(S.feedbackCtx, esc));
     if (!mine) $('#fb-text').focus();
     showMine({ scroll: mine });
   },
-  'only-feedback': () => { S.onlyFeedback = !S.onlyFeedback; render({ force: true }); },
+  'only-feedback': () => { setState({ onlyFeedback: !S.onlyFeedback }); render({ force: true }); },
   'feedback-send': async (el) => {
     const text = val('fb-text');
     if (!text) return toast('Say what happened first', true);
@@ -2101,11 +2086,11 @@ const ACTIONS = {
   // Get started's "Link a project to its repository": that project, with its + repo form open.
   'link-repo': (el) => {
     if (el.dataset.slug === S.slug) return ACTIONS['remote-new']();
-    S.linkRepo = el.dataset.slug;
+    setState({ linkRepo: el.dataset.slug });
     go(el.dataset.slug);
   },
   'get-started-hide': async () => {
-    try { S.gs = await api('/api/get-started/hide', { method: 'POST' }); render({ force: true }); } catch (e) { toastError(e); }
+    try { setState({ gs: await api('/api/get-started/hide', { method: 'POST' }) }); render({ force: true }); } catch (e) { toastError(e); }
   },
   'more-repos': (el) => { el.remove(); loadRepos(el.dataset.q, Number(el.dataset.page)); },
   'pick-repo': async (el) => {
@@ -2167,17 +2152,17 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
   // On the home, a card's actions belong to its own project.
-  S.actSlug = el.closest('[data-project]')?.dataset.project ?? null;
+  setState({ actSlug: el.closest('[data-project]')?.dataset.project ?? null });
   // Picking something from the phone's Menu closes it.
-  if (S.railMenu && el.closest('.rail-foot')) { S.railMenu = false; renderRail(); }
+  if (S.railMenu && el.closest('.rail-foot')) { setState({ railMenu: false }); renderRail(); }
   fn(el);
 });
 document.addEventListener('change', (e) => {
   if (e.target.dataset?.action === 'feed-all') ACTIONS['feed-all']();
-  if (e.target.dataset?.draft && e.target.type === 'checkbox') S.drafts[e.target.dataset.draft] = e.target.checked;
+  if (e.target.dataset?.draft && e.target.type === 'checkbox') putIn('drafts', e.target.dataset.draft, e.target.checked);
 });
 document.addEventListener('input', (e) => {
-  if (e.target.dataset?.draft) S.drafts[e.target.dataset.draft] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+  if (e.target.dataset?.draft) putIn('drafts', e.target.dataset.draft, e.target.type === 'checkbox' ? e.target.checked : e.target.value);
 });
 document.addEventListener('focusout', () => setTimeout(() => { if (S.pending && !typing()) render(); }, 150));
 // What each shortcut in SHORTCUTS (web/shortcuts.js) does; the two lists name the same ids.
@@ -2224,7 +2209,7 @@ for (const type of ['click', 'focusin']) {
   }, true);
 }
 // The rail re-renders on every update: the workspace menu stays as the person left it.
-document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) S.orgOpen = e.target.open; }, true);
+document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) setState({ orgOpen: e.target.open }); }, true);
 
 // ── live updates ──
 // At most one a second, and none while the person scrolls or holds a pointer down: it waits, then applies (#392).
@@ -2242,9 +2227,9 @@ function listen() {
     online();
     if (!opened) return void (opened = true);
     const info = await api('/api/info').catch(() => null);
-    if (info && info.commit !== S.info?.commit) { S.info = info; scheduleRefresh(); }
+    if (info && info.commit !== S.info?.commit) { setState({ info }); scheduleRefresh(); }
   };
-  es.onmessage = () => { S.listStale = true; views.forget(); scheduleRefresh(); };
+  es.onmessage = () => { setState({ listStale: true }); views.forget(); scheduleRefresh(); };
   es.onerror = () => { es.close(); offline(); setTimeout(listen, 3000); };
 }
 
@@ -2255,7 +2240,7 @@ function listen() {
   // Back from Stripe's billing page (#231) or Checkout (#228), or sent by Free's limit: the workspace's settings,
   // over the home. From Checkout (?checkout=done) they say what happens next.
   const fromStripe = location.hash === '#/settings';
-  S.checkoutDone = fromStripe && /[?&]checkout=done\b/.test(location.search);
+  setState({ checkoutDone: fromStripe && /[?&]checkout=done\b/.test(location.search) });
   if (fromStripe) history.replaceState(null, '', `${location.pathname}#/`);
   // From the push that says their feedback is fixed (#297): what they sent, over the home.
   const fromFixed = location.hash === '#/feedback';
@@ -2266,22 +2251,20 @@ function listen() {
   const home = !location.hash || location.hash === '#/';
   const slug = location.hash.match(/^#\/p\/([^/]+)/)?.[1];
   const b = await bootData(api, { home, view: slug ? () => views.load(decodeURIComponent(slug)) : home ? () => api('/api/home') : null });
-  S.me = b.me;
-  S.person = b.person;
-  S.info = b.info ?? undefined;
+  setState({ me: b.me, person: b.person, info: b.info ?? null });
   // Billing (#231): only a workspace hub that takes payments answers; its owners get Workspace settings.
-  if (b.billing !== undefined) S.billing = b.billing;
+  if (b.billing !== undefined) setState({ billing: b.billing });
   // Feedback about nuworq (#295): only a hub that takes it shows the entry.
-  S.feedback = b.feedback;
-  if (b.projects) { S.projects = b.projects; S.listStale = false; }
-  if (home) { S.gs = b.gs; S.gsFresh = true; S.homeFresh = b.first; }
+  setState({ feedback: b.feedback });
+  if (b.projects) setState({ projects: b.projects, listStale: false });
+  if (home) setState({ gs: b.gs, gsFresh: true, homeFresh: b.first });
   // Relative times tick here (#530); only a change on the hub refetches, never a timer.
   startTicking();
   if (fromGitHub) return void (route(), listen(), backFromGitHub());
   if (fromStripe) return void (route(), listen(), workspaceSettings());
   if (fromFixed && S.feedback?.on) return void (route(), listen(), ACTIONS.feedback(null, { mine: true }));
   // One project opens it, unless Get started still has steps to show on All projects.
-  if (home && S.projects.length === 1 && !S.gs?.show) return void (S.homeFresh = null, go(S.projects[0].slug), listen());
+  if (home && S.projects.length === 1 && !S.gs?.show) return void (setState({ homeFresh: null }), go(S.projects[0].slug), listen());
   route();
   listen();
 })();
