@@ -203,7 +203,7 @@ export function agentArgs(name, argv, { read = () => '' } = {}) {
 // What the hub takes besides the protocol's parameters: fields its own clients send. The MCP process sends a
 // worker's role and runner with checkin; the runner posts usage, an operation of its own; retire's note is the
 // older spelling of notes.
-const EXTRA = { checkin: ['role', 'runner'], retire: ['note'], usage: ['usage'] };
+const EXTRA = { checkin: ['role', 'runner'], retire: ['note'], usage: ['usage'], signoff: ['stopped'] };
 
 // The first field args has that op doesn't take, with the nearest one it does: { field, near } or null.
 // A sample value for each required field, so a missing-field error can show a whole valid body (#715).

@@ -173,7 +173,8 @@ export function outcomes(hub, slug, { since, until } = {}) {
   const by_reviewer = v.by_model.filter((m) => m.reviewed || m.overturned).map((m) => ({ model: m.model, reviewed: m.reviewed, escapes: m.reviewed_escaped, overturned: m.overturned }));
   const cost = humanCost(hub, p, from, to);
   const human_actions = { total: cost.actions, landed: cost.landed, per_landed: cost.per_landed, median_wait_ms: cost.median_wait_ms };
-  return { version: OUTCOMES_VERSION, project: p.slug, since: from, until: to, items, by_model, by_agent, by_reviewer, human_actions, jobs: jobsTaken(hub, p, from, to) };
+  const jobs = jobsTaken(hub, p, from, to);
+  return { version: OUTCOMES_VERSION, project: p.slug, since: from, until: to, items, by_model, by_agent, by_reviewer, human_actions, jobs, stalls_by_cause: stallsByCause(jobs) };
 }
 
 // ── Each job an agent took (#348): what it was, on what, and how it came out ──
@@ -184,10 +185,30 @@ const TAKES = ['claimed', 'shaping', 'review_started', 'landing'];
 // Every event that can change a job's result: its take, its end, and the verdicts and lapses after it (#537).
 export const JOB_EVENTS = [...new Set([...TAKES, ...Object.values(FINISHED).flat(), 'accepted', 'sent_back', 'handoff', 'lease_expired'])];
 
-// Every job taken in [from, to], oldest first: { item, job, agent, model, difficulty, trial, at, result }.
+// Why a job stalled (#754), from the event that ended it. A hand-back: 'handoff' (the agent gave it back), 'signoff'
+// (its session ended holding it), or, for a runner's worker, 'exited' (it ended on its own: a crash, a context or API
+// error), 'timeout' (--max-minutes), 'budget' (its spending cap) or 'interrupted' (the runner was stopped). A lapsed
+// lease: 'quiet' (its agent went quiet), 'session' (its session or runner ended first) or 'restart' (the hub was
+// down). 'unrecorded': before causes were recorded (lapsed leases before #564, reviews and landings and hand-backs
+// before #754).
+export const STALL_CAUSES = ['quiet', 'exited', 'timeout', 'budget', 'interrupted', 'handoff', 'signoff', 'session', 'restart', 'unrecorded'];
+export function stallCause(x) {
+  const c = JSON.parse(x.data || '{}').cause;
+  if (x.type === 'lease_expired') return c === '' ? 'quiet' : STALL_CAUSES.includes(c) ? c : 'unrecorded';
+  return STALL_CAUSES.includes(c) ? c : 'unrecorded';
+}
+
+// Stalled jobs (jobsTaken) by cause, most first: [{ cause, stalls }].
+export function stallsByCause(jobs) {
+  const n = new Map();
+  for (const j of jobs) if (j.result === 'stalled') n.set(j.cause, (n.get(j.cause) ?? 0) + 1);
+  return [...n].map(([cause, stalls]) => ({ cause, stalls })).sort((a, b) => b.stalls - a.stalls || STALL_CAUSES.indexOf(a.cause) - STALL_CAUSES.indexOf(b.cause));
+}
+
+// Every job taken in [from, to], oldest first: { item, job, agent, model, difficulty, trial, at, result, turns, cause }.
 // A building job's result: landed (without being sent back), escaped (landed, and a later item repairs it), sent
 // back, not chosen (a race kept another attempt), stalled (handed off, or its lease lapsed), or open (still going,
-// or accepted and not landed yet). Any other job: done, stalled or open.
+// or accepted and not landed yet). Any other job: done, stalled or open. cause: why it stalled (stallCause), else null.
 export function jobsTaken(hub, p, from, to = hub.now()) {
   const takes = hub.q(`SELECT e.*, i.seq, i.stage AS item_stage FROM events e JOIN items i ON i.id = e.item_id
     WHERE e.project_id = ? AND e.type IN (${TAKES.map(() => '?').join(', ')}) AND e.at >= ? AND e.at <= ? ORDER BY e.at, e.id`).all(p.id, ...TAKES, from, to);
@@ -208,10 +229,11 @@ export function jobsTaken(hub, p, from, to = hub.now()) {
     const turns = counted.length ? counted.reduce((a, r) => a + r.turns, 0) : null;
     const lapsed = (x) => x.type === 'lease_expired' && (JSON.parse(x.data || '{}').agent ?? (job === 'review' ? e.actor : null)) === e.actor;
     let result = 'open';
+    let cause = null;
     const end = after.findIndex((x) => (mine(x) && (FINISHED[job].includes(x.type) || x.type === 'handoff')) || lapsed(x));
     if (end >= 0) {
       const x = after[end];
-      if (x.type === 'handoff' || x.type === 'lease_expired') result = 'stalled';
+      if (x.type === 'handoff' || x.type === 'lease_expired') { result = 'stalled'; cause = stallCause(x); }
       else if (job !== 'work') result = 'done';
       else {
         // Built and submitted: the verdict that follows decides it.
@@ -222,7 +244,7 @@ export function jobsTaken(hub, p, from, to = hub.now()) {
         else if (verdict && e.item_stage === 'done') result = repaired.has(e.item_id) ? 'escaped' : 'landed';
       }
     }
-    return { item: `#${e.seq}`, job, agent: e.actor, model: d.model || null, difficulty: d.difficulty ?? 'standard', trial: d.trial ?? null, at: e.at, result, turns };
+    return { item: `#${e.seq}`, job, agent: e.actor, model: d.model || null, difficulty: d.difficulty ?? 'standard', trial: d.trial ?? null, at: e.at, result, turns, cause };
   });
 }
 
@@ -333,7 +355,7 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
   const items = [], waits = [], jobs = [], taken = [];
   const projects = hub.projects().filter((p) => !scope || scope.includes(p.slug)).map((p) => {
     const now = projectFigures(hub, p, from, to);
-    jobs.push(...pricedJobs(hub, p, from, to));
+    jobs.push(...pricedJobs(hub, p, from, to, now.jobs));
     items.push(...now.items);
     waits.push(...now.waits);
     taken.push(...now.jobs);
@@ -348,6 +370,7 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
     version: OUTCOMES_VERSION, period, since: from, until: to,
     takeaway: takeaway({ summary, projects, by_model }),
     summary, projects, by_model, by_agent, calibration: calibration(items), routing: routingResults(jobs), turns: turnsByJob(taken),
+    stalls_by_cause: stallsByCause(taken),
   };
 }
 
@@ -355,8 +378,8 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
 
 // Every finished job in [from, to] that names its model, with what it cost: the usage its agent recorded on the
 // item, shared evenly among that agent's jobs there. cost_usd null: not known (a local model, or nothing recorded).
-export function pricedJobs(hub, p, from, to) {
-  const jobs = jobsTaken(hub, p, from, to).filter((j) => j.model && j.result !== 'open' && j.result !== 'not_chosen');
+export function pricedJobs(hub, p, from, to, taken = jobsTaken(hub, p, from, to)) {
+  const jobs = taken.filter((j) => j.model && j.result !== 'open' && j.result !== 'not_chosen');
   // Where llm-proxy measured an agent on an item, its rows stand in for what was reported, so nothing counts twice.
   const spent = new Map();
   for (const r of hub.q('SELECT u.agent, u.cost_usd, u.source, i.seq FROM usage u JOIN items i ON i.id = u.item_id WHERE u.project_id = ?').all(p.id)) {

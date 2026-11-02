@@ -51,10 +51,13 @@ export function effective(hub, slug, { since, until }) {
       landed_with_any: landed.filter((i) => i.sent_back + i.stalls > 0).length,
       sent_back_by: count(events(['sent_back']), (e) => kindOf(e.actor)),
       handed_back_from: count(events(['handoff']), (e) => data(e).stage ?? 'unrecorded (before #734)'),
-      lapsed_leases_by_cause: count(events(['lease_expired']), (e) => ({ '': 'went quiet', restart: 'hub restart', session: 'worker or session ended' })[data(e).cause] ?? (data(e).cause === undefined ? 'review or landing' : data(e).cause)),
+      lapsed_leases_by_cause: count(events(['lease_expired']), (e) => ({ '': 'went quiet', restart: 'hub restart', session: 'worker or session ended' })[data(e).cause] ?? (data(e).cause === undefined ? 'unrecorded (a review or landing before #754)' : data(e).cause)),
+      // Every stalled job (#754), whatever ended it: a hand-back's cause (handoff, signoff, or a runner worker's exit,
+      // timeout, budget or interrupt) or a lapsed lease's (quiet, session, restart). src/outcomes.js stallCause.
+      stalls_by_cause: Object.fromEntries(o.stalls_by_cause.map((s) => [s.cause, s.stalls])),
       landing_blocked: count(events(['pr_blocked', 'pr_merge_failed', 'conflict']), (e) => e.type),
     },
-    building_jobs: { taken: work.length, results: count(work, (j) => j.result), cheaper_model_trials: work.filter((j) => j.trial).length },
+    building_jobs: { taken: work.length, results: count(work, (j) => j.result), stalled_by_cause: count(work.filter((j) => j.result === 'stalled'), (j) => j.cause), cheaper_model_trials: work.filter((j) => j.trial).length },
     other_jobs: count(o.jobs.filter((j) => j.job !== 'work'), (j) => `${j.job}: ${j.result}`),
     cycle_hours: { median: hours(quantile(landed.map((i) => i.cycle_ms), 0.5)), p90: hours(quantile(landed.map((i) => i.cycle_ms), 0.9)) },
     people: {

@@ -28,6 +28,18 @@ export { slugify, normRemote };
 
 const GIT_CHECK = Symbol('git check');
 const CREATED = Symbol('created'); // on the project row project() just created
+const STALL = Symbol('stall'); // signoff → handoff: why the work was handed back (#754)
+// Why a runner's worker stopped (#754, src/runner.js stopHeadline), as signoff's stopped field brings it: kept
+// to the fields each cause has, or null when it isn't one.
+function stoppedOf(s) {
+  if (!s || typeof s !== 'object') return null;
+  const n = (x) => (Number.isFinite(Number(x)) && x !== '' && x != null ? Number(x) : null);
+  if (s.cause === 'timeout') return { cause: 'timeout', minutes: n(s.minutes) };
+  if (s.cause === 'budget') return { cause: 'budget', usd: n(s.usd) };
+  if (s.cause === 'interrupted') return { cause: 'interrupted' };
+  if (s.cause === 'exited') return { cause: 'exited', code: Number.isInteger(s.code) ? s.code : typeof s.code === 'string' ? s.code.slice(0, 20) : null };
+  return null;
+}
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
 // One agent can't flood a hub (#766): its writes per minute, and what a project or hub holds at most.
 const WRITE_OPS = ['propose', 'ask', 'comment', 'learn', 'usage'];
@@ -2212,10 +2224,12 @@ export class Hub extends EventEmitter {
             data: { agent: it.last_worker, stage: 'active', cause: why },
           });
         } else {
+          const holder = it.holder; // patch clears it: read before, or a landing lapse names no one (#754)
           this.patch(it, { holder: null, lease_until: null });
+          // With their cause too (#754). A review's names no agent: snapshot and fit() count an agent's lapses as missed work.
           this.event(p, it.stage === 'landing'
-            ? { item: it, actor: SYSTEM, type: 'lease_expired', headline: `${it.holder} went quiet while landing #${it.seq}; another agent can land it`, data: { agent: it.holder } }
-            : { item: it, actor: SYSTEM, type: 'lease_expired', headline: `Review lease on #${it.seq} expired; it's open for review again` });
+            ? { item: it, actor: SYSTEM, type: 'lease_expired', headline: `${holder} went quiet while landing #${it.seq}; another agent can land it`, data: { agent: holder, stage: 'landing', cause: why } }
+            : { item: it, actor: SYSTEM, type: 'lease_expired', headline: `Review lease on #${it.seq} expired; it's open for review again`, data: { stage: 'verifying', cause: why } });
         }
         if (it.stage !== 'verifying') this.stepUp(p, it, 'lost its lease');
       }
@@ -3751,7 +3765,8 @@ const AGENT_OPS = {
         ...(park ? { parked_by: SYSTEM } : {}),
       });
     }
-    this.event(p, { item, actor: agent, type: 'handoff', headline: `${agent} handed off #${item.seq}: ${headline}`, summary, detail, data: { stage: was } });
+    // Why (#754): 'handoff' when the agent handed it back itself, else what signoff says (stoppedOf, or 'signoff').
+    this.event(p, { item, actor: agent, type: 'handoff', headline: `${agent} handed off #${item.seq}: ${headline}`, summary, detail, data: { stage: was, ...(args[STALL] ?? { cause: 'handoff' }) } });
     if (park) {
       this.event(p, {
         item, actor: SYSTEM, type: 'kept_parked',
@@ -3929,8 +3944,10 @@ const AGENT_OPS = {
   signoff(p, agent, args) {
     const held = this.heldBy(p, agent);
     const note = str(args.headline) || 'Signed off';
+    // What it held goes back saying why (#754): a runner's worker that stopped says how, any other session signed off.
+    const why = stoppedOf(args.stopped) ?? { cause: 'signoff' };
     for (const item of held) {
-      AGENT_OPS.handoff.call(this, p, agent, { item: item.seq, headline: note, summary: args.summary });
+      AGENT_OPS.handoff.call(this, p, agent, { item: item.seq, headline: note, summary: args.summary, [STALL]: why });
     }
     // Operator questions it held (#467) are free again for the next operator.
     this.q(`UPDATE questions SET held_by = '', held_until = 0 WHERE project_id = ? AND held_by = ?`).run(p.id, agent);

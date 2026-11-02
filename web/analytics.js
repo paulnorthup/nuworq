@@ -69,8 +69,38 @@ export function analyticsPage(o, { esc, dur, period = o?.period ?? '14d', open =
   const calSec = calibrationSection(o.calibration, { esc });
   const routeSec = routingSection(o.routing, { esc });
   const turnSec = turnsSection(o.turns, { esc });
+  const stallSec = stallSection(o.stalls_by_cause);
   const top = `${head}${take}<div class="an-switch">${seg}</div>`;
-  return wide ? `${top}${columns(`${projects}${calSec}${turnSec}`, `${modelSec}${agentSec}${routeSec}`)}` : `${top}${projects}${modelSec}${agentSec}${routeSec}${calSec}${turnSec}`;
+  return wide ? `${top}${columns(`${projects}${stallSec}${calSec}${turnSec}`, `${modelSec}${agentSec}${routeSec}`)}` : `${top}${projects}${modelSec}${agentSec}${routeSec}${stallSec}${calSec}${turnSec}`;
+}
+
+// What each stall cause means to an owner (src/outcomes.js stallCause).
+const CAUSES = {
+  quiet: ['Went quiet', 'its agent stopped calling'], exited: ['Worker exited', 'a crash, or a context or API error'],
+  timeout: ['Ran out of time', 'stopped at --max-minutes'], budget: ['Hit its spending cap', '--worker-usd or a land cap'],
+  interrupted: ['Runner stopped', 'Ctrl-C or a restart'], handoff: ['Handed back', 'the agent gave it up'],
+  signoff: ['Signed off', 'its session ended holding it'], session: ['Session ended', 'before its lease ran out'],
+  restart: ['Hub restarted', 'its lease ran out meanwhile'], unrecorded: ['Not recorded', 'from before causes were kept'],
+};
+const STALLS_SHOWN = 5;
+
+// Why work stalled (#754): jobs handed back or left to lapse, by cause, so the one that wastes most comes first, in
+// words; then the top causes as bars on one scale (amounts: no state color), the rest summed in a line.
+export function stallSection(list) {
+  if (!list?.length) return '';
+  const total = list.reduce((n, s) => n + s.stalls, 0);
+  const max = list[0].stalls;
+  const name = (c) => CAUSES[c]?.[0] ?? c;
+  const [first] = list;
+  const verdict = `${name(first.cause)} is the most common: ${first.stalls} of ${total} stall${total === 1 ? '' : 's'}${CAUSES[first.cause] ? ` (${CAUSES[first.cause][1]})` : ''}.`;
+  const rest = list.slice(STALLS_SHOWN).reduce((n, s) => n + s.stalls, 0);
+  const rows = list.slice(0, STALLS_SHOWN).map((s) => `<div class="step"><dt>${name(s.cause)}</dt>
+      <dd><span class="bar" style="width:${Math.max(2, Math.round((100 * s.stalls) / max))}%"></span></dd>
+      <dd class="n">${s.stalls}</dd></div>`).join('');
+  const others = rest ? `<div class="step unrated"><dt>Other causes <span class="s">${rest}</span></dt></div>` : '';
+  return `<section class="sec"><header><h2 data-new="stall-causes">Why work stalled</h2><span class="count">${total}</span><span class="hint">jobs handed back or left to lapse, by cause</span></header>
+    <p class="an-verdict">${verdict}</p>
+    <div class="an-lines"><dl class="funnel an-cal">${rows}${others}</dl></div></section>`;
 }
 
 const JOBS = { work: 'Building', land: 'Landing', tidy: 'Tidying', review: 'Reviewing', shape: 'Shaping' };
