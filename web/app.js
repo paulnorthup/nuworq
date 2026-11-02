@@ -30,7 +30,7 @@ import { morph } from './morph.js';
 import { radioKeys } from './radiogroup.js';
 import { liveGate } from './pace.js';
 import { predict, placeholder } from './instant.js';
-import { held, loadProject, shell } from './switching.js';
+import { held, loadProject, shell, paintInTwo } from './switching.js';
 import { bootData } from './boot.js';
 import { dataCache } from './data.js';
 import { S, setState, toggleIn, addTo, putIn, removeFrom, PAGE } from './store.js';
@@ -298,6 +298,7 @@ async function refresh({ force = false, fresh = true, list = true } = {}) {
     if (!S.projects.length) $('#main').innerHTML = `<div class="loading">Can't reach the nuworq hub. Is <code>nuworq serve</code> running?</div>`;
     return;
   }
+  if (S.slug && shellOnly === S.slug) return; // the switch's second paint draws it (#637)
   render({ force });
 }
 
@@ -324,9 +325,11 @@ function render({ force = false } = {}) {
   markNew(document); // what just shipped (#130), redrawn with everything else
 }
 
+// The project picked this frame (#637): only its shell is drawn until the frame has painted, held view or not.
+let shellOnly = null;
 function mainHtml() {
   if (S.analytics) return analytics();
-  if (S.slug && S.view?.project.slug === S.slug) return project(S.view);
+  if (S.slug && S.view?.project.slug === S.slug && shellOnly !== S.slug) return project(S.view);
   if (S.missing) return missingProject(S.missing, { esc });
   // Picked a moment ago (#503): its header from what the app holds, at once; the view fills it in place.
   if (S.slug) return projectShell(S.slug);
@@ -359,7 +362,16 @@ function route() {
   if (ref !== S.itemRef) setState({ itemRef: ref, item: prefetched(slug, ref), deep: z() >= 2, editItem: false, editPre: false });
   if (ref) remember(slug, ref);
   // An item opens on this frame: from what was fetched as the pointer rested on it, else as a placeholder.
-  if ((moved && slug && !S.analytics) || (ref && S.view?.project.slug === slug)) render({ force: true });
+  if (moved && slug && !S.analytics) {
+    // Its header and pulse in the first frame, the whole page in a task after it (#637): a refresh that answers at
+    // once (a view fetched ahead) waits for that too, so it never builds the big page before the header paints.
+    shellOnly = slug;
+    paintInTwo(() => render({ force: true }), () => {
+      if (shellOnly !== slug) return;
+      shellOnly = null;
+      if (S.slug === slug) render({ force: true });
+    });
+  } else if (ref && S.view?.project.slug === slug) render({ force: true });
   refresh({ force: true, fresh: !moved, list: false }).then(() => linking && $('#remote-in')?.focus());
 }
 // Opening an item (#393): fetched when the pointer rests on its link, or as a finger lands on it, so it opens

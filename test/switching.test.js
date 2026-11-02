@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { view, projectList } from '../src/insight.js';
-import { held, viewLoader, loadProject, shell } from '../web/switching.js';
+import { held, viewLoader, loadProject, shell, paintInTwo } from '../web/switching.js';
 import { placeholder } from '../web/instant.js';
 
 // #503: a project appears the moment it's picked, from what the app holds; the hub's answer then fills it in place.
@@ -98,11 +98,30 @@ describe('a project shows the moment it is picked (#503)', () => {
   test('the app draws the held project on the click, then fetches without the list unless a live change marked it', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.match(app, /loading: slug, view: slug \? held\(slug, S\)\?\.view \?\? null : S\.view \}\);/, 'the last view seen, else the shell');
-    assert.match(app, /if \(\(moved && slug && !S\.analytics\) \|\| [^\n]*\) render\(\{ force: true \}\);\n\s*refresh\(\{ force: true, fresh: !moved, list: false \}\)/, 'drawn before the fetch');
+    assert.match(app, /shellOnly = slug;\n\s*paintInTwo\(\(\) => render\(\{ force: true \}\), [^]*?\n\s*refresh\(\{ force: true, fresh: !moved, list: false \}\)/, 'drawn before the fetch');
     assert.match(app, /list: list \|\| S\.listStale \|\| !S\.projects\.length \? \(\) => data\.read\('\/api\/projects', \{ fresh \}\) : null/);
     assert.match(app, /es\.onmessage = \(m\) => \{ data\.changed\(changeOf\(m\.data\)\); setState\(\{ listStale: true \}\); scheduleRefresh\(\); \};/, 'a change drops only what it touched (#601)');
     assert.match(app, /if \(slug !== S\.slug\) return; \/\/ they moved on/, 'an answer for a project left behind never draws over the one picked');
     assert.match(app, /addEventListener\('focusin', \(e\) => prefetchView\(projectTarget\(e\)\)\)/, 'focus starts loading');
     assert.match(app, /const run = L\.results\[L\.sel\]\?\.run;[^]*?prefetchView\(/, 'so does the launcher\'s highlighted result');
+  });
+});
+
+describe('a big project paints its header first, the rest after (#637)', () => {
+  test('the first paint runs now; the rest waits for a later task', () => {
+    const order = [], queued = [];
+    paintInTwo(() => order.push('header'), () => order.push('page'), (fn) => queued.push(fn));
+    assert.deepEqual(order, ['header'], 'only the header in this frame');
+    assert.equal(queued.length, 1);
+    queued[0]();
+    assert.deepEqual(order, ['header', 'page'], 'then the whole page, in place');
+  });
+
+  test("with a held view, route() paints only the shell first, and a refresh that answers at once doesn't draw the page early", () => {
+    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    assert.match(app, /if \(S\.slug && S\.view\?\.project\.slug === S\.slug && shellOnly !== S\.slug\) return project\(S\.view\);/, 'a held view waits for the second paint');
+    assert.match(app, /if \(shellOnly !== slug\) return;\n\s*shellOnly = null;\n\s*if \(S\.slug === slug\) render\(\{ force: true \}\);/, 'the second paint draws the page, once, for the project still picked');
+    assert.match(app, /if \(S\.slug && shellOnly === S\.slug\) return; \/\/ the switch's second paint draws it/, 'refresh leaves the drawing to it');
+    assert.match(readFileSync(new URL('../web/switching.js', import.meta.url), 'utf8'), /export const afterPaint = \(fn\) => requestAnimationFrame\(\(\) => setTimeout\(fn, 0\)\);/, 'after the frame has painted, in a task of its own');
   });
 });
