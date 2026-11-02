@@ -8,6 +8,38 @@ export const AGENTS = ['claude', 'codex', 'opencode', 'pi'];
 export const ROTE = ['land', 'tidy'];
 const MAX_TIERS = 6;
 
+// The tiers a project uses for an agent it set none for (#723), cheapest first. Only Claude's list has been checked;
+// Codex, opencode and pi keep the runner's --model until someone sets theirs. The freshness sweep (src/freshness.js)
+// checks this list against the newest Claude models.
+export const DEFAULT_TIERS = { claude: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] };
+
+// Claude models newer than the default tier of their family (#723), from the model ids agents checked in with:
+// [{ model, replaces }], newest per family. claude-opus-5-5, claude-sonnet-6 and dated ids (…-20261101) parse.
+const CLAUDE_ID = /^claude-(haiku|sonnet|opus)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/;
+const claudeVersion = (m) => { const v = CLAUDE_ID.exec(m ?? ''); return v && { family: v[1], n: Number(v[2]) * 100 + Number(v[3] ?? 0) }; };
+export function newerClaude(seen, defaults = DEFAULT_TIERS.claude) {
+  const out = [];
+  for (const old of defaults) {
+    const was = claudeVersion(old);
+    if (!was) continue;
+    const best = [...new Set(seen)].map((m) => ({ m, v: claudeVersion(m) })).filter(({ v }) => v?.family === was.family && v.n > was.n)
+      .sort((a, b) => b.v.n - a.v.n)[0];
+    if (best) out.push({ model: best.m, replaces: old });
+  }
+  return out;
+}
+
+// The tiers in use: the project's own for each agent it set, the default for the rest. own: as stored (JSON or object).
+export function tiersOf(own) {
+  const set = typeof own === 'string' ? JSON.parse(own || '{}') : own ?? {};
+  const out = {};
+  for (const agent of AGENTS) {
+    const list = set[agent]?.length ? set[agent] : DEFAULT_TIERS[agent];
+    if (list?.length) out[agent] = list;
+  }
+  return out;
+}
+
 // How hard an item is (#348), rated when it's shaped: unrated counts as standard.
 export const DIFFICULTIES = ['rote', 'standard', 'hard'];
 export const difficultyOf = (item) => item?.difficulty || 'standard';

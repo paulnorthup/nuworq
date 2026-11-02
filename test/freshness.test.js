@@ -18,6 +18,19 @@ function setup() {
 }
 
 describe('the weekly freshness sweep (#181)', () => {
+  test('a newer Claude model than the default tiers, seen on the hub, makes the sweep propose an update (#723)', () => {
+    const { hub, agent, sweeps, tick } = setup();
+    agent('checkin', 'w1', { model: 'claude-opus-5-5' });
+    tick(7 * DAY);
+    freshen(hub);
+    assert.doesNotMatch(sweeps()[0].acceptance, /Newer Claude models/, 'the defaults are the newest seen');
+    hub.q('UPDATE items SET stage = ? WHERE sweep = 1').run('done');
+    agent('checkin', 'w2', { model: 'claude-opus-6-0' });
+    tick(7 * DAY);
+    freshen(hub);
+    assert.match(sweeps()[1].acceptance, /Newer Claude models than nuworq's default tiers \(claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5\) are in use on this hub: claude-opus-6-0 \(newer than claude-opus-5-5\)\. Propose an update: in nuworq's own repository, DEFAULT_TIERS in src\/models\.js/);
+  });
+
   test('one "keep <project> fresh" item every 7 days, never two open at once', () => {
     const { hub, human, sweeps, tick } = setup();
     assert.equal(FRESH_EVERY, 7 * DAY);

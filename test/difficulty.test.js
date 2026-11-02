@@ -84,7 +84,7 @@ describe('trials', () => {
   test('a trial builds a tier down, the claim records it, and a failed one steps back up to the top', () => {
     const { hub, set, op, row, route, create } = world();
     set({ model_routing: true, model_tiers: TIERS, model_trial: 100 });
-    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, trial: 100, race: 0, quality: 'balanced', qualities: QUALITY });
+    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, own: TIERS, defaults: TIERS, trial: 100, race: 0, quality: 'balanced', qualities: QUALITY });
     create('Build', { priority: 'now' });
     assert.equal(route().model, 'claude-opus-5-5', '"now" work never tries a cheaper model');
     assert.equal(row(1).trial, '', 'and nothing is decided for it');
@@ -110,12 +110,35 @@ describe('trials', () => {
 
   test('without routing, or with one tier, nothing is tried and nothing decided', () => {
     const { set, row, route, create } = world();
-    set({ model_trial: 100, model_tiers: TIERS });
+    set({ model_routing: false, model_trial: 100, model_tiers: TIERS });
     create('Build');
     assert.equal(route().model, undefined);
     set({ model_routing: true, model_tiers: { claude: 'claude-opus-5-5' } });
     assert.equal(route().model, 'claude-opus-5-5');
     assert.equal(row(1).trial, '');
+  });
+
+  test('a project that never set tiers tries a cheaper model on the default ones (#723)', () => {
+    const { hub, set, row, route, create } = world();
+    set({ model_trial: 100 });
+    assert.deepEqual({ ...hub.q("SELECT model_routing, model_tiers FROM projects WHERE slug = 'p'").get() }, { model_routing: 1, model_tiers: '{}' }, 'on by default, no tiers of its own');
+    create('Build');
+    assert.equal(route().model, 'claude-sonnet-5-5', 'one tier below the default top, claude-opus-5-5');
+    assert.equal(row(1).trial, 'down');
+    assert.equal(hub.route('', { runner: true, kind: 'codex', model: 'gpt-5' })[0].model, 'gpt-5', 'codex has no default: its runner\'s --model');
+    hub.q("UPDATE items SET stage = 'landing', stage_since = 0, holder = NULL WHERE seq = 1").run();
+    assert.deepEqual([route('claude-opus-5-5').mode, route('claude-opus-5-5').model], ['land', 'claude-haiku-5-5'], 'a landing job on the cheapest default tier');
+  });
+
+  test('a runner on the cheapest default tier has nothing cheaper to try, so no trial is decided (#723)', () => {
+    const { hub, set, row, create } = world();
+    set({ model_trial: 100 });
+    create('Build');
+    const haiku = () => hub.route('', { runner: true, kind: 'claude', model: 'claude-haiku-5-5' })[0];
+    assert.equal(haiku().model, 'claude-haiku-5-5', 'the defaults stop at its --model');
+    assert.equal(row(1).trial, '', 'a one-model list is no trial');
+    assert.equal(hub.route('', { runner: true, kind: 'claude', model: 'claude-sonnet-5-5' })[0].model, 'claude-haiku-5-5', 'a Sonnet runner still tries one down');
+    assert.equal(row(1).trial, 'down');
   });
 
   test('a raced trial: two slots, the top tier and one down, a model for each worker the runner starts', () => {
