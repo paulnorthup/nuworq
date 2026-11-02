@@ -23,7 +23,7 @@ test('Settings has a row per setting, switches for staffing and freshness, Park 
   assert.match(dialog, /role="switch" aria-checked="\$\{on\}" aria-labelledby="set-\$\{id\}"/);
   assert.match(dialog, /sw\('runner', !!P\.runner, P\.runner \? 'runner-off' : 'runner-on'\)/);
   assert.match(dialog, /data-action="staffing-from-settings">Change</);
-  assert.match(dialog, /\$\{P\.github \? 'Manage' : 'Connect GitHub'\}/);
+  assert.match(dialog, /\$\{P\.github \? 'Manage' : 'Set up'\}/);
   const below = dialog.slice(dialog.indexOf('<h3>This project</h3>'));
   assert.ok(below.includes('data-action="park"') && below.includes('data-action="unpark-project"') && below.includes('data-action="remove-project"'));
   assert.ok(dialog.indexOf('<h3>This project</h3>') > dialog.indexOf("'GitHub'"), 'Park and Remove come last');
