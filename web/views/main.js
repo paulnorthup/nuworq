@@ -558,8 +558,13 @@ function steering(v) {
   // Memory distilled for people (#552): a gist first, the full words one tap away; a review's recommendation decided
   // with one tap. Without a gist yet, the words themselves.
   const behind = (label, body) => `<details class="mem-full"><summary>${label}</summary><div class="mem-words">${inline(body)}</div></details>`;
-  const decisions = v.decisions.map((d) => `<div class="row-item" data-key="note:${d.id}"><div class="body"><div class="h">${inline(d.gist ?? d.body)}</div>${d.gist ? behind('Full text', d.body) : ''}</div>
-    <div class="acts"><span class="age">${when(d)} ago</span><button class="btn ghost small" data-action="retire" data-note="${d.id}">Retire</button></div></div>`).join('');
+  // Retire shows where retiring is recommended; elsewhere it waits behind the row's ⋯, one tap away (#651).
+  // A popover, so the rows' rounded clip never cuts it off, and a tap elsewhere or Escape shuts it. Its anchor is the
+  // wrapper, not the ⋯: a "new" tag anchors itself to the ⋯ and would take the menu's anchor away.
+  const more = (id, title, isNew) => `<span class="row-more-at" style="anchor-name:--more-${id}"><button class="btn ghost small row-more" popovertarget="more-${id}" aria-label="More" title="More"${isNew ? ' data-new="retire-in-menu"' : ''}>⋯</button>
+    <div class="row-menu" id="more-${id}" popover style="position-anchor:--more-${id}"><button data-action="retire" data-note="${id}" title="${title}">Retire</button></div></span>`;
+  const decisions = v.decisions.map((d, i) => `<div class="row-item" data-key="note:${d.id}"><div class="body"><div class="h">${inline(d.gist ?? d.body)}</div>${d.gist ? behind('Full text', d.body) : ''}</div>
+    <div class="acts"><span class="age">${when(d)} ago</span>${more(d.id, 'Stop giving it to agents', i === 0)}</div></div>`).join('');
   const all = z() >= 2 || S.open.has(`memory:${S.slug}`);
   // A recommendation waiting for the person comes first, so it's among those shown before 30m.
   const pending = (n) => !!n.advice && !n.advice.by && n.advice.do !== 'keep';
@@ -574,7 +579,7 @@ function steering(v) {
   };
   // Agents get the ten notes that bear on their work (#443); a note marked always-show reaches every one of them.
   const notes = shownNotes.map((n, i) => `<div class="row-item note-item" data-key="note:${n.id}"><div class="body"><div class="h">${inline(n.gist ?? n.note ?? n.body)}</div>${n.gist ? behind('Agent\'s words', n.body) : ''}<div class="s">${who(n.by)}${n.item ? ` on ${refLink(n.item)}` : ''}</div>${advice(n)}</div>
-    <div class="acts"><span class="age">${when(n)} ago</span><button class="btn ghost small${n.always ? ' on' : ''}" data-action="always" data-note="${n.id}" data-on="${n.always ? 0 : 1}" aria-pressed="${!!n.always}" title="${n.always ? 'Every agent gets it, whatever it works on. Tap to stop' : 'Give it to every agent, whatever it works on (at most 3)'}"${i === 0 ? ' data-new="always-show"' : ''}>${n.always ? 'Always shown' : 'Always show'}</button>${pending(n) && n.advice.do === 'retire' ? '' : `<button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button>`}</div></div>`).join('');
+    <div class="acts"><span class="age">${when(n)} ago</span><button class="btn ghost small${n.always ? ' on' : ''}" data-action="always" data-note="${n.id}" data-on="${n.always ? 0 : 1}" aria-pressed="${!!n.always}" title="${n.always ? 'Every agent gets it, whatever it works on. Tap to stop' : 'Give it to every agent, whatever it works on (at most 3)'}"${i === 0 ? ' data-new="always-show"' : ''}>${n.always ? 'Always shown' : 'Always show'}</button>${pending(n) && n.advice.do === 'retire' ? '' : more(n.id, 'Outdated or wrong', !decisions && i === 0)}</div></div>`).join('');
   const sub = (label, hint) => `<div class="sublabel">${label}<span>${hint}</span></div>`;
   // Direction today (#552): a few plain lines a person checks direction by, each naming where it comes from.
   const src = (s) => {
