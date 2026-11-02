@@ -17,6 +17,8 @@ const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
 const RUNNER_ON_DUTY = 5 * MIN; // a runner that polled this recently is on duty (#185): ten of its default 30s polls
 const CHURN_AGENTS = 3;
+// The guide's Start an operator (#712), opened at that part; relative, so it stays in the workspace.
+export const OPERATOR_GUIDE = 'guide#operator';
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 // The 30-second line's first part (#506): how many things need you, and how many of them are now ("4 things need
@@ -348,9 +350,15 @@ function build(hub, p, t, { light = false } = {}) {
 
   // A question to an issue's reporter comes to you only once they've had reporter_wait hours to answer on GitHub.
   const wait = p.reporter_wait * HOUR;
-  // A question to an operator is an operator session's to answer (next mode "answer"), never yours.
+  // A question to an operator is an operator session's to answer (next mode "answer"); with no operator here for a
+  // day it's yours too (#712): its steps to tick and its answer box, as if asked of you, and the guide's operator part.
   // A reply held from someone outside the project (#471) comes to you at once, to pass on or answer yourself.
-  for (const q of openQs.filter((q) => (q.blocking || landedSteps(q)) && q.audience !== 'operator' && !(q.reporter && !q.held_reply && t - q.at < wait))) {
+  const operatorHere = agents.some((a) => t - a.last_seen < DAY && json(a.has, []).includes('operator'));
+  const carded = (q) => (q.audience === 'operator'
+    ? !operatorHere && (q.blocking || landedSteps(q) || json(q.steps, []).length > 0) // steps wait for someone even when the asker went on
+    : (q.blocking || landedSteps(q)) && !(q.reporter && !q.held_reply && t - q.at < wait));
+  for (const q of openQs.filter(carded)) {
+    const forOperator = q.audience === 'operator';
     const it = byId.get(q.item_id);
     // An operator's escalation carries the question it was asked, who asked it, and what the operator found.
     const orig = q.escalates ? hub.q('SELECT question, asked_by FROM questions WHERE id = ?').get(q.escalates) : null;
@@ -360,9 +368,13 @@ function build(hub, p, t, { light = false } = {}) {
       headline: q.question,
       sub: [it?.title, orig ? `${q.asked_by} (operator) escalated ${orig.asked_by}'s question ${timeIn(q.at)} ago` : `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${timeIn(q.at)} ago`,
         held ? `@${q.reporter} replied; they have no write access, so it waits for you to pass it on` : q.reporter && 'no reply yet',
+        forOperator && 'no operator connected, so you can do it',
         it?.stage === 'waiting' && 'work is parked until you answer', landedSteps(q) && `${ref(it)} landed; ${orig ? 'its' : 'these'} steps are still to do`].filter(Boolean).join(' · '),
       why: [held && `@${q.reporter} replied on GitHub (${q.held_url}):\n\n${q.held_reply.split('\n').map((l) => `> ${l}`).join('\n')}`,
-        orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
+        orig && `${orig.asked_by} asked an operator: "${orig.question}"`,
+        forOperator && `${q.asked_by} asked an operator: a trusted, attended session that runs things, grants permissions or checks real infrastructure. None has checked in here in the last day, so it's yours: do the steps and answer, and ${q.asked_by} gets your answer as an operator's. Or start an operator and leave it to them.`,
+        q.context].filter(Boolean).join('\n\n'), detail: q.detail,
+      ...(forOperator ? { operator: true, guide: OPERATOR_GUIDE } : {}),
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: [...(held ? [PASS_ON] : []), ...json(q.options, [])], asked_by: q.asked_by },
       agent: q.asked_by, presence: presence(q.asked_by),
@@ -389,16 +401,17 @@ function build(hub, p, t, { light = false } = {}) {
 
   // Tidy results and field-note reviews never show here (#497): they stay in their items' history.
 
-  // Unless no operator has been here for a day: then one line, so the questions don't wait forever.
-  const forOperator = openQs.filter((q) => q.audience === 'operator');
-  if (forOperator.length && !agents.some((a) => t - a.last_seen < DAY && json(a.has, []).includes('operator'))) {
+  // Unless no operator has been here for a day: those with steps or blocking work are cards above; the rest, one
+  // line, so they don't wait forever.
+  const forOperator = operatorHere ? [] : openQs.filter((q) => q.audience === 'operator' && !carded(q));
+  if (forOperator.length) {
     push({
       key: `operator:${forOperator[0].id}`, level: 'act', kind: 'operator-missing', at: forOperator[0].at,
       headline: `${plural(forOperator.length, 'question')} ${forOperator.length === 1 ? 'waits' : 'wait'} for an operator; none connected`,
       sub: forOperator.map((q) => `Q${q.id}: ${q.question}`).slice(0, 3).join(' · '),
       questions: forOperator.map((q) => q.id), // by number (#710): ⌘K's "q207" lands on this card
-      why: 'Agents asked an operator: a trusted, attended session that checks in with has: ["operator"] to run things, grant permissions or verify on real infra. None has checked in here in the last day. Start an operator session (the guide\'s Operators section says how).',
-      guide: '/agents.md#operators',
+      why: 'Agents asked an operator: a trusted, attended session that checks in with has: ["operator"] to run things, grant permissions or verify on real infra. None has checked in here in the last day. Start an operator session: the guide\'s Start an operator says how.',
+      guide: OPERATOR_GUIDE,
     });
   }
 
@@ -583,7 +596,7 @@ function build(hub, p, t, { light = false } = {}) {
     });
   }
 
-  for (const q of openQs.filter((q) => !q.blocking && !landedSteps(q))) {
+  for (const q of openQs.filter((q) => !q.blocking && !landedSteps(q) && !(q.audience === 'operator' && carded(q)))) {
     const it = byId.get(q.item_id);
     push({
       key: `q:${q.id}`, level: 'know', kind: 'assumption', at: q.at,

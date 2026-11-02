@@ -4,6 +4,8 @@ import { Hub, DAY, HOUR } from '../src/core.js';
 import { view, homeView } from '../src/insight.js';
 import { tools, guide } from '../src/protocol.js';
 import { defaultAudience } from '../src/audience.js';
+import { guidePage } from '../src/userguide.js';
+import { appSource } from './appsource.js';
 
 // #133: questions an agent can't settle alone (running things, permissions, real infra) go to an operator session, not Paul.
 function setup() {
@@ -98,20 +100,62 @@ describe('questions to an operator', () => {
     assert.equal(hub.q('SELECT status FROM questions WHERE id = ?').get(human).status, 'open');
   });
 
-  test('with no operator seen in a day, Needs you has one line saying how many wait; an operator checking in clears it', () => {
+  test('with no operator seen in a day, the blocking one is a card of yours and the rest one line; an operator checking in clears both', () => {
     const { hub, acts, tick } = setup();
     hub.agentOp('o', 'ask', 'w1', { question: 'Can you grant the deploy key?', assumption: 'I will skip deploying', to: 'operator' });
     let lines = acts();
-    assert.equal(lines.length, 1);
-    assert.equal(lines[0].kind, 'operator-missing');
-    assert.equal(lines[0].headline, '2 questions wait for an operator; none connected');
-    assert.match(lines[0].why, /operator session/);
-    assert.equal(homeView(hub).needs.length, 1);
+    assert.deepEqual(lines.map((a) => a.kind).sort(), ['operator-missing', 'question']);
+    const line = lines.find((a) => a.kind === 'operator-missing');
+    assert.equal(line.headline, '1 question waits for an operator; none connected');
+    assert.match(line.why, /operator session/);
+    assert.equal(line.guide, 'guide#operator', "the guide's Start an operator, not the agents' protocol");
+    assert.equal(homeView(hub).needs.length, 2);
 
     hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
     assert.equal(acts().length, 0);
-    tick(DAY + HOUR); // gone for over a day: the line comes back
-    assert.equal(acts().length, 1);
+    tick(DAY + HOUR); // gone for over a day: both come back
+    assert.equal(acts().length, 2);
+    hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
+    assert.equal(acts().length, 0);
+  });
+
+  test("the app's operator links open the guide's Start an operator, never the agents' protocol (#712)", () => {
+    const src = appSource();
+    assert.match(src, /a\.guide \? `<a class="link" href="\$\{esc\(a\.guide\)\}"[^`]*>How to start an operator<\/a>`/, "a question card for an operator links its guide");
+    assert.match(src, /a\.kind === 'question' && a\.operator \? 'For an operator'/, 'and says who it was for');
+    assert.doesNotMatch(src, /agents\.md#operators/);
+    assert.match(guidePage(), /<h4 id="operator">/, '/guide#operator is a part of the guide');
+  });
+
+  // #712: a person working alone isn't stuck behind a question only an operator could answer.
+  test('with no operator, a question with steps is yours: a card with its steps to tick, answered as if asked of you', () => {
+    const { hub, item, acts } = setup();
+    hub.agentOp('o', 'claim', 'w2', { item: '#2' });
+    const steps = [{ do: 'Add the key NUWORQ_CRED_DEPLOY to the hub host', where: 'nuworq creds set DEPLOY', check: 'nuworq creds list shows DEPLOY' }];
+    const asked = hub.agentOp('o', 'ask', 'w2', { item: '#2', question: 'Add the deploy key?', assumption: 'I go on without deploying', to: 'operator', steps });
+    const cards = acts().filter((a) => a.kind === 'question');
+    assert.deepEqual(cards.map((a) => a.headline).sort(), ['Add the deploy key?', 'Does the migration run on prod?'], 'blocking or with steps: each its own card');
+    const c = cards.find((a) => a.question.id === asked.question);
+    assert.equal(c.operator, true);
+    assert.equal(c.guide, 'guide#operator');
+    assert.deepEqual(c.steps.map((s) => s.do), [steps[0].do]);
+    assert.match(c.sub, /no operator connected, so you can do it/);
+    assert.match(c.why, /w2 asked an operator/);
+    assert.ok(!acts().some((a) => a.kind === 'operator-missing'), 'nothing left for the one line');
+    assert.ok(!view(hub, 'o').attention.some((a) => a.kind === 'assumption' && a.question?.id === asked.question), 'not also an assumption line');
+
+    // Ticking its one step answers it (#162), and the asker hears it like an operator's answer.
+    hub.humanOp('o', 'step', { question: asked.question, step: 1, done: true });
+    assert.equal(hub.q('SELECT status FROM questions WHERE id = ?').get(asked.question).status, 'answered');
+    // The blocking one, answered by the person: the work goes back to ready, and w1 hears it at checkin.
+    const blocking = cards.find((a) => a.headline === 'Does the migration run on prod?').question.id;
+    hub.humanOp('o', 'answer', { question: blocking, answer: 'Ran it on prod: fine.' });
+    assert.equal(item(1).stage, 'ready');
+    assert.equal(hub.agentOp('o', 'checkin', 'w1', {}).answers[0].answer, 'Ran it on prod: fine.');
+    assert.equal(acts().filter((a) => a.kind === 'question' || a.kind === 'operator-missing').length, 0);
+
+    // With an operator here, questions with steps are theirs again.
+    hub.agentOp('o', 'ask', 'w2', { item: '#2', question: 'Rotate it too?', assumption: 'no', to: 'operator', steps });
     hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
     assert.equal(acts().length, 0);
   });

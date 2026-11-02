@@ -262,7 +262,7 @@ describe('an operator waits on the hub', () => {
 
   test('a listening operator counts as connected: Needs you says none is only when none has been here', async () => {
     const { hub, tick } = setup();
-    hub.agentOp('o', 'ask', 'w1', { question: 'Prod check?', to: 'operator' });
+    hub.agentOp('o', 'ask', 'w1', { question: 'Prod check?', assumption: 'none needed', to: 'operator' }); // no steps, not blocking: the one line
     tick(2 * DAY);
     const missing = () => view(hub, 'o').attention.some((a) => a.kind === 'operator-missing');
     assert.ok(missing(), 'nobody seen for two days');

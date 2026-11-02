@@ -46,6 +46,7 @@ export const NEW = {
   'setup-folded': '2026-11-01', // #644: Connect an agent shows one block to copy; what connect sets up is folded beneath it
   'retire-in-menu': '2026-11-02', // #651: Retire shows where it's recommended; on other decisions and notes it's behind the row's ⋯
   'question-numbers': '2026-11-02', // #710: each question shows its number (Q207), and ⌘K finds it by q207 or "question 207"
+  'operator-question': '2026-11-02', // #712: with no operator connected, its questions are yours: steps to tick and an answer, and How to start an operator
 };
 
 const DAYS = 7;

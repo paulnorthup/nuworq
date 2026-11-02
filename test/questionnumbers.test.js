@@ -118,12 +118,18 @@ describe('each question shows its number (#710)', () => {
     assert.match(html.drawer, new RegExp(`data-qs="${q}" tabindex="-1">\\s*<div class="meta"><span class="qref"[^>]*>Q${q}</span> · `));
   });
 
-  test("an operator's waiting questions are listed by number on their card", () => {
-    const loose = hub.agentOp('a', 'ask', 'bot', { question: 'Add the API key to the runner machine', blocking: true, to: 'operator',
+  test("an operator's waiting questions are listed by number: on their own card, or on the one line", () => {
+    // With steps, and no operator here, it's a card of its own (#712), numbered like any question.
+    const steps = hub.agentOp('a', 'ask', 'bot', { question: 'Add the API key to the runner machine', blocking: true, to: 'operator',
       steps: [{ do: 'Run nuworq secrets set KEY', where: 'nuworq secrets set KEY' }] });
-    const card = view(hub, 'a', { depth: '30s' }).attention.find((a) => a.kind === 'operator-missing');
-    assert.deepEqual(card.questions, [loose.question]);
-    assert.equal(card.sub, `Q${loose.question}: Add the API key to the runner machine`);
+    const attention = () => view(hub, 'a', { depth: '30s' }).attention;
+    const own = attention().find((a) => a.kind === 'question' && a.question.id === steps.question);
+    assert.equal(own.operator, true);
+    // The rest wait on the one line, by number.
+    const loose = hub.agentOp('a', 'ask', 'bot', { question: 'Is the runner machine up?', assumption: 'It is', to: 'operator' });
+    const line = attention().find((a) => a.kind === 'operator-missing');
+    assert.deepEqual(line.questions, [loose.question]);
+    assert.equal(line.sub, `Q${loose.question}: Is the runner machine up?`);
   });
 
   test('it is new, and the guide says how to find a question by its number', () => {
