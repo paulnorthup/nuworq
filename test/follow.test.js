@@ -34,7 +34,7 @@ function world({ red = [], sick = [], full = false, unbootable = [] } = {}) {
     start: async () => { w.up = w.out; w.log.push(`start ${w.out}`); },
     alive: () => w.up != null,
     stop: async () => { if (w.up) w.log.push(`stop ${w.up}`); w.up = null; },
-    healthy: async () => !sick.includes(w.up),
+    healthy: async () => !w.wedged && !sick.includes(w.up),
     redMain: async (sha, failed, running) => { w.log.push(`red ${sha} ${failed} (running ${running})`); return '#9 in nuworq'; },
     close: async () => { w.log.push('close'); w.up = null; },
   };
@@ -312,6 +312,90 @@ describe('the hub follows main', () => {
     await f.tick();
     assert.equal(w.up, 'aaaaaaa1');
     assert.ok(w.said.some((l) => l.startsWith('the hub stopped by itself')));
+  });
+
+  test('a hub that is up but stops answering is restarted after 3 failed checks in a row (#741)', async () => {
+    const w = world();
+    const f = follow(w);
+    await f.boot();
+    w.wedged = true; // its event loop is stuck: the process lives on
+    await f.tick();
+    await f.tick();
+    assert.equal(count(w, 'stop'), 0, 'two misses are not enough');
+    assert.equal(w.up, 'aaaaaaa1');
+    w.wedged = false;
+    await f.tick();
+    w.wedged = true;
+    await f.tick();
+    await f.tick();
+    assert.equal(count(w, 'stop'), 0, 'a check that answers starts the count again');
+    await f.tick();
+    assert.deepEqual(w.log.slice(-3), ['stop aaaaaaa1', 'checkout aaaaaaa1', 'start aaaaaaa1']);
+    assert.ok(w.said.includes('the hub stopped answering (3 health checks in a row); starting it again at aaaaaaa'));
+  });
+
+  test('a crash loop backs off (1, 2, 5 min…), says why for nuworq status, and the next healthy check clears it (#741)', async () => {
+    const w = world();
+    let t = 0;
+    w.now = () => t;
+    w.trouble = (why) => { w.troubleText = why; };
+    const f = follow(w);
+    await f.boot();
+    const crash = async () => { w.up = null; t += 10_000; await f.tick(); };
+    for (let i = 0; i < 3; i++) await crash();
+    assert.equal(count(w, 'start'), 4, 'three restarts within 10 minutes');
+    await crash();
+    assert.equal(count(w, 'start'), 4, 'the fourth waits');
+    assert.match(w.troubleText, /^the hub stopped by itself at aaaaaaa, after 3 restarts in 10 minutes; waiting 1 minute before the next \(\d\d:\d\d\)$/);
+    t += 30_000;
+    await f.tick();
+    assert.equal(count(w, 'start'), 4, 'still waiting');
+    t += 30_000;
+    await f.tick();
+    assert.equal(count(w, 'start'), 5, 'tried again once the minute is up');
+    await crash();
+    assert.equal(count(w, 'start'), 5);
+    assert.match(w.troubleText, /waiting 2 minutes/);
+    t += 120_000;
+    await f.tick();
+    assert.equal(count(w, 'start'), 6);
+    await crash();
+    assert.match(w.troubleText, /waiting 5 minutes/);
+    t += 300_000;
+    await f.tick();
+    assert.equal(count(w, 'start'), 7);
+    t += 10_000;
+    await f.tick(); // it stays up and answers
+    assert.equal(w.troubleText, null);
+    assert.ok(w.said.includes('the hub answers again at aaaaaaa'));
+  });
+
+  test('a rollback whose old commit also does not answer is started again at the next tick (#741)', async () => {
+    const w = world({ sick: ['bbbbbbb2'] });
+    const f = follow(w);
+    await f.boot();
+    w.main = 'bbbbbbb2';
+    const checkout = w.checkout;
+    w.checkout = (sha) => { if (sha === 'bbbbbbb2') w.wedged = true; checkout(sha); }; // the old commit won't answer either
+    await f.tick();
+    assert.ok(w.said.includes("the hub didn't answer at aaaaaaa either; trying again at the next check"));
+    const starts = count(w, 'start aaaaaaa1');
+    w.wedged = false;
+    await f.tick();
+    assert.equal(count(w, 'start aaaaaaa1'), starts + 1, 'not left as is');
+    assert.ok(w.said.includes("the hub didn't answer after it started; starting it again at aaaaaaa"));
+    assert.equal(f.state.retry, false);
+  });
+
+  test('nuworq status shows why serve --follow is backing off, even when the hub does not answer (#741)', () => {
+    const data = mkdtempSync(join(tmpdir(), 'nuworq-trouble-'));
+    writeFileSync(join(data, 'hub-src.trouble'), 'the hub stopped by itself at aaaaaaa, after 3 restarts in 10 minutes; waiting 1 minute before the next (12:00)\n');
+    let r;
+    try {
+      r = execFileSync(process.execPath, [join(import.meta.dirname, '..', 'bin', 'nuworq.js'), 'status', '--data-dir', data, '--url', 'http://127.0.0.1:9', '--project', 'x'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: data, NO_COLOR: '1' } });
+    } catch (e) { r = e.stdout; }
+    assert.match(r, /^! serve --follow: the hub stopped by itself at aaaaaaa, after 3 restarts/);
   });
 
   test('each move backs up the database first, with the hub stopped, tagged with the commit it leaves', async () => {

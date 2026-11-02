@@ -24,6 +24,13 @@ const HEALTHY_MS = 15_000;
 const TEST_TIMEOUT_MS = 10 * 60_000;
 const CI_WAIT_MS = 30 * 60_000; // a commit whose CI check never shows up is tested here after this (#543)
 const SMOKE_MS = 60_000; // a smoke boot's migrations run on copies of all the live data
+// A running hub is checked at every tick (#741): one that is up but doesn't answer CHECK_MS, MISSES checks in a row,
+// is restarted. Past LOOP_RESTARTS restarts within LOOP_WINDOW_MS, the follower waits before the next, longer each time.
+const CHECK_MS = 5_000;
+const MISSES = 3;
+const LOOP_RESTARTS = 3;
+const LOOP_WINDOW_MS = 10 * 60_000;
+export const BACKOFF_MS = [1, 2, 5, 10].map((m) => m * 60_000);
 // A loopback port nothing listens on, for a smoke boot.
 const freePort = () => new Promise((resolve, reject) => {
   const s = createNetServer();
@@ -403,6 +410,14 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
     // doesn't test the commit it already took again.
     passed() { try { return readFileSync(`${dir}.passed`, 'utf8').trim() || null; } catch { return null; } },
     pass(sha) { try { writeFileSync(`${dir}.passed`, `${sha}\n`); } catch { /* it only saves a test run */ } },
+    // Why the hub keeps failing, beside its worktree, for `nuworq status` (#741): the hub's own push notifications
+    // can't say it, since they run inside the hub. null removes it.
+    trouble(why) {
+      try {
+        if (why) writeFileSync(`${dir}.trouble`, `${why}\n`);
+        else rmSync(`${dir}.trouble`, { force: true });
+      } catch { /* status just doesn't show it */ }
+    },
     // Files of the supervisor's own code that differ between two commits (either side's import graph).
     ownCode(from, to) {
       const changed = git(repo, 'diff', '--name-only', from, to).split('\n').filter(Boolean);
@@ -427,7 +442,38 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
 // state.skip: a commit not to try again (it failed its tests or didn't start).
 // state.red: main is in a red streak and someone has been asked to fix it.
 export function follower(sys, { branch = 'main', log = () => {} } = {}) {
-  const state = { running: null, good: null, skip: null, red: false, busy: false, closed: false };
+  // state.retry: the hub was started but didn't answer, so the next tick starts it again (#741).
+  // state.misses: health checks in a row the running hub didn't answer. state.restarts: when it was started again.
+  // state.backoff: waiting until then before the next restart (a crash loop); state.backoffs: how many in a row.
+  const state = { running: null, good: null, skip: null, red: false, busy: false, closed: false, retry: false, misses: 0, restarts: [], backoff: null, backoffs: 0 };
+
+  // Start the hub again on the commit it runs (why: what went wrong). Past LOOP_RESTARTS within LOOP_WINDOW_MS,
+  // it's a crash loop: wait BACKOFF_MS first, longer each time, and write why for `nuworq status` (sys.trouble).
+  async function restart(why) {
+    const t = now();
+    if (state.backoff && t < state.backoff.until) return;
+    state.restarts = state.restarts.filter((r) => t - r < LOOP_WINDOW_MS);
+    if (!state.backoff && state.restarts.length >= LOOP_RESTARTS) {
+      const ms = BACKOFF_MS[Math.min(state.backoffs, BACKOFF_MS.length - 1)];
+      state.backoffs++;
+      state.backoff = { until: t + ms };
+      const reason = `${why} at ${short(state.running)}, after ${state.restarts.length} restarts in ${LOOP_WINDOW_MS / 60_000} minutes; waiting ${ms / 60_000} minute${ms === 60_000 ? '' : 's'} before the next (${new Date(t + ms).toTimeString().slice(0, 5)})`;
+      log(reason);
+      sys.trouble?.(reason);
+      state.troubled = true;
+      return;
+    }
+    if (!state.backoff) state.backoffs = 0;
+    state.backoff = null;
+    state.restarts.push(t);
+    state.misses = 0;
+    log(`${why}; starting it again at ${short(state.running)}`);
+    await sys.stop();
+    sys.checkout(state.running);
+    await sys.start();
+    state.retry = !(await sys.healthy());
+    if (state.retry) log(`the hub didn't answer at ${short(state.running)}; trying again at the next check`);
+  }
 
   // Main is red at sha: say so, and once per red streak, put fixing it at the front of the queue.
   async function red(sha, failed) {
@@ -515,6 +561,7 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       throw new Error(`the hub didn't answer at ${short(sha)} within ${HEALTHY_MS / 1000}s`);
     }
     Object.assign(state, { running: sha, good: sha });
+    sys.trouble?.(null); // a crash loop the last supervisor reported is over: the hub answers
     if (sha !== head) return log(`hub running at ${short(sha)}, the last commit that passed; following ${branch}, which takes ${short(head)} once it passes`);
     // A supervisor restarted on the commit it had taken (its own code changed) doesn't test it again (#546).
     if (sys.passed?.() === sha) return log(`hub running at ${short(sha)}; following ${branch}; ${short(sha)} already passed its tests`);
@@ -538,12 +585,20 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
     if (state.busy || state.closed || !state.running) return;
     state.busy = true;
     try {
-      if (sys.alive && !sys.alive()) {
-        log(`the hub stopped by itself; starting it again at ${short(state.running)}`);
-        sys.checkout(state.running);
-        await sys.start();
-        if (!(await sys.healthy())) log(`the hub didn't answer at ${short(state.running)}; trying again at the next check`);
-        return;
+      if (sys.alive && !sys.alive()) return await restart('the hub stopped by itself');
+      if (state.retry) return await restart("the hub didn't answer after it started");
+      // Up but not answering (a wedged event loop): restarted once it misses MISSES checks in a row (#741).
+      if (!(await sys.healthy(CHECK_MS))) {
+        if (state.closed) return;
+        if (++state.misses < MISSES) return log(`the hub at ${short(state.running)} didn't answer its health check (${state.misses} of ${MISSES} before a restart)`);
+        return await restart(`the hub stopped answering (${MISSES} health checks in a row)`);
+      }
+      state.misses = 0;
+      if (state.troubled) {
+        state.troubled = false;
+        state.backoff = null;
+        sys.trouble?.(null);
+        log(`the hub answers again at ${short(state.running)}`);
       }
       const sha = sys.head(branch);
       if (!sha || sha === state.running || sha === state.skip) return;
@@ -600,7 +655,8 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       sys.checkout(state.good);
       state.running = state.good;
       await sys.start();
-      log((await sys.healthy()) ? `hub back at ${short(state.good)}` : `the hub didn't answer at ${short(state.good)} either; trying again at the next check`);
+      state.retry = !(await sys.healthy());
+      log(state.retry ? `the hub didn't answer at ${short(state.good)} either; trying again at the next check` : `hub back at ${short(state.good)}`);
     } catch (e) {
       log(`couldn't follow ${branch} this time (${e.message}); trying again at the next check`);
     } finally {
