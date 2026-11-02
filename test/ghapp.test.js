@@ -26,7 +26,7 @@ function github() {
   // for). autoMergeOff: the repository doesn't allow auto-merge. refuseMerge: why GitHub won't merge, if it won't.
   const state = {
     installed: new Set(['acme/api']), suspended: false, mints: [], jwts: [], expiresIn: 4 * 60_000,
-    prs: new Map(), merges: [], mergeable: 'clean', autoMergeOff: false, refuseMerge: '',
+    prs: new Map(), merges: [], rebases: [], mergeable: 'clean', autoMergeOff: false, refuseMerge: '',
   };
   const pulls = async (req, json) => {
     let raw = '', m;
@@ -41,7 +41,16 @@ function github() {
     }
     if (req.method === 'POST' && req.url === '/graphql') {
       const pr = [...state.prs.values()].find((x) => x.node_id === body.variables.id);
-      const no = (message) => json(200, { data: { enablePullRequestAutoMerge: null }, errors: [{ type: 'UNPROCESSABLE', path: ['enablePullRequestAutoMerge'], message }] });
+      // Rebasing its branch (#752): only one that's behind, not one in conflict, and only from the head it names.
+      if (/updatePullRequestBranch/.test(body.query)) {
+        state.rebases.push({ number: pr.number, ...body.variables, method: body.query.match(/updateMethod: (\w+)/)?.[1] });
+        const fail = (message) => json(200, { data: { updatePullRequestBranch: null }, errors: [{ type: 'UNPROCESSABLE', message }] });
+        if (pr.mergeable_state === 'dirty') return fail('Failed to update pull request branch: merge conflict between base and head');
+        if (body.variables.sha && body.variables.sha !== pr.head.sha) return fail('Expected head oid did not match');
+        Object.assign(pr, { mergeable_state: 'blocked', head: { ...pr.head, sha: `rebased${state.rebases.length}` } });
+        return json(200, { data: { updatePullRequestBranch: { pullRequest: { headRefOid: pr.head.sha } } } });
+      }
+      const no =(message) => json(200, { data: { enablePullRequestAutoMerge: null }, errors: [{ type: 'UNPROCESSABLE', path: ['enablePullRequestAutoMerge'], message }] });
       if (state.autoMergeOff) return no('Pull request Auto merge is not allowed for this repository');
       if (pr.mergeable_state === 'clean') return no('Pull request Pull request is in clean status');
       pr.auto_merge = { merge_method: 'squash' };
@@ -510,6 +519,44 @@ describe('the hub lands pull requests GitHub would leave waiting', () => {
     await w.hub.mergeReady();
     assert.equal(w.events('pr_blocked').length, 1, 'said once');
     assert.deepEqual(w.merges(), []);
+    // GitHub was asked to rebase it first, once, and said why it couldn't.
+    assert.equal(gh.state.rebases.filter((r) => r.number === w.pr.number).length, 1);
+    assert.match(w.events('pr_rebase_failed')[0].headline, new RegExp(`GitHub couldn't rebase PR #${w.pr.number} onto main: .*merge conflict.*; an agent rebases it`));
+  });
+
+  test('only behind main (#752): GitHub rebases it, no land job is offered, and it lands on the rebased head', async () => {
+    const w = await landing({ mergeable: 'blocked' });
+    w.hub.patch(w.item(), { reviewed_sha: 'abc1234' });
+    w.pr.mergeable_state = 'behind';
+    assert.equal(await w.hub.mergeReady(), 0);
+    const asked = gh.state.rebases.filter((r) => r.number === w.pr.number);
+    assert.deepEqual(asked, [{ number: w.pr.number, id: w.pr.node_id, sha: 'abc1234', method: 'REBASE' }], 'a rebase, pinned to the head it looked at');
+    assert.equal(w.row().blocked, '', 'not a conflict');
+    assert.equal(w.events('pr_blocked').length, 0);
+    assert.equal(w.item().reviewed_sha, w.pr.head.sha, "GitHub's rebase of the reviewed head is what lands");
+    assert.match(w.events('pr_rebased')[0].headline, new RegExp(`GitHub rebased nuworq/1-ship-it onto main with nothing to resolve: no land job needed, and PR #${w.pr.number} merges once its checks pass`));
+    w.advance(3 * 60_000);
+    assert.equal(w.hub.agentOp('api', 'next', 'a1').mode !== 'land', true, 'no land job');
+    assert.equal(w.hub.q("SELECT COUNT(*) AS n FROM events WHERE type = 'landing'").get().n, 0);
+    // Its checks pass and GitHub merges it.
+    Object.assign(w.pr, { state: 'closed', merged: true, merge_commit_sha: 'auto789' });
+    w.advance(60_000);
+    assert.equal(await w.hub.mergeReady(), 1);
+    assert.equal(w.item().stage, 'done');
+    assert.equal(w.events('rebased').length, 0, 'nothing sent back to review');
+  });
+
+  test("a webhook saying it's behind waits for GitHub's rebase, not a land job (#752)", async () => {
+    const w = await landing({ mergeable: 'blocked' });
+    w.pr.mergeable_state = 'behind';
+    const raw = Buffer.from(JSON.stringify({ action: 'synchronize', repository: { full_name: 'acme/api' }, pull_request: { ...w.pr, title: 'Ship it' } }));
+    receive(w.hub, 'api', { event: 'pull_request', raw, signature: 'sha256=' + createHmac('sha256', 'whs').update(raw).digest('hex') });
+    assert.equal(w.row().blocked, '');
+    w.advance(3 * 60_000);
+    assert.notEqual(w.hub.agentOp('api', 'next', 'a1').mode, 'land');
+    await w.hub.mergeReady();
+    assert.equal(w.events('pr_rebased').length, 1);
+    assert.equal(w.row().blocked, '');
   });
 });
 

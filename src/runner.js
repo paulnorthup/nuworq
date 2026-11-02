@@ -278,7 +278,8 @@ const KILL_GRACE_MS = 10_000;
 const WAIT_MAX_S = 90;
 
 // routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal),
-// exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited }.
+// exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited, cap?: the most it may spend
+// (a land job's, #752), checked each round: past it, the worker is stopped }.
 // launch throws an error with skip: true when this machine can't work on the route's project (no
 // checkout of it here): that project is left to others for this round, said once, and isn't a failure.
 // With pause: true too (its checkout couldn't be updated, e.g. git can't reach origin), the project is left
@@ -381,6 +382,11 @@ export async function run({
     for (const w of running) {
       if (!w.killedAt && t - w.started > maxMinutes * 60_000) {
         log(`${w.name} ran past ${maxMinutes}m: stopping it (its lease expires and the item returns to the queue)`);
+        w.kill('SIGTERM');
+        w.killedAt = t;
+      } else if (!w.killedAt && w.cap && Number(w.spent?.()) > w.cap) {
+        // A land job's dollar cap (#752), for agents that report spend as they go; Claude stops itself there.
+        log(`${w.name} spent past its $${w.cap} cap for a land job: stopping it (the item goes back as a land job)`);
         w.kill('SIGTERM');
         w.killedAt = t;
       } else if (w.killedAt && t - w.killedAt > KILL_GRACE_MS) {

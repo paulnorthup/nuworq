@@ -417,6 +417,18 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
       const error = r.json.errors?.[0]?.message;
       if (r.status !== 200 || (error && !/not enabled|isn't enabled|is not enabled/i.test(error))) throw new Error(error ?? `GitHub answered ${r.status}`);
     },
+    // Rebase the PR's branch onto its base on GitHub (#752), no agent needed: behind main, or touching nothing main
+    // changed. sha: the head it was looked at with; GitHub refuses when the branch is anything else by then. Throws
+    // with GitHub's reason when it can't: a conflict, which a land job resolves.
+    async updateBranch({ repo, id, sha = '' }) {
+      const r = await app.call('POST', '/graphql', {
+        query: 'mutation($id: ID!, $sha: GitObjectID) { updatePullRequestBranch(input: { pullRequestId: $id, expectedHeadOid: $sha, updateMethod: REBASE }) { pullRequest { headRefOid } } }',
+        variables: { id, sha: sha || null },
+      }, await tokenFor(repo));
+      const error = r.json.errors?.[0]?.message;
+      if (r.status !== 200 || error) throw new Error(error ?? `GitHub answered ${r.status}`);
+      return { head: r.json.data?.updatePullRequestBranch?.pullRequest?.headRefOid ?? '' };
+    },
     // Squash-merge it now: { sha } of the commit it made on the base branch. head (#605): the reviewed head; GitHub
     // refuses (409) when the PR's head is anything else, and the error says moved.
     async merge({ repo, number, head = '' }) {

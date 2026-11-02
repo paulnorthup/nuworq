@@ -403,6 +403,7 @@ export class Hub extends EventEmitter {
     this._opening = new Map(); // item id → the pull request being opened for it
     this._prPass = { at: 0, running: null }; // the periodic look at landing PRs (mergeReady)
     this._mergeFailed = new Map(); // item id → why GitHub last wouldn't merge its ready PR (on the record once)
+    this._rebaseTried = new Map(); // item id → the PR head GitHub was last asked to rebase (#752): once per head
     // llmProxy: where measured usage comes from ({ requests }; see proxyClient in src/llmproxy.js). Set by
     // `nuworq serve` from NUWORQ_LLM_PROXY_URL; tests set a fake. null: reported usage only.
     this.llmProxy = null;
@@ -624,6 +625,12 @@ export class Hub extends EventEmitter {
   // The item's open pull request that conflicts with main (GitHub said so), or null.
   conflictedPr(item) {
     return this.q(`SELECT * FROM prs WHERE item_id = ? AND state = 'open' AND blocked = 'conflict'`).get(item.id) ?? null;
+  }
+
+  // Whether GitHub is asked to rebase a pull request's branch before it becomes a land job (#752): the hub's app can,
+  // and hasn't asked for this head yet. row: its prs row; head: its head as GitHub has it.
+  rebasesOnGitHub(row, head) {
+    return !!this.github?.updateBranch && this.github.covers(row.repo) && this._rebaseTried.get(row.item_id) !== (head || row.head_sha);
   }
 
   // Ask llm-proxy what the item cost, after this transaction: on submit and on landing. One at a time
@@ -903,7 +910,17 @@ export class Hub extends EventEmitter {
   // A building trial (#348) runs one tier down; a raced one is two slots, the top tier and one down (jobModels).
   jobModel(p, item, mode, kind, top = '') {
     const plan = this.routePlan(p, item, mode, kind, top);
-    return plan && modelAt(plan.list, plan.start, item.tier_up ?? 0, mode === 'work' && item.trial === 'down' ? 1 : 0);
+    return plan && modelAt(plan.list, plan.start, this.tierUp(item, mode), mode === 'work' && item.trial === 'down' ? 1 : 0);
+  }
+
+  // How many tiers up a job on item starts for failed attempts (#347). A land job counts only failed land jobs since
+  // the item reached landing (#752): a build sent back twice is no reason to rebase on the top tier. A land job taken
+  // (landing) that ended with no rebase or push of its own failed; the one held now hasn't yet.
+  tierUp(item, mode) {
+    if (mode !== 'land') return item.tier_up ?? 0;
+    const r = this.q(`SELECT COALESCE(SUM(type = 'landing'), 0) AS took, COALESCE(SUM(type IN ('rebased', 'pushed') AND actor NOT IN (?, ?)), 0) AS done
+      FROM events WHERE item_id = ? AND at >= ?`).get(SYSTEM, GITHUB, item.id, item.stage_since);
+    return Math.max(0, r.took - r.done - (item.holder ? 1 : 0));
   }
 
   // What a runner hears about models for a job: { model }, and for a raced trial the models of its open slots in
@@ -913,8 +930,9 @@ export class Hub extends EventEmitter {
     if (!plan) return {};
     const model = this.jobModel(p, item, mode, kind, top) ?? undefined;
     const planned = plan.list[plan.start];
+    const up = this.tierUp(item, mode);
     const why = model === planned ? plan.why
-      : `${model}, ${item.tier_up && model !== modelAt(plan.list, plan.start, 0, 1) ? `stepped up after ${item.tier_up} failed attempt${item.tier_up === 1 ? '' : 's'}` : 'a trial one tier down'}. Planned: ${plan.why}`;
+      : `${model}, ${up && model !== modelAt(plan.list, plan.start, 0, 1) ? `stepped up after ${up} failed attempt${up === 1 ? '' : 's'}` : 'a trial one tier down'}. Planned: ${plan.why}`;
     if (item.route_why !== why) this.patch(item, { route_why: why });
     if (mode !== 'work' || item.trial !== 'race' || !this.racing(item)) return { model, why };
     const want = [modelAt(plan.list, plan.start, item.tier_up), modelAt(plan.list, plan.start, item.tier_up, 1)];
@@ -957,12 +975,14 @@ export class Hub extends EventEmitter {
   // routing on, the history says so when that changes the model its next job runs on.
   stepUp(p, item, why) {
     const it = this.itemById(item.id);
-    const up = it.tier_up ?? 0;
+    let up = it.tier_up ?? 0;
     // A raced trial (#348) that comes back to the queue was the experiment; its next attempt is one worker.
     const unrace = it.trial === 'race' && it.race === 2 && it.stage === 'ready';
     this.patch(it, { tier_up: up + 1, ...(unrace ? { race: 1 } : {}) });
     if (!p.model_routing) return;
     const mode = modeAt(it);
+    // A land job's own failures (tierUp): this one, let go just now, already counts.
+    if (mode === 'land') up = Math.max(0, this.tierUp(it, mode) - 1);
     const tiers = json(p.model_tiers, {});
     const down = mode === 'work' && it.trial === 'down' ? 1 : 0;
     const next = AGENTS.filter((k) => tiers[k]?.length).map((k) => this.routePlan(p, it, mode, k)).filter(Boolean)
@@ -1835,7 +1855,7 @@ export class Hub extends EventEmitter {
     const children = this.q('SELECT seq, title, stage FROM items WHERE parent_id = ? ORDER BY seq').all(item.id);
     const history = this.q(`SELECT * FROM events WHERE item_id = ?
         AND type IN ('handoff','sent_back','lease_expired','answered','assumption_confirmed','submitted','shaped','picked','comment','steer','refined',
-          'accepted','pr_failed','pr_blocked','rebased','issue_close_failed','stepped_up','trial','retired','restored')
+          'accepted','pr_failed','pr_blocked','pr_rebase_failed','rebased','issue_close_failed','stepped_up','trial','retired','restored')
         ORDER BY at DESC LIMIT 8`).all(item.id).reverse();
     const questions = this.q('SELECT * FROM questions WHERE item_id = ? ORDER BY at').all(item.id);
     // Its own answers shown here are delivered, as checkin's are (#458): a fresh listener doesn't wake it for them.
@@ -2736,6 +2756,11 @@ async function mergeReady() {
         continue;
       }
     }
+    // Behind main, or in conflict with it (#752): GitHub rebases the branch first, so no model is paid for a rebase
+    // with nothing to resolve. Only when it can't (a real conflict) is it a land job, through prSeen below.
+    if (pr.state === 'open' && ['dirty', 'behind'].includes(pr.mergeable_state) && row.blocked !== 'conflict' && this.rebasesOnGitHub(row, pr.head_sha)) {
+      if (await rebaseOnGitHub.call(this, p, row, pr)) continue;
+    }
     // Ready with no auto-merge to wait for (opened before the hub merged those, or auto-merge is off). Only the
     // reviewed head (#605): GitHub refuses the merge when the PR's head has moved since.
     if (pr.state === 'open' && pr.mergeable_state === 'clean' && !pr.auto_merge) {
@@ -2756,6 +2781,33 @@ async function mergeReady() {
     this.changed(p);
   }
   return landed;
+}
+
+// GitHub rebases a landing PR's branch onto its base (#752), pinned to the head the hub looked at, once per head. That
+// head is the reviewed one (mergeReady checked just before), and GitHub replays exactly its commits with nothing to
+// resolve, so the rebased head is the reviewed change too: reviewed_sha moves to it, and auto-merge carries on.
+// True when GitHub did it; false when it couldn't, said on the record, and prSeen makes it a land job.
+async function rebaseOnGitHub(p, row, pr) {
+  this._rebaseTried.set(row.item_id, pr.head_sha);
+  let head = '', why = '';
+  try { ({ head } = await this.github.updateBranch({ repo: row.repo, id: pr.node_id, sha: pr.head_sha })); } catch (e) { why = e.message; }
+  const item = this.itemById(row.item_id);
+  if (!item) return !why;
+  this.tx(() => {
+    if (why) {
+      this.event(p, { item, actor: SYSTEM, type: 'pr_rebase_failed', headline: `GitHub couldn't rebase PR #${row.number} onto ${pr.base}: ${clip(why)}; an agent rebases it`, data: { pr: row.number, url: row.url, head: pr.head_sha, error: why } });
+      return;
+    }
+    if (head && item.reviewed_sha === pr.head_sha) this.patch(item, { reviewed_sha: head });
+    if (head) this.q('UPDATE prs SET head_sha = ? WHERE project_id = ? AND repo = ? AND number = ?').run(head, row.project_id, row.repo, row.number);
+    this.event(p, {
+      item, actor: SYSTEM, type: 'pr_rebased',
+      headline: `GitHub rebased ${item.branch || `PR #${row.number}'s branch`} onto ${pr.base} with nothing to resolve: no land job needed, and PR #${row.number} merges once its checks pass`,
+      data: { pr: row.number, url: row.url, was: pr.head_sha, head, reviewed: item.reviewed_sha === pr.head_sha },
+    });
+  });
+  this.changed(p);
+  return !why;
 }
 
 // Landed work leaves no branch behind on GitHub (#444): the hub deletes it there as its GitHub App. Only the

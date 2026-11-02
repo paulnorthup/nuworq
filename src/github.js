@@ -162,7 +162,8 @@ function heldAlready(hub, p, item, { number, url }) {
 // What the hub's own look at a landing item's open pull request found (its periodic pass, which a hub needs
 // because no webhook may reach it), as pull() in src/ghapp.js says: merged lands it, as the merged webhook
 // does; closed without merging leaves it in landing, a land job again, saying so; conflicting with main
-// (dirty, or behind it) makes it a land job to rebase the branch (see landHint). In a transaction.
+// (dirty, or behind it), once GitHub couldn't rebase it itself (mergeReady, #752), makes it a land job to rebase the
+// branch (see landHint). In a transaction.
 // True when it changed something.
 export function prSeen(hub, p, row, pr) {
   row = hub.q('SELECT * FROM prs WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, row.repo, row.number);
@@ -206,6 +207,8 @@ function blocked(hub, p, item, repo, pr) {
     : pr.review_decision === 'REVIEW_REQUIRED' || (ms === 'blocked' && ci !== 'fail') ? 'review'
     : !ms || ms === 'unknown' || ms === 'blocked' ? row.blocked
     : '';
+  // GitHub rebases it first, on the hub's next look (mergeReady, #752): a land job only if that can't.
+  if (why === 'conflict' && row.blocked !== 'conflict' && hub.rebasesOnGitHub(row, pr.head?.sha)) return;
   setBlocked(hub, p, item, row, why, pr.html_url);
 }
 

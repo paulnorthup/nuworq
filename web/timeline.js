@@ -7,6 +7,7 @@ export const DOT = {
   claimed: 'agents', progress: 'agents', landing: 'agents', accepted: 'agents', shaping: 'agents', review_started: 'agents',
   rebased: 'agents', pushed: 'agents', pr: 'agents', pr_blocked: 'agents', assumption: 'agents', assumption_confirmed: 'agents',
   head_rebased: 'agents', // an accepted branch rebased, the same change: still landing (#605)
+  pr_rebased: 'agents', pr_rebase_failed: 'agents', // GitHub rebased a landing PR, or couldn't and an agent does (#752)
   // the person's move
   question: 'you', kept_parked: 'you',
   // back in the queue for any agent

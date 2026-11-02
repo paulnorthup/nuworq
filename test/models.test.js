@@ -107,7 +107,28 @@ describe('model routing', () => {
     assert.equal(row(2).tier_up, 1);
     assert.deepEqual(history(2), []);
     landing(2);
-    assert.equal(route().model, 'claude-sonnet-5-5', 'its landing starts a tier up too');
+    assert.equal(route().model, 'claude-haiku-5-5', "its landing still starts on the cheapest tier: a build's failures aren't a rebase's (#752)");
+  });
+
+  test("a land job steps up only for failed land jobs since the item reached landing, not its build's (#752)", () => {
+    const { hub, clock, set, op, route, landing } = world();
+    set({ model_routing: true, model_tiers: TIERS });
+    hub.humanOp('p', 'create', { title: 'Build', acceptance: 'x' });
+    hub.q('UPDATE items SET tier_up = 2 WHERE seq = 1').run(); // sent back twice while it was built
+    landing(1);
+    assert.deepEqual([route().mode, route().model], ['land', 'claude-haiku-5-5']);
+    op('l1', 'checkin');
+    op('l1', 'next');
+    assert.equal(hub.tierUp(hub.item(hub.project('p'), '#1'), 'land'), 0, 'the one held now has not failed');
+    clock.t += LEASE_MS + 1;
+    hub.sweep();
+    assert.equal(route().model, 'claude-sonnet-5-5', 'one failed land job: one tier up');
+    // A land job that did its part (rebased for the PR) isn't a failure.
+    op('l2', 'checkin');
+    op('l2', 'next');
+    hub.event(hub.project('p'), { item: hub.item(hub.project('p'), '#1'), actor: 'l2', type: 'rebased', headline: 'rebased' });
+    hub.patch(hub.item(hub.project('p'), '#1'), { holder: null, lease_until: null });
+    assert.equal(route().model, 'claude-sonnet-5-5');
   });
 
   test('a stalled attempt steps up even with routing off, so turning it on later starts from what happened', () => {
@@ -120,7 +141,7 @@ describe('model routing', () => {
     assert.equal(hub.q("SELECT COUNT(*) AS n FROM events WHERE type = 'stepped_up'").get().n, 0, 'off: nothing to say');
     set({ model_routing: true, model_tiers: TIERS });
     hub.q("UPDATE items SET stage = 'landing', stage_since = 0 WHERE seq = 1").run();
-    assert.equal(route().model, 'claude-sonnet-5-5');
+    assert.equal(route().model, 'claude-haiku-5-5', "its landing doesn't count the build's stall (#752)");
   });
 
   test('each claim records the model it runs on and its job', () => {
