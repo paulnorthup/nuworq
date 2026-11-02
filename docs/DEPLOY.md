@@ -302,6 +302,16 @@ The Claude Code plugin installs from this repository's `release` branch (`claude
 3. From a GitHub account with no access before step 2 (or signed out, with `HOME` set to an empty folder): `claude plugin marketplace add paulnorthup/nuworq#release`, then `claude plugin install nuworq@nuworq --scope user`. Check: `claude plugin list` shows nuworq, and the plugin's folder holds the nuworq, shaper and operator skills and `.mcp.json`.
 Undo: `gh repo edit paulnorthup/nuworq --visibility private --accept-visibility-change-consequences`. Copies and forks made while it was public stay out there.
 
+### Deleting a person's data
+nuworq.com/privacy promises that an email to privacy@nuworq.com gets a person's account and workspace data deleted within 30 days. For a hub run with `--workspaces`, on the hub host, as the hub's user:
+1. Confirm the request comes from the address it is about (reply to it, or ask them to sign in and say so). Use their sign-in email: the one GitHub or Google verified.
+2. Export a copy first, to send them if they ask. Look at what the hub holds: `nuworq person forget <email> --dry-run --data-dir <dir>`. It lists the sign-in identity, sessions, workspace memberships, early-access request and grants it would remove, and removes nothing. For the rows themselves: `sqlite3 -json <dir>/workspaces/directory.sqlite "SELECT * FROM identities WHERE email = '<email>'"`, and the same for `access_requests` (by `email`) and `memberships` (by `identity_id`).
+3. Delete: `nuworq person forget <email> --data-dir <dir>`. It prints what it removed. Check: the same command with `--dry-run` now says 0 of everything, and signing in again with that email starts a new identity with no workspaces. A running hub needs no restart; their open sessions stop working at once.
+4. Their row inside a workspace (their handle, name, email as a person there) belongs to that workspace's data, and `forget` leaves it. Remove it per workspace with `nuworq person remove <handle> --workspace <name>`, or by removing the workspace (`nuworq workspace remove <name>`), which also deletes its database and backups.
+5. Reply to the person, within 30 days, saying what was deleted and what stays.
+
+What it keeps, and why: **Stripe billing records** (a customer id and subscription state, with no sign-in or email in the hub's copy; tax law requires them, and Stripe holds the originals, which they ask Stripe to erase as far as the law allows). **Feedback** they sent: it is filed under a handle or an agent's name, never an email, and only the hub's owners read it. **Backups** under `<dir>/backups` still hold the old rows until they age out; remove them by hand if the request must reach them. **Workspace rows** as step 4 says.
+
 ### Tokens
 ```bash
 nuworq token create <name> --role human|agent     # prints the token once

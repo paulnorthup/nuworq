@@ -235,7 +235,7 @@ export const COMMANDS = [
   {
     name: 'person', group: 'hub', label: 'person, invite', brief: "who's in, and their roles",
     does: 'add, list and remove the people of a hub (on the hub host)',
-    usage: ['person add <handle> --role <role> [--email e]', 'person list', 'person set-role <handle> <role>', 'person remove <handle>'],
+    usage: ['person add <handle> --role <role> [--email e]', 'person list', 'person set-role <handle> <role>', 'person remove <handle>', 'person forget <email> [--dry-run]'],
     flags: [
       ['--role <role>', 'owner, steward, member or viewer', 'member'],
       ['--email <e>', 'their email'],
@@ -246,6 +246,7 @@ export const COMMANDS = [
     example: 'nuworq person add bea --role steward --email bea@example.com',
     notes: [
       'Owners do everything; stewards steer, decide, answer and accept; members comment and propose; viewers read. remove revokes the tokens they held or minted.',
+      "forget <email> answers a privacy request: it deletes that email's sign-in, sessions, workspace memberships and early-access request from the hub's directory (--data-dir), and prints what it kept. --dry-run only lists them.",
     ],
   },
   {

@@ -395,6 +395,7 @@ Usage
   nuworq person list
   nuworq person set-role <handle> <role>
   nuworq person remove <handle>
+  nuworq person forget <email> [--dry-run]
 
 Flags
   --role <role>       owner, steward, member or viewer (default: member)
@@ -408,6 +409,10 @@ Example
 
 Owners do everything; stewards steer, decide, answer and accept; members comment
 and propose; viewers read. remove revokes the tokens they held or minted.
+
+forget <email> answers a privacy request: it deletes that email's sign-in,
+sessions, workspace memberships and early-access request from the hub's
+directory (--data-dir), and prints what it kept. --dry-run only lists them.
 ```
 
 ### nuworq invite

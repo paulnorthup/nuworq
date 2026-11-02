@@ -559,6 +559,39 @@ export class Directory {
       ON CONFLICT DO UPDATE SET created = MAX(created, excluded.created)`).run(i.id, workspace, created ? 1 : 0, this.now());
   }
 
+  // A person's data on request (#769): their identity, hub sessions, memberships and early-access request (with its
+  // grants), found by email. dryRun only counts. Stripe's billing rows, feedback (filed under a handle or an agent's
+  // name, not an email) and the people rows inside workspaces are not here; the CLI names them.
+  forgetPerson(email, { dryRun = false } = {}) {
+    const e = String(email).trim().toLowerCase();
+    const id = this.db.prepare('SELECT id FROM identities WHERE email = ?').get(e)?.id ?? null;
+    const req = this.db.prepare('SELECT id FROM access_requests WHERE email = ?').get(e)?.id ?? null;
+    const n = (sql, ...a) => this.db.prepare(sql).get(...a).n;
+    const found = {
+      identities: id === null ? 0 : 1,
+      sessions: id === null ? 0 : n('SELECT COUNT(*) AS n FROM hub_sessions WHERE identity_id = ?', id),
+      memberships: id === null ? [] : this.db.prepare('SELECT workspace FROM memberships WHERE identity_id = ? ORDER BY workspace').all(id).map((m) => m.workspace),
+      access_requests: req === null ? 0 : 1,
+      grants: req === null ? 0 : n('SELECT COUNT(*) AS n FROM org_grants WHERE request_id = ?', req),
+    };
+    if (dryRun) return found;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (id !== null) {
+        this.db.prepare('DELETE FROM hub_sessions WHERE identity_id = ?').run(id);
+        this.db.prepare('DELETE FROM memberships WHERE identity_id = ?').run(id);
+        this.db.prepare('UPDATE org_grants SET used_by = NULL WHERE used_by = ?').run(id);
+        this.db.prepare('DELETE FROM identities WHERE id = ?').run(id);
+      }
+      if (req !== null) {
+        this.db.prepare('DELETE FROM org_grants WHERE request_id = ?').run(req);
+        this.db.prepare('DELETE FROM access_requests WHERE id = ?').run(req);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) { this.db.exec('ROLLBACK'); throw err; }
+    return found;
+  }
+
   // An identity's organizations, checked against each workspace's people: { workspace, handle, role, created }.
   // spaces: the Workspaces registry. Memberships whose workspace or person is gone are forgotten; a person only
   // counts with the email as their own (they signed in with it), never one an owner typed for them (#470).

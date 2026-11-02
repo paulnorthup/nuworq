@@ -1944,8 +1944,25 @@ function reportBinding({ bound, elsewhere }, ws) {
   for (const e of elsewhere) console.log(amber(`  Installation ${e.id} is bound to workspace ${e.workspace}, so it stays there.`));
 }
 
+// nuworq person forget <email> [--dry-run]: a privacy request (#769). Removes the person's sign-in, sessions,
+// workspace memberships and early-access request from the hub's directory; --dry-run only lists them.
+async function personForget(email, flags) {
+  const { Workspaces } = await import('../src/workspaces.js');
+  const e = String(need(email, '<email>')).trim().toLowerCase();
+  const dry = !!flags['dry-run'];
+  const spaces = new Workspaces({ dir: workspacesDir(flags), backups: join(dataHome(flags), 'backups') });
+  const f = spaces.directory.forgetPerson(e, { dryRun: dry });
+  const plural = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  console.log(`${dry ? amber('Dry run') : green('Forgot')} ${bold(e)} (hub directory in ${spaces.dir}):
+  ${dry ? 'Would remove' : 'Removed'}: ${plural(f.identities, 'sign-in identity').replace('identitys', 'identities')}, ${plural(f.sessions, 'session')}, ${plural(f.memberships.length, 'workspace membership')}${f.memberships.length ? ` (${f.memberships.join(', ')})` : ''}, ${plural(f.access_requests, 'early-access request')}, ${plural(f.grants, 'grant')}.
+  ${dim('Kept: Stripe billing records (the law requires them; they hold a customer id, no sign-in); feedback, filed under a handle or an agent name, not an email;')}
+  ${dim("the person's row inside each workspace (the workspace's own data: its owner removes it); backups, which age out. See docs/DEPLOY.md, Deleting a person's data.")}`);
+  if (dry) console.log(dim('  Nothing was changed. Run it without --dry-run to delete.'));
+}
+
 // People (the humans, each with a role) are managed on the hub host too, like tokens.
 async function person(pos, flags) {
+  if (pos[0] === 'forget') return personForget(pos[1], flags);
   const { openDb } = await import('../src/db.js');
   const { Auth, PERSON_ROLES } = await import('../src/auth.js');
   const auth = new Auth(openDb(dbPath(flags)));
