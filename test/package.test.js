@@ -234,6 +234,8 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
     if (tagged) execFileSync('git', ['-C', clone, 'tag', '-f', `v${version}`, 'HEAD'], { stdio: 'ignore' });
     writeFileSync(join(clone, 'CHANGELOG.md'), `# Changelog\n\n## ${version} (2026-10-31)\n\n- Signed releases\n`);
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', join(dir, 'origin.git')]);
+    // CI checks out one commit deep, so this clone is shallow: its origin must take a shallow push.
+    execFileSync('git', ['-C', join(dir, 'origin.git'), 'config', 'receive.shallowUpdate', 'true']);
     execFileSync('git', ['-C', clone, 'remote', 'set-url', 'origin', join(dir, 'origin.git')]);
     // The real release's tag came with the clone once main is tagged; these tests tag their own commit.
     try { execFileSync('git', ['-C', clone, 'tag', '-d', `v${version}`], { stdio: 'ignore' }); } catch {}
