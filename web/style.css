@@ -959,7 +959,9 @@ main.admin { padding-top: var(--sp-6); }
 .fb-decided { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: var(--rule) solid var(--line); }
 .fb-decided p { margin: 0; }
 .fb-decided .btn { flex: none; min-height: 40px; }
-.fb-bulk { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-3); background: var(--panel); border: var(--rule) solid var(--line-strong); border-radius: var(--r-m); }
+/* The wrapper sticks, not the bar: it spans only the bar, so a sticky bar inside it would scroll away with it. */
+#fb-bulk { position: sticky; top: 0; z-index: 2; }
+.fb-bulk { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-3); background: var(--panel); border: var(--rule) solid var(--line-strong); border-radius: var(--r-m); }
 .fb-bulk span { flex: 1 0 auto; font-weight: 560; }
 .fb-waiting { text-decoration: none; }
 .fb-waiting .badge { flex: none; }
