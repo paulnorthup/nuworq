@@ -848,7 +848,7 @@ function worthKnowing(v) {
     const openBtn = `<button class="btn ghost small" data-action="toggle" data-key="wk:${esc(a.key)}" aria-expanded="${open}">${open ? 'Close' : 'Open'}</button>`;
     if (!open) {
       return `<div class="row-item wk-line"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h" title="${esc(a.headline)}">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.headline)}</div></div>
-        <div class="acts">${openBtn}<button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Got it</button></div></div>`;
+        <div class="acts">${openBtn}<button class="btn ghost small wk-got" data-action="dismiss" data-key="${esc(a.key)}">Got it</button></div></div>`;
     }
     let acts = `<button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Got it</button>`;
     if (a.kind === 'assumption') {
@@ -874,7 +874,7 @@ function worthKnowing(v) {
   const more = know.length > WK_SHOWN
     ? `<button class="link wk-more" data-action="toggle" data-key="${esc(allKey)}" aria-expanded="${S.open.has(allKey)}">${S.open.has(allKey) ? 'Show fewer' : `${know.length - WK_SHOWN} more`}</button>` : '';
   const all = `<button class="btn ghost small" data-action="dismiss-all" data-keys="${esc(JSON.stringify(know.map((a) => a.key)))}">Got it, all</button>`;
-  return `<section class="sec" data-new="worth-knowing-lines"><header><h2>Worth knowing</h2><span class="count">${know.length}</span><span class="hint">agents carried on without you; glance and confirm, or redirect</span><span style="flex:1"></span>${all}</header><div class="rows">${rows}</div>${more}</section>`;
+  return `<section class="sec" data-new="worth-knowing-lines"><header><h2>Worth knowing</h2><span class="count">${know.length}</span><span class="hint wk-hint">agents carried on without you; glance and confirm, or redirect</span><span style="flex:1"></span>${all}</header><div class="rows">${rows}</div>${more}</section>`;
 }
 
 // ── 30s → 5m: what's in motion ──
