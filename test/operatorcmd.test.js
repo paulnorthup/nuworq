@@ -116,7 +116,7 @@ describe('nuworq operator', () => {
 
   test('help lists it', async () => {
     const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'help'], { env: { ...process.env, NO_COLOR: '1' } });
-    assert.match(stdout, /^ {2}operator +the line that starts an operator session$/m);
+    assert.match(stdout, /^ {2}operator +start an operator: Claude Code in a terminal \(--start\)$/m);
     const own = (await promisify(execFile)(process.execPath, [BIN, 'help', 'operator'], { env: { ...process.env, NO_COLOR: '1' } })).stdout;
     assert.match(own, /^ {2}nuworq operator \[--project p\] \[--has tags\]$/m);
   });
