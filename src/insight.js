@@ -453,7 +453,7 @@ function build(hub, p, t, { light = false } = {}) {
     push({
       key: `land:${it.id}`, level: 'know', kind: 'landing-stuck', at: it.stage_since,
       headline: `${ref(it)} was accepted ${timeIn(it.stage_since)} ago but isn't on main yet`,
-      sub: it.title, why: `No agent has landed ${it.branch || 'its branch'}. Start an agent; land jobs come before any other work.`,
+      sub: it.title, why: `No agent has landed ${it.branch || 'its branch'}. Connect an agent; land jobs come before any other work.`,
       item: ref(it), start: true,
     });
   }
@@ -885,7 +885,7 @@ function idleCause(hub, p, t) {
   const rs = hub.runnersFor(p.slug);
   const live = rs.filter((r) => ['up', 'skipping', 'paused'].includes(r.state));
   const run = 'nuworq run --workers 1';
-  const check = 'Runners, on this project page at 5m, shows it as up within a minute';
+  const check = 'The Runners section of this project page (depth 5m) lists it as up within a minute';
   const budget = rs.find((r) => r.state === 'stopped' && /max-usd/.test(r.stopped ?? ''));
   if (!live.length && budget) {
     return {
@@ -899,7 +899,7 @@ function idleCause(hub, p, t) {
     return {
       cause: 'no-runner',
       sub: last ? `No runner is up: ${last.name} was last seen ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''}` : 'No runner has ever reported here',
-      why: `Nothing starts workers for this project: no \`nuworq run\` is up${last ? ` (${last.name} went quiet ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''})` : ''}. Start one, or start an agent yourself. Or park the project if it should stay quiet.`,
+      why: `No runner (\`nuworq run\`) is up for this project${last ? `: ${last.name} went quiet ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''}` : ''}. Start a runner, or connect an agent yourself. Or park the project if it should stay quiet.`,
       // Not staffed yet (#643): the runner staffs it as it starts (--staff), rather than a switch nothing could act on
       // yet. Its install doesn't repeat that: a service that re-staffed on every start would undo turning it off.
       how: [
@@ -912,8 +912,8 @@ function idleCause(hub, p, t) {
   if (!p.runner) {
     return {
       cause: 'unstaffed', sub: `${plural(live.length, 'runner')} up, but this project isn't staffed`,
-      why: `${live.map((r) => r.name).join(', ')} ${live.length === 1 ? 'is' : 'are'} up, but this project doesn't let \`nuworq run\` start workers. One click lets it.`,
-      how: [{ do: 'Click "Let nuworq run staff this project" on this card', check: 'Runners appears on this page and shows a worker within a poll' }],
+      why: `${live.map((r) => r.name).join(', ')} ${live.length === 1 ? 'is' : 'are'} up, but this project isn't staffed with \`nuworq run\`. One click staffs it.`,
+      how: [{ do: 'Click "Staff it with nuworq run" on this card', check: 'The Runners section of this project page (depth 5m) shows a worker within a poll' }],
       staff: true,
     };
   }

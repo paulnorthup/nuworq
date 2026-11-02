@@ -244,7 +244,7 @@ export async function staffCheck({ projects, here = null, staff, ask, optIn, log
   const yes = (a) => /^y(es)?$/i.test(String(a ?? '').trim());
   let pick = null;
   if (here && live.includes(here)) {
-    if (yes(await ask(`Let nuworq run staff ${here.name ?? here.slug}, the project of this clone? Its workers can cost money. [y/N] `))) pick = here;
+    if (yes(await ask(`Staff ${here.name ?? here.slug}, the project of this clone, with nuworq run? Its workers can cost money. [y/N] `))) pick = here;
   } else {
     const a = String(await ask(`Which project should nuworq run staff? Its workers can cost money. (${live.map((p) => p.slug).join(', ')}; Enter for none) `) ?? '').trim();
     pick = a ? find(a) ?? null : null;

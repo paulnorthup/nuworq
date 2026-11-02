@@ -25,7 +25,7 @@ export function getStarted(s) {
     { key: 'project', label: 'Add a project', done: !!s.project, action: { label: '+ Project', ui: 'new-project' } },
     s.project && { key: 'repo', label: 'Link a project to its repository', done: !!s.repo, action: { label: '+ repo', ui: 'link-repo', slug: s.recent } },
     s.github !== false && { key: 'github', label: 'Connect GitHub', done: s.app === 'installed', action: github },
-    { key: 'machine', label: 'Install and connect your machine', done: !!s.machine, action: { label: 'Connect your machine', ui: 'connect' } },
+    { key: 'machine', label: 'Install and connect your machine', done: !!s.machine, action: { label: 'Connect an agent', ui: 'connect' } },
     // The setup that works (#489, web/connect.js's SETUP): each step shows its session's commands while it's next.
     ...SETUP.map(({ key, title }) => ({ key, label: title, done: !!s[key], action: { label: title, ui: 'connect', command: key } })),
     { key: 'landed', label: 'Watch your first item land', done: !!s.landed, action: s.board ? { label: 'Open the board', href: `#/p/${encodeURIComponent(s.board)}` } : { label: '+ Project', ui: 'new-project' } },

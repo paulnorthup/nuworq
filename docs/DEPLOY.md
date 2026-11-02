@@ -122,7 +122,7 @@ Then give the agent `NUWORQ_URL` and `NUWORQ_TOKEN`, e.g. `claude mcp add nuworq
 
 ### GitHub: pull requests and CI on items
 A signed webhook links pull requests to items and shows CI results on them. When CI fails on work in Verifying, it lands under "Needs you" (and gets pushed, if you set up [notifications](../README.md#getting-pinged-ntfy-slack-or-any-webhook)).
-1. In the project (5m view, top right): **Settings**, then **Connect GitHub**. Generate a secret, copy it, and save.
+1. In the project (5m view, top right): **Settings**, then **Set up** beside GitHub (**Manage** once it's connected). Under "Without the app: a webhook for this project", generate a secret, copy it, and click **Save the webhook**. (Get started's **Connect GitHub** is the GitHub App, not this webhook.)
 2. In the repo on GitHub: **Settings → Webhooks → Add webhook**:
    - Payload URL: `https://<your hub>/api/hooks/github/<project>` (the dialog shows it)
    - Content type: `application/json`
