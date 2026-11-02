@@ -470,5 +470,14 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
         auto_merge: !!pr.auto_merge, base: pr.base?.ref ?? 'main', sha: pr.merge_commit_sha ?? '', head_sha: pr.head?.sha ?? '', node_id: pr.node_id ?? '',
       };
     },
+    // A commit's check runs as GitHub has them now (#743), for when their webhooks never came: the completed
+    // ones, [{ name, conclusion, url }].
+    async checkRuns({ repo, sha }) {
+      const [owner, name] = parts(repo);
+      const r = await app.call('GET', `/repos/${owner}/${name}/commits/${sha}/check-runs?per_page=100`, null, await tokenFor(repo));
+      if (r.status !== 200) throw new Error(`GitHub didn't show the checks on ${sha.slice(0, 7)} (${said(r)})`);
+      return (r.json.check_runs ?? []).filter((c) => c.status === 'completed' && c.conclusion)
+        .map((c) => ({ name: c.name ?? 'check', conclusion: c.conclusion, url: c.html_url ?? '' }));
+    },
   };
 }

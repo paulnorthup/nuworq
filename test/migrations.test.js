@@ -101,7 +101,7 @@ describe('model routing on by default (#723)', () => {
     // As before #723: projects started off, and the choice was only in the headline.
     hub.db.exec("UPDATE projects SET model_routing = 0 WHERE slug != 'fresh'");
     hub.db.exec("UPDATE events SET data = '{}' WHERE type = 'runner'");
-    hub.db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    hub.db.exec(`PRAGMA user_version = ${MIGRATIONS.findIndex((m) => m.name === 'model routing is on unless a person turned it off')}`);
     hub.db.close();
     const db = openDb(file);
     const on = Object.fromEntries(db.prepare('SELECT slug, model_routing FROM projects').all().map((r) => [r.slug, r.model_routing]));
