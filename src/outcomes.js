@@ -73,11 +73,13 @@ export function verification(hub, landed, modelOf, held = heldUpAll(hub, landed)
 
 // What work costs a person (#175): each answer, verdict, steer, decision, comment and confirmation they made,
 // as the events already record them. The steer an override writes beside its answer is the same action, and
-// so is the answer an escalation's answer gives the operator question it carried up.
-export const HUMAN_ACTIONS = ['answered', 'accepted', 'sent_back', 'steer', 'decision', 'comment', 'assumption_confirmed'];
+// so is the answer an escalation's answer gives the operator question it carried up. Setting the autonomy and
+// parking the project count as before #550, when the hub's notice to agents recorded them as steers.
+export const HUMAN_ACTIONS = ['answered', 'accepted', 'sent_back', 'steer', 'decision', 'comment', 'assumption_confirmed', 'autonomy', 'parked'];
 const PERSON = (col = 'actor') => `(${col} = '${HUMAN}' OR ${col} LIKE '@%')`;
 // Built when first used: core.js imports this file (#349), so its exports aren't there while this one loads.
 const ACTIONS = () => `e.type IN (${HUMAN_ACTIONS.map((t) => `'${t}'`).join(', ')}) AND ${PERSON('e.actor')}
+  AND NOT (e.type = 'parked' AND e.headline LIKE '%unparked%')
   AND NOT (e.type = 'steer' AND e.headline LIKE '%: Change of course%'
     AND EXISTS (SELECT 1 FROM events a WHERE a.type = 'answered' AND a.actor = e.actor AND a.at = e.at AND a.project_id = e.project_id))
   AND NOT (e.type = 'answered'

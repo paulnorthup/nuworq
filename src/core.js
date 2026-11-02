@@ -4029,7 +4029,7 @@ const HUMAN_OPS = {
       if (!AUTONOMY[autonomy]) throw new UserError('autonomy must be ask, balanced or full');
       this.q('UPDATE projects SET autonomy = ? WHERE id = ?').run(autonomy, p.id);
       changes.push('autonomy');
-      this.event(p, { actor: by, type: 'settings', headline: `${You(by)} set autonomy to "${AUTONOMY[autonomy].label}"` });
+      this.event(p, { actor: by, type: 'autonomy', headline: `${You(by)} set autonomy to "${AUTONOMY[autonomy].label}"` });
       this.addNote(p, 'steer', `Autonomy is now "${AUTONOMY[autonomy].label}": ${AUTONOMY[autonomy].agent}`, null, null, by, { notice: true });
     }
     if (changes.includes('mission')) this.event(p, { actor: by, type: 'mission', headline: `${You(by)} updated the mission`, summary: str(mission) });

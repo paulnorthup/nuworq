@@ -72,7 +72,7 @@ describe('Your steering is what people wrote (#550)', () => {
     hub.humanOp('p', 'settings', { autonomy: 'full' });
     hub.humanOp('p', 'settings', { parked: true });
     assert.deepEqual(yours(hub), []);
-    const history = hub.q(`SELECT type, headline FROM events WHERE type IN ('settings', 'parked', 'steer') ORDER BY id`).all();
+    const history = hub.q(`SELECT type, headline FROM events WHERE type IN ('autonomy', 'parked', 'steer') ORDER BY id`).all();
     assert.deepEqual(history.map((e) => e.headline), ['You set autonomy to "Run with it"', 'You parked the project']);
     const got = steersFor(hub, 'w1');
     assert.ok(got.some((b) => b.startsWith('Autonomy is now')) && got.some((b) => b.startsWith('The project is parked')), got.join(' | '));
