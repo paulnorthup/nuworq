@@ -140,9 +140,10 @@ export async function uninstall({ platform, home, uid, exec, fs = { rmSync, exis
 
 // The environment a service needs from the shell it was installed from: PATH (so the agent CLIs and git are
 // found), HOME, and nuworq's own settings (NUWORQ_* and the older TRELLIS_*). repos: the folder holding the
-// checkout it was installed beside, kept as NUWORQ_REPOS unless the shell already set one (#225).
-export function serviceEnv(env = process.env, { repos } = {}) {
-  const kept = Object.entries(env).filter(([k, v]) => v != null && (['PATH', 'HOME'].includes(k) || /^(NUWORQ|TRELLIS)_/.test(k)));
+// checkout it was installed beside, kept as NUWORQ_REPOS unless the shell already set one (#225). names: the
+// variables `--env` named for workers (#616), kept with their values here so its workers get them.
+export function serviceEnv(env = process.env, { repos, names = [] } = {}) {
+  const kept = Object.entries(env).filter(([k, v]) => v != null && (['PATH', 'HOME', ...names].includes(k) || /^(NUWORQ|TRELLIS)_/.test(k)));
   if (repos && !env.NUWORQ_REPOS && !env.TRELLIS_REPOS) kept.push(['NUWORQ_REPOS', repos]);
   return Object.fromEntries(kept.sort(([a], [b]) => a.localeCompare(b)));
 }

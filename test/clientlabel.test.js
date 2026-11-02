@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { guide } from '../src/protocol.js';
+import { workerEnv, harnessKeys, namedEnv, CLAUDE_SCRUBS } from '../src/runtrust.js';
+import { serviceEnv } from '../src/service.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
@@ -91,12 +93,12 @@ describe('workers route through llm-proxy: opencode with --model proxy/<model>, 
 
   test("claude: --proxy points Claude Code at llm-proxy's Anthropic route with the owner token, expanded by the shell", async () => {
     const out = await workerCmd('claude', { home: freshHome(), vars, extra: ['--proxy', 'http://studio.local:4100/'] });
-    assert.match(out, /ANTHROPIC_BASE_URL='http:\/\/studio\.local:4100\/anthropic' ANTHROPIC_AUTH_TOKEN="\$NUWORQ_LLM_PROXY_TOKEN" \\\n\s+ANTHROPIC_CUSTOM_HEADERS="[^"]*"'x-client-name: nuworq\/lab\/w-1' \\\n\s+claude -p/);
+    assert.match(out, /export ANTHROPIC_BASE_URL='http:\/\/studio\.local:4100\/anthropic' ANTHROPIC_AUTH_TOKEN="\$NUWORQ_LLM_PROXY_TOKEN" && \\\nunset NUWORQ_LLM_PROXY_TOKEN && \\\nCLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS="[^"]*"'x-client-name: nuworq\/lab\/w-1' \\\n\s+claude -p/);
     assert.deepEqual(leaks(out), [], 'no secret is printed or in argv');
     assert.doesNotMatch(out, /CF-Access|NUWORQ_LLM_PROXY_KEY/, "workers use the LAN address: no Access token, and not the hub's read key");
-    const assign = out.match(/(ANTHROPIC_BASE_URL=.*?) \\\n\s+ANTHROPIC_CUSTOM_HEADERS/s)[1];
-    const { stdout } = await promisify(execFile)('/bin/sh', ['-c', `${assign}; export ANTHROPIC_AUTH_TOKEN; printf %s "$ANTHROPIC_AUTH_TOKEN"`], { env: { NUWORQ_LLM_PROXY_TOKEN: 't' } });
-    assert.equal(stdout, 't', 'the shell hands Claude Code the token');
+    const assign = out.match(/(export ANTHROPIC_BASE_URL=.*?unset NUWORQ_LLM_PROXY_TOKEN)/s)[1];
+    const { stdout } = await promisify(execFile)('/bin/sh', ['-c', `${assign} && printf %s "$ANTHROPIC_AUTH_TOKEN:\${NUWORQ_LLM_PROXY_TOKEN-gone}"`], { env: { NUWORQ_LLM_PROXY_TOKEN: 't' } });
+    assert.equal(stdout, 't:gone', 'the shell hands Claude Code the token, under the one name it scrubs');
     const fromEnv = await workerCmd('claude', { home: freshHome(), vars: { NUWORQ_LLM_PROXY_URL: 'http://studio.local:4100/v1' }, extra: ['--proxy'] });
     assert.match(fromEnv, /ANTHROPIC_BASE_URL='http:\/\/studio\.local:4100\/anthropic'/, '--proxy alone takes NUWORQ_LLM_PROXY_URL');
     assert.doesNotMatch(await workerCmd('claude', { home: freshHome(), vars }), /ANTHROPIC_BASE_URL/, 'without --proxy nothing changes');
@@ -146,5 +148,95 @@ describe('workers route through llm-proxy: opencode with --model proxy/<model>, 
     const vars = { NUWORQ_LLM_PROXY_URL: 'http://studio.local:8080', NUWORQ_LLM_PROXY_KEY: KEY };
     assert.match(await workerCmd('claude', { home: freshHome(), vars }), /claude -p/);
     assert.deepEqual(config(await workerCmd('opencode', { home: freshHome(), vars, extra: ['--model', 'ollama/qwen3:8b'] })).provider.ollama.options.headers, { 'x-client-name': 'nuworq/lab/w-1' });
+  });
+});
+
+// A worker's agent starts on an allowlisted environment, and its harness keeps its own model key from its shell (#616).
+describe("a worker's shell sees no credential variables", () => {
+  const SECRETS = {
+    AWS_ACCESS_KEY_ID: 'AKIA-do-not-leak', AWS_SECRET_ACCESS_KEY: 'aws-do-not-leak', OPENAI_API_KEY: 'sk-openai-do-not-leak', ANTHROPIC_API_KEY: 'sk-ant-do-not-leak',
+    NUWORQ_LLM_PROXY_TOKEN: 'owner-do-not-leak', NUWORQ_LLM_PROXY_KEY: 'proxy-key-do-not-leak', NUWORQ_LLM_PROXY_ACCESS_SECRET: 'cf-do-not-leak',
+    NUWORQ_TOKEN: 'nwq_human12345', NUWORQ_TOKEN_FILE: '/home/me/.nuworq/runner.token', GITHUB_TOKEN: 'gh-do-not-leak', NPM_TOKEN: 'npm-do-not-leak',
+    STRIPE_SECRET_KEY: 'stripe-do-not-leak', SSH_AUTH_SOCK: '/tmp/agent.sock', ANTHROPIC_CUSTOM_HEADERS: 'x-proxy-token: hdr-do-not-leak',
+  };
+  const credential = (k) => /KEY|TOKEN|SECRET|PASS|SSH_AUTH|CUSTOM_HEADERS/.test(k);
+  // The environment its shell gets, from the command a worker runs, started the way a runner starts it.
+  async function shellEnv(agent, fake, { opts = {}, extra = [] } = {}) {
+    const home = freshHome();
+    const bin = join(home, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, agent), fake, { mode: 0o755 });
+    const out = await workerCmd(agent, { home, extra });
+    const start = out.match(agent === 'claude' ? /^cd '[\s\S]*?--allowedTools '[^']*'$/m : /^cd '[\s\S]*?sign off\.'$/m)[0];
+    const { secret, config } = harnessKeys(agent, opts);
+    const env = workerEnv([...secret, ...config], { PATH: `${bin}:/usr/bin:/bin`, HOME: home, LANG: 'en_US.UTF-8', ...SECRETS, NUWORQ_LLM_PROXY_URL: 'http://studio.local:4100' });
+    const { stdout } = await promisify(execFile)('/bin/sh', ['-c', start], { env });
+    const [harness, ...lines] = stdout.trim().split('\n');
+    return { harness, shell: Object.fromEntries(lines.map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)])) };
+  }
+  const clean = (shell) => {
+    assert.deepEqual(Object.keys(shell).filter(credential), [], 'no credential by name');
+    assert.deepEqual(Object.values(SECRETS).filter((v) => Object.values(shell).some((x) => x.includes(v))), [], 'no credential by value');
+    assert.ok(shell.PATH && shell.HOME && shell.LANG, 'what a shell needs is there');
+  };
+
+  test('claude: only what Claude Code reaches its model with, which it scrubs from its shell', async () => {
+    // Claude Code with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1: its Bash tool starts without those names.
+    const fake = `#!/bin/sh\n[ "$CLAUDE_CODE_SUBPROCESS_ENV_SCRUB" = 1 ] || { echo 'not scrubbed'; exit 1; }\nprintf 'harness:%s\\n' "$ANTHROPIC_AUTH_TOKEN"\nexec env ${CLAUDE_SCRUBS.map((k) => `-u ${k}`).join(' ')} env\n`;
+    const proxied = await shellEnv('claude', fake, { opts: { proxy: true }, extra: ['--proxy', 'http://studio.local:4100'] });
+    assert.equal(proxied.harness, 'harness:owner-do-not-leak', "Claude Code gets llm-proxy's owner token");
+    clean(proxied.shell);
+    clean((await shellEnv('claude', fake)).shell);
+  });
+
+  test("codex: its key reaches Codex, and its shell policy leaves it out", async () => {
+    // Codex's shell: its environment minus shell_environment_policy.exclude, whatever its default excludes are.
+    const fake = `#!/bin/sh\nex=''; ok=''\nfor a; do case "$a" in shell_environment_policy.exclude=*) ex=$(printf %s "\${a#*=}" | tr -d '[]"' | tr , ' ');; shell_environment_policy.ignore_default_excludes=false) ok=1;; esac; done\n[ -n "$ok" ] || { echo 'default excludes off'; exit 1; }\nprintf 'harness:%s\\n' "$NUWORQ_LLM_PROXY_TOKEN"\nexec env $(for k in $ex; do printf -- '-u %s ' "$k"; done) env\n`;
+    const proxied = await shellEnv('codex', fake, { opts: { proxy: true }, extra: ['--proxy', 'http://studio.local:4100'] });
+    assert.equal(proxied.harness, 'harness:owner-do-not-leak', "Codex gets llm-proxy's owner token");
+    clean(proxied.shell);
+    clean((await shellEnv('codex', fake)).shell);
+  });
+
+  test('opencode and pi (no sandbox, #615): their one model key, and no other credential', () => {
+    const keys = (agent, model) => { const { secret, config } = harnessKeys(agent, { model }); return [...secret, ...config]; };
+    const creds = (env) => Object.keys(env).filter(credential);
+    assert.deepEqual(creds(workerEnv(keys('pi', 'anthropic/claude-sonnet-5-5'), SECRETS)), ['ANTHROPIC_API_KEY']);
+    assert.deepEqual(creds(workerEnv(keys('opencode', 'proxy/gpt-5'), SECRETS)), ['NUWORQ_LLM_PROXY_KEY']);
+    assert.deepEqual(creds(workerEnv(keys('pi', 'ollama/qwen3:8b'), SECRETS)), []);
+  });
+
+  // The allowlist's addition point: a project whose build reads DOCKER_HOST or VIRTUAL_ENV names them.
+  test('a worker gets a variable the person named, and still no credential variables', async () => {
+    const PROJECT = { DOCKER_HOST: 'unix:///run/docker.sock', VIRTUAL_ENV: '/home/me/app/.venv', DATABASE_URL_TEST: 'postgres://localhost/test', JAVA_OPTS: '-Xmx2g' };
+    const all = { PATH: '/usr/bin:/bin', HOME: '/home/me', ...SECRETS, ...PROJECT };
+    const named = namedEnv(['DOCKER_HOST,VIRTUAL_ENV', 'JAVA_OPTS']);
+    const { secret, config } = harnessKeys('claude');
+    const env = workerEnv([...secret, ...config, ...named], all);
+    assert.deepEqual([env.DOCKER_HOST, env.VIRTUAL_ENV, env.JAVA_OPTS], [PROJECT.DOCKER_HOST, PROJECT.VIRTUAL_ENV, PROJECT.JAVA_OPTS]);
+    assert.equal(env.DATABASE_URL_TEST, undefined, 'only what was named');
+    assert.deepEqual(Object.keys(env).filter((k) => credential(k) && !CLAUDE_SCRUBS.includes(k)), [], "no credential but the ones Claude Code scrubs from its shell");
+    // A name that looks like a secret takes --env-secret, so passing one is a choice; and only names, never values.
+    assert.throws(() => namedEnv('AWS_SECRET_ACCESS_KEY'), (e) => /looks like a secret, so --env doesn't pass it/.test(e.message) && /--env-secret AWS_SECRET_ACCESS_KEY/.test(e.hint));
+    assert.throws(() => namedEnv('NPM_TOKEN,DOCKER_HOST'), /NPM_TOKEN looks like a secret/);
+    assert.throws(() => namedEnv('DOCKER_HOST=tcp://x'), /--env takes variable names, not "DOCKER_HOST=tcp:\/\/x"/);
+    assert.deepEqual(namedEnv(undefined, 'NPM_TOKEN'), ['NPM_TOKEN'], '--env-secret passes it');
+    assert.equal(workerEnv(namedEnv(undefined, 'NPM_TOKEN'), all).NPM_TOKEN, SECRETS.NPM_TOKEN);
+    assert.equal(workerEnv(namedEnv(undefined, 'NUWORQ_TOKEN'), all).NUWORQ_TOKEN, undefined, "a nuworq token's value never goes, named or not");
+    // An installed runner keeps the named values in its service, and only those.
+    const svc = serviceEnv(all, { names: named });
+    assert.deepEqual(Object.keys(svc).filter((k) => k in PROJECT), ['DOCKER_HOST', 'JAVA_OPTS', 'VIRTUAL_ENV']);
+  });
+
+  test('the CLI refuses an --env name it won\'t pass, before anything starts, and --env-secret with --install', async () => {
+    const home = freshHome();
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, ...a], { env: { PATH: process.env.PATH, HOME: home, NO_COLOR: '1', NUWORQ_NO_UPDATE: '1', NUWORQ_URL: 'http://127.0.0.1:9' } }).catch((e) => e);
+    for (const cmd of ['run', 'worker']) {
+      const r = await cli(cmd, '--env', 'GITHUB_TOKEN');
+      assert.notEqual(r.code ?? 0, 0, cmd);
+      assert.match(r.stderr, /GITHUB_TOKEN looks like a secret, so --env doesn't pass it/, cmd);
+    }
+    const r = await cli('run', '--install', '--env-secret', 'NPM_TOKEN');
+    assert.match(r.stderr, /--env-secret isn't kept by an installed runner/);
   });
 });
