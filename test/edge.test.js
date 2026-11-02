@@ -260,6 +260,7 @@ describe('the page', () => {
     assert.equal(md('takes --can-read-keys, `--browser` or https://a.test/--x'),
       `<p>takes ${f('--can-read-keys')}, <code>${f('--browser')}</code> or <a href="https://a.test/--x" target="_blank" rel="noopener">https://a.test/--x</a></p>`);
     assert.equal(md('**`--b` --c**'), `<p><strong><code>${f('--b')}</code> ${f('--c')}</strong></p>`);
+    assert.equal(inline('`--staff nuworq-app docs/a-b.md`'), `<code>${f('--staff')} ${f('nuworq-app')} docs/a-b.md</code>`, 'a path still wraps');
   });
 
   test("an agent's steps say who wrote them and that the hub didn't; a person's and the hub's say nothing", () => {
