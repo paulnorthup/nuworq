@@ -175,6 +175,15 @@ describe('a finished milestone drafts the release (#399)', () => {
     const again = w.hub.q('SELECT * FROM items WHERE id = ?').get(next.id);
     assert.deepEqual({ title: again.title, summary: again.summary }, before);
     assert.equal(w.releases().length, 2);
+    // More lands after the tag: the redraft still holds Two, and keeps the version.
+    w.at(T0 + 2e9);
+    w.done(w.add('c'));
+    w.hub.humanOp('p', 'release');
+    const later = w.hub.q('SELECT * FROM items WHERE id = ?').get(next.id);
+    assert.equal(later.title, 'Release v1.2.0');
+    assert.match(later.summary, /\*\*Two/);
+    assert.match(later.summary, /- c \(#/);
+    assert.equal(w.releases().length, 2);
   });
 
   test('releases off: a finished milestone drafts nothing', () => {
