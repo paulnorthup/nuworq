@@ -147,7 +147,7 @@ export const OPS = [
   },
   {
     name: 'ask',
-    description: 'Ask a question. Prefer non-blocking: give the assumption you proceed with; blocking parks the item.',
+    description: 'Ask a question. Prefer non-blocking: give the assumption you proceed with; blocking parks the item (work another agent holds stays theirs; they hear of it).',
     params: {
       item: { ...ITEM, description: 'Optional. The item this is about.' },
       question: s('The question, one line. ≤2,000 characters.'),
