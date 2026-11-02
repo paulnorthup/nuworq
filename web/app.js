@@ -31,6 +31,7 @@ import { radioKeys } from './radiogroup.js';
 import { liveGate } from './pace.js';
 import { predict, placeholder } from './instant.js';
 import { held, viewLoader, loadProject, shell } from './switching.js';
+import { bootData } from './boot.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -278,10 +279,14 @@ async function refresh({ force = false, fresh = true, list = true } = {}) {
     } else {
       S.view = null;
       // The home: one request, which also brings the project lines the rail shows.
-      S.home = await api('/api/home');
+      // Boot just asked (homeFresh, #599): the first refresh uses that answer.
+      S.home = S.homeFresh ?? await api('/api/home');
+      S.homeFresh = null;
       S.projects = S.home.projects;
       // Get started: asked until it says it's gone (finished or hidden), then never again this visit.
-      if (S.gs?.show !== false) S.gs = await api('/api/get-started').catch(() => S.gs);
+      // Boot just asked (gsFresh, #599): the first refresh uses that answer.
+      if (S.gsFresh) S.gsFresh = false;
+      else if (S.gs?.show !== false) S.gs = await api('/api/get-started').catch(() => S.gs);
     }
   } catch (e) {
     if (!S.projects.length) $('#main').innerHTML = `<div class="loading">Can't reach the nuworq hub. Is <code>nuworq serve</code> running?</div>`;
@@ -2150,11 +2155,13 @@ document.addEventListener('pointerdown', () => live.press(), true);
 for (const ev of ['pointerup', 'pointercancel']) document.addEventListener(ev, () => live.release(), true);
 document.addEventListener('scroll', () => live.scrolled(), { capture: true, passive: true });
 const scheduleRefresh = () => live.poke();
+let opened = false; // the stream's first open comes right after boot asked for the version (#599)
 function listen() {
   const es = new EventSource('api/stream');
   // A hub that moved onto a new commit restarts, so the stream reconnects: pick up the version it runs now.
   es.onopen = async () => {
     online();
+    if (!opened) return void (opened = true);
     const info = await api('/api/info').catch(() => null);
     if (info && info.commit !== S.info?.commit) { S.info = info; scheduleRefresh(); }
   };
@@ -2175,24 +2182,27 @@ function listen() {
   const fromFixed = location.hash === '#/feedback';
   if (fromFixed) history.replaceState(null, '', `${location.pathname}#/`);
   window.addEventListener('hashchange', route);
-  S.me = await api('/api/me').catch(() => null);
-  S.person = await api('/api/people/me').catch(() => null);
-  S.info = await api('/api/info').catch(() => null) ?? undefined;
+  // Everything the first screen needs, at once and each once (#599, web/boot.js); the open project's view starts
+  // with it, kept by the view loader for the first refresh.
+  const home = !location.hash || location.hash === '#/';
+  const slug = location.hash.match(/^#\/p\/([^/]+)/)?.[1];
+  const b = await bootData(api, { home, view: slug ? () => views.load(decodeURIComponent(slug)) : home ? () => api('/api/home') : null });
+  S.me = b.me;
+  S.person = b.person;
+  S.info = b.info ?? undefined;
   // Billing (#231): only a workspace hub that takes payments answers; its owners get Workspace settings.
-  if (S.me?.org) S.billing = await api('/api/billing').catch(() => null);
+  if (b.billing !== undefined) S.billing = b.billing;
   // Feedback about nuworq (#295): only a hub that takes it shows the entry.
-  S.feedback = await api('/api/feedback').catch(() => null);
-  await loadProjects().catch(() => {});
+  S.feedback = b.feedback;
+  if (b.projects) { S.projects = b.projects; S.listStale = false; }
+  if (home) { S.gs = b.gs; S.gsFresh = true; S.homeFresh = b.first; }
   // Relative times tick here (#530); only a change on the hub refetches, never a timer.
   startTicking();
   if (fromGitHub) return void (route(), listen(), backFromGitHub());
   if (fromStripe) return void (route(), listen(), workspaceSettings());
   if (fromFixed && S.feedback?.on) return void (route(), listen(), ACTIONS.feedback(null, { mine: true }));
-  if (!location.hash || location.hash === '#/') {
-    // One project opens it, unless Get started still has steps to show on All projects.
-    S.gs = await api('/api/get-started').catch(() => null);
-    if (S.projects.length === 1 && !S.gs?.show) return void (go(S.projects[0].slug), listen());
-  }
+  // One project opens it, unless Get started still has steps to show on All projects.
+  if (home && S.projects.length === 1 && !S.gs?.show) return void (S.homeFresh = null, go(S.projects[0].slug), listen());
   route();
   listen();
 })();
