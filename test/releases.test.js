@@ -155,9 +155,41 @@ describe('a finished milestone drafts the release (#399)', () => {
     assert.doesNotMatch(w.releases()[0].summary, /\*\*Two/);
     w.done(`#${r.seq}`); // it lands, and Two finished meanwhile: the next is drafted at once
     const next = w.releases()[1];
-    assert.equal(next.title, 'Release v1.1.0', 'the tag is still v1.0.0 here; landing tags it (#400)');
+    assert.equal(next.title, 'Release v1.2.0', 'the tag is still v1.0.0 here, but v1.1.0 landed: it is the floor (#735)');
     assert.match(next.summary, /\*\*Two/);
     assert.doesNotMatch(next.summary, /\*\*One/);
+    assert.match(next.summary, /^What landed since v1\.1\.0\./);
+  });
+
+  test('work done while a release is under way is in exactly one changelog, however late the tag shows (#735)', () => {
+    const w = world({ tags: [['v1.0.0', T0]] });
+    w.milestone('One', ['a']);
+    const r = w.releases()[0];
+    w.hub.agentOp('p', 'checkin', 'a1', {});
+    w.hub.agentOp('p', 'claim', 'a1', { item: `#${r.seq}` });
+    w.milestone('Two', ['b']); // finished while One's release is under way
+    w.done(`#${r.seq}`);
+    const next = w.releases()[1];
+    const before = { title: next.title, summary: next.summary };
+    // Now the tag shows, dated after Two finished; a redraft keeps the same version and contents.
+    const dir = w.hub.project('p').path;
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', dir, 'commit', '-q', '--allow-empty', '-m', 'Release v1.1.0'], {
+      env: { ...process.env, GIT_COMMITTER_DATE: iso(T0 + 1e9), GIT_AUTHOR_DATE: iso(T0 + 1e9) },
+    });
+    execFileSync('git', ['-C', dir, 'tag', 'v1.1.0']);
+    w.hub.humanOp('p', 'release');
+    const again = w.hub.q('SELECT * FROM items WHERE id = ?').get(next.id);
+    assert.deepEqual({ title: again.title, summary: again.summary }, before);
+    assert.equal(w.releases().length, 2);
+    // More lands after the tag: the redraft still holds Two, and keeps the version.
+    w.at(T0 + 2e9);
+    w.done(w.add('c'));
+    w.hub.humanOp('p', 'release');
+    const later = w.hub.q('SELECT * FROM items WHERE id = ?').get(next.id);
+    assert.equal(later.title, 'Release v1.2.0');
+    assert.match(later.summary, /\*\*Two/);
+    assert.match(later.summary, /- c \(#/);
+    assert.equal(w.releases().length, 2);
   });
 
   test('releases off: a finished milestone drafts nothing', () => {
