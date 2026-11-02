@@ -223,8 +223,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     });
   }
 
-  // What an operator settled on its own in the last day, so you can glance at it.
-  const settled = hub.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'answered' AND answered_at > ?
+  // What an operator marked for people in the last day (#497): a change it made on a live system, or a call no
+  // decision covers. Its other answers live only in their item's history.
+  const settled = hub.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'answered' AND for_people = 1 AND answered_at > ?
     AND NOT EXISTS (SELECT 1 FROM questions e WHERE e.escalates = q.id AND e.status = 'answered') ORDER BY answered_at`).all(p.id, t - DAY);
   for (const q of settled) {
     const it = byId.get(q.item_id);
@@ -236,11 +237,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     });
   }
 
-  // What a tidy job changed in the groups in the last day (#202), in one line: each change is in the groups' history.
-  for (const e of hub.q(`SELECT * FROM events WHERE project_id = ? AND type = 'tidied' AND at > ? ORDER BY at`).all(p.id, t - DAY)) {
-    const it = byId.get(e.item_id);
-    push({ key: `tidied:${e.id}`, level: 'know', kind: 'tidied', at: e.at, headline: e.headline, sub: `${dur(t - e.at)} ago`, why: e.summary, item: it ? ref(it) : null });
-  }
+  // Tidy results and field-note reviews never show here (#497): they stay in their items' history.
 
   // Unless no operator has been here for a day: then one line, so the questions don't wait forever.
   const forOperator = openQs.filter((q) => q.audience === 'operator');
@@ -371,14 +368,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
         sub: shaped ? `${shaped.actor} shaped it ${dur(t - shaped.at)} ago` : `${it.created_by === HUMAN ? 'You' : it.created_by} proposed it ${dur(t - it.created_at)} ago`,
         why: [shaped?.headline, it.summary].filter(Boolean).join('\n\n'), acceptance: it.acceptance, item: ref(it),
       });
-    } else if (it.created_at > p.seen_at && !isHuman(it.created_by)) {
-      push({
-        key: `proposal:${it.id}`, level: 'know', kind: 'proposal', at: it.created_at,
-        headline: `${it.created_by} proposed: ${it.title}`,
-        sub: 'agents can shape this into ready work themselves',
-        why: it.summary, item: ref(it),
-      });
     }
+    // An agent's raw proposal isn't for you (#497): agents shape it into ready work themselves.
   }
 
   for (const it of in_('verifying')) {
@@ -439,9 +430,10 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       WHERE n.project_id = ? AND n.kind = 'steer' AND n.active = 1 AND n.at > ? ORDER BY n.at DESC`).all(p.id, t - 3 * DAY)
     .map((n) => {
       const acks = hub.q('SELECT * FROM acks WHERE note_id = ? ORDER BY at').all(n.id);
-      return { id: n.id, body: n.body, item: n.item_seq ? `#${n.item_seq}` : null, at: n.at, acks: acks.map((a) => ({ agent: a.agent, response: a.response, at: a.at })) };
+      return { id: n.id, body: n.body, by: n.author, item: n.item_seq ? `#${n.item_seq}` : null, at: n.at, acks: acks.map((a) => ({ agent: a.agent, response: a.response, at: a.at })) };
     });
-  for (const s of steers.filter((s) => !s.acks.length && t - s.at > 15 * MIN)) {
+  // Only a steer a person wrote: one made from an answer ("Change of course") is the answerer's (#497).
+  for (const s of steers.filter((s) => isHuman(s.by) && !s.acks.length && t - s.at > 15 * MIN)) {
     push({
       key: `steer:${s.id}`, level: 'know', kind: 'steer-unseen', at: s.at,
       headline: `No agent has picked up your steer yet (${dur(t - s.at)})`,
@@ -518,17 +510,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       sub: idle.sub, why: idle.why, cause: idle.cause, how: idle.how, staff: idle.staff,
       start: true,
     });
-  } else if (!p.parked && !claimable && !inFlight && recentAgents.length) {
-    const approvals = in_('proposed').filter((i) => !i.holder && i.acceptance && waitsForOk(p, i)).length;
-    if (in_('waiting').length || approvals) {
-      push({
-        key: `starved:${Math.floor(t / (6 * HOUR))}`, level: 'know', kind: 'starved', at: t,
-        headline: 'Agents are out of work',
-        sub: [approvals && `${approvals} shaped proposal${approvals === 1 ? '' : 's'} to approve`, in_('waiting').length && `${in_('waiting').length} waiting on your answer`].filter(Boolean).join(' · '),
-        why: 'Everything left is waiting on you.',
-      });
-    }
   }
+  // Agents out of work because the rest waits on you isn't news (#497): what waits on you is already in Needs you.
 
   if (!p.parked) {
     for (const c of hub.q('SELECT id, kind, last_error, failing_since FROM channels WHERE failing_since IS NOT NULL').all()) {
@@ -1040,7 +1023,7 @@ export function itemView(hub, slug, ref) {
       };
     });
   const steers = hub.q(`SELECT * FROM notes WHERE item_id = ? AND kind = 'steer' ORDER BY at`).all(it.id)
-    .map((n) => ({ id: n.id, body: n.body, active: !!n.active, ago: dur(t - n.at), at: n.at, acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
+    .map((n) => ({ id: n.id, body: n.body, by: n.author, active: !!n.active, ago: dur(t - n.at), at: n.at, acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
   const agentNames = [...new Set(events.filter((e) => !isHuman(e.actor) && !isSystem(e.actor)).map((e) => e.actor))];
   const models = Object.fromEntries(agentNames.map((n) => [n, hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, n)?.model ?? '']));
   const parent = hub.itemById(it.parent_id);

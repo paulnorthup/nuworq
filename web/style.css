@@ -383,6 +383,12 @@ button.row-item:hover, button.row-item:focus-visible { background: var(--hover);
 .row-item .h { font-weight: 520; }
 .row-item .s { color: var(--muted); font-size: var(--fs-2); }
 .row-item .acts { display: flex; gap: var(--sp-1); flex: none; align-items: center; }
+/* Worth knowing (#497): one line a card, the rest behind Open. */
+.wk-line { align-items: center; padding-block: var(--sp-2); }
+.wk-line .h { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.wk-open .body > .acts { flex-wrap: wrap; }
+/* On a phone the line gets the room: Got it, all and an opened card still clear one. */
+@media (max-width: 600px) { .wk-line .wk-got, .wk-hint { display: none; } }
 .row-item.clickable { cursor: pointer; }
 .row-item.clickable:hover { background: var(--sunken); }
 .tag { font-size: var(--fs-1); font-weight: 600; border-radius: var(--r-s); padding: var(--sp-h) var(--sp-2); text-transform: uppercase; letter-spacing: .04em; flex: none; }

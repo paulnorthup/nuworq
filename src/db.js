@@ -575,6 +575,12 @@ export const MIGRATIONS = [
     name: 'a project can name hosts its workers\' tests need',
     up(db) { addColumn(db, "ALTER TABLE projects ADD COLUMN sandbox_hosts TEXT NOT NULL DEFAULT '[]'"); },
   },
+  {
+    // An operator answer marked for people (#497): a change on a live system, or a call no decision covers. Only
+    // those show in Worth knowing; the rest live in their item's history.
+    name: 'an operator can mark an answer for people',
+    up(db) { addColumn(db, 'ALTER TABLE questions ADD COLUMN for_people INTEGER NOT NULL DEFAULT 0'); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

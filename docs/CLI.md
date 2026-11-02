@@ -610,7 +610,11 @@ nuworq answer: answer a question asked to: "operator" (next hands it to you as
   mode "answer")
 
 Usage
-  nuworq answer <question-id> <answer>
+  nuworq answer <question-id> <answer> [flags]
+
+Flags
+  --for-people  true when you changed a live system or made a call no decision
+                covers: people see it in Worth knowing
 
 Example
   nuworq answer 40 "Done: it is installed" --as operator-1

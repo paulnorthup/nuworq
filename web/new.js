@@ -38,6 +38,7 @@ export const NEW = {
   'security-reviews': '2026-11-01', // #480: Settings' Security reviews switch: a review before each release, an area each month
   'needs-rank': '2026-11-01', // #506: Needs you most important first, each card with its priority (the section's hint)
   appearance: '2026-11-01', // #485: Match device, Light or Dark, in the rail's footer (behind Menu on a phone)
+  'worth-knowing-lines': '2026-11-01', // #497: Worth knowing holds only what you might act on, one line each, with Got it, all
 };
 
 const DAYS = 7;
