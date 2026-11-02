@@ -966,6 +966,55 @@ describe('run: the supervising loop', () => {
     assert.equal(res.launched, 3);
   });
 
+  // Workers that each exit with codes[n] once the runner's clock has moved ms past their start (#764): time only
+  // moves when the runner sleeps, so a worker is let go from sleep.
+  const slow = (ms, codes = () => 1) => {
+    const w = world([[route('a', 50)]]);
+    const launch = w.opts.launch;
+    const sleep = w.opts.sleep;
+    w.opts.launch = async (r) => Object.assign(await launch(r), { at: w.opts.now() });
+    w.opts.sleep = async (d) => {
+      await sleep(d);
+      for (const x of w.workers) if (!x.gone && w.opts.now() - x.at >= ms) { x.gone = true; x.finish(codes(w.workers.indexOf(x))); }
+    };
+    w.reports = [];
+    w.opts.report = async (s) => { w.reports.push(s); };
+    return w;
+  };
+
+  test('pauses 5m, then 10m, after 3 workers in a row fail after a minute each, and tells the hub why', async () => {
+    const w = slow(60_000);
+    const res = await run({ ...w.opts, workers: 1, maxRuns: 6 });
+    assert.match(res.why, /max-runs 6/);
+    const paused = w.lines.filter((l) => /^Paused/.test(l));
+    assert.deepEqual(paused, [
+      'Paused 5m: 3 workers in a row failed after 1m, 1m, 1m. Check the agent runs on its own (see its log).',
+      'Paused 10m: 3 workers in a row failed after 1m, 1m, 1m. Check the agent runs on its own (see its log).',
+    ]);
+    const gap = w.workers[3].at - w.workers[2].at;
+    assert.ok(gap >= 5 * 60_000 + 60_000 && gap < 6 * 60_000 + 10_000, `no 4th worker until the 5m pause is over (gap ${gap}ms)`);
+    const told = w.reports.find((s) => s.paused);
+    assert.equal(told.paused.reason, '3 workers in a row failed after 1m, 1m, 1m', 'the hub hears of the pause and its reason');
+  });
+
+  test('workers that fail after 20 minutes each pause it too', async () => {
+    const w = slow(20 * 60_000);
+    await run({ ...w.opts, workers: 1, maxRuns: 3 });
+    assert.deepEqual(w.lines.filter((l) => /^Paused/.test(l)), ['Paused 5m: 3 workers in a row failed after 20m, 20m, 20m. Check the agent runs on its own (see its log).']);
+  });
+
+  test('a slow worker that exits 0 resets the streak, and so does one that failed after submitting something', async () => {
+    const clean = slow(60_000, (n) => (n === 2 ? 0 : 1));
+    clean.opts.claimed = async () => true;
+    await run({ ...clean.opts, workers: 1, maxRuns: 5 });
+    assert.ok(!clean.lines.some((l) => /^Paused/.test(l)), 'w1 w2 fail, w3 exits 0, w4 w5 fail: never 3 in a row');
+
+    const handed = slow(60_000);
+    handed.opts.submitted = async (x) => x.name === 'w3';
+    await run({ ...handed.opts, workers: 1, maxRuns: 5 });
+    assert.ok(!handed.lines.some((l) => /^Paused/.test(l)), 'w3 exited 1 but submitted: never 3 in a row');
+  });
+
   // Workers that exit cleanly the moment they start (well within a minute); claims says which took a job.
   const empty = (routesSeq, claims = () => false) => {
     const w = world(routesSeq);

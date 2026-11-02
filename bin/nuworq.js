@@ -1379,6 +1379,8 @@ async function runCmd(flags) {
     // of slack covers clocks that differ.
     claimed: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).claims > 0,
     took: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).first ?? null,
+    // A failed worker that handed something in still worked (#764); an older hub doesn't say, so it counts as failed.
+    submitted: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).submitted > 0,
     // A worker that exited without signing off (#558), say it crashed: what it held goes back now, not at its lease's end.
     // At most 5 s, since it counts as running until then.
     signoff: (w) => Promise.race([reporter.call('signoff', { headline: 'Worker exited' }, { agent: w.name, project: w.project }), new Promise((r) => setTimeout(r, 5000).unref())]),
