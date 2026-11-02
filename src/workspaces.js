@@ -125,14 +125,16 @@ export class Workspaces {
 
   // Open the closed workspace that has gone longest without a sweep, if that's over everyMs: its leases lapse,
   // preconditions get checked and pushes go out while nobody uses it. It closes again with closeIdle. Returns its
-  // hub, or null.
+  // hub, or null. One whose file won't open (corrupt, say) is logged and skipped until its turn comes again (#740).
   wake(everyMs) {
     const t = this.now();
     const since = (s) => Math.max(this.used.get(s) ?? 0, this.woken.get(s) ?? 0);
-    const due = this.list().filter((s) => !this.open.has(s) && t - since(s) >= everyMs).sort((a, b) => since(a) - since(b))[0];
-    if (!due) return null;
-    this.woken.set(due, t);
-    return this.get(due, { touch: false });
+    const due = this.list().filter((s) => !this.open.has(s) && t - since(s) >= everyMs).sort((a, b) => since(a) - since(b));
+    for (const s of due) {
+      this.woken.set(s, t);
+      try { return this.get(s, { touch: false }); } catch (e) { console.error(`waking workspace "${s}" failed; skipped`, e); }
+    }
+    return null;
   }
 
   // claim(name): what must hold before it's made (an early-access grant, say), run once the name starts clean: it may

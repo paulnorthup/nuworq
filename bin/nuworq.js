@@ -1700,8 +1700,9 @@ const SMOKE = { sweepMs: 2 ** 31 - 1 };
 async function serve(flags) {
   if (flags.follow) return serveFollow(flags);
   const { Hub } = await import('../src/core.js');
-  const { createServer } = await import('../src/server.js');
+  const { createServer, keepServing } = await import('../src/server.js');
   const { Notifier } = await import('../src/notify.js');
+  keepServing();
   const host = flags.host || envVar('HOST') || '127.0.0.1';
   const port = Number(flags.port || envVar('PORT') || 4747);
   const loopback = host === 'localhost' || host === '::1' || host.startsWith('127.');
@@ -1816,7 +1817,8 @@ async function serveFollow(flags) {
 // Many workspaces, one process: each workspace is its own database, reached by subdomain or /w/<name>/.
 async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const { Workspaces } = await import('../src/workspaces.js');
-  const { createServer } = await import('../src/server.js');
+  const { createServer, keepServing } = await import('../src/server.js');
+  keepServing();
   const dir = workspacesDir(flags);
   // Plans (#113): off unless the host turns them on; organizations the owners belong to are never limited.
   const plans = /^(1|on|true|yes)$/i.test(String(flags.plans ?? envVar('PLANS') ?? ''));
