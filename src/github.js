@@ -37,6 +37,13 @@ function itemFor(hub, p, pr) {
   return bySeq(pr.title) || own() || byBranch() || bySeq(pr.body);
 }
 
+// Whether the last thing to take the item out of landing was a failing check on its pull request (check, below):
+// then the builder is fixing that PR, and its auto-merge stays on.
+const sentBackByCi = (hub, item) => {
+  const e = hub.q(`SELECT type, actor FROM events WHERE item_id = ? AND type IN ('sent_back', 'staged', 'rebased') ORDER BY at DESC, id DESC LIMIT 1`).get(item.id);
+  return e?.type === 'sent_back' && e.actor === ACTOR;
+};
+
 // Whether a pull request's branch is the item's own (#478): only that one's CI or closing sends landing work back.
 // An item that names no branch takes any of its pull requests, as before.
 const ownBranch = (item, ref) => !item.branch || item.branch === String(ref ?? '');
@@ -87,9 +94,11 @@ function pullRequest(hub, p, body) {
     });
     // The merge lands it. Accepted work waits for it in landing; but a PR whose check failed keeps its
     // auto-merge, so the builder's fix merges as soon as it's green, while the item is still with them.
-    // Only the item's own branch lands it (#727): another branch's PR that names "#N" merging leaves it be.
+    // Only after CI's own send-back (#726): one by a person, a drop, or a head moved since acceptance turned auto-merge
+    // off, so a merge then is someone's hand on GitHub, not the fix landing. And only the item's own branch lands it
+    // (#727): another branch's PR that names "#N" merging leaves it be.
     const before = item.stage, holder = item.holder;
-    const withFix = old && ['ready', 'active', 'verifying'].includes(before) && hub.prMode(p, item); // the hub's PR, auto-merge on
+    const withFix = old && ['ready', 'active', 'verifying'].includes(before) && hub.prMode(p, item) && sentBackByCi(hub, item); // the hub's PR, auto-merge on
     if (state === 'merged' && (before === 'landing' || withFix) && ownBranch(item, pr.head?.ref)) {
       const base = pr.base?.ref ?? 'main';
       hub.move(item, 'done', ACTOR, { holder: null, lease_until: null, touching: '[]' });
