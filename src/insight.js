@@ -266,7 +266,12 @@ function atDepth(v, depth, pages) {
   };
   const { all, agents, activity, queue, done, notes, steers, decisions, proposed, waiting, verifying, ...out } = v;
   Object.assign(out, { depth, counts, stage_items });
-  if (z >= 1) Object.assign(out, { queue: z >= 2 ? queue : queue.slice(0, 5), done: z >= 2 ? done : done.slice(0, 5), notes: z >= 2 ? notes : notes.slice(0, 3), steers, decisions });
+  // At 5m, the first field notes, and every one waiting for a person's tap or named in Direction today (#552), so
+  // its recommendation and its source link have their note.
+  const waits = (n) => n.advice && !n.advice.by && n.advice.do !== 'keep';
+  const sourced = new Set((v.direction ?? []).map((d) => Number(/^note (\d+)$/.exec(d.source)?.[1])).filter(Boolean));
+  const notes5m = [...new Set([...notes.filter((n) => waits(n) || sourced.has(n.id)), ...notes.slice(0, 3)])];
+  if (z >= 1) Object.assign(out, { queue: z >= 2 ? queue : queue.slice(0, 5), done: z >= 2 ? done : done.slice(0, 5), notes: z >= 2 ? notes : notes5m, steers, decisions });
   const more = (k) => Math.max(PAGE[k], Number(pages[k]) || 0);
   if (z >= 2) {
     const rows = [...board].sort((a, b) => b.item.slice(1) - a.item.slice(1));

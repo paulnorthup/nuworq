@@ -135,4 +135,17 @@ describe('memory distilled for people (#552)', () => {
     assert.throws(() => s.agent('distill', 'r1', { notes: [{ note: s.ids.ok, gist: 'g', recommend: 'retire' }] }), /Say why/);
     assert.throws(() => s.agent('distill', 'r1', { notes: [{ note: s.ids.ok, gist: 'g', recommend: 'decide', why: 'w' }] }), /draft/);
   });
+
+  // With #501, 5m sends only the first field notes: one waiting for a person, or named in Direction today, still comes.
+  test("at 5m the page gets every note waiting for a person's tap and every note Direction today names", () => {
+    const s = setup({ autonomy: 'balanced' });
+    review(s);
+    s.agent('distill', 'r1', distillArgs(s.ids));
+    for (let i = 0; i < 4; i++) { s.tick(1000); s.agent('learn', 'a1', { note: `Newer lesson ${i}.` }); }
+    const sent = view(s.hub, 'p', { depth: '5m' }).notes.map((n) => n.id);
+    assert.ok(sent.includes(s.ids.built), 'its retire waits for a person');
+    assert.ok(sent.includes(s.ids.rule), 'its decision draft waits, and Direction today names it');
+    assert.ok(!sent.includes(s.ids.ok), 'a kept note older than the first three stays at 30m');
+    assert.equal(view(s.hub, 'p', { depth: '5m' }).counts.notes, 7);
+  });
 });
