@@ -10,7 +10,7 @@ import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneD
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
-import { sandboxSettings, filePermissions, projectCommands, sandboxHosts, workerGitDenies } from '../src/sandbox.js';
+import { sandboxSettings, filePermissions, projectCommands, sandboxHosts, workerCommands, workerGitDenies } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -669,7 +669,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
     console.log(`\n${cmd}\n`);
     console.log(dim({
       claude: `Headless agents can't ask permission: they may only use the tools in --allowedTools (the project's own test and build commands; change with --allow). Their shell runs in Claude Code's sandbox: it writes only in the worktree and temp, and reaches only the hub, GitHub, the project's registries and the hosts its settings add. ${origin ? 'Pushes go through the hub, which takes nuworq/ branches only; the hub lands work on main.' : 'Never git push.'}`,
-      codex: `Codex runs in its workspace-write sandbox (it limits writes and network, not reads); the nuworq MCP server runs outside it, so it can reach the hub.`,
+      codex: `Codex runs in its workspace-write sandbox (it limits writes and network, not reads), so it runs only on projects without a remote; the nuworq MCP server runs outside it, so it can reach the hub.`,
       opencode: `opencode has no sandbox, so it runs only on projects without a remote, and never git pushes (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
       pi: `pi has no sandbox, so it runs only on projects without a remote, and never git pushes (nuworq's pi extension blocks it). Its config is a folder of its own (${piDir}): none of your pi extensions, skills, MCP servers or sign-ins follow it in. Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
     }[agent] + '\nAdd --run to start it now.'));
@@ -951,16 +951,24 @@ function workerSetup(target, agent, flags, s, token = null) {
       hint: 'A person sets them in the project\'s Settings, as host names (api.example.com, *.example.com). A hub that sends anything else isn\'t trusted to widen a worker\'s network.',
     });
   }
+  // The commands a person added beyond the project's checks (#768), checked here the same way.
+  let commands;
+  try { commands = workerCommands(target.worker_commands ?? []); } catch (e) {
+    throw new HubError(`Not starting a worker for ${target.name ?? target.slug}: the hub sent worker commands the runner refuses (${e.message})`, {
+      hint: 'A person sets them in the project\'s Settings, as whole commands (npm run e2e, make test). A hub that sends anything else isn\'t trusted to widen what a worker runs.',
+    });
+  }
   // Its agent token goes in a 0600 file the MCP server and the credential helper read; only the file's path is
   // in the commands and the environment (#477).
   const tokenAt = token ? tokenFile(dirname(HUB_FILE), name, token) : null;
   const isRepo = existsSync(join(home, '.git'));
   // With an origin (GitHub), work starts from main there and lands by pushing to it.
   const origin = isRepo && hasOrigin(home);
-  // opencode and pi have no sandbox to keep their shell in (#472): they run only where there is nothing to push to.
-  if ((agent === 'opencode' || agent === 'pi') && origin) {
-    throw new HubError(`${agent} workers aren't started for ${target.name}: it has a remote, and ${agent} has no sandbox`, {
-      hint: `${agent}'s shell could read this machine's keys and reach any host, so it works only on projects without an origin. Use --agent claude (its shell runs in Claude Code's sandbox) or --agent codex --can-read-keys (workspace-write: limited writes and network, but it can read the keys).`,
+  // opencode and pi have no sandbox to keep their shell in (#472), and Codex's workspace-write one doesn't keep it
+  // from reading (#768): they run only where there is nothing to push to, until Codex can deny reads.
+  if (agent !== 'claude' && origin) {
+    throw new HubError(`${agent} workers aren't started for ${target.name}: it has a remote, and ${agent === 'codex' ? "Codex's sandbox doesn't keep its shell from this machine's keys" : `${agent} has no sandbox`}`, {
+      hint: `${agent === 'codex' ? "Codex's shell could read this machine's keys (its workspace-write sandbox limits writes and network, not reads)" : `${agent}'s shell could read this machine's keys and reach any host`}, so it works only on projects without an origin. Use --agent claude: its shell runs in Claude Code's sandbox, which hides the keys.`,
     });
   }
   const worktree = isRepo && !flags.here ? join(`${home}.worktrees`, name) : null;
@@ -999,7 +1007,7 @@ function workerSetup(target, agent, flags, s, token = null) {
 
   // The project's own test and build commands, never an interpreter that runs anything (#472, src/sandbox.js).
   const run = [
-    projectCommands(home),
+    projectCommands(home, commands),
     // nuworq itself: the demo hub its UI work is looked at with.
     browser && has('bin/nuworq.js') && ['Bash(node bin/nuworq.js serve --demo --port 0)'],
     isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)', 'Bash(git rebase:*)'],

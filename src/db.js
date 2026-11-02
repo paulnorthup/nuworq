@@ -657,6 +657,11 @@ export const MIGRATIONS = [
     name: 'turns per run beside its tokens and cost',
     up(db) { addColumn(db, 'ALTER TABLE usage ADD COLUMN turns INTEGER'); },
   },
+  {
+    // Commands workers may run beyond the project's checks (#768): a JSON list only a person sets (settings).
+    name: 'a project can add commands its workers may run',
+    up(db) { addColumn(db, "ALTER TABLE projects ADD COLUMN worker_commands TEXT NOT NULL DEFAULT '[]'"); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

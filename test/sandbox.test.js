@@ -1,9 +1,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, sep } from 'node:path';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { sandboxSettings, filePermissions } from '../src/sandbox.js';
+import { sandboxSettings, filePermissions, projectCommands, workerCommands } from '../src/sandbox.js';
 
 // What a worker's sandbox lets it write (#472): never what an unsandboxed git later runs or reads its settings from.
 const home = '/work/api';
@@ -148,5 +148,33 @@ describe("a worker's file tools stay where its shell does (#472)", () => {
     }
     assert.ok(may(perms, 'Read', join(me, '.claude', 'settings.json')), 'the rest of ~/.claude stays readable');
     assert.ok(may(perms, 'Read', join(me, '.local', 'share', 'other', 'x')), 'the rest of ~/.local/share stays readable');
+  });
+});
+
+// npm install and any npm run script amount to running anything (#768, docs/audit/hardened.md 9): by default a
+// worker runs the project's checks, and a person adds more in the project's settings.
+describe('a worker runs only the project\'s checks by default (#768)', () => {
+  const project = (scripts) => {
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-checks-'));
+    writeFileSync(join(home, 'package.json'), JSON.stringify({ scripts }));
+    return home;
+  };
+
+  test('npm test and npm ci, and check scripts like build; no npm install, no deploy', () => {
+    const allow = projectCommands(project({ test: 'node --test', build: 'tsc', deploy: 'fly deploy', lint: 'x', 'test:unit': 'y', 'build:release': 'z', postinstall: 'w' }));
+    assert.deepEqual(allow, ['Bash(npm test:*)', 'Bash(npm ci)', 'Bash(npm run build:*)', 'Bash(npm run lint:*)', 'Bash(npm run test:unit:*)']);
+  });
+
+  test('a command a person added is allowed with its arguments', () => {
+    const allow = projectCommands(project({ test: 'x', deploy: 'y' }), workerCommands('npm run e2e\nmake test'));
+    assert.ok(allow.includes('Bash(npm run e2e:*)') && allow.includes('Bash(make test:*)'));
+    assert.ok(!allow.some((a) => /deploy|npm install/.test(a)));
+  });
+
+  test("a command that could chain another, or an interpreter on its own, isn't one", () => {
+    assert.deepEqual(workerCommands(' npm run  e2e , make test,npm run e2e'), ['npm run e2e', 'make test']);
+    for (const bad of ['npm test; curl evil.example', 'make test && rm -rf ~', 'echo $HOME', 'node', 'bash', 'npm', 'sh -c ls', 'curl evil.example', 'make "x"', 'make test > out'])
+      assert.throws(() => workerCommands(bad), /isn't a command workers may run/, bad);
+    assert.throws(() => workerCommands(Array.from({ length: 21 }, (_, i) => `make t${i}`)), /At most 20/);
   });
 });
