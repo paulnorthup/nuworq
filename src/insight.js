@@ -256,7 +256,7 @@ function atDepth(v, depth, pages) {
   const board = v.all.filter((i) => i.stage !== 'dropped' && !i.old);
   const light = (i) => ({ item: i.item, title: i.title, stage: i.stage, priority: i.priority, last_worker: i.last_worker, repo: i.repo, at: i.at, ago: i.ago, ...(i.feedback ? { feedback: true } : {}) });
   const stage_items = {};
-  for (const s of Object.keys(v.stages)) {
+  for (const s of z >= 1 ? Object.keys(v.stages) : []) { // 30s sends no stage lists (#750): the page lists a stage from 5m
     const here = board.filter((i) => i.stage === s);
     const fb = here.filter((i) => i.feedback).slice(-25);
     stage_items[s] = [...new Set([...here.slice(-25), ...fb])].sort((a, b) => a.item.slice(1) - b.item.slice(1)).map(light);
@@ -268,7 +268,10 @@ function atDepth(v, depth, pages) {
     queue: v.queue.length, done: v.done.length, notes: v.notes.length,
   };
   const { all, agents, activity, queue, done, notes, steers, decisions, proposed, waiting, verifying, ...out } = v;
-  Object.assign(out, { depth, counts, stage_items });
+  Object.assign(out, { depth, counts });
+  // 30s draws each row of In motion as who, what and how long: not the last words, the files or the heads-up.
+  if (z === 0) out.motion = v.motion.map(({ last, touching, heads_up, ...m }) => ({ ...m, ...(last ? { last: { ago: last.ago, at: last.at } } : {}) }));
+  if (z >= 1) out.stage_items = stage_items;
   // At 5m, the first field notes, and every one waiting for a person's tap or named in Direction today (#552), so
   // its recommendation and its source link have their note.
   const waits = (n) => n.advice && !n.advice.by && n.advice.do !== 'keep';
@@ -283,9 +286,11 @@ function atDepth(v, depth, pages) {
   // Since you last looked lists the first 6 of what finished; counts.finished says how many.
   out.since = { ...v.since, finished: v.since.finished.slice(0, 6) };
   const earlier = new Set(z >= 2 ? gone.slice(0, more('agents')).map((a) => a.name) : []);
-  const named = namesIn(out, new Set(gone.map((a) => a.name)));
+  const named = z >= 1 ? namesIn(out, new Set(gone.map((a) => a.name))) : new Set(); // 30s names only who's here now (#750)
   const who = (a) => ({ name: a.name, model: a.model, role: a.role, where: a.where, job: a.job, present: false });
-  out.agents = agents.filter((a) => a.present || earlier.has(a.name) || named.has(a.name)).map((a) => (a.present || earlier.has(a.name) ? a : who(a)));
+  const here = (a) => ({ name: a.name, model: a.model, role: a.role, where: a.where, job: a.job, present: true }); // all 30s names
+  if (z === 0) out.agents = agents.filter((a) => a.present).map(here);
+  else out.agents = agents.filter((a) => a.present || earlier.has(a.name) || named.has(a.name)).map((a) => (a.present || earlier.has(a.name) ? a : who(a)));
   if (z >= 2) out.earlier = [...earlier]; // the page of "Show earlier agents", by name
   return out;
 }

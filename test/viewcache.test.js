@@ -91,8 +91,8 @@ describe('the page takes the depth (#501)', () => {
 
   test('30s: the pulse, needs you, motion, flow and milestones, with counts of the rest', () => {
     const v = at('30s');
-    for (const k of ['pulse', 'since', 'attention', 'motion', 'flow', 'groups', 'project', 'stages', 'counts', 'stage_items']) assert.ok(k in v, k);
-    for (const k of ['all', 'queue', 'done', 'notes', 'steers', 'decisions', 'activity', 'proposed', 'waiting', 'verifying']) assert.ok(!(k in v), `no ${k}`);
+    for (const k of ['pulse', 'since', 'attention', 'motion', 'flow', 'groups', 'project', 'stages', 'counts']) assert.ok(k in v, k);
+    for (const k of ['stage_items', 'all', 'queue', 'done', 'notes', 'steers', 'decisions', 'activity', 'proposed', 'waiting', 'verifying']) assert.ok(!(k in v), `no ${k}`);
     assert.deepEqual(v.attention, full.attention);
     assert.deepEqual(v.counts, {
       items: full.all.length, board: full.all.filter((i) => i.stage !== 'dropped' && !i.old).length,
@@ -102,16 +102,29 @@ describe('the page takes the depth (#501)', () => {
     });
     assert.ok(v.since.finished.length <= 6);
     assert.equal(v.since.counts.finished, full.since.counts.finished);
-    // Flow's stage pills open to the last 25 items of each stage.
-    const ready = full.all.filter((i) => i.stage === 'ready');
-    assert.deepEqual(v.stage_items.ready.map((i) => i.item), ready.slice(-25).map((i) => i.item));
-    // Agents: the ones here now, and the others the page names, as a line each.
-    assert.deepEqual(v.agents.filter((a) => a.present), full.agents.filter((a) => a.present));
-    const named = v.agents.filter((a) => !a.present);
-    assert.ok(named.every((a) => Object.keys(a).join() === 'name,model,role,where,job,present'));
-    const { agents, ...rest } = v;
-    const said = JSON.stringify(rest);
-    assert.ok(named.length && named.every((a) => said.includes(`"${a.name}"`)), 'each one is named elsewhere on the page');
+    // Agents (#750): a line each for the ones here now, and no one else; In motion without the last words, files and heads-up.
+    assert.deepEqual(v.agents.map((a) => a.name), full.agents.filter((a) => a.present).map((a) => a.name));
+    assert.ok(v.agents.every((a) => Object.keys(a).join() === 'name,model,role,where,job,present'));
+    assert.deepEqual(v.motion.map((m) => m.item), full.motion.map((m) => m.item));
+    assert.ok(v.motion.every((m) => !('touching' in m) && !('heads_up' in m) && Object.keys(m.last ?? {}).join() === 'ago,at'));
+  });
+
+  test('30s is at most half what it was (123,212 bytes), and 5m and 30m carry the stage lists and agents', () => {
+    assert.ok(JSON.stringify(at('30s')).length <= 61_606, `${JSON.stringify(at('30s')).length} bytes at 30s`);
+    for (const depth of ['5m', '30m']) {
+      const v = at(depth);
+      // Flow's stage pills open to the last 25 items of each stage.
+      const ready = full.all.filter((i) => i.stage === 'ready');
+      assert.deepEqual(v.stage_items.ready.map((i) => i.item), ready.slice(-25).map((i) => i.item));
+      // Agents: the ones here now, and the others the page names, as a line each.
+      assert.deepEqual(v.agents.filter((a) => a.present), full.agents.filter((a) => a.present));
+      const named = v.agents.filter((a) => !a.present);
+      const { agents, ...rest } = v;
+      const said = JSON.stringify(rest);
+      if (depth === '5m') assert.ok(named.every((a) => Object.keys(a).join() === 'name,model,role,where,job,present'));
+      assert.ok(named.every((a) => said.includes(`"${a.name}"`)), 'each one is named elsewhere on the page');
+      assert.deepEqual(v.motion, full.motion);
+    }
   });
 
   test('5m: the first of Up next, Recently finished and the field notes, steering and decisions; under 150 KB', () => {
