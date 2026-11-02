@@ -727,6 +727,10 @@ kbd { display: inline-block; min-width: 1.6em; padding: var(--sp-h) var(--sp-2);
 .ok { color: var(--ok); font-size: var(--fs-2); margin-top: var(--sp-1); }
 /* Failed, not just at risk (#192): red. Amber (.warn) is for what might still go wrong. */
 .bad { color: var(--bad); font-size: var(--fs-2); margin-top: var(--sp-1); }
+/* A refused field (#748): its reason right under it, and its border in the same red. */
+.field-err { color: var(--bad); font-size: var(--fs-2); margin: var(--sp-1) 0 0; }
+.form > .field-err { margin-top: calc(var(--sp-1) - var(--sp-3)); } /* against its field, not the form's gap away */
+[aria-invalid="true"], [aria-invalid="true"]:focus { border-color: var(--bad); }
 /* The hub's own pages (join, early access, requests): one narrow column. */
 main.narrow { max-width: 560px; margin: 0 auto; padding: var(--sp-12) var(--sp-5) var(--sp-20); }
 main.narrow h1 { margin-bottom: var(--sp-4); }

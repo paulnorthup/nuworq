@@ -15,6 +15,9 @@ export function errorText(e) {
   return hint ? `${stop(error)} ${hint}` : error;
 }
 
+// A refused field's reason (#748): the error alone, as one sentence, since the field's own hint is already beside it.
+export const fieldReason = (e) => stop(sentence(e?.message || e?.error || 'That isn\'t accepted'));
+
 // The same, as HTML: the app's own addresses in the hint become links (relative, so a workspace keeps its prefix).
 export function errorHtml(e, esc) {
   return esc(errorText(e)).replace(/\/?(#\/[^\s<]*[^\s<.,;:)])/g, (_, path) => `<a href="${path}">${path}</a>`);

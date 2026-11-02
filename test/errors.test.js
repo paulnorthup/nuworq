@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
-import { errorText, errorHtml } from '../web/errors.js';
+import { errorText, errorHtml, fieldReason } from '../web/errors.js';
 import { appSource } from './appsource.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -45,5 +45,39 @@ describe('errors as a person reads them', () => {
     const app = appSource();
     assert.doesNotMatch(app, /toast\(e\.message/);
     assert.doesNotMatch(app, /esc\(e\.message\)/);
+  });
+});
+
+// #748: a refused form shows its reason under the field, as one sentence that doesn't repeat the field's hint.
+describe('a refused field', () => {
+  test('its reason is the error alone, sentence case, one full stop; a name keeps its case', () => {
+    assert.equal(fieldReason({ message: 'a channel needs a URL', hint: 'ntfy topic URL (phone push), e.g. https://ntfy.sh/x' }), 'A channel needs a URL.');
+    assert.equal(fieldReason({ message: "Type the project's name (api) to delete it" }), "Type the project's name (api) to delete it.");
+    assert.equal(fieldReason({}), "That isn't accepted.");
+  });
+
+  test('the hub refuses a bad channel or a mistyped name with 400, which the dialog shows at the field', async () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('api', { create: true }));
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const post = async (path, body) => {
+      const r = await fetch(`http://127.0.0.1:${server.address().port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: r.status, ...(await r.json()) };
+    };
+    try {
+      const ftp = await post('/api/notify', { kind: 'ntfy', url: 'ftp://ntfy.sh/x' });
+      assert.equal(ftp.status, 400);
+      assert.equal(fieldReason({ message: ftp.error }), 'Channel URLs must be http or https.');
+      const typo = await post('/api/p/api/human/delete', { confirm: 'apj' });
+      assert.equal(typo.status, 400);
+      assert.equal(fieldReason({ message: typo.error }), "Type the project's name (api) to delete it.");
+    } finally { server.close(); }
+  });
+
+  test('dialogs say it at the field, not in a toast', () => {
+    const app = appSource();
+    assert.doesNotMatch(app, /toast\('Name it'/);
+    for (const id of ['np-name', 'fp-name', 'nt-url', 'gh-secret', 'fb-text', 'rm-confirm', 'rm-archived']) assert.match(app, new RegExp(`fieldError\\('${id}'|'${id}'\\)`), id);
   });
 });
