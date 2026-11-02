@@ -137,4 +137,39 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.equal(hub.q("SELECT token_id FROM agents WHERE name = 'olivia-ui'").get().token_id, null);
     assert.equal((await op('look', { token: tok.box, agent: 'olivia-ui' })).status, 200);
   });
+
+  test('operator role needs a token a steward or owner minted', async () => {
+    auth.addPerson('sam', 'steward');
+    const minted = (name, by, powers) => auth.createToken(name, 'agent', { mintedBy: by, ...(powers ? { powers } : {}) });
+    const t = { mo: minted('mo-device', 'mo'), sam: minted('sam-device', 'sam'), olivia: minted('olivia-device', 'olivia'), named: minted('mo-operate', 'mo', 'shape,build,review,operate') };
+    const as = (token, agent) => op('checkin', { token, agent, body: { has: ['operator', 'macos'] } });
+
+    // A member's device login: refused as an operator, with a hint; fine as an agent.
+    const refused = await as(t.mo, 'mo-op');
+    assert.equal(refused.status, 403);
+    assert.match(refused.json.error, /can't act as an operator/);
+    assert.match(refused.json.hint, /steward or owner minted[^]*--powers shape,build,review,operate/);
+    assert.equal((await op('checkin', { token: t.mo, agent: 'mo-op', body: { has: ['macos'] } })).status, 200);
+    assert.equal(hub.roleOf(hub.project('api'), 'mo-op'), 'session');
+
+    // A steward's, an owner's, one with the operate power by name, and one made on the hub host (no person minted it).
+    for (const [token, agent] of [[t.sam, 'sam-op'], [t.olivia, 'olivia-op'], [t.named, 'mo-named-op'], [tok.box, 'box-op']]) {
+      assert.equal((await as(token, agent)).status, 200, agent);
+      assert.equal(hub.roleOf(hub.project('api'), agent), 'operator', agent);
+    }
+
+    // A member signed in in the browser checks in, but not as an operator.
+    const moSid = auth.createSession(hub.db.prepare("SELECT id FROM tokens WHERE name = 'mo-laptop'").get().id);
+    assert.equal((await op('checkin', { cookie: moSid, agent: 'mo-ui', body: { has: ['operator'] } })).status, 403);
+
+    // answer and escalate check the same, even for a session that became an operator before this was checked.
+    hub.humanOp('api', 'create', { title: 'Needs an operator', acceptance: 'x' });
+    const ask = () => hub.agentOp('api', 'ask', 'asker', { question: 'Restart the VM?', assumption: 'yes', to: 'operator' }).question;
+    hub.agentOp('api', 'checkin', 'asker', {});
+    hub.db.prepare("UPDATE agents SET role = 'operator' WHERE name = 'mo-op'").run();
+    const q1 = ask();
+    assert.equal((await op('answer', { token: t.mo, agent: 'mo-op', body: { question: q1, answer: 'done' } })).status, 403);
+    assert.equal((await op('ask', { token: t.mo, agent: 'mo-op', body: { question: 'Paul?', escalates: q1 } })).status, 403);
+    assert.equal((await op('answer', { token: t.sam, agent: 'sam-op', body: { question: q1, answer: 'Restarted it.' } })).status, 200);
+  });
 });
