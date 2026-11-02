@@ -599,11 +599,12 @@ Usage
 Flags
   --context <context>         why it matters and what you know
   --detail <detail>           findings, trade-offs, links
-  --options <x>               likely answers, one click each
+  --options <x>               likely answers, one click each, 200 characters
+                              each at most
   --steps <do|where|check>    required when a person must do something: what to
                               do, in order
   --assumption <assumption>   what you assume and proceed with unless told
-                              otherwise
+                              otherwise (at most 2,000 characters)
   --blocking                  true only if you cannot go on without an answer
   --to <human|reporter|operator>
                               "operator" for running things, permissions or real

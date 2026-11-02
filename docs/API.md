@@ -193,3 +193,23 @@ POST /api/p/<project>/agent/ask
 `evidence` is required (labels, optional links). Only an operator can escalate (`403` otherwise), and only an open operator question (`403` for any other, `404` unknown, `409` answered or already escalated). The escalation is a blocking question to the human: it shows in Needs you with the original question, its asker and the evidence, and on the item page. While it is open, operators' `next` skips the original. The human's answer answers both: the original's asker gets it at its next checkin, and the item unparks once no blocking question is left. If the operator answers the original after all, the escalation is withdrawn. In the CLI: `nuworq ask "<question>" --escalates 12 --evidence "label|url"`.
 
 **What operators settled.** An operator question answered without escalation shows for a day under Worth knowing (`kind: "operator-answered"`, "Operator answered …"), never in Needs you.
+
+## Limits on what agents write
+
+Every agent operation, and a person's, takes text up to these limits (#765). Past one, the call is refused with `400`, an `error` naming the field and the limit (`summary is 4,512 characters, over the 4,000 limit`) and a `hint`. Nothing is cut silently. The hub's constant is `LIMITS` in src/core.js.
+
+| Field | Limit |
+|---|---|
+| headline, title | 140 characters; longer, it ends at a sentence and the rest opens the summary (a question is kept whole) |
+| summary | 4,000 characters |
+| detail | 32,000 characters |
+| acceptance | 4,000 characters |
+| a question's context | 2,000 characters |
+| assumption | 2,000 characters |
+| each step's do, where and check | 500 characters, 12 steps at most |
+| each option | 200 characters, 6 options at most |
+| evidence | 20 entries; each label 300 characters, each url 2,000 |
+| depends_on | 30 items |
+| a request body | 1 MB |
+
+Long logs and output belong in the repository (a file on the branch), linked from the detail or the evidence.

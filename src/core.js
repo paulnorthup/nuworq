@@ -180,8 +180,23 @@ export function providerOf(model = '') {
   return 'Open-weight';
 }
 
+// The most an agent's (or a person's) text may hold (#765), in characters, or entries for lists. Past one, the write
+// is refused with a hint, never cut silently: every open page and many agents read these back on each change.
+export const LIMITS = {
+  summary: 4_000, detail: 32_000, acceptance: 4_000, context: 2_000, assumption: 2_000, step: 500, option: 200,
+  evidence: 20, evidence_label: 300, evidence_url: 2_000, depends_on: 30,
+};
+const LONG_HINT = 'Say it shorter: the summary is the 5-minute version and the detail the 30-minute one. Put long logs and output in the repository (a file on your branch) and point to it.';
+const commas = (x) => x.toLocaleString('en-US');
+// text, unless it's over max: then refused, naming field and the limit.
+function capped(text, max, field, hint = LONG_HINT) {
+  if (text.length > max) throw new UserError(`${field} is ${commas(text.length)} characters, over the ${commas(max)} limit`, { hint });
+  return text;
+}
+
 // Everything written into nuworq has up to three layers. Be forgiving: an over-long
 // headline is trimmed and the overflow moved into the summary rather than rejected.
+// The summary and detail are refused past LIMITS (#765); a question's summary is its context.
 // It ends at the last sentence that fits; only a first sentence over the cap is cut at a space, with "…".
 // whole: a question (#387), kept at any length, since a person must read all of it to answer.
 // moved: '' (nothing), 'sentence' or 'space', so the agent can be told.
@@ -211,6 +226,9 @@ export function layered(headline, summary = '', detail = '', what = 'headline', 
       moved = 'space';
     }
   }
+  if (what === 'question') capped(summary, LIMITS.context, 'context');
+  else capped(summary, LIMITS.summary, 'summary');
+  capped(detail, LIMITS.detail, 'detail');
   return { headline, summary, detail, moved };
 }
 
@@ -1474,6 +1492,7 @@ export class Hub extends EventEmitter {
 
   setDeps(p, item, refs) {
     if (!Array.isArray(refs)) return;
+    if (refs.length > LIMITS.depends_on) throw new UserError(`At most ${LIMITS.depends_on} dependencies, not ${refs.length}`, { hint: 'Depend on the milestone that groups them instead (its parts finish it).' });
     this.q('DELETE FROM deps WHERE item_id = ?').run(item.id);
     for (const r of refs) {
       const d = this.item(p, r);
@@ -3053,7 +3072,7 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
 }
 
 function finishShaping(p, agent, item, { headline, summary, detail, acceptance, difficulty, difficulty_why }) {
-  if (str(acceptance)) this.patch(item, { acceptance: str(acceptance) });
+  if (str(acceptance)) this.patch(item, { acceptance: capped(str(acceptance), LIMITS.acceptance, 'acceptance') });
   // Its difficulty (#348), rated here or with refine; unrated, it counts as standard and the hint says so.
   const rated = rateDifficulty(item, { difficulty, difficulty_why }, []);
   if (Object.keys(rated).length) this.patch(item, rated);
@@ -3076,13 +3095,21 @@ function finishShaping(p, agent, item, { headline, summary, detail, acceptance, 
   };
 }
 
-// Evidence as agents send it: strings or { label, url }, one or many.
+// Evidence as agents send it: strings or { label, url }, one or many. At most LIMITS.evidence of them (#765).
 function evidenceList(raw) {
-  return (Array.isArray(raw) ? raw : raw ? [raw] : [])
-    .map((e) => (typeof e === 'string' ? { label: e } : { label: str(e.label || e.url), url: str(e.url) || undefined }))
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  if (list.length > LIMITS.evidence) throw new UserError(`At most ${LIMITS.evidence} pieces of evidence, not ${list.length}`, { hint: 'Keep the ones a reviewer checks first: the test run, the commit, a screenshot. Put the rest in one file on your branch and link it.' });
+  return list
+    .map((e) => (typeof e === 'string' ? { label: str(e) } : { label: str(e.label || e.url), url: str(e.url) || undefined }))
+    .map((e) => ({ ...e, label: capped(e.label, LIMITS.evidence_label, 'an evidence label'), ...(e.url ? { url: capped(e.url, LIMITS.evidence_url, 'an evidence url') } : {}) }))
     // Agents sometimes put the result where the link goes ("unit tests|2 passed"): keep it as text, not a broken link.
     .map((e) => (e.url && !/^https?:\/\//i.test(e.url) ? { label: e.label === e.url ? e.label : `${e.label}: ${e.url}` } : e))
     .filter((e) => e.label);
+}
+
+// A question's one-click answers: at most 6, each at most LIMITS.option characters (#765).
+function optionList(raw) {
+  return Array.isArray(raw) ? raw.map(str).filter(Boolean).slice(0, 6).map((o, i) => capped(o, LIMITS.option, `option ${i + 1}`, 'An option is one short answer a person clicks; put the explanation in context.')) : [];
 }
 
 // What a person must do, in order: [{ do, where?, check? }]. `where` is the exact place: a URL or one bare command.
@@ -3098,6 +3125,7 @@ function stepList(raw, tidied = []) {
   return raw.map((s, i) => {
     const step = typeof s === 'string' ? { do: str(s) } : { do: str(s?.do), where: str(s?.where) || undefined, check: str(s?.check) || undefined };
     if (!step.do) throw new UserError(`Step ${i + 1} says nothing to do`, { hint: `Each step needs do: what to do. ${STEPS_HINT}` });
+    for (const k of ['do', 'where', 'check']) if (step[k]) capped(step[k], LIMITS.step, `step ${i + 1}'s ${k}`, 'A step is one action a person takes: split a long one into several steps, and put background in context.');
     return tidyWhere(step, i + 1, tidied);
   });
 }
@@ -3158,7 +3186,7 @@ function escalate(p, agent, args) {
   const tidied = [];
   const steps = stepList(args.steps, tidied);
   requireSteps(question, steps);
-  const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
+  const options = optionList(args.options);
   const item = this.itemById(orig.item_id);
   const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, escalates, evidence, steps)
     VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?, ?, ?)`).run(p.id, orig.item_id, agent, question.headline, question.summary, question.detail,
@@ -3360,7 +3388,7 @@ const AGENT_OPS = {
     }
     if (args.escalates != null && args.escalates !== '') return escalate.call(this, p, agent, args);
     const question = layered(args.question, args.context, args.detail, 'question', { whole: true });
-    const assumption = str(args.assumption);
+    const assumption = capped(str(args.assumption), LIMITS.assumption, 'assumption');
     const to = str(args.to).toLowerCase();
     if (to && !['reporter', 'human', 'operator'].includes(to)) {
       throw new UserError(`to must be "human", "reporter" or "operator", not "${args.to}"`, { hint: 'Leave it out and the hub picks: running things, permissions, credentials or infra go to an operator; anything else to the human.' });
@@ -3376,7 +3404,7 @@ const AGENT_OPS = {
     }
     if (issue && !this.github) throw new UserError("This hub has no GitHub App, so it can't post on the issue", { hint: 'Ask the human instead: leave out to.' });
     const blocking = !!issue || args.blocking === true || args.blocking === 'true' || (!assumption && args.blocking == null);
-    const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
+    const options = optionList(args.options);
     // Left out, `to` is picked from what the question is about (src/audience.js); given, it is kept as is.
     const routed = to ? null : defaultAudience({ question: question.headline, context: `${question.summary}\n${question.detail}` });
     const operator = (to || routed.audience) === 'operator';
@@ -3735,7 +3763,7 @@ const AGENT_OPS = {
 Object.assign(Hub.prototype, {
   createItem(p, actor, args) {
     const { headline: title, summary, detail } = layered(args.title ?? args.headline, args.summary, args.detail, 'title');
-    const acceptance = str(args.acceptance);
+    const acceptance = capped(str(args.acceptance), LIMITS.acceptance, 'acceptance');
     const priority = isPriority(args.priority) ? args.priority : 'soon';
     const parent = args.parent ? this.item(p, args.parent) : null;
     const repo = this.checkRepo(p, args.repo);
@@ -3792,7 +3820,7 @@ Object.assign(Hub.prototype, {
     const set = {};
     if (args.title != null && str(args.title) && str(args.title) !== item.title) { set.title = layered(args.title).headline; changed.push('title'); }
     for (const k of ['summary', 'detail', 'acceptance']) {
-      if (args[k] != null && str(args[k]) !== item[k]) { set[k] = str(args[k]); changed.push(k); }
+      if (args[k] != null && str(args[k]) !== item[k]) { set[k] = capped(str(args[k]), LIMITS[k], k); changed.push(k); }
     }
     if (isPriority(args.priority) && args.priority !== item.priority) {
       // A tidy job keeps the groups true; what matters most stays the person's call (#202).
