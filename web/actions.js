@@ -13,6 +13,7 @@ import { predict, placeholder } from './instant.js';
 import { S, setState, toggleIn, addTo, putIn, removeFrom, PAGE } from './store.js';
 import { recent, store, themeNow } from './prefs.js';
 import { go, prefetch } from './router.js';
+import { markNew } from './new.js';
 import { $, api, closeModal, loadProjects, modal, prefetchView, refresh, render, scheduleRefresh, toast, toastError, views } from './ui.js';
 import { MAC, Z, esc, inline, plural, stepWhere } from './views/html.js';
 import { z } from './views/parts.js';
@@ -112,16 +113,16 @@ function staffingModal(back) {
     <div class="form"><label>Workers at once<input id="st-workers" type="number" inputmode="numeric" min="1" max="100" placeholder="Each runner's own --workers" value="${s.workers ?? ''}"></label>
     <label>Daily budget, dollars (UTC days)<input id="st-budget" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="No budget" value="${s.budget ?? ''}"></label></div>
     <p class="faint">Spent here today: $${(s.spent_today ?? 0).toFixed(2)}. Once it reaches the budget, no new workers start until tomorrow.</p>
-    <div class="setting" data-new="model-routing"><div class="body"><div class="h" id="set-models">Cheaper models where they do as well</div>
+    <div class="setting"><div class="body"><div class="h" id="set-models"><span data-new="model-routing">Cheaper models where they do as well</span></div>
       <div class="s">${m.on ? 'On: building starts on the top model below and landing and tidying on the cheapest, until results show a cheaper one meets the quality bar. A failed attempt steps up one. Reviews and shaping always use the top one.' :'Off: every worker runs on its runner\'s own model.'}</div></div>
       <button class="switch" role="switch" aria-checked="${m.on}" aria-labelledby="set-models" data-action="${m.on ? 'models-off' : 'models-on'}"></button></div>
     <div class="form">${tier('claude', 'Claude models, cheapest first')}
     <details><summary>Codex, opencode and pi</summary>${tier('codex', 'Codex models, cheapest first')}${tier('opencode', 'opencode models (provider/model), cheapest first')}${tier('pi', 'pi models (provider/model), cheapest first')}</details>
-    <label data-new="model-trials">Building jobs that try one model down, percent<input id="st-trial" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.trial ?? 10}"></label>
+    <label><span data-new="model-trials">Building jobs that try one model down, percent</span><input id="st-trial" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.trial ?? 10}"></label>
     <label>Building jobs raced against the top model, percent<input id="st-race" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.race ?? 0}"></label></div>
     <p class="bad" id="st-trial-note" role="status"${note ? '' : ' hidden'}>${esc(note)}</p>
     <p class="faint">Trials teach nuworq what each model can do. Only rote and standard items that aren't "now" or operator-only, while there's budget left today. 0 turns one off.</p>
-    <fieldset class="quality" data-new="model-quality"><legend>Quality bar</legend>
+    <fieldset class="quality"><legend><span data-new="model-quality">Quality bar</span></legend>
       ${Object.entries(m.qualities ?? {}).map(([k, q]) => `<label class="check-label"><input type="radio" name="st-quality" value="${k}" ${(m.quality ?? 'balanced') === k ? 'checked' : ''}> <span><b>${esc(q.label)}</b>: ${esc(q.means)}</span></label>`).join('')}
       <p class="faint">Once a model has 20 finished jobs of a kind (building standard items, say), and so has the top one, each job of that kind runs on the cheapest model that meets the bar. Until then: the top model for building, the cheapest for landing and tidying.</p></fieldset>
     <div class="foot"><button class="btn ghost" data-action="staffing-pause" data-paused="${s.paused ? 1 : 0}">${s.paused ? 'Resume' : 'Pause'}</button><button class="btn primary" data-action="staffing-save">Save</button></div>`);
@@ -158,7 +159,8 @@ const liveLink = (slug) => `${location.origin}${location.pathname.replace(/[^/]*
 function settingsModal() {
   const P = S.view?.project;
   if (!P) return;
-  const row = (id, name, what, control) => `<div class="setting"><div class="body"><div class="h" id="set-${id}">${name}</div><div class="s">${what}</div></div>${control}</div>`;
+  // shipped: a "new" key, its tag beside the row's name (#721), not adrift at the dialog's edge.
+  const row = (id, name, what, control, shipped) => `<div class="setting"><div class="body"><div class="h" id="set-${id}">${shipped ? `<span data-new="${shipped}">${name}</span>` : name}</div><div class="s">${what}</div></div>${control}</div>`;
   const sw = (id, on, action) => `<button class="switch" role="switch" aria-checked="${on}" aria-labelledby="set-${id}" data-action="${action}"></button>`;
   modal(`<h2 data-settings>Settings</h2>
     <p class="lead">How ${esc(P.name)} is staffed, kept current and linked to GitHub.</p>
@@ -167,20 +169,20 @@ function settingsModal() {
       sw('runner', !!P.runner, P.runner ? 'runner-off' : 'runner-on'))}
     ${row('fresh', 'Keep it fresh weekly', 'Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade.',
       sw('fresh', !!P.fresh, P.fresh ? 'fresh-off' : 'fresh-on'))}
-    <div data-new="security-reviews">${row('security', 'Security audits', P.security
+    ${row('security', 'Security audits', P.security
     ? 'On: before each release an agent that built none of it audits what it ships, and the release waits for it. Each month, one area in turn.'
     : 'Before each release, an audit of what it ships by an agent that built none of it; each month, one area in turn.',
-      sw('security', !!P.security, P.security ? 'security-off' : 'security-on'))}</div>
-    <div data-new="releases">${row('releases', 'Release per milestone', P.releases === 'milestone'
+      sw('security', !!P.security, P.security ? 'security-off' : 'security-on'), 'security-reviews')}
+    ${row('releases', 'Release per milestone', P.releases === 'milestone'
     ? 'On: when a milestone finishes, the hub drafts "Release vX.Y.Z" with its changelog and upgrade notes, for you to edit and sign.'
     : 'When a milestone finishes, the hub drafts the next release: its version, changelog and upgrade notes.',
-    sw('releases', P.releases === 'milestone', P.releases === 'milestone' ? 'releases-off' : 'releases-on'))}
+    sw('releases', P.releases === 'milestone', P.releases === 'milestone' ? 'releases-off' : 'releases-on'), 'releases')}
     ${row('release-now', 'Release now', 'A patch for a fix that can\'t wait, or whatever landed since the last release, drafted the same way.',
-      '<button class="btn" data-action="release-now">Draft</button>')}</div>
-    <div data-new="live-view">${row('live', 'Anyone can watch', P.live
+      '<button class="btn" data-action="release-now">Draft</button>')}
+    ${row('live', 'Anyone can watch', P.live
     ? `On: anyone with <a href="${esc(liveLink(P.slug))}" target="_blank" rel="noopener">the link</a> sees item titles, agents, models, Flow and totals. Nothing else.`
     : 'A public, read-only page of what agents are doing here. Off until you turn it on.',
-    sw('live', !!P.live, P.live ? 'live-off' : 'live-on'))}</div>
+    sw('live', !!P.live, P.live ? 'live-off' : 'live-on'), 'live-view')}
     ${row('github', 'GitHub', P.github ? 'Connected: pull requests and CI results link to items.' : 'Link pull requests and CI results to items.',
       `<button class="btn${P.github ? '' : ' primary'}" data-action="github">${P.github ? 'Manage' : 'Set up'}</button>`)}
     <h3>This project</h3>
@@ -231,13 +233,13 @@ async function connect() {
   const where = S.view?.project.path;
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
-    <h4>Install and connect, once per machine</h4>
-    <p class="lead">Paste it in a terminal, in a clone of the project. ${c.verified ? '<span data-new="verified-install">It downloads this hub\'s newest signed release and checks its signature against nuworq\'s release key; if that doesn\'t match, it stops before anything installs.</span> Then it installs nuworq (Node 24 or newer: <code class="flag">node --version</code>; older or missing, get it from nodejs.org), which keeps itself up to date.' : c.install ? 'It installs nuworq from this hub (Node 24 or newer: <code class="flag">node --version</code>; older or missing, get it from nodejs.org), and keeps it up to date.' : 'This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed first.'} It signs you in through the browser, then asks, one at a time, to install the Claude Code plugin, staff the project with workers here, and start an operator, and says how to start a shaper. That one block is all there is to copy. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.setup)}
-    <details class="setup-fold" data-new="setup-folded"><summary>What connect sets up, to do by hand</summary>
+    <h4>${c.verified ? '<span data-new="verified-install">Install and connect, once per machine</span>' : 'Install and connect, once per machine'}</h4>
+    <p class="lead">Paste it in a terminal, in a clone of the project. ${c.verified ? 'It downloads this hub\'s newest signed release and checks its signature against nuworq\'s release key; if that doesn\'t match, it stops before anything installs. Then it installs nuworq (Node 24 or newer: <code class="flag">node --version</code>; older or missing, get it from nodejs.org), which keeps itself up to date.' : c.install ? 'It installs nuworq from this hub (Node 24 or newer: <code class="flag">node --version</code>; older or missing, get it from nodejs.org), and keeps it up to date.' : 'This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed first.'} It signs you in through the browser, then asks, one at a time, to install the Claude Code plugin, staff the project with workers here, and start an operator, and says how to start a shaper. That one block is all there is to copy. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.setup)}
+    <details class="setup-fold"><summary><span data-new="setup-folded">What connect sets up, to do by hand</span></summary>
     ${setupSection()}
     <h4>Then, and after any restart</h4><p class="lead">The first two for every project that isn't parked, in one command: the runner with automatic workers, and an operator in its own terminal for each (tmux when you have it). Run it again any time: it starts only what's missing. <code>nuworq down</code> stops it all.</p>${commandBlocks(c.up)}
     </details>
-    ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
+    ${gh ? `<h4><span data-new="github-app-status">GitHub App</span> (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add <code class="flag">--here</code>), or link the repo in the project header, so later workers find it.</p>`}
     ${z() >= 2 ? `<h3>Setting up by hand</h3>
     <h4>Workers in this terminal</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code class="flag">--browser</code> for workers that check UI work.</p>${commandBlocks(c.run)}
@@ -307,7 +309,7 @@ function appStatus(st) {
     : st.state === 'created'
       ? [`Created${st.slug ? ` as <code>${esc(st.slug)}</code>` : ''}, not installed: it can't reach any repository yet. GitHub asks which ones it may use.`, '<a class="btn primary small" href="api/github/install">Install</a>']
       : ['No GitHub App yet. Workers push through it: a token for one repository, for an hour, and nobody holds a lasting GitHub credential. GitHub asks you to confirm it, then where to install it.', '<a class="btn primary small" href="api/github/app/new">Create</a>'];
-  return `<div class="app-status ${st.state}" data-new="github-app-status"><span class="dot"></span><p>${line}</p>${act}</div>`;
+  return `<div class="app-status ${st.state}"><span class="dot"></span><p>${line}</p>${act}</div>`;
 }
 
 // Back from installing the app (GitHub sends the person to the app's setup_url with setup_action): say where
@@ -323,7 +325,7 @@ export async function backFromGitHub() {
 // Whether each repository's Dependabot alerts come in as items (#180): green when they do; otherwise what
 // to do, as numbered steps with the exact place, and how to see it worked.
 function alertLines(alerts = []) {
-  return alerts.map((a) => `<div class="app-status alerts ${a.state === 'on' ? 'installed' : 'created'}"><span class="dot"></span><div><p>${esc(a.line)}</p>${a.steps ? `<ol>${a.steps.map((s) => `<li>${inline(s.do)}${s.where ? `: ${stepWhere(s.where)}` : ''}${s.check ? `<br><small>${inline(s.check)}.</small>` : ''}</li>`).join('')}</ol>` : ''}</div></div>`).join('');
+  return alerts.map((a, i) => `<div class="app-status alerts ${a.state === 'on' ? 'installed' : 'created'}"><span class="dot"></span><div><p>${i ? esc(a.line) : `<span data-new="dependabot-alerts">${esc(a.line)}</span>`}</p>${a.steps ? `<ol>${a.steps.map((s) => `<li>${inline(s.do)}${s.where ? `: ${stepWhere(s.where)}` : ''}${s.check ? `<br><small>${inline(s.check)}.</small>` : ''}</li>`).join('')}</ol>` : ''}</div></div>`).join('');
 }
 
 async function githubSettings() {
@@ -348,13 +350,13 @@ async function githubSettings() {
   const lead = st.state === 'none'
     ? `<div class="app-status none"><span class="dot"></span><p>No GitHub App yet. It links pull requests and CI results to items and brings issues in as proposals, for every project at once, with no setup per repository. Workers push through it with a token for one repository, for an hour.
       ${st.can_create ? 'GitHub asks you to confirm it, then where to install it.</p><a class="btn primary small" href="api/github/app/new">Create</a>' : 'Only an owner can create it: ask whoever runs this hub.</p>'}</div>`
-    : `${appStatus(st)}<p class="lead" id="gh-covered">${st.state === 'installed' ? 'Checking whether it covers this project\'s repository…' : ''}</p><div id="gh-alerts" data-new="dependabot-alerts"></div>`;
+    : `${appStatus(st)}<p class="lead" id="gh-covered">${st.state === 'installed' ? 'Checking whether it covers this project\'s repository…' : ''}</p><div id="gh-alerts"></div>`;
   modal(`<h2>GitHub</h2>${lead}
     <details ${P.github ? 'open' : ''}><summary>Without the app: a webhook for this project${P.github ? ' (connected)' : ''}</summary>${manual}
       <div class="foot">${disconnect}<button class="btn" data-action="github-save">Save the webhook</button></div></details>
     <div class="foot"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
   if (st.state === 'installed') appCovers(P).then((line) => { const el = $('#gh-covered'); if (el) el.innerHTML = line; });
-  if (st.state === 'installed') api(`/api/p/${encodeURIComponent(P.slug)}/github`).then((r) => { const el = $('#gh-alerts'); if (el) el.innerHTML = alertLines(r.alerts); }).catch(() => {});
+  if (st.state === 'installed') api(`/api/p/${encodeURIComponent(P.slug)}/github`).then((r) => { const el = $('#gh-alerts'); if (el) { el.innerHTML = alertLines(r.alerts); markNew(el); } }).catch(() => {});
 }
 
 // Whether the hub's installed GitHub App can see this project's repository, as one line for the GitHub dialog.

@@ -206,7 +206,8 @@ export function modal(html) {
   m.hidden = false;
   markNew(m);
 }
-export const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''; };
+// The page behind is the screen again, so its tags come back (#721).
+export const closeModal = () => { $('#modal').hidden = true; $('#modal').innerHTML = ''; markNew(document); };
 
 // ── live updates ──
 // At most one a second, and none while the person scrolls or holds a pointer down: it waits, then applies (#392).

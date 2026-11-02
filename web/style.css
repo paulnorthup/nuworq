@@ -901,15 +901,16 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 .where:hover { color: var(--ink); }
 .where .faint { color: var(--muted); font-style: italic; }
 
-/* What just shipped (#130, web/new.js): a quiet pill over the corner, so it takes no room and moves nothing.
-   The pill is a button beside the feature (#314), anchored over its corner: tapping it dismisses it. */
+/* What just shipped (#130, web/new.js): a quiet pill at the corner, so it takes no room and moves nothing.
+   The pill is a button beside the feature (#314), anchored just above its corner, clear of its text (#721):
+   tapping it dismisses it. */
 .new-tag, .is-new::after { font: var(--fw-1) var(--fs-1)/1 var(--font); letter-spacing: .02em; text-transform: lowercase; padding: var(--sp-h) var(--sp-1); border-radius: var(--r-full);
   color: var(--ink); background: var(--sunken); outline: var(--rule) solid var(--panel); }
 .new-tag { display: none; }
 @supports (anchor-name: --a) {
   /* A feature that isn't drawn (e.g. the phone's Menu on a desktop) has no anchor: new.js hides its tag, and until
      it does, the fallbacks keep the tag off the top-left, out of sight. */
-  .new-tag { display: block; position: absolute; bottom: calc(anchor(top, 9999px) - 3px); right: calc(anchor(right, 9999px) - 6px); z-index: 1;
+  .new-tag { display: block; position: absolute; bottom: calc(anchor(top, 9999px) + 1px); right: calc(anchor(right, 9999px) - 6px); z-index: 1;
     position-visibility: anchors-visible; border: 0; margin: 0; cursor: pointer; }
   .new-tag[hidden] { display: none; }
   .new-tag:hover { background: var(--line); }
@@ -919,7 +920,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 /* A browser without anchor positioning keeps the old pill: the tag can't be dismissed, but using the feature retires it. */
 @supports not (anchor-name: --a) {
   .is-new { position: relative; }
-  .is-new::after { content: 'new'; position: absolute; bottom: calc(100% - 3px); right: -6px; z-index: 1; pointer-events: none; }
+  .is-new::after { content: 'new'; position: absolute; bottom: calc(100% + 1px); right: -6px; z-index: 1; pointer-events: none; }
 }
 
 /* The admin host (#166, web/admin.js): one column on every screen, every target at least 44px tall. */

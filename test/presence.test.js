@@ -82,7 +82,7 @@ describe('counts by role', () => {
     const row = html.match(/<div class="role-row">(.*?)<\/div>/)[1];
     assert.equal((row.match(/<span class="role-item">/g) ?? []).length, 3);
     assert.equal((row.match(/class="sep"/g) ?? []).length, 2);
-    assert.match(row, /^<span class="role-label">Here now<\/span><span class="role-item"><button/);
+    assert.match(row, /^<span class="role-label" data-new="present-agents">Here now<\/span><span class="role-item"><button/);
     assert.match(row, /<span class="role-item"><span class="sep" aria-hidden="true">·<\/span><button[^>]*>1 operator</);
     assert.doesNotMatch(row, />\s+</);
   });

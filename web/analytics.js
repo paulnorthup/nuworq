@@ -86,7 +86,7 @@ export function routingSection(r, { esc }) {
     <dl class="funnel an-cal">${c.models.map((m) => `<div class="step${m.attempts < 20 ? ' faint' : ''}"><dt>${esc(m.model)} <span class="s">${m.attempts}${m.cost_per_clean == null ? '' : ` · ${money(m.cost_per_clean)}`}</span></dt>
       <dd><span class="bar" style="width:${Math.max(m.rate ? 2 : 0, Math.round(m.rate * 100))}%"></span></dd>
       <dd class="n">${pct(m.rate)}</dd></div>`).join('')}</dl></div>`;
-  return `<section class="sec" data-new="model-routing-results"><header><h2>Model routing</h2><span class="hint">clean rate per model, by kind of job</span></header>
+  return `<section class="sec"><header><h2 data-new="model-routing-results">Model routing</h2><span class="hint">clean rate per model, by kind of job</span></header>
     <p class="an-verdict">${esc(saved)}</p>
     <div class="an-lines">${r.cells.map(cell).join('')}</div></section>`;
 }
@@ -115,7 +115,7 @@ export function calibrationSection(c, { esc }) {
   const tries = (list) => list.filter((g) => g.landed).map((g) => `${LABELS[g.key].toLowerCase()} ${g.mean_attempts}`).join(', ');
   const block = (name, list, rated) => `<div class="an-line"><span class="an-name">${name}</span><dl class="funnel an-cal">${rows(list)}${unrated(c.landed - rated)}</dl>
       ${tries(list) ? `<div class="an-figs"><span class="fig">Attempts per item: ${esc(tries(list))}</span></div>` : ''}</div>`;
-  return `<section class="sec" data-new="calibration"><header><h2>Difficulty or size</h2><span class="hint">median cost per landed item, by rating</span></header>
+  return `<section class="sec"><header><h2 data-new="calibration">Difficulty or size</h2><span class="hint">median cost per landed item, by rating</span></header>
     <p class="an-verdict">${esc(verdict)}</p>
     <div class="an-lines">${block('By difficulty', c.by_difficulty, c.rated)}${block('By size', c.by_size, c.sized ?? c.landed)}</div></section>`;
 }
