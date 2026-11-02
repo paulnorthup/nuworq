@@ -36,9 +36,9 @@ Who might attack nuworq, where the trust boundaries are, and which defence cover
 Each defence names the item that built it and the tests that guard it.
 
 ### The HTTP edge and sign-in
-- **Sign-in decides identity.** Plans, owner rights and notifications follow how someone signed in, never an email they typed (#470: `test/identity.test.js`, `test/adminspaces.test.js`).
+- **Sign-in decides identity.** Plans, owner rights and notifications follow how someone signed in, never an email they typed (#470: `test/identity.test.js`, `test/adminspaces.test.js`). A verified sign-in never vouches for a session it didn't create: a person made by opening an invite link carries the invite's email unproven, and until #612 a later verified sign-in with that email marks that same row verified while the link-opener's session stays valid.
 - **Roles and tokens.** A person's role and a token's identity decide what a caller may do. Agent operations are for agents, and each agent acts only as itself (#469: `test/agentroles.test.js`, `test/auth.test.js`).
-- **A token never outdoes its minter.** An agent token may do no more than the person who minted it may now: a member's machine proposes and comments, and demoting someone narrows their tokens at once. Runner tokens stand on their own. Being built: #629 (found by the review of sign-in, accounts and tenancy, #590).
+- **A token never outdoes its minter.** An agent token may do no more than the person who minted it may now: a member's machine proposes and comments, and demoting someone narrows their tokens at once. Runner tokens stand on their own. Being built: #629 (found by the review of sign-in, accounts and tenancy, #590); #609, that only a token a steward or owner minted may act as an operator, is the narrowest case of it.
 - **Stored as hashes.** Tokens, sessions and codes are stored as hashes, never as the secret itself.
 - **Hardened edge.** The hub reads real client addresses behind a proxy, builds links from its own address, and sends HSTS. Errors are quiet: a 500 carries an id and no internals. Markdown renders in a single pass and streams are capped (#479: `test/edge.test.js`, `test/wait.test.js`). Escaping and the CSP hold.
 - **No SQL injection.** Every query takes parameters.
