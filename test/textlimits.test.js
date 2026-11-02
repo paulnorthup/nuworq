@@ -4,6 +4,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub } from '../src/core.js';
 import { view } from '../src/insight.js';
+import { draftRelease } from '../src/releases.js';
 
 // The limits, as docs/API.md lists them (src/core.js LIMITS).
 const LIMITS = {
@@ -69,6 +70,19 @@ describe("agents' long text fields have limits (#765)", () => {
     const refs = Array.from({ length: LIMITS.depends_on + 1 }, () => '#1');
     assert.throws(() => op('a1', 'refine', { item: '#2', depends_on: refs }), /At most 30 dependencies, not 31/);
     assert.equal(op('a1', 'submit', { item: '#1', headline: 'Built', evidence: many.slice(0, 20) }).ok, true, '20 is fine');
+  });
+
+  test("the hub's own text isn't capped: a release of 60 items drafts its whole changelog", () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('demo', { create: true }));
+    const p = hub.project('demo');
+    const add = (title, more = {}) => hub.humanOp('demo', 'create', { title, acceptance: 'x', ...more }).item;
+    const m = add('Version one');
+    for (let i = 0; i < 60; i++) hub.humanOp('demo', 'update', { item: add(`A part with a long enough title to fill the changelog line, number ${i}`, { parent: m }), stage: 'done' });
+    hub.humanOp('demo', 'update', { item: m, stage: 'done' });
+    const it = draftRelease(hub, p);
+    assert.ok(it.summary.length > LIMITS.summary, `the draft is ${it.summary.length} characters, kept whole`);
+    assert.match(it.summary, /number 59/);
   });
 
   test("the project view can't be blown up by one agent's comments any more", () => {
