@@ -179,6 +179,9 @@ export class Auth {
         const typed = this.db.prepare('SELECT * FROM people WHERE email = ? AND verified_at IS NULL ORDER BY id').get(email);
         const inv = this.db.prepare('SELECT * FROM invites WHERE email = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at >= ? ORDER BY id').get(email, t);
         if (!typed && !inv) { this.db.exec('ROLLBACK'); return null; }
+        // A verified sign-in never vouches for a session it didn't create (#612): whoever opened an invite link to this
+        // email was signed in as this row without proving it, so what they hold ends before the row becomes verified.
+        if (typed) this.revokeUnproven(typed);
         if (inv) {
           if (typed) {
             this.db.prepare('UPDATE people SET role = ?, verified_at = ? WHERE id = ?').run(inv.role, t, typed.id);
@@ -263,6 +266,14 @@ export class Auth {
   }
 
   // Removing a person revokes their logins and every agent token they minted. Runner tokens stay.
+  // Every token (and so every session) an unverified person row holds or minted (#612), revoked before a verified
+  // sign-in claims the row. Returns how many.
+  revokeUnproven(p) {
+    const ids = this.db.prepare('SELECT id FROM tokens WHERE (person_id = ? OR minted_by = ?) AND revoked_at IS NULL').all(p.id, p.id).map((r) => r.id);
+    for (const id of ids) this.revoke(id);
+    return ids.length;
+  }
+
   removePerson(handle) {
     const p = this.person(handle);
     if (!p) throw new Error(`no person @${String(handle).replace(/^@/, '')}`);
