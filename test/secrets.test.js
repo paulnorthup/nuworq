@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { Hub } from '../src/core.js';
-import { findSecret } from '../src/secrets.js';
+import { findSecret, SHAPES } from '../src/secrets.js';
 
 // Realistic fakes, assembled at runtime so this file never contains a live-looking secret.
 const r = (n, set = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789') => Array.from({ length: n }, (_, i) => set[(i * 7 + 3) % set.length]).join('');
@@ -48,6 +48,33 @@ describe('secret shapes', () => {
       'ghs_ tokens are JWTs now; see ghs_installation_token_handler.test.js and ghs_request_handler_for_the_installation_flow_v2',
     ];
     for (const s of fine) assert.equal(findSecret(s), null, s);
+  });
+
+  test('the secret check takes linear time on long token-like text', () => {
+    // Near misses repeated to 1 MB, one or more per shape: each starts a match that fails late, and none
+    // is a secret. A check that scans the rest of the run from every start takes minutes on these (#780).
+    const MB = 1024 * 1024;
+    const fill = (unit) => unit.repeat(Math.ceil(MB / unit.length)).slice(0, MB);
+    const near = [
+      '-ghp_a', 'ghp_a_', '-ghs_' + r(8) + '.', '-ghs_' + r(30) + '.' + r(5) + '.', 'ghs_' + r(9) + '.',
+      ' AKIA' + r(15, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), ' github_pat_' + r(21), ' sk-ant-' + r(19), ' sk-proj-' + r(19), ' sk-' + r(31),
+      ' xoxb-' + r(9), 'hooks.slack.com/services/T' + r(8) + '/B' + r(8) + '/' + r(15) + '.', ' -----BEGIN PRIVATE KEY----',
+      ' nwq_' + r(39), 'Authorization: Bearer ' + r(19) + ' ', 'Authorization:  ',
+    ];
+    for (const unit of near) {
+      const text = fill(unit);
+      const t = performance.now();
+      assert.equal(findSecret({ summary: text }), null, unit);
+      const ms = performance.now() - t;
+      assert.ok(ms < 500, `${JSON.stringify(unit)} repeated to 1 MB took ${Math.round(ms)} ms`);
+    }
+  });
+
+  test('a JWT-shaped token is matched whole, for the history scan', () => {
+    const token = FAKES['a GitHub App installation token'];
+    const m = `see ${token}, then`.match(SHAPES.find(([, re]) => !(re instanceof RegExp))[1]);
+    assert.equal(m[0], token);
+    assert.equal(m.index, 4);
   });
 
   test('the path points into nested values', () => {
