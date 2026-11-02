@@ -248,6 +248,34 @@ describe('the hub follows main', () => {
     assert.ok(w.said.includes('hub running at bbbbbbb; following main; bbbbbbb already passed its tests'));
   });
 
+  test('a restarted supervisor starts on the last commit that passed, not untested main (#620)', async () => {
+    const w = world({ red: ['ccccccc3'] });
+    let passed = 'aaaaaaa1';
+    const ancestors = { aaaaaaa1: ['bbbbbbb2', 'ccccccc3'], bbbbbbb2: ['ccccccc3'] }; // main moved past what passed
+    Object.assign(w, { passed: () => passed, pass: (sha) => { passed = sha; }, isAncestor: (a, b) => a === b || !!ancestors[a]?.includes(b) });
+    w.main = 'bbbbbbb2';
+    const f = follow(w);
+    await f.boot();
+    assert.equal(w.up, 'aaaaaaa1', 'the hub runs the commit that passed, not main');
+    assert.equal(count(w, 'test'), 0, 'nothing is tested at boot');
+    assert.ok(w.said.includes('hub running at aaaaaaa, the last commit that passed; following main, which takes bbbbbbb once it passes'));
+    await f.tick();
+    assert.equal(w.up, 'bbbbbbb2', 'main goes live once it passes, as any move does');
+    // Restarted again, main now red: it stays on what passed and stops the line, never running the red commit.
+    w.main = 'ccccccc3';
+    const again = follow(w);
+    await again.boot();
+    assert.equal(w.up, 'bbbbbbb2');
+    await again.tick();
+    assert.equal(w.up, 'bbbbbbb2', 'a red main never goes live');
+    assert.equal(count(w, 'red ccccccc3'), 1, 'and its fix is asked for');
+    // Main rewritten past it (not an ancestor any more): main as it is, tested, as before.
+    passed = 'ddddddd4';
+    const third = follow(w);
+    await third.boot();
+    assert.equal(w.up, 'ccccccc3');
+  });
+
   test("the supervisor's own code is follow.js alone, and it imports only node: modules (#546)", () => {
     assert.deepEqual([...own], ['src/follow.js']);
     const text = readFileSync(join(root, 'src/follow.js'), 'utf8');
