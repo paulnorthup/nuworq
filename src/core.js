@@ -48,6 +48,9 @@ const HEADLINE_MAX = 140;
 const STEER_TTL = 3 * DAY;
 export const HUMAN = 'you';
 export const SYSTEM = 'nuworq';
+// Handed back this many times with nothing submitted in between (#734), work is parked for a person: its workers
+// keep stopping, and a runner's crashed worker signs off, which hands back too.
+export const HANDBACKS = 3;
 const GITHUB = 'github'; // holds accepted work while the hub opens its pull request
 const PR_LEASE = 2 * MIN;
 const PR_PASS = MIN; // how often the hub looks at landing work's pull requests itself (mergeReady)
@@ -937,6 +940,13 @@ export class Hub extends EventEmitter {
       });
     }
     return item;
+  }
+
+  // How many times item's work was handed back (handoff, or signoff while holding it) since it was last submitted,
+  // sent back or unparked (#734). Reviews and shaping let go don't count, nor lapsed leases (those are bounceOf's).
+  handbacks(item) {
+    const since = this.q(`SELECT MAX(id) AS id FROM events WHERE item_id = ? AND type IN ('submitted', 'sent_back', 'unparked')`).get(item.id).id ?? 0;
+    return this.q(`SELECT COUNT(*) AS n FROM events WHERE item_id = ? AND type = 'handoff' AND id > ? AND json_extract(data, '$.stage') = 'active'`).get(item.id, since).n;
   }
 
   // An attempt on item failed (sent back, stalled, handed off, lease lost): its next one goes up a tier (#347). With
@@ -2390,7 +2400,10 @@ export class Hub extends EventEmitter {
     }
     if (this.racing(item)) return this.joinRace(p, agent, item);
     if (item.stage === 'active') throw new UserError(`#${item.seq} is held by ${item.holder} (lease ends in ${dur(item.lease_until - t)})`, { status: 409, hint: 'Pick other work with next. If they go quiet, it returns to the queue automatically.' });
-    if (item.stage === 'waiting') throw new UserError(`#${item.seq} is parked waiting for the human to answer a question`, { status: 409, hint: 'Pick other work with next.' });
+    if (item.stage === 'waiting') {
+      throw new UserError(item.parked_by === SYSTEM ? `#${item.seq} is parked: it was handed back ${HANDBACKS} times with nothing submitted, and waits for a person to look`
+        : `#${item.seq} is parked waiting for the human to answer a question`, { status: 409, hint: 'Pick other work with next.' });
+    }
     if (item.stage === 'outside') {
       const last = json(item.last_check, null);
       throw new UserError(`#${item.seq} waits on something outside this hub: ${describePrecondition(JSON.parse(item.precondition))}${last ? ` (last check: ${last.detail})` : ' (not checked yet)'}`, { status: 409, hint: 'The hub checks it and makes the work ready when it passes. Pick other work with next.' });
@@ -3337,6 +3350,8 @@ const AGENT_OPS = {
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
     const item = this.heldItem(p, agent, args.item, 'hand off');
     const racing = this.racing(item);
+    const was = item.stage;
+    let park = false;
     if (racing) {
       // Giving up a race slot: it opens for someone else, and the note stays for whoever takes it.
       this.endAttempt(item, agent, 'abandoned');
@@ -3346,12 +3361,22 @@ const AGENT_OPS = {
     } else if (item.stage === 'proposed') {
       this.patch(item, { holder: null, lease_until: null, last_worker: agent, handoff: JSON.stringify({ kind: 'handoff', by: agent, headline, summary, at: this.now() }) });
     } else {
-      this.move(item, 'ready', agent, {
+      // The third hand-back since the last submit (or unpark) parks it for a person instead (#734).
+      park = item.stage === 'active' && this.handbacks(item) + 1 >= HANDBACKS;
+      this.move(item, park ? 'waiting' : 'ready', agent, {
         holder: null, lease_until: null, last_worker: agent, touching: '[]',
         handoff: JSON.stringify({ kind: 'handoff', by: agent, headline, summary, at: this.now() }),
+        ...(park ? { parked_by: SYSTEM } : {}),
       });
     }
-    this.event(p, { item, actor: agent, type: 'handoff', headline: `${agent} handed off #${item.seq}: ${headline}`, summary, detail });
+    this.event(p, { item, actor: agent, type: 'handoff', headline: `${agent} handed off #${item.seq}: ${headline}`, summary, detail, data: { stage: was } });
+    if (park) {
+      this.event(p, {
+        item, actor: SYSTEM, type: 'kept_parked',
+        headline: `#${item.seq} was handed back ${HANDBACKS} times with nothing submitted; nuworq parked it until a person looks`,
+        data: { handbacks: HANDBACKS },
+      });
+    }
     // A reviewer letting a review go isn't a failed attempt at the work.
     if (item.stage !== 'verifying') this.stepUp(p, item, 'was handed off');
     if (racing) this.settleRace(p, item, agent);
