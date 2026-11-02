@@ -440,13 +440,14 @@ function flow(v) {
   let detail = '';
   if (S.stage) {
     const st = f.stages.find((s) => s.stage === S.stage);
-    const here = v.stage_items?.[S.stage] ?? boardWork(v.all).rows.filter((i) => i.stage === S.stage);
+    // 30s sends no stage lists (#750): the pill's blurb and whose move it is, and the lists at 5m.
+    const here = z() === 0 ? [] : v.stage_items?.[S.stage] ?? boardWork(v.all).rows.filter((i) => i.stage === S.stage);
     // Approved feedback about nuworq (#295) is marked, and can be shown on its own.
     const fb = here.some((i) => i.feedback);
     const items = here.filter((i) => !S.onlyFeedback || !fb || i.feedback).slice(-25).reverse();
     detail = `<div class="stage-detail"><div class="blurb"><b>${esc(st.label)}.</b> ${esc(st.blurb)} ${st.court ? `<i>Whose move: ${st.court === 'you' ? 'yours' : st.court === 'agents' ? "the agents'" : st.court === 'external' ? 'someone outside this hub' : 'nobody yet (waiting for an agent)'}.</i>` : ''} ${st.ms ? `Work spent ${esc(st.time)} here in the last 14 days.` : ''}</div>
       ${fb ? `<button class="chip fb-only ${S.onlyFeedback ? 'on' : ''}" data-action="only-feedback" aria-pressed="${!!S.onlyFeedback}">Feedback only</button>` : ''}
-      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${i.feedback ? '<span class="tag fb-tag">feedback</span> ' : ''}${esc(i.title)} <span class="age">${when(i)}</span></div>`).join('') : `<div class="age">${STAGE_EMPTY[S.stage] ?? 'Nothing here.'}</div>`}</div>`;
+      ${items.length ? items.map((i) => `<div>${refLink(i.item)} ${i.feedback ? '<span class="tag fb-tag">feedback</span> ' : ''}${esc(i.title)} <span class="age">${when(i)}</span></div>`).join('') : z() === 0 && st.count ? `<div class="age"><button class="link" data-action="zoom" data-zoom="5m">Go to 5m</button> to see the ${st.count === 1 ? 'item' : 'items'} here.</div>` : `<div class="age">${STAGE_EMPTY[S.stage] ?? 'Nothing here.'}</div>`}</div>`;
   }
   const c = f.court;
   const hasTime = c.agents + c.queue + c.you + (c.external ?? 0) > 0;
