@@ -109,7 +109,7 @@ export function commands({ index, current = null, view = null, zoom = '30s', rol
       else set('Staff it with nuworq run', `Staff ${P.name} with nuworq run: it starts headless workers whenever work is waiting. They can cost money.`, h({ runner: true }, '`nuworq run` may now start workers here'));
     }
     if (can.has('update')) {
-      for (const g of view.groups ?? []) {
+      for (const g of [...(view.groups ?? []), ...(view.groups_waiting ?? [])]) {
         for (const pr of PRIORITIES) {
           if (pr === g.priority) continue;
           set(`${g.item} ${g.title}: priority ${pr}`, `${g.item} priority: ${g.priority} → ${pr}. Everything in the milestone ranks at least ${pr}.`,

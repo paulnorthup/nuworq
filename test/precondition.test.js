@@ -158,7 +158,7 @@ describe('preconditions: work that waits on an outside fact', () => {
     try {
       v.state.status = 200;
       const pre = normPrecondition({ url: `${v.url}/x`, credential: 'VENDOR' });
-      assert.deepEqual(await check(pre, { env: {} }), { ok: false, detail: "NUWORQ_CRED_VENDOR isn't set on the hub's host" });
+      assert.deepEqual(await check(pre, { env: {} }), { ok: false, error: true, detail: "NUWORQ_CRED_VENDOR isn't set on the hub's host" });
       const asked = v.state.auth.length;
       assert.match((await check(pre, { env: { NUWORQ_CRED_VENDOR: 'k1' } })).detail, /isn't allowed for 127\.0\.0\.1: .*NUWORQ_CRED_VENDOR_HOSTS/, 'no hosts named: sent nowhere');
       assert.equal(v.state.auth.length, asked, 'and the vendor was never asked');

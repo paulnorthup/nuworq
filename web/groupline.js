@@ -4,7 +4,7 @@
 // width and the bar a fixed one, so the bars start at the same x down the list and compare by length. Color
 // stays on the state word and the left border (#187); the bar is an amount, so it's neutral. Pure, so the page
 // and the tests share it.
-export const GROUP_STATE = { you: 'Waits on you', stuck: 'Stuck', moving: 'Moving', queued: 'Queued' };
+export const GROUP_STATE = { you: 'Waits on you', stuck: 'Stuck', moving: 'Moving', queued: 'Queued', waiting: 'Waiting' };
 
 // g: a line of view().groups; done and total count the group itself as its last step. priority: its control's
 // HTML. isNew: whether this line carries the "new" tag.
