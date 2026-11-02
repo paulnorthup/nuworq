@@ -97,12 +97,12 @@ export const MODE_RULES = {
   review: 'Check breaking too: set when the change makes someone act, and saying accurately who must do what; reject it when missing, wrong, or set on a change that breaks nobody. Reject any item but a release that changes the version.',
   // A tidy job (src/tidy.js).
   tidy: 'Look for open work in no milestone, two milestones after the same outcome, a milestone whose parts are all done or dropped, a pull request no item tracks, and ready items untouched for 21 days. A stale ready item: recommend keeping, refining or dropping it, with a reason; refine it yourself if that is the fix; to drop it, ask the person on that item (no assumption) and drop it with refine drop only once they answer. Merge two milestones by moving one\'s parts into the other; propose a parent for a cluster. Give every change a one-line reason: it goes on both parents\' history. Never touch a priority a person set or a decision; if one looks wrong, say so in your submit.',
-  // A field-notes review (src/fieldnotes.js), after the hint's own steps.
+  // A field-notes tidy (src/fieldnotes.js), after the hint's own steps.
   notes: 'A person can bring any retired note back. Checkin, next and look give at most ten notes, the most relevant first; look with notes "all" lists every one.',
   // The weekly "Keep <project> fresh" item (src/freshness.js).
   fresh: 'This is the weekly freshness sweep; do it on your machine with the project\'s own tools (the hub runs nothing). Check what applies: npm outdated and npm audit, pip list --outdated and pip-audit, cargo outdated and cargo audit, go list -m -u all, osv-scanner if installed; the runtime version (engines, .nvmrc, .python-version, go.mod\'s go line) when near or past end of life; CI actions with a newer major. Batch every patch and minor update into one change on this branch, lockfiles included, tests passing. Propose each breaking upgrade (a major version, a runtime, a CI action\'s new major) on its own, with what breaks, how to migrate, and breaking set to who must do what; a dev tool\'s new major breaks nobody. Standing decisions win: a pin means no proposal to leave it. Nothing to update? Submit "fresh: nothing to update" with the commands\' output as evidence.',
-  // A security review (src/security.js), before a release or of one area a month.
-  security: 'This is a security review: read, don\'t fix the code here (only the threat model changes on its branch). Start from the threat model (docs/SECURITY-MODEL.md) and the attackers it names; rate each finding critical, high, medium or low by who can do it and what they get, and propose each one as its own item with the fix and a regression test named for what it guards. Never put a working exploit in an item, comment or evidence: they are as public as the repository. Title a finding by what its fix guards, not by how to break it (a live view shows titles).',
+  // A security audit (src/security.js), before a release or of one area a month.
+  security: 'This is a security audit: read, don\'t fix the code here (only the threat model changes on its branch). Start from the threat model (docs/SECURITY-MODEL.md) and the attackers it names; rate each finding critical, high, medium or low by who can do it and what they get, and propose each one as its own item with the fix and a regression test named for what it guards. Never put a working exploit in an item, comment or evidence: they are as public as the repository. Title a finding by what its fix guards, not by how to break it (a live view shows titles).',
   // A release item (src/releases.js), after the version and changelog steps.
   release: 'Only a release item changes the version: reviewers reject any other that does. Land it like any work; once main has it, the hub tags that commit (when it can\'t, the land submit gives you the tag command). When the project signs releases, the key is a person\'s: after it lands, ask the person who signs (no item: name the release in the question) with steps, the sign command and how to check it.',
 };
@@ -208,7 +208,7 @@ export const OPS = [
   },
   {
     name: 'handoff',
-    description: 'Release an item you hold unfinished, with a note on where you left off for the next agent.',
+    description: 'Hand off an item you hold unfinished, with a note on where you left off for the next agent.',
     params: {
       item: ITEM,
       headline: s('Where you left off, one line.'),
@@ -302,9 +302,9 @@ export const OPS = [
   },
   {
     name: 'retire',
-    description: 'In a field-notes review (next mode "tidy"): retire notes whose lesson now lives in code, the guide or a test, or merge duplicates.',
+    description: 'In a field-notes tidy (next mode "tidy"): retire notes whose lesson now lives in code, the guide or a test, or merge duplicates.',
     params: {
-      notes: { type: 'array', items: { type: 'integer' }, description: 'The note ids, as the review lists them.' },
+      notes: { type: 'array', items: { type: 'integer' }, description: 'The note ids, as the tidy job lists them.' },
       reason: s('Where the lesson lives now, one line.'),
       into: { type: 'integer', description: 'Optional. For a merge: the note you learned with the combined lesson.' },
     },
@@ -312,7 +312,7 @@ export const OPS = [
   },
   {
     name: 'distill',
-    description: 'In a field-notes review: Direction today, a gist per decision and field note, a recommendation per field note.',
+    description: 'In a field-notes tidy: Direction today, a gist per decision and field note, a recommendation per field note.',
     params: {
       direction: { type: 'array', description: 'At most 7 plain lines.', items: { type: 'object', properties: { line: { type: 'string' }, source: s('"decision 12", "steer 40", "note 7" or "#468".') }, required: ['line', 'source'] } },
       notes: {
@@ -397,7 +397,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 3. **No nuworq tools in this session?** Say so and stop. The machine needs \`nuworq connect <hub>\`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with \`look\`, ask what they want and why, offer options with trade-offs, then \`propose\` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The hint \`next\` gives with it says how.
-6. **A tidy job** (\`next\` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, submit finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. A field-notes review (also mode "tidy") retires notes whose lesson is built in, merges duplicates, and distills memory for people with \`distill\`. The hint \`next\` gives with each says how.
+6. **A tidy job** (\`next\` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, submit finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. A field-notes tidy (also mode "tidy") retires notes whose lesson is built in, merges duplicates, and distills memory for people with \`distill\`. The hint \`next\` gives with each says how.
 
 ## Roles
 Your role comes from how you started and is fixed for the session. \`checkin\` says which you are.

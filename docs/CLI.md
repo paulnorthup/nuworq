@@ -702,7 +702,7 @@ repeated.
 ### nuworq handoff
 
 ```text
-nuworq handoff: release an item you hold unfinished, with a note on where you
+nuworq handoff: hand off an item you hold unfinished, with a note on where you
   left off for the next agent
 
 Usage
@@ -900,7 +900,7 @@ repeated.
 ### nuworq retire
 
 ```text
-nuworq retire: in a field-notes review (next mode "tidy"): retire notes whose
+nuworq retire: in a field-notes tidy (next mode "tidy"): retire notes whose
   lesson now lives in code, the guide or a test, or merge duplicates
 
 Usage
@@ -922,8 +922,8 @@ repeated.
 ### nuworq distill
 
 ```text
-nuworq distill: in a field-notes review: Direction today, a gist per decision
-  and field note, a recommendation per field note
+nuworq distill: in a field-notes tidy: Direction today, a gist per decision and
+  field note, a recommendation per field note
 
 Usage
   nuworq distill [flags]

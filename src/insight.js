@@ -523,7 +523,7 @@ function build(hub, p, t, { light = false } = {}) {
       push({
         key: `review:${it.id}:${sub?.id ?? 0}`, level: 'act', kind: 'review', at: it.stage_since,
         headline: sub?.headline || it.title,
-        sub: `${it.title} · ${it.implementer ?? 'an agent'} finished it ${timeIn(it.stage_since)} ago`,
+        sub: `${it.title} · ${it.implementer ?? 'an agent'} submitted it ${timeIn(it.stage_since)} ago`,
         why: sub?.summary, detail: sub?.detail,
         acceptance: it.acceptance, evidence, git,
         warn: [evidence.length ? null : 'No evidence attached', gitWarning(git)].filter(Boolean).join(' · ') || null,

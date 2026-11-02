@@ -46,7 +46,7 @@ export function reviewRelease(hub, p, release, by = SYSTEM) {
   let it = openSecurity(hub, p, 'release');
   if (!it) {
     it = hub.createItem(p, by, {
-      title: `Security review before the next release (#${release.seq})`,
+      title: `Security audit before the next release (#${release.seq})`,
       summary: `Read what #${release.seq} ships against the threat model (${MODEL}) before it's tagged and signed. Its summary lists the changes. Whoever built any of them can't take this review.`,
       acceptance: RELEASE_ACCEPTANCE(`#${release.seq}`),
       priority: 'now',
@@ -87,8 +87,8 @@ export function securityUp(hub) {
       hub.q('UPDATE projects SET security_area = ? WHERE id = ?').run(n + 1, p.id);
       const area = AREAS[n];
       const it = hub.createItem(p, SYSTEM, {
-        title: `Security review: ${area.split(':')[0]}`,
-        summary: `This month's security review, area ${n + 1} of ${AREAS.length}: ${area}. Read it against the threat model (${MODEL}).`,
+        title: `Security audit: ${area.split(':')[0]}`,
+        summary: `This month's security audit, area ${n + 1} of ${AREAS.length}: ${area}. Read it against the threat model (${MODEL}).`,
         acceptance: AREA_ACCEPTANCE,
         priority: 'soon',
       });

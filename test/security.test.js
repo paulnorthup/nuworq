@@ -53,12 +53,12 @@ describe('a review before each release (#480)', () => {
     const rel = w.release();
     const [rev] = w.reviews('release');
     assert.ok(rel && rev, 'a release and its review');
-    assert.match(rev.title, new RegExp(`Security review before the next release \\(#${rel.seq}\\)`));
+    assert.match(rev.title, new RegExp(`Security audit before the next release \\(#${rel.seq}\\)`));
     assert.equal(rev.stage, 'ready');
     assert.equal(rev.priority, 'now');
     assert.deepEqual(w.hub.unmetDeps(rel).map((d) => d.seq), [rev.seq], 'the release depends on it');
     assert.throws(() => w.hub.agentOp('p', 'claim', 'a2', { item: `#${rel.seq}` }), /depends on unfinished work/);
-    assert.doesNotMatch(rel.summary, /Security review/, "the review isn't in the release's changelog");
+    assert.doesNotMatch(rel.summary, /Security audit/, "the review isn't in the release's changelog");
   });
 
   test('an agent that built a change the release ships is never given the review, nor may claim it', () => {
@@ -68,7 +68,7 @@ describe('a review before each release (#480)', () => {
     for (const builder of ['a1', 'a3']) {
       w.hub.agentOp('p', 'checkin', builder, {});
       assert.notEqual(w.hub.agentOp('p', 'next', builder, { claim: false }).item, `#${rev.seq}`, `${builder} isn't offered it`);
-      assert.throws(() => w.hub.agentOp('p', 'claim', builder, { item: `#${rev.seq}` }), /reviews changes you built/);
+      assert.throws(() => w.hub.agentOp('p', 'claim', builder, { item: `#${rev.seq}` }), /audits changes you built/);
     }
     const r = w.next('a2');
     assert.equal(r.item, `#${rev.seq}`, 'someone who built none of it gets it');
@@ -81,7 +81,7 @@ describe('a review before each release (#480)', () => {
     const part = w.hub.q("SELECT * FROM items WHERE title = 'Part 1'").get();
     w.hub.q("INSERT INTO attempts (item_id, agent, stage, closed, at) VALUES (?, 'a4', 'submitted', 1, 0)").run(part.id);
     const [rev] = w.reviews('release');
-    assert.throws(() => w.hub.agentOp('p', 'claim', 'a4', { item: `#${rev.seq}` }), /reviews changes you built/);
+    assert.throws(() => w.hub.agentOp('p', 'claim', 'a4', { item: `#${rev.seq}` }), /audits changes you built/);
   });
 
   test("a token can't take the review of a release it built under another name (#622)", async () => {
@@ -97,7 +97,7 @@ describe('a review before each release (#480)', () => {
     for (const a of ['a1', 'a9', 'r1']) w.hub.agentOp('p', 'checkin', a, {});
     const bind = (agent, token) => w.hub.db.prepare('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ?').run(id(token), w.hub.project('p').id, agent);
     bind('a1', 'box'); bind('a9', 'box');
-    assert.throws(() => w.hub.agentOp('p', 'claim', 'a9', { item: `#${rev.seq}` }), /reviews changes you built/);
+    assert.throws(() => w.hub.agentOp('p', 'claim', 'a9', { item: `#${rev.seq}` }), /audits changes you built/);
     assert.notEqual(w.hub.agentOp('p', 'next', 'a9', { claim: false }).item, `#${rev.seq}`, "and isn't offered it");
     // Moved to the runner's token, a1's work no longer makes a runner sibling its builder.
     bind('a1', 'ci'); bind('r1', 'ci');
@@ -142,7 +142,7 @@ describe('a review before each release (#480)', () => {
     const [rev] = w.reviews('release');
     assert.deepEqual(w.hub.unmetDeps(w.release()).map((d) => d.seq), [rev.seq]);
     const said = w.hub.q("SELECT headline FROM events WHERE type = 'settings' ORDER BY id DESC").get().headline;
-    assert.match(said, /turned on security reviews: one before each release, and one area each month/);
+    assert.match(said, /turned on security audits: one before each release, and one area each month/);
     assert.equal(view(w.hub, 'p').project.security, true);
   });
 
@@ -151,7 +151,7 @@ describe('a review before each release (#480)', () => {
     w.ship(['a1']);
     securityUp(w.hub);
     assert.equal(w.reviews('area').length, 1);
-    assert.deepEqual(drift(w.hub, w.p()).filter((d) => /Security review/.test(d.text)), []);
+    assert.deepEqual(drift(w.hub, w.p()).filter((d) => /Security audit/.test(d.text)), []);
   });
 });
 
@@ -161,14 +161,14 @@ describe('one area a month (#480)', () => {
     assert.equal(securityUp(w.hub).length, 1);
     let [first] = w.reviews('area');
     assert.match(first.summary, new RegExp(`area 1 of ${AREAS.length}`));
-    assert.match(first.title, /^Security review: sign-in, accounts and tenancy$/);
+    assert.match(first.title, /^Security audit: sign-in, accounts and tenancy$/);
     assert.equal(securityUp(w.hub).length, 0, 'not again within the month');
     w.hub.humanOp('p', 'update', { item: `#${first.seq}`, stage: 'done' });
     w.later(SECURITY_EVERY);
     securityUp(w.hub);
     const second = w.reviews('area')[1];
     assert.match(second.summary, /area 2 of/);
-    assert.match(second.title, /^Security review: the web client and the HTTP edge$/);
+    assert.match(second.title, /^Security audit: the web client and the HTTP edge$/);
   });
 
   test("while last month's is open, this month's is skipped; parked or off, none opens", () => {

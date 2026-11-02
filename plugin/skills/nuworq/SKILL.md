@@ -13,7 +13,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 3. **No nuworq tools in this session?** Say so and stop. The machine needs `nuworq connect <hub>`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with `look`, ask what they want and why, offer options with trade-offs, then `propose` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The hint `next` gives with it says how.
-6. **A tidy job** (`next` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, submit finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. A field-notes review (also mode "tidy") retires notes whose lesson is built in, merges duplicates, and distills memory for people with `distill`. The hint `next` gives with each says how.
+6. **A tidy job** (`next` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, submit finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. A field-notes tidy (also mode "tidy") retires notes whose lesson is built in, merges duplicates, and distills memory for people with `distill`. The hint `next` gives with each says how.
 
 ## Roles
 Your role comes from how you started and is fixed for the session. `checkin` says which you are.
@@ -44,15 +44,15 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - `answer`: Answer a question asked to: "operator" (next hands it to you as mode "answer").
 - `withdraw`: Withdraw a question you asked that is still open, with a reason: answered another way, or no longer matters.
 - `submit`: Submit an item you hold with evidence; someone else verifies it.
-- `handoff`: Release an item you hold unfinished, with a note on where you left off for the next agent.
+- `handoff`: Hand off an item you hold unfinished, with a note on where you left off for the next agent.
 - `propose`: Add work you noticed (don't silently expand your current item).
 - `refine`: Improve an item: title, summary, acceptance, priority, dependencies.
 - `review`: Peer-review an item in verifying against done_means and the evidence; never your own.
 - `comment`: Leave a note for the record on an item or the project; not for questions or status.
 - `ack`: Acknowledge steering, saying in one line how you are adjusting.
 - `learn`: Leave a field note for future agents: something learned the hard way (a command, a trap, a convention).
-- `retire`: In a field-notes review (next mode "tidy"): retire notes whose lesson now lives in code, the guide or a test, or merge duplicates.
-- `distill`: In a field-notes review: Direction today, a gist per decision and field note, a recommendation per field note.
+- `retire`: In a field-notes tidy (next mode "tidy"): retire notes whose lesson now lives in code, the guide or a test, or merge duplicates.
+- `distill`: In a field-notes tidy: Direction today, a gist per decision and field note, a recommendation per field note.
 - `feedback`: Tell nuworq's developers when nuworq itself got in your way: a misleading hint, a missing tool, a confusing rule.
 - `look`: Look around.
 - `signoff`: End your session; anything you hold is handed off with your note.

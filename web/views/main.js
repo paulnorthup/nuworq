@@ -109,7 +109,7 @@ function staffLine(s) {
 // flow and agents beside it, the same sections either way. Each starts at its own depth; Flow at every depth (Paul's decision).
 function projectBody(v, empty) {
   const more = z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
-    ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, what's next, what finished, and how agents are doing.`
+    ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, what's next, what landed, and how agents are doing.`
     : `<button data-action="zoom" data-zoom="30m">Go to 30m</button> for the full activity record, every item and agent diagnostics.`}</div>` : '';
   const s = {
     pulse: pulse(v), composer: composer(v), empty: empty ? emptyProject() : '', needs: needsYou(v), groups: groups(v), motion: motion(v),
@@ -133,7 +133,7 @@ function pulse(v) {
   const label = STATE_LABELS[v.pulse.state];
   const c = v.since.counts;
   const bits = [
-    c.finished && `<b>${c.finished}</b> finished`,
+    c.finished && `<b>${c.finished}</b> accepted`,
     c.submitted && `<b>${c.submitted}</b> submitted`,
     c.started && `<b>${c.started}</b> started`,
     c.proposed && `<b>${c.proposed}</b> proposed`,
@@ -142,7 +142,7 @@ function pulse(v) {
   const since = v.since.at
     ? bits.length ? `Since you last looked (${when(v.since)} ago): ${bits.join(' · ')}` : `No agent activity since you last looked (${when(v.since)} ago).`
     : v.home ? 'Everything here is new to you.' : 'Everything in this project is new to you.';
-  // On the home, each finished item names its project, and its link opens it there.
+  // On the home, each accepted item names its project, and its link opens it there.
   const list = z() >= 1 && v.since.finished.length
     ? `<div class="since-list">${v.since.finished.slice(0, 6).map((f) => `<div${f.project ? ` data-project="${esc(f.project.slug)}"` : ''}>✓ ${refLink(f.item)} ${esc(f.title)} <span class="age">${f.project ? `${esc(f.project.name)} · ` : ''}by ${esc(f.by === 'you' ? 'you' : f.by)}</span></div>`).join('')}</div>` : '';
   // Who is here now, as counts by role (#441): on the home at every depth, on a project at 30s (5m on has its Agents section).
@@ -162,9 +162,9 @@ function composer(v) {
   const hints = {
     steer: 'Every agent must read and acknowledge it. You\'ll see who did.',
     decision: 'A standing rule. Every agent gets it at every checkin.',
-    note: 'For the record. Agents may see it; no acknowledgement needed.',
+    comment: 'For the record. Agents may see it; no acknowledgement needed.',
   };
-  const kinds = { steer: 'Steer', decision: 'Decision', note: 'Note' };
+  const kinds = { steer: 'Steer', decision: 'Decision', comment: 'Comment' };
   return `<div class="composer">
       <div class="box">
         <textarea id="compose" data-draft="compose" placeholder="Say something to your agents…${KEYBOARD.matches ? ' (⌘↵ to send)' : ''}"></textarea>
@@ -198,7 +198,7 @@ function needsYou(v) {
 const groups = (v) => milestonesSection(v, { esc });
 // What each Needs you card is, in plain words: one per kind the hub puts at level "act" (test/cardlabels.test.js).
 const CARD_LABELS = {
-  question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Direction',
+  question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Pick the next work',
   'no-agents': 'Nobody is working', 'group-stalled': 'A "now" milestone is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
   'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked', 'app-wiring': 'GitHub App setup', 'payment-failed': 'Payment failed',
   'plan-limit': 'Free plan limit',
@@ -397,7 +397,7 @@ function worthKnowing(v) {
     if (a.start) acts = `<button class="btn small" data-action="connect">Start an agent</button>` + acts;
     if (a.kind === 'notify-failing') acts = `<button class="btn small" data-action="notify">Check it</button>` + acts;
     if (a.kind === 'outside-overdue') acts = `<button class="btn small" data-action="check-now" data-item="${esc(a.item)}">Check now</button><button class="btn small" data-action="open" data-item="${esc(a.item)}">Edit it</button>` + acts;
-    if (a.kind === 'peer-review-stuck') acts =`<button class="btn small" data-action="open" data-item="${esc(a.item)}">Review it</button>` + acts;
+    if (a.kind === 'peer-review-stuck') acts =`<button class="btn small" data-action="open" data-item="${esc(a.item)}">Verify it</button>` + acts;
     // Stuck on a capability nobody has: the choices are to let any agent take it, or keep waiting for one that has it.
     // Infrastructure work can't go to just any agent: the steps start an operator session instead (#201).
     if (a.kind === 'unfit' && a.operator) acts = `<button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Keep waiting</button>`;
@@ -463,8 +463,8 @@ function flow(v) {
         <div class="legend"><span><i class="agents"></i>Agents working ${c.agents}%</span><span><i class="queue"></i>Waiting for an agent ${c.queue}%</span><span><i class="you"></i>Waiting on you ${c.you}%</span>${c.external ? `<span><i class="external"></i>Waiting outside ${c.external}%</span>` : ''}</div>` : ''}
       ${f.takeaway ? `<p class="takeaway">${esc(f.takeaway)}</p>` : ''}
       <div class="throughput">
-        <div class="spark" title="Finished per day, last 14 days">${f.throughput.map((n) => `<span class="${n ? '' : 'z'}" style="height:${Math.max(2, Math.round((n / max) * 28))}px" title="${n}"></span>`).join('')}</div>
-        <span>${plural(f.finished, 'item')} finished in 14 days${f.median_cycle ? ` · median ${esc(f.median_cycle)} from ready to done` : ''}</span>
+        <div class="spark" title="Landed per day, last 14 days">${f.throughput.map((n) => `<span class="${n ? '' : 'z'}" style="height:${Math.max(2, Math.round((n / max) * 28))}px" title="${n}"></span>`).join('')}</div>
+        <span>${plural(f.finished, 'item')} landed in 14 days${f.median_cycle ? ` · median ${esc(f.median_cycle)} from ready to done` : ''}</span>
       </div>
       ${flowYou(f.you)}
       ${flowHeld(f.verification)}
@@ -492,13 +492,13 @@ function flowYou(y) {
 // Why a stage is empty, and the one thing to do about it where there is one.
 const STAGE_EMPTY = {
   proposed: 'No ideas waiting to be shaped. <button class="link" data-action="toggle-add">+ Work</button>',
-  ready: 'Nothing ready: every shaped item is taken or finished. <button class="link" data-action="toggle-add">+ Work</button>',
+  ready: 'Nothing ready: every shaped item is taken or landed. <button class="link" data-action="toggle-add">+ Work</button>',
   outside: 'Nothing is waiting on a check outside this hub.',
   active: 'No agent is working right now. <button class="link" data-action="connect">Start an agent</button>',
   waiting: 'No agent is waiting on an answer from you.',
-  verifying: 'Nothing to review: no submissions are waiting.',
+  verifying: 'Nothing to verify: no submissions are waiting.',
   landing: 'Nothing accepted is waiting to land on main.',
-  done: 'Nothing finished in the last 3 days. <button class="link" data-action="launcher">Search</button> finds older work.',
+  done: 'Nothing landed in the last 3 days. <button class="link" data-action="launcher">Search</button> finds older work.',
 };
 
 // What finished work cost per model; a local model shows tokens, having no price.
@@ -527,7 +527,7 @@ function itemRow(i, extra = '') {
 
 function upNext(v) {
   if (!v.queue.length) return (v.counts?.items ?? v.all.length) ? `<section class="sec"><header><h2>Up next</h2></header>
-    ${zero('<b>Nothing ready for an agent to pick up.</b> Everything here is in progress, waiting, still being shaped or finished.', '<button class="link" data-action="toggle-add">+ Work</button>')}</section>` : '';
+    ${zero('<b>Nothing ready for an agent to pick up.</b> Everything here is in progress, waiting, still being shaped or landed.', '<button class="link" data-action="toggle-add">+ Work</button>')}</section>` : '';
   const shown = z() >= 2 ? v.queue : v.queue.slice(0, 5);
   const all = v.counts?.queue ?? v.queue.length;
   return `<section class="sec"><header><h2>Up next</h2><span class="count">${all}</span><span class="hint">ready for any agent, in the order they'll be picked</span></header>
@@ -538,12 +538,12 @@ function upNext(v) {
 function finished(v) {
   if (!v.done.length) return '';
   const shown = z() >= 2 ? v.done : v.done.slice(0, 5);
-  return `<section class="sec"><header><h2>Recently finished</h2><span class="count">${v.counts?.done ?? v.done.length}</span><span class="hint">last 3 days</span></header>
+  return `<section class="sec"><header><h2>Recently landed</h2><span class="count">${v.counts?.done ?? v.done.length}</span><span class="hint">last 3 days</span></header>
     <div class="rows">${shown.map((i) => i.parts ? finishedMilestone(i) : `<div class="row-item clickable" data-action="open" data-item="${esc(i.item)}">
       <div class="body"><div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>${credit(i, who) ? `<div class="s">${credit(i, who)}</div>` : ''}</div>
       <span class="age">${when(i)} ago</span></div>`).join('')}</div></section>`;
 }
-// A finished milestone is one line (#442): its title, how many parts, when it finished. Tapping the parts count
+// A landed milestone is one line (#442): its title, how many parts, when it landed. Tapping the parts count
 // opens them under it.
 function finishedMilestone(i) {
   const key = `fin:${i.item}`, shown = S.open.has(key);
@@ -551,7 +551,7 @@ function finishedMilestone(i) {
     <div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>
     <button class="link fin-parts" data-action="toggle" data-key="${esc(key)}" aria-expanded="${shown}">${shown ? 'Hide parts' : `${plural(i.parts.length, 'part')}`}</button>
     ${shown ? `<ul class="fin-list">${i.parts.map((c) => `<li>${refLink(c.item)} ${esc(c.title)}${c.stage === 'done' ? '' : ` ${stagePill(c.stage, courtOf(c.stage))}`}</li>`).join('')}</ul>` : ''}</div>
-    <span class="age">finished ${when(i)} ago</span></div>`;
+    <span class="age">landed ${when(i)} ago</span></div>`;
 }
 
 function steering(v) {
@@ -585,7 +585,7 @@ function steering(v) {
     if (!pending(n)) return a?.do === 'keep' && a.why && !a.by ? `<div class="s">Recommended: keep. ${esc(a.why)}</div>` : '';
     return a.do === 'retire'
       ? `<div class="mem-advice"><span>Recommended: retire. ${esc(a.why)}</span><span class="mem-acts"><button class="btn small" data-action="retire" data-note="${n.id}">Retire</button><button class="btn ghost small" data-action="keep" data-note="${n.id}">Keep</button></span></div>`
-      : `<div class="mem-advice"><span>Recommended: make it a decision. ${esc(a.why)}</span><blockquote>${inline(a.draft)}</blockquote><span class="mem-acts"><button class="btn small" data-action="promote" data-note="${n.id}">Make it a decision</button><button class="btn ghost small" data-action="keep" data-note="${n.id}">Keep as a note</button></span></div>`;
+      : `<div class="mem-advice"><span>Recommended: make it a decision. ${esc(a.why)}</span><blockquote>${inline(a.draft)}</blockquote><span class="mem-acts"><button class="btn small" data-action="promote" data-note="${n.id}">Make it a decision</button><button class="btn ghost small" data-action="keep" data-note="${n.id}">Keep as a field note</button></span></div>`;
   };
   // Agents get the ten notes that bear on their work (#443); a note marked always-show reaches every one of them.
   const notes = shownNotes.map((n, i) => `<div class="row-item note-item" data-key="note:${n.id}"><div class="body"><div class="h">${inline(n.gist ?? n.note ?? n.body)}</div>${n.gist ? behind('Agent\'s words', n.body) : ''}<div class="s">${who(n.by)}${n.item ? ` on ${refLink(n.item)}` : ''}</div>${advice(n)}</div>
@@ -597,9 +597,9 @@ function steering(v) {
     if (!m) return /^#\d+$/.test(s) ? refLink(s) : '';
     return `<button class="link faint" data-action="memory-src" data-note="${m[2]}">${{ decision: 'a decision', steer: 'your steering', note: 'a field note' }[m[1]]}</button>`;
   };
-  const direction = v.direction?.length ? `${sub('<span data-new="memory-distilled">Direction today</span>', 'distilled from your decisions, steering and the notes that matter')}
+  const direction = v.direction?.length ? `${sub('<span data-new="memory-distilled">Direction today</span>', 'distilled from your decisions, steering and the field notes that matter')}
     <ol class="direction">${v.direction.map((d) => `<li><span>${inline(d.line)}</span> <span class="mem-src">${src(d.source)}</span></li>`).join('')}</ol>` : '';
-  return `<section class="sec"><header><h2>Steering &amp; memory</h2><span class="hint">did your nudges land, and what every agent carries into every session</span></header>
+  return `<section class="sec"><header><h2>Steering &amp; memory</h2><span class="hint">did your steers land, and what every agent carries into every session</span></header>
     ${direction}
     ${steers ? `${sub('Steering', 'acknowledged by')}<div class="rows" style="margin-bottom:var(--sp-4)">${steers}</div>` : ''}
     ${decisions ? `${sub('Decisions', 'standing rules, from you')}<div class="rows" style="margin-bottom:var(--sp-4)">${decisions}</div>` : ''}
@@ -702,14 +702,14 @@ function allWork(v) {
   const floor = rows.length < board ? Number(rows.at(-1)?.item.slice(1) ?? 0) : 0; // dropped work within the page shown
   const shown = [...rows, ...(showDropped ? dropped.filter((i) => Number(i.item.slice(1)) > floor) : [])].sort((a, b) => b.item.slice(1) - a.item.slice(1));
   const foot = [
-    old ? `${plural(old, 'item')} finished more than 3 days ago: <button class="link" data-action="launcher">Search</button> finds them.` : '',
+    old ? `${plural(old, 'item')} landed more than 3 days ago: <button class="link" data-action="launcher">Search</button> finds them.` : '',
     dropped.length ? `<button class="link" data-action="toggle" data-key="all:dropped" aria-expanded="${showDropped}" data-new="show-dropped">${showDropped ? 'Hide dropped' : `Show dropped (${dropped.length})`}</button>` : '',
   ].filter(Boolean).join(' · ');
   const more = board > rows.length ? `<div class="zoom-more"><button class="link" data-action="more" data-more="all" data-new="show-more">Show more (${board - rows.length} older)</button></div>` : '';
   return `<section class="sec"><header><h2>All work</h2><span class="count">${board + (showDropped ? dropped.length : 0)}</span></header>
     ${shown.length ? `<div class="work-scroll"><table class="work"><thead><tr><th>#</th><th>Title</th><th>Stage</th><th>Priority</th><th>Worked on by</th><th>In stage</th></tr></thead><tbody>
     ${shown.map((i) => `<tr data-action="open" data-item="${esc(i.item)}"><td>${esc(i.item)}</td><td>${esc(i.title)}${repoTag(i)}</td><td>${stagePill(i.stage, courtOf(i.stage))}</td><td>${esc(i.priority)}</td><td>${i.last_worker ? who(i.last_worker) : '<span class="age" title="No agent has worked on it yet">—</span>'}</td><td class="age">${when(i)}</td></tr>`).join('')}
-    </tbody></table></div>` : zero('<b>Nothing open or recently finished.</b>')}
+    </tbody></table></div>` : zero('<b>Nothing open or recently landed.</b>')}
     ${more}${foot ? `<div class="zoom-more">${foot}</div>` : ''}</section>`;
 }
 

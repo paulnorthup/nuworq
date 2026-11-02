@@ -67,7 +67,7 @@ export function drawerHtml() {
       ? `<b>Race of ${it.race}</b> · ${stageAge(it)} so far · ${it.racers.map((r) => `${who(r.agent, r.model)} ${r.stage === 'active' ? `on it, lease ${when(r, 'lease_left', 'lease_until', true)} left` : esc(r.stage)}`).join(' · ') || 'no one yet'}`
       : `<b>${who(it.holder)}</b> is on it · ${stageAge(it)} so far · lease ${when(it, 'lease_left', 'lease_until', true)} left`,
     waiting: `<b>Waiting on you</b> for ${stageAge(it)}: an agent parked it to ask a question.`,
-    verifying: `<b>Verifying</b> · ${who(it.implementer)} finished it ${stageAge(it)} ago${it.holder ? ` · ${who(it.holder)} is reviewing` : ''}`,
+    verifying: `<b>Verifying</b> · ${who(it.implementer)} submitted it ${stageAge(it)} ago${it.holder ? ` · ${who(it.holder)} is verifying` : ''}`,
     landing: `<b>Landing</b> · accepted; ${it.holder ? `${who(it.holder)} is putting it on main` : 'the next free agent puts it on main'}`,
     done: `<b>Done</b> ${stageAge(it)} ago${it.implementer ? ` · ${credit({ implementer: it.implementer }, who)}` : ''}`,
     dropped: `<b>Dropped</b> ${stageAge(it)} ago`,
@@ -190,9 +190,9 @@ export function drawerHtml() {
     ${steers}
     ${told}
     <div class="d-sec"><div class="label">Say something about this item</div>
-      <div class="inline-form"><input data-draft="ic:${it.item}" id="ic:${it.item}" placeholder="Steer whoever works on it next, or leave a note…">
+      <div class="inline-form"><input data-draft="ic:${it.item}" id="ic:${it.item}" placeholder="Steer whoever works on it next, or leave a comment…">
       <button class="btn primary" data-action="item-steer" data-item="${it.item}" title="The agent on it must read and acknowledge">Steer</button>
-      <button class="btn" data-action="item-note" data-item="${it.item}">Note</button></div></div>
+      <button class="btn" data-action="item-note" data-item="${it.item}">Comment</button></div></div>
     <div class="d-sec">${S.deep ? '' : `<button class="btn" data-action="deep">Deep dive (30m): the timeline, every event and its detail</button>`}</div>
     ${deep}`;
 }
