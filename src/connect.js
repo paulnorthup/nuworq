@@ -32,9 +32,9 @@ export function launcher(bin, env = process.env) {
 
 // An entry an earlier connect wrote the old way: node <…/nuworq.js> mcp.
 const oldForm = (command, args) => command === 'node' && args.length === 2 && /nuworq\.js$/.test(args[0]) && args[1] === 'mcp';
-const run = (cmd, args, env) => {
+const run = (cmd, args, env, cwd) => {
   try {
-    return { ok: true, out: execFileSync(cmd, args, { env, encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] }) };
+    return { ok: true, out: execFileSync(cmd, args, { env, cwd, encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] }) };
   } catch (e) {
     return { ok: false, out: `${e.stdout ?? ''}${e.stderr ?? ''}`.trim() || e.message };
   }
@@ -210,8 +210,9 @@ export function installPlugin(env = process.env) {
 // Where Claude Code has the plugin (#496): { account, folders }. account: an install it applies to every project
 // (user or managed scope; an entry from before scopes had none, and was the account's). folders: the projects an
 // install for some folders only covers (local or project scope), which other projects don't get.
+// installs: each of those folder installs with its scope, { scope, projectPath } (#608: what a repin puts back).
 export function pluginScopes(home) {
-  const out = { account: false, folders: [] };
+  const out = { account: false, folders: [], installs: [] };
   try {
     const { plugins = {} } = JSON.parse(readFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
     for (const [key, installs] of Object.entries(plugins)) {
@@ -219,7 +220,10 @@ export function pluginScopes(home) {
       for (const i of [].concat(installs)) {
         if (!i || typeof i !== 'object') continue;
         if (!i.scope || i.scope === 'user' || i.scope === 'managed') out.account = true;
-        else if (i.projectPath && !out.folders.includes(i.projectPath)) out.folders.push(i.projectPath);
+        else if (i.projectPath && !out.folders.includes(i.projectPath)) {
+          out.folders.push(i.projectPath);
+          out.installs.push({ scope: i.scope, projectPath: i.projectPath });
+        }
       }
     }
   } catch { /* no plugins file: none installed */ }
@@ -241,14 +245,26 @@ export function staleMarketplace(home) {
     return ref === RELEASE_BRANCH ? null : src;
   } catch { return null; } // no marketplaces file: nothing added
 }
-// What moves it onto the release branch: remove it and add it again at MARKETPLACE, then install the plugin for the
-// account again if it was (removing a marketplace can take its plugins with it).
-export const REPIN = (account) => [['plugin', 'marketplace', 'remove', NAME], PLUGIN_INSTALL[0], ...(account ? [PLUGIN_INSTALL[1]] : [])];
+// What moves it onto the release branch: remove it and add it again at MARKETPLACE, then install the plugin again
+// everywhere it was, since removing a marketplace uninstalls its plugins in every scope: for the account if it was,
+// and in each folder it was installed for (in that folder, with its scope), skipping folders that are gone.
+// [{ args, cwd? }].
+export function REPIN(home) {
+  const steps = [{ args: ['plugin', 'marketplace', 'remove', NAME] }, { args: PLUGIN_INSTALL[0] }];
+  const { account, installs } = pluginScopes(home);
+  if (account) steps.push({ args: PLUGIN_INSTALL[1] });
+  for (const i of installs) {
+    if (existsSync(i.projectPath)) steps.push({ args: ['plugin', 'install', `${NAME}@${NAME}`, '--scope', i.scope], cwd: i.projectPath });
+  }
+  return steps;
+}
+// The steps as a person types them.
+export const repinCommands = (home) => REPIN(home).map((s) => `${s.cwd ? `(cd ${JSON.stringify(s.cwd)} && ` : ''}claude ${s.args.join(' ')}${s.cwd ? ')' : ''}`).join(' && ');
 // Run REPIN; null, or what went wrong in one line.
-export function repinMarketplace(account, env = process.env) {
-  for (const args of REPIN(account)) {
-    const r = run('claude', args, env);
-    if (!r.ok && !(args[2] === 'add' && /already/i.test(r.out))) return `claude ${args.join(' ')} failed: ${r.out.split('\n')[0]}`;
+export function repinMarketplace(home, env = process.env) {
+  for (const s of REPIN(home)) {
+    const r = run('claude', s.args, env, s.cwd);
+    if (!r.ok && !(s.args[2] === 'add' && /already/i.test(r.out))) return `claude ${s.args.join(' ')}${s.cwd ? ` (in ${s.cwd})` : ''} failed: ${r.out.split('\n')[0]}`;
   }
   return null;
 }

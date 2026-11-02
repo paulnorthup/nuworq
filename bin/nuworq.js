@@ -1375,18 +1375,21 @@ async function setUp(flags, mode) {
 // mode (#490): 'ask' asks; 'yes' installs it; 'no' says how. An install for some folders only (#496) counts as
 // none: it says which folders it covers, then offers the account's.
 async function offerPlugin(flags, mode) {
-  const { pluginScopes, claudeCode, installPlugin, PLUGIN_INSTALL, staleMarketplace, repinMarketplace, REPIN } = await import('../src/connect.js');
+  const { pluginScopes, claudeCode, installPlugin, PLUGIN_INSTALL, staleMarketplace, repinMarketplace, repinCommands, REPIN } = await import('../src/connect.js');
   const scopes = pluginScopes(homedir());
   if (!claudeCode()) return null;
   // Added before releases (#608): it follows main, so it moves onto the release branch, without asking (it's how
-  // the plugin already should install). With no one to run it for (--no), the commands to do it.
+  // the plugin already should install), and the plugin goes back everywhere it was installed. With no one to run
+  // it for (--no), the commands to do it. Then on as usual: a folder-only install still gets the account's offer.
   if (staleMarketplace(homedir())) {
     const { MARKETPLACE } = await import('../src/plugin.js');
-    const repin = REPIN(scopes.account).map((a) => `claude ${a.join(' ')}`).join(' && ');
+    const repin = repinCommands(homedir());
     if (mode === 'no') return amber(`  Claude Code's nuworq marketplace follows main, not releases. Move it onto the release branch: ${repin}`);
-    const failed = repinMarketplace(scopes.account);
-    return failed ? amber(`${failed}. Claude Code's nuworq marketplace still follows main, not releases: ${repin}`)
-      : `  Claude Code: moved the ${bold('nuworq')} marketplace onto the release branch (${MARKETPLACE}), so the plugin updates only to approved releases.`;
+    const folders = REPIN(homedir()).filter((s) => s.cwd).length;
+    const failed = repinMarketplace(homedir());
+    if (failed) return amber(`${failed}. Claude Code's nuworq marketplace may now be missing or still follow main; to put it right: ${repin}`);
+    const where = [scopes.account && 'for your account', folders && `in ${folders === 1 ? 'one folder' : `${folders} folders`}`].filter(Boolean).join(' and ');
+    console.error(`  Claude Code: moved the ${bold('nuworq')} marketplace onto the release branch (${MARKETPLACE}), so the plugin updates only to approved releases${where ? `, and installed the plugin again ${where}` : ''}.`);
   }
   if (scopes.account) return null;
   const n = scopes.folders.length;

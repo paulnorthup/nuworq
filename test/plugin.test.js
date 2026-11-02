@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -100,15 +100,28 @@ describe('the Claude Code plugin', () => {
       known(own);
       assert.equal(staleMarketplace(home), null, `the person's own marketplace stays: ${JSON.stringify(own)}`);
     }
-    // Remove, add at #release, and install for the account again only if it was.
-    assert.deepEqual(REPIN(true).map((a) => a.join(' ')), ['plugin marketplace remove nuworq', 'plugin marketplace add paulnorthup/nuworq#release', 'plugin install nuworq@nuworq --scope user']);
-    assert.deepEqual(REPIN(false).map((a) => a.join(' ')), ['plugin marketplace remove nuworq', 'plugin marketplace add paulnorthup/nuworq#release']);
+    // Removing a marketplace uninstalls its plugins in every scope, so the plugin goes back everywhere it was: for the
+    // account if it was, and in each folder, there, with its scope. A folder that's gone is skipped.
+    const steps = () => REPIN(home).map((s) => `${s.cwd ? `${s.cwd}: ` : ''}${s.args.join(' ')}`);
+    const head = ['plugin marketplace remove nuworq', 'plugin marketplace add paulnorthup/nuworq#release'];
+    assert.deepEqual(steps(), head, 'nothing installed: nothing to put back');
+    const a = mkdtempSync(join(tmpdir(), 'nuworq-proj-a-')), b = mkdtempSync(join(tmpdir(), 'nuworq-proj-b-'));
+    const installed = (installs) => writeFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'nuworq@nuworq': installs } }));
+    installed([{ scope: 'local', projectPath: a }, { scope: 'project', projectPath: b }, { scope: 'local', projectPath: join(a, 'gone') }]);
+    assert.deepEqual(steps(), [...head, `${a}: plugin install nuworq@nuworq --scope local`, `${b}: plugin install nuworq@nuworq --scope project`], 'folder-only installs come back, each in its folder');
+    installed([{ scope: 'user' }, { scope: 'local', projectPath: a }]);
+    assert.deepEqual(steps(), [...head, 'plugin install nuworq@nuworq --scope user', `${a}: plugin install nuworq@nuworq --scope local`]);
+    // Run with a fake claude that records where it ran and what.
     const bin = mkdtempSync(join(tmpdir(), 'nuworq-claude-')), calls = join(bin, 'calls');
-    writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho "$*" >> ${JSON.stringify(calls)}\nexit 0\n`);
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho "$(pwd -P): $*" >> ${JSON.stringify(calls)}\nexit 0\n`);
     chmodSync(join(bin, 'claude'), 0o755);
-    assert.equal(repinMarketplace(true, { ...process.env, PATH: `${bin}:${process.env.PATH}` }), null);
-    assert.deepEqual(read(calls).trim().split('\n'), REPIN(true).map((a) => a.join(' ')), 'runs exactly those, in order');
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    installed([{ scope: 'local', projectPath: a }]);
+    assert.equal(repinMarketplace(home, env), null);
+    const ran = read(calls).trim().split('\n');
+    assert.equal(ran.length, 3, 'remove, add, and the folder install');
+    assert.match(ran[2], new RegExp(`^${realpathSync(a)}: plugin install nuworq@nuworq --scope local$`), 'the folder install runs in that folder');
     writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "no such marketplace" >&2\nexit 1\n');
-    assert.match(repinMarketplace(false, { ...process.env, PATH: `${bin}:${process.env.PATH}` }), /^claude plugin marketplace remove nuworq failed: no such marketplace/, 'says what failed');
+    assert.match(repinMarketplace(home, env), /^claude plugin marketplace remove nuworq failed: no such marketplace/, 'says what failed');
   });
 });
