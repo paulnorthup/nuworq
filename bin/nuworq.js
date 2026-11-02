@@ -156,9 +156,16 @@ async function operatorCmd(flags) {
   if (renamed.length) console.log(dim(`Tag renamed: ${renamed.join(', ')}.`));
   const op = await import('../src/operator.js');
   // This machine's own infra check (#494): set by its person, kept in ~/.nuworq/operator.json, never from the hub.
+  // Only a person at a terminal changes it (#607): --detect runs the check, so an agent's shell never sets one.
   if (flags['infra-check'] !== undefined || flags.without === 'infra' || flags.with === 'infra') {
     const check = typeof flags['infra-check'] === 'string' ? flags['infra-check'].trim() : undefined;
-    const now = op.saveLocal(OPERATOR_FILE, { ...(check !== undefined ? { infra_check: check || null } : {}), ...(flags.without === 'infra' ? { without_infra: true } : flags.with === 'infra' ? { without_infra: null } : {}) });
+    const patch = { ...(check !== undefined ? { infra_check: check || null } : {}), ...(flags.without === 'infra' ? { without_infra: true } : flags.with === 'infra' ? { without_infra: null } : {}) };
+    const { answerer } = await import('../src/setup.js');
+    const now = await op.changeInfra(OPERATOR_FILE, patch, process.stdin.isTTY && process.stdout.isTTY ? answerer('ask', askLine) : null);
+    if (!now) {
+      process.exitCode = 1;
+      return console.log(process.stdin.isTTY && process.stdout.isTTY ? 'Nothing changed.' : 'Nothing changed: only a person at a terminal changes this machine\'s infra settings. Run it in your own terminal.');
+    }
     console.log(now.without_infra ? `This machine declares no ${bold('infra')}: it can't reach ${project}'s live systems. Undo: nuworq operator --with infra`
       : now.infra_check ? `${bold('infra')} is declared only while ${bold(now.infra_check)} passes. Clear it: nuworq operator --infra-check ""`
       : `${bold('infra')} is declared: a person starts this attended operator here.`);
