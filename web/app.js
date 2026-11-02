@@ -21,7 +21,7 @@ import { markNew, markSeen, dismissNew, keepNew } from './new.js';
 import { preconditionSection, toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
 import { shortcutFor, shortcutsHtml } from './shortcuts.js';
-import { rank, resultsHtml, confirmHtml } from './launcher.js';
+import { rank, resultsHtml, confirmHtml, THEMES } from './launcher.js';
 import { feedbackForm, feedbackThanks, feedbackMine, attached } from './feedback.js';
 import { LOGO } from './logo.js';
 import { isTextBox, saveFocus, restoreFocus } from './focus.js';
@@ -415,12 +415,42 @@ function renderRail() {
       ${S.feedback?.on ? '<button class="rail-item" data-action="feedback"><span data-new="feedback">Feedback</span></button>' : ''}
       ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings"><span class="name">Workspace settings</span>${S.billing.plans?.length ? '<span class="tag now">Upgrade</span>' : ''}</button>` : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
+      ${appearance()}
       ${versionLine()}
     </div>`);
   // On a phone the rail's actions sit behind Menu, the top bar's only way to them.
   $('#rail').classList.toggle('menu-open', !!S.railMenu);
   markNew($('#rail'));
 }
+
+// Appearance (#485): Match device unless this browser chose Light or Dark. A setting, set once and kept in this
+// browser; web/theme.js applies it before the first paint of every page.
+const themeNow = () => { const t = store.get('theme', 'device'); return t === 'light' || t === 'dark' ? t : 'device'; };
+function appearance() {
+  const now = themeNow();
+  return `<div class="appearance"><span class="seg-label" id="appearance-label">Appearance</span>
+    <div class="seg" role="radiogroup" aria-labelledby="appearance-label" data-new="appearance">${THEMES.map(([k, label]) =>
+      `<button role="radio" aria-checked="${k === now}" tabindex="${k === now ? 0 : -1}" class="${k === now ? 'on' : ''}" data-action="theme" data-appearance="${k}">${label}</button>`).join('')}</div></div>`;
+}
+function setTheme(t) {
+  if (t === 'device') { try { localStorage.removeItem('nuworq:theme'); } catch {} } else store.set('theme', t);
+  const root = document.documentElement;
+  root.classList.add('theming'); // the other theme at once: no transition eases it in
+  if (t === 'light' || t === 'dark') root.dataset.theme = t; else delete root.dataset.theme;
+  requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('theming')));
+  renderRail();
+}
+// The arrow keys move the choice, as in any radio group; Tab reaches the chosen one.
+document.addEventListener('keydown', (e) => {
+  const b = e.target.closest?.('.appearance [role="radio"]');
+  const step = b && { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const [k] = THEMES[(THEMES.findIndex(([t]) => t === b.dataset.appearance) + step + THEMES.length) % THEMES.length];
+  setTheme(k);
+  $(`.appearance [data-appearance="${k}"]`)?.focus();
+}, true);
 
 // On a hub with workspaces: which one this is, the others you belong to (one click signs you in there),
 // and making a new one.
@@ -1619,7 +1649,7 @@ function drawLauncher({ keep = false } = {}) {
   if (!L.index) { list.innerHTML = placeholder(3, { head: false }); return; }
   if (L.confirming) { list.innerHTML = confirmHtml(L.confirming, { esc }); return; }
   // Moving through the list keeps it as it is; typing (or the index arriving) ranks it again.
-  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: !!S.billing?.owner, recent: recent() });
+  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { theme: themeNow(), current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: !!S.billing?.owner, recent: recent() });
   L.sel = Math.min(L.sel, Math.max(0, L.results.length - 1));
   list.innerHTML = resultsHtml(L.results, { sel: L.sel, stages: L.index.stages, esc });
   list.querySelector('.ln-row.on')?.scrollIntoView({ block: 'nearest' });
@@ -1642,6 +1672,7 @@ async function runLauncher(r) {
   const x = r.run;
   if (x.go) location.hash = x.go;
   else if (x.action) ACTIONS[x.action]();
+  else if (x.theme) { setTheme(x.theme); toast(`Appearance: ${THEMES.find(([k]) => k === x.theme)[1]}`); }
   else if (x.zoom) { S.zoom = x.zoom; store.set('zoom', S.zoom); render({ force: true }); toast(`Depth ${x.zoom}`); }
   else if (x.open) openAt(x.open);
   else if (x.human) {
@@ -1697,6 +1728,7 @@ const ACTIONS = {
   reveal: (el) => { S.reveal.add(el.dataset.key); render({ force: true }); setTimeout(() => document.getElementById(el.dataset.key.replace('dsb', `sb:${S.itemRef}`))?.focus(), 0); },
   stage: (el) => { S.stage = S.stage === el.dataset.stage ? null : el.dataset.stage; render({ force: true }); },
   seen: () => human('seen', {}, 'Marked as seen'),
+  theme: (el) => setTheme(el.dataset.appearance),
   autonomy: (el) => human('settings', { autonomy: el.dataset.level }, 'Autonomy changed; agents have been told'),
   'edit-mission': () => { S.editMission = true; render({ force: true }); setTimeout(() => $('#mission-in')?.focus(), 0); },
   'cancel-mission': () => { S.editMission = false; clearDraft('mission'); render({ force: true }); },

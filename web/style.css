@@ -204,6 +204,10 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .rail-foot .rail-item { color: var(--muted); }
 .rail-foot .tag { text-transform: none; letter-spacing: 0; padding: var(--sp-h) var(--sp-1); } /* Upgrade (#308): narrow enough to leave its label whole */
 .rail-menu, .rail-break { display: none; }
+/* Appearance (#485): the footer's one setting, its label over its three choices. */
+.appearance { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) var(--sp-1); }
+/* Changing it: the other theme at once, nothing eased in. */
+html.theming *, html.theming *::before, html.theming *::after { transition: none !important; }
 /* The sidebar in the phone top bar's terms (#141): chips for projects, the count beside its label, quiet actions. */
 @media (min-width: 861px) {
   .rail-item { padding: var(--sp-2) var(--sp-3); border-radius: var(--r-m); }
@@ -753,6 +757,8 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   #rail.menu-open .rail-menu { background: var(--sunken); color: var(--ink); }
   #rail.menu-open .rail-foot { display: flex; flex-basis: 100%; margin-top: var(--sp-1); padding-top: var(--sp-2); border-top: var(--rule) solid var(--line); }
   #rail.menu-open .rail-foot .rail-item { width: 100%; min-height: 44px; }
+  #rail.menu-open .appearance { padding: var(--sp-2) var(--sp-3); }
+  #rail.menu-open .appearance .seg button { min-height: 44px; padding: var(--sp-2) var(--sp-3); }
   /* The quick launcher (#290): Search beside Menu, thumb-sized; its box the width of the screen. */
   #rail .rail-search { margin: 0 0 0 auto; min-height: 44px; padding: var(--sp-3) var(--sp-4); }
   #rail .rail-search + .rail-menu { margin-left: 0; }

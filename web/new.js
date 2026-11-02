@@ -37,6 +37,7 @@ export const NEW = {
   'verified-install': '2026-11-01', // #473: Connect an agent's install checks the release's signature before installing it
   'security-reviews': '2026-11-01', // #480: Settings' Security reviews switch: a review before each release, an area each month
   'needs-rank': '2026-11-01', // #506: Needs you most important first, each card with its priority (the section's hint)
+  appearance: '2026-11-01', // #485: Match device, Light or Dark, in the rail's footer (behind Menu on a phone)
 };
 
 const DAYS = 7;
