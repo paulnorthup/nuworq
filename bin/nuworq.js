@@ -1102,7 +1102,7 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine } = await import('../src/runner.js');
   // The worktrees of the workers running now: each one's branch is its own to move (#618).
   const live = new Set();
   const logs = join(dirname(HUB_FILE), 'logs');
@@ -1217,16 +1217,18 @@ async function runCmd(flags) {
     await git(['-C', home, 'fetch', '-q', '--prune', 'origin']).catch(() => {});
     const g = await restoreRefs(home, before, git, { own: [branch], live: siblings }).catch((e) => {
       console.error(dim(`  couldn't check what ${name} did to ${home}'s branches: ${String(e.stderr || e.message).trim().split('\n')[0]}`));
-      return { restored: [] };
+      return { restored: [], kept: [] };
     });
-    if (!g.restored.length) return;
-    const lines = g.restored.map((r) => restoredLine(home, r));
+    if (!g.restored.length && !g.kept.length) return;
+    const lines = [...g.restored.map((r) => restoredLine(home, r)), ...g.kept.map(keptLine)];
     for (const l of lines) console.log(amber(`  ${name}: ${l}`));
     const item = branch.match(/^nuworq\/(\d+)-/)?.[1];
+    const n = g.restored.length;
     try {
       await createClient({ url: s.url, token: token ?? s.token }).call('comment', {
         ...(item ? { item: `#${item}` } : {}),
-        headline: `The runner put back ${lines.length === 1 ? 'a branch' : `${lines.length} branches or tags`} ${name} moved outside its own`,
+        headline: n ? `The runner put back ${n === 1 ? 'a branch' : `${n} branches or tags`} ${name} moved outside its own${g.kept.length ? `; ${g.kept.length} checked out elsewhere to check` : ''}`
+          : `${g.kept.length === 1 ? 'A branch' : `${g.kept.length} branches`} checked out elsewhere moved while ${name} ran: check ${g.kept.length === 1 ? 'it' : 'them'}`,
         summary: lines.join('\n'),
       }, { agent: name, project });
     } catch (e) { console.error(dim(`  couldn't say so on the hub: ${e.message}`)); }
