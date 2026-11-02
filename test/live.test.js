@@ -107,7 +107,7 @@ test('under /w/<workspace>, the live page loads its script and styles, and its d
     assert.equal(page.status, 200);
     const html = await page.text();
     const assets = [...html.matchAll(/(?:src|href)="(\/[^"]+\.(?:js|css))"/g)].map((m) => m[1]);
-    assert.deepEqual(assets.sort(), ['/w/acme/live.js', '/w/acme/style.css']);
+    assert.deepEqual(assets.sort(), ['/w/acme/live.js', '/w/acme/style.css', '/w/acme/theme.js']);
     for (const asset of assets) {
       const r = await fetch(`${url}${asset}`);
       assert.equal(r.status, 200, asset);

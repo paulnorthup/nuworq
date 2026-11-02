@@ -63,7 +63,7 @@ describe('the appearance a browser chose applies before the first paint (#485)',
     assert.match(css, /@media \(prefers-color-scheme: dark\) \{\n  :root:not\(\[data-theme="light"\]\) \{/, 'a dark device gets dark unless the browser chose Light');
     assert.match(css, /\n:root\[data-theme="dark"\] \{\n  --bg: #1b1d21;/, 'Dark applies on any device');
     assert.match(css, /:root\[data-theme="light"\] \{ color-scheme: light; \}/, 'and Light keeps the browser\'s own parts light too');
-    assert.match(css, /html\.theming \*[^{]*\{ transition: none !important; \}/, 'a change applies at once, not eased in');
+    assert.match(css, /html\.theming \*[^{]*\{ transition-property: none !important; \}/, 'a change applies at once, not eased in');
   });
 });
 
@@ -73,7 +73,8 @@ describe('the Appearance setting', () => {
     assert.match(app, /\$\{appearance\(\)\}\n\s*\$\{versionLine\(\)\}\n\s*<\/div>`\);/, 'in .rail-foot, which a phone opens with Menu');
     assert.match(app, /role="radiogroup" aria-labelledby="appearance-label"/);
     assert.match(app, /role="radio" aria-checked="\$\{k === now\}" tabindex="\$\{k === now \? 0 : -1\}"/);
-    assert.match(app, /\{ ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 \}\[e\.key\]/, 'arrow keys move the choice');
+    assert.match(app, /radioKeys\(document, '\.appearance \[role="radio"\]', /, 'arrow keys move the choice');
+    assert.match(read('web/radiogroup.js'), /\{ ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 \}/);
     assert.match(app, /const themeNow = \(\) => \{ const t = store\.get\('theme', 'device'\);/, 'kept in this browser; store reads in try/catch');
     assert.match(read('web/style.css'), /#rail\.menu-open \.appearance \.seg button \{ min-height: 44px;/, '44px choices on a phone');
     assert.match(read('web/new.js'), /appearance: '2026-11-01'/);

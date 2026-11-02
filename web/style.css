@@ -210,7 +210,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .appearance .seg { display: flex; }
 .appearance .seg button { flex: 1 1 auto; padding: var(--sp-1) var(--sp-2); }
 /* Changing it: the other theme at once, nothing eased in. */
-html.theming *, html.theming *::before, html.theming *::after { transition: none !important; }
+html.theming *, html.theming *::before, html.theming *::after { transition-property: none !important; }
 /* The sidebar in the phone top bar's terms (#141): chips for projects, the count beside its label, quiet actions. */
 @media (min-width: 861px) {
   .rail-item { padding: var(--sp-2) var(--sp-3); border-radius: var(--r-m); }

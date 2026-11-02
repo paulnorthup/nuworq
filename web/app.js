@@ -27,6 +27,7 @@ import { LOGO } from './logo.js';
 import { isTextBox, saveFocus, restoreFocus } from './focus.js';
 import { keepScroll } from './scroll.js';
 import { morph } from './morph.js';
+import { radioKeys } from './radiogroup.js';
 import { liveGate } from './pace.js';
 import { predict, placeholder } from './instant.js';
 import { held, viewLoader, loadProject, shell } from './switching.js';
@@ -441,16 +442,11 @@ function setTheme(t) {
   renderRail();
 }
 // The arrow keys move the choice, as in any radio group; Tab reaches the chosen one.
-document.addEventListener('keydown', (e) => {
-  const b = e.target.closest?.('.appearance [role="radio"]');
-  const step = b && { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
-  if (!step) return;
-  e.preventDefault();
-  e.stopPropagation();
+radioKeys(document, '.appearance [role="radio"]', (b, step) => {
   const [k] = THEMES[(THEMES.findIndex(([t]) => t === b.dataset.appearance) + step + THEMES.length) % THEMES.length];
   setTheme(k);
   $(`.appearance [data-appearance="${k}"]`)?.focus();
-}, true);
+});
 
 // On a hub with workspaces: which one this is, the others you belong to (one click signs you in there),
 // and making a new one.
