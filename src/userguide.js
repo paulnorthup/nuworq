@@ -19,8 +19,12 @@ import { commandParts } from '../web/commands.js';
 export const SETUP_TITLE = 'The setup that works';
 
 // A session's lines in the guide's marks: what it does, where and why, then its commands, each to copy.
-export const sessionLines = (s) => [setupLine(s),
-  ...commandParts(s.how).map((x) => (x.cmd ? `\`${x.cmd}\`` : `${x.text.charAt(0).toUpperCase()}${x.text.slice(1)}:`))];
+// Words that lead into a command end in a colon; a note after the last one (#646) doesn't.
+export const sessionLines = (s) => {
+  const parts = commandParts(s.how);
+  return [setupLine(s), ...parts.map((x, i) => (x.cmd ? `\`${x.cmd}\``
+    : `${x.text.charAt(0).toUpperCase()}${x.text.slice(1)}${parts.slice(i + 1).some((y) => y.cmd) ? ':' : ''}`))];
+};
 
 export const STEPS = [
   {
