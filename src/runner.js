@@ -266,8 +266,11 @@ export function unstaffedLine(routes, projects) {
   return `${n} item${n === 1 ? ' waits' : 's wait'} in projects nuworq run doesn't staff: ${where}. To staff one, ${STAFF_HOW}.`;
 }
 
+// Workers in a row that fail, however long each ran (#764): an outage whose workers retry for a minute, or for
+// twenty, is as stuck as one whose workers fail at once. Those under 15 s are said to fail within seconds.
 const FAST_FAIL_MS = 15_000;
-const FAST_FAILS = 3;
+const FAILS = 3;
+const ran = (ms) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`);
 // Clean exits this soon without claiming anything: the hub routed a worker to work it couldn't take.
 const EMPTY_MS = 60_000;
 const EMPTIES = 3;
@@ -286,6 +289,8 @@ const WAIT_MAX_S = 90;
 // alone for 5 minutes, then 10, up to 30, and said each time; the others go on.
 // claimed(worker): whether the hub saw it take a job since it started (absent: assume it did).
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
+// submitted(worker): whether it handed something in since it started (absent: assume it didn't); one that did,
+// then exited non-zero, still worked, so it ends a failing streak rather than adding to it.
 // maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
 // report(state): tells the hub how this runner is, once per poll and once more when it stops (#171); a
 // report that fails is let go (the hub shows the runner down until one gets through).
@@ -304,7 +309,7 @@ const WAIT_MAX_S = 90;
 // the runner waits on it instead of sleeping, so a worker starts about a second after work appears. A hub that
 // answers early with nothing new is an older one that ignores the wait: from then on the runner sleeps instead.
 export async function run({
-  routes, launch, claimed = async () => true, took = async () => null, log = console.log, report = async () => {}, sweep, sweptAt = 0,
+  routes, launch, claimed = async () => true, submitted = async () => false, took = async () => null, log = console.log, report = async () => {}, sweep, sweptAt = 0,
   updated = () => null, supervised = false, signoff = async () => {}, machine = () => ({}), maxWorkers, unstaffed = async () => null, waitRoutes,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
@@ -317,7 +322,7 @@ export async function run({
   let lastStart = -Infinity;
   let launched = 0;
   let spent = 0;
-  let fastFails = 0;
+  let failing = []; // how long each worker of the failing streak ran, in ms
   let empties = [];
   let pausedUntil = 0;
   let pauseMs = PAUSE_MS;
@@ -364,10 +369,12 @@ export async function run({
     };
   };
   const tell = (s) => Promise.resolve().then(() => report(s)).catch(() => {});
-  const failedFast = () => {
-    if (++fastFails < FAST_FAILS) return;
-    fastFails = 0;
-    pause(`${FAST_FAILS} workers in a row failed within seconds`, 'Check the agent runs on its own (see its log).');
+  const failedAfter = (ms) => {
+    failing.push(ms);
+    if (failing.length < FAILS) return;
+    const how = failing.every((x) => x < FAST_FAIL_MS) ? 'within seconds' : `after ${failing.map(ran).join(', ')}`;
+    failing = [];
+    pause(`${FAILS} workers in a row failed ${how}`, 'Check the agent runs on its own (see its log).');
   };
   const foundNothing = (w) => {
     empties.push(w.project);
@@ -464,7 +471,7 @@ export async function run({
             launched++;
             log(`Couldn't start a worker for ${r.name ?? r.project}: ${e.message}`);
             done.push({ name: '(not started)', project: r.project, code: 'error', secs: 0 });
-            failedFast();
+            failedAfter(0);
             continue;
           }
           launched++;
@@ -485,10 +492,13 @@ export async function run({
             log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s${usd ? `, spent $${usd.toFixed(2)}` : ''}`);
             const others = running.length - 1; // this one is still in the list until the hub answers below
             if (spent >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${spent.toFixed(2)} spent)${others ? `; letting ${others} running worker(s) finish` : ''}`);
-            if (code !== 0 && !interrupted && !w.killedAt && ms < FAST_FAIL_MS) failedFast();
-            else fastFails = 0;
             // It counts as running until the hub answers, so no replacement starts meanwhile.
             await Promise.resolve().then(() => signoff(w)).catch(() => {});
+            const failure = code !== 0 && !interrupted && !w.killedAt;
+            const worked = failure && await Promise.resolve().then(() => submitted(w)).catch(() => false);
+            if (failure && !worked) failedAfter(ms);
+            else if (code === 0 || worked) failing = [];
+            if (worked) pauseMs = PAUSE_MS; // it handed something in: the next streak pauses 5m again
             const empty = code === 0 && !interrupted && !w.killedAt && ms < EMPTY_MS && !(await claimed(w).catch(() => true));
             if (empty) foundNothing(w);
             else if (code === 0) { empties = []; pauseMs = PAUSE_MS; } // it worked: the next streak pauses 5m again

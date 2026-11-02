@@ -39,9 +39,10 @@ describe('a project nuworq run staffs', () => {
     hub.reportRunner({ name: 'mini', machine: 'mini.local', workers: 1, skipping: [{ project: 'p', reason: "couldn't fetch origin" }] });
     hub.route('', { runner: true });
     assert.equal(idle()?.cause, 'skipping', 'its poll is no worker on the way');
-    hub.reportRunner({ name: 'mini', machine: 'mini.local', workers: 1, paused: { until: hub.now() + 5 * MIN, reason: '3 workers failed' } });
+    hub.reportRunner({ name: 'mini', machine: 'mini.local', workers: 1, paused: { until: hub.now() + 5 * MIN, reason: '3 workers in a row failed after 1m, 1m, 1m' } });
     hub.route('', { runner: true });
     assert.equal(idle()?.cause, 'paused');
+    assert.equal(idle()?.sub, 'Runners paused: 3 workers in a row failed after 1m, 1m, 1m', 'Needs you names the failing streak (#764)');
     hub.reportRunner({ name: 'mini', machine: 'mini.local', workers: 1, stopped: 'interrupted' });
     hub.route('', { runner: true });
     assert.equal(idle(), undefined, 'a runner polling again after it stopped, before its first report, is on duty');

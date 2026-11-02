@@ -1038,6 +1038,19 @@ export class Hub extends EventEmitter {
     return n;
   }
 
+  // How many times agent handed something in since then (#764): work, a shaping, a tidy, a verdict or a landing.
+  // A worker that did, then exited non-zero, still worked: `nuworq run` doesn't count it toward a failing streak.
+  submitsSince(agent, since, { scope = null } = {}) {
+    const types = ['submitted', 'shaped', 'tidied', 'accepted', 'sent_back', 'landed'];
+    let n = 0;
+    for (const p of this.projects()) {
+      if (scope && !scope.includes(p.slug)) continue;
+      n += this.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND actor = ? AND at >= ?
+          AND type IN (${types.map(() => '?').join(',')})`).get(p.id, agent, since, ...types).n;
+    }
+    return n;
+  }
+
   // What agent first took since then, for `nuworq run`'s log (#533): "#12 Fix x (review)", or null.
   firstClaim(agent, since, { scope = null } = {}) {
     const MODE = { claimed: 'work', shaping: 'shape', review_started: 'review', landing: 'land' };

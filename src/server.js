@@ -1862,7 +1862,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'GET' && path === '/api/claims') {
         const [who, since] = [url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0];
-        return send(200, { claims: hub.claimsSince(who, since, { scope: caller.scope }), first: hub.firstClaim(who, since, { scope: caller.scope }) });
+        return send(200, {
+          claims: hub.claimsSince(who, since, { scope: caller.scope }), first: hub.firstClaim(who, since, { scope: caller.scope }),
+          submitted: hub.submitsSince(who, since, { scope: caller.scope }),
+        });
       }
       if (req.method === 'GET' && path === '/api/finished') {
         const slug = url.searchParams.get('project') ?? '';
