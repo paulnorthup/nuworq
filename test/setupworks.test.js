@@ -8,6 +8,7 @@ import { commandsIn } from '../web/commands.js';
 import { STEPS, SETUP_TITLE, guidePage } from '../src/userguide.js';
 import { getStarted } from '../src/getstarted.js';
 import { bare, GET_GOING, command } from '../src/help.js';
+import { appSource } from './appsource.js';
 
 const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
 const unescape = (s) => s.replace(/&(lt|gt|quot|#39|amp);/g, (_, e) => ({ lt: '<', gt: '>', quot: '"', '#39': "'", amp: '&' })[e]);
@@ -59,7 +60,7 @@ describe('the setup that works, everywhere the same (#489)', () => {
       for (const c of commandsIn(s.how)) assert.ok(html.includes(`data-text="${c}"`), `${s.key}: ${c} to copy`);
     }
     // In the dialog: after the machine's one paste, before nuworq up, and by hand only at depth 30m.
-    const app = read('web/app.js');
+    const app = appSource();
     const dialog = app.slice(app.indexOf('async function connect()'), app.indexOf('async function notifySettings()'));
     assert.ok(ascending(order(dialog, ['Set up this machine (once)', '${setupSection()}', 'commandBlocks(c.up)', 'z() >= 2', 'commandBlocks(c.run)', 'OpenAI Codex', 'opencode'])), 'setup, the three, up, then by hand at 30m');
     // #644: one block to copy on the first screen; the three and nuworq up are folded beneath it, still copyable.

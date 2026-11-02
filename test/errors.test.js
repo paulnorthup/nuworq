@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { errorText, errorHtml } from '../web/errors.js';
+import { appSource } from './appsource.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -41,7 +42,7 @@ describe('errors as a person reads them', () => {
   });
 
   test('every toast of a caught error goes through it: no toast(e.message left', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.doesNotMatch(app, /toast\(e\.message/);
     assert.doesNotMatch(app, /esc\(e\.message\)/);
   });

@@ -4,9 +4,11 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { FIELDS, regionsOf, createStore } from '../web/store.js';
+import { appSource } from './appsource.js';
 
 const WEB = new URL('../web/', import.meta.url);
-const sources = readdirSync(WEB).filter((f) => f.endsWith('.js') && f !== 'store.js').map((f) => [f, readFileSync(new URL(f, WEB), 'utf8')]);
+const sources = [...readdirSync(WEB), ...readdirSync(new URL('views/', WEB)).map((f) => `views/${f}`)]
+  .filter((f) => f.endsWith('.js') && f !== 'store.js').map((f) => [f, readFileSync(new URL(f, WEB), 'utf8')]);
 
 // A write to S that bypasses the setters: an assignment (=, +=, ??= …) to S.x or anything inside it, ++/--, a Set's
 // or Map's mutating call, delete, or Object.assign onto S.
@@ -33,7 +35,7 @@ describe('the app state store (#600)', () => {
   });
 
   test('every field the app reads is declared, and nothing is declared that the app never uses', () => {
-    const app = readFileSync(new URL('app.js', WEB), 'utf8');
+    const app = appSource();
     const read = new Set([...app.matchAll(/\bS\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]));
     assert.deepEqual([...read].filter((k) => !Object.hasOwn(FIELDS, k)), [], 'read but not declared in web/store.js');
     // Used: read as S.x, or named to a collection's setter (views is read by held() in web/switching.js).
@@ -80,7 +82,7 @@ describe('the app state store (#600)', () => {
     // The whole table, pinned: a field that moves between regions is a change someone meant.
     const table = Object.fromEntries(Object.keys(FIELDS).map((k) => [k, regionsOf(k).join(' ')]));
     assert.deepEqual(table, {
-      projects: 'rail main', slug: 'rail main drawer', view: 'main drawer', views: '', loading: 'main', missing: 'main', listStale: '',
+      projects: 'rail main', slug: 'rail main drawer', view: 'main drawer', views: '', loading: 'main', shellOnly: 'main', missing: 'main', listStale: '',
       pages: 'main', zoom: 'main drawer', home: 'main', homeFresh: '', gs: 'main', gsFresh: '',
       analytics: 'rail main', period: 'main', outcomes: 'main',
       me: 'rail main drawer', person: 'main', info: 'rail drawer', billing: 'rail', checkoutDone: '', feedback: 'rail', feedbackCtx: '',

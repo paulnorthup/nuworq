@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { agentLine } from '../web/agentline.js';
 import { Hub } from '../src/core.js';
 import { view, homeView } from '../src/insight.js';
+import { appSource } from './appsource.js';
 
 // #240: an agent reads as role, where it runs and its job, from what the hub reports (#238), not as claude-<hex>.
 describe('agentLine', () => {
@@ -66,7 +67,7 @@ describe('the hub says who an agent named in an entry is', () => {
 });
 
 describe('the page uses one function for every agent', () => {
-  const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  const app = appSource();
   test('who() builds every agent label with agentLine, its id at 30m', () => {
     assert.match(app, /import \{ agentLine(, \w+)* \} from '\.\/agentline\.js';/);
     assert.match(app, /esc\(agentLine\(presence, \{ name, job, id: z\(\) >= 2 \}\)\)/);

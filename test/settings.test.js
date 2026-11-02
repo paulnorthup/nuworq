@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { appSource } from './appsource.js';
 
 // A project's settings are in one dialog (#213): the header keeps Depth, Autonomy and Settings.
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 const fn = (name) => { const s = app.indexOf(`function ${name}(`); return app.slice(s, app.indexOf('\n}\n', s)); };
 const header = (() => { const p = fn('project'); return p.slice(p.indexOf('<div class="phead">'), p.indexOf('${projectBody(')); })();
 const dialog = fn('settingsModal');

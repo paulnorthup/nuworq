@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { appSource } from './appsource.js';
 
 // Copy a person shouldn't have to decode (#150): the pulse's first visit, the card's "why" link, All work's column.
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 
 test('no "First look", no "Why? (5m)", no bare "Who" column; their plain replacements are there', () => {
   for (const old of ['First look', 'Why? (5m)', '<th>Who</th>']) assert.ok(!app.includes(old), old);

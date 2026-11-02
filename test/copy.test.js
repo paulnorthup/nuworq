@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { copyBlock, commandBlocks, copyText } from '../web/copy.js';
 import { connectCommands } from '../web/connect.js';
+import { appSource } from './appsource.js';
 
 // A document just big enough for the synchronous copy: execCommand('copy') copies the selected textarea.
 function fakeDoc({ works = true } = {}) {
@@ -53,7 +54,7 @@ describe('copy buttons (#89)', () => {
   });
 
   test('every Copy button on the site has non-empty data-text', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.ok(!app.includes('data-action="copy"'), 'every Copy button is made by copyBlock');
     // What the modals pass to copyBlock, for every kind of hub.
     const infos = [

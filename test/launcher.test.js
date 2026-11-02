@@ -5,6 +5,7 @@ import { Hub, PERSON_CAN } from '../src/core.js';
 import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
 import { fuzzy, marked, rank, commands, resultsHtml, confirmHtml } from '../web/launcher.js';
+import { appSource } from './appsource.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const stages = { ready: { label: 'Ready', court: 'queue' }, active: { label: 'Active', court: 'agents' }, done: { label: 'Done', court: null } };
@@ -186,7 +187,7 @@ describe('the quick launcher (#290)', () => {
   });
 
   test('wired in: ⌘K and the rail button open it, it has its own place in the page, and it is new', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
     const neu = readFileSync(new URL('../web/new.js', import.meta.url), 'utf8');
     assert.match(app, /class="rail-item rail-search" data-action="launcher" data-new="launcher"/);

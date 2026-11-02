@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { analyticsPage, change } from '../web/analytics.js';
+import { appSource } from './appsource.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const dur = (ms) => `${Math.round(ms / 60000)}m`;
@@ -108,7 +109,7 @@ describe('analytics', () => {
   });
 
   test('owners open it from the home; #/analytics is its address', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /\$\{owner\(\) \? '<a class="btn an-open" href="#\/analytics" data-new="analytics">Analytics<\/a>' : ''\}/);
     assert.match(app, /const owner = \(\) => S\.person\?\.role === 'owner';/);
     assert.match(app, /analytics: location\.hash\.startsWith\('#\/analytics'\)/);

@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { appSource } from './appsource.js';
 
 // The project page at each depth (web/app.js, projectBody()'s sections): 30s is what needs you and what's moving,
 // and each deeper level adds sections rather than repeating them (#144).
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 const start = app.indexOf('function projectBody(');
 const body = app.slice(start, app.indexOf('\n}\n', start));
 const at = (section) => body.match(new RegExp(`\\b\\w+: (?:z\\(\\) >= (\\d) \\? )?${section}\\(v\\)`))?.[1] ?? '0';

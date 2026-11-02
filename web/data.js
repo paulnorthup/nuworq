@@ -27,20 +27,30 @@ export const kept = (url) => SHARED.test(url) || PROJECT.test(url);
 // get(url): the request (the app's api()). read(url, { fresh }) answers from what's kept, else asks; fresh asks the
 // hub again. changed(e) drops what e affects. forget(test) drops the URLs test(url) says; clear() drops everything,
 // for when change events may have been missed (the stream reconnected, the hub was out of reach).
+// An answer asked again that says just what the last one said is that same object (#602): the store sees nothing
+// changed, so the region it shows isn't drawn again.
 export function dataCache(get) {
   const kept_ = new Map(); // url → promise of its answer
+  const last = new Map(); // url → { json, value }: the last answer, to compare the next one with
+  const same = (url, value) => {
+    const json = JSON.stringify(value);
+    const had = last.get(url);
+    if (had?.json === json) return had.value;
+    last.set(url, { json, value });
+    return value;
+  };
   return {
     read(url, { fresh = false } = {}) {
       if (!kept(url)) return get(url);
       const had = kept_.get(url);
       if (had && !fresh) return had;
-      const p = get(url);
+      const p = get(url).then((v) => same(url, v));
       kept_.set(url, p);
       p.catch(() => { if (kept_.get(url) === p) kept_.delete(url); });
       return p;
     },
     changed(e) { for (const url of [...kept_.keys()]) if (affects(url, e)) kept_.delete(url); },
-    forget(test) { for (const url of [...kept_.keys()]) if (test(url)) kept_.delete(url); },
+    forget(test) { for (const url of new Set([...kept_.keys(), ...last.keys()])) if (test(url)) { kept_.delete(url); last.delete(url); } },
     clear() { kept_.clear(); },
     has: (url) => kept_.has(url),
   };

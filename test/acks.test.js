@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { ackList, ACKS_INLINE } from '../web/acks.js';
+import { appSource } from './appsource.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const acks = (n) => Array.from({ length: n }, (_, i) => ({ agent: `claude-${String(i).padStart(4, '0')}`, response: `on it ${i}`, at: 1000 + i }));
@@ -55,7 +56,7 @@ describe('who acknowledged a steer', () => {
   });
 
   test('the steering section and the item drawer both use it, collapsed at every depth until tapped', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /ackList\(\{ acks: s\.acks, missing, key: `acks:\$\{s\.id\}`, open: S\.open\.has\(`acks:\$\{s\.id\}`\), responses: z\(\) >= 2 \}/);
     assert.match(app, /ackList\(\{ acks: s\.acks, key: `dacks:\$\{s\.id\}`, open: S\.open\.has\(`dacks:\$\{s\.id\}`\), responses: true,/);
   });

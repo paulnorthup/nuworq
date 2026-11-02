@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, mkdtempSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { appSource } from './appsource.js';
 
 // Every color means one thing (#188): the state colors and the provider marks stay clearly apart.
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
@@ -105,7 +106,7 @@ describe('the color map keeps meanings apart (#188)', () => {
     const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
     assert.deepEqual(strip(outside).match(COLOR) ?? [], [], 'web/style.css');
     for (const dir of ['web', 'src']) {
-      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n) && n !== 'style.css' && n !== 'logo.js')) {
+      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url), { recursive: dir === 'web' }).filter((n) => /\.(css|js|html)$/.test(n) && n !== 'style.css' && n !== 'logo.js')) {
         if (dir === 'src' && f !== 'server.js') continue;
         const src = strip(readFileSync(new URL(`../${dir}/${f}`, import.meta.url), 'utf8'));
         assert.deepEqual(src.match(COLOR) ?? [], [], `${dir}/${f}`);
@@ -123,17 +124,17 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.ok(icon.includes(`rx="8" fill="${BRAND}"/><g fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round">${q}</g>`), 'the favicon is the same q on --brand');
     // Every logo the hub draws uses that one source; no page keeps its own copy.
     const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
-    assert.match(read('web/app.js'), /import \{ LOGO \} from '\.\/logo\.js';/);
+    assert.match(appSource(), /import \{ LOGO \} from '\.\/logo\.js';/);
     assert.match(read('src/server.js'), /<link rel="icon" href="\$\{FAVICON\}">[^`]*<div class="brand">\$\{LOGO\}<span>nuworq<\/span>/, 'the flow pages');
     // Every page has the favicon (#318), and the sign-in style pages the logo above their card.
-    for (const f of readdirSync(new URL('../web/', import.meta.url)).filter((n) => n.endsWith('.html'))) {
+    for (const f of readdirSync(new URL('../web/', import.meta.url), { recursive: true }).filter((n) => n.endsWith('.html'))) {
       const html = read(`web/${f}`);
       assert.match(html, /<link rel="icon" href="<!--favicon-->">/, `${f}'s favicon`);
       if (['login.html', 'device.html', 'invite.html', 'early-access.html'].includes(f)) assert.match(html, /<div class="brand">\s*<!--logo-->\s*<span>nuworq<\/span>/, `${f}'s logo`);
       assert.ok(withLogo(html).includes(FAVICON) && !withLogo(html).includes('<!--'), `${f} is filled in`);
     }
     for (const dir of ['web', 'src']) {
-      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n) && n !== 'logo.js')) {
+      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url), { recursive: dir === 'web' }).filter((n) => /\.(css|js|html)$/.test(n) && n !== 'logo.js')) {
         const src = read(`${dir}/${f}`);
         assert.doesNotMatch(src, /<svg viewBox="0 0 32 32"|rx="8" fill=|rx='8'/, `${dir}/${f} draws its own mark`);
         assert.ok(!src.includes('M8 24L24 8'), `${dir}/${f} still has the lattice`);
@@ -186,7 +187,7 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.ok(contrast('#ffffff', root['--brand']) < 4.5, 'a white mark on citron would fail the mark rule');
     assert.ok(contrast(dark['--ink'], root['--brand']) < 4.5, 'so would dark\'s --ink: the mark is --brand-ink');
     for (const dir of ['web', 'src']) {
-      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n))) {
+      for (const f of readdirSync(new URL(`../${dir}/`, import.meta.url), { recursive: dir === 'web' }).filter((n) => /\.(css|js|html)$/.test(n))) {
         const src = readFileSync(new URL(`../${dir}/${f}`, import.meta.url), 'utf8');
         assert.doesNotMatch(src, /(^|[^-])color:\s*var\(--brand\)/, `${dir}/${f} draws text in --brand`);
       }
@@ -212,7 +213,7 @@ describe('the color map keeps meanings apart (#188)', () => {
   });
 
   test('buttons show emphasis, not state, and peer choices look alike (#193)', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     for (const [f, src] of [['web/style.css', css], ['web/app.js', app]]) assert.doesNotMatch(src, /btn[ .](go|you)\b/, `${f} has no .btn.go or .btn.you`);
     for (const sel of ['.opt', '.opt:hover', '.pick', '.pick:hover']) {
       const body = css.match(new RegExp(`(?:^|\\n)${sel.replace('.', '\\.')} \\{([^}]*)\\}`))[1];
@@ -245,7 +246,7 @@ describe('the color map keeps meanings apart (#188)', () => {
   });
 
   test('--faint is decoration only: no text anywhere in web/ is drawn in it (#195)', () => {
-    for (const f of readdirSync(new URL('../web/', import.meta.url)).filter((n) => /\.(css|js|html)$/.test(n))) {
+    for (const f of readdirSync(new URL('../web/', import.meta.url), { recursive: true }).filter((n) => /\.(css|js|html)$/.test(n))) {
       const src = readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8');
       assert.doesNotMatch(src, /(^|[^-])color:\s*var\(--faint\)/, `${f} draws text in --faint`);
     }
@@ -258,7 +259,7 @@ describe('the color map keeps meanings apart (#188)', () => {
       assert.match(dot, new RegExp(`class="dot ${state}"`));
       assert.match(dot, new RegExp(`role="img" aria-label="${label}" title="${label}"`));
     }
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     const home = readFileSync(new URL('../web/home.js', import.meta.url), 'utf8');
     assert.doesNotMatch(app + home, /<span class="dot \$\{\w+\.pulse\.state\}/, 'the rail, home and pulse draw their dots with stateDot');
   });
@@ -274,7 +275,7 @@ describe('the color map keeps meanings apart (#188)', () => {
     for (const sel of ['a:not([class]), a.step-where, .link', 'input:focus', '.composer .box:focus-within', '.is-new::after', '.missing-links .link', '.zoom-more button']) {
       assert.doesNotMatch(rule(sel), states, `${sel} uses no state color`);
     }
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /class="st \$\{a\.status\.split\(' '\)\[0\]\}"/, 'the agent strip marks a working agent');
   });
 
@@ -295,10 +296,10 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.doesNotMatch(admin, /class="warn">\$\{esc\(e\.message\)\}/, 'an error from the hub is not amber');
     assert.equal(admin.match(/class="bad">\$\{esc\(e\.message\)\}/g)?.length, 4, 'requests, sources (#356), feedback (#295), workspaces');
     assert.match(admin, /'payment failed' \? 'bad'/);
-    assert.match(web('app.js'), /<span class="bad">⚠ failing: \$\{esc\(c\.last_error\)\}/);
+    assert.match(appSource(), /<span class="bad">⚠ failing: \$\{esc\(c\.last_error\)\}/);
     assert.doesNotMatch(web('join.js'), /className = [^;]*'warn'/, 'join shows the hub\'s refusals and errors in red');
     // What can still go wrong stays amber: missing evidence, a name used by two tokens, a git warning.
-    assert.match(web('app.js'), /<div class="warn">⚠ No evidence attached<\/div>/);
+    assert.match(appSource(), /<div class="warn">⚠ No evidence attached<\/div>/);
   });
 
   test('a token change that brings two meanings too close fails', () => {

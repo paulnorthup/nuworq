@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { mapParts } from '../web/groupmap.js';
+import { appSource } from './appsource.js';
 
 const part = (seq, stage, priority = 'soon') => ({ item: `#${seq}`, stage, priority });
 
@@ -33,7 +34,7 @@ describe("a group's map", () => {
   });
 
   test('the drawer folds at every level, behind a toggle that unfolds the done parts after the open ones; dropped only at 30m', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     const fn = app.slice(app.indexOf('function groupMap('), app.indexOf('\n}\n', app.indexOf('function groupMap(')));
     assert.match(fn, /const \{ open, folded, label, dropped \} = mapParts\(x\.children\);/);
     assert.match(fn, /data-action="toggle" data-key="\$\{esc\(key\)\}" aria-expanded="\$\{shown\}">\$\{shown \? `Hide \$\{label\}` : label\}<\/button>/);

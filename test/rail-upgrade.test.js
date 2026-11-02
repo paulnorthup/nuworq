@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { appSource } from './appsource.js';
 
 // #308: on a Free workspace the rail's Workspace settings carries Upgrade as a tag, not a "·" that wraps alone.
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
 
 test('Workspace settings: the label whole, Upgrade a tag beside it, no separator', () => {

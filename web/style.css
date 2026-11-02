@@ -842,7 +842,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 }
 
 /* Wide (#141): the same sections in two columns, the work and beside it the 30-second answer, which stays in
-   view while you act. app.js lays them out from 1024px (WIDE); below that, the phone's single column. */
+   view while you act. web/views/main.js lays them out from 1024px (WIDE); below that, the phone's single column. */
 @media (min-width: 1024px) {
   #main { max-width: 1360px; padding: var(--sp-7) var(--sp-8) var(--sp-20); }
   .cols { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-6); align-items: start; }

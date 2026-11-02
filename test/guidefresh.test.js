@@ -49,7 +49,7 @@ describe('the getting-started guide names only what nuworq has (#384)', () => {
   before(async () => {
     cli = cliContract(COMMANDS);
     // The web app's text, and Get started's button labels, which the hub sends to web/getstarted.js to draw.
-    webText = [...readdirSync(new URL('../web/', import.meta.url)).filter((f) => /\.(js|html)$/.test(f)).map((f) => `web/${f}`), 'src/getstarted.js'].map(read).join('\n');
+    webText = [...readdirSync(new URL('../web/', import.meta.url), { recursive: true }).filter((f) => /\.(js|html)$/.test(f)).map((f) => `web/${f}`), 'src/getstarted.js'].map(read).join('\n');
     const server = read('src/server.js');
     served = (p) => server.includes(`'${p}'`) || server.includes(`"${p}"`) || server.includes(`\`${p}\``);
   });

@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { saveScroll, restoreScroll, keepScroll } from '../web/scroll.js';
+import { appSource } from './appsource.js';
 
 // Just enough of a page for layout: boxes stack their children 40px apiece, a box's rows sit where its scroll puts
 // them, and the page itself (scrollingElement) is a box at the top of the screen.
@@ -168,7 +169,7 @@ describe('a redraw keeps every place', () => {
 });
 
 describe('the app keeps places', () => {
-  const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  const app = appSource();
   test('render() and dialogs redraw through keepScroll; the side column has a key per page', () => {
     assert.match(app, /keepScroll\(document, \(\) => \{ \/\/ every scrolled area/);
     assert.match(app, /keepScroll\(document, \(\) => \{ m\.innerHTML = `<div class="dialog" data-scroll=/);

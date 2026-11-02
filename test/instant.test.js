@@ -88,7 +88,7 @@ describe('controls and loading', () => {
 
   test('no page shows "Loading…" where content goes', () => {
     const web = new URL('../web/', import.meta.url);
-    for (const f of readdirSync(web).filter((f) => /\.(js|html)$/.test(f))) {
+    for (const f of readdirSync(web, { recursive: true }).filter((f) => /\.(js|html)$/.test(f))) {
       assert.doesNotMatch(readFileSync(new URL(f, web), 'utf8'), /Loading[^"]*…/, f);
     }
   });

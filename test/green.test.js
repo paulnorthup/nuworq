@@ -2,9 +2,10 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { checkChip } from '../web/checks.js';
+import { appSource } from './appsource.js';
 
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 // The declarations of the rule whose selector is exactly sel ('' when there's none).
 const rule = (sel) => css.match(new RegExp(`(?:^|\\n|\\}\\s*)${sel.replace(/[.*+?^${}()|[\]\\:]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[1] ?? '';
 const green = (decl) => /var\(--ok(-tint)?\)/.test(decl);

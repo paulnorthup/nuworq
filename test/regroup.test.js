@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { itemView } from '../src/insight.js';
 import { MODE_RULES, tools } from '../src/protocol.js';
+import { appSource } from './appsource.js';
 
 // #1 Workers goal, #2 Operator lane (#3 its part), #4 a lone item.
 function setup() {
@@ -68,7 +69,7 @@ describe('moving an item to another group, or out of one (#199)', () => {
     human('update', { item: '#4', parent: '#2' });
     assert.equal(view(4).parent.item, '#2');
     assert.deepEqual(said(2), ['You moved #4 into #2: A lone item']);
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /Part of <input data-draft="ei-parent"/);
     assert.match(app, /parent: val\('ei-parent'\)/);
     assert.match(MODE_RULES.shape, /refine it with parent \("" takes it out\)/);

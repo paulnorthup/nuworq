@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Hub, HOUR, MIN } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { readFileSync } from 'node:fs';
+import { appSource } from './appsource.js';
 
 const DAY_PLUS = 25 * HOUR; // past a day: the Worth knowing line's window
 
@@ -63,7 +64,7 @@ describe('a "now" group stalled on a capability reaches Needs you (#201)', () =>
     const unfit = v().attention.find((a) => a.kind === 'unfit');
     assert.equal(unfit.operator, true);
     assert.match(unfit.how[0].where, /^nuworq operator --project site/);
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /a\.kind === 'unfit' && a\.operator\) acts = `<button class="btn ghost small" data-action="dismiss"/);
   });
 });

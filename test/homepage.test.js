@@ -5,6 +5,7 @@ import { Hub } from '../src/core.js';
 import { homeView } from '../src/insight.js';
 import { createServer } from '../src/server.js';
 import { homePage } from '../web/home.js';
+import { appSource } from './appsource.js';
 
 // The page's own helpers, stood in for: pulse and card leave a marker, so order and placement show.
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -74,7 +75,7 @@ describe('the home page', () => {
   });
 
   test('pulse() and card() are the project page\'s own: one definition each, handed to the home', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.equal(app.match(/^function pulse\(/gm)?.length, 1);
     assert.equal(app.match(/^function card\(/gm)?.length, 1);
     assert.match(app, /homePage\(S\.home, \{ z: z\(\), pulse, card, esc, plural, /);
