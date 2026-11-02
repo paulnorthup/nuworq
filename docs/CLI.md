@@ -896,6 +896,33 @@ stdin; a list takes "a,b" or JSON, and a list of objects "x|y" per flag,
 repeated.
 ```
 
+### nuworq distill
+
+```text
+nuworq distill: in a field-notes review: distill memory for people, as Direction
+  today, a gist for each decision and field note, and a recommendation for each
+  field note
+
+Usage
+  nuworq distill [flags]
+
+Flags
+  --direction <line|source>   at most 7 plain lines a person reads in a minute,
+                              each with its source
+  --notes <note|gist|recommend|why|draft>
+                              decisions and field notes, each with a one-line
+                              gist; a field note also with your recommendation
+
+Example
+  nuworq distill --direction "Agents come first: small responses|decision 3"
+      --notes "12|Rebase, test, then push|keep" --as claude-1
+
+Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url.
+Each <argument> can be given as its flag instead. "-" as a value reads it from
+stdin; a list takes "a,b" or JSON, and a list of objects "x|y" per flag,
+repeated.
+```
+
 ### nuworq feedback
 
 ```text

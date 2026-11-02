@@ -593,6 +593,19 @@ export const MIGRATIONS = [
         OR body GLOB 'Autonomy is now "*')`);
     },
   },
+  {
+    // Memory distilled for people (#552, src/fieldnotes.js): a note's one-line gist and, for a field note, the
+    // review's advice ({ do: keep | retire | decide, why, draft }); the project's Direction today ([{ line, source }]),
+    // and the inputs it was distilled from (distilled_sig) and when.
+    name: 'memory distilled for people: gists, advice and direction',
+    up(db) {
+      addColumn(db, "ALTER TABLE notes ADD COLUMN gist TEXT NOT NULL DEFAULT ''");
+      addColumn(db, "ALTER TABLE notes ADD COLUMN advice TEXT NOT NULL DEFAULT ''");
+      addColumn(db, "ALTER TABLE projects ADD COLUMN direction TEXT NOT NULL DEFAULT '[]'");
+      addColumn(db, "ALTER TABLE projects ADD COLUMN distilled_sig TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'ALTER TABLE projects ADD COLUMN distilled_at INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

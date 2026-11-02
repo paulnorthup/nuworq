@@ -12,7 +12,7 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue, heldI
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
-import { fieldNotesFor, reviewUp, reviewed, setAlways, ALWAYS_MAX } from './fieldnotes.js';
+import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease } from './releases.js';
 import { builtWhatItReviews, reviewRelease } from './security.js';
 import { sandboxHosts } from './sandbox.js';
@@ -64,7 +64,7 @@ const answerFor = (q) => (String(q.answered_by).startsWith('github:') ? quotedFr
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'always', 'check', 'release'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'always', 'keep', 'promote', 'check', 'release'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 // Which agent operations a person may use on the agent routes (#469): what their role allows on the human
 // routes. A member proposes and comments, never claims, reviews or gets a push token. null: every one.
@@ -1735,7 +1735,7 @@ export class Hub extends EventEmitter {
   }
 
   decisions(p) {
-    return this.q(`SELECT id, body, at FROM notes WHERE project_id = ? AND kind = 'decision' AND active = 1 ORDER BY at`).all(p.id);
+    return this.q(`SELECT id, body, gist, at FROM notes WHERE project_id = ? AND kind = 'decision' AND active = 1 ORDER BY at`).all(p.id);
   }
 
   // Everything an agent needs to work an item, and nothing it doesn't.
@@ -2472,8 +2472,10 @@ const NOTES_HINT = (item, p) => [
   `You hold #${item.seq}, a field-notes review, for ${dur(LEASE_MS)}. No branch. For each note its summary lists, check whether the lesson is now in the code, the agents' guide or a test (search the repo for it), and whether another note says the same.`,
   p.autonomy === 'full'
     ? 'Retire each one whose lesson is built in with retire { notes, reason }, the reason naming where it lives now. Merge duplicates: learn the combined note, then retire { notes: [the duplicates], into: <its id>, reason }. Keep the rest.'
-    : `Don't retire anything yourself in this project: ask the person one question listing the notes to retire or merge and why (the reason naming where each lesson lives now); they retire them on the project page.`,
-  `Then submit #${item.seq} with what you kept, merged and retired; that finishes it.`,
+    : `Don't retire anything yourself in this project: recommend it with distill (recommend retire, and why: where the lesson lives now), and the person decides with one tap on the project page.`,
+  // Memory for people (#552): what distill records, and that a decision is always a person's.
+  'Then distill { direction, notes }: Direction today, a one-line gist for each decision and field note, and for each field note keep, retire or decide (a draft decision a person accepts; never make one yourself).',
+  `Then submit #${item.seq} with what you kept, merged, retired and recommended; that finishes it.`,
   MODE_RULES.notes,
 ].join(' ');
 // Infra work is built by workers; only its live step needs the operator (#272).
@@ -3340,6 +3342,13 @@ const AGENT_OPS = {
     return { ok: true, retired: done, hint: 'On the record with your reason; a person can bring any back.' };
   },
 
+  // Memory distilled for people (#552, src/fieldnotes.js distill): Direction today, gists and recommendations.
+  distill(p, agent, args) {
+    const review = this.q(`SELECT * FROM items WHERE project_id = ? AND notes_review = 1 AND holder = ? AND stage = 'active'`).get(p.id, agent);
+    if (!review) throw new UserError('Only a field-notes review distills memory', { status: 403, hint: 'The hub opens one when the decisions, steering or field notes change, and weekly; next offers it.' });
+    return distill(this, p, agent, review, args);
+  },
+
   signoff(p, agent, args) {
     const held = this.heldBy(p, agent);
     const note = str(args.headline) || 'Signed off';
@@ -3744,6 +3753,27 @@ const HUMAN_OPS = {
     if (!!n.always === !!on) return;
     if (!setAlways(this, n, on)) throw new UserError(`At most ${ALWAYS_MAX} field notes are always shown`, { status: 409, hint: 'Stop always showing one of them first.' });
     this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'always', headline: `${You(by)} ${on ? 'always shows' : 'stopped always showing'} a field note: ${clip(n.body, 100)}` });
+  },
+
+  // A review's recommendation for a field note (#552), decided with one tap: keep it (the advice goes), or make it a
+  // decision (promote: the draft, or the person's edit of it, becomes a decision and the note retires).
+  keep(p, { note }, by) {
+    const n = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(Number(note), p.id);
+    if (!n) throw new UserError(`No field note ${note}`, { status: 404 });
+    this.q('UPDATE notes SET advice = ? WHERE id = ?').run(JSON.stringify({ do: 'keep', why: 'kept by a person', by }), n.id);
+    this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'kept', headline: `${You(by)} kept a field note: ${clip(n.gist || n.body, 100)}` });
+  },
+
+  promote(p, { note, body }, by) {
+    const n = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning' AND active = 1`).get(Number(note), p.id);
+    if (!n) throw new UserError(`No active field note ${note}`, { status: 404 });
+    let draft = '';
+    try { draft = JSON.parse(n.advice || '{}').draft ?? ''; } catch { /* no advice */ }
+    const text = str(body) || draft;
+    if (!text) throw new UserError('Say the decision', { hint: 'body: the standing rule, as every agent should read it.' });
+    this.addNote(p, 'decision', text, null, null, by);
+    this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
+    this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'retired', headline: `${You(by)} made a field note a decision: ${clip(text, 100)}`, data: { note: n.id } });
   },
 
   comment(p, { item, body }, by) {

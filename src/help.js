@@ -427,6 +427,7 @@ const AGENT = {
   feedback: { example: 'nuworq feedback "next gave me an item I can\'t build" --as claude-1' },
   look: { example: 'nuworq look 12 --as claude-1' },
   retire: { example: 'nuworq retire 31 --reason "built into checkin" --as claude-1' },
+  distill: { example: 'nuworq distill --direction "Agents come first: small responses|decision 3" --notes "12|Rebase, test, then push|keep" --as claude-1' },
   signoff: { example: 'nuworq signoff "Nothing left for me" --as claude-1' },
 };
 const AGENT_NOTE = 'Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url. Each <argument> can be given as its flag instead. "-" as a value reads it from stdin; a list takes "a,b" or JSON, and a list of objects "x|y" per flag, repeated.';
