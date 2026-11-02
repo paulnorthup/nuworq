@@ -2166,7 +2166,6 @@ export class Hub extends EventEmitter {
     // A field the operation doesn't take is a typo, never silently dropped (#521).
     const odd = unknownField(op, args);
     if (odd) throw new UserError(`${op} has no field "${odd.field}"${odd.near ? `: did you mean "${odd.near}"?` : ''}`, { hint: `See the ${op} tool's parameters, or: nuworq help ${op}` });
-    refuseSecrets(args);
     refuseLong(args);
     this.sweep();
     const agent = this.requireAgent(name);
@@ -2197,6 +2196,9 @@ export class Hub extends EventEmitter {
       }
     }
     this.throttleWrite(p, agent, op, args ?? {});
+    // After the write limit, so one agent can't run the check more often than it may write; still before
+    // anything from args is stored (the project and agent above come from the call, not its fields).
+    refuseSecrets(args);
     const here = normDir(root);
     // Learn where the project lives the first time an agent names it from a folder, but only a folder
     // that is a clone of the project's repository: a worker started in the wrong repo must not teach it.
