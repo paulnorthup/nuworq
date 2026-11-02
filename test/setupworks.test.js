@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { SETUP, SETUP_LEAD, setupLine, setupSection } from '../web/connect.js';
 import { commandsIn } from '../web/commands.js';
-import { STEPS, SETUP_TITLE, guidePage } from '../src/userguide.js';
+import { STEPS, SETUP_TITLE, guidePage, sessionLines } from '../src/userguide.js';
 import { getStarted } from '../src/getstarted.js';
 import { bare, GET_GOING, command } from '../src/help.js';
 
@@ -22,6 +22,19 @@ describe('the setup that works, everywhere the same (#489)', () => {
     assert.deepEqual(SETUP.map((s) => commandsIn(s.how)), [['nuworq run --install --workers auto'], ['claude', '/nuworq:operator'], ['/nuworq:shaper']]);
     assert.match(SETUP_LEAD, /how nuworq itself is built/);
     assert.match(SETUP_LEAD, /Starting with just a shaper is fine/);
+  });
+
+  // #646: the command first, then the form without the plugin; the copy block still copies the command alone.
+  test('the operator and shaper lines name the command first, then the no-plugin form', () => {
+    for (const k of ['operator', 'shaper']) {
+      const s = SETUP.find((x) => x.key === k);
+      assert.match(s.how, new RegExp(`type \`/nuworq:${k}\` \\(or "/nuworq-${k}" without the plugin\\)$`), k);
+      assert.equal(commandsIn(s.how).at(-1), `/nuworq:${k}`);
+      const lines = sessionLines(s);
+      assert.equal(lines.at(-1), `(or "/nuworq-${k}" without the plugin)`, 'in the guide, a note after the command: no colon');
+      assert.equal(lines.at(-2), `\`/nuworq:${k}\``);
+      assert.match(lines.at(-3), /^Then type:$|type:$/, 'words before a command still lead into it');
+    }
   });
 
   test('the guide: a section right after Install and connect your machine, each session in its words, with its commands to copy', () => {
