@@ -208,4 +208,27 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     const owner = await people(tok.olivia);
     assert.equal(owner.json.find((p) => p.handle === 'mo').email, 'mo@acme.test', 'an owner does');
   });
+
+  test("workers of one runner on a person's device token review each other's work (#658)", async () => {
+    hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
+    // A person's machine: one device token, no runner tag, running nuworq run's workers and an interactive session.
+    const device = auth.createToken('olivia-mbp', 'agent', { mintedBy: 'olivia' });
+    for (const w of ['mbp-w1', 'mbp-w2']) {
+      assert.equal((await op('checkin', { token: device, agent: w, body: { role: 'worker', runner: 'olivia-mbp' } })).status, 200, w);
+    }
+    const build = async (agent, title) => {
+      const { item } = hub.humanOp('api', 'create', { title, acceptance: 'x' });
+      assert.equal((await op('claim', { token: device, agent, body: { item } })).status, 200);
+      assert.equal((await op('submit', { token: device, agent, body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+      return item;
+    };
+    const review = (agent, item) => op('review', { token: device, agent, body: { item, verdict: 'accept', headline: 'looks right' } });
+    const built = await build('mbp-w1', 'Built by one worker of the runner');
+    assert.equal((await review('mbp-w2', built)).status, 200, "a sibling worker reviews it, as before #622");
+    // #622's case stands: two plain sessions on one token are one builder.
+    const own = await build('mbp-session', 'Built by a session on the device token');
+    const r = await review('mbp-other-session', own);
+    assert.notEqual(r.status, 200);
+    assert.match(r.json.error, /can't review your own work/);
+  });
 });
