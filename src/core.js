@@ -13,7 +13,7 @@ import { prMerged, prSeen, checksSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
-import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease } from './releases.js';
+import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease, settleTags } from './releases.js';
 import { builtWhatItReviews, reviewRelease } from './security.js';
 import { sandboxHosts } from './sandbox.js';
 import { BUDGET as DEFAULT_BUDGET } from './setup.js';
@@ -875,7 +875,11 @@ export class Hub extends EventEmitter {
   }
 
   remoteChanged(remote) {
-    for (const p of this.projects()) if (this.remotesOf(p).includes(remote)) this.changed(p);
+    for (const p of this.projects()) {
+      if (!this.remotesOf(p).includes(remote)) continue;
+      this.tx(() => settleTags(this, p)); // a release tag made by hand shows: its question closes (#760)
+      this.changed(p);
+    }
     this.refreshBehindSoon(); // a fetch moved its branches (#535)
   }
 
@@ -3415,6 +3419,7 @@ const AGENT_OPS = {
 
   next(p, agent, args) {
     // An operator answers what agents can't settle alone before anything else: each answer unparks someone's work.
+    if (this.isOperator(p, agent)) settleTags(this, p, { fresh: true }); // a tag already made isn't handed out (#760)
     const oq = this.isOperator(p, agent) ? this.operatorQuestion(p, agent) : null;
     if (oq) {
       // Held for this operator like an item (#467), so a second operator's next moves on; a peek holds nothing.
