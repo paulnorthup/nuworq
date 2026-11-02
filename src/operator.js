@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { OPS, OPERATOR_WAIT } from './protocol.js';
+import { flag, short, GIT_RUNS, rebaseRuns } from './gitrules.js';
 
 const OS = { darwin: ['macos', 'macOS'], linux: ['linux', 'Linux'], win32: ['windows', 'Windows'] };
 const first = (s) => String(s ?? '').trim().split('\n')[0];
@@ -92,14 +93,8 @@ export function sshHost(check) {
 // Claude Code matches rule text: `*` is any text, spaces included, and `:*` means "and anything" only at the
 // very end. Commands it allows outright; checkout (its path form discards work) and the rest of remote still ask.
 export const OPERATOR_GIT_CMDS = ['status', 'diff', 'log', 'show', 'fetch', 'pull', 'switch', 'add', 'commit', 'rebase', 'push', 'branch', 'tag', 'worktree', 'rev-parse', 'ls-remote'];
-// A flag, wherever it sits: first (`git push -fu`) or later (`git push origin x --force`), with its value attached or not.
-const flag = (cmd, ...flags) => flags.flatMap((f) => [`Bash(${cmd} ${f}*)`, `Bash(${cmd} * ${f}*)`]);
-// A short flag bundled with others too (#607), e.g. `-uf` for -f: letters are the command's short flags, and a
-// bundle starts with one of them, so `--dry-run` never matches. Rule text can't say "within one word", so a later
-// word may make it match (`-u origin feature`): that command asks, which is the safe side.
-const short = (cmd, letters, ...targets) => targets.flatMap((t) => flag(cmd, `-${t}`, ...[...letters].filter((x) => x !== t).map((x) => `-${x}*${t}`)));
-// Options that make git run a program or write a file, denied on every git command the operator may run (#607).
-const GIT_RUNS = ['--upload-pack', '--receive-pack', '--exec', '--output', '--ext-diff', '--textconv'];
+// flag, short and GIT_RUNS (src/gitrules.js): a flag wherever it sits, a short one bundled, and the options that make
+// git run a program or write a file, denied on every git command the operator may run (#607).
 // nuworq's commands an operator runs without prompts (#607): the agent operations, which only talk to the hub,
 // and what reads: --detect, --check, the listener and the guide. Never `nuworq:*`: other commands start
 // programs, write files or change this machine's settings, so they ask.
@@ -129,7 +124,7 @@ export function rules({ host = null } = {}) {
     // Running a program or writing a file (#607): through the transport, a configured diff or textconv driver,
     // --output, or rebase's exec, interactive editor and merge strategy (a git-merge-* on PATH).
     ...git.flatMap((c) => flag(`git ${c}`, ...GIT_RUNS)),
-    ...flag('git rebase', '--interactive', '--strategy', '--edit-todo'), ...short('git rebase', 'CfikmnqrsvxX', 'x', 'i', 's'),
+    ...rebaseRuns(),
     ...flag('git pull', '--strategy', '--rebase=i'), ...short('git pull', '46afknqrstuv', 's'),
     ...short('git ls-remote', 'bhqtu', 'u'),
     // This machine's operator settings: its infra check is a command --detect runs (they also need a person at a

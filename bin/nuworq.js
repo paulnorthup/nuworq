@@ -10,7 +10,7 @@ import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneD
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
-import { sandboxSettings, filePermissions, projectCommands, sandboxHosts } from '../src/sandbox.js';
+import { sandboxSettings, filePermissions, projectCommands, sandboxHosts, workerGitDenies } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -880,9 +880,11 @@ function workerSettings(sandbox, { own = false } = {}) {
     const file = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'plugins', 'installed_plugins.json');
     plugins = JSON.parse(readFileSync(file, 'utf8')).plugins ?? {};
   } catch { /* none installed */ }
+  // The file denies, and git's options that run a program (#625), which hold whatever the allowlist says.
   const files = sandbox && filePermissions(sandbox);
+  const deny = sandbox && [...files.deny, ...workerGitDenies({ home: sandbox.landsHere ? sandbox.home : null })];
   return JSON.stringify({ enabledPlugins: Object.fromEntries(Object.keys(plugins).map((p) => [p, false])),
-    ...(sandbox ? { sandbox: sandboxSettings(sandbox), permissions: own ? { deny: files.deny } : files } : {}) });
+    ...(sandbox ? { sandbox: sandboxSettings(sandbox), permissions: own ? { deny } : { ...files, deny } } : {}) });
 }
 
 // A worker's git, set in its environment (#472). credential.helper's empty value drops every helper set before it
