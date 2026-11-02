@@ -103,9 +103,9 @@ describe('a single hub moves into workspaces mode (#204)', () => {
     const me = dir.identity('paul@example.com');
     assert.deepEqual(dir.orgsOf(me, spaces).map((o) => [o.workspace, o.handle, o.role]), [['main', 'paul', 'owner']]);
     const sid = dir.createSession(me.id);
-    const enter = await call('GET', '/api/orgs/main/enter', null, null, { cookie: `nuworq_id=${sid}` });
-    assert.equal(enter.status, 302);
-    assert.match(enter.headers.get('location'), /\/w\/main\/api\/oauth\/finish\?ticket=/);
+    const enter = await call('POST', '/api/orgs/main/enter', null, {}, { cookie: `nuworq_id=${sid}`, origin: base });
+    assert.equal(enter.status, 200);
+    assert.match((await enter.json()).go, /\/w\/main\/api\/oauth\/finish\?ticket=/, 'a member of the adopted hub goes straight in');
   });
 
   test('bind-installation binds one installation by hand; a bad id or a missing workspace is refused', async () => {

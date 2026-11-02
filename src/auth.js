@@ -171,8 +171,9 @@ export class Auth {
   // invite bound to it (it sets their role; a new person gets a handle from the email), else a person someone made
   // by typing the email, else null. A role typed for an email before its owner ever signed in doesn't take effect
   // on its own (#470): unless an invite they accepted gave it, they come in as a viewer, and held is the role an
-  // owner may now confirm.
-  signInByEmail(email, provider) {
+  // owner may now confirm. join: false (#630) asks first: someone not yet a member gets { pending: { role,
+  // invited_by } } and nothing changes, so only their own yes (join: true) adds them.
+  signInByEmail(email, provider, { join = true } = {}) {
     email = String(email ?? '').trim().toLowerCase();
     if (!email.includes('@')) return null;
     this.db.exec('BEGIN IMMEDIATE');
@@ -183,6 +184,12 @@ export class Auth {
         const typed = this.db.prepare('SELECT * FROM people WHERE email = ? AND verified_at IS NULL ORDER BY id').get(email);
         const inv = this.db.prepare('SELECT * FROM invites WHERE email = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at >= ? ORDER BY id').get(email, t);
         if (!typed && !inv) { this.db.exec('ROLLBACK'); return null; }
+        // Made by accepting an invite link to this email: they already said yes, there.
+        const accepted = typed && !inv && this.db.prepare('SELECT 1 FROM invites WHERE used_by = ? AND email = ? AND used_at >= ?').get(typed.handle, email, typed.created_at);
+        if (!join && !accepted) {
+          this.db.exec('ROLLBACK');
+          return { pending: { role: inv ? inv.role : 'viewer', invited_by: inv?.created_by || '' } };
+        }
         // A verified sign-in never vouches for a session it didn't create (#612): whoever opened an invite link to this
         // email was signed in as this row without proving it, so what they hold ends before the row becomes verified.
         if (typed) this.revokeUnproven(typed);
@@ -201,7 +208,6 @@ export class Auth {
           joined = true;
         } else {
           // Made by accepting an invite link to this email: that invite gave the role, so it stands.
-          const accepted = this.db.prepare('SELECT 1 FROM invites WHERE used_by = ? AND email = ? AND used_at >= ?').get(typed.handle, email, typed.created_at);
           const role = accepted ? typed.role : 'viewer';
           if (role !== typed.role) held = typed.role;
           joined = !accepted; // accepting the link already said they joined
