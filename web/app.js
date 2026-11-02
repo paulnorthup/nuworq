@@ -366,7 +366,9 @@ function route() {
     // Its header and pulse in the first frame, the whole page in a task after it (#637): a refresh that answers at
     // once (a view fetched ahead) waits for that too, so it never builds the big page before the header paints.
     shellOnly = slug;
-    paintInTwo(() => render({ force: true }), () => {
+    // Nothing of the page it leaves is kept, so it goes first: diffing a big project's page into the small shell
+    // would cost the first frame what the shell saves it.
+    paintInTwo(() => { $('#main').replaceChildren(); render({ force: true }); }, () => {
       if (shellOnly !== slug) return;
       shellOnly = null;
       if (S.slug === slug) render({ force: true });
