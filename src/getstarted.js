@@ -1,8 +1,9 @@
 // Get started (#117): from sign-in to a first landed item, each step checked off from what the hub already
 // knows. getStarted() is pure; facts() asks the database. Once every step is done (or the person hides the
 // card) that is recorded, and the card never comes back for them, even if a step later comes undone.
+import { SETUP } from '../web/connect.js';
 
-export const RECENT_MS = 7 * 24 * 3600_000; // "an agent is running": one checked in within a week
+export const RECENT_MS = 7 * 24 * 3600_000; // "it's running": it reported or checked in within a week
 
 // Who to ask for the GitHub App when the viewer can't create it: the hub's owners by handle, or whoever runs a
 // shared hub (its app is the host's to set up).
@@ -25,7 +26,8 @@ export function getStarted(s) {
     s.project && { key: 'repo', label: 'Link a project to its repository', done: !!s.repo, action: { label: '+ repo', ui: 'link-repo', slug: s.recent } },
     s.github !== false && { key: 'github', label: 'Connect GitHub', done: s.app === 'installed', action: github },
     { key: 'machine', label: 'Install and connect your machine', done: !!s.machine, action: { label: 'Connect your machine', ui: 'connect' } },
-    { key: 'agent', label: 'Start an agent', done: !!s.agent, action: { label: 'Start an agent', ui: 'connect', command: 'worker' } },
+    // The setup that works (#489, web/connect.js's SETUP): each step shows its session's commands while it's next.
+    ...SETUP.map(({ key, title }) => ({ key, label: title, done: !!s[key], action: { label: title, ui: 'connect', command: key } })),
     { key: 'landed', label: 'Watch your first item land', done: !!s.landed, action: s.board ? { label: 'Open the board', href: `#/p/${encodeURIComponent(s.board)}` } : { label: '+ Project', ui: 'new-project' } },
   ].filter(Boolean).map(({ action, ...step }) => (step.done ? step : { ...step, action }));
   return { complete: steps.every((x) => x.done), steps };
@@ -56,10 +58,17 @@ export function facts(hub, { viewer = 'you', workspaces = false, app = 'none', c
     GROUP BY p.id ORDER BY MAX(COALESCE(a.last_seen, 0)) DESC, p.id LIMIT 1`)?.slug ?? null;
   // Where to link a repository: the newest project.
   const recent = q(`SELECT slug FROM projects WHERE archived_at = 0 ORDER BY created_at DESC, id DESC LIMIT 1`)?.slug ?? null;
+  // The setup that works: a runner reported for one of these projects (its scope: their slugs, '' for all) within a
+  // week; an operator checked in within a week; a shaper ever checked in, or proposed.
+  const week = hub.now() - RECENT_MS;
+  const slugs = new Set(hub.q('SELECT slug FROM projects WHERE archived_at = 0').all().map((r) => r.slug));
+  const workers = hub.q('SELECT scope FROM runners WHERE seen_at >= ?').all(week).some((r) => !r.scope || r.scope.split(',').some((x) => slugs.has(x)));
   return {
     workspaces, org: workspaces && !!person, root, app, canCreateApp, installUrl, github, owners,
-    project, repo, recent, machine,
-    agent: !!q(`SELECT 1 FROM agents WHERE last_seen >= ? AND project_id IN (${live})`, hub.now() - RECENT_MS),
+    project, repo, recent, machine, workers,
+    operator: !!q(`SELECT 1 FROM agents WHERE role = 'operator' AND last_seen >= ? AND project_id IN (${live})`, week),
+    shaper: !!q(`SELECT 1 FROM agents a WHERE role = 'shaper' AND project_id IN (${live})
+      AND (last_checkin > 0 OR EXISTS (SELECT 1 FROM items i WHERE i.project_id = a.project_id AND i.created_by = a.name))`),
     landed: !!q(`SELECT 1 FROM events WHERE type = 'landed' AND project_id IN (${live})`),
     board,
   };

@@ -69,7 +69,7 @@ describe('the getting-started guide names only what nuworq has (#384)', () => {
 
   test('a renamed flag, an unknown command, a missing label or page each fail, naming it', () => {
     const m = mentions();
-    const renamed = { ...m, commands: m.commands.map((c) => c.replace('nuworq run --install', 'nuworq run --instal')) };
+    const renamed = { ...m, commands: m.commands.map((c) => (c === 'nuworq run --install' ? 'nuworq run --instal' : c)) };
     assert.deepEqual(stale(renamed, { cli, webText, served }), ['flag --instal (in `nuworq run --instal`) isn\'t a flag of nuworq run']);
     assert.deepEqual(stale({ commands: ['nuworq lanch --run'] }, { cli, webText, served }), ['command "nuworq lanch" (in `nuworq lanch --run`) isn\'t in nuworq help']);
     assert.deepEqual(stale({ commands: ['--no-mpc'] }, { cli, webText, served }), ['flag --no-mpc isn\'t in nuworq help']);

@@ -1,6 +1,6 @@
 // nuworq UI. No framework: state → HTML strings → one delegated event handler.
 // Zoom levels mirror 0-30-5-30: what isn't relevant at a level simply isn't rendered.
-import { connectCommands } from './connect.js';
+import { connectCommands, SETUP, setupSection } from './connect.js';
 import { ago, startTicking } from './ago.js';
 import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { getStartedCard } from './getstarted.js';
@@ -498,7 +498,7 @@ const owner = () => S.person?.role === 'owner';
 const analytics = () => analyticsPage(S.outcomes, { esc, dur, period: S.period, open: S.open.has('an-agents'), wide: WIDE.matches, columns });
 
 // The home, across every project (web/home.js): the pulse, what needs you, a line per project.
-const getStarted = () => getStartedCard(S.gs, { worker: S.info ? connectCommands(S.info, location).worker : '' });
+const getStarted = () => getStartedCard(S.gs, { commands: Object.fromEntries(SETUP.map((s) => [s.key, s.how])) });
 function overview() {
   if (!S.projects.length && S.me?.org) return firstProject();
   if (!S.projects.length || !S.home) {
@@ -1344,7 +1344,7 @@ function connectStep(r) {
     ${c.clone ? `<h4>Get nuworq on the machine (once)</h4>${commandBlocks(c.clone)}` : ''}
     <h4>Set it up for ${esc(S.me.org)}</h4><p class="lead">Paste it in a terminal, in a clone of the repository. It installs nuworq (Node 24 or newer), signs you in through the browser, saves a fresh agent token for this workspace, and registers nuworq with Claude Code, Codex, opencode and pi if they're installed. Then it asks to staff ${esc(r.name)} with workers and start an operator.</p>${commandBlocks(c.setup)}
     <h4>Then, and after any restart</h4><p class="lead">The runner with automatic workers, and an operator for each project that isn't parked, each in its own terminal. It starts only what's missing.</p>${commandBlocks(c.up)}
-    <h4>Start a worker in a clone of the repository</h4>${commandBlocks(c.worker)}
+    ${setupSection()}
     <div class="foot"><button class="btn primary" data-action="goto-new" data-slug="${esc(r.slug)}">Open the board</button></div>`);
 }
 
@@ -1481,12 +1481,14 @@ async function connect() {
     <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
     <h4>Set up this machine (once)</h4>
     <p class="lead">Paste it in a terminal, in a clone of the project. ${c.verified ? '<span data-new="verified-install">It downloads this hub\'s newest signed release and checks its signature against nuworq\'s release key; if that doesn\'t match, it stops before anything installs.</span> Then it installs nuworq (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), which keeps itself up to date.' : c.install ? 'It installs nuworq from this hub (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), and keeps it up to date.' : 'This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed first.'} It signs you in through the browser, then asks, one at a time, to install the Claude Code plugin, staff the project with workers here, and start an operator. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.setup)}
-    <h4>Then, and after any restart</h4><p class="lead">The one command: it keeps the runner going with automatic workers, and opens an operator in its own terminal for each project that isn't parked (tmux when you have it). Run it again any time: it starts only what's missing. <code>nuworq down</code> stops it all.</p>${commandBlocks(c.up)}
-    <h4>Workers by hand</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${commandBlocks(c.run)}
-    <p class="lead">One worker on its own, wherever work is waiting:</p>${commandBlocks(c.worker)}
+    ${setupSection()}
+    <h4>Then, and after any restart</h4><p class="lead">The first two for every project that isn't parked, in one command: the runner with automatic workers, and an operator in its own terminal for each (tmux when you have it). Run it again any time: it starts only what's missing. <code>nuworq down</code> stops it all.</p>${commandBlocks(c.up)}
     ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
-    ${z() >= 2 ? `<h3>Setting up by hand</h3><p class="lead">What <code>nuworq connect</code> does for you. No token or address goes in these: connect saved both, and <code>nuworq mcp</code> reads them.</p>
+    ${z() >= 2 ? `<h3>Setting up by hand</h3>
+    <h4>Workers in this terminal</h4><p class="lead">One per waiting item, on the projects you let it staff, each in its own git worktree and branch. Ctrl-C stops them. Add <code>--browser</code> for workers that check UI work.</p>${commandBlocks(c.run)}
+    <p class="lead">One worker on its own, wherever work is waiting:</p>${commandBlocks(c.worker)}
+    <p class="lead">What <code>nuworq connect</code> does for you. No token or address goes in these: connect saved both, and <code>nuworq mcp</code> reads them.</p>
     <h4>The Claude Code plugin</h4><p class="lead">The MCP server and the nuworq skills in one install. Connect this machine all the same: the plugin holds no token.</p>${commandBlocks(c.plugin)}
     <h4>Claude Code</h4>${commandBlocks(c.claude)}
     <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}

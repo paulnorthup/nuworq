@@ -11,6 +11,16 @@
 // is a command to copy. test/guidefresh.test.js fails when a `nuworq …` command or flag isn't in the CLI's help,
 // a **label** isn't in any web/ file, or a /path isn't served by src/server.js.
 // An item that changes what a new person does updates this file in the same change.
+// The setup that works (#489) is one step whose sessions are web/connect.js's SETUP, each a part with its own id,
+// so Get started's Start workers, Start an operator and Shape work with a shaper link straight to it.
+import { SETUP, SETUP_LEAD, setupLine } from '../web/connect.js';
+import { commandParts } from '../web/commands.js';
+
+export const SETUP_TITLE = 'The setup that works';
+
+// A session's lines in the guide's marks: what it does, where and why, then its commands, each to copy.
+export const sessionLines = (s) => [setupLine(s),
+  ...commandParts(s.how).map((x) => (x.cmd ? `\`${x.cmd}\`` : `${x.text.charAt(0).toUpperCase()}${x.text.slice(1)}:`))];
 
 export const STEPS = [
   {
@@ -75,23 +85,34 @@ export const STEPS = [
     check: 'The terminal says the machine is connected, and Get started ticks Install and connect your machine off.',
   },
   {
-    key: 'agent', title: 'Start an agent', glance: 'Work beside one in Claude Code, or let workers run on their own.',
+    key: 'setup', title: SETUP_TITLE, glance: 'Workers on `nuworq run`, an operator in a terminal, a shaper in the Claude Code app.',
+    sessions: SETUP,
     hand: [
+      SETUP_LEAD,
+      'Add workers and an operator once there\'s work for them. The operator and the shaper are Claude Code with the nuworq plugin, which `nuworq connect` offers to install (or see Start an agent, below). Workers work only on the projects you let them staff: connect asks, or open the project, then **Settings**, and switch on **Staff it with nuworq run**.',
+    ],
+    auto: '`nuworq up` starts the first two for every project that isn\'t parked, in one go: the runner as a service with automatic workers, and an operator in its own terminal (tmux when you have it). Run it again after any restart: it starts only what\'s missing. `nuworq down` stops what it started. `nuworq operator --start` opens one operator here, with its routine commands allowed; `nuworq run --uninstall` removes the service.',
+    check: 'Workers and an operator show on the project\'s board, and Get started ticks off Start workers, Start an operator and Shape work with a shaper.',
+  },
+  {
+    key: 'agent', title: 'Start an agent', glance: 'Beyond the setup that works: one agent beside you, or workers by hand.',
+    hand: [
+      'Start with The setup that works, above. These are the other ways.',
       'Beside you: install the Claude Code plugin once (two commands), open Claude Code in a clone of the project\'s repository, and say "Work on <project> using nuworq". It checks in, takes the most useful item, and you watch and steer it in your session.',
       '`claude plugin marketplace add paulnorthup/nuworq#release`',
       '`claude plugin install nuworq@nuworq --scope user`',
       'In Claude Code\'s `/plugin` menu, pick the option for you (all projects), not one for this repository only: then every project gets `/nuworq:shaper` and `/nuworq:operator`.',
-      'On their own: workers are headless agents, each in its own git worktree with a branch per item. One worker, wherever work is waiting:',
+      'Workers by hand, in a terminal, until Ctrl-C stops them. One worker, wherever work is waiting:',
       '`nuworq worker --agent claude --run`',
-      'Or keep up to three going on the projects you let it staff. First open the project, then **Settings**, and switch on **Staff it with nuworq run** (the board also offers **Let nuworq run staff this project**). Ctrl-C stops them. Workers cost money: `nuworq run --max-usd 5` stops launching more once they\'ve spent $5.',
+      'Or up to three on the projects you let it staff (the board also offers **Let nuworq run staff this project**). Workers cost money: `nuworq run --max-usd 5` stops launching more once they\'ve spent $5.',
       '`nuworq run --workers 3 --agent claude`',
       'Workers can run on other agents too: `--agent codex`, or `--agent opencode` or `--agent pi` with a model as <provider>/<model> (`--model ollama/qwen3.8:27b-mtp-q4_K_M` runs a local Ollama model at no cost). opencode and pi have no sandbox, so their workers run only on projects without a remote. A pi worker gets a config folder of its own: your pi extensions, skills and sign-ins stay out, so give its provider key in the environment (e.g. ANTHROPIC_API_KEY).',
     ],
     auto: '`nuworq run --install` installs the runner as a service (a LaunchAgent on macOS, a systemd user unit on Linux), so workers keep going after you close the terminal or restart. When nuworq updates, it moves onto the new version by itself once its workers finish. It adds that one service; its log is ~/.nuworq/logs/run.log. `nuworq run --uninstall` removes it.',
-    check: 'The agent shows on the project\'s board, on an item or checked in, and Get started ticks Start an agent off.',
+    check: 'The agent shows on the project\'s board, on an item or checked in.',
   },
   {
-    key: 'plan', title: 'Plan the first work', glance: 'Write what you want done on the board, or plan it with an agent.',
+    key: 'plan', title: 'Plan the first work', glance: 'Plan it with a shaper, or write it on the board yourself.',
     hand: [
       'On the project\'s board, tap **+ Work**, write what should be true when it\'s done (for example "Users can reset their password"), and tap **Propose**.',
       'Already know exactly what done means? Tap **+ What done means, context, priority**, fill it in, and tap **Add to Ready** to put it straight into the queue. **Waits on** there holds it until a URL answers or a person replies.',
@@ -99,7 +120,7 @@ export const STEPS = [
       '`nuworq propose "Exports retry when storage times out" --acceptance "A timed-out export retries 3 times, then fails with a clear error"`',
       'Proposals are shaped into ready work by agents, or wait for your OK, depending on the project\'s autonomy (below).',
     ],
-    auto: 'In Claude Code with the plugin, type `/nuworq:shaper` and say what you want and why. The shaper reads the project, asks a few questions, recommends a milestone and its parts, and proposes them, each with what done means, once you say so. You decide; it never decides for you.',
+    auto: 'The shaper from The setup that works, above: in the Claude Code app, type `/nuworq:shaper` and say what you want and why. It reads the project, asks a few questions, recommends a milestone and its parts, and proposes them, each with what done means, once you say so. You decide; it never decides for you.',
     check: 'The items are on the board, under Proposed or Ready.',
   },
   {
@@ -146,7 +167,7 @@ export const ESSENTIALS = [
     key: 'operator', title: 'The operator', glance: 'An attended agent with your permissions, for what workers can\'t do.',
     body: [
       'Workers can\'t touch live infrastructure, sign releases or administer GitHub. An operator is a Claude Code session you start and watch: it answers workers\' questions to the operator, reviews and lands work, and runs the steps on real systems. It asks you only what only you can do.',
-      '`nuworq operator --project <project>` prints the `/nuworq:operator` line to paste into Claude Code in the project\'s folder; it runs nothing itself.',
+      'Start it as in The setup that works: Claude Code in a terminal of its own. `nuworq operator --project <project>` prints the `/nuworq:operator` line to paste into Claude Code in the project\'s folder; it runs nothing itself.',
     ],
   },
 ];
@@ -162,7 +183,8 @@ const para = (s) => {
 
 // Every command, label and app path the guide names, for tests that keep it true.
 export function mentions() {
-  const text = [...STEPS.flatMap((s) => [s.glance, ...s.hand, s.auto, s.none, s.check]), ...ESSENTIALS.flatMap((e) => [e.glance, ...e.body])].filter(Boolean);
+  const text = [...STEPS.flatMap((s) => [s.glance, ...s.hand, ...(s.sessions ?? []).flatMap(sessionLines), s.auto, s.none, s.check]),
+    ...ESSENTIALS.flatMap((e) => [e.glance, ...e.body])].filter(Boolean);
   const all = (re) => [...new Set(text.flatMap((t) => [...t.matchAll(re)].map((m) => m[1])))];
   return { commands: all(/`([^`]+)`/g), labels: all(/\*\*([^*]+)\*\*/g), paths: all(/(?:^|[\s(])(\/[a-z][\w-]*(?:\/[\w-]+)*)/g) };
 }
@@ -170,7 +192,8 @@ export function mentions() {
 // version: e.g. "v0.2.0 · c3a3008". base: the app's address on this host ('' or /w/<workspace>).
 export function guidePage({ version = '', base = '', logo = '', favicon = '' } = {}) {
   const step = (s, n) => `<li><details id="${s.key}"><summary><span class="n">${n}</span><span class="t"><b>${esc(s.title)}</b><span class="g">${inline(s.glance)}</span></span></summary>
-    <div class="body"><h4>By hand</h4>${s.hand.map(para).join('')}
+    <div class="body">${s.sessions ? `${s.hand.map(para).join('')}${s.sessions.map((x, k) => `<h4 id="${x.key}">${k + 1}. ${esc(x.title)}</h4>${sessionLines(x).map(para).join('')}`).join('')}`
+      : `<h4>By hand</h4>${s.hand.map(para).join('')}`}
     <h4>${s.auto ? 'Or let nuworq do it' : 'Can nuworq do it for you?'}</h4>${para(s.auto ?? s.none)}
     <h4>How you know it worked</h4>${para(s.check)}</div></details></li>`;
   const essential = (e) => `<li><details id="${e.key}"><summary><span class="t"><b>${esc(e.title)}</b><span class="g">${inline(e.glance)}</span></span></summary>

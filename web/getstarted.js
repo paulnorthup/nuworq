@@ -4,8 +4,9 @@ import { commandBlocks } from './copy.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-// gs: the response. worker: the command that starts an agent, shown under that step while it's undone.
-export function getStartedCard(gs, { worker = '' } = {}) {
+// gs: the response. commands: what to type for a step's action.command (the setup that works, #489: a SETUP
+// session's how), shown under that step while it's the next one.
+export function getStartedCard(gs, { commands = {} } = {}) {
   if (!gs?.show || !gs.steps?.length) return '';
   const done = gs.steps.filter((s) => s.done).length;
   // The first undone step is the one to do now: its action is a button, the rest are links.
@@ -20,7 +21,7 @@ export function getStartedCard(gs, { worker = '' } = {}) {
   };
   const rows = gs.steps.map((s) => `<li class="${s.done ? 'done' : s.key === next ? 'next' : ''}" data-step="${esc(s.key)}">
       <span class="tick">${s.done ? '✓' : ''}</span><span class="label">${esc(s.label)}</span>${s.done ? '' : `${action(s)}<a class="link how" href="guide#${esc(s.key)}">How?</a>`}
-      ${!s.done && s.key === next && s.action?.command === 'worker' && worker ? commandBlocks(worker) : ''}</li>`).join('');
+      ${!s.done && s.key === next && commands[s.action?.command] ? commandBlocks(commands[s.action.command]) : ''}</li>`).join('');
   return `<section class="get-started"><div class="gs-head"><h3>Get started</h3><span class="faint">${done} of ${gs.steps.length} done</span>
       <a class="link gs-guide" href="guide"><span data-new="guide-gs">Guide</span></a><button class="link" data-action="get-started-hide" title="Hide this for good">Hide</button></div>
     <ol>${rows}</ol></section>`;

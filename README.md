@@ -17,10 +17,23 @@ The last word of the second line is the release key (`release-key.pub` in this r
 
 ```bash
 nuworq connect https://nuworq.com/w/acme         # browser login, saves the token, registers Claude Code and Codex
-nuworq run --workers 3 --agent claude            # keep workers going where work is waiting; Ctrl-C stops
 ```
 
-Or, after connecting, one command brings it all up and keeps it up: `nuworq up` makes sure one runner runs here as a service with `--workers auto` (installed if there is none, restarted if its flags differ), asks once whether to staff the projects that aren't (a no is remembered), and opens an operator (Claude Code with `/nuworq:operator`) in its own terminal for each unparked project that has none: in tmux when it is installed (`tmux attach -t nuworq`, a window per project), else a Terminal or iTerm window on a Mac, else it prints the commands. A project with no clone here is skipped, with where to clone it. Run it again any time, after a restart too: it starts only what is missing, and ends with a table of each project, its operator and the runner. `nuworq up --dry-run` prints that table and does nothing; `nuworq down` stops the operators it started and the runner service.
+### The setup that works
+
+Three sessions, each where it works best. It's how nuworq itself is built. Starting with just a shaper is fine. Add workers and an operator once there's work for them. The operator and the shaper are Claude Code with the nuworq plugin (below), which `connect` offers to install.
+
+1. **Start workers.** Workers on `nuworq run` (best as a service) build, review and land the work: headless agents, each in its own git worktree, on the projects you let them staff. They need no one watching. As a service they keep going after you close the terminal, and after a restart. In a clone of the project, run:
+
+   ```bash
+   nuworq run --install --workers auto
+   ```
+
+2. **Start an operator.** An operator in a terminal manages the workers and keeps things moving: it answers their questions, lands work, and does what workers can't. It asks you only what only you can do. Its listener starts a turn each time something waits for it. In a terminal of its own, those turns never interrupt the conversation you're having with the shaper. In the project's folder, run `claude`, then type `/nuworq:operator` (`nuworq operator --start` does both).
+
+3. **Shape work with a shaper.** A shaper in the Claude Code app talks through what you want, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you. It's the session you read and talk in, and the app is made for reading and talking. Open the project's folder in the Claude Code app's Code tab, then type `/nuworq:shaper`.
+
+`nuworq run --workers 3 --agent claude` keeps workers going in this terminal instead, until Ctrl-C. Or, after connecting, one command brings it all up and keeps it up: `nuworq up` makes sure one runner runs here as a service with `--workers auto` (installed if there is none, restarted if its flags differ), asks once whether to staff the projects that aren't (a no is remembered), and opens an operator (Claude Code with `/nuworq:operator`) in its own terminal for each unparked project that has none: in tmux when it is installed (`tmux attach -t nuworq`, a window per project), else a Terminal or iTerm window on a Mac, else it prints the commands. A project with no clone here is skipped, with where to clone it. Run it again any time, after a restart too: it starts only what is missing, and ends with a table of each project, its operator and the runner. `nuworq up --dry-run` prints that table and does nothing; `nuworq down` stops the operators it started and the runner service.
 
 `run` keeps workers on the projects you let it staff ("Let nuworq run staff this project" in the UI), one per waiting item. Add `--browser` for workers that check UI work. Each worker gets its own git worktree (each item it takes gets its own branch, cut from the latest main). `nuworq worker --agent claude --run` starts a single one, and goes wherever work is waiting across projects; `--agent codex`, `--agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M` and `--agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M` (a local open-weight model) work the same way. opencode and pi have no sandbox, so their workers run only on projects without a remote. A pi worker gets a config folder of its own (`~/.nuworq/pi/<worker>`), so none of your pi extensions, skills, MCP servers or sign-ins follow it in: give its provider key in the environment.
 
