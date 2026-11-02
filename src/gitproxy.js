@@ -1,6 +1,6 @@
 // Workers push through the hub (#472). A worker's git sends pushes for github.com here (pushInsteadOf), and the hub
-// reads the ref updates at the head of the request: only branches under refs/heads/nuworq/ go on to GitHub, with
-// the hub's own token for that one repository; main, tags, other branches and deletions are refused, with a
+// reads the ref updates at the head of the request: only the branch of the item the pusher holds (refs/heads/nuworq/…)
+// goes on to GitHub, with the hub's own token for that one repository; main, tags, other branches and deletions are refused, with a
 // reason git shows. The worker never holds a token that can write. Smart HTTP only, as git speaks it:
 // https://git-scm.com/docs/http-protocol and https://git-scm.com/docs/pack-protocol (pkt-lines).
 import http from 'node:http';
@@ -32,12 +32,17 @@ export function readCommands(buf) {
   }
 }
 
-// Why the hub won't pass this update on, or '' when it may.
-export function refusedRef({ new: to, ref }) {
+// Why the hub won't pass this update on, or '' when it may. branch: the one the hub named for the item the pushing
+// agent holds (#605); every other ref is refused, other items' nuworq/ branches among them, so holding one item
+// never rewrites another's accepted branch.
+export function refusedRef({ new: to, ref }, branch = '') {
   if (!ref.startsWith(PUSH_REFS)) {
     return ref === 'refs/heads/main' || ref === 'refs/heads/master'
       ? 'workers never push main: the hub lands accepted work itself'
       : `workers push only ${PUSH_REFS}* branches, the ones the hub names`;
+  }
+  if (!branch || ref !== `refs/heads/${branch}`) {
+    return branch ? `workers push only the branch of the item they hold: ${branch}` : 'the item you hold has no branch yet: push it after the hub names one';
   }
   if (ZERO.test(to)) return 'workers never delete branches: the hub deletes a landed one itself';
   return '';
@@ -82,9 +87,9 @@ const relay = (up, res) => {
 };
 
 // One push through the hub. git: the repository's address on GitHub (https://github.com/o/r.git), service the
-// smart HTTP path (info/refs or git-receive-pack), token the hub's write token for it. onRefused(cmds, reasons)
-// and onPushed(cmds) put it on the record.
-export async function proxyPush(req, res, { git, service, token, onRefused, onPushed }) {
+// smart HTTP path (info/refs or git-receive-pack), token the hub's write token for it, branch the held item's
+// (refusedRef). onRefused(cmds, reasons) and onPushed(cmds) put it on the record.
+export async function proxyPush(req, res, { git, service, token, branch = '', onRefused, onPushed }) {
   if (service === 'info/refs') return relay(await upstream(`${git}/info/refs?service=git-receive-pack`, { token, from: req }), res);
   if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') {
     res.writeHead(415, { 'content-type': 'text/plain' });
@@ -101,7 +106,7 @@ export async function proxyPush(req, res, { git, service, token, onRefused, onPu
     if (!parsed && head.length > MAX_HEAD) throw new Error('not a git push');
   }
   if (!parsed) throw new Error('not a git push');
-  const reasons = parsed.cmds.map(refusedRef);
+  const reasons = parsed.cmds.map((c) => refusedRef(c, branch));
   if (reasons.some(Boolean)) {
     for await (const _ of { [Symbol.asyncIterator]: () => it }) { /* drain the pack: nothing goes on */ }
     onRefused?.(parsed.cmds, reasons);

@@ -606,6 +606,12 @@ export const MIGRATIONS = [
       addColumn(db, 'ALTER TABLE projects ADD COLUMN distilled_at INTEGER NOT NULL DEFAULT 0');
     },
   },
+  {
+    // The head a review accepted (#605): the commit of the item's branch the hub saw at acceptance. Landing merges
+    // only that, or the same change rebased; '' when the hub couldn't see the branch then.
+    name: 'landing merges only the reviewed head',
+    up(db) { addColumn(db, "ALTER TABLE items ADD COLUMN reviewed_sha TEXT NOT NULL DEFAULT ''"); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
