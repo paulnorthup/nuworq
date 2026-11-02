@@ -73,7 +73,7 @@ function world() {
 }
 
 describe('a landing PR that cannot merge routes itself', () => {
-  test('a conflict hands out a rebase land job; after the rebase the same PR merges and the item is done', async () => {
+  test('a conflict hands out a rebase land job; the resolved rebase is reviewed again, then the same PR merges and the item is done', async () => {
     const w = await (async () => { const x = world(); return { ...x, job: await x.accepted() }; })();
     assert.notEqual(w.op('a1', 'next').mode, 'land', 'an open, mergeable PR is no land job');
     w.mainMoves();
@@ -95,8 +95,14 @@ describe('a landing PR that cannot merge routes itself', () => {
       w.git(w.job.dir, '-c', 'core.editor=true', 'rebase', '--continue');
     }
     w.git(w.job.dir, 'push', '-q', 'origin', w.job.branch, '--force-with-lease');
-    const done = w.op('a1', 'submit', { item: '#1', headline: 'Rebased' });
-    assert.match(done.hint, /PR #101 has the rebased branch/);
+    // Resolving the conflict changed what lands (#605): it isn't the change the review accepted, so it's reviewed again.
+    const back = w.op('a1', 'submit', { item: '#1', headline: 'Rebased' });
+    assert.match(back.hint, /isn't the head #1's review accepted, nor that change rebased, so it is verifying again/);
+    assert.equal(w.item().stage, 'verifying');
+    w.hub.humanOp('demo', 'accept', { item: '#1' });
+    await w.hub.prsSettled();
+    assert.equal(w.item().stage, 'landing');
+    assert.equal(w.item().reviewed_sha, w.git(w.job.dir, 'rev-parse', 'HEAD'), 'the rebased head is the reviewed one now');
     assert.equal(w.opened.length, 1, 'no second PR');
     assert.notEqual(w.op('a2', 'next').mode, 'land', 'no land job once rebased');
 

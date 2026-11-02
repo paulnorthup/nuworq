@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -581,6 +581,19 @@ export class Hub extends EventEmitter {
     setImmediate(() => openPr.call(this, p, item.id)
       .catch((e) => console.error('opening a pull request failed', e))
       .finally(() => { this._opening.delete(item.id); done(); }));
+  }
+
+  // A push the hub passed on to an accepted item's branch (#605, src/server.js): unless it's the change the review
+  // accepted, rebased, the item goes back to review at once, and its pull request's auto-merge goes off.
+  async headMoved(p, id) {
+    let item = this.itemById(id);
+    if (item?.stage !== 'landing' || !item.reviewed_sha) return;
+    this.repoFor(p, item, { fresh: true });
+    item = this.itemById(id);
+    if (item?.stage !== 'landing' || this.tx(() => reviewedHead.call(this, p, item)) !== 'moved') return;
+    const head = shaOf(this.repoFor(p, item)?.path, item.branch) ?? '';
+    this.tx(() => headMovedBack.call(this, p, item, { by: item.holder && item.holder !== GITHUB ? item.holder : SYSTEM, head }));
+    this.changed(p);
   }
 
   // Resolves once every pull request being opened is open (or has failed). For tests and shutdown.
@@ -2557,7 +2570,7 @@ const CI_TESTS = 'Tests: run the ones near your change. Not the whole suite: CI 
 const OWN_TESTS = 'Tests: run the ones near your change as you work, and the whole suite once, just before you submit.';
 
 // Remote work that lands through a pull request: the lander only pushes; the hub opens the PR.
-const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
+const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: it is reviewed as pushed, then the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
 const PR_OPEN_HINT = (item) => `${item.branch} is on origin but has no pull request yet. Submit #${item.seq}: the hub opens one with auto-merge on, and GitHub's merge marks it done. Don't push to main yourself.`;
 
 // Its pull request conflicts with main: rebase the branch and push it again; the PR and its auto-merge stay.
@@ -2612,9 +2625,12 @@ async function openPr(p, id) {
     });
     return this.changed(p);
   }
-  try { auto = await this.github.autoMerge({ repo, number: pr.number, id: pr.node_id }); } catch (e) { noAuto = e.message; }
+  // Both pinned to the head the review accepted (#605): GitHub refuses either when the PR's head is anything else.
+  const head = item.reviewed_sha;
+  let moved = false;
+  try { auto = await this.github.autoMerge({ repo, number: pr.number, id: pr.node_id, ...(head ? { sha: head } : {}) }); } catch (e) { noAuto = e.message; }
   if (auto?.ready) {
-    try { merged = await this.github.merge({ repo, number: pr.number }); } catch (e) { noMerge = e.message; }
+    try { merged = await this.github.merge({ repo, number: pr.number, ...(head ? { head } : {}) }); } catch (e) { noMerge = e.message; moved = !!e.moved; }
   }
   let row;
   this.tx(() => {
@@ -2635,7 +2651,8 @@ async function openPr(p, id) {
     });
     if (merged) prMerged(this, p, row, { ...merged, base });
   });
-  if (noMerge) mergeFailed.call(this, p, row, noMerge);
+  if (moved) this.tx(() => headMovedBack.call(this, p, this.itemById(id), { head: pr.head_sha ?? '' }));
+  else if (noMerge) mergeFailed.call(this, p, row, noMerge);
   this.changed(p);
 }
 
@@ -2648,13 +2665,29 @@ async function mergeReady() {
     try { pr = await this.github.pull({ repo: row.repo, number: row.number }); } catch { continue; } // GitHub didn't answer: the next pass asks again
     const p = this.q('SELECT * FROM projects WHERE id = ?').get(row.project_id);
     if (!p) continue;
-    // Ready with no auto-merge to wait for (opened before the hub merged those, or auto-merge is off).
+    // Its head moved after acceptance (#605): the same change rebased carries on; anything else goes back to review,
+    // with auto-merge off. The hub's copy is fetched first, so it has the commit GitHub names.
+    const item = this.itemById(row.item_id);
+    if (pr.state === 'open' && item?.reviewed_sha && pr.head_sha && pr.head_sha !== item.reviewed_sha) {
+      this.repoFor(p, item, { fresh: true });
+      if (this.tx(() => reviewedHead.call(this, p, item, pr.head_sha)) === 'moved') {
+        this.tx(() => headMovedBack.call(this, p, item, { head: pr.head_sha }));
+        this.changed(p);
+        continue;
+      }
+    }
+    // Ready with no auto-merge to wait for (opened before the hub merged those, or auto-merge is off). Only the
+    // reviewed head (#605): GitHub refuses the merge when the PR's head has moved since.
     if (pr.state === 'open' && pr.mergeable_state === 'clean' && !pr.auto_merge) {
+      const head = this.itemById(row.item_id)?.reviewed_sha ?? '';
       try {
-        pr = { ...pr, ...await this.github.merge({ repo: row.repo, number: row.number }), state: 'merged' };
+        pr = { ...pr, ...await this.github.merge({ repo: row.repo, number: row.number, ...(head ? { head } : {}) }), state: 'merged' };
         this._mergeFailed.delete(row.item_id);
       } catch (e) {
-        mergeFailed.call(this, p, row, e.message);
+        if (e.moved) {
+          this.tx(() => headMovedBack.call(this, p, this.itemById(row.item_id), { head: pr.head_sha ?? '' }));
+          this.changed(p);
+        } else mergeFailed.call(this, p, row, e.message);
         continue;
       }
     }
@@ -2704,6 +2737,62 @@ function mergeFailed(p, row, why) {
   this.changed(p);
 }
 
+// Where an item's branch stands against the head its review accepted (#605): 'same'; 'rebased', the same change on a
+// newer base (reviewed_sha moves to it); 'moved', anything else; null when there's nothing to compare (no reviewed
+// head on record, or no branch to see). head: the branch's head as GitHub has it; else the hub's copy's.
+function reviewedHead(p, item, head = null) {
+  if (!item.reviewed_sha || !item.branch) return null;
+  const repo = this.repoFor(p, item);
+  head ||= repo ? shaOf(repo.path, item.branch) : null;
+  if (!head) return null;
+  if (head === item.reviewed_sha) return 'same';
+  const base = repo && baseOf(repo.path);
+  if (base && sameChange(repo.path, base, item.reviewed_sha, head)) {
+    this.event(p, { item, actor: SYSTEM, type: 'head_rebased', headline: `${item.branch} was rebased (${head.slice(0, 7)}): the same change #${item.seq}'s review accepted, so it still lands`, data: { reviewed: item.reviewed_sha, head } });
+    this.patch(item, { reviewed_sha: head });
+    return 'rebased';
+  }
+  return 'moved';
+}
+
+// Accepted work whose branch moved to something its review didn't see (#605): back to review, and nothing merges it
+// meanwhile. Its pull request stays open with auto-merge off; the next acceptance pins the new head. by: who pushed,
+// when the hub knows: then they don't review it (implementedBy reads the 'rebased' event with conflicts).
+function headMovedBack(p, item, { by = SYSTEM, head = '' } = {}) {
+  const was = item.reviewed_sha;
+  this.move(item, 'verifying', by, { holder: null, lease_until: null, ...(by === SYSTEM ? {} : { last_worker: by }) });
+  this.event(p, {
+    item, actor: by, type: 'rebased',
+    headline: `${item.branch} changed after #${item.seq} was accepted${was ? ` (${was.slice(0, 7)} → ${head ? head.slice(0, 7) : 'a new head'})` : ''}: it goes back to review before it lands`,
+    summary: was ? 'What would land is no longer what the review accepted, and not the same change rebased. Review the branch as it is now.'
+      : 'The hub never saw the head the review accepted, so what was pushed since gets a review of its own.',
+    data: { conflicts: true, head_moved: true, reviewed: was, head },
+  });
+  const row = this.q(`SELECT * FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
+  if (row && this.github?.disableAutoMerge) {
+    const off = (async () => {
+      const pr = await this.github.pull({ repo: row.repo, number: row.number });
+      if (pr.auto_merge) await this.github.disableAutoMerge({ repo: row.repo, id: pr.node_id });
+    })().catch((e) => this.tx(() => this.event(p, {
+      item, actor: SYSTEM, type: 'pr_merge_failed', headline: `The hub couldn't turn off auto-merge on PR #${row.number} for #${item.seq}: ${clip(e.message)}`,
+      summary: `Turn it off on GitHub (${row.url}) until #${item.seq} is reviewed again.`, data: { url: row.url, number: row.number, error: e.message },
+    })));
+    const key = `auto-merge off ${item.id}`;
+    this._opening.set(key, off);
+    off.finally(() => this._opening.delete(key));
+  }
+}
+
+// A land job whose branch isn't what its review accepted (#605): back to review, and the lander says so.
+function movedHint(p, agent, item) {
+  const head = shaOf(this.repoFor(p, item)?.path, item.branch) ?? '';
+  headMovedBack.call(this, p, item, { by: agent, head });
+  this.setStatus(p, agent, `Sent #${item.seq} back for review: its branch isn't what was accepted`);
+  const reviewer = p.autonomy === 'full' ? 'Another agent reviews it' : 'The human verifies it';
+  const why = item.reviewed_sha ? `isn't the head #${item.seq}'s review accepted, nor that change rebased` : `is on origin now, but the hub never saw the head #${item.seq}'s review accepted`;
+  return { ok: true, hint: `${item.branch} ${why}, so it is verifying again. ${reviewer}, then it lands. Call next.` };
+}
+
 // Submit on a land job: done when git shows main has the branch; back to review when the rebase changed it.
 function finishLanding(p, agent, item, { headline, summary, detail, conflicts }) {
   const reviewer = p.autonomy === 'full' ? 'Another agent reviews it again' : 'The human verifies it again';
@@ -2746,6 +2835,8 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
     if (!contains(repo.path, item.branch, land.base)) {
       throw new UserError(`${item.branch} on origin doesn't contain ${land.base} yet`, { status: 409, hint: PR_REBASE_HINT(item, conflicted, land.base) });
     }
+    // Auto-merge carries on only for the change its review accepted, rebased (#605); anything more is reviewed first.
+    if (reviewedHead.call(this, p, item) === 'moved') return movedHint.call(this, p, agent, item);
     this.q(`UPDATE prs SET blocked = '' WHERE item_id = ? AND state = 'open'`).run(item.id);
     this.patch(item, { holder: null, lease_until: null });
     this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased ${item.branch} onto ${land.base} for PR #${conflicted.number}; auto-merge carries on`, summary, detail });
@@ -2754,6 +2845,8 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   }
   // Pushed for a pull request: the hub opens it, and GitHub's merge marks the item done.
   if (land.pending && this.prMode(p, item) && !this.prFailed(item)) {
+    // The hub opens a PR only for the head a review accepted (#605): one it never saw, or one that moved, is reviewed first.
+    if (!item.reviewed_sha || reviewedHead.call(this, p, item) === 'moved') return movedHint.call(this, p, agent, item);
     this.event(p, { item, actor: agent, type: 'pushed', headline: `${agent} pushed ${item.branch} for #${item.seq}; the hub opens its pull request`, summary, detail });
     this.openPr(p, item);
     this.setStatus(p, agent, `Pushed #${item.seq} for its pull request`);
@@ -3627,8 +3720,11 @@ Object.assign(Hub.prototype, {
       const nocode = absent && this.noCode(p, item, branch);
       const unseen = absent && !nocode;
       const landing = !!land?.pending || unseen;
+      // The head this review accepted (#605), as the hub sees it now (toLand just fetched): landing merges only it,
+      // or the same change rebased. '' when the hub can't see the branch: whatever is pushed later gets a review.
+      const reviewed = land ? shaOf(this.repoFor(p, item).path, branch) ?? '' : '';
       this.move(item, landing ? 'landing' : 'done', actor, {
-        holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
+        holder: null, lease_until: null, reviewed_sha: reviewed, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
       });
       const viaPr = landing && this.prMode(p, item);
       this.event(p, {
@@ -3636,7 +3732,7 @@ Object.assign(Hub.prototype, {
         headline: `${who} accepted #${item.seq}${kept ? ` (${kept.agent}'s attempt)` : ''}${headline ? `: ${headline}` : ''}`,
         summary: [
           land?.pending && viaPr ? `${branch} lands through a pull request: the hub opens it with auto-merge on, and GitHub's merge marks #${item.seq} done.` : '',
-          unseen && viaPr ? `${branch} lands through a pull request: the hub can't see it on origin yet, so an agent pushes it, then the hub opens the PR.` : '',
+          unseen && viaPr ? `${branch} lands through a pull request: the hub can't see it on origin yet, so an agent pushes it, it is reviewed as pushed, then the hub opens the PR.` : '',
           land?.pending && !viaPr ? `${branch} lands on ${land.base} next: an agent rebases it, runs the checks and fast-forwards ${land.base}.` : '',
           unseen && !viaPr ? `${branch} lands next: the hub can't see it on origin yet, so the lander pushes it first, then rebases it, runs the checks and pushes it to main.` : '',
           nocode ? `#${item.seq} had no code to land: ${branch} isn't on origin, it has no pull request, and its evidence names no commit origin lacks. So it is done.` : '',

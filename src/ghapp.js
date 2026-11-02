@@ -321,8 +321,12 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
       throw new Error(`GitHub didn't open the pull request (${said(r)}${r.json.errors?.[0]?.message ? `; ${r.json.errors[0].message}` : ''})`);
     },
     // { ready: true } when GitHub won't turn it on because the PR has nothing left to wait for: merge it instead.
-    async autoMerge({ repo, id }) {
-      const r = await app.call('POST', '/graphql', {
+    // sha (#605): the head that was reviewed; GitHub refuses if the PR's head is anything else by then.
+    async autoMerge({ repo, id, sha = '' }) {
+      const r = await app.call('POST', '/graphql', sha ? {
+        query: 'mutation($id: ID!, $sha: GitObjectID!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH, expectedHeadOid: $sha }) { clientMutationId } }',
+        variables: { id, sha },
+      } : {
         query: 'mutation($id: ID!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH }) { clientMutationId } }',
         variables: { id },
       }, await tokenFor(repo));
@@ -331,10 +335,21 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
       if (r.status !== 200 || error) throw new Error(error ?? `GitHub answered ${r.status}`);
       return { ready: false };
     },
-    // Squash-merge it now: { sha } of the commit it made on the base branch.
-    async merge({ repo, number }) {
+    // Auto-merge off again (#605): its head moved after review. Already off is fine.
+    async disableAutoMerge({ repo, id }) {
+      const r = await app.call('POST', '/graphql', {
+        query: 'mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }',
+        variables: { id },
+      }, await tokenFor(repo));
+      const error = r.json.errors?.[0]?.message;
+      if (r.status !== 200 || (error && !/not enabled|isn't enabled|is not enabled/i.test(error))) throw new Error(error ?? `GitHub answered ${r.status}`);
+    },
+    // Squash-merge it now: { sha } of the commit it made on the base branch. head (#605): the reviewed head; GitHub
+    // refuses (409) when the PR's head is anything else, and the error says moved.
+    async merge({ repo, number, head = '' }) {
       const [owner, name] = parts(repo);
-      const r = await app.call('PUT', `/repos/${owner}/${name}/pulls/${number}/merge`, { merge_method: 'squash' }, await tokenFor(repo));
+      const r = await app.call('PUT', `/repos/${owner}/${name}/pulls/${number}/merge`, { merge_method: 'squash', ...(head ? { sha: head } : {}) }, await tokenFor(repo));
+      if (r.status === 409 && head) throw Object.assign(new Error(`GitHub didn't merge PR #${number}: its head isn't the reviewed ${head.slice(0, 7)} (${said(r)})`), { moved: true });
       if (r.status !== 200 || !r.json.merged) throw new Error(`GitHub didn't merge PR #${number} (${said(r)})`);
       return { sha: r.json.sha ?? '' };
     },
@@ -367,7 +382,7 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
       const pr = r.json;
       return {
         state: pr.merged ? 'merged' : pr.state === 'closed' ? 'closed' : 'open', mergeable_state: pr.mergeable_state ?? 'unknown',
-        auto_merge: !!pr.auto_merge, base: pr.base?.ref ?? 'main', sha: pr.merge_commit_sha ?? '',
+        auto_merge: !!pr.auto_merge, base: pr.base?.ref ?? 'main', sha: pr.merge_commit_sha ?? '', head_sha: pr.head?.sha ?? '', node_id: pr.node_id ?? '',
       };
     },
   };

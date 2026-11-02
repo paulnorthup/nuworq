@@ -58,6 +58,22 @@ export const contains = (repo, into, ref) => git(repo, 'merge-base', '--is-ances
 const count = (repo, range) => Number(git(repo, 'rev-list', '--count', range) ?? 0);
 // The full commit a ref points at; null when there is none.
 export const shaOf = (repo, ref) => git(repo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+// Whether commit b is commit a's change, rebased (#605): the diff each makes against base, from where it branched,
+// has the same patch id (line numbers and whitespace aside). A conflict resolved, a commit added or anything else
+// that changes what lands says false, and so does git not being able to say (a commit it doesn't have).
+export function sameChange(repo, base, a, b) {
+  const id = (c) => {
+    const from = git(repo, 'merge-base', base, c);
+    if (!from) return null;
+    try {
+      const diff = execFileSync('git', ['-C', repo, 'diff', '--binary', from, c], { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 << 20 });
+      if (!diff.length) return null;
+      return execFileSync('git', ['-C', repo, 'patch-id', '--stable'], { input: diff, encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'ignore'] }).trim().split(/\s/)[0] || null;
+    } catch { return null; }
+  };
+  const x = id(a);
+  return !!x && x === id(b);
+}
 // Whether a file is in the tree at ref.
 export const hasFile = (repo, ref, file) => git(repo, 'cat-file', '-e', `${ref}:${file}`) !== null;
 // Files under paths that differ between two commits, and the subjects of the commits that changed them

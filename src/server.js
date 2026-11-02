@@ -1659,9 +1659,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
         const names = (cmds) => cmds.map((c) => c.ref.replace(/^refs\/heads\//, '')).join(', ');
         return await proxyPush(req, res, {
-          git: `${gh.web}/${want.slice('github.com/'.length)}.git`, service, token,
+          git: `${gh.web}/${want.slice('github.com/'.length)}.git`, service, token, branch: it.branch,
           onRefused: (cmds, reasons) => { hub.event(p, { item: it, actor: gitAgent, type: 'push_refused', headline: `The hub refused ${gitAgent}'s push of ${names(cmds)} to ${want}: ${[...new Set(reasons.filter(Boolean))].join('; ')}`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } }); hub.changed(p); },
-          onPushed: (cmds) => { if (cmds.length) { hub.event(p, { item: it, actor: gitAgent, type: 'pushed_via_hub', headline: `${gitAgent} pushed ${names(cmds)} to ${want} through the hub`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } }); hub.changed(p); } },
+          onPushed: (cmds) => {
+            if (!cmds.length) return;
+            hub.event(p, { item: it, actor: gitAgent, type: 'pushed_via_hub', headline: `${gitAgent} pushed ${names(cmds)} to ${want} through the hub`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } });
+            hub.changed(p);
+            // Accepted work whose branch just moved (#605): unless it's the reviewed change rebased, back to review.
+            if (it.stage === 'landing') hub.headMoved(p, it.id).catch((e) => console.error('checking a pushed branch failed', e));
+          },
         });
       }
       // git asks for a credential (nuworq git-credential): a read-only token for the repository of the item this

@@ -20,12 +20,16 @@ describe('the hub reads a push before passing it on', () => {
     assert.throws(() => readCommands(Buffer.from(pkt('hello\n'))), /not a git push/);
   });
 
-  test('only nuworq/ branches, and no deletions', () => {
-    assert.equal(refusedRef({ new: B, ref: 'refs/heads/nuworq/12-fix' }), '');
-    assert.match(refusedRef({ new: B, ref: 'refs/heads/main' }), /never push main/);
-    assert.match(refusedRef({ new: B, ref: 'refs/tags/v1.0.0' }), /only refs\/heads\/nuworq\/\*/);
-    assert.match(refusedRef({ new: B, ref: 'refs/heads/nuworqx' }), /only refs\/heads\/nuworq\/\*/);
-    assert.match(refusedRef({ new: Z, ref: 'refs/heads/nuworq/12-fix' }), /never delete/);
+  test('only the held item\'s nuworq/ branch, and no deletions (#605)', () => {
+    const own = 'nuworq/12-fix';
+    assert.equal(refusedRef({ new: B, ref: 'refs/heads/nuworq/12-fix' }, own), '');
+    assert.match(refusedRef({ new: B, ref: 'refs/heads/nuworq/7-accepted-elsewhere' }, own), /only the branch of the item they hold: nuworq\/12-fix/);
+    assert.match(refusedRef({ new: B, ref: 'refs/heads/nuworq/12-fix-2' }, own), /only the branch of the item they hold/);
+    assert.match(refusedRef({ new: B, ref: 'refs/heads/nuworq/12-fix' }), /has no branch yet/, 'no held branch: nothing passes');
+    assert.match(refusedRef({ new: B, ref: 'refs/heads/main' }, own), /never push main/);
+    assert.match(refusedRef({ new: B, ref: 'refs/tags/v1.0.0' }, own), /only refs\/heads\/nuworq\/\*/);
+    assert.match(refusedRef({ new: B, ref: 'refs/heads/nuworqx' }, own), /only refs\/heads\/nuworq\/\*/);
+    assert.match(refusedRef({ new: Z, ref: 'refs/heads/nuworq/12-fix' }, own), /never delete/);
   });
 
   test('a refusal git understands: each ref rejected with its reason, in the side band when asked', () => {

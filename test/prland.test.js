@@ -103,7 +103,8 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     assert.match(pr.body, /Built by a1 \(claude-opus-5-5\), reviewed by r1\./);
     assert.match(pr.body, /- npm test: 12 passed\n- commit abc1234 \(https:\/\/example\.test\/c\)/);
     assert.match(pr.body, /Fixes #42$/);
-    assert.deepEqual(w.calls.auto, [{ repo: w.hub.repoOf(w.hub.project('demo'), w.item(1)), number: 101, id: 'PR_101' }]);
+    // Pinned to the head the review accepted (#605): GitHub's expectedHeadOid.
+    assert.deepEqual(w.calls.auto, [{ repo: w.hub.repoOf(w.hub.project('demo'), w.item(1)), number: 101, id: 'PR_101', sha: w.git(j.dir, 'rev-parse', 'HEAD') }]);
 
     const it = w.item(1);
     assert.equal(it.stage, 'landing');
@@ -182,7 +183,7 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     assert.equal(w.hub.q('SELECT COUNT(*) AS n FROM prs WHERE item_id = ?').get(w.item(1).id).n, 1);
   });
 
-  test("branch not on origin yet: the land job's hint is just the push, then the hub opens the PR", async () => {
+  test("branch not on origin yet: the land job's hint is just the push; what was pushed is reviewed, then the hub opens the PR", async () => {
     const w = world();
     w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
     const j = w.build('a1', { push: false });
@@ -191,16 +192,20 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     assert.equal(w.calls.opened.length, 0, 'nothing to open a PR from yet');
     const land = w.op('a1', 'next');
     assert.equal(land.mode, 'land');
-    assert.match(land.hint, new RegExp(`^Push it: git push origin ${j.branch} \\(the hub can't see it on origin yet\\)\\. Then submit #1: the hub opens a pull request`));
+    assert.match(land.hint, new RegExp(`^Push it: git push origin ${j.branch} \\(the hub can't see it on origin yet\\)\\. Then submit #1: it is reviewed as pushed, then the hub opens a pull request`));
     assert.doesNotMatch(land.hint, /rebase|push origin \S+:main/);
     w.git(j.dir, 'push', '-q', 'origin', j.branch);
+    // The hub never saw the head the review accepted (#605): what was pushed is reviewed before any PR merges it.
     const s = w.op('a1', 'submit', { item: '#1', headline: 'Pushed' });
-    assert.match(s.hint, /The hub opens a pull request with auto-merge on/);
+    assert.match(s.hint, /is on origin now, but the hub never saw the head #1's review accepted, so it is verifying again/);
+    assert.equal(w.item(1).stage, 'verifying');
+    assert.equal(w.calls.opened.length, 0, 'no PR for unreviewed code');
+    w.hub.humanOp('demo', 'accept', { item: '#1' });
     await w.hub.prsSettled();
     assert.equal(w.calls.opened.length, 1);
     assert.equal(w.item(1).stage, 'landing');
     assert.equal(w.item(1).holder, null);
-    assert.equal(w.events(1, 'pushed').length, 1);
+    assert.equal(w.calls.auto[0].sha, w.git(j.dir, 'rev-parse', 'HEAD'), 'auto-merge pinned to the head reviewed this time');
   });
 
   test("the hub stopped while opening the PR: the land job says submit (the hub opens it), never push to main", async () => {
@@ -302,6 +307,10 @@ describe('accepted remote work lands through a pull request the hub opens', () =
       }
       if (req.method === 'GET' && req.url.startsWith('/repos/acme/api/pulls?')) return json(200, [{ number: 4, html_url: 'u4', node_id: 'PR_4', head: { ref: 'nuworq/1-x', sha: 'bbb' } }]);
       if (req.url === '/graphql') return json(200, { data: { enablePullRequestAutoMerge: { clientMutationId: null } } });
+      // The merge, pinned to a head (#605): GitHub answers 409 when the PR's head is another.
+      if (req.method === 'PUT' && req.url === '/repos/acme/api/pulls/5/merge') {
+        return JSON.parse(raw).sha === 'aaa' ? json(200, { merged: true, sha: 'm1' }) : json(409, { message: 'Head branch was modified. Review and try the merge again.' });
+      }
       json(404, { message: 'Not Found' });
     });
     await new Promise((r) => api.listen(0, '127.0.0.1', r));
@@ -323,6 +332,15 @@ describe('accepted remote work lands through a pull request the hub opens', () =
       assert.equal(gql.url, '/graphql');
       assert.match(gql.body.query, /enablePullRequestAutoMerge\(input: \{ pullRequestId: \$id, mergeMethod: SQUASH \}\)/);
       assert.deepEqual(gql.body.variables, { id: 'PR_5' });
+      // Pinned to the reviewed head (#605): auto-merge with expectedHeadOid, the squash-merge with sha.
+      await gh.autoMerge({ repo: 'github.com/acme/api', number: 5, id: 'PR_5', sha: 'aaa' });
+      assert.match(seen.at(-1).body.query, /enablePullRequestAutoMerge\(input: \{ pullRequestId: \$id, mergeMethod: SQUASH, expectedHeadOid: \$sha \}\)/);
+      assert.deepEqual(seen.at(-1).body.variables, { id: 'PR_5', sha: 'aaa' });
+      assert.deepEqual(await gh.merge({ repo: 'github.com/acme/api', number: 5, head: 'aaa' }), { sha: 'm1' });
+      assert.deepEqual(seen.at(-1).body, { merge_method: 'squash', sha: 'aaa' });
+      await assert.rejects(gh.merge({ repo: 'github.com/acme/api', number: 5, head: 'ccc' }), (e) => e.moved === true && /isn't the reviewed ccc/.test(e.message));
+      await gh.disableAutoMerge({ repo: 'github.com/acme/api', id: 'PR_5' });
+      assert.match(seen.at(-1).body.query, /disablePullRequestAutoMerge\(input: \{ pullRequestId: \$id \}\)/);
     } finally {
       api.close();
     }
@@ -338,5 +356,119 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     const land = w.op('a1', 'next');
     assert.equal(land.mode, 'land');
     assert.match(land.hint, /git push origin nuworq\/1-thing:main/);
+  });
+});
+
+// Landing merges only what the review accepted (#605): its head as the hub saw it at acceptance, or that change
+// rebased. GitHub, here, answers pull() with the branch as the bare repo has it, and refuses a merge pinned to another head.
+describe('landing merges only the reviewed head', () => {
+  // #1 built, accepted with its PR open; GitHub's view of the PR follows the branch on origin.
+  async function accepted({ auto = true } = {}) {
+    const w = world();
+    w.hub.humanOp('demo', 'create', { title: 'Api endpoint', acceptance: 'x' });
+    const j = w.build('a1');
+    const reviewed = w.git(j.dir, 'rev-parse', 'HEAD');
+    w.hub.humanOp('demo', 'accept', { item: '#1' });
+    await w.hub.prsSettled();
+    const head = () => w.git(j.dir, 'ls-remote', 'origin', `refs/heads/${j.branch}`).split('\t')[0];
+    Object.assign(w.calls, { merged: [], off: [] });
+    const state = { auto };
+    Object.assign(w.hub.github, {
+      async pull() { return { state: 'open', mergeable_state: 'clean', auto_merge: state.auto, base: 'main', sha: '', head_sha: head(), node_id: 'PR_101' }; },
+      async merge({ head: pinned }) {
+        w.calls.merged.push(pinned);
+        if (pinned !== head()) throw Object.assign(new Error('its head moved'), { moved: true });
+        return { sha: 'fff0000' };
+      },
+      async disableAutoMerge(args) { w.calls.off.push(args); state.auto = false; },
+    });
+    // Main moves on, apart from #1's file.
+    const other = w.git(j.dir, 'rev-parse', '--show-toplevel').replace(/work-[^/]+$/, 'seed');
+    w.git(other, 'pull', '-q', 'origin', 'main');
+    writeFileSync(join(other, 'OTHER'), 'x\n');
+    w.git(other, 'add', '.');
+    w.git(other, 'commit', '-q', '-m', 'other work');
+    w.git(other, 'push', '-q', 'origin', 'main');
+    return { ...w, j, reviewed, head, state };
+  }
+  const pass = async (w) => { w.advance(60_000); await w.hub.mergeReady(); await w.hub.prsSettled(); };
+
+  test('acceptance records the head it accepted; the merge is pinned to it', async () => {
+    const w = await accepted({ auto: false });
+    assert.equal(w.item(1).reviewed_sha, w.reviewed);
+    assert.equal(w.calls.auto[0].sha, w.reviewed, 'auto-merge pinned (expectedHeadOid)');
+    await pass(w);
+    assert.deepEqual(w.calls.merged, [w.reviewed], 'squash-merge pinned (sha)');
+    assert.equal(w.item(1).stage, 'done');
+  });
+
+  test('a commit pushed after acceptance sends it back to review, with auto-merge off, and nothing merges', async () => {
+    const w = await accepted();
+    writeFileSync(join(w.j.dir, 'backdoor.js'), 'evil()\n');
+    w.git(w.j.dir, 'add', '.');
+    w.git(w.j.dir, 'commit', '-q', '-m', 'one more thing');
+    w.git(w.j.dir, 'push', '-q', 'origin', w.j.branch);
+    await pass(w);
+    assert.equal(w.item(1).stage, 'verifying');
+    assert.deepEqual(w.calls.off, [{ repo: w.hub.repoOf(w.hub.project('demo'), w.item(1)), id: 'PR_101' }], 'auto-merge off on its PR');
+    assert.deepEqual(w.calls.merged, [], 'nothing merged');
+    const back = w.events(1, 'rebased').at(-1);
+    assert.match(back.headline, new RegExp(`changed after #1 was accepted \\(${w.reviewed.slice(0, 7)} → ${w.head().slice(0, 7)}\\): it goes back to review`));
+    // Its next acceptance pins the new head.
+    w.hub.humanOp('demo', 'accept', { item: '#1' });
+    await w.hub.prsSettled();
+    assert.equal(w.item(1).reviewed_sha, w.head());
+  });
+
+  test('a merge GitHub refuses because the head moved goes back to review too', async () => {
+    const w = await accepted({ auto: false });
+    // The hub's look at the PR saw the reviewed head; by the merge, it had moved.
+    const pull = w.hub.github.pull;
+    w.hub.github.pull = async (a) => ({ ...await pull(a), head_sha: w.reviewed });
+    writeFileSync(join(w.j.dir, 'late.js'), 'late()\n');
+    w.git(w.j.dir, 'add', '.');
+    w.git(w.j.dir, 'commit', '-q', '-m', 'late');
+    w.git(w.j.dir, 'push', '-q', 'origin', w.j.branch);
+    await pass(w);
+    assert.deepEqual(w.calls.merged, [w.reviewed]);
+    assert.equal(w.item(1).stage, 'verifying');
+  });
+
+  test('the same change rebased onto a newer main still lands, pinned to the rebased head', async () => {
+    const w = await accepted({ auto: false });
+    w.git(w.j.dir, 'fetch', '-q', 'origin');
+    w.git(w.j.dir, 'rebase', '-q', 'origin/main');
+    w.git(w.j.dir, 'push', '-q', '--force', 'origin', w.j.branch);
+    const rebased = w.head();
+    assert.notEqual(rebased, w.reviewed);
+    await pass(w);
+    assert.equal(w.item(1).stage, 'done');
+    assert.deepEqual(w.calls.merged, [rebased]);
+    assert.match(w.events(1, 'head_rebased')[0].headline, /the same change #1's review accepted, so it still lands/);
+  });
+
+  test('a rebase that slips in a change is not the same change', async () => {
+    const w = await accepted();
+    w.git(w.j.dir, 'fetch', '-q', 'origin');
+    w.git(w.j.dir, 'rebase', '-q', 'origin/main');
+    writeFileSync(join(w.j.dir, 'a1.txt'), 'work, and a little more\n');
+    w.git(w.j.dir, 'commit', '-q', '-a', '--amend', '--no-edit');
+    w.git(w.j.dir, 'push', '-q', '--force', 'origin', w.j.branch);
+    await pass(w);
+    assert.equal(w.item(1).stage, 'verifying');
+    assert.equal(w.calls.off.length, 1);
+  });
+
+  test('a push the hub passes on to an accepted branch is checked at once', async () => {
+    const w = await accepted();
+    writeFileSync(join(w.j.dir, 'more.js'), 'more()\n');
+    w.git(w.j.dir, 'add', '.');
+    w.git(w.j.dir, 'commit', '-q', '-m', 'more');
+    w.git(w.j.dir, 'push', '-q', 'origin', w.j.branch);
+    // What src/server.js does once GitHub took a push to the branch of a landing item.
+    await w.hub.headMoved(w.hub.project('demo'), w.item(1).id);
+    await w.hub.prsSettled();
+    assert.equal(w.item(1).stage, 'verifying');
+    assert.equal(w.calls.off.length, 1, 'auto-merge off before GitHub merges it');
   });
 });
