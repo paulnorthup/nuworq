@@ -13,11 +13,13 @@ const short = (sha) => String(sha).slice(0, 7);
 // running: the commit the hub runs (the red one itself when the supervisor just started on it).
 // With workspaces, every API path names one (#561): the workspace whose project lives in this repo, from their
 // databases (findWorkspace), its hub at /w/<workspace>/, with a human token of that workspace in NUWORQ_TOKEN.
-export async function redMain({ url, repo, sha, failed, running, workspaces = null, workspace = null }) {
+export async function redMain({ url, repo, sha, failed, running, workspaces = null, workspace = null, app = null }) {
   let hub, project, ws = null;
   if (workspaces) {
     const remote = repoRemote(repo);
-    const found = findWorkspace({ workspaces, workspace, repo, remote });
+    // When several workspaces link the repository, the one its App installation is bound to owns it (#614).
+    const installation = workspace ? null : await installationOf(remote, app);
+    const found = findWorkspace({ workspaces, workspace, repo, remote, installation });
     if (!found) {
       throw new Error(`no ${workspace ? `project in workspace ${workspace}` : `workspace in ${workspaces} has a project`} for ${remote || repo}. Link the repository to its project there, or name the workspace with serve --follow --workspace <name>`);
     }
@@ -46,6 +48,18 @@ export async function redMain({ url, repo, sha, failed, running, workspaces = nu
     throw e;
   }
   return { where: `${r.item} in ${ws ? `${ws}/` : ''}${project}` };
+}
+
+// The id of the hub's GitHub App installation on remote (github.com/owner/name), asked of GitHub with the App
+// (NUWORQ_GITHUB_APP_*, else the app file), or null: no app, not on GitHub, not installed, or GitHub didn't answer.
+async function installationOf(remote, app) {
+  const conf = appFromEnv() ?? appFromFile(app);
+  const m = String(remote).match(/^github\.com\/([^/]+)\/([^/]+)$/);
+  if (!conf || !m) return null;
+  try {
+    const r = await new GitHubApp(conf).call('GET', `/repos/${m[1]}/${m[2]}/installation`);
+    return r.status === 200 ? r.json?.id ?? null : null;
+  } catch { return null; }
 }
 
 // CI's required `test` check on sha, from GitHub with the hub's own App: NUWORQ_GITHUB_APP_*, else the app file
