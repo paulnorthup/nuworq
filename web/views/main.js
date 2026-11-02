@@ -1,7 +1,7 @@
 // The page (#602): the home, a project, analytics, as markup from the state. Pure: it reads the store (fields marked
 // 'main' in web/store.js) and the window's width, and touches no page.
 import { SETUP } from '../connect.js';
-import { ago, dur } from '../ago.js';
+import { ago, dur, timed } from '../ago.js';
 import { getStartedCard } from '../getstarted.js';
 import { proposeForm } from '../propose.js';
 import { homePage, columns, stateDot, STATE_LABELS } from '../home.js';
@@ -213,8 +213,8 @@ function card(a) {
       ${a.detail ? `<div class="label">Detail</div>${md(a.detail)}` : ''}
     </div>` : '';
   return `<article class="card kind-${a.kind}">
-    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${named(a.sub, a.agent, a.presence)}</span>${cardPriority(a)}</div>
-    <h3>${esc(a.headline)}</h3>
+    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${timed(a.sub, a.sub_at, (s) => named(s, a.agent, a.presence))}</span>${cardPriority(a)}</div>
+    <h3>${timed(a.headline, a.headline_at, esc)}</h3>
     ${a.attempts?.length > 1 ? attemptsGrid(a.item, a.attempts) : `${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
     ${commits(a.git)}`}
     ${a.warn ? `<div class="warn">⚠ ${esc(a.warn)}</div>` : ''}
@@ -374,7 +374,7 @@ function worthKnowing(v) {
     const open = S.open.has(`wk:${a.key}`);
     const openBtn = `<button class="btn ghost small" data-action="toggle" data-key="wk:${esc(a.key)}" aria-expanded="${open}">${open ? 'Close' : 'Open'}</button>`;
     if (!open) {
-      return `<div class="row-item wk-line"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h" title="${esc(a.headline)}">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.headline)}</div></div>
+      return `<div class="row-item wk-line"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h" title="${esc(a.headline)}">${a.item ? refLink(a.item) + ' ' : ''}${timed(a.headline, a.headline_at, esc)}</div></div>
         <div class="acts">${openBtn}<button class="btn ghost small wk-got" data-action="dismiss" data-key="${esc(a.key)}">Got it</button></div></div>`;
     }
     let acts = `<button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Got it</button>`;
@@ -395,7 +395,7 @@ function worthKnowing(v) {
     else if (a.kind === 'unfit') acts = `<button class="btn small" data-action="needs" data-item="${esc(a.item)}" data-needs="${esc(JSON.stringify(a.keep ?? []))}" title="Drop ${esc((a.missing ?? []).join(', '))} from what it needs">Let any agent take it</button><button class="btn ghost small" data-action="dismiss" data-key="${esc(a.key)}">Keep waiting</button>`;
     // "Got it" is for news; next to a real action, dismissing just hides it.
     else if (/data-action="(open|connect|notify)"/.test(acts)) acts = acts.replace('>Got it</button>', '>Hide</button>');
-    return `<div class="row-item wk-open"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${esc(a.sub)}</div>
+    return `<div class="row-item wk-open"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${timed(a.sub, a.sub_at, esc)}</div>
       ${a.why ? `<div class="s" style="margin-top:var(--sp-1)">${esc(a.why)}</div>` : ''}${a.how?.length ? howList(a.how) : ''}<div class="acts" style="margin-top:var(--sp-2)">${acts}</div></div><div class="acts">${openBtn}</div></div>`;
   }).join('');
   const more = know.length > WK_SHOWN

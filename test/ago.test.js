@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, dur as hubDur, MIN, HOUR, DAY } from '../src/core.js';
 import { view, itemView } from '../src/insight.js';
-import { dur, ago, tick } from '../web/ago.js';
+import { dur, ago, tick, timed } from '../web/ago.js';
 
 // #530: the page formats relative times itself from the hub's timestamps and keeps them current with one local
 // tick, so it needs no 30-second refetch; what only time changes on the hub arrives as a change.
@@ -47,6 +47,32 @@ describe('relative times tick in the page', () => {
     assert.equal(it.stage_since, created + 5 * MIN);
     assert.ok(it.lease_until > now);
     for (const e of it.timeline ?? it.events ?? []) assert.ok(e.at, 'events carry at');
+  });
+
+  // #689: a card's time sits inside a sentence ("w1 asked 2m ago"), so the hub sends it beside the sentence.
+  test('cards send the time beside each time in their sentences, and the page makes each one tick', () => {
+    let now = Date.UTC(2026, 10, 1, 9);
+    const hub = new Hub({ clock: () => now });
+    hub.tx(() => hub.project('p', { create: true }));
+    hub.humanOp('p', 'create', { title: 'A', acceptance: 'x' });
+    hub.agentOp('p', 'checkin', 'w1', {});
+    hub.agentOp('p', 'next', 'w1', {});
+    const asked = now;
+    hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Which way?', blocking: true });
+    hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Tabs?', assumption: 'spaces' });
+    now += 2 * MIN;
+    const v = view(hub, 'p');
+    const q = v.attention.find((a) => a.kind === 'question');
+    assert.equal(q.sub, 'A · w1 asked 2m ago · work is parked until you answer', 'the sentence reads as before');
+    assert.deepEqual(q.sub_at, [[asked, '2m']]);
+    const as = v.attention.find((a) => a.kind === 'assumption');
+    assert.deepEqual(as.sub_at, [[asked, '2m']]);
+    for (const a of v.attention) assert.ok(!/[\u0001-\u0003]/.test(a.headline + (a.sub ?? '')), 'no marks reach the page');
+
+    const html = timed(q.sub, q.sub_at, (s) => s.replace('&', '&amp;'), now + MIN);
+    assert.equal(html, `A · w1 asked <span data-at="${asked}">3m</span> ago · work is parked until you answer`);
+    assert.equal(timed('3m · 3m', [[asked, '3m']], String, now), `3m · <span data-at="${asked}">2m</span>`, 'the last one said is the time');
+    assert.equal(timed('<b>', undefined, (s) => s.replace('<', '&lt;')), '&lt;b>', 'no times: just rendered');
   });
 });
 

@@ -19,6 +19,22 @@ export function ago(at, { left = false, fallback = '', now = Date.now() } = {}) 
   return `<span data-at="${Number(at)}"${left ? ' data-left' : ''}>${dur(left ? at - now : now - at)}</span>`;
 }
 
+// A hub sentence with times in it (#689: "finished it 3m ago"): each time the hub sent beside it (times: [at, as
+// said]) becomes an ago() span, so the tick keeps it current. render turns the rest into markup (esc, named...).
+export function timed(text, times, render, now = Date.now()) {
+  text = String(text ?? '');
+  if (!times?.length) return render(text);
+  let end = text.length;
+  for (let k = times.length - 1; k >= 0; k--) {
+    const said = times[k][1];
+    const i = text.lastIndexOf(said, end - said.length);
+    if (!said || i < 0) continue;
+    text = `${text.slice(0, i)}\u0000${k}\u0000${text.slice(i + said.length)}`;
+    end = i;
+  }
+  return render(text).replace(/\u0000(\d+)\u0000/g, (m, k) => ago(times[k][0], { now }));
+}
+
 // Markup with what the tick says left out: two pages that differ only in how long ago things were are alike (#682).
 export const untimed = (html) => html.replace(/(<span data-at="\d+"(?: data-left)?>)[^<]*<\/span>/g, '$1</span>');
 
