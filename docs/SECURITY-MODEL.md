@@ -52,13 +52,19 @@ Each defence names the item that built it and the tests that guard it.
 - **Titles are public.** Item titles show on the live view, so a finding's title names what its fix guards, never the hole.
 
 ### People's machines (Paul's call 3)
-- **Workers run sandboxed.** Their shell writes only inside the worktree and reaches only the hub, GitHub and package registries. They run exact commands, not prefixes, and push only their own branch. Landing on main goes through the hub. Being built: #472, with #487 as its live test. Until it lands, a worker runs under its Claude Code allowlist (bin/nuworq.js).
+- **Workers run sandboxed.** Their shell writes only inside the worktree and reaches only the hub, GitHub and package registries. They run exact commands, not prefixes, and push only their own branch. Landing on main goes through the hub (#472, with #487 as its live test).
+  - **Not every harness is sandboxed the same way** (review #596). Claude Code workers get the sandbox above. Codex workers run with `-s workspace-write`: writes and network are limited, but reads aren't, and DENY_READ doesn't apply. opencode and pi workers have no sandbox, so they run only on projects without a remote (bin/nuworq.js), and a hostile hub's task text could have them read the machine's keys. Choosing one of those harnesses accepts that until #615 lands.
+  - **Where work lands in the checkout** (no origin), the worker may write the whole checkout. Anything an unsandboxed process later reads there (other workers' git metadata, `.claude/` settings) must stay denied (#606).
+  - **A push is to the held item's branch only, and landing merges the head that was reviewed.** Otherwise a worker could replace another item's accepted branch, or add to its own after review (#605).
+- **The operator's no-prompt rules are a boundary too.** An operator runs unsandboxed as the person and reads text that started with workers or strangers. Its permission prompt is the last thing a person sees, so the rules `nuworq operator --allow` writes must never let it run a program or store a command without asking (#607).
+- **An operator is someone a person trusted.** The operator role comes from a declared tag; a token a member minted shouldn't get it (#609), and an operator's words never carry a person's authority to other agents (#610).
 - **A runner trusts its machine.** It checks what the hub sends, and keeps its token out of commands, environments and logs (#477: `test/runtrust.test.js`, `test/runner.test.js`). A worker's llm-proxy token stays off its command line (#493: `test/clientlabel.test.js`).
 - **No fetched code.** Nothing is ever run that was fetched at runtime. Code arrives only through the package, checksum-verified (a standing decision).
 
 ### Releases (Paul's call 1)
 - **Paul approves each release.** It is signed only after he approves it on the machine that holds the key. The plugin installs from the `release` branch, never from main. Release tags get protected on GitHub too (#476, before the repository goes public). Covered by #473: `test/signer.test.js`, `test/plugin.test.js`, `test/package.test.js`.
-- **A compromised hub can't ship.** The signer builds each package from GitHub's copy of the commit and refuses a package that differs. Installs check the signature against the pinned `release-key.pub` (`scripts/signer.js`).
+- **A compromised hub can't ship.** The signer builds each package from GitHub's copy of the commit and refuses a package that differs. Installs check the signature against the pinned `release-key.pub` (`scripts/signer.js`). Every way of signing holds to this, signing by hand (`sign-release.js release`) included, which until #603 signs the bytes the hub serves without those checks.
+- **Plugin installs follow releases only.** An install made before #473 still tracks main's marketplace file until connect moves it onto the `release` branch (#608).
 - **Reviewed before it ships.** In a project with security reviews on, every release waits for a review of what it ships (below).
 
 ### The repository
