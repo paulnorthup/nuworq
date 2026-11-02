@@ -193,13 +193,19 @@ export function jobsTaken(hub, p, from, to = hub.now()) {
     WHERE e.project_id = ? AND e.type IN (${TAKES.map(() => '?').join(', ')}) AND e.at >= ? AND e.at <= ? ORDER BY e.at, e.id`).all(p.id, ...TAKES, from, to);
   // Every event of the items taken, in one query, grouped by item in id order (#537); and the items later repaired.
   const taken = [...new Set(takes.map((e) => e.item_id))];
-  const events = byItem(hub.q(`SELECT item_id, id, type, actor, data FROM events WHERE item_id IN (SELECT value FROM json_each(?)) ORDER BY item_id, id`).all(JSON.stringify(taken)));
+  const events = byItem(hub.q(`SELECT item_id, id, type, actor, data, at FROM events WHERE item_id IN (SELECT value FROM json_each(?)) ORDER BY item_id, id`).all(JSON.stringify(taken)));
   const repaired = new Set(hub.q(`SELECT DISTINCT fixes FROM items WHERE fixes IN (SELECT value FROM json_each(?))`).all(JSON.stringify(taken)).map((r) => r.fixes));
+  // Turns its CLI counted (#751), per run on each item: a job has those its agent recorded there from its take until
+  // its next take of the item. NULL rows (a CLI that doesn't say) count as unknown, not as none.
+  const runs = byItem(hub.q(`SELECT item_id, agent, turns, at FROM usage WHERE turns IS NOT NULL AND item_id IN (SELECT value FROM json_each(?)) ORDER BY item_id, at`).all(JSON.stringify(taken)));
   return takes.map((e) => {
     const d = JSON.parse(e.data || '{}');
     const job = d.job ?? { shaping: 'shape', review_started: 'review', landing: 'land' }[e.type] ?? 'work';
     const after = (events.get(e.item_id) ?? []).filter((x) => x.id > e.id);
     const mine = (x) => x.actor === e.actor;
+    const until = after.find((x) => mine(x) && TAKES.includes(x.type))?.at ?? Infinity;
+    const counted = (runs.get(e.item_id) ?? []).filter((r) => r.agent === e.actor && r.at >= e.at && r.at < until);
+    const turns = counted.length ? counted.reduce((a, r) => a + r.turns, 0) : null;
     const lapsed = (x) => x.type === 'lease_expired' && (JSON.parse(x.data || '{}').agent ?? (job === 'review' ? e.actor : null)) === e.actor;
     let result = 'open';
     const end = after.findIndex((x) => (mine(x) && (FINISHED[job].includes(x.type) || x.type === 'handoff')) || lapsed(x));
@@ -216,8 +222,18 @@ export function jobsTaken(hub, p, from, to = hub.now()) {
         else if (verdict && e.item_stage === 'done') result = repaired.has(e.item_id) ? 'escaped' : 'landed';
       }
     }
-    return { item: `#${e.seq}`, job, agent: e.actor, model: d.model || null, difficulty: d.difficulty ?? 'standard', trial: d.trial ?? null, at: e.at, result };
+    return { item: `#${e.seq}`, job, agent: e.actor, model: d.model || null, difficulty: d.difficulty ?? 'standard', trial: d.trial ?? null, at: e.at, result, turns };
   });
+}
+
+// Turns per kind of job (#751), over finished jobs (jobsTaken): how many, how many recorded turns, and their median
+// (null: not recorded). A looping worker shows here as turns, not only as dollars.
+export function turnsByJob(jobs) {
+  const finished = jobs.filter((j) => j.result !== 'open');
+  return Object.keys(FINISHED).map((job) => {
+    const list = finished.filter((j) => j.job === job);
+    return { job, jobs: list.length, recorded: list.filter((j) => j.turns != null).length, median_turns: median(list.map((j) => j.turns)) };
+  }).filter((k) => k.jobs);
 }
 
 // ── Calibration (#348): does difficulty predict what an item costs and how many attempts it takes, better than size? ──
@@ -302,7 +318,7 @@ function projectFigures(hub, p, from, to) {
       landed: t.landed, median_cycle_ms: t.median_cycle_ms, cost_usd: t.cost_usd, cost_per_landed: t.cost_per_landed,
       human_actions: o.human_actions.total, median_wait_ms: median(waits), escapes: t.escapes,
     },
-    items: o.items, waits,
+    items: o.items, waits, jobs: o.jobs,
   };
 }
 
@@ -314,12 +330,13 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
   const to = hub.now();
   const span = PERIODS[period];
   const from = span == null ? 0 : to - span;
-  const items = [], waits = [], jobs = [];
+  const items = [], waits = [], jobs = [], taken = [];
   const projects = hub.projects().filter((p) => !scope || scope.includes(p.slug)).map((p) => {
     const now = projectFigures(hub, p, from, to);
     jobs.push(...pricedJobs(hub, p, from, to));
     items.push(...now.items);
     waits.push(...now.waits);
+    taken.push(...now.jobs);
     const before = span == null ? null : projectFigures(hub, p, from - span, from - 1).figures;
     return { project: p.slug, name: p.name, ...now.figures, previous: before };
   });
@@ -330,7 +347,7 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
   return {
     version: OUTCOMES_VERSION, period, since: from, until: to,
     takeaway: takeaway({ summary, projects, by_model }),
-    summary, projects, by_model, by_agent, calibration: calibration(items), routing: routingResults(jobs),
+    summary, projects, by_model, by_agent, calibration: calibration(items), routing: routingResults(jobs), turns: turnsByJob(taken),
   };
 }
 

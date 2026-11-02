@@ -68,8 +68,9 @@ export function analyticsPage(o, { esc, dur, period = o?.period ?? '14d', open =
 
   const calSec = calibrationSection(o.calibration, { esc });
   const routeSec = routingSection(o.routing, { esc });
+  const turnSec = turnsSection(o.turns, { esc });
   const top = `${head}${take}<div class="an-switch">${seg}</div>`;
-  return wide ? `${top}${columns(`${projects}${calSec}`, `${modelSec}${agentSec}${routeSec}`)}` : `${top}${projects}${modelSec}${agentSec}${routeSec}${calSec}`;
+  return wide ? `${top}${columns(`${projects}${calSec}${turnSec}`, `${modelSec}${agentSec}${routeSec}`)}` : `${top}${projects}${modelSec}${agentSec}${routeSec}${calSec}${turnSec}`;
 }
 
 const JOBS = { work: 'Building', land: 'Landing', tidy: 'Tidying', review: 'Reviewing', shape: 'Shaping' };
@@ -89,6 +90,18 @@ export function routingSection(r, { esc }) {
   return `<section class="sec"><header><h2 data-new="model-routing-results">Model routing</h2><span class="hint">clean rate per model, by kind of job</span></header>
     <p class="an-verdict">${esc(saved)}</p>
     <div class="an-lines">${r.cells.map(cell).join('')}</div></section>`;
+}
+
+// Turns per job (#751): each kind of job's median turns as a bar on one scale (an amount: no state color), how many
+// jobs it covers beside it, and "not recorded" where no run's CLI counted turns. A looping worker shows here.
+export function turnsSection(turns, { esc }) {
+  if (!turns?.length) return '';
+  const max = Math.max(...turns.map((k) => k.median_turns ?? 0), 0);
+  const row = (k) => `<div class="step"><dt>${esc(JOBS[k.job] ?? k.job)} <span class="s">${k.recorded && k.recorded < k.jobs ? `${k.recorded} of ${k.jobs}` : k.jobs}</span></dt>
+      ${k.median_turns == null ? '<dd class="none">not recorded</dd>'
+        : `<dd><span class="bar" style="width:${max ? Math.max(2, Math.round((100 * k.median_turns) / max)) : 0}%"></span></dd><dd class="n">${k.median_turns}</dd>`}</div>`;
+  return `<section class="sec"><header><h2 data-new="turns-per-job">Turns per job</h2><span class="hint">median turns, by kind of job</span></header>
+    <div class="an-lines"><div class="an-line"><dl class="funnel an-cal">${turns.map(row).join('')}</dl></div></div></section>`;
 }
 
 const LABELS = { rote: 'Rote', standard: 'Standard', hard: 'Hard', small: 'Small', large: 'Large' };

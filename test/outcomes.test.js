@@ -128,3 +128,42 @@ test("no checkin model: the model the implementer's usage names; checkin's still
     assert.deepEqual(r.by_agent.map((a) => [a.agent, a.model]), [['bare', 'gpt-5-codex'], ['both', 'claude-opus-5-5'], ['none', null]]);
   }
 });
+
+// Turns per job (#751): each job carries the turns its agent's runs recorded on the item while it held the job, and
+// the workspace's outcomes give the median per kind of job, "not recorded" (null) where no run said.
+describe('turns per job', () => {
+  test('a job sums its runs\' turns; NULL stays unknown; the median per kind', () => {
+    let t = Date.UTC(2026, 9, 1, 9);
+    const hub = new Hub({ clock: () => t });
+    hub.tx(() => hub.project('demo', { create: true }));
+    const human = (op, args) => hub.humanOp('demo', op, args);
+    const agent = (name, op, args = {}) => hub.agentOp('demo', op, name, args);
+    for (const [k, turns] of [[1, 7], [2, 3], [3, null]]) {
+      human('create', { title: `Item ${k}`, acceptance: 'x' });
+      const w = `w${k}`;
+      agent(w, 'checkin', { model: 'claude-opus-5-5' });
+      agent(w, 'next');
+      t += 60_000;
+      agent(w, 'submit', { item: `#${k}`, headline: 'Done' });
+      t += 60_000;
+      // As the runner posts it once the worker exits (src/core.js usage).
+      agent(w, 'usage', { usage: { input_tokens: 100, output_tokens: 10, cost_usd: 0.1, ...(turns == null ? {} : { turns }) } });
+      human('accept', { item: `#${k}` });
+    }
+    const o = outcomes(hub, 'demo');
+    assert.deepEqual(o.jobs.map((j) => [j.item, j.job, j.turns]), [['#1', 'work', 7], ['#2', 'work', 3], ['#3', 'work', null]]);
+    const w = workspaceOutcomes(hub, { period: '14d' });
+    assert.deepEqual(w.turns, [{ job: 'work', jobs: 3, recorded: 2, median_turns: 7 }]);
+  });
+
+  test('a kind of job with no turns recorded says so', () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('demo', { create: true }));
+    hub.humanOp('demo', 'create', { title: 'One', acceptance: 'x' });
+    hub.agentOp('demo', 'checkin', 'w1', { model: 'claude-opus-5-5' });
+    hub.agentOp('demo', 'next', 'w1');
+    hub.agentOp('demo', 'submit', 'w1', { item: '#1', headline: 'Done', usage: { input_tokens: 5, output_tokens: 5 } });
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    assert.deepEqual(workspaceOutcomes(hub, { period: '14d' }).turns, [{ job: 'work', jobs: 1, recorded: 0, median_turns: null }]);
+  });
+});

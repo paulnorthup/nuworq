@@ -22,20 +22,24 @@ export function normUsage(u) {
   const rawCost = u.cost_usd ?? u.costUsd ?? u.cost;
   const cost = rawCost == null || rawCost === '' ? null : count(rawCost, 'cost_usd');
   const model = String(u.model ?? '').trim().slice(0, 100);
+  // turns (#751): the run's turns as its CLI counted them; left out where it didn't, so it's recorded as NULL, not 0.
+  const rawTurns = u.turns ?? u.num_turns ?? u.numTurns;
+  const turns = rawTurns == null || rawTurns === '' ? null : Math.round(count(rawTurns, 'turns'));
   if (!input && !output && cost == null) return null;
   // estimated: priced by nuworq from the run's tokens, not by its CLI (#761).
-  return { input_tokens: input, output_tokens: output, cost_usd: cost, model, ...(u.estimated === true || u.estimated === 'true' ? { estimated: true } : {}) };
+  return { input_tokens: input, output_tokens: output, cost_usd: cost, model, ...(turns != null ? { turns } : {}), ...(u.estimated === true || u.estimated === 'true' ? { estimated: true } : {}) };
 }
 
 // Split one run's usage across the items it worked on, by weight (time held). Integer tokens; the
 // last share takes the rounding remainder so the totals stay exact.
 export function split(u, weights) {
   const total = weights.reduce((a, w) => a + w, 0);
-  let inLeft = u.input_tokens, outLeft = u.output_tokens, costLeft = u.cost_usd;
+  let inLeft = u.input_tokens, outLeft = u.output_tokens, costLeft = u.cost_usd, turnsLeft = u.turns;
   return weights.map((w, k) => {
     const share = total ? w / total : 1 / weights.length;
-    if (k === weights.length - 1) return { ...u, input_tokens: inLeft, output_tokens: outLeft, cost_usd: costLeft };
+    if (k === weights.length - 1) return { ...u, input_tokens: inLeft, output_tokens: outLeft, cost_usd: costLeft, ...(u.turns != null ? { turns: turnsLeft } : {}) };
     const part = { ...u, input_tokens: Math.round(u.input_tokens * share), output_tokens: Math.round(u.output_tokens * share), cost_usd: u.cost_usd == null ? null : u.cost_usd * share };
+    if (u.turns != null) { part.turns = Math.round(u.turns * share); turnsLeft -= part.turns; }
     inLeft -= part.input_tokens; outLeft -= part.output_tokens;
     if (costLeft != null) costLeft -= part.cost_usd;
     return part;
@@ -51,8 +55,9 @@ export function split(u, weights) {
 // While it runs (#761), claude's spend so far is estimated from each assistant message's usage and the model's
 // price, so a runaway run can be stopped and counted before it exits; its `result` replaces the estimate. A run
 // killed before its `result` keeps the estimate, marked estimated: true. Codex is priced from the same table.
+// Turns (#751): claude's `result` says num_turns; codex emits one `turn.completed` per turn; the others say none.
 export function tap(agent, { model = '' } = {}) {
-  let input = 0, output = 0, cost = null, seen = false, name = model, estimated = false;
+  let input = 0, output = 0, cost = null, seen = false, name = model, estimated = false, turns = null;
   const add = (i, o, c) => { seen = true; input += Number(i) || 0; output += Number(o) || 0; if (c != null && Number.isFinite(Number(c))) cost = (cost ?? 0) + Number(c); };
   const text = (blocks) => (Array.isArray(blocks) ? blocks.filter((b) => b?.type === 'text' && b.text).map((b) => b.text).join('\n') : '') || null;
   // claude's messages so far, by id: stream-json repeats a message's usage on each of its content blocks.
@@ -83,6 +88,7 @@ export function tap(agent, { model = '' } = {}) {
         // Cached input is still input the model read: count it, so tokens match the bill.
         add((u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), u.output_tokens, e.total_cost_usd);
         if (!name && e.modelUsage) name = Object.keys(e.modelUsage)[0] ?? '';
+        if (e.num_turns != null && Number.isFinite(Number(e.num_turns))) turns = Number(e.num_turns);
         return null;
       }
       return null;
@@ -92,6 +98,7 @@ export function tap(agent, { model = '' } = {}) {
         // Its input_tokens include the cached ones.
         const u = e.usage ?? {};
         const cached = Number(u.cached_input_tokens) || 0;
+        turns = (turns ?? 0) + 1;
         add(u.input_tokens, u.output_tokens, priceOf(name, { input: Math.max((Number(u.input_tokens) || 0) - cached, 0), cache_read: cached, output: Number(u.output_tokens) || 0 }));
         return null;
       }
@@ -130,7 +137,7 @@ export function tap(agent, { model = '' } = {}) {
     usage() {
       if (!seen) return null;
       const unpriced = /^(ollama|proxy)\//.test(name);
-      return { input_tokens: input, output_tokens: output, cost_usd: unpriced ? null : cost, model: name.replace(/^(ollama|proxy)\//, ''), ...(estimated ? { estimated: true } : {}) };
+      return { input_tokens: input, output_tokens: output, cost_usd: unpriced ? null : cost, model: name.replace(/^(ollama|proxy)\//, ''), ...(turns != null ? { turns } : {}), ...(estimated ? { estimated: true } : {}) };
     },
     // Dollars so far, for the runner's caps: 0 while unknown.
     spent() { return /^(ollama|proxy)\//.test(name) ? 0 : cost ?? 0; },

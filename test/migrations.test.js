@@ -24,6 +24,7 @@ describe('numbered migrations', () => {
     for (const i of NEW_INDEXES) assert.ok(indexes(db).includes(i), i);
     assert.ok(columns(db, 'items').includes('notes_review'));
     assert.ok(columns(db, 'people').includes('verified_at'));
+    assert.ok(columns(db, 'usage').includes('turns'), 'turns per run (#751)');
     assert.equal(db.prepare('PRAGMA synchronous').get().synchronous, 1, 'WAL with synchronous=NORMAL');
     db.close();
   });
