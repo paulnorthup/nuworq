@@ -76,7 +76,7 @@ describe('the page uses one function for every agent', () => {
   test('the agent strip and the Agents cards say the job; cards, the feed and timelines name agents through it; the home too', () => {
     assert.match(app, /\$\{who\(a\.name, a\.model, \{ job: true \}\)\}<span class="st /);
     assert.match(app, /<div class="top">\$\{who\(a\.name, a\.model, \{ job: true \}\)\}/);
-    assert.match(app, /<span class="sub">\$\{named\(a\.sub, a\.agent, a\.presence\)\}<\/span>/);
+    assert.match(app, /<span class="sub">\$\{timed\(a\.sub, a\.sub_at, \(s\) => named\(s, a\.agent, a\.presence\)\)\}<\/span>/);
     assert.equal(app.match(/named\(e\.headline, e\.actor, undefined, \{ beside: true \}\)/g).length, 2);
     // In motion's last step sits beside the agent's line: no "claude-80e7 is shaping #9" under it.
     assert.match(app, /m\.last\.type === 'shaping' \? 'Started shaping it' : named\(m\.last\.headline, m\.agent, undefined, \{ beside: true \}\)/);

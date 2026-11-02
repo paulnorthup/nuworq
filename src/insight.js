@@ -329,7 +329,19 @@ function build(hub, p, t, { light = false } = {}) {
 
   // ── attention: what needs you (act) and what's worth knowing (know) ──
   const attention = [];
-  const push = (a) => { if (!dismissed.has(a.key)) attention.push(a); };
+  // How long since at, inside an entry's headline or sub (#689). push takes it out again and sends it beside the
+  // text (headline_at, sub_at: [at, as said]), so the page renders it with ago() and its tick keeps it current:
+  // a minute passing then redraws no card.
+  const timeIn = (at) => `\u0001${at}\u0002${dur(t - at)}\u0003`;
+  const timed = (a, f) => {
+    const times = [];
+    a[f] = a[f].replace(/\u0001(\d+)\u0002([^\u0003]*)\u0003/g, (m, at, said) => (times.push([Number(at), said]), said));
+    if (times.length) a[`${f}_at`] = times;
+  };
+  const push = (a) => {
+    for (const f of ['headline', 'sub']) if (typeof a[f] === 'string' && a[f].includes('\u0001')) timed(a, f);
+    if (!dismissed.has(a.key)) attention.push(a);
+  };
 
   // A question to an issue's reporter comes to you only once they've had reporter_wait hours to answer on GitHub.
   const wait = p.reporter_wait * HOUR;
@@ -343,7 +355,7 @@ function build(hub, p, t, { light = false } = {}) {
     push({
       key: `q:${q.id}`, level: 'act', kind: 'question', at: q.reporter && !held ? q.at + wait : q.at,
       headline: q.question,
-      sub: [it?.title, orig ? `${q.asked_by} (operator) escalated ${orig.asked_by}'s question ${dur(t - q.at)} ago` : `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${dur(t - q.at)} ago`,
+      sub: [it?.title, orig ? `${q.asked_by} (operator) escalated ${orig.asked_by}'s question ${timeIn(q.at)} ago` : `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${timeIn(q.at)} ago`,
         held ? `@${q.reporter} replied; they have no write access, so it waits for you to pass it on` : q.reporter && 'no reply yet',
         it?.stage === 'waiting' && 'work is parked until you answer'].filter(Boolean).join(' · '),
       why: [held && `@${q.reporter} replied on GitHub (${q.held_url}):\n\n${q.held_reply.split('\n').map((l) => `> ${l}`).join('\n')}`,
@@ -367,7 +379,7 @@ function build(hub, p, t, { light = false } = {}) {
     push({
       key: `opanswer:${q.id}`, level: 'know', kind: 'operator-answered', at: q.answered_at,
       headline: `Operator answered ${q.asked_by}: ${q.answer}`,
-      sub: [`Q: ${q.question}`, `${q.answered_by} · ${dur(t - q.answered_at)} ago`].join(' · '),
+      sub: [`Q: ${q.question}`, `${q.answered_by} · ${timeIn(q.answered_at)} ago`].join(' · '),
       why: q.context, item: it ? ref(it) : null,
     });
   }
@@ -402,7 +414,7 @@ function build(hub, p, t, { light = false } = {}) {
   for (const it of landing.filter((i) => !i.holder && t - i.stage_since > HOUR)) {
     push({
       key: `land:${it.id}`, level: 'know', kind: 'landing-stuck', at: it.stage_since,
-      headline: `${ref(it)} was accepted ${dur(t - it.stage_since)} ago but isn't on main yet`,
+      headline: `${ref(it)} was accepted ${timeIn(it.stage_since)} ago but isn't on main yet`,
       sub: it.title, why: `No agent has landed ${it.branch || 'its branch'}. Start an agent; land jobs come before any other work.`,
       item: ref(it), start: true,
     });
@@ -415,8 +427,8 @@ function build(hub, p, t, { light = false } = {}) {
     const pre = preconditionOut(it);
     push({
       key: `outside:${it.id}:${it.stage_since}`, level: 'know', kind: 'outside-overdue', at: it.stage_since,
-      headline: `${ref(it)} has waited ${dur(t - it.stage_since)} on something outside the hub`,
-      sub: [it.title, pre?.last_check ? `last check ${dur(t - pre.last_check.at)} ago: ${pre.last_check.detail}` : 'not checked yet'].join(' · '),
+      headline: `${ref(it)} has waited ${timeIn(it.stage_since)} on something outside the hub`,
+      sub: [it.title, pre?.last_check ? `last check ${timeIn(pre.last_check.at)} ago: ${pre.last_check.detail}` : 'not checked yet'].join(' · '),
       why: `It waits until ${pre?.waits_for}. If that will never happen, or the check is wrong, edit or remove the precondition; "Check now" asks again on the next sweep.`,
       item: ref(it),
     });
@@ -447,7 +459,7 @@ function build(hub, p, t, { light = false } = {}) {
     push({
       key: `plan-limit:${refused.agent}`, level: 'act', kind: 'plan-limit', at: refused.at, upgrade,
       headline: `${refused.agent} is waiting: the Free plan runs one agent at a time, and ${refused.working.join(', ')} is working`,
-      sub: `refused ${dur(t - refused.at)} ago`,
+      sub: `refused ${timeIn(refused.at)} ago`,
       why: `On Free, a second agent waits until the first finishes or hands off. Pro runs any number side by side. Upgrade opens Stripe Checkout; the plan changes within a minute once Stripe confirms the payment.`,
       owners: hub.q("SELECT handle FROM people WHERE role = 'owner' ORDER BY handle").all().map((r) => `@${r.handle}`),
     });
@@ -473,7 +485,7 @@ function build(hub, p, t, { light = false } = {}) {
       push({
         key: `review:${it.id}:${sub?.id ?? 0}`, level: 'act', kind: 'review', at: it.stage_since,
         headline: sub?.headline || it.title,
-        sub: `${it.title} · ${it.implementer ?? 'an agent'} finished it ${dur(t - it.stage_since)} ago`,
+        sub: `${it.title} · ${it.implementer ?? 'an agent'} finished it ${timeIn(it.stage_since)} ago`,
         why: sub?.summary, detail: sub?.detail,
         acceptance: it.acceptance, evidence, git,
         warn: [evidence.length ? null : 'No evidence attached', gitWarning(git)].filter(Boolean).join(' · ') || null,
@@ -485,7 +497,7 @@ function build(hub, p, t, { light = false } = {}) {
     for (const it of in_('verifying').filter((i) => !i.holder && t - i.stage_since > 2 * HOUR)) {
       push({
         key: `peer:${it.id}`, level: 'know', kind: 'peer-review-stuck', at: it.stage_since,
-        headline: `${ref(it)} has waited ${dur(t - it.stage_since)} for a peer review`,
+        headline: `${ref(it)} has waited ${timeIn(it.stage_since)} for a peer review`,
         sub: it.title, why: 'No other agent has picked it up. Review it yourself, or start another agent.',
         item: ref(it),
       });
@@ -500,7 +512,7 @@ function build(hub, p, t, { light = false } = {}) {
       push({
         key: `proposal:${it.id}`, level: 'act', kind: 'proposal', at: shaped?.at ?? it.created_at,
         headline: it.title,
-        sub: shaped ? `${shaped.actor} shaped it ${dur(t - shaped.at)} ago` : `${it.created_by === HUMAN ? 'You' : it.created_by} proposed it ${dur(t - it.created_at)} ago`,
+        sub: shaped ? `${shaped.actor} shaped it ${timeIn(shaped.at)} ago` : `${it.created_by === HUMAN ? 'You' : it.created_by} proposed it ${timeIn(it.created_at)} ago`,
         why: [shaped?.headline, it.summary].filter(Boolean).join('\n\n'), acceptance: it.acceptance, item: ref(it),
       });
     }
@@ -560,7 +572,7 @@ function build(hub, p, t, { light = false } = {}) {
     push({
       key: `q:${q.id}`, level: 'know', kind: 'assumption', at: q.at,
       headline: `${q.asked_by} assumed: ${q.assumption}`,
-      sub: [`Q: ${q.question}`, `${dur(t - q.at)} ago`].filter(Boolean).join(' · '),
+      sub: [`Q: ${q.question}`, `${timeIn(q.at)} ago`].filter(Boolean).join(' · '),
       why: q.context, item: it ? ref(it) : null,
       question: { id: q.id, options: json(q.options, []), assumption: q.assumption, asked_by: q.asked_by },
     });
@@ -579,7 +591,7 @@ function build(hub, p, t, { light = false } = {}) {
   for (const s of steers.filter((s) => isHuman(s.by) && !s.acks.length && t - s.at > 15 * MIN)) {
     push({
       key: `steer:${s.id}`, level: 'know', kind: 'steer-unseen', at: s.at,
-      headline: `No agent has picked up your steer yet (${dur(t - s.at)})`,
+      headline: `No agent has picked up your steer yet (${timeIn(s.at)})`,
       sub: `"${s.body.slice(0, 120)}"`,
       why: recentAgents.length ? 'Agents see steering on their next call to nuworq.' : 'No agents are active right now. They will see it when they check in.',
       item: s.item,
@@ -610,7 +622,7 @@ function build(hub, p, t, { light = false } = {}) {
     push({
       key: `group-stalled:${g.id}:${missing.join(',')}`, level: 'act', kind: 'group-stalled', at: it.stage_since + 4 * HOUR,
       headline: `"${g.title}" is stalled: ${ref(it)} needs ${missing.join(', ')}`,
-      sub: `${g.id === it.id ? 'It' : `Its next step, ${ref(it)},`} has waited ${dur(t - it.stage_since)}; no agent connected in 4 hours has ${missing.join(', ')}`,
+      sub: `${g.id === it.id ? 'It' : `Its next step, ${ref(it)},`} has waited ${timeIn(it.stage_since)}; no agent connected in 4 hours has ${missing.join(', ')}`,
       why: `${ref(g)} is "now", and its next step needs ${missing.join(', ')}, which no agent connected in the last 4 hours has. Nothing else can move it.`,
       item: ref(it), group: ref(g), missing, how: capabilitySteps(p, it, missing),
     });
@@ -661,7 +673,7 @@ function build(hub, p, t, { light = false } = {}) {
       push({
         key: `notify:${c.id}:${c.failing_since}`, level: 'know', kind: 'notify-failing', at: c.failing_since,
         headline: `Push notifications to ${c.kind} are failing (${c.last_error})`,
-        sub: `since ${dur(t - c.failing_since)} ago · retried once`,
+        sub: `since ${timeIn(c.failing_since)} ago · retried once`,
         why: 'Things that need you are not reaching your phone or chat. Check the channel under Notifications, or run `nuworq notify test`.',
       });
     }
