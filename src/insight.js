@@ -306,9 +306,10 @@ function build(hub, p, t, { light = false } = {}) {
   const remotes = hub.remotesOf(p);
   const agents = hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id);
   // Only what can still be acted on: never a question about work that landed or was dropped (#182), but steps a
-  // person still has to do for work that landed (#692) are theirs to do, blocking or not.
-  const openQs = hub.q(`SELECT q.* FROM questions q LEFT JOIN items i ON i.id = q.item_id
-    WHERE q.project_id = ? AND q.status = 'open' AND (i.id IS NULL OR i.stage NOT IN ('done', 'dropped') OR (i.stage = 'done' AND q.steps != '[]')) ORDER BY q.at`).all(p.id);
+  // person still has to do for work that landed (#692) are theirs to do, blocking or not, as is an escalation of them.
+  const openQs = hub.q(`SELECT q.* FROM questions q LEFT JOIN items i ON i.id = q.item_id LEFT JOIN questions o ON o.id = q.escalates
+    WHERE q.project_id = ? AND q.status = 'open' AND (i.id IS NULL OR i.stage NOT IN ('done', 'dropped')
+      OR (i.stage = 'done' AND (q.steps != '[]' OR (o.status = 'open' AND o.steps != '[]')))) ORDER BY q.at`).all(p.id);
   const landedSteps = (q) => byId.get(q.item_id)?.stage === 'done';
   const dismissed = new Set(hub.q('SELECT key FROM dismissals WHERE project_id = ?').all(p.id).map((d) => d.key));
   const snap = hub.snap(p); // dependencies, jobs and records from one load (#538)
@@ -347,7 +348,7 @@ function build(hub, p, t, { light = false } = {}) {
       headline: q.question,
       sub: [it?.title, orig ? `${q.asked_by} (operator) escalated ${orig.asked_by}'s question ${dur(t - q.at)} ago` : `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${dur(t - q.at)} ago`,
         held ? `@${q.reporter} replied; they have no write access, so it waits for you to pass it on` : q.reporter && 'no reply yet',
-        it?.stage === 'waiting' && 'work is parked until you answer', landedSteps(q) && `${ref(it)} landed; these steps are still to do`].filter(Boolean).join(' · '),
+        it?.stage === 'waiting' && 'work is parked until you answer', landedSteps(q) && `${ref(it)} landed; ${orig ? 'its' : 'these'} steps are still to do`].filter(Boolean).join(' · '),
       why: [held && `@${q.reporter} replied on GitHub (${q.held_url}):\n\n${q.held_reply.split('\n').map((l) => `> ${l}`).join('\n')}`,
         orig && `${orig.asked_by} asked an operator: "${orig.question}"`, q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked

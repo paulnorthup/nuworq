@@ -1133,11 +1133,14 @@ export class Hub extends EventEmitter {
   // 'shipped', not 'confirmed' (nobody agreed; it landed on them and nobody changed them). Every other open
   // question about it, and any escalation of one, is withdrawn. Disagreeing later is new work, not an override.
   // Except steps a person still has to do (#692): landed work often needs them to run, so that question stays open
-  // until they are done. Dropped work never shipped, so its steps are withdrawn with it.
+  // until they are done, and so does an operator's escalation of it. Dropped work never shipped, so its steps are
+  // withdrawn with it.
   settleQuestions(item, stage) {
     const reason = stage === 'done' ? `#${item.seq} landed` : `#${item.seq} was dropped`;
-    for (const q of this.q(`SELECT id, blocking, assumption, steps FROM questions WHERE item_id = ? AND status = 'open'`).all(item.id)) {
-      if (stage === 'done' && json(q.steps, []).length) continue;
+    const open = this.q(`SELECT id, blocking, assumption, steps, escalates FROM questions WHERE item_id = ? AND status = 'open'`).all(item.id);
+    const kept = new Set(stage === 'done' ? open.filter((q) => json(q.steps, []).length).map((q) => q.id) : []);
+    for (const q of open) {
+      if (kept.has(q.id) || kept.has(q.escalates)) continue;
       const shipped = stage === 'done' && !q.blocking && !!q.assumption;
       this.q('UPDATE questions SET status = ?, closed_reason = ? WHERE id = ?').run(shipped ? 'shipped' : 'withdrawn', reason, q.id);
       this.q(`UPDATE questions SET status = 'withdrawn', closed_reason = ? WHERE escalates = ? AND status = 'open'`).run(reason, q.id);

@@ -129,6 +129,18 @@ describe('steps a person still has to do outlive the work that landed (#692)', (
     assert.equal(asks(view(hub, 'p')).length, 0);
   });
 
+  test("an operator's escalation of them stays open with them, in Needs you", () => {
+    const hub = setup();
+    const q = hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Can you grant the app Actions: Read?', assumption: 'granted', steps: STEPS, to: 'operator' }).question;
+    hub.agentOp('p', 'checkin', 'op', { has: ['operator'] });
+    const e = hub.agentOp('p', 'ask', 'op', { escalates: q, question: 'May I grant the app Actions: Read?', options: ['yes', 'no'], evidence: ['checked its permissions'] }).question;
+    hub.humanOp('p', 'update', { item: '#1', stage: 'done' });
+    assert.deepEqual(qs(hub).map((q) => [q.status, q.closed_reason]), [['open', ''], ['open', '']]);
+    const c = asks(view(hub, 'p')).find((a) => a.question.id === e);
+    assert.equal(c.level, 'act');
+    assert.match(c.sub, /#1 landed; its steps are still to do/);
+  });
+
   test('a restart leaves them open', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'nuworq-settled-')), 'hub.db');
     const hub = setup(new Hub({ file, clock: () => Date.UTC(2026, 9, 30, 9) }));
