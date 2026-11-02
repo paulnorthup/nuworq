@@ -74,7 +74,9 @@ export function takeIssue(hub, p, repo, issue) {
     }
   }
   // Renamed on GitHub: follow it while the item is still a proposal and nobody holds it back; after that the item's title is ours.
-  if (issue.title && issue.title !== row.title && item.stage === 'proposed' && !heldIssue(hub, item)) {
+  // Never for an outsider's issue (#613): a person let in the title they saw, and a stranger's rename would reach
+  // agents and the live view unquoted. The new title stays on the issue's row for anyone who looks.
+  if (issue.title && issue.title !== row.title && item.stage === 'proposed' && !heldIssue(hub, item) && !row.outsider) {
     hub.patch(item, { title: clip(issue.title, 160) });
     changes.push('renamed');
   }
