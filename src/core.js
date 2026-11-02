@@ -2795,19 +2795,25 @@ function headMovedBack(p, item, { by = SYSTEM, head = '' } = {}) {
       : 'The hub never saw the head the review accepted, so what was pushed since gets a review of its own.',
     data: { conflicts: true, head_moved: true, reviewed: was, head },
   });
+  autoMergeOff.call(this, p, item, ` until #${item.seq} is reviewed again`);
+}
+
+// Nothing merges work that isn't accepted as it stands (#605, #726): its open pull request's auto-merge goes off, in
+// the background. The next acceptance merges it pinned to the reviewed head (mergeReady). until: when it may merge
+// again, for the record if GitHub refuses.
+function autoMergeOff(p, item, until) {
   const row = this.q(`SELECT * FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
-  if (row && this.github?.disableAutoMerge) {
-    const off = (async () => {
-      const pr = await this.github.pull({ repo: row.repo, number: row.number });
-      if (pr.auto_merge) await this.github.disableAutoMerge({ repo: row.repo, id: pr.node_id });
-    })().catch((e) => this.tx(() => this.event(p, {
-      item, actor: SYSTEM, type: 'pr_merge_failed', headline: `The hub couldn't turn off auto-merge on PR #${row.number} for #${item.seq}: ${clip(e.message)}`,
-      summary: `Turn it off on GitHub (${row.url}) until #${item.seq} is reviewed again.`, data: { url: row.url, number: row.number, error: e.message },
-    })));
-    const key = `auto-merge off ${item.id}`;
-    this._opening.set(key, off);
-    off.finally(() => this._opening.delete(key));
-  }
+  if (!row || !this.github?.disableAutoMerge) return;
+  const off = (async () => {
+    const pr = await this.github.pull({ repo: row.repo, number: row.number });
+    if (pr.auto_merge) await this.github.disableAutoMerge({ repo: row.repo, id: pr.node_id });
+  })().catch((e) => this.tx(() => this.event(p, {
+    item, actor: SYSTEM, type: 'pr_merge_failed', headline: `The hub couldn't turn off auto-merge on PR #${row.number} for #${item.seq}: ${clip(e.message)}`,
+    summary: `Turn it off on GitHub (${row.url})${until}.`, data: { url: row.url, number: row.number, error: e.message },
+  })));
+  const key = `auto-merge off ${item.id}`;
+  this._opening.set(key, off);
+  off.finally(() => this._opening.delete(key));
 }
 
 // A land job whose branch isn't what its review accepted (#605): back to review, and the lander says so.
@@ -3782,6 +3788,7 @@ Object.assign(Hub.prototype, {
         handoff: JSON.stringify({ kind: 'sent_back', by: actor, headline, summary, at: this.now() }),
       });
       this.event(p, { item, actor, type: 'sent_back', headline: `${who} sent back #${item.seq}: ${headline}`, summary, detail });
+      autoMergeOff.call(this, p, item, ` until #${item.seq} is accepted again`);
       this.stepUp(p, item, 'was sent back');
     }
   },
@@ -3961,6 +3968,7 @@ const HUMAN_OPS = {
       this.move(it, args.stage, by, { holder: null, lease_until: null });
       const verb = { ready: 'moved', proposed: 'moved', done: 'marked', dropped: 'dropped' }[args.stage];
       this.event(p, { item: it, actor: by, type: 'staged', headline: `${You(by)} ${verb} #${it.seq}${args.stage !== 'dropped' ? ` to ${args.stage}` : ''}`, summary: str(args.note) });
+      if (args.stage !== 'done') autoMergeOff.call(this, p, it, args.stage === 'dropped' ? `: #${it.seq} was dropped` : ` until #${it.seq} is accepted again`);
       for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder, by, { notice: true });
     }
   },
