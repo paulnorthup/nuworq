@@ -321,7 +321,8 @@ html.theming *, html.theming *::before, html.theming *::after { transition-prope
 .kind { font-weight: 650; text-transform: uppercase; letter-spacing: .05em; font-size: var(--fs-1); color: var(--you); }
 .ref { font-family: var(--mono); font-size: var(--fs-2); color: var(--muted); background: var(--sunken); padding: 0 var(--sp-2); border-radius: var(--r-s); cursor: pointer; }
 .ref:hover { color: var(--ink); text-decoration: none; }
-.card h3 { font-size: var(--fs-5); font-weight: 600; margin: var(--sp-1) 0 var(--sp-h); line-height: 1.4; }
+/* A question's number (#710): quieter than the item's ref beside it, since it isn't a link. */
+.qref { font-family: var(--mono); font-size: var(--fs-2); color: var(--muted); white-space: nowrap; }.card h3 { font-size: var(--fs-5); font-weight: 600; margin: var(--sp-1) 0 var(--sp-h); line-height: 1.4; }
 .card .sub { color: var(--muted); }
 .more { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: var(--rule) solid var(--line); color: var(--ink); font-size: var(--fs-3); }
 .more p { margin: 0 0 var(--sp-2); }

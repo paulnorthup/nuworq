@@ -6,7 +6,7 @@ import { errorHtml } from './errors.js';
 import { toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
 import { shortcutsHtml } from './shortcuts.js';
-import { rank, resultsHtml, confirmHtml, THEMES } from './launcher.js';
+import { rank, resultsHtml, confirmHtml, questionHtml, THEMES } from './launcher.js';
 import { feedbackForm, feedbackThanks, feedbackMine, attached } from './feedback.js';
 import { predict, placeholder } from './instant.js';
 import { S, setState, toggleIn, addTo, putIn, removeFrom, PAGE } from './store.js';
@@ -454,6 +454,7 @@ export async function runLauncher(r) {
   else if (x.theme) { setTheme(x.theme); toast(`Appearance: ${THEMES.find(([k]) => k === x.theme)[1]}`); }
   else if (x.zoom) { setZoom(x.zoom); toast(`Depth ${x.zoom}`); }
   else if (x.open) openAt(x.open);
+  else if (x.question) openQuestion(x.question);
   else if (x.human) {
     try {
       await api(`/api/p/${encodeURIComponent(x.slug)}/human/${x.human}`, { method: 'POST', body: JSON.stringify(x.body) });
@@ -474,6 +475,20 @@ function openAt({ slug, item, focus }) {
   const t = setInterval(() => {
     const el = $(`#drawer [id="${id}"]`);
     if (el || ++tries > 60) { clearInterval(t); el?.focus(); }
+  }, 50);
+}
+// A question by its number (#710): an open one at its card in Needs you, else its row in its item's flyout; one with
+// no item and no card opens on its own.
+function openQuestion(q) {
+  if (!q.card && !q.n) return modal(questionHtml(q, { esc }));
+  const before = location.hash;
+  go(q.p, q.card ? null : `#${q.n}`);
+  if (location.hash === before) render({ force: true });
+  const sel = `${q.card ? '#main' : '#drawer'} [data-qs~="${q.id}"]`;
+  let tries = 0;
+  const t = setInterval(() => {
+    const el = $(sel);
+    if (el || ++tries > 60) { clearInterval(t); el?.scrollIntoView({ block: 'center' }); el?.focus({ preventScroll: true }); }
   }, 50);
 }
 // ── events ──
@@ -815,6 +830,7 @@ export const ACTIONS = {
     } catch (e) { toastError(e); }
   },
   'close-modal': () => closeModal(),
+  'question-project': (el) => { closeModal(); go(el.dataset.slug); },
   logout: async () => { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); location.href = 'login.html'; },
   'first-project': async () => {
     const name = val('fp-name');

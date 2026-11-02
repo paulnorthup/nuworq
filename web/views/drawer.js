@@ -10,7 +10,7 @@ import { ackList } from '../acks.js';
 import { preconditionSection } from '../precondition.js';
 import { placeholder } from '../instant.js';
 import { S } from '../store.js';
-import { commits, esc, inline, md, plural, refLink, repoTag, stageAge, when } from './html.js';
+import { commits, esc, inline, md, plural, qref, refLink, repoTag, stageAge, when } from './html.js';
 import { attemptsGrid, courtOf, named, stagePill, who, z } from './parts.js';
 
 const prioritySeg = (item, priority) => milestonePriority(item, priority, { esc });
@@ -102,9 +102,9 @@ export function drawerHtml() {
   const handoff = it.handoff && it.stage !== 'done' ? `<div class="d-sec"><div class="label">${it.handoff.kind === 'sent_back' ? 'Sent back' : 'Where the last agent left off'}</div>
     <div class="handoff"><div class="by">${who(it.handoff.by)} · ${ago(it.handoff.at)} ago</div><b>${esc(it.handoff.headline)}</b>${it.handoff.summary ? md(it.handoff.summary) : ''}</div></div>` : '';
 
-  const questions = it.questions.length ? `<div class="d-sec"><div class="label">Questions <span class="count">${it.questions.length}</span></div>
-    ${it.questions.map((q) => `<div class="q ${q.status} ${q.blocking ? 'blocking' : ''}">
-      <div class="meta">${who(q.asked_by)} · ${q.escalation ? `escalated ${esc(q.escalation.asked_by)}'s question` : q.blocking ? 'blocking' : 'non-blocking'} · ${when(q)} ago · ${esc(q.status)}</div>
+  const questions = it.questions.length ? `<div class="d-sec"><div class="label"><span data-new="question-numbers">Questions</span> <span class="count">${it.questions.length}</span></div>
+    ${it.questions.map((q) => `<div class="q ${q.status} ${q.blocking ? 'blocking' : ''}" data-qs="${q.id}" tabindex="-1">
+      <div class="meta">${qref(q.id)} · ${who(q.asked_by)} · ${q.escalation ? `escalated ${esc(q.escalation.asked_by)}'s question` : q.blocking ? 'blocking' : 'non-blocking'} · ${when(q)} ago · ${esc(q.status)}</div>
       <div><b>${esc(q.question)}</b></div>${q.escalation ? `<div class="a">${esc(q.escalation.asked_by)} asked an operator: <i>${esc(q.escalation.question)}</i></div>` : ''}${q.context ? md(q.context) : ''}
       ${q.evidence?.length ? `<div class="evidence">${q.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
       ${q.assumption ? `<div class="a">Assumed: <i>${esc(q.assumption)}</i></div>` : ''}

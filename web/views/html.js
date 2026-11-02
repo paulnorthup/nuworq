@@ -46,6 +46,8 @@ export function providerOf(model = '') {
 }
 // An empty section: one line on why it's empty, and the one thing to do about it.
 export const zero = (why, action = '') => `<div class="zero"><span class="check">→</span><div>${why}${action ? ` ${action}` : ''}</div></div>`;
+// A question's number (#710), quiet beside its item's ref: what agents and the hub call it, and what ⌘K finds.
+export const qref = (id) => `<span class="qref" title="Question ${esc(id)}: ⌘K finds it as q${esc(id)}">Q${esc(id)}</span>`;
 export const refLink = (ref) => (ref ? `<a class="ref" data-action="open" data-item="${esc(ref)}">${esc(ref)}</a>` : '');
 // A step's place: a URL opens in a new tab; commands each get their own Copy, joined by their words (#379).
 export const stepWhere = (where) => (!where ? '' : /^https?:\/\/\S+$/i.test(where.trim())
