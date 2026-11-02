@@ -182,3 +182,72 @@ describe('a landing PR that cannot merge routes itself', () => {
     assert.equal(cards().length, 1);
   });
 });
+
+// #726: work a person takes back out of landing never merges on its own. GitHub, here, says the PR has auto-merge on
+// until the hub turns it off, and records that it did.
+describe('sending back or dropping a landing item turns its auto-merge off', () => {
+  async function landing({ refuse = false } = {}) {
+    const w = world();
+    const job = await w.accepted();
+    const gh = { auto: true, off: [] };
+    Object.assign(w.hub.github, {
+      async pull() { return { state: 'open', mergeable_state: 'blocked', auto_merge: gh.auto, base: 'main', head_sha: SHA, node_id: 'PR_101' }; },
+      async disableAutoMerge(args) {
+        if (refuse) throw new Error('Resource not accessible by integration');
+        gh.off.push(args);
+        gh.auto = false;
+      },
+    });
+    const merged = () => w.deliver('pull_request', { action: 'closed', pull_request: w.pr({ state: 'closed', merged: true, merge_commit_sha: 'fff' }) });
+    return { ...w, job, gh, merged };
+  }
+  const off = (w) => [{ repo: w.hub.repoOf(w.hub.project('demo'), w.item()), id: 'PR_101' }];
+
+  test('a person sending it back turns auto-merge off, and a merge afterwards leaves it ready', async () => {
+    const w = await landing();
+    w.hub.humanOp('demo', 'sendback', { item: '#1', note: 'Not this way' });
+    await w.hub.prsSettled();
+    assert.equal(w.item().stage, 'ready');
+    assert.deepEqual(w.gh.off, off(w));
+    w.merged();
+    assert.equal(w.item().stage, 'ready', 'someone merging by hand on GitHub is not the sent-back work done');
+    assert.equal(w.events('landed').length, 0);
+  });
+
+  test('dropping it, or moving it back to ready, turns auto-merge off too', async () => {
+    for (const stage of ['dropped', 'ready']) {
+      const w = await landing();
+      w.hub.humanOp('demo', 'update', { item: '#1', stage });
+      await w.hub.prsSettled();
+      assert.deepEqual(w.gh.off, off(w), stage);
+      w.merged();
+      assert.equal(w.item().stage, stage, `${stage}: a merge afterwards changes nothing`);
+    }
+  });
+
+  test("a reviewer rejecting the builder's CI fix turns auto-merge off; only CI's own send-back keeps it", async () => {
+    const w = await landing();
+    w.hub.humanOp('demo', 'settings', { autonomy: 'full' });
+    w.deliver('check_run', { action: 'completed', check_run: { name: 'test', head_sha: SHA, status: 'completed', conclusion: 'failure' } });
+    await w.hub.prsSettled();
+    assert.deepEqual(w.gh.off, [], "CI's send-back keeps auto-merge: the fix merges once green");
+    w.op('a1', 'next');
+    w.op('a1', 'submit', { item: '#1', headline: 'Fixed' });
+    w.op('r1', 'checkin');
+    assert.equal(w.op('r1', 'next').mode, 'review');
+    w.op('r1', 'review', { item: '#1', verdict: 'reject', headline: 'The fix hides the failure' });
+    await w.hub.prsSettled();
+    assert.deepEqual(w.gh.off, off(w));
+    w.merged();
+    assert.equal(w.item().stage, 'ready');
+  });
+
+  test('GitHub refusing to turn it off goes on the record with the PR link', async () => {
+    const w = await landing({ refuse: true });
+    w.hub.humanOp('demo', 'update', { item: '#1', stage: 'dropped' });
+    await w.hub.prsSettled();
+    const [e] = w.events('pr_merge_failed');
+    assert.match(e.headline, /couldn't turn off auto-merge on PR #101 for #1: Resource not accessible/);
+    assert.equal(e.summary, 'Turn it off on GitHub (https://github.com/acme/api/pull/101): #1 was dropped.');
+  });
+});
