@@ -95,6 +95,19 @@ describe('text from outside the project waits for a person', () => {
     assert.equal(ctx.held, undefined);
   });
 
+  test("an outsider's issue renamed after it was let in keeps its approved title (#613)", async () => {
+    await deliver('issues', { action: 'opened', repository, issue: issue(7, 'NONE') });
+    answer(needsYou()[0], LET_IN);
+    assert.equal(item(1).title, 'Export is slow (7)', 'the title the person let in');
+    const r = await deliver('issues', { action: 'edited', repository, issue: issue(7, 'NONE', { title: INJECT }) });
+    assert.equal(item(1).title, 'Export is slow (7)', "a stranger's rename doesn't reach agents or the live view");
+    assert.equal(r.body.changes, undefined);
+    // A collaborator's proposal still follows its issue's renames, as before.
+    await deliver('issues', { action: 'opened', repository, issue: issue(10, 'OWNER') });
+    await deliver('issues', { action: 'edited', repository, issue: issue(10, 'OWNER', { title: 'Exports stream' }) });
+    assert.equal(item(2).title, 'Exports stream');
+  });
+
   test('Drop it drops the proposal; reopening the issue holds it again', async () => {
     await deliver('issues', { action: 'opened', repository, issue: issue(8, 'CONTRIBUTOR') });
     answer(needsYou()[0], DROP_IT);
