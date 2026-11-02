@@ -23,6 +23,14 @@ function setup() {
   return { hub, step, tick: (ms) => { now += ms; } };
 }
 
+// The setup that works (#489), all three running: a runner, an operator and a shaper.
+function theSetup(hub, slug = 'demo') {
+  hub.agentOp(slug, 'checkin', 'a1', {});
+  hub.reportRunner({ machine: 'mac' }, { scope: [slug] });
+  hub.agentOp(slug, 'checkin', 'op', { has: ['operator'] });
+  hub.agentOp(slug, 'checkin', 's1', { role: 'shaper' });
+}
+
 // GitHub as far as Get started asks: whether the app has any installation.
 function github(installations) {
   const server = http.createServer((req, res) => {
@@ -33,10 +41,10 @@ function github(installations) {
 }
 
 describe('get started: each step checks itself off from hub state', () => {
-  test('a single hub has five steps; a workspaces hub adds the organization first', () => {
+  test('a single hub has seven steps; a workspaces hub adds the organization first', () => {
     const { hub } = setup();
-    assert.deepEqual(getStarted(facts(hub)).steps.map((s) => s.key), ['project', 'github', 'machine', 'agent', 'landed']);
-    assert.deepEqual(getStarted(facts(hub, { workspaces: true })).steps.map((s) => s.key), ['org', 'project', 'github', 'machine', 'agent', 'landed']);
+    assert.deepEqual(getStarted(facts(hub)).steps.map((s) => s.key), ['project', 'github', 'machine', 'workers', 'operator', 'shaper', 'landed']);
+    assert.deepEqual(getStarted(facts(hub, { workspaces: true })).steps.map((s) => s.key), ['org', 'project', 'github', 'machine', 'workers', 'operator', 'shaper', 'landed']);
   });
 
   test('organization: done once the viewer is a person in the workspace', () => {
@@ -93,14 +101,49 @@ describe('get started: each step checks itself off from hub state', () => {
     assert.equal(step('machine', { viewer: '@bo' }).done, false);
   });
 
-  test('start an agent: one checked in within the last week', () => {
+  // The setup that works (#489): Start an agent became its three sessions.
+  test('start workers: a runner reported for one of these projects within the last week', () => {
     const { hub, step, tick } = setup();
     hub.tx(() => hub.project('demo', { create: true }));
-    assert.equal(step('agent').done, false);
     hub.agentOp('demo', 'checkin', 'a1', {});
-    assert.equal(step('agent').done, true);
+    assert.equal(step('workers').done, false, 'an agent checking in is not workers');
+    hub.reportRunner({ machine: 'other' }, { scope: ['elsewhere'] });
+    assert.equal(step('workers').done, false, 'a runner for a project this hub has not');
+    hub.reportRunner({ machine: 'mac' }, { scope: ['demo'] });
+    assert.equal(step('workers').done, true);
     tick(RECENT_MS + 1);
-    assert.equal(step('agent').done, false, 'a week of silence: start one again');
+    assert.equal(step('workers').done, false, 'a week of silence: start them again');
+    hub.reportRunner({ machine: 'mac' });
+    assert.equal(step('workers').done, true, 'a runner whose token reaches every project');
+  });
+
+  test('start an operator: one checked in within the last week; a worker or session is not one', () => {
+    const { hub, step, tick } = setup();
+    hub.tx(() => hub.project('demo', { create: true }));
+    hub.agentOp('demo', 'checkin', 'a1', {});
+    assert.equal(step('operator').done, false);
+    hub.agentOp('demo', 'checkin', 'op', { has: ['operator'] });
+    assert.equal(step('operator').done, true);
+    tick(RECENT_MS + 1);
+    assert.equal(step('operator').done, false, 'a week of silence: start one again');
+  });
+
+  test('shape work with a shaper: a shaper checked in, once is enough', () => {
+    const { hub, step, tick } = setup();
+    hub.tx(() => hub.project('demo', { create: true }));
+    hub.agentOp('demo', 'propose', 'a1', { title: 'A worker proposed this' });
+    assert.equal(step('shaper').done, false, 'a worker proposing is not a shaper');
+    hub.agentOp('demo', 'checkin', 's1', { role: 'shaper' });
+    assert.equal(step('shaper').done, true);
+    tick(RECENT_MS + 1);
+    assert.equal(step('shaper').done, true, 'shaping is done once: no need to keep one open');
+  });
+
+  test('each setup step opens Connect an agent with its session\'s commands', () => {
+    const { step } = setup();
+    for (const [key, label] of [['workers', 'Start workers'], ['operator', 'Start an operator'], ['shaper', 'Shape work with a shaper']]) {
+      assert.deepEqual(step(key), { key, label, done: false, action: { label, ui: 'connect', command: key } });
+    }
   });
 
   test('first item landed: an item built, accepted and landed on main', () => {
@@ -136,7 +179,7 @@ describe('get started: each step checks itself off from hub state', () => {
     assert.ok(step('github'), 'before any project, GitHub is on the list');
     const p = hub.tx(() => hub.project('demo', { create: true }));
     hub.addRemote(p, '/srv/git/demo.git', 'you');
-    hub.agentOp('demo', 'checkin', 'a1', {});
+    theSetup(hub);
     hub.event(p, { actor: 'a1', type: 'landed', headline: 'a1 landed #1 on main' });
     const gs = getStarted(facts(hub, { app: 'none' }));
     assert.equal(gs.steps.find((s) => s.key === 'github'), undefined);
@@ -208,11 +251,11 @@ describe('get started over HTTP: complete once, then gone for good', () => {
       let gs = await call('/api/get-started');
       assert.equal(gs.show, true);
       assert.equal(gs.complete, false);
-      assert.deepEqual(gs.steps.filter((s) => !s.done).map((s) => s.key), ['repo', 'github', 'machine', 'agent', 'landed']);
+      assert.deepEqual(gs.steps.filter((s) => !s.done).map((s) => s.key), ['repo', 'github', 'machine', 'workers', 'operator', 'shaper', 'landed']);
       assert.equal(gs.steps.find((s) => s.key === 'github').action.href, 'https://github.com/apps/nuworq-test/installations/new');
 
       hub.addRemote(p, 'github.com/acme/api', 'you');
-      hub.agentOp('demo', 'checkin', 'a1', {});
+      theSetup(hub);
       hub.event(p, { actor: 'a1', type: 'landed', headline: 'a1 landed #1 on main' });
       gs = await call('/api/get-started');
       assert.deepEqual(gs.steps.filter((s) => !s.done).map((s) => s.key), ['github'], 'GitHub still has no installation');
@@ -226,7 +269,7 @@ describe('get started over HTTP: complete once, then gone for good', () => {
     const { hub, p, call, close } = await hubWithEverything(installations);
     try {
       hub.addRemote(p, 'github.com/acme/api', 'you');
-      hub.agentOp('demo', 'checkin', 'a1', {});
+      theSetup(hub);
       hub.event(p, { actor: 'a1', type: 'landed', headline: 'a1 landed #1 on main' });
       let gs = await call('/api/get-started');
       assert.equal(gs.complete, true);
@@ -261,9 +304,10 @@ describe('get started card', () => {
   const steps = [
     { key: 'github', label: 'Connect GitHub', done: true },
     { key: 'project', label: 'Add a project', done: false, action: { label: '+ Project', ui: 'new-project' } },
-    { key: 'agent', label: 'Start an agent', done: false, action: { label: 'Start an agent', ui: 'connect', command: 'worker' } },
+    { key: 'operator', label: 'Start an operator', done: false, action: { label: 'Start an operator', ui: 'connect', command: 'operator' } },
     { key: 'landed', label: 'Watch your first item land', done: false, action: { label: 'Open the board', href: '#/p/demo' } },
   ];
+  const commands = { operator: 'In the project\'s folder, run `claude`, then type `/nuworq:operator`' };
 
   test('done steps are ticked; the next undone step is a button, later ones links', () => {
     const html = getStartedCard({ show: true, steps });
@@ -274,11 +318,13 @@ describe('get started card', () => {
     assert.match(html, /data-action="get-started-hide"/);
   });
 
-  test('the worker command shows under "Start an agent" once it is the next step', () => {
-    const later = getStartedCard({ show: true, steps }, { worker: 'node nuworq.js worker --run' });
-    assert.doesNotMatch(later, /worker --run/);
-    const now = getStartedCard({ show: true, steps: steps.map((s) => (s.key === 'project' ? { ...s, done: true, action: undefined } : s)) }, { worker: 'node nuworq.js worker --run' });
-    assert.match(now, /<pre>node nuworq.js worker --run<\/pre>/);
+  test('a step\'s commands show under it once it is the next step, each with its Copy (#489)', () => {
+    const later = getStartedCard({ show: true, steps }, { commands });
+    assert.doesNotMatch(later, /nuworq:operator/);
+    const now = getStartedCard({ show: true, steps: steps.map((s) => (s.key === 'project' ? { ...s, done: true, action: undefined } : s)) }, { commands });
+    assert.match(now, /<pre>claude<\/pre>/);
+    assert.match(now, /<p class="cmd-join">then type<\/p>/);
+    assert.match(now, /<pre>\/nuworq:operator<\/pre>/);
   });
 
   test('complete or hidden: no card at all', () => {

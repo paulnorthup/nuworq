@@ -62,7 +62,7 @@ export const COMMANDS = [
     ],
   },
   {
-    name: 'run', group: 'start', brief: 'keep workers on waiting work in your projects',
+    name: 'run', group: 'start', brief: 'start workers: keep them on waiting work in your projects',
     does: 'keep up to N headless workers on waiting work in the projects you opted in',
     usage: ['run [flags]', 'run --sweep [--dry-run]', 'run --install [run flags]', 'run --uninstall'],
     flags: [
@@ -120,7 +120,7 @@ export const COMMANDS = [
     ],
   },
   {
-    name: 'operator', group: 'agents', brief: 'the line that starts an operator session',
+    name: 'operator', group: 'start', brief: 'start an operator: Claude Code in a terminal (--start)',
     does: 'print the tags an operator session declares and the line that starts it (runs nothing)',
     usage: ['operator [--project p] [--has tags]', 'operator --start [--has tags]', 'operator --check <level>'],
     flags: [
@@ -519,6 +519,11 @@ const styler = (style) => (line, names = []) => {
   return s;
 };
 
+// Get going leads with the setup that works (#489): connect, then its three sessions in web/connect.js's order
+// (workers on run, an operator, a shaper: no command, but a line typed in the Claude Code app), then the rest.
+const SHAPER = { name: '/nuworq:shaper', brief: 'shape work with a shaper: type it in the Claude Code app' };
+export const GET_GOING = ['connect', 'run', 'operator', SHAPER.name, 'up', 'status', 'update'];
+
 // A bare `nuworq`: one screen.
 export function bare({ width = 80, style = plain } = {}) {
   const s = styler(style);
@@ -526,7 +531,8 @@ export function bare({ width = 80, style = plain } = {}) {
   // One column for every group, as wide as the widest name listed.
   const at = 2 + Math.max(...COMMANDS.filter((c) => c.brief).map((c) => (c.label ?? c.name).length)) + 4;
   for (const [g, title] of GROUPS) {
-    const cmds = COMMANDS.filter((c) => c.group === g && !c.under);
+    const cmds = g === 'start' ? GET_GOING.map((n) => (n === SHAPER.name ? SHAPER : command(n)))
+      : COMMANDS.filter((c) => c.group === g && !c.under);
     if (!cmds.length) continue;
     if (g === 'protocol' || g === 'more') {
       out.push(...wrap(`${title}: ${cmds.map((c) => c.name).join(', ')}`, width, { hang: '  ' }), '');

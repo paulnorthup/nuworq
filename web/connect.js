@@ -3,7 +3,10 @@
 // such file or directory". Every command is the installed `nuworq`, never a path into a checkout, and no
 // config holds a token or an address: `nuworq connect` saves both, and `nuworq mcp` reads them.
 
-const LOOPBACK = /^(localhost|127(\.\d+){3}|\[::1\])$/i;
+import { commandBlocks } from './copy.js';
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const LOOPBACK =/^(localhost|127(\.\d+){3}|\[::1\])$/i;
 
 // The first install's signature check (#473): node -e '<VERIFY>' <file> <key>, where key is release-key.pub's
 // base64 line. It exits 1 unless <file>.sig is the release key's signature over <file>. No arrows or pipes, so
@@ -56,6 +59,39 @@ export function connectCommands(info, page = null, slug = 'my-project') {
     guide: `nuworq guide --project ${slug}`,
   };
 }
+
+// The setup that works (#489): how nuworq itself is built, and what every place that says how to get going offers
+// first, in this order and these words: the guide, Get started, Connect an agent, the README and the CLI's bare
+// screen (test/setup.test.js holds them together). name, where and does make one sentence (setupLine); how is
+// what to type, with each command to copy in backticks.
+export const SETUP = [
+  {
+    key: 'workers', title: 'Start workers', name: 'Workers', where: 'on `nuworq run` (best as a service)',
+    does: 'build, review and land the work: headless agents, each in its own git worktree, on the projects you let them staff.',
+    why: 'They need no one watching. As a service they keep going after you close the terminal, and after a restart.',
+    how: 'In a clone of the project, run `nuworq run --install --workers auto`',
+  },
+  {
+    key: 'operator', title: 'Start an operator', name: 'An operator', where: 'in a terminal',
+    does: 'manages the workers and keeps things moving: it answers their questions, lands work, and does what workers can\'t. It asks you only what only you can do.',
+    why: 'Its listener starts a turn each time something waits for it. In a terminal of its own, those turns never interrupt the conversation you\'re having with the shaper.',
+    how: 'In the project\'s folder, run `claude`, then type `/nuworq:operator`',
+  },
+  {
+    key: 'shaper', title: 'Shape work with a shaper', name: 'A shaper', where: 'in the Claude Code app',
+    does: 'talks through what you want, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you.',
+    why: 'It\'s the session you read and talk in, and the app is made for reading and talking.',
+    how: 'Open the project\'s folder in the Claude Code app\'s Code tab, then type `/nuworq:shaper`',
+  },
+];
+// One session in a sentence, in backtick marks: "Workers on `nuworq run` (best as a service) build, …".
+export const setupLine = (s) => `${s.name} ${s.where} ${s.does} ${s.why}`;
+export const SETUP_LEAD = 'Three sessions, each where it works best. It\'s how nuworq itself is built. Starting with just a shaper is fine.';
+
+// The sessions as Connect an agent shows them, each with what to type and a Copy per command.
+export const setupSection = () => `<section><h3><span data-new="setup-that-works">The setup that works</span></h3>
+  <p class="lead">${esc(SETUP_LEAD)}</p>
+  ${SETUP.map((s, k) => `<h4>${k + 1}. ${esc(s.title)}</h4><p class="lead">${esc(setupLine(s)).replace(/`([^`]+)`/g, '<code>$1</code>')}</p>${commandBlocks(s.how)}`).join('')}</section>`;
 
 // The commands meant for a shell, for checking: none may hold a placeholder.
 export const shellCommands = (c) => [c.setup, c.install, c.connect, c.up, c.run, c.worker, c.plugin, c.claude, c.pi, c.piWorker, c.guide].filter(Boolean);

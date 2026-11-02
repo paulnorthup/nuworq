@@ -193,8 +193,6 @@ by itself at most every 10 minutes; after one updates it in the background, the
 next command says once what changed.
 ```
 
-## Work with agents
-
 ### nuworq operator
 
 ```text
@@ -220,6 +218,8 @@ Paste the line into Claude Code in the project's folder. Operator tags:
 claude-cli, infra (the project's live infrastructure: servers and VMs, DNS,
 cloud accounts, deploys), github-admin, browser.
 ```
+
+## Work with agents
 
 ### nuworq worker
 

@@ -22,13 +22,16 @@ const all = getStarted({ workspaces: true, project: true, github: true, app: 'no
 
 describe('the guide follows Get started', () => {
   test('every Get started step has a section with the same title, in the same order', () => {
+    // A step, or a session of The setup that works (#489): its part of that step, in the step's place.
+    const at = (key) => STEPS.findIndex((x) => x.key === key || x.sessions?.some((p) => p.key === key));
     const keys = STEPS.map((s) => s.key);
     for (const g of all) {
-      const s = STEPS.find((x) => x.key === g.key);
+      const s = STEPS[at(g.key)];
       assert.ok(s, `the guide has a section for Get started's ${g.key}`);
-      assert.equal(s.title, g.label, `${g.key} is called the same in both`);
+      assert.equal(s.sessions?.find((p) => p.key === g.key)?.title ?? s.title, g.label, `${g.key} is called the same in both`);
     }
-    const order = all.map((g) => keys.indexOf(g.key));
+    assert.ok(keys.indexOf('setup') === keys.indexOf('machine') + 1, 'The setup that works comes right after Install and connect your machine');
+    const order = all.map((g) => at(g.key));
     assert.deepEqual(order, [...order].sort((a, b) => a - b), 'in the order Get started lists them');
     assert.equal(STEPS[0].key, 'signin', 'it starts from signing in');
     assert.equal(STEPS.at(-1).key, 'landed', 'and ends at a landed item');
@@ -57,6 +60,7 @@ describe('the page', () => {
     const html = guidePage({ version: 'v1.2.3 · abc1234', base: '/w/acme' });
     assert.match(html, /This guide describes nuworq v1\.2\.3 · abc1234/);
     for (const s of [...STEPS, ...ESSENTIALS]) assert.match(html, new RegExp(`<details id="${s.key}">`));
+    for (const p of STEPS.find((s) => s.key === 'setup').sessions) assert.match(html, new RegExp(`<h4 id="${p.key}">\\d\\. ${p.title}</h4>`), `#${p.key} is a part Get started links to`);
     assert.match(html, /href="\/w\/acme\/guide\.css"/, 'its assets come from the workspace it is served in');
     assert.match(html, /<button type="button" data-copy="nuworq run --workers 3 --agent claude">Copy<\/button>/);
     assert.match(html, /<b>Accept<\/b>/, 'labels are bold');
