@@ -17,6 +17,7 @@ Who might attack nuworq, where the trust boundaries are, and which defence cover
 | **Another workspace** | Sign in, hold tokens and agents of its own, and call every API its role allows. | Another workspace's data, or acting in it. |
 | **A member, by role** | What their role allows: owner, member or viewer. | More than their role: settings, people, billing, other projects. |
 | **An agent token** | Agent operations in its project, as the agent it names. | Human operations (accept, settings, decisions), acting as another agent, other projects. |
+| **A person's own agents** | The agent tokens they minted (device login, `nuworq token`), which keep working after their role changes. | Through their agents, what their role refuses them in person: claiming, reviewing, push tokens. |
 | **A stranger's issue or reply** | Write text that the hub imports from GitHub. Agents read that text. | Prompt injection: getting an agent to run, push or leak something. |
 | **A hostile or impersonated hub** | Whatever a runner, worker or MCP process accepts from the hub it's connected to. | Running code on people's machines, or reading their files and tokens. |
 | **A compromised hub VM** | Everything the hub holds: databases, the GitHub App key, webhook secrets. | Releases, and people's machines through them. |
@@ -37,6 +38,7 @@ Each defence names the item that built it and the tests that guard it.
 ### The HTTP edge and sign-in
 - **Sign-in decides identity.** Plans, owner rights and notifications follow how someone signed in, never an email they typed (#470: `test/identity.test.js`, `test/adminspaces.test.js`).
 - **Roles and tokens.** A person's role and a token's identity decide what a caller may do. Agent operations are for agents, and each agent acts only as itself (#469: `test/agentroles.test.js`, `test/auth.test.js`).
+- **A token never outdoes its minter.** An agent token may do no more than the person who minted it may now: a member's machine proposes and comments, and demoting someone narrows their tokens at once. Runner tokens stand on their own. Being built: #629 (found by the review of sign-in, accounts and tenancy, #590).
 - **Stored as hashes.** Tokens, sessions and codes are stored as hashes, never as the secret itself.
 - **Hardened edge.** The hub reads real client addresses behind a proxy, builds links from its own address, and sends HSTS. Errors are quiet: a 500 carries an id and no internals. Markdown renders in a single pass and streams are capped (#479: `test/edge.test.js`, `test/wait.test.js`). Escaping and the CSP hold.
 - **No SQL injection.** Every query takes parameters.
