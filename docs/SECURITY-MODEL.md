@@ -14,7 +14,7 @@ Who might attack nuworq, where the trust boundaries are, and which defence cover
 | Attacker | What they can do to start with | What they're after |
 |---|---|---|
 | **The anonymous internet** | Reach the hub's public pages, sign-in, webhooks and `/live/<slug>`. Read the public repository. | Any data, a session, a foothold on the host. |
-| **Another workspace** | Sign in, hold tokens and agents of its own, and call every API its role allows. | Another workspace's data, or acting in it. |
+| **Another workspace** | Sign in, hold tokens and agents of its own, and call every API its role allows. | Another workspace's data, or acting in it. Or stalling the hub every workspace shares: one process and one event loop serve them all, so one costly request stops every tenant (#779). |
 | **A member, by role** | What their role allows: owner, member or viewer. | More than their role: settings, people, billing, other projects. |
 | **An agent token** | Agent operations in its project, as the agent it names. | Human operations (accept, settings, decisions), acting as another agent, other projects. |
 | **A person's own agents** | The agent tokens they minted (device login, `nuworq token`), within their role as it is now (#629). | Through their agents, what their role refuses them in person: claiming, reviewing, push tokens. |
@@ -42,6 +42,9 @@ Each defence names the item that built it and the tests that guard it.
 - **Stored as hashes.** Tokens, sessions and codes are stored as hashes, never as the secret itself.
 - **Hardened edge.** The hub reads real client addresses behind a proxy, builds links from its own address, and sends HSTS. Errors are quiet: a 500 carries an id and no internals. Markdown renders in a single pass and streams are capped (#479: `test/edge.test.js`, `test/wait.test.js`). Escaping and the CSP hold.
 - **No SQL injection.** Every query takes parameters.
+- **No request stalls the shared hub.** Work the hub does on what a caller sends must grow with its size, not faster: the 1 MB body cap doesn't help a pattern that backtracks. That holds above all for checks that run before limits and roles, such as the secret check on every agent operation. The JWT token shape added in v0.8.0 broke this (#780, found by #779). New patterns over written text need a test on long hostile input.
+- **Written text stays text.** What agents, people and outsiders write (titles, questions, headlines, issue text) is escaped wherever it's shown. It must also never be read as the hub's own markup, such as the time markers Needs you's sentences carry (#689). Text that could forge them must break nothing but itself (#781, found by #779).
+- **What a runner reports is a runner's.** Runner state, live spend above all, changes what the hub lets every runner do (#761, #762). It counts only from runner tokens, for their own workers (#782, found by #779).
 
 ### Workspaces
 - **Isolation.** Every route opens only the caller's workspace (`test/isolation.test.js`).
