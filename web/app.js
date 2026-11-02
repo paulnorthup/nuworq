@@ -86,6 +86,8 @@ for (const type of ['click', 'focusin']) {
 }
 // The rail is drawn from the state: the workspace menu stays as the person left it.
 document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) setState({ orgOpen: e.target.open }); }, true);
+// A row's ⋯ menu (#651) shuts once its action is chosen; the popover shuts itself on a tap elsewhere or Escape.
+document.addEventListener('click', (e) => e.target.closest?.('.row-menu:popover-open [data-action]')?.closest('.row-menu').hidePopover());
 
 document.addEventListener('visibilitychange', () => live.shown());
 document.addEventListener('pointerdown', () => live.press(), true);
