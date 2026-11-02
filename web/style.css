@@ -383,8 +383,8 @@ button.row-item:hover, button.row-item:focus-visible { background: var(--hover);
 /* What agents and the hub told each other about an item (#550): one plain line each, its whole text on a tap. */
 .told-item + .told-item { border-top: var(--rule) solid var(--line); }
 .told-item > button.row-item { border-top: 0; font-size: var(--fs-3); }
-.told-item .h { flex: 1; font-weight: var(--fw-4); }
-.told-item .h b { font-weight: 600; }
+.told-item > .row-item .h { flex: 1; font-weight: var(--fw-4); }
+.told-item > .row-item .h b { font-weight: 600; }
 .told-body { padding: 0 var(--sp-4) var(--sp-3); font-size: var(--fs-3); color: var(--muted); }
 .row-item .h { font-weight: 520; }
 .row-item .s { color: var(--muted); font-size: var(--fs-2); }
