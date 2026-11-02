@@ -50,6 +50,53 @@ export async function cleanWorktree(worktree, git) {
   return { kept: false };
 }
 
+// The branches and tags of the checkout a worker shares, as ref → sha (#618): its sandbox writes refs so it can
+// commit in its worktree, so a prompt-injected worker could move any of them.
+export async function refsOf(home, git) {
+  const out = await git(['-C', home, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads', 'refs/tags']);
+  return new Map(out.split('\n').filter(Boolean).map((l) => l.split(' ')));
+}
+
+// The branches checked out in the checkout's worktrees, the person's own included: ref → that worktree's path.
+export async function checkedOut(home, git) {
+  const held = new Map();
+  let path = null;
+  for (const l of (await git(['-C', home, 'worktree', 'list', '--porcelain'])).split('\n')) {
+    if (l.startsWith('worktree ')) path = l.slice(9);
+    else if (l.startsWith('branch ')) held.set(l.slice(7), path);
+  }
+  return held;
+}
+
+// After a worker exits (#618): every branch or tag of the shared checkout that moved or went while it ran goes back
+// where it was, so the person (or an operator, or a sibling) never pushes what a worker put there. Left alone: the
+// worker's own branch (own), a branch checked out in another live worker's worktree (live: its sibling moves it), and
+// a branch now on a commit origin has (a pull; the caller fetches first, so origin's refs are origin's). A branch
+// checked out in any other worktree, the person's checkout included, is never moved: under their files it would
+// look like their commit vanished. It is reported instead (kept), to check by hand. Refs it made are named, not
+// deleted. Returns { restored: [{ ref, from, to }], kept: [{ ref, from, to, path }], created: [ref] }.
+export async function restoreRefs(home, before, git, { own = [], live = [] } = {}) {
+  const after = await refsOf(home, git);
+  const skip = new Set([...own, ...live].filter(Boolean).map((b) => (b.startsWith('refs/') ? b : `refs/heads/${b}`)));
+  const held = await checkedOut(home, git);
+  const restored = [], kept = [];
+  for (const [ref, from] of before) {
+    const to = after.get(ref) ?? null;
+    if (to === from || skip.has(ref)) continue;
+    if (to && ref.startsWith('refs/heads/') && (await git(['-C', home, 'branch', '-r', '--contains', to]).catch(() => '')).trim()) continue;
+    if (to && held.has(ref)) { kept.push({ ref, from, to, path: held.get(ref) }); continue; }
+    // Only from where it is now: one the person moves meanwhile is theirs.
+    await git(['-C', home, 'update-ref', ref, from, ...(to ? [to] : [])]);
+    restored.push({ ref, from, to });
+  }
+  const created = [...after.keys()].filter((ref) => !before.has(ref) && !skip.has(ref));
+  return { restored, kept, created };
+}
+// One line a person can act on: what moved, where it went back to, and how to undo that.
+export const restoredLine = (home, { ref, from, to }) => `${ref.replace(/^refs\/heads\//, '')} was ${to ? `moved to ${to.slice(0, 7)}` : 'deleted'} while the worker ran; it is back at ${from.slice(0, 7)}${to ? ` (if that move was yours: git -C ${home} update-ref ${ref} ${to})` : ''}`;
+// A branch left where it is because a worktree has it checked out: what moved, to check.
+export const keptLine = ({ ref, from, to, path }) => `${ref.replace(/^refs\/heads\//, '')} (checked out in ${path}) moved from ${from.slice(0, 7)} to ${to.slice(0, 7)} while the worker ran: check it (left as it is)`;
+
 // The commits on ref whose work would be lost with it (#455), as "<short sha> <subject>" lines: none when every
 // commit is on origin, when its item's PR merged (merged: a Set of branch names), or when main has each one's
 // changes (`git cherry` finds no "+"): a branch rebased or squashed before landing keeps commits origin never had.

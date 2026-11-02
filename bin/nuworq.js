@@ -1109,7 +1109,9 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine } = await import('../src/runner.js');
+  // The worktrees of the workers running now: each one's branch is its own to move (#618).
+  const live = new Set();
   const logs = join(dirname(HUB_FILE), 'logs');
   lockDown(dirname(HUB_FILE)); // 0700 folders and 0600 files, again on every start (#477)
   const chosen = await chooseWorkFolders(flags, await hubProjects(client), s);
@@ -1181,6 +1183,9 @@ async function runCmd(flags) {
         throw Object.assign(new HubError(`couldn't update its checkout: ${said}`, { hint: `log: ${log}` }), { skip: true, pause: true });
       }
     }
+    // The checkout's branches and tags as the worker starts (#618), to put back whatever it moves that isn't its own.
+    const refsBefore = worktree ? await refsOf(home, git).catch(() => null) : null;
+    if (worktree) live.add(worktree);
     const out = createWriteStream(log, { mode: 0o600 });
     // Its own process group, so stopping it stops the agent too, not just the shell. Never the runner's tokens.
     const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: withoutTokens() });
@@ -1199,7 +1204,9 @@ async function runCmd(flags) {
         // Its worktree goes with it, unless something there would be lost; and its branch, once its item is
         // done or dropped and all of it is on origin (#444).
         if (worktree) {
+          live.delete(worktree);
           const branch = (await git(['-C', worktree, 'symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim();
+          if (refsBefore) await guardRefs({ home, branch, name, project: target.slug, before: refsBefore });
           const r = await cleanWorktree(worktree, git).catch((e) => ({ kept: true, why: `git couldn't remove it (${String(e.stderr || e.message).trim().split('\n')[0]})` }));
           if (r.kept) console.log(dim(`  kept ${name}'s worktree, ${worktree}: ${r.why}`));
           else if (branch) await finishedOf(target.slug).then((f) => cleanBranch(home, branch, f.finished, git, f.merged)).catch(() => false);
@@ -1208,6 +1215,30 @@ async function runCmd(flags) {
       })),
       spent: () => usage()?.cost_usd ?? 0, // what its CLI said it cost, for --max-usd
     };
+  };
+
+  // After a worker exits (#618): origin's refs fetched by the runner itself, then every other branch or tag it moved
+  // goes back, said in the runner's output and on the worker's item.
+  const guardRefs = async ({ home, branch, name, project, before }) => {
+    const siblings = await Promise.all([...live].map((w) => git(['-C', w, 'symbolic-ref', '-q', '--short', 'HEAD']).then((b) => b.trim(), () => '')));
+    await git(['-C', home, 'fetch', '-q', '--prune', 'origin']).catch(() => {});
+    const g = await restoreRefs(home, before, git, { own: [branch], live: siblings }).catch((e) => {
+      console.error(dim(`  couldn't check what ${name} did to ${home}'s branches: ${String(e.stderr || e.message).trim().split('\n')[0]}`));
+      return { restored: [], kept: [] };
+    });
+    if (!g.restored.length && !g.kept.length) return;
+    const lines = [...g.restored.map((r) => restoredLine(home, r)), ...g.kept.map(keptLine)];
+    for (const l of lines) console.log(amber(`  ${name}: ${l}`));
+    const item = branch.match(/^nuworq\/(\d+)-/)?.[1];
+    const n = g.restored.length;
+    try {
+      await createClient({ url: s.url, token: token ?? s.token }).call('comment', {
+        ...(item ? { item: `#${item}` } : {}),
+        headline: n ? `The runner put back ${n === 1 ? 'a branch' : `${n} branches or tags`} ${name} moved outside its own${g.kept.length ? `; ${g.kept.length} checked out elsewhere to check` : ''}`
+          : `${g.kept.length === 1 ? 'A branch' : `${g.kept.length} branches`} checked out elsewhere moved while ${name} ran: check ${g.kept.length === 1 ? 'it' : 'them'}`,
+        summary: lines.join('\n'),
+      }, { agent: name, project });
+    } catch (e) { console.error(dim(`  couldn't say so on the hub: ${e.message}`)); }
   };
 
   // --workers auto (#533): as many as the machine has room for, up to --max-workers (half its cores by default).
