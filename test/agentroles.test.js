@@ -332,4 +332,43 @@ describe('agent operations are for agents, and each agent acts only as itself', 
       assert.deepEqual([r.json.mode, r.json.item], ['review', theirs], `${agent}: ${JSON.stringify(r.json)}`);
     }
   });
+
+  test("an operator on a person's device token reviews that machine's runner workers, and next never offers what review refuses (#663)", async () => {
+    hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
+    // Feedback #2: the operator and the runner's workers all used Paul's device login, and every next answered
+    // "You can't review your own work" for an item a worker built.
+    const device = auth.createToken('olivia-studio', 'agent', { mintedBy: 'olivia' });
+    assert.equal((await op('checkin', { token: device, agent: 'studio-op', body: { has: ['operator', 'macos'] } })).status, 200);
+    assert.equal(hub.roleOf(hub.project('api'), 'studio-op'), 'operator');
+    assert.equal((await op('checkin', { token: device, agent: 'studio-w1', body: { role: 'worker', runner: 'olivia-studio' } })).status, 200);
+    // Earlier tests' reviews go first, so the worker's is the one waiting.
+    const clearer = auth.createToken('clearer-663', 'agent');
+    for (const { id } of hub.q("SELECT id FROM items WHERE stage = 'verifying'").all()) {
+      assert.equal((await op('review', { token: clearer, agent: 'clearer-663', body: { item: `#${id}`, verdict: 'accept', headline: 'ok' } })).status, 200);
+    }
+    const build = async (agent, title) => {
+      const { item } = hub.humanOp('api', 'create', { title, acceptance: 'x', priority: 'now' });
+      assert.equal((await op('claim', { token: device, agent, body: { item } })).status, 200, `${agent} claims ${item}`);
+      assert.equal((await op('submit', { token: device, agent, body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+      return item;
+    };
+    const next = () => op('next', { token: device, agent: 'studio-op', body: { claim: false } });
+
+    // The runner's worker builds: the operator's next offers the review, and the review is accepted.
+    const theirs = await build('studio-w1', "Built by the machine's runner worker");
+    const offered = await next();
+    assert.equal(offered.status, 200, JSON.stringify(offered.json));
+    assert.deepEqual([offered.json.mode, offered.json.item], ['review', theirs], JSON.stringify(offered.json));
+    assert.equal((await op('review', { token: device, agent: 'studio-op', body: { item: theirs, verdict: 'accept', headline: 'looks right' } })).status, 200);
+
+    // A plain session on the same token builds: that is the operator's own token's work, so next doesn't offer it,
+    // and answers with other work or none, never an error.
+    const own = await build('studio-session', 'Built by a session on the device token');
+    const after = await next();
+    assert.equal(after.status, 200, JSON.stringify(after.json));
+    assert.ok(!after.json.error, JSON.stringify(after.json));
+    assert.notEqual(after.json.item, own, "next doesn't offer the review it would refuse");
+    assert.doesNotMatch(JSON.stringify(after.json), /can't review your own work/);
+    assert.ok(!hub.claimable(hub.project('api'), 'studio-op').some((o) => o.mode === 'review' && `#${o.item.seq}` === own));
+  });
 });
