@@ -282,6 +282,10 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
       pull(branch);
       try { return git(repo, 'rev-parse', '--verify', '-q', `${branch}^{commit}`); } catch { return null; }
     },
+    // Whether a is b or an ancestor of it: whether main still has a.
+    isAncestor(a, b) {
+      try { git(repo, 'merge-base', '--is-ancestor', a, b); return true; } catch { return false; }
+    },
     // CI's verdict on sha (checkOn in src/ghapp.js), or null when it ended without one.
     ci: ci && ((sha) => helper('ci', { repo, sha, app: ci.app })),
     // Move the hub's own worktree: only while the hub is stopped, right before it starts.
@@ -489,11 +493,15 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
     log(`${what}; restart serve --follow to run it`);
   }
 
-  // Start on main as it is (there is nothing better to run), then test it like any other commit,
-  // so a supervisor restarted in a red streak still stops the line.
+  // Start on the last commit that passed (#620), when main still has it and has moved past it since: a restart (its
+  // own code changed, a reboot) never runs what CI hasn't passed, and tick() takes main through its verdict from
+  // there. Else on main as it is (there is nothing better to run), tested like any other commit, so a supervisor
+  // restarted in a red streak still stops the line.
   async function boot() {
-    const sha = sys.head(branch);
-    if (!sha) throw new Error(`there is no ${branch} branch to follow`);
+    const head = sys.head(branch);
+    if (!head) throw new Error(`there is no ${branch} branch to follow`);
+    const last = sys.passed?.();
+    const sha = last && last !== head && sys.isAncestor?.(last, head) ? last : head;
     sys.checkout(sha);
     await sys.start();
     if (!(await sys.healthy())) {
@@ -501,6 +509,7 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       throw new Error(`the hub didn't answer at ${short(sha)} within ${HEALTHY_MS / 1000}s`);
     }
     Object.assign(state, { running: sha, good: sha });
+    if (sha !== head) return log(`hub running at ${short(sha)}, the last commit that passed; following ${branch}, which takes ${short(head)} once it passes`);
     // A supervisor restarted on the commit it had taken (its own code changed) doesn't test it again (#546).
     if (sys.passed?.() === sha) return log(`hub running at ${short(sha)}; following ${branch}; ${short(sha)} already passed its tests`);
     log(`hub running at ${short(sha)}; following ${branch}, testing ${short(sha)}`);
