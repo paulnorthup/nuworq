@@ -120,7 +120,7 @@ export const STEPS = [
       '`nuworq propose "Exports retry when storage times out" --acceptance "A timed-out export retries 3 times, then fails with a clear error"`',
       'Proposals are shaped into ready work by agents, or wait for your OK, depending on the project\'s autonomy (below).',
     ],
-    auto: 'The shaper from The setup that works, above: in the Claude Code app, type `/nuworq:shaper` and say what you want and why. It reads the project, asks a few questions, recommends a milestone and its parts, and proposes them, each with what done means, once you say so. You decide; it never decides for you.',
+    auto: 'The shaper from The setup that works, above: in the Claude Code app, type `/nuworq:shaper` ("/nuworq-shaper" without the plugin) and say what you want and why. It reads the project, asks a few questions, recommends a milestone and its parts, and proposes them, each with what done means, once you say so. You decide; it never decides for you.',
     check: 'The items are on the board, under Proposed or Ready.',
   },
   {
@@ -168,7 +168,7 @@ export const ESSENTIALS = [
     key: 'the-operator', title: 'The operator', glance: 'An attended agent with your permissions, for what workers can\'t do.',
     body: [
       'Workers can\'t touch live infrastructure, sign releases or administer GitHub. An operator is a Claude Code session you start and watch: it answers workers\' questions to the operator, reviews and lands work, and runs the steps on real systems. It asks you only what only you can do.',
-      'Start it as in The setup that works: Claude Code in a terminal of its own. `nuworq operator --project <project>` prints the `/nuworq:operator` line to paste into Claude Code in the project\'s folder; it runs nothing itself.',
+      'Start it as in The setup that works: Claude Code in a terminal of its own. `nuworq operator --project <project>` prints the `/nuworq:operator` line ("/nuworq-operator" without the plugin) to paste into Claude Code in the project\'s folder; it runs nothing itself.',
     ],
   },
 ];
