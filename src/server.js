@@ -956,6 +956,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       res.end(out.body);
     };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
+    // A reply that holds a credential (#623): sent, never kept for a retry, which asks again instead.
+    const sendSecret = (status, body) => { answered = null; send(status, body); };
     // A worker's git pushes through the hub (#472) with basic auth, as git does: its name, and its agent token as
     // the password. Asked first, so git's credential helper answers (nuworq git-credential).
     let gitAgent = '';
@@ -1347,7 +1349,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           if (path === '/api/invites/revoke') { authz.revokeInvite(b.id); return send(200, { ok: true }); }
           const inv = authz.createInvite(b.role, { email: b.email, by: by === HUMAN ? '' : by });
           // The link is shown this once; only its hash is kept.
-          return send(200, { ok: true, id: inv.id, role: inv.role, link: `${origin(req)}${base}/invite.html#${inv.token}`, expires_in: '7 days' });
+          return sendSecret(200, { ok: true, id: inv.id, role: inv.role, link: `${origin(req)}${base}/invite.html#${inv.token}`, expires_in: '7 days' });
         } catch (e) {
           throw new UserError(e.message);
         }
@@ -1701,7 +1703,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
             data: { agent: who, repo: t.repo, purpose: 'clone', expires_at: t.expires_at, token: caller.token?.name ?? null },
           });
           hub.changed(p);
-          return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
+          return sendSecret(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
         }
         // A token is for the agent's own token (#469), never a person's browser session.
         if (caller.identity?.session) return deny(403, "a person's browser session gets no push token", 'Push tokens are for the agent that holds the item: its own token asks (nuworq git-credential).');
@@ -1709,7 +1711,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (other) return deny(403, `${agent} is another agent's name here`, 'A push token goes only to the token the agent holding the item uses. Pick a name of your own and claim work with next.');
         if (!held) return deny(409, `${agent || 'this agent'} holds no item to fetch for`, 'Tokens are for the item you hold: claim one (next), then fetch.');
         const t = await itemToken(hub, { agent, ...held, caller });
-        return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
+        return sendSecret(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
       if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {
@@ -1879,7 +1881,18 @@ function replyTo(hub, id) {
   const r = hub.q('SELECT status, body FROM replies WHERE id = ? AND at >= ?').get(id, hub.now() - REPLY_MS);
   return r ? { status: r.status, body: JSON.parse(r.body) } : null;
 }
+// A reply holding a credential is never kept (#623): the hub stores hashes, never the secret itself. Routes that
+// return one say so (sendSecret); this catches any that forgets: a field named for a secret, or a value shaped like
+// a nuworq, invite or GitHub token. Not a field named token: events name the token that acted there.
+const SECRET_FIELDS = new Set(['password', 'secret', 'client_secret', 'webhook_secret', 'private_key', 'device_code']);
+const SECRET_VALUE = /\b(nwq|nwi|ghs|ghp|gho|ghu|ghr|github_pat)_[A-Za-z0-9_-]{4,}/;
+export function holdsSecret(body) {
+  if (typeof body === 'string') return SECRET_VALUE.test(body);
+  if (!body || typeof body !== 'object') return false;
+  return Object.entries(body).some(([k, v]) => (SECRET_FIELDS.has(k) && typeof v === 'string' && v !== '') || holdsSecret(v));
+}
 function keepReply(hub, id, status, body) {
+  if (holdsSecret(body)) return;
   hub.q('DELETE FROM replies WHERE at < ?').run(hub.now() - REPLY_MS);
   hub.q('INSERT OR REPLACE INTO replies (id, status, body, at) VALUES (?, ?, ?, ?)').run(id, status, JSON.stringify(body ?? null), hub.now());
 }
