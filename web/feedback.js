@@ -52,6 +52,18 @@ export function feedbackMine(list, esc, ago = () => '') {
   return `<div class="fb-mine" id="fb-mine"><span class="label" data-new="feedback-mine">What you sent</span><ul>${list.map(row).join('')}</ul></div>`;
 }
 
+// For the hub's owners (#688): one line on the home saying how much feedback waits, opening its groups on the admin
+// dashboard. The count is what waits; "in N groups" says how few decisions it takes. Nothing when nothing waits.
+export function feedbackWaiting(w, esc) {
+  if (!w?.pieces) return '';
+  return `<a class="ov-line fb-waiting" href="${esc(w.url)}" target="_blank" rel="noopener" aria-label="${w.pieces} piece${w.pieces === 1 ? '' : 's'} of feedback wait for you: open them">
+    <span class="badge">${w.pieces}</span>
+    <div class="body"><b data-new="feedback-waiting">Feedback waits for you</b>
+      <span class="s">${w.groups === w.pieces ? 'each its own report' : `in ${w.groups} group${w.groups === 1 ? '' : 's'}: ${w.groups} decision${w.groups === 1 ? '' : 's'}`}</span></div>
+    <span class="s">Open ↗</span>
+  </a>`;
+}
+
 export const feedbackThanks = () => `<h2>Thanks</h2>
   <p class="lead">It's on its way to the people who build nuworq. They read every piece.</p>
   <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>

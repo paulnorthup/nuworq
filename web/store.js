@@ -33,7 +33,7 @@ export const FIELDS = {
   info: [null, [R, D]],
   billing: [null, [R]],
   checkoutDone: [false, []], // just back from Stripe Checkout
-  feedback: [null, [R]],
+  feedback: [null, [R, M]], // M: the home's line of feedback waiting for a hub owner (#688)
   feedbackCtx: [null, []], // what a feedback message attaches: the page, the version, the browser
   notifyPerson: [null, []], // who "only what needs me" means
   offline: [null, []], // since when the hub has been out of reach (#142); its bar is drawn on its own

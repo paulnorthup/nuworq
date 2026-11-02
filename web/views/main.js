@@ -5,6 +5,7 @@ import { ago, dur, timed } from '../ago.js';
 import { getStartedCard } from '../getstarted.js';
 import { proposeForm } from '../propose.js';
 import { homePage, columns, stateDot, STATE_LABELS } from '../home.js';
+import { feedbackWaiting } from '../feedback.js';
 import { credit } from '../credit.js';
 import { checkChip } from '../checks.js';
 import { missingProject } from '../missing.js';
@@ -64,7 +65,7 @@ function overview() {
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}
       ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div></div>
-    ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, gs: getStarted() })}`;}
+    ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, gs: getStarted(), fb: feedbackWaiting(S.feedback?.waiting, esc) })}`;}
 
 // ── project ──
 function project(v) {

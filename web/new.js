@@ -48,6 +48,8 @@ export const NEW = {
   'question-numbers': '2026-11-02', // #710: each question shows its number (Q207), and ⌘K finds it by q207 or "question 207"
   'operator-question': '2026-11-02', // #712: with no operator connected, its questions are yours: steps to tick and an answer, and How to start an operator
   'one-name': '2026-11-02', // #708: one name per step of getting going: + Project, Home, Guide, Connect an agent, Staff it with nuworq run (the rail's + Project)
+  'feedback-groups': '2026-11-02', // #688: the admin dashboard's feedback in groups: what covers each, a suggested call, one tap, Undo
+  'feedback-waiting': '2026-11-02', // #688: for the hub's owners, the home's line of feedback waiting, opening the groups
 };
 
 const DAYS = 7;
