@@ -5,6 +5,8 @@ import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { itemView, view } from '../src/insight.js';
 import { tools } from '../src/protocol.js';
+import { generateKeyPairSync } from 'node:crypto';
+import { GitHubApp } from '../src/ghapp.js';
 import { normPrecondition, check, runChecks, privateAddress, credentialAllows, semver, compareSemver, firstVersion } from '../src/precondition.js';
 
 const MIN = 60_000;
@@ -295,6 +297,40 @@ describe('version preconditions: work that waits for a version', () => {
       await runChecks(hub, { shared: true, github: { app } });
       assert.equal(auth.at(-1), null, 'acme/api is not this project\'s repository');
       assert.equal(item(2).stage, 'ready', 'and the public API still answers');
+    } finally { gh.closeAllConnections(); gh.close(); }
+  });
+
+  test('on a shared hub a release precondition mints only through its own workspace\'s installation (#758)', async () => {
+    // acme/api is private and the app is installed on it for workspace A (installation 42); only a token reads it.
+    const mints = [];
+    const gh = http.createServer((req, res) => {
+      const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+      if (req.url === '/repos/acme/api/installation') return json(200, { id: 42, account: { login: 'acme' } });
+      if (req.method === 'POST' && req.url === '/app/installations/42/access_tokens') { mints.push(1); return json(201, { token: 'ghs_a', expires_at: new Date(Date.now() + 3_600_000).toISOString() }); }
+      if (req.url === '/repos/acme/api/releases/latest') return req.headers.authorization === 'Bearer ghs_a' ? json(200, { tag_name: 'v9.9.9' }) : json(404, { message: 'Not Found' });
+      json(404, { message: 'Not Found' });
+    });
+    await new Promise((r) => gh.listen(0, '127.0.0.1', r));
+    const api = `http://127.0.0.1:${gh.address().port}`;
+    try {
+      const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const app = new GitHubApp({ id: 1, key: privateKey.export({ type: 'pkcs8', format: 'pem' }), api });
+      const run = async (view) => {
+        const { hub, item } = setup();
+        hub.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(hub.project('w').id, 'github.com/acme/api', 0);
+        hub.agentOp('w', 'propose', 'a', { title: 'Adopt', acceptance: 'x', precondition: { kind: 'release', repo: 'acme/api', min: '1.0.0' } });
+        await runChecks(hub, { shared: true, github: { api, app: view } });
+        return item(1);
+      };
+      // The server hands runChecks the workspace's own view of the app (appOf): A's owns installation 42, B's does not.
+      const a = await run(app.scoped((id) => id === 42));
+      assert.equal(a.stage, 'ready', 'A reads its own repository');
+      assert.match(JSON.parse(a.last_check).detail, /9\.9\.9/);
+      const before = mints.length;
+      const b = await run(app.scoped(() => false));
+      assert.equal(mints.length, before, "no token was minted through A's installation");
+      assert.equal(b.stage, 'outside');
+      assert.doesNotMatch(JSON.parse(b.last_check).detail, /9\.9\.9/, 'and no tag is named');
     } finally { gh.closeAllConnections(); gh.close(); }
   });
 });
