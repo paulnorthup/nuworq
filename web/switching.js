@@ -30,6 +30,15 @@ export function viewLoader(get, { now = Date.now, keep = VIEW_FOR } = {}) {
   };
 }
 
+// A switch paints in two (#637): the header and top section in this frame, the rest in a task after that frame has
+// painted. A big project's page takes one long frame to build (nuworq's ~70 ms), and it never stands between the
+// click and the project's name.
+export const afterPaint = (fn) => requestAnimationFrame(() => setTimeout(fn, 0));
+export function paintInTwo(first, rest, later = afterPaint) {
+  first();
+  later(rest);
+}
+
 // The project list and the view (and the open item), at the same time. The list is asked for only when it may have
 // changed (list is null otherwise); a view that fails comes back as its error, for the caller to weigh against the list.
 export async function loadProject({ list, view, item }) {
