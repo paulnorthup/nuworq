@@ -4410,7 +4410,7 @@ const HUMAN_OPS = {
     this.q(`DELETE FROM acks WHERE note_id IN (SELECT id FROM notes WHERE project_id = ?)`).run(p.id);
     for (const t of ['attempts', 'transitions']) this.q(`DELETE FROM ${t} WHERE item_id IN (${items})`).run();
     this.q(`DELETE FROM deps WHERE item_id IN (${items}) OR depends_on IN (${items})`).run();
-    for (const t of ['agents', 'events', 'questions', 'notes', 'project_stewards', 'dismissals', 'step_ticks', 'project_remotes', 'notified', 'prs', 'issues', 'checks', 'usage', 'items']) {
+    for (const t of ['agents', 'events', 'questions', 'notes', 'project_stewards', 'dismissals', 'step_ticks', 'project_remotes', 'notified', 'unsent', 'prs', 'issues', 'checks', 'usage', 'items']) {
       this.q(`DELETE FROM ${t} WHERE project_id = ?`).run(p.id);
     }
     this.q('DELETE FROM projects WHERE id = ?').run(p.id);

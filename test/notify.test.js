@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { Hub, MIN, HOUR } from '../src/core.js';
+import { Hub, MIN, HOUR, DAY } from '../src/core.js';
 import { view, byNeed } from '../src/insight.js';
 import { Notifier, addChannel, listChannels, mask, testChannels } from '../src/notify.js';
 import { createServer } from '../src/server.js';
@@ -159,6 +159,62 @@ describe('push notifications', () => {
     n.scan();
     await n.flush();
     assert.equal(view(hub, 'app').attention.find((a) => a.kind === 'notify-failing'), undefined);
+  });
+
+  test('an entry a down channel missed goes out on a later scan while it still needs you (#744)', async () => {
+    const { op, n } = setup();
+    reply = 503;
+    blockingAsk(op, 'a', '#1', 'Postgres or SQLite?');
+    n.scan();
+    const [r] = await n.flush();
+    assert.equal(r.ok, false);
+    reply = 200;
+    got.length = 0;
+    n.scan();
+    assert.ok(n.batch, 'the scan opens a window for the retry');
+    const [again] = await n.flush();
+    assert.equal(again.ok, true);
+    assert.equal(got.length, 1);
+    assert.match(got[0].body, /#1 question: Postgres or SQLite\?/);
+    n.scan();
+    assert.deepEqual(await n.flush(), [], 'sent once it arrived');
+    assert.equal(got.length, 1);
+  });
+
+  test('an entry resolved while its channel was down is not sent when it comes back (#744)', async () => {
+    const { hub, op, n } = setup();
+    reply = 503;
+    blockingAsk(op, 'a', '#1', 'Postgres or SQLite?');
+    n.scan();
+    await n.flush();
+    hub.humanOp('app', 'answer', { question: view(hub, 'app').attention.find((a) => a.kind === 'question').question.id, answer: 'SQLite' });
+    reply = 200;
+    got.length = 0;
+    n.scan();
+    assert.deepEqual(await n.flush(), []);
+    assert.equal(got.length, 0);
+    assert.equal(hub.db.prepare('SELECT COUNT(*) AS n FROM unsent').get().n, 0, 'nothing left to retry');
+  });
+
+  test('a channel down for a day stops retrying old entries but still gets new ones (#744)', async () => {
+    const { op, n, advance } = setup();
+    reply = 503;
+    blockingAsk(op, 'a', '#1', 'Postgres or SQLite?');
+    n.scan();
+    await n.flush();
+    advance(DAY + MIN);
+    op('checkin', 'b');
+    assert.equal(op('next', 'b').item, '#2'); // someone is working, so "no agent is working" stays quiet
+    n.scan();
+    assert.deepEqual(await n.flush(), [], 'the old entry is no longer retried');
+    reply = 200;
+    got.length = 0;
+    blockingAsk(op, 'b', '#2', 'Which region?');
+    n.scan();
+    const [r] = await n.flush();
+    assert.equal(r.ok, true);
+    const hook = JSON.parse(got[0].body);
+    assert.deepEqual(hook.entries.map((e) => e.item), ['#2']);
   });
 
   test('a channel that never answers times out without holding up agents', async () => {
