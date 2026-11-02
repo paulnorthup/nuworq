@@ -27,6 +27,10 @@ export { slugify, normRemote };
 
 const GIT_CHECK = Symbol('git check');
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
+// One agent can't flood a hub (#766): its writes per minute, and what a project or hub holds at most.
+const WRITE_OPS = ['propose', 'ask', 'comment', 'learn', 'usage'];
+const WRITES_PER_MIN = 60;
+export const LIMITS = { projects: 100, openQuestions: 200, proposed: 500 };
 
 export class UserError extends Error {
   constructor(message, { status = 400, hint } = {}) {
@@ -389,6 +393,7 @@ export class Hub extends EventEmitter {
     this.changedAt = new Map(); // project id → the counter at its last change; a change with no project moves allChanged (#501)
     this.allChanged = 0;
     this._marks = null; // while an agent operation runs: what it wrote that a view shows (mark())
+    this._writes = new Map(); // project id:agent → when its writes in the last minute came (#766), memory only
     this._unreachable = new Set(); // repositories the hub has said it can't reach
     this._behind = new Map(); // item id → whether its branch lacks its base, as refreshBehind last found (#535)
     // The app's read tokens for the hub's own mirrors, per remote: { token, expires_at } once minted,
@@ -490,7 +495,8 @@ export class Hub extends EventEmitter {
     return this.q(`SELECT * FROM projects WHERE ${archived ? 'archived_at > 0' : 'archived_at = 0'} ORDER BY name COLLATE NOCASE`).all();
   }
 
-  project(slug, { create = false, name } = {}) {
+  // cap: the most projects create may bring the hub to (an agent's checkin, #766); null: no limit (a person).
+  project(slug, { create = false, name, cap = null } = {}) {
     const s = slugify(slug);
     if (!s) throw new UserError('project is required', { hint: 'Pass a project slug, e.g. "my-app".' });
     // An agent told "work on the Acme API project" names it the way a person would: match the name
@@ -498,6 +504,11 @@ export class Hub extends EventEmitter {
     let p = this.q('SELECT * FROM projects WHERE slug = ?').get(s)
       ?? this.q('SELECT * FROM projects WHERE lower(name) = lower(?) ORDER BY id LIMIT 1').get(String(slug).trim());
     if (!p && create) {
+      if (cap != null && this.q('SELECT COUNT(*) AS n FROM projects WHERE archived_at = 0').get().n >= cap) {
+        throw new UserError(`This hub already has ${cap} projects, the most an agent's checkin may create`, {
+          status: 429, hint: `Check in to a project that exists, or have a person create "${s}" in the UI (+ Project).`,
+        });
+      }
       this.q('INSERT INTO projects (slug, name, created_at, fresh_at, notes_at, staff_asked) VALUES (?, ?, ?, ?, ?, 0)').run(s, str(name) || s, this.now(), this.now(), this.now());
       p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);
       this.event(p, { actor: SYSTEM, type: 'project', headline: `Project ${p.name} created` });
@@ -2012,6 +2023,23 @@ export class Hub extends EventEmitter {
 
   // ── agent operations ────────────────────────────────────────────────────
 
+  // One agent's writes on a project, at most WRITES_PER_MIN in any minute (#766): reads and progress without a
+  // headline (a heartbeat) aren't counted, nor is a write this refuses. Each agent has its own window.
+  throttleWrite(p, agent, op, args) {
+    if (!WRITE_OPS.includes(op) && !(op === 'progress' && str(args.headline))) return;
+    const key = `${p.id}:${agent}`, now = this.now();
+    const recent = (this._writes.get(key) ?? []).filter((t) => t > now - MIN);
+    if (recent.length >= WRITES_PER_MIN) {
+      this._writes.set(key, recent);
+      const wait = Math.max(1, Math.ceil((recent[0] + MIN - now) / 1000));
+      throw new UserError(`${agent} made ${WRITES_PER_MIN} writes in the last minute, the most one agent may`, {
+        status: 429, hint: `Try again in ${wait} second${wait === 1 ? '' : 's'}. Reads and progress without a headline aren't limited.`,
+      });
+    }
+    recent.push(now);
+    this._writes.set(key, recent);
+  }
+
   // slug may be empty: then the agent's folder (root) picks the project, or the hub routes it to work.
   // scope: the project slugs the caller's token may reach (null: all).
   // token: the calling token's identity (required mode): its name is recorded on the agent; an agent
@@ -2034,7 +2062,7 @@ export class Hub extends EventEmitter {
     let routed = null;
     if (slug) {
       this.inScope(scope, slug);
-      p = this.project(slug, { create: op === 'checkin' });
+      p = this.project(slug, { create: op === 'checkin', cap: LIMITS.projects });
       if (p.archived_at) throw new UserError(`${p.name} is archived`, { status: 410, hint: 'Nothing is worked on there until an owner restores it. Check in without a project to be sent to work that is waiting.' });
     } else {
       // The repository is the same on every machine; the folder only on this one.
@@ -2054,6 +2082,7 @@ export class Hub extends EventEmitter {
         p = this.project(routed.project);
       }
     }
+    this.throttleWrite(p, agent, op, args ?? {});
     const here = normDir(root);
     // Learn where the project lives the first time an agent names it from a folder, but only a folder
     // that is a clone of the project's repository: a worker started in the wrong repo must not teach it.
@@ -3221,6 +3250,11 @@ const AGENT_OPS = {
   },
 
   ask(p, agent, args) {
+    if (this.q(`SELECT COUNT(*) AS n FROM questions WHERE project_id = ? AND status = 'open'`).get(p.id).n >= LIMITS.openQuestions) {
+      throw new UserError(`${p.name} already has ${LIMITS.openQuestions} open questions, the most a project holds`, {
+        status: 429, hint: 'Withdraw the ones that are answered or moot, or take other work until some are answered; then ask again.',
+      });
+    }
     if (args.escalates != null && args.escalates !== '') return escalate.call(this, p, agent, args);
     const question = layered(args.question, args.context, args.detail, 'question', { whole: true });
     const assumption = str(args.assumption);
@@ -3406,6 +3440,11 @@ const AGENT_OPS = {
     if (args.release) {
       const it = askRelease(this, p, agent);
       return { ok: true, item: `#${it.seq}`, stage: it.stage, title: it.title, hint: `#${it.seq} is ${it.title}, drafted from what landed. Its summary is the changelog; refine it if it needs words.` };
+    }
+    if (this.q(`SELECT COUNT(*) AS n FROM items WHERE project_id = ? AND stage = 'proposed'`).get(p.id).n >= LIMITS.proposed) {
+      throw new UserError(`${p.name} already has ${LIMITS.proposed} proposed items, the most a project holds`, {
+        status: 429, hint: 'Finish shaping some first (refine them with acceptance criteria) or have a person drop the stale ones, then propose again.',
+      });
     }
     const item = this.createItem(p, agent, args);
     return {
