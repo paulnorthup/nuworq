@@ -204,18 +204,25 @@ describe('agent operations are for agents, and each agent acts only as itself', 
 
   test("a machine's workers review each other's work with the runner token its device login mints (#656)", async () => {
     hub.humanOp('api', 'settings', { autonomy: 'full' });
-    const device = auth.createToken('mo@laptop', 'agent', { mintedBy: 'mo' }); // what nuworq connect gets
+    // A token does no more than its minter may (#629), so a steward connects the machine.
+    auth.addPerson('rita', 'steward');
+    const device = auth.createToken('rita@laptop', 'agent', { mintedBy: 'rita' }); // what nuworq connect gets
     const mint = (token) => call('/api/me/runner-token', { token });
     const me = async (token) => (await fetch(`${url}/api/me`, { headers: { authorization: `Bearer ${token}` } })).json();
     const r = await mint(device);
     assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.deepEqual([r.json.name, r.json.runner], ['mo@laptop.runner', 'mo@laptop']);
+    assert.deepEqual([r.json.name, r.json.runner], ['rita@laptop.runner', 'rita@laptop']);
     const runner = r.json.token;
-    assert.deepEqual([(await me(runner)).role, (await me(runner)).runner], ['agent', 'mo@laptop'], 'it says which runner it is');
+    assert.deepEqual([(await me(runner)).role, (await me(runner)).runner], ['agent', 'rita@laptop'], 'it says which runner it is');
     assert.equal((await mint(runner)).status, 400, "a runner token can't mint another");
     assert.equal((await mint(tok.olivia)).status, 400, "nor can a person's token");
-    const row = auth.listTokens().find((t) => t.name === 'mo@laptop.runner');
-    assert.equal(row.minted_by, 'mo', 'the person who connected the machine answers for it');
+    const row = auth.listTokens().find((t) => t.name === 'rita@laptop.runner');
+    assert.equal(row.minted_by, 'rita', 'the person who connected the machine answers for it');
+    // A member's machine gets a runner token too, but can't build with it (#629).
+    const members = await mint(auth.createToken('mo@laptop', 'agent', { mintedBy: 'mo' }));
+    assert.equal(members.status, 200, JSON.stringify(members.json));
+    const { item: theirs } = hub.humanOp('api', 'create', { title: 'Not for a member', acceptance: 'x' });
+    assert.match((await op('claim', { token: members.json.token, agent: 'mo-worker', body: { item: theirs } })).json.error, /minted by a member/);
 
     // Worker A builds, worker B's next offers the review, and B's review is accepted. Earlier tests' reviews go first.
     const clearer = auth.createToken('clearer', 'agent');
@@ -231,14 +238,14 @@ describe('agent operations are for agents, and each agent acts only as itself', 
 
     // The person's own token still can't review what it built under another name.
     const { item: own } = hub.humanOp('api', 'create', { title: 'Built on the connect token', acceptance: 'x' });
-    assert.equal((await op('claim', { token: device, agent: 'mo-laptop-a', body: { item: own } })).status, 200);
-    assert.equal((await op('submit', { token: device, agent: 'mo-laptop-a', body: { item: own, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
-    assert.match((await op('review', { token: device, agent: 'mo-laptop-b', body: { item: own, verdict: 'accept', headline: 'x' } })).json.error, /can't review your own work/);
+    assert.equal((await op('claim', { token: device, agent: 'rita-laptop-a', body: { item: own } })).status, 200);
+    assert.equal((await op('submit', { token: device, agent: 'rita-laptop-a', body: { item: own, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+    assert.match((await op('review', { token: device, agent: 'rita-laptop-b', body: { item: own, verdict: 'accept', headline: 'x' } })).json.error, /can't review your own work/);
 
     // Minting again replaces it; disconnecting the machine revokes its runner token too.
     const again = (await mint(device)).json.token;
     assert.equal((await me(runner)).role, null, 'the old runner token is revoked');
-    assert.equal((await me(again)).runner, 'mo@laptop');
+    assert.equal((await me(again)).runner, 'rita@laptop');
     assert.equal((await call('/api/me/revoke', { token: device })).status, 200);
     assert.equal((await me(again)).role, null, "the device login's runner token went with it");
   });
