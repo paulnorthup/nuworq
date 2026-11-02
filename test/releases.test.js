@@ -278,6 +278,55 @@ describe('a release that lands is tagged with its version (#400)', () => {
     // Only release items are tagged.
     assert.equal(hub.tx(() => tagRelease(hub, p, { ...hub.item(p, it), release: 0 }, sha)), '');
   });
+
+  test('a tag GitHub refuses reaches an operator as a question with the command, and closes itself once the tag shows (#760)', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-tagq-')));
+    const g = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8' }).trim();
+    const origin = join(root, 'origin.git');
+    g(root, 'init', '-q', '--bare', '-b', 'main', origin);
+    g(root, 'clone', '-q', origin, join(root, 'seed'));
+    const seed = join(root, 'seed');
+    writeFileSync(join(seed, 'README'), 'hi\n');
+    g(seed, 'add', '.');
+    g(seed, 'commit', '-qm', 'init');
+    g(seed, 'push', '-q', 'origin', 'main');
+    const sha = g(seed, 'rev-parse', 'HEAD');
+
+    const hub = new Hub({ repos: join(root, 'repos') });
+    hub.tx(() => hub.project('g', { create: true }));
+    hub.humanOp('g', 'remote', { add: origin });
+    hub.github = { covers: () => true, async tag() { throw new Error('422: Reference update failed'); } };
+    const p = hub.project('g');
+    const it = hub.humanOp('g', 'create', { title: 'Release v0.7.0', acceptance: 'x' }).item;
+    hub.patch(hub.item(p, it), { release: 1, stage: 'done' });
+    assert.equal(hub.tx(() => tagRelease(hub, p, hub.item(p, it), sha)), '');
+    await tagsSettled(hub);
+
+    const q = hub.q(`SELECT * FROM questions WHERE item_id = ? AND audience = 'operator' AND status = 'open'`).all(hub.item(p, it).id);
+    assert.equal(q.length, 1, 'one operator question on the release');
+    assert.match(q[0].context, /GitHub refused the hub's tag: 422: Reference update failed/);
+    assert.ok(q[0].context.includes(`git tag v0.7.0 ${sha} && git push origin refs/tags/v0.7.0`), 'it holds the exact command');
+    // Failing again (a retry, a second lander) doesn't ask twice.
+    hub.tx(() => tagRelease(hub, p, hub.item(p, it), sha));
+    await tagsSettled(hub);
+    assert.equal(hub.q(`SELECT COUNT(*) AS n FROM questions WHERE item_id = ? AND status = 'open'`).get(hub.item(p, it).id).n, 1);
+
+    // next hands it to an operator.
+    hub.agentOp('g', 'checkin', 'op', { has: ['operator'] });
+    const job = hub.agentOp('g', 'next', 'op', {});
+    assert.equal(job.mode, 'answer');
+    assert.equal(job.question.id, q[0].id);
+    assert.match(job.question.question, /^Tag the release v0\.7\.0/);
+
+    // Someone tags it by hand; the hub's mirror sees the tag, and the question closes.
+    g(seed, 'tag', 'v0.7.0', sha);
+    g(seed, 'push', '-q', 'origin', 'refs/tags/v0.7.0');
+    const after = hub.agentOp('g', 'next', 'op', {});
+    assert.notEqual(after.mode, 'answer', 'nothing left to answer');
+    const closed = hub.q('SELECT * FROM questions WHERE id = ?').get(q[0].id);
+    assert.equal(closed.status, 'withdrawn');
+    assert.equal(closed.closed_reason, `v0.7.0 is on ${origin.replace(/\.git$/, '')} at ${sha.slice(0, 7)}`);
+  });
 });
 
 describe('the Releases setting (#399)', () => {

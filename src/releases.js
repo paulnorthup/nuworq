@@ -4,7 +4,7 @@
 // major (minor while on 0.x), any finished milestone minor, anything else a patch. The draft changelog is the
 // item's summary, which a person may edit before signing: a redraft then only adds what it doesn't mention.
 import { SYSTEM, UserError } from './core.js';
-import { lastRelease, tagAt } from './git.js';
+import { lastRelease, shaOf, tagAt } from './git.js';
 import { reviewRelease } from './security.js';
 
 export const RELEASES = { milestone: 'per milestone', off: 'off' };
@@ -125,26 +125,63 @@ export function tagRelease(hub, p, item, sha) {
   if (!item.release || !version) return '';
   const tag = `v${version}`, short = String(sha ?? '').slice(0, 7);
   const byHand = `Tag it: git fetch origin, then git tag ${tag} ${sha || 'origin/main'}, then git push origin ${tag}.`;
-  // tagged, or tag_failed: someone tags it by hand.
+  // tagged, or tag_failed: someone tags it by hand, and an operator is asked to (#760).
   const record = (headline, summary = '', type = 'tagged') => hub.event(p, { item, actor: SYSTEM, type, headline, summary, data: { tag, sha } });
+  const failed = (headline, why, where) => { record(headline, byHand, 'tag_failed'); askToTag(hub, p, item, { tag, sha, why, where }); };
   if (sha && hub.localFor(p, item)) {
     if (tagAt(p.path, tag, sha)) { record(`nuworq tagged ${short} ${tag}`); return ''; }
-    record(`The hub couldn't tag ${short} ${tag} in ${p.path}`, byHand, 'tag_failed');
+    failed(`The hub couldn't tag ${short} ${tag} in ${p.path}`, `git tag ${tag} ${sha} failed in ${p.path}.`, p.path);
     return byHand;
   }
   const repo = hub.repoOf(p, item);
   if (!sha || !hub.github?.tag || !hub.github.covers(repo)) {
     record(`#${item.seq} landed; ${tag} needs tagging by hand`, `The hub can't write tags to ${repo || 'its repository'}. ${byHand}`, 'tag_failed');
+    askToTag(hub, p, item, { tag, sha, why: `The hub can't write tags to ${repo || 'its repository'}${sha ? '' : `, and doesn't know which commit main got`}.`, where: repo });
     return byHand;
   }
   const run = hub.github.tag({ repo, tag, sha }).then(
     () => hub.tx(() => record(`nuworq tagged ${short} ${tag} on ${repo}`)),
-    (e) => hub.tx(() => record(`The hub couldn't tag ${short} ${tag} on ${repo}: ${e.message}`, byHand, 'tag_failed')),
+    (e) => hub.tx(() => failed(`The hub couldn't tag ${short} ${tag} on ${repo}: ${e.message}`, `GitHub refused the hub's tag: ${e.message}`, repo)),
   ).then(() => hub.changed(p), (e) => console.error('tagging a release failed', e));
   const all = tagging.get(hub) ?? new Set();
   tagging.set(hub, all.add(run));
   run.finally(() => all.delete(run));
   return '';
+}
+
+// A release tag the hub couldn't make (#760) is an operator question on the release item, so next hands it to an
+// operator instead of it sitting unseen as a tag_failed event. One per release; settleTags closes it once the tag
+// shows. where: the repository (or the checkout) to tag in.
+const TAG_QUESTION = 'Tag the release';
+function askToTag(hub, p, item, { tag, sha, why, where }) {
+  const open = hub.q(`SELECT 1 FROM questions WHERE item_id = ? AND asked_by = ? AND audience = 'operator' AND status = 'open' AND question LIKE ?`)
+    .get(item.id, SYSTEM, `${TAG_QUESTION} %`);
+  if (open) return;
+  const at = sha || 'origin/main';
+  const command = `git tag ${tag} ${at} && git push origin refs/tags/${tag}`;
+  const question = `${TAG_QUESTION} ${tag}: the hub couldn't tag #${item.seq} on ${where || 'its repository'}`;
+  const context = `${why}\n\nIn a checkout of ${where || 'the repository'} that may push tags, run git fetch origin, then:\n\n${command}\n\n`
+    + `Releases are signed from their tags, so until it exists the release sits untagged on main. This question closes itself once the hub's copy of the repository has ${tag}.`;
+  const steps = [{ do: `git fetch origin, then ${command}`, where: `a checkout of ${where || 'the repository'} that may push tags`, check: `git ls-remote origin refs/tags/${tag} prints ${sha || 'the commit main got'}` }];
+  const id = Number(hub.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, options, blocking, assumption, at, audience, steps)
+    VALUES (?, ?, ?, ?, ?, '[]', 1, '', ?, 'operator', ?)`).run(p.id, item.id, SYSTEM, question, context, hub.now(), JSON.stringify(steps)).lastInsertRowid);
+  hub.event(p, { item, actor: SYSTEM, type: 'question', headline: `nuworq asks an operator: ${question}`, summary: context, data: { question: id, tag, sha } });
+}
+
+// Close the tagging questions whose tag now shows in the project's repository (its checkout, or the hub's mirror
+// of it). fresh: a mirror on this machine is fetched first. In a transaction.
+export function settleTags(hub, p, { fresh = false } = {}) {
+  const open = hub.q(`SELECT q.id, q.item_id FROM questions q WHERE q.project_id = ? AND q.asked_by = ? AND q.audience = 'operator' AND q.status = 'open' AND q.question LIKE ?`)
+    .all(p.id, SYSTEM, `${TAG_QUESTION} %`);
+  for (const q of open) {
+    const item = hub.itemById(q.item_id), version = releaseVersion(item);
+    const path = version && hub.repoFor(p, item, { fresh })?.path;
+    const at = path && shaOf(path, `refs/tags/v${version}`);
+    if (!at) continue;
+    const reason = `v${version} is on ${hub.repoOf(p, item) || p.path} at ${at.slice(0, 7)}`;
+    hub.q(`UPDATE questions SET status = 'withdrawn', closed_reason = ?, held_by = '', held_until = 0 WHERE id = ?`).run(reason, q.id);
+    hub.event(p, { item, actor: SYSTEM, type: 'question_withdrawn', headline: `nuworq withdrew its question: ${reason}`, summary: `Why: ${reason}`, data: { question: q.id } });
+  }
 }
 
 // Resolves once every tag being made is made (or has failed). For tests.
