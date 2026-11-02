@@ -1854,7 +1854,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // nuworq run's state, on every poll (#171): who it is comes from its token when it has a runner name.
       if (req.method === 'POST' && path === '/api/runner') {
         const b = await body(req);
-        const changed = hub.reportRunner(b, { name: caller.token?.runner ?? '', scope: caller.scope });
+        const changed = hub.reportRunner(b, { name: caller.token?.runner ?? '', scope: caller.scope, runner: !!caller.token?.runner });
         if (changed) hub.changed(null, { kind: 'runner' });
         // Its live workers' leases renew with the report (#540), so a worker in a long test run keeps its job.
         const renewed = hub.renewWorkers(b.live, { scope: caller.scope, identity: caller.identity });

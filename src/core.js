@@ -49,6 +49,7 @@ export class UserError extends Error {
 
 export const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 const RUNNER_DOWN_POLLS = 3; // a runner silent for this many of its poll intervals is down (#171)
+const LIVE_SPEND_MAX = 100; // the most one running worker's reported spend counts, when its runner names no lower cap (#782)
 // How long an agent can be unseen before the page says something new about it (#530): quiet on its work (10m),
 // away (30m), not present (1h), and a day, when "no operator connected" turns on.
 const TIME_FLIPS = [10 * MIN, 30 * MIN, HOUR, DAY];
@@ -1153,13 +1154,20 @@ export class Hub extends EventEmitter {
   // nuworq run says how it is on every poll (#171): workers running and its limit, projects it skips and
   // why, whether it paused itself and why, what it has spent. Bookkeeping, not an agent being present.
   // name: its token's runner name when it has one, else what it calls itself. scope: the slugs its token
-  // reaches (null: all), so it only shows on those projects. Returns whether anything visible changed.
-  reportRunner(r = {}, { name = '', scope = null } = {}) {
+  // reaches (null: all), so it only shows on those projects. runner: the caller holds a runner token, whose
+  // workers' spend counts against budgets (#782). Returns whether anything visible changed.
+  reportRunner(r = {}, { name = '', scope = null, runner = false } = {}) {
     const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : 0);
     const when = (v) => (num(v) > 0 ? num(v) : null);
     const machine = clip(r.machine, 80);
     name = clip(name || r.name || machine, 80);
     if (!name) throw new UserError('a runner needs a name', { hint: 'Send { name, machine, ... }: nuworq run sends its machine name.' });
+    // Spend counts only from a runner token, for workers it vouches for: in its live list or checked in through
+    // it, and none another runner's. Each counts at most its per-worker cap, never past LIVE_SPEND_MAX (#782).
+    const live = new Set((Array.isArray(r.live) ? r.live : []).map((n) => clip(n, 80)));
+    const most = Math.min(num(r.worker_usd) || LIVE_SPEND_MAX, LIVE_SPEND_MAX);
+    const ownedBy = (w) => this.q('SELECT a.runner FROM agents a JOIN projects p ON p.id = a.project_id WHERE p.slug = ? AND a.name = ?').get(w.project, w.name)?.runner ?? '';
+    const vouched = (w) => { const of = ownedBy(w); return of ? of === name : live.has(w.name); };
     const state = {
       running: num(r.running), workers: num(r.workers),
       // --workers auto (#533): it adds workers while the machine has room, and why it holds when it doesn't.
@@ -1170,8 +1178,9 @@ export class Hub extends EventEmitter {
       spent: Math.round(num(r.spent) * 100) / 100,
       stopped: r.stopped ? clip(r.stopped, 200) : null,
       // Its running workers' spend so far (#761), which the projects' daily budgets count until they exit.
-      spending: (Array.isArray(r.spending) ? r.spending : []).slice(0, 50).filter((w) => w?.name && w.project && num(w.usd) > 0)
-        .map((w) => ({ name: clip(w.name, 80), project: clip(w.project, 80), usd: Math.round(num(w.usd) * 10000) / 10000 })),
+      spending: (runner && Array.isArray(r.spending) ? r.spending : []).slice(0, 50).filter((w) => w?.name && w.project && num(w.usd) > 0)
+        .map((w) => ({ name: clip(w.name, 80), project: clip(w.project, 80), usd: Math.round(Math.min(num(w.usd), most) * 10000) / 10000 }))
+        .filter(vouched),
     };
     const pollMs = Math.min(Math.max(num(r.poll_seconds) || 30, 1), 3600) * 1000;
     const was = this.q('SELECT state, seen_at, poll_ms FROM runners WHERE name = ?').get(name);
