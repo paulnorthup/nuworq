@@ -154,12 +154,20 @@ export class Workspaces {
     if (this._directory || existsSync(join(this.dir, 'directory.sqlite'))) this.directory.forget(s);
   }
 
-  // Each name the directory holds rows for with no workspace of that name: forgotten, and returned (names only).
+  // Each name the directory holds rows for with no workspace of that name: forgotten, and returned with where the
+  // directory was copied first (#755). A workspace file only moved aside (a backup being restored, say) would lose its
+  // installation, plan and members for good; with the copy, putting both back undoes it. Nothing gone, no copy.
+  // Returns { gone: [name], copy: path or null }.
   forgetGone() {
-    if (!this._directory && !existsSync(join(this.dir, 'directory.sqlite'))) return [];
+    if (!this._directory && !existsSync(join(this.dir, 'directory.sqlite'))) return { gone: [], copy: null };
     const gone = this.directory.named().filter((s) => !existsSync(this.file(s)));
+    if (!gone.length) return { gone, copy: null };
+    const stamp = new Date(this.now()).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    let copy = join(this.dir, `directory.before-forget-${stamp}.sqlite`);
+    for (let n = 2; existsSync(copy); n++) copy = join(this.dir, `directory.before-forget-${stamp}-${n}.sqlite`);
+    this.directory.db.prepare('VACUUM INTO ?').run(copy); // throws, and nothing is forgotten, if it can't be made
     for (const s of gone) this.directory.forget(s);
-    return gone;
+    return { gone, copy };
   }
 
   // A single hub's database becomes a workspace (#204): copied whole (projects, items, history, decisions,
