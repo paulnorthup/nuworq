@@ -18,7 +18,7 @@ const old = {
   },
   // What each job's result was, from each take's own later events.
   results(hub, p, from) {
-    const FINISHED = { work: ['submitted'], review: ['accepted', 'sent_back'], shape: ['shaped'], land: ['landed', 'pushed', 'rebased', 'submitted'], tidy: ['submitted'] };
+    const FINISHED = { work: ['submitted'], review: ['accepted', 'sent_back'], shape: ['shaped'], land: ['landed', 'pushed', 'rebased', 'submitted'], tidy: ['tidied'] };
     const takes = hub.q(`SELECT e.*, i.stage AS item_stage FROM events e JOIN items i ON i.id = e.item_id
       WHERE e.project_id = ? AND e.type IN ('claimed', 'shaping', 'review_started', 'landing') AND e.at >= ? ORDER BY e.at, e.id`).all(p.id, from);
     return takes.map((e) => {

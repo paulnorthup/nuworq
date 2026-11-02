@@ -178,8 +178,8 @@ export function outcomes(hub, slug, { since, until } = {}) {
 
 // ── Each job an agent took (#348): what it was, on what, and how it came out ──
 
-// The events that end a job, per job: its taker finished it.
-const FINISHED = { work: ['submitted'], review: ['accepted', 'sent_back'], shape: ['shaped'], land: ['landed', 'pushed', 'rebased', 'submitted'], tidy: ['submitted'] };
+// The events that end a job, per job: its taker finished it. A tidy job's submit records tidied (#753).
+const FINISHED = { work: ['submitted'], review: ['accepted', 'sent_back'], shape: ['shaped'], land: ['landed', 'pushed', 'rebased', 'submitted'], tidy: ['tidied'] };
 const TAKES = ['claimed', 'shaping', 'review_started', 'landing'];
 // Every event that can change a job's result: its take, its end, and the verdicts and lapses after it (#537).
 export const JOB_EVENTS = [...new Set([...TAKES, ...Object.values(FINISHED).flat(), 'accepted', 'sent_back', 'handoff', 'lease_expired'])];
