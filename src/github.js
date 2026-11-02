@@ -79,10 +79,10 @@ function pullRequest(hub, p, body) {
   const item = old ? hub.itemById(old.item_id) : itemFor(hub, p, pr);
   // No item tracks it: on record for the next tidy job to attach (#202).
   if (!item) return untrackedPr(hub, p, full, pr, state);
-  hub.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  hub.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (project_id, repo, number) DO UPDATE SET url = excluded.url, title = excluded.title, state = excluded.state,
         head_ref = excluded.head_ref, head_sha = excluded.head_sha, updated_at = excluded.updated_at`)
-    .run(p.id, repo, pr.number, item.id, pr.html_url ?? '', pr.title ?? '', state, pr.head?.ref ?? '', pr.head?.sha ?? '', hub.now());
+    .run(p.id, repo, pr.number, item.id, pr.html_url ?? '', pr.title ?? '', state, pr.head?.ref ?? '', pr.head?.sha ?? '', hub.now(), hub.now());
   // Only changes of state go on the record; pushes to the branch just move the head.
   if (!old || old.state !== state) {
     const verb = !old ? (state === 'open' ? 'opened' : state) : state === 'open' ? 'reopened' : state;
@@ -235,15 +235,22 @@ function review(hub, p, body) {
 }
 
 // A completed check (check_suite, check_run or commit status) for a commit.
-function check(hub, p, { sha, name, conclusion, url }) {
-  if (!sha || !conclusion) return { ignored: 'not completed' };
+const check = (hub, p, { sha, name, conclusion, url }) => checksSeen(hub, p, sha, [{ name, conclusion, url }]);
+
+// Completed checks for a commit: from a webhook, or as the hub read them from GitHub when none came (#743).
+export function checksSeen(hub, p, sha, runs) {
+  runs = runs.filter((r) => r.conclusion);
+  if (!sha || !runs.length) return { ignored: 'not completed' };
   const prs = hub.q('SELECT * FROM prs WHERE project_id = ? AND head_sha = ?').all(p.id, sha);
   if (!prs.length) return { ignored: 'no pull request for this commit' };
   const before = ciState(hub, p, sha).state;
-  hub.q(`INSERT INTO checks (project_id, sha, name, conclusion, url, at) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT (project_id, sha, name) DO UPDATE SET conclusion = excluded.conclusion, url = excluded.url, at = excluded.at`)
-    .run(p.id, sha, name, conclusion, url ?? '', hub.now());
+  for (const { name, conclusion, url } of runs) {
+    hub.q(`INSERT INTO checks (project_id, sha, name, conclusion, url, at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (project_id, sha, name) DO UPDATE SET conclusion = excluded.conclusion, url = excluded.url, at = excluded.at`)
+      .run(p.id, sha, name, conclusion, url ?? '', hub.now());
+  }
   const after = ciState(hub, p, sha);
+  const url = (after.checks.find((c) => FAIL.has(c.conclusion)) ?? runs.at(-1)).url;
   // One line on the record when the overall result changes, not one per check.
   if (after.state !== before && after.state !== 'pending') {
     for (const pr of prs) {

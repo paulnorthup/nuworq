@@ -9,7 +9,7 @@ import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
 import { normPrecondition, describe as describePrecondition, dateReached, WAIT_DAYS } from './precondition.js';
 import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue, heldIssue, heldAnswered, quotedFrom, PASS_ON } from './issues.js';
-import { prMerged, prSeen } from './github.js';
+import { prMerged, prSeen, checksSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
@@ -79,6 +79,10 @@ export const HANDBACKS = 3;
 const GITHUB = 'github'; // holds accepted work while the hub opens its pull request
 const PR_LEASE = 2 * MIN;
 const PR_PASS = MIN; // how often the hub looks at landing work's pull requests itself (mergeReady)
+// A landing PR's checks, read from GitHub when their webhooks may have been lost (#743): once it has been open
+// this long, and at most this often.
+const CHECKS_GRACE = 30 * MIN;
+const CHECKS_READ = 10 * MIN;
 const CI_RECENT = 30 * DAY; // checks recorded this recently mean CI checks the project's pull requests (ciGated)
 const MIRROR_RETRY = 5 * MIN; // after GitHub refuses the app a token for a mirror, ask again this often
 // The hub's own entries on the record: SYSTEM, GitHub's (webhooks, the pull requests it opens), or
@@ -2929,9 +2933,9 @@ async function openPr(p, id) {
   let row;
   this.tx(() => {
     item = this.itemById(id);
-    this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+    this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at, opened_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
         ON CONFLICT (project_id, repo, number) DO UPDATE SET item_id = excluded.item_id, url = excluded.url, state = 'open', updated_at = excluded.updated_at`)
-      .run(p.id, repo, pr.number, id, pr.url ?? '', item.title, pr.head_ref ?? item.branch, pr.head_sha ?? '', this.now());
+      .run(p.id, repo, pr.number, id, pr.url ?? '', item.title, pr.head_ref ?? item.branch, pr.head_sha ?? '', this.now(), this.now());
     // GitHub's "opened" delivery may have come in while this awaited it, and recorded the PR as o/r: one record.
     for (const sql of PR_TWINS) this.db.exec(sql);
     row = this.q('SELECT * FROM prs WHERE project_id = ? AND repo = ? AND number = ?').get(p.id, repo, pr.number);
@@ -2970,6 +2974,11 @@ async function mergeReady() {
         continue;
       }
     }
+    // Its checks as GitHub has them (#743), in case a failure's webhook never came: a send-back, as the webhook does.
+    if (pr.state === 'open' && await readChecks.call(this, p, row, pr) && this.itemById(row.item_id)?.stage !== 'landing') {
+      this.changed(p);
+      continue;
+    }
     // Behind main, or in conflict with it (#752): GitHub rebases the branch first, so no model is paid for a rebase
     // with nothing to resolve. Only when it can't (a real conflict) is it a land job, through prSeen below.
     if (pr.state === 'open' && ['dirty', 'behind'].includes(pr.mergeable_state) && row.blocked !== 'conflict' && this.rebasesOnGitHub(row, pr.head_sha)) {
@@ -2995,6 +3004,24 @@ async function mergeReady() {
     this.changed(p);
   }
   return landed;
+}
+
+// A landing PR's check runs, read from GitHub once it has been open CHECKS_GRACE (its webhooks have had their
+// chance) and at most every CHECKS_READ, then recorded as their webhooks would have (checksSeen). The row takes
+// the PR's head as GitHub has it, which mergeReady has just found to be the reviewed change. True when it read them.
+async function readChecks(p, row, pr) {
+  const now = this.now();
+  if (!this.github.checkRuns || now - row.opened_at < CHECKS_GRACE || now - row.checks_read_at < CHECKS_READ) return false;
+  const sha = pr.head_sha || row.head_sha;
+  if (!sha) return false;
+  this.q('UPDATE prs SET checks_read_at = ? WHERE project_id = ? AND repo = ? AND number = ?').run(now, row.project_id, row.repo, row.number);
+  let runs;
+  try { runs = await this.github.checkRuns({ repo: row.repo, sha }); } catch { return false; } // the next read asks again
+  this.tx(() => {
+    if (sha !== row.head_sha) this.q('UPDATE prs SET head_sha = ? WHERE project_id = ? AND repo = ? AND number = ?').run(sha, row.project_id, row.repo, row.number);
+    checksSeen(this, p, sha, runs);
+  });
+  return true;
 }
 
 // GitHub rebases a landing PR's branch onto its base (#752), pinned to the head the hub looked at, once per head. That
@@ -4062,8 +4089,8 @@ Object.assign(Hub.prototype, {
     const promote = item.stage === 'proposed' && !item.holder && item.acceptance && (human || !waitsForOk(p, item)) && args.ready !== false;
     if (promote) { this.move(item, 'ready', actor); changed.push('now ready'); }
     if (attach) {
-      this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(p.id, attach.repo, attach.number, item.id, attach.url, attach.title, attach.state, attach.head_ref, attach.head_sha, this.now());
+      this.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(p.id, attach.repo, attach.number, item.id, attach.url, attach.title, attach.state, attach.head_ref, attach.head_sha, this.now(), this.now());
       this.q('DELETE FROM untracked_prs WHERE project_id = ? AND repo = ? AND number = ?').run(p.id, attach.repo, attach.number);
     }
     // Why, in one line (#202): on the item's record and on both groups' when it moved.

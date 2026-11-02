@@ -634,6 +634,16 @@ export const MIGRATIONS = [
         WHERE type = 'runner' AND project_id IS NOT NULL AND (headline LIKE '% turned on model routing%' OR headline LIKE '% turned off model routing%'))`);
     },
   },
+  {
+    // A failed check is noticed without its webhook (#743): when a PR went on record (0: before this; its last
+    // update stands in), and when the hub last read its check runs from GitHub itself.
+    name: "landing PRs' checks are read when no webhook came",
+    up(db) {
+      addColumn(db, 'ALTER TABLE prs ADD COLUMN opened_at INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'ALTER TABLE prs ADD COLUMN checks_read_at INTEGER NOT NULL DEFAULT 0');
+      db.exec('UPDATE prs SET opened_at = updated_at WHERE opened_at = 0');
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

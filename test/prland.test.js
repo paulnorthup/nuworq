@@ -569,3 +569,64 @@ describe('landing merges only the reviewed head', () => {
     assert.equal(w.calls.off.length, 1, 'auto-merge off before GitHub merges it');
   });
 });
+
+describe("a landing PR's failed check is noticed without its webhook (#743)", () => {
+  // #1 accepted, its PR open and waiting on checks; no check webhook ever arrives. GitHub's check runs: runs.
+  async function waiting(runs) {
+    const w = world();
+    w.hub.humanOp('demo', 'create', { title: 'Api endpoint', acceptance: 'x' });
+    const j = w.build('a1');
+    w.hub.humanOp('demo', 'accept', { item: '#1' });
+    await w.hub.prsSettled();
+    const head = w.git(j.dir, 'rev-parse', 'HEAD');
+    const reads = [];
+    Object.assign(w.hub.github, {
+      async pull() { return { state: 'open', mergeable_state: 'blocked', auto_merge: true, base: 'main', sha: '', head_sha: head, node_id: 'PR_101' }; },
+      async checkRuns(args) { reads.push(args); return runs; },
+    });
+    const pass = async (ms = 60_000) => { w.advance(ms); await w.hub.mergeReady(); await w.hub.prsSettled(); };
+    return { ...w, head, reads, pass };
+  }
+
+  test('a required check that failed on GitHub sends it back naming the check, within two passes after 30 minutes', async () => {
+    const w = await waiting([
+      { name: 'lint', conclusion: 'success', url: 'https://github.com/acme/api/runs/1' },
+      { name: 'test', conclusion: 'failure', url: 'https://github.com/acme/api/runs/2' },
+    ]);
+    await w.pass(28 * 60_000);
+    assert.equal(w.item(1).stage, 'landing', 'before 30 minutes its webhooks still have their chance');
+    assert.equal(w.reads.length, 0);
+    await w.pass();
+    await w.pass();
+    assert.equal(w.item(1).stage, 'ready', 'back to its builder');
+    assert.deepEqual(w.reads.map((r) => r.sha), [w.head]);
+    const back = w.events(1, 'sent_back').at(-1);
+    assert.match(back.headline, /^test failed on PR #101; #1 goes back to a1/);
+    assert.match(back.summary, /test: failure \(https:\/\/github\.com\/acme\/api\/runs\/2\)/);
+    assert.match(w.events(1, 'ci').at(-1).headline, /CI failed on PR #101: test/);
+    assert.equal(JSON.parse(w.item(1).handoff).kind, 'sent_back');
+  });
+
+  test("its checks are read at most once every 10 minutes, and passing ones change nothing", async () => {
+    const w = await waiting([{ name: 'test', conclusion: 'success', url: '' }, { name: 'e2e', conclusion: null }]);
+    await w.pass(30 * 60_000);
+    assert.equal(w.reads.length, 1);
+    for (let i = 0; i < 9; i++) await w.pass();
+    assert.equal(w.reads.length, 1, 'not again within 10 minutes');
+    await w.pass();
+    assert.equal(w.reads.length, 2);
+    assert.equal(w.item(1).stage, 'landing');
+    assert.equal(w.events(1, 'sent_back').length, 0);
+  });
+
+  test('a check webhook that did arrive is not repeated on the record', async () => {
+    const w = await waiting([{ name: 'test', conclusion: 'success', url: '' }]);
+    w.hub.q('UPDATE prs SET head_sha = ?').run(w.head); // as GitHub's pull_request webhook has it
+    const raw = Buffer.from(JSON.stringify({ action: 'completed', check_run: { head_sha: w.head, name: 'test', conclusion: 'success' } }));
+    receive(w.hub, 'demo', { event: 'check_run', raw, signature: 'sha256=' + createHmac('sha256', SECRET).update(raw).digest('hex') });
+    assert.equal(w.events(1, 'ci').length, 1);
+    await w.pass(30 * 60_000);
+    assert.equal(w.reads.length, 1);
+    assert.equal(w.events(1, 'ci').length, 1, 'read again under the head GitHub has, still passing: said once');
+  });
+});
