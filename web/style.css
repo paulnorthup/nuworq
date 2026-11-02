@@ -743,12 +743,13 @@ main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--
 .setting .staff-words .link { display: inline-flex; align-items: center; min-height: 44px; margin: calc(-1 * var(--sp-3)) 0; padding: 0 var(--sp-1); font-size: inherit; text-decoration: underline; vertical-align: middle; }
 .setting > .btn { flex: none; min-height: 44px; padding: var(--sp-3) var(--sp-4); }
 .dialog .back { padding: 0; margin-bottom: var(--sp-2); }
-/* A switch: off, a grey track with the knob left; on, an ink track with it right. 44px tall for a thumb. */
+/* A switch (#718): off, a light outlined track with a smaller grey knob left; on, a solid ink track with a panel knob
+   right. Only on is filled. Outline and knobs are at least 3:1 on what's around them in both themes. 44px tall for a thumb. */
 .switch { flex: none; position: relative; width: 56px; height: 44px; border: 0; padding: 0; background: none; cursor: pointer; }
-.switch::before { content: ''; position: absolute; left: 2px; right: 2px; top: 7px; height: 30px; border-radius: var(--r-full); background: var(--muted); }
-.switch::after { content: ''; position: absolute; left: 5px; top: 10px; width: 24px; height: 24px; border-radius: var(--r-full); background: var(--panel); box-shadow: var(--e-1); }
-.switch[aria-checked="true"]::before { background: var(--ink); }
-.switch[aria-checked="true"]::after { transform: translateX(22px); }
+.switch::before { content: ''; position: absolute; left: 2px; right: 2px; top: 7px; height: 30px; border-radius: var(--r-full); box-sizing: border-box; background: var(--sunken); border: var(--rule) solid var(--muted); }
+.switch::after { content: ''; position: absolute; left: 9px; top: 14px; width: 16px; height: 16px; border-radius: var(--r-full); background: var(--muted); }
+.switch[aria-checked="true"]::before { background: var(--ink); border-color: var(--ink); }
+.switch[aria-checked="true"]::after { left: 27px; top: 10px; width: 24px; height: 24px; background: var(--panel); box-shadow: var(--e-1); }
 /* Notifications' add row (#155): the kind as wide as its words, the address taking the rest. */
 .notify-add select { width: auto; flex: none; }
 .notify-add input { flex: 1; min-width: 0; }
