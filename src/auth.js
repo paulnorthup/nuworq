@@ -9,6 +9,10 @@ const ROLES = ['human', 'agent'];
 export const PERSON_ROLES = ['owner', 'steward', 'member', 'viewer'];
 // What an agent token may do; reading, asking, proposing and notes are always allowed (see core.js).
 export const POWERS = ['shape', 'build', 'review'];
+// The power to act as an operator (#609), given only by name: never part of a token's default powers.
+export const OPERATE = 'operate';
+// Whose agent tokens may act as an operator without it: a steward's or an owner's.
+const OPERATOR_MINTERS = ['owner', 'steward'];
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 const same = (a, b) => a.length === b.length && timingSafeEqual(a, b);
@@ -46,6 +50,7 @@ export class Auth {
       'ALTER TABLE tokens ADD COLUMN minted_by INTEGER', // agent tokens: the person accountable for them
       'ALTER TABLE tokens ADD COLUMN runner TEXT', // or a named runner (CI, cloud agents) that outlives any one person
       'ALTER TABLE tokens ADD COLUMN powers TEXT', // JSON subset of shape/build/review; NULL means all
+      'ALTER TABLE tokens ADD COLUMN from_token INTEGER', // a runner token: the device login it was minted from (#656)
     ]) {
       try { db.exec(sql); } catch { /* already there */ }
     }
@@ -167,8 +172,9 @@ export class Auth {
   // invite bound to it (it sets their role; a new person gets a handle from the email), else a person someone made
   // by typing the email, else null. A role typed for an email before its owner ever signed in doesn't take effect
   // on its own (#470): unless an invite they accepted gave it, they come in as a viewer, and held is the role an
-  // owner may now confirm.
-  signInByEmail(email, provider) {
+  // owner may now confirm. join: false (#630) asks first: someone not yet a member gets { pending: { role,
+  // invited_by } } and nothing changes, so only their own yes (join: true) adds them.
+  signInByEmail(email, provider, { join = true } = {}) {
     email = String(email ?? '').trim().toLowerCase();
     if (!email.includes('@')) return null;
     this.db.exec('BEGIN IMMEDIATE');
@@ -179,6 +185,15 @@ export class Auth {
         const typed = this.db.prepare('SELECT * FROM people WHERE email = ? AND verified_at IS NULL ORDER BY id').get(email);
         const inv = this.db.prepare('SELECT * FROM invites WHERE email = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at >= ? ORDER BY id').get(email, t);
         if (!typed && !inv) { this.db.exec('ROLLBACK'); return null; }
+        // Made by accepting an invite link to this email: they already said yes, there.
+        const accepted = typed && !inv && this.db.prepare('SELECT 1 FROM invites WHERE used_by = ? AND email = ? AND used_at >= ?').get(typed.handle, email, typed.created_at);
+        if (!join && !accepted) {
+          this.db.exec('ROLLBACK');
+          return { pending: { role: inv ? inv.role : 'viewer', invited_by: inv?.created_by || '' } };
+        }
+        // A verified sign-in never vouches for a session it didn't create (#612): whoever opened an invite link to this
+        // email was signed in as this row without proving it, so what they hold ends before the row becomes verified.
+        if (typed) this.revokeUnproven(typed);
         if (inv) {
           if (typed) {
             this.db.prepare('UPDATE people SET role = ?, verified_at = ? WHERE id = ?').run(inv.role, t, typed.id);
@@ -194,7 +209,6 @@ export class Auth {
           joined = true;
         } else {
           // Made by accepting an invite link to this email: that invite gave the role, so it stands.
-          const accepted = this.db.prepare('SELECT 1 FROM invites WHERE used_by = ? AND email = ? AND used_at >= ?').get(typed.handle, email, typed.created_at);
           const role = accepted ? typed.role : 'viewer';
           if (role !== typed.role) held = typed.role;
           joined = !accepted; // accepting the link already said they joined
@@ -244,8 +258,8 @@ export class Auth {
       }
       if (powers != null) {
         const list = (Array.isArray(powers) ? powers : String(powers).split(/[\s,]+/)).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
-        const bad = list.filter((x) => !POWERS.includes(x));
-        if (bad.length || !list.length) throw new Error(`powers: one or more of ${POWERS.join(', ')}`);
+        const bad = list.filter((x) => ![...POWERS, OPERATE].includes(x));
+        if (bad.length || !list.length) throw new Error(`powers: one or more of ${[...POWERS, OPERATE].join(', ')}`);
         power = JSON.stringify([...new Set(list)]);
       }
     }
@@ -253,6 +267,34 @@ export class Auth {
     this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, person_id, minted_by, runner, powers, created_at, projects) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(name, role, sha(token), token.slice(0, 8), personId, minter, runner ? String(runner) : null, power, this.now(), projects.join(','));
     return token;
+  }
+
+  // A machine's runner token (#656), minted from its device login (an agent token with no runner): the workers
+  // `nuworq run` starts share it, so the hub tells them apart from the person's own sessions and they may review each
+  // other's work. The same person answers for it; it reaches the same projects with the same powers and never
+  // operates. Its runner is the device login's name (e.g. paul@laptop). Minting again replaces the last one, and
+  // revoking the device login (nuworq disconnect) revokes it too.
+  runnerToken(fromId) {
+    const from = this.db.prepare('SELECT * FROM tokens WHERE id = ? AND revoked_at IS NULL').get(fromId);
+    if (!from || from.role !== 'agent') throw new Error('only an agent token can mint a runner token');
+    if (from.runner) throw new Error('this is a runner token already');
+    const powers = from.powers ? JSON.parse(from.powers).filter((x) => x !== OPERATE) : null;
+    if (powers && !powers.length) throw new Error('this token has no powers a worker could use');
+    const root = `${from.name.slice(0, 50)}.runner`;
+    let name = root;
+    for (let n = 2; this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name); n++) name = `${root}-${n}`;
+    const token = TOKEN_PREFIXES[0] + randomBytes(32).toString('base64url');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const old of this.db.prepare('SELECT id FROM tokens WHERE from_token = ? AND revoked_at IS NULL').all(from.id)) this.revoke(old.id);
+      this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, minted_by, runner, powers, created_at, projects, from_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(name, 'agent', sha(token), token.slice(0, 8), from.minted_by, from.name, powers ? JSON.stringify(powers) : null, this.now(), from.projects, from.id);
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+    return { token, name, runner: from.name };
   }
 
   listTokens() {
@@ -263,6 +305,14 @@ export class Auth {
   }
 
   // Removing a person revokes their logins and every agent token they minted. Runner tokens stay.
+  // Every token (and so every session) an unverified person row holds or minted (#612), revoked before a verified
+  // sign-in claims the row. Returns how many.
+  revokeUnproven(p) {
+    const ids = this.db.prepare('SELECT id FROM tokens WHERE (person_id = ? OR minted_by = ?) AND revoked_at IS NULL').all(p.id, p.id).map((r) => r.id);
+    for (const id of ids) this.revoke(id);
+    return ids.length;
+  }
+
   removePerson(handle) {
     const p = this.person(handle);
     if (!p) throw new Error(`no person @${String(handle).replace(/^@/, '')}`);
@@ -280,9 +330,20 @@ export class Auth {
     if (!row) return null;
     const out = { id: row.id, name: row.name, role: row.role };
     if (row.role === 'agent') {
-      const full = this.db.prepare('SELECT powers, projects FROM tokens WHERE id = ?').get(row.id);
+      const full = this.db.prepare('SELECT t.powers, t.projects, t.minted_by, m.role AS minter_role FROM tokens t LEFT JOIN people m ON m.id = t.minted_by WHERE t.id = ?').get(row.id);
       out.powers = full?.powers ? JSON.parse(full.powers) : [...POWERS];
       out.projects = scopeOf(full?.projects);
+      // May it act as an operator (#609)? A steward's or owner's token, one made on the hub host (no person minted
+      // it), or one given the operate power by name. A member's device login isn't, nor is a runner's token.
+      out.operator = !row.runner && (out.powers.includes(OPERATE) || full?.minted_by == null || OPERATOR_MINTERS.includes(full?.minter_role));
+      // Never more than its minter may do now (#629), read on every call, so demoting the minter narrows it at once.
+      // actsAs: the role whose agent-route limits it takes (PERSON_AGENT_CAN). A member's device login acts as a member
+      // does (no shape, build or review), a viewer's token not at all. Powers named for it on the hub host
+      // (nuworq token create --powers) are the host's own grant, and stand while its minter is a member. Runner
+      // tokens and ones made on the hub host have no minter.
+      const minter = full?.minted_by != null ? full.minter_role ?? null : null;
+      out.actsAs = minter === 'viewer' || (minter === 'member' && !full.powers) ? minter : null;
+      if (out.actsAs) { out.powers = []; out.operator = false; }
       if (row.runner) out.runner = row.runner; // a runner's token: the runner it reports as (#171)
     }
     if (row.role === 'human') {
@@ -298,6 +359,8 @@ export class Auth {
     if (!t) return null;
     this.db.prepare('UPDATE tokens SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?').run(this.now(), t.id);
     this.db.prepare('DELETE FROM sessions WHERE token_id = ?').run(t.id);
+    // A device login's runner token goes with it (#656).
+    for (const r of this.db.prepare('SELECT id FROM tokens WHERE from_token = ? AND revoked_at IS NULL').all(t.id)) this.revoke(r.id);
     return { id: t.id, name: t.name, role: t.role };
   }
 

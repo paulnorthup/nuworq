@@ -20,7 +20,18 @@ export const sq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
 
 // Tokens out of anything logged or sent to the hub: nuworq's (nwq_) and GitHub's (ghs_, ghp_, gho_, ghu_, github_pat_).
 const TOKENS = /\b(nwq|ghs|ghp|gho|ghu|ghr|github_pat)_[A-Za-z0-9_]{4,}/g;
-export const redact = (s) => String(s ?? '').replace(TOKENS, '$1_[redacted]');
+// Model keys too (#626): Anthropic's sk-ant-…, OpenAI's sk-… and sk-proj-…, llm-proxy's sk-proxy-…; a key in a header
+// line, whatever its shape; and the value of any secret in this runner's own environment (llm-proxy's owner token has
+// no shape of its own), a path aside.
+const KEYS = /\bsk-[A-Za-z0-9_-]{8,}/g;
+const HEADERS = /\b(authorization:\s*bearer|x-proxy-token:|x-api-key:)\s*[^\s"',]+/gi;
+const secrets = (env) => Object.entries(env).filter(([k, v]) => /KEY|TOKEN|SECRET|PASSWORD/.test(k) && String(v ?? '').length >= 12 && !/^[/~]/.test(v))
+  .map(([, v]) => String(v)).sort((a, b) => b.length - a.length);
+export const redact = (s, env = process.env) => {
+  let out = String(s ?? '');
+  for (const v of secrets(env)) out = out.split(v).join('[redacted]');
+  return out.replace(TOKENS, '$1_[redacted]').replace(KEYS, 'sk-[redacted]').replace(HEADERS, '$1 [redacted]');
+};
 
 // Text from the hub, safe to print: no control characters (terminal escapes among them); newlines and tabs stay.
 // eslint-disable-next-line no-control-regex
@@ -66,6 +77,58 @@ export function withoutTokens(env = process.env) {
   const gitConfig = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
   const dropGit = out.some((e) => gitConfig.test(e[0]) && holds(e));
   return Object.fromEntries(out.filter((e) => !holds(e) && !(dropGit && gitConfig.test(e[0]))));
+}
+
+// The environment a worker's agent starts with (#616): an allowlist, not the runner's own minus what looks like a
+// token. Where things are (PATH, HOME, temp, locale, the network proxy and CA certificates, toolchain folders) and
+// nuworq's own settings, never its secrets; then the names its harness needs to reach its model (keys: workerSetup's
+// `keys`, each one its harness keeps from its own shell). AWS_*, OPENAI_API_KEY for a Claude worker, an SSH agent,
+// npm's auth: none of it is there to read. Values holding a nuworq or GitHub token go too, whatever their name.
+const BASE_ENV = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'COLORTERM', 'NO_COLOR', 'FORCE_COLOR',
+  'LANG', 'TZ', '__CF_USER_TEXT_ENCODING', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  'GOPATH', 'GOROOT', 'GOCACHE', 'CARGO_HOME', 'RUSTUP_HOME', 'JAVA_HOME', 'NVM_DIR', 'PYENV_ROOT', 'VOLTA_HOME', 'PNPM_HOME', 'BUN_INSTALL']);
+const nuworqSetting = (k) => /^NUWORQ_/.test(k) && !/TOKEN|KEY|SECRET|PASS|ACCESS/.test(k);
+export function workerEnv(keys = [], env = process.env) {
+  const keep = (k) => BASE_ENV.has(k) || /^LC_[A-Z]+$/.test(k) || nuworqSetting(k) || keys.includes(k);
+  return Object.fromEntries(Object.entries(env).filter(([k, v]) => keep(k) && !new RegExp(TOKENS.source).test(String(v))));
+}
+
+// The project's own variables the person names for workers (#616), e.g. `nuworq run --env DOCKER_HOST,VIRTUAL_ENV`:
+// names only, the values come from the runner's environment. One that looks like a secret is refused unless it's
+// named with --env-secret, so passing a credential to a worker's agent is a choice, never a slip. env, secret: the
+// flags' values (a string, several, or a list).
+const SECRETISH = /KEY|TOKEN|SECRET|PASS|CREDENTIAL|AUTH|PRIVATE|SESSION|COOKIE/i;
+export function namedEnv(env, secret) {
+  const names = (v) => [v ?? []].flat().filter((x) => x !== true).flatMap((x) => String(x).split(/[\s,]+/)).filter(Boolean);
+  const plain = names(env), secrets = names(secret);
+  const bad = [...plain, ...secrets].find((n) => !/^[A-Za-z_]\w*$/.test(n));
+  if (bad) throw Object.assign(new Error(`--env takes variable names, not "${bad}"`), { hint: 'e.g. nuworq run --env DOCKER_HOST,VIRTUAL_ENV: the values come from this shell.' });
+  const looks = plain.filter((n) => SECRETISH.test(n));
+  if (looks.length) throw Object.assign(new Error(`${looks.join(', ')} looks like a secret, so --env doesn't pass it`), { hint: `A worker's agent could read it and send it wherever it reaches. To pass it anyway: --env-secret ${looks.join(',')}` });
+  return [...new Set([...plain, ...secrets])];
+}
+
+// What each harness needs from the environment to reach its model, and which of it is secret: the secrets each one
+// keeps out of its own shell. Claude Code does with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (these four among the names it
+// scrubs, checked in 2.1.309), Codex with shell_environment_policy.exclude. opencode and pi have no sandbox and no
+// such setting: their shell sees their one model key (#615). proxy: --proxy (Claude Code, Codex: the owner token);
+// model: opencode's and pi's <provider>/<model>; codexKey: a custom Codex provider's env_key.
+export const CLAUDE_SCRUBS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_OAUTH_TOKEN'];
+export function harnessKeys(agent, { proxy = false, model = '', codexKey = null } = {}) {
+  if (agent === 'claude') {
+    return { secret: [...CLAUDE_SCRUBS, ...(proxy ? ['NUWORQ_LLM_PROXY_TOKEN'] : [])],
+      config: ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CONFIG_DIR'] };
+  }
+  if (agent === 'codex') {
+    return { secret: [...new Set(['OPENAI_API_KEY', 'CODEX_API_KEY', ...(proxy ? ['NUWORQ_LLM_PROXY_TOKEN'] : []), ...(codexKey ? [codexKey] : [])])],
+      config: ['OPENAI_BASE_URL', 'CODEX_HOME'] };
+  }
+  const provider = String(model).split('/')[0];
+  const key = provider === 'proxy' ? ['NUWORQ_LLM_PROXY_KEY'] : provider === 'ollama' || !/^[\w-]+$/.test(provider) ? []
+    : [`${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`, ...(provider === 'google' ? ['GEMINI_API_KEY'] : [])];
+  return { secret: key, config: ['OLLAMA_URL'] };
 }
 
 // ── the folders a runner may work in: the person's choice on this machine (folders.json) ──

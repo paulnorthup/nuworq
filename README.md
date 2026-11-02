@@ -17,10 +17,25 @@ The last word of the second line is the release key (`release-key.pub` in this r
 
 ```bash
 nuworq connect https://nuworq.com/w/acme         # browser login, saves the token, registers Claude Code and Codex
-nuworq run --workers 3 --agent claude            # keep workers going where work is waiting; Ctrl-C stops
 ```
 
-`run` keeps workers on the projects you let it staff ("Let nuworq run staff this project" in the UI), one per waiting item. Add `--browser` for workers that check UI work. Each worker gets its own git worktree (each item it takes gets its own branch, cut from the latest main). `nuworq worker --agent claude --run` starts a single one, and goes wherever work is waiting across projects; `--agent codex` and `--agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M` (a local open-weight model) work the same way.
+### The setup that works
+
+Three sessions, each where it works best. It's how nuworq itself is built. Starting with just a shaper is fine. Add workers and an operator once there's work for them. The operator and the shaper are Claude Code with the nuworq plugin (below), which `connect` offers to install.
+
+1. **Start workers.** Workers on `nuworq run` (best as a service) build, review and land the work: headless agents, each in its own git worktree, on the projects you let them staff. They need no one watching. As a service they keep going after you close the terminal, and after a restart. In a clone of the project, run:
+
+   ```bash
+   nuworq run --install --workers auto
+   ```
+
+2. **Start an operator.** An operator in a terminal manages the workers and keeps things moving: it answers their questions, lands work, and does what workers can't. It asks you only what only you can do. Its listener starts a turn each time something waits for it. In a terminal of its own, those turns never interrupt the conversation you're having with the shaper. In the project's folder, run `claude`, then type `/nuworq:operator` (`nuworq operator --start` does both).
+
+3. **Shape work with a shaper.** A shaper in the Claude Code app talks through what you want, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you. It's the session you read and talk in, and the app is made for reading and talking. Open the project's folder in the Claude Code app's Code tab, then type `/nuworq:shaper`.
+
+`nuworq run --workers 3 --agent claude` keeps workers going in this terminal instead, until Ctrl-C. Or, after connecting, one command brings it all up and keeps it up: `nuworq up` makes sure one runner runs here as a service with `--workers auto` (installed if there is none, restarted if its flags differ), asks once whether to staff the projects that aren't (a no is remembered), and opens an operator (Claude Code with `/nuworq:operator`) in its own terminal for each unparked project that has none: in tmux when it is installed (`tmux attach -t nuworq`, a window per project), else a Terminal or iTerm window on a Mac, else it prints the commands. A project with no clone here is skipped, with where to clone it. Run it again any time, after a restart too: it starts only what is missing, and ends with a table of each project, its operator and the runner. `nuworq up --dry-run` prints that table and does nothing; `nuworq down` stops the operators it started and the runner service.
+
+`run` keeps workers on the projects you let it staff ("Let nuworq run staff this project" in the UI), one per waiting item. Add `--browser` for workers that check UI work. Each worker gets its own git worktree (each item it takes gets its own branch, cut from the latest main). `nuworq worker --agent claude --run` starts a single one, and goes wherever work is waiting across projects; `--agent codex`, `--agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M` and `--agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M` (a local open-weight model) work the same way, with `--can-read-keys`: only Claude workers are kept from your machine's keys. Codex's sandbox limits writes and network, not reads; opencode and pi have no sandbox, so their workers also run only on projects without a remote. A pi worker gets a config folder of its own (`~/.nuworq/pi/<worker>`), so none of your pi extensions, skills, MCP servers or sign-ins follow it in: give its provider key in the environment.
 
 `nuworq run` also takes limits:
 
@@ -38,7 +53,7 @@ Claude workers ignore your own MCP servers and plugins: they load only the serve
 
 `--browser` (Claude workers, on `worker` or `run`) gives each worker a headless browser to check UI work with: Microsoft's Playwright MCP server (`@playwright/mcp`, pinned) driving your Google Chrome with a throwaway profile, opening only `localhost` and `127.0.0.1` pages. The worker runs the app from its worktree on a free port, looks at it at desktop width and 375px (the app is light only), and says what it saw in its evidence. It also declares `browser`, so items that need one go to it, ahead of generic work of the same priority.
 
-What each item cost shows in its 30-minute view, per agent and model. Workers started with `--run` (or by `nuworq run`) report their CLI's own numbers when the agent exits, split across the items they worked on by time: `claude` (`--output-format stream-json`: tokens including cached input, and dollars), `codex` (`exec --json`: tokens only, so cost shows "—"), `opencode` (`--format json`: tokens and cost; a local Ollama model's cost shows "—"). The readers follow those CLIs' JSON event formats; the tests use sample output in those shapes, not yet captures from live runs. Agents you run yourself can pass `usage` on progress, submit and handoff.
+What each item cost shows in its 30-minute view, per agent and model. Workers started with `--run` (or by `nuworq run`) report their CLI's own numbers when the agent exits, split across the items they worked on by time: `claude` (`--output-format stream-json`: tokens including cached input, and dollars), `codex` (`exec --json`: tokens only, so cost shows "—"), `opencode` (`--format json`: tokens and cost; a local Ollama model's cost shows "—"), `pi` (`--mode json`: tokens and cost from each assistant message; a local model's cost shows "—"). The readers follow those CLIs' JSON event formats; the tests use sample output in those shapes, not yet captures from live runs. Agents you run yourself can pass `usage` on progress, submit and handoff.
 
 Claude Code takes nuworq best as one plugin: the MCP server, two commands a person types (`/nuworq:shaper` to shape work with you, `/nuworq:operator` to start an operator), and the skill an agent loads on its own when asked to work on nuworq, which stays out of the slash menu. On a clean machine, after installing nuworq as above, that is all of it:
 
@@ -60,7 +75,7 @@ claude plugin update nuworq@nuworq   # add --scope local if you installed it tha
 
 Then start a new Claude Code session, or run `/reload-plugins` in the one you have.
 
-`connect` shows a code. You approve it in the browser, signed in as a member or above, and the machine gets its own agent token (`<you>@<machine>`). The token is saved in `~/.nuworq/connect.json`, which only you can read. `connect` then adds the nuworq MCP server to the agent tools it finds: Claude Code (`claude mcp add --scope user`), Codex (`~/.codex/config.toml`) and opencode (`~/.config/opencode/opencode.json`). It prints each change, leaves other entries alone, and puts no token in those configs. The CLI, the MCP server and `nuworq run` read the saved connection; `NUWORQ_URL` and `NUWORQ_TOKEN` still win. Connecting again revokes the old token. `--token <t>` skips the browser (`--token -` reads it from stdin), and `--no-mcp` leaves the tools alone. `disconnect` revokes the token on the hub, removes only the entries `connect` added, and deletes the file. Running it twice is harmless.
+`connect` shows a code. You approve it in the browser, signed in as a member or above, and the machine gets its own agent token (`<you>@<machine>`). The token is saved in `~/.nuworq/connect.json`, which only you can read. `connect` then adds the nuworq MCP server to the agent tools it finds: Claude Code (`claude mcp add --scope user`), Codex (`~/.codex/config.toml`) opencode (`~/.config/opencode/opencode.json`) and pi (`pi mcp add nuworq --exposure direct`, in `~/.pi/agent/mcp.json`). It prints each change, leaves other entries alone, and puts no token in those configs. The CLI, the MCP server and `nuworq run` read the saved connection; `NUWORQ_URL` and `NUWORQ_TOKEN` still win. Connecting again revokes the old token. `--token <t>` skips the browser (`--token -` reads it from stdin), and `--no-mcp` leaves the tools alone. `disconnect` revokes the token on the hub, removes only the entries `connect` added, and deletes the file. Running it twice is harmless.
 
 Run your own hub, with nuworq installed the same way:
 
@@ -78,6 +93,7 @@ What `connect` does for you. No token or address goes in these: `connect` saved 
 
 ```bash
 claude mcp add --scope user nuworq -- nuworq mcp     # Claude Code
+pi mcp add nuworq --exposure direct -- nuworq mcp   # pi 1.4+
 nuworq init                                         # the same for opencode and other MCP clients
 ```
 
@@ -149,10 +165,10 @@ You can also set channels up in the UI, under **Notifications** in the left rail
 ### Connecting agents (any model, the same way)
 | How | For |
 |---|---|
-| MCP server (`nuworq mcp`) | Claude Code, Codex, opencode, Goose, Cline, LM Studio, any MCP client, including open-weight models (verified: opencode 1.18 + Qwen3 27B on Ollama; see [docs/OPEN-WEIGHT.md](docs/OPEN-WEIGHT.md)) |
+| MCP server (`nuworq mcp`) | Claude Code, Codex, opencode, pi, Goose, Cline, LM Studio, any MCP client, including open-weight models (verified: opencode 1.18 + Qwen3 27B on Ollama; see [docs/OPEN-WEIGHT.md](docs/OPEN-WEIGHT.md)) |
 | CLI (`nuworq checkin --as name …`) | Any agent with a shell |
 | HTTP + tool schemas (`/api/tools?format=openai\|anthropic\|mcp`) | Your own agent loop |
-| Headless worker | `nuworq worker --agent claude\|codex\|opencode --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree (each item gets its own branch, cut from the latest main), with a scoped tool allowlist |
+| Headless worker | `nuworq worker --agent claude\|codex\|opencode\|pi --run`, from anywhere: the hub routes it to the most valuable waiting work, in its own git worktree (each item gets its own branch, cut from the latest main), with a scoped tool allowlist |
 | Runner | `nuworq run --workers N`: keeps up to N headless workers on projects you opted in, one per waiting item, never a herd on one |
 
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.
@@ -168,9 +184,9 @@ Keep one running by opening Claude Code in the project folder (the terminal or t
 ```
 /nuworq:operator
 ```
-Capabilities are optional. Left out, the session runs `nuworq operator --detect`, which proves each one on this machine: the OS, `claude-cli` when `claude` runs, `github-admin` when `gh` is admin on every repository of the project, `browser` when Chrome or Chromium is installed, and `infra` unless you set `--without infra` (or `--infra-check "<command>"`: then only while that check passes; it stays on this machine). Its first line says what it declared and why. Typed capabilities (`/nuworq:operator macos,infra`, or `nuworq operator --has a,b`) replace the detection. Without the plugin it is `/nuworq-operator`.
+Capabilities are optional. Left out, the session runs `nuworq operator --detect`, which proves each one on this machine: the OS, `claude-cli` when `claude` runs, `github-admin` when `gh` is admin on every repository of the project, `browser` when Chrome or Chromium is installed, and `infra` unless you set `--without infra` (or `--infra-check "<command>"`: then only while that check passes; it stays on this machine, and only you change it, at your terminal: --detect runs it). Its first line says what it declared and why. Typed capabilities (`/nuworq:operator macos,infra`, or `nuworq operator --has a,b`) replace the detection. Without the plugin it is `/nuworq-operator`.
 
-`nuworq operator --start` opens Claude Code here with that line sent, and lets the operator's routine commands run without prompts: `nuworq`, git, gh for reading, pull requests, runs and GET api calls, and ssh to the infra check's host. Force-pushes, deleting branches or tags, and gh writes still ask. For a session you start yourself, `nuworq operator --allow` adds the same rules to the project's `.claude/settings.local.json` after a yes, and `--allow --off` removes them.
+`nuworq operator --start` opens Claude Code here with that line sent, and lets the operator's routine commands run without prompts: `nuworq`'s agent operations, `--detect`, `--check`, the listener and the guide, git, gh for reading, pull requests, runs and GET api calls, and ssh to the infra check's host. Force-pushes, deleting branches or tags, git options that run a program or write a file, other `nuworq` commands and gh writes still ask. For a session you start yourself, `nuworq operator --allow` adds the same rules to the project's `.claude/settings.local.json` after a yes, and `--allow --off` removes them.
 
 No /loop. The session works until nothing waits, then goes idle and spends nothing. The skill starts a listener, `nuworq wait --operator --follow`: the plugin's monitor, or the Monitor tool when none is running (the skill checks with `pgrep`). It wakes only the session that started it: the MCP server and the listener both tell the hub which Claude Code session they belong to (hashed), so two operator sessions on one token don't wake each other. It holds one open request to the hub, and each new operator item, operator question, or answer to the operator's own question prints a line ("nuworq: operator work waiting (#219). Run next.") that starts a turn on its own. Lines carry ids and kinds only, never text other agents wrote. It listens to the project of the folder it runs in (`--project p` names another, `--all-projects` takes every one), and it skips answers a checkin already delivered. Only a person invokes the skill, so worker sessions never listen.
 
@@ -196,7 +212,7 @@ src/names.js       the new names, and the old Trellis ones still read (env, conf
 src/runner.js      nuworq run: which workers to start (pure plan) and the supervising loop
 src/usage.js       tokens and cost: reading them from agent CLIs' JSON output, splitting a run across items
 src/llmproxy.js    measured usage from llm-proxy (NUWORQ_LLM_PROXY_URL/_KEY) for each agent's lease windows; supersedes reported
-scripts/           live-opencode.mjs: an open-weight model works one item against a throwaway hub
+scripts/           live-opencode.mjs, live-pi.mjs: an open-weight model works one item against a throwaway hub
 src/seed.js        the demo, replayed through real operations on a moved clock
 web/               the UI: no framework, one delegated event handler
 deploy/, docs/     Dockerfile, compose, systemd unit, Caddyfile, DEPLOY.md
@@ -236,7 +252,7 @@ For other tools, the published contract is [docs/API.md](docs/API.md) (e.g. outc
 ```
 GET  /api/projects                       pulse per project
 GET  /api/p/:project/outcomes            finished work: landed/dropped, sent back, stalls, cycle time, tokens (docs/API.md)
-GET  /api/p/:project/view                everything the UI shows
+GET  /api/p/:project/view                everything the UI shows; ?depth=30s|5m|30m only what that depth shows (&all=, &agents= pages)
 GET  /api/p/:project/items/:n            one item, lifecycle, timeline
 POST /api/p/:project/agent/:op           agent operations (header x-nuworq-agent: <name>)
 POST /api/p/:project/human/:action       answer, confirm, accept, sendback, steer, decide, comment,

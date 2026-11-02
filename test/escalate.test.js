@@ -97,9 +97,16 @@ describe('an operator escalates to the human', () => {
     assert.equal(item(1).stage, 'ready');
   });
 
-  test('what an operator settled alone is a know line for a day, never act', () => {
+  test('a routine operator answer stays in the item history, out of Worth knowing (#497)', () => {
+    const { hub, q, attention } = setup();
+    hub.agentOp('o', 'answer', 'op', { question: q, answer: 'Checked: the tables are referenced; left alone.' });
+    assert.ok(!attention().some((a) => a.kind === 'operator-answered'));
+    assert.ok(itemView(hub, 'o', 1).events.some((e) => e.type === 'answered'), 'the item history has it');
+  });
+
+  test('what an operator marks for people is a know line for a day, never act', () => {
     const { hub, q, attention, tick } = setup();
-    hub.agentOp('o', 'answer', 'op', { question: q, answer: 'Dropped them; backup in s3.' });
+    hub.agentOp('o', 'answer', 'op', { question: q, answer: 'Dropped them; backup in s3.', for_people: true });
     const lines = attention().filter((a) => a.kind === 'operator-answered');
     assert.equal(lines.length, 1);
     assert.equal(lines[0].level, 'know');

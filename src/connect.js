@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, 
 import { join, dirname, basename, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { userSkills } from './protocol.js';
-import { MARKETPLACE } from './plugin.js';
+import { MARKETPLACE, REPO, RELEASE_BRANCH } from './plugin.js';
 
 const NAME = 'nuworq';
 // How a person installs the plugin, and the `claude` arguments connect runs when they say yes (#432): the
@@ -32,9 +32,9 @@ export function launcher(bin, env = process.env) {
 
 // An entry an earlier connect wrote the old way: node <…/nuworq.js> mcp.
 const oldForm = (command, args) => command === 'node' && args.length === 2 && /nuworq\.js$/.test(args[0]) && args[1] === 'mcp';
-const run = (cmd, args, env) => {
+const run = (cmd, args, env, cwd) => {
   try {
-    return { ok: true, out: execFileSync(cmd, args, { env, encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] }) };
+    return { ok: true, out: execFileSync(cmd, args, { env, cwd, encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] }) };
   } catch (e) {
     return { ok: false, out: `${e.stdout ?? ''}${e.stderr ?? ''}`.trim() || e.message };
   }
@@ -173,6 +173,25 @@ const TOOLS = {
       return null;
     },
   },
+  // pi (1.4+) has MCP built in, kept in mcp.json in its agent folder (PI_CODING_AGENT_DIR, else ~/.pi/agent). Its own
+  // CLI writes the entry. Direct exposure: nuworq's tools are declared to the model as they are, not behind codemode.
+  pi: {
+    label: 'pi',
+    where: ({ home, env }) => join(env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent'), 'mcp.json'),
+    present: ({ env }) => onPath('pi', env),
+    add(ctx) {
+      let cfg = {};
+      try { cfg = JSON.parse(readFileSync(TOOLS.pi.where(ctx), 'utf8')); } catch { /* none yet */ }
+      if (cfg.mcpServers?.[NAME]) return { skip: `it already has a "${NAME}" MCP server` };
+      const r = run('pi', ['mcp', 'add', NAME, '--exposure', 'direct', '--', ctx.launch.command, ...ctx.launch.args], ctx.env);
+      if (!r.ok) return { skip: `pi mcp add failed: ${r.out.split('\n')[0]}` };
+      return { record: {} };
+    },
+    remove({ env }) {
+      const r = run('pi', ['mcp', 'remove', NAME], env);
+      return r.ok || /no .*server named/i.test(r.out) ? null : `pi mcp remove failed: ${r.out.split('\n')[0]}`;
+    },
+  },
 };
 
 // The nuworq Claude Code plugin (plugin/, see src/plugin.js) brings the MCP server and the skills
@@ -191,8 +210,9 @@ export function installPlugin(env = process.env) {
 // Where Claude Code has the plugin (#496): { account, folders }. account: an install it applies to every project
 // (user or managed scope; an entry from before scopes had none, and was the account's). folders: the projects an
 // install for some folders only covers (local or project scope), which other projects don't get.
+// installs: each of those folder installs with its scope, { scope, projectPath } (#608: what a repin puts back).
 export function pluginScopes(home) {
-  const out = { account: false, folders: [] };
+  const out = { account: false, folders: [], installs: [] };
   try {
     const { plugins = {} } = JSON.parse(readFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
     for (const [key, installs] of Object.entries(plugins)) {
@@ -200,7 +220,10 @@ export function pluginScopes(home) {
       for (const i of [].concat(installs)) {
         if (!i || typeof i !== 'object') continue;
         if (!i.scope || i.scope === 'user' || i.scope === 'managed') out.account = true;
-        else if (i.projectPath && !out.folders.includes(i.projectPath)) out.folders.push(i.projectPath);
+        else if (i.projectPath && !out.folders.includes(i.projectPath)) {
+          out.folders.push(i.projectPath);
+          out.installs.push({ scope: i.scope, projectPath: i.projectPath });
+        }
       }
     }
   } catch { /* no plugins file: none installed */ }
@@ -208,6 +231,43 @@ export function pluginScopes(home) {
 }
 // The plugin covers Claude Code only when it's installed for the account.
 export const pluginInstalled = (home) => pluginScopes(home).account;
+
+// A nuworq marketplace added before #473 (#608) follows GitHub's default branch, so `claude plugin update` reads its
+// plugin entry from main, where agents land without a release. Its source as Claude Code recorded it in
+// known_marketplaces.json, when it is nuworq's repository at any branch but the release one; else null. A marketplace
+// from a folder, or another repository, is the person's own and stays.
+export function staleMarketplace(home) {
+  try {
+    const src = JSON.parse(readFileSync(join(home, '.claude', 'plugins', 'known_marketplaces.json'), 'utf8'))?.[NAME]?.source;
+    if (!src || !['github', 'git'].includes(src.source)) return null;
+    const [repo, ref = src.ref] = String(src.repo ?? src.url ?? '').replace(/\.git$/, '').split('#');
+    if (!repo.endsWith(REPO)) return null;
+    return ref === RELEASE_BRANCH ? null : src;
+  } catch { return null; } // no marketplaces file: nothing added
+}
+// What moves it onto the release branch: remove it and add it again at MARKETPLACE, then install the plugin again
+// everywhere it was, since removing a marketplace uninstalls its plugins in every scope: for the account if it was,
+// and in each folder it was installed for (in that folder, with its scope), skipping folders that are gone.
+// [{ args, cwd? }].
+export function REPIN(home) {
+  const steps = [{ args: ['plugin', 'marketplace', 'remove', NAME] }, { args: PLUGIN_INSTALL[0] }];
+  const { account, installs } = pluginScopes(home);
+  if (account) steps.push({ args: PLUGIN_INSTALL[1] });
+  for (const i of installs) {
+    if (existsSync(i.projectPath)) steps.push({ args: ['plugin', 'install', `${NAME}@${NAME}`, '--scope', i.scope], cwd: i.projectPath });
+  }
+  return steps;
+}
+// The steps as a person types them.
+export const repinCommands = (home) => REPIN(home).map((s) => `${s.cwd ? `(cd ${JSON.stringify(s.cwd)} && ` : ''}claude ${s.args.join(' ')}${s.cwd ? ')' : ''}`).join(' && ');
+// Run REPIN; null, or what went wrong in one line.
+export function repinMarketplace(home, env = process.env) {
+  for (const s of REPIN(home)) {
+    const r = run('claude', s.args, env, s.cwd);
+    if (!r.ok && !(s.args[2] === 'add' && /already/i.test(r.out))) return `claude ${s.args.join(' ')}${s.cwd ? ` (in ${s.cwd})` : ''} failed: ${r.out.split('\n')[0]}`;
+  }
+  return null;
+}
 
 // What an earlier nuworq left in Claude Code beside an account-wide plugin (#496), recorded or not: skill folders
 // in ~/.claude/skills whose SKILL.md carries the generated line, and a user-scope MCP server named nuworq that

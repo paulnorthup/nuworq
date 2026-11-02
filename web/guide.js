@@ -1,12 +1,14 @@
 // The getting-started guide's page (/guide, src/userguide.js): a link to a step (/guide#machine, from Get
-// started) opens that step, and each command's Copy copies exactly that command.
+// started) opens that step, a link to a part of one (/guide#operator, in The setup that works) opens its step at
+// that part, and each command's Copy copies exactly that command.
 import { copyText } from './copy.js';
 
 const open = () => {
-  const step = location.hash.length > 1 && document.getElementById(decodeURIComponent(location.hash.slice(1)));
-  if (step?.tagName !== 'DETAILS') return;
+  const at = location.hash.length > 1 && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  const step = at?.closest?.('details');
+  if (!step) return;
   step.open = true;
-  step.scrollIntoView({ block: 'start' });
+  at.scrollIntoView({ block: 'start' });
 };
 addEventListener('hashchange', open);
 open();

@@ -262,6 +262,9 @@ describe('landing through GitHub, when the hub has no checkout', () => {
 
     hub.humanOp('demo', 'accept', { item: '#1' });
     assert.equal(item(1).stage, 'landing', 'accepted, but main on GitHub does not have it yet');
+    // A runner's worker pushes only nuworq/ branches (#472): with no pull request to land it through, it isn't offered.
+    op('w1', 'checkin', { role: 'worker', runner: 'mac' });
+    assert.notEqual(op('w1', 'next', { claim: false }).mode, 'land');
 
     const land = op('a1', 'next');
     assert.equal(land.mode, 'land');

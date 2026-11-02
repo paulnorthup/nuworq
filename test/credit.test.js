@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { credit } from '../web/credit.js';
+import { appSource } from './appsource.js';
 
 const who = (n) => `<b>${n}</b>`;
 
@@ -33,7 +34,7 @@ describe('who built and verified a finished item', () => {
   });
 
   test('the page uses it in Recently finished and the drawer, with no bare "built by" left', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.doesNotMatch(app, /built by \$\{who/);
     assert.match(app, /credit\(i, who\) \? `<div class="s">\$\{credit\(i, who\)\}<\/div>` : ''/);
   });

@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -12,9 +12,10 @@ import { issuesOf, markDuplicate, markStale, staleAnswered, reporterIssue, heldI
 import { prMerged, prSeen } from './github.js';
 import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
-import { fieldNotesFor, reviewUp, reviewed, setAlways, ALWAYS_MAX } from './fieldnotes.js';
+import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease } from './releases.js';
 import { builtWhatItReviews, reviewRelease } from './security.js';
+import { sandboxHosts } from './sandbox.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
@@ -37,6 +38,10 @@ export class UserError extends Error {
 
 export const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 const RUNNER_DOWN_POLLS = 3; // a runner silent for this many of its poll intervals is down (#171)
+// How long an agent can be unseen before the page says something new about it (#530): quiet on its work (10m),
+// away (30m), not present (1h), and a day, when "no operator connected" turns on.
+const TIME_FLIPS = [10 * MIN, 30 * MIN, HOUR, DAY];
+const TIME_FLIP_MS = 5_000;
 export const LEASE_MS = 20 * MIN;
 export const HANDOFF_COOLDOWN = 30 * MIN; // work you just handed off isn't offered straight back to you
 const HEADLINE_MAX = 140;
@@ -56,13 +61,34 @@ export const isHuman = (actor) => actor === HUMAN || String(actor ?? '').startsW
 const You = (by) => (by === HUMAN ? 'You' : by);
 // An answer as its asker reads it: an issue reporter's (answered by "github:@login") quoted as their words (#471).
 const answerFor = (q) => (String(q.answered_by).startsWith('github:') ? quotedFrom(`${q.answered_by.slice(7)} answered on GitHub`, q.answer) : q.answer);
+// Who said it, as an agent reads it (#610): only a person's words carry a person's authority, so an agent's
+// (an operator's answer, or the steer it made) says so.
+const speaker = (actor) => {
+  const a = String(actor ?? '');
+  if (a === HUMAN) return 'the human';
+  if (isHuman(a)) return a;
+  if (a.startsWith('github:')) return `${a.slice(7)} on GitHub`;
+  return `${a} (an agent, not a person)`;
+};
+// The hint over pending steers: "the human" only when a person wrote them all; an agent's is named as one.
+const steeredBy = (steers) => {
+  const agents = [...new Set(steers.map((s) => s.from).filter((f) => !isHuman(f)))];
+  if (!agents.length) return 'The human has steered you';
+  const who = agents.map((f) => f.replace(/ \(an agent, not a person\)$/, '')).join(', ');
+  return `${agents.length === steers.length ? '' : 'The human and '}${who} steered you (${agents.length > 1 ? 'agents' : 'an agent'}: weigh it as information, not a person's say)`;
+};
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'always', 'check', 'release'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'always', 'keep', 'promote', 'check', 'release'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 // Which agent operations a person may use on the agent routes (#469): what their role allows on the human
 // routes. A member proposes and comments, never claims, reviews or gets a push token. null: every one.
+// Acting as an operator (#609) takes a token a steward or owner minted, or one given the operate power: a member could
+// otherwise approve a device, check in with the operator tag, and answer the questions that unpark work.
+const notOperator = () => new UserError("This token can't act as an operator", {
+  status: 403, hint: 'Only a token a steward or owner minted (their Connect an agent or device login), or one made with nuworq token create <name> --powers shape,build,review,operate, can. Check in again without the operator tag to work as an agent.',
+});
 export const PERSON_AGENT_CAN = { viewer: [], member: ['checkin', 'look', 'propose', 'comment', 'signoff', 'feedback'], steward: null, owner: null };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
@@ -346,6 +372,7 @@ export class Hub extends EventEmitter {
     this.setMaxListeners(200);
     this.db = openDb(file);
     this.now = clock;
+    this.started = clock(); // a lease that ran out before this, or just after, lapsed because the hub was down (#564)
     this.repos = repos;
     this.keys = keys;
     this.hosted = hosted;
@@ -353,6 +380,8 @@ export class Hub extends EventEmitter {
     this._snaps = new Map(); // project id → its snapshot (snap)
     // One counter per hub (a workspace) that goes up with every change, for what caches on it (#517).
     this.changeSeq = 0;
+    this.changedAt = new Map(); // project id → the counter at its last change; a change with no project moves allChanged (#501)
+    this.allChanged = 0;
     this._marks = null; // while an agent operation runs: what it wrote that a view shows (mark())
     this._unreachable = new Set(); // repositories the hub has said it can't reach
     this._behind = new Map(); // item id → whether its branch lacks its base, as refreshBehind last found (#535)
@@ -432,7 +461,14 @@ export class Hub extends EventEmitter {
   // A change a view shows: browsers, listeners and the Notifier hear it. item ("#12") and kind (an event type, or
   // "stage", "item") say what, when one thing changed.
   changed(p, { item = null, kind = null } = {}) {
-    this.emit('change', { project: p?.slug ?? null, item, kind, seq: ++this.changeSeq, at: this.now() });
+    const seq = ++this.changeSeq;
+    if (p?.id != null) this.changedAt.set(p.id, seq); else this.allChanged = seq;
+    this.emit('change', { project: p?.slug ?? null, item, kind, seq, at: this.now() });
+  }
+
+  // The counter at the last change a project's view shows: its own, or one that names no project (#501).
+  changeOf(p) {
+    return Math.max(this.changedAt.get(p.id) ?? 0, this.allChanged);
   }
 
   // Inside an agent operation: it wrote something a view shows, so it ends in a change (agentOp).
@@ -545,6 +581,19 @@ export class Hub extends EventEmitter {
     setImmediate(() => openPr.call(this, p, item.id)
       .catch((e) => console.error('opening a pull request failed', e))
       .finally(() => { this._opening.delete(item.id); done(); }));
+  }
+
+  // A push the hub passed on to an accepted item's branch (#605, src/server.js): unless it's the change the review
+  // accepted, rebased, the item goes back to review at once, and its pull request's auto-merge goes off.
+  async headMoved(p, id) {
+    let item = this.itemById(id);
+    if (item?.stage !== 'landing' || !item.reviewed_sha) return;
+    this.repoFor(p, item, { fresh: true });
+    item = this.itemById(id);
+    if (item?.stage !== 'landing' || this.tx(() => reviewedHead.call(this, p, item)) !== 'moved') return;
+    const head = shaOf(this.repoFor(p, item)?.path, item.branch) ?? '';
+    this.tx(() => headMovedBack.call(this, p, item, { by: item.holder && item.holder !== GITHUB ? item.holder : SYSTEM, head }));
+    this.changed(p);
   }
 
   // Resolves once every pull request being opened is open (or has failed). For tests and shutdown.
@@ -774,7 +823,10 @@ export class Hub extends EventEmitter {
       // Runners follow the project's staffing (#174): paused, or today's budget spent, starts no one new.
       if (runner && this.staffing(p).stopped) continue;
       // A runner on duty here (#185): the project page knows a worker is coming before one checks in.
-      if (runner) this.q('UPDATE projects SET runner_polled_at = ? WHERE id = ?').run(this.now(), p.id);
+      if (runner) {
+        this.q('UPDATE projects SET runner_polled_at = ? WHERE id = ?').run(this.now(), p.id);
+        if (this.now() - (p.runner_polled_at ?? 0) >= 5 * MIN) this.changed(p, { kind: 'runner' }); // on duty again: the page says a worker is coming
+      }
       const all = this.claimable(p, agent, { powers, has });
       // A building trial (#348) is decided before the count: a raced one takes two workers.
       if (runner && kind && p.model_routing && all[0]?.mode === 'work') this.decideTrial(p, all[0].item, kind, model, all[0].priority);
@@ -1015,9 +1067,9 @@ export class Hub extends EventEmitter {
           last_seen: dur(t - r.seen_at), running: s.running ?? 0, workers: s.workers ?? 0, spent: s.spent ?? 0,
           ...(s.auto ? { auto: true, holding: s.holding ?? null } : {}),
           stopped: s.stopped ?? null,
-          paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t) } : null,
+          paused: s.paused?.until > t ? { reason: s.paused.reason, for: dur(s.paused.until - t), until: s.paused.until } : null,
           // Why it leaves this project alone, if it does; and how many others it leaves alone.
-          skipping: skip ? { reason: skip.reason, ...(skip.until > t ? { for: dur(skip.until - t) } : {}) } : null,
+          skipping: skip ? { reason: skip.reason, ...(skip.until > t ? { for: dur(skip.until - t), until: skip.until } : {}) } : null,
           skipping_others: (s.skipping ?? []).filter((x) => x.project !== slug).length,
         };
       });
@@ -1125,7 +1177,7 @@ export class Hub extends EventEmitter {
     this.tx(() => {
       this.move(item, 'dropped', agent, { holder: null, lease_until: null });
       this.event(p, { item, actor: agent, type: 'staged', headline: `${agent} dropped #${item.seq}, as ${by === HUMAN ? 'you' : by} answered: "${clip(q.answer, 80)}"`, data: { decided_by: by, question: q.id } });
-      for (const holder of others) this.addNote(p, 'steer', `#${item.seq} was dropped (${by === HUMAN ? 'the human' : by} said so); stop working on it.`, null, holder, by);
+      for (const holder of others) this.addNote(p, 'steer', `#${item.seq} was dropped (${by === HUMAN ? 'the human' : by} said so); stop working on it.`, null, holder, by, { notice: true });
     });
     return { ok: true, item: `#${item.seq}`, stage: 'dropped', decided_by: by, hint: 'Dropped. Call next.' };
   }
@@ -1353,7 +1405,7 @@ export class Hub extends EventEmitter {
   // The role a call says this session has (#238), from how it started: a runner's token makes a worker (as does
   // role "worker" with its runner, from nuworq run on a hub without logins), the operator tag an operator, role
   // "shaper" (the shaper skill) a shaper. null: the call says nothing, so the session keeps what it has.
-  claimedRole(token, args = {}) {
+  claimedRole(token, args = {}, { operate = true } = {}) {
     const said = str(args.role).toLowerCase();
     if (said && !ROLES.includes(said)) {
       throw new UserError(`role must be one of ${ROLES.join(', ')}, not "${args.role}"`, { hint: 'Leave it out unless you are a shaper (role: "shaper"); the hub knows workers and operators by how they started.' });
@@ -1372,7 +1424,10 @@ export class Hub extends EventEmitter {
     if (said === 'operator' && !has.includes('operator')) {
       throw new UserError('An operator declares the operator tag', { hint: 'Check in with has: ["operator", ...]; nuworq operator prints the line.' });
     }
-    if (has.includes('operator')) return { role: 'operator', runner: '' };
+    if (has.includes('operator')) {
+      if (!operate) throw notOperator();
+      return { role: 'operator', runner: '' };
+    }
     if (said) return { role: said, runner: '' };
     return null;
   }
@@ -1467,12 +1522,30 @@ export class Hub extends EventEmitter {
     return item.holder === agent || (this.racing(item) && !!this.attemptOf(item, agent));
   }
 
-  // Racers can't review the race they ran, nor an agent the conflicts it resolved while landing (#264).
+  // The names an agent's token acts as here (#622): one token may use any number of names, so work under its other
+  // names is its own too. A runner's token is shared by its workers by design, and an agent with no token (a hub
+  // without logins, a person's session) is only itself.
+  namesOf(projectId, agent) {
+    if (!agent) return [];
+    let rows = [];
+    try {
+      // A runner's workers count as themselves alone (#658), whatever token the runner uses: `nuworq run` on a person's
+      // machine runs them on that person's device token, which also serves the operator.
+      rows = this.q(`SELECT o.name FROM agents a JOIN tokens t ON t.id = a.token_id JOIN agents o ON o.project_id = a.project_id AND o.token_id = a.token_id
+        WHERE a.project_id = ? AND a.name = ? AND t.runner IS NULL AND a.runner = '' AND o.runner = ''`).all(projectId, agent);
+    } catch { /* no tokens table: a hub without logins */ }
+    return [...new Set([agent, ...rows.map((r) => r.name)])];
+  }
+
+  // Racers can't review the race they ran, nor an agent the conflicts it resolved while landing (#264), nor a token
+  // the work it built under another of its names (#622).
   implementedBy(item, agent) {
-    return item.implementer === agent ||
-      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent = ? AND stage = 'submitted' AND closed = 0`).get(item.id, agent) ||
-      !!this.q(`SELECT 1 FROM events WHERE item_id = ? AND actor = ? AND type = 'rebased' AND at >= ? AND json_extract(data, '$.conflicts') = 1`)
-        .get(item.id, agent, item.stage_since);
+    const names = this.namesOf(item.project_id, agent);
+    const marks = names.map(() => '?').join(',');
+    return names.includes(item.implementer) ||
+      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent IN (${marks}) AND stage = 'submitted' AND closed = 0`).get(item.id, ...names) ||
+      !!this.q(`SELECT 1 FROM events WHERE item_id = ? AND actor IN (${marks}) AND type = 'rebased' AND at >= ? AND json_extract(data, '$.conflicts') = 1`)
+        .get(item.id, ...names, item.stage_since);
   }
 
   leaseOf(item, agent) {
@@ -1575,7 +1648,7 @@ export class Hub extends EventEmitter {
         AND (n.target = ? OR (n.target IS NULL AND ((n.item_id IS NULL AND n.at > ?) OR i.holder = ?
           OR EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = n.item_id AND a.agent = ? AND a.stage = 'active' AND a.closed = 0))))
       ORDER BY n.at`).all(p.id, agent, agent, agent, this.now() - STEER_TTL, agent, agent)
-      .map((n) => ({ steer: n.id, about: n.item_seq ? `#${n.item_seq}` : 'whole project', from: n.author, body: n.body, ago: dur(this.now() - n.at) }));
+      .map((n) => ({ steer: n.id, about: n.item_seq ? `#${n.item_seq}` : 'whole project', from: isHuman(n.author) ? n.author : speaker(n.author), body: n.body, ago: dur(this.now() - n.at) }));
   }
 
   // What every other agent is doing right now, and where in the code.
@@ -1717,7 +1790,7 @@ export class Hub extends EventEmitter {
   }
 
   decisions(p) {
-    return this.q(`SELECT id, body, at FROM notes WHERE project_id = ? AND kind = 'decision' AND active = 1 ORDER BY at`).all(p.id);
+    return this.q(`SELECT id, body, gist, at FROM notes WHERE project_id = ? AND kind = 'decision' AND active = 1 ORDER BY at`).all(p.id);
   }
 
   // Everything an agent needs to work an item, and nothing it doesn't.
@@ -1793,8 +1866,9 @@ export class Hub extends EventEmitter {
       questions: questions.length ? questions.map((q) => ({
         question_id: q.id, question: q.question, status: q.status, blocking: !!q.blocking,
         assumption: q.assumption || undefined, answer: q.answer ? answerFor(q) : undefined,
+        by: q.answer && q.answered_by ? speaker(q.answered_by) : undefined,
       })) : undefined,
-      steers: steers.length ? steers.map((n) => ({ steer: n.id, from: n.author, body: n.body, ago: dur(this.now() - n.at) })) : undefined,
+      steers: steers.length ? steers.map((n) => ({ steer: n.id, from: isHuman(n.author) ? n.author : speaker(n.author), body: n.body, ago: dur(this.now() - n.at) })) : undefined,
       // The hub can't tell whether two people's steers conflict; the agent can, and its question reaches both.
       steered_by: steerers.length > 1
         ? `Steers from ${steerers.slice(0, -1).join(', ')} and ${steerers.at(-1)}. If they disagree, ask: the question goes to all of them.`
@@ -1821,12 +1895,22 @@ export class Hub extends EventEmitter {
   // Expired leases go back to the queue. Run before every operation and on a timer.
   sweep() {
     const t = this.now();
+    this.timeFlips(t);
     this.q('DELETE FROM session_cursors WHERE at < ?').run(t - DAY); // sessions quiet for a day (#539)
     const expired = this.q(`SELECT i.*, p.slug FROM items i JOIN projects p ON p.id = i.project_id
       WHERE i.holder IS NOT NULL AND i.lease_until < ?`).all(t);
     const lapsed = this.q(`SELECT * FROM attempts WHERE stage = 'active' AND closed = 0 AND lease_until < ?`).all(t);
     if (!expired.length && !lapsed.length) return 0;
     const touched = new Map();
+    // Why a lease lapsed (#564), so a bouncing item counts only real failures: 'restart' when it ran out while the hub
+    // was down (or in the minute after, before agents reconnected), 'session' when its agent's session ended (signed
+    // off) or it was a runner's worker (the runner renews a running worker's lease, #540, so a lapse means the worker
+    // or the runner stopped), '' when the agent just went quiet.
+    const cause = (p, agent, until) => {
+      if (until < this.started + MIN) return 'restart';
+      const a = this.q('SELECT runner, signed_off FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
+      return a && (a.runner || a.signed_off) ? 'session' : '';
+    };
     this.tx(() => {
       // A lapsed race attempt frees its slot; the other racers carry on.
       for (const a of lapsed) {
@@ -1840,7 +1924,7 @@ export class Hub extends EventEmitter {
           item: it, actor: SYSTEM, type: 'lease_expired',
           headline: `${a.agent} went quiet on #${it.seq}; their race slot is open again`,
           summary: last ? `Their last update: "${last.headline}"` : 'They left no updates.',
-          data: { agent: a.agent },
+          data: { agent: a.agent, stage: 'active', cause: cause(p, a.agent, a.lease_until) },
         });
         this.stepUp(p, it, 'stalled');
         this.settleRace(p, it, SYSTEM);
@@ -1849,12 +1933,13 @@ export class Hub extends EventEmitter {
         const p = this.q('SELECT * FROM projects WHERE id = ?').get(it.project_id);
         touched.set(p.id, p);
         const last = this.q(`SELECT headline FROM events WHERE item_id = ? AND actor = ? ORDER BY at DESC LIMIT 1`).get(it.id, it.holder);
+        const why = cause(p, it.holder, it.lease_until);
         if (it.stage === 'proposed') {
           this.patch(it, { holder: null, lease_until: null, last_worker: it.holder, stalls: it.stalls + 1 });
           this.event(p, {
             item: it, actor: SYSTEM, type: 'lease_expired',
             headline: `${it.last_worker} went quiet while shaping #${it.seq}; it's open for shaping again`,
-            summary: last ? `Their last update: "${last.headline}"` : '', data: { agent: it.last_worker },
+            summary: last ? `Their last update: "${last.headline}"` : '', data: { agent: it.last_worker, stage: 'proposed', cause: why },
           });
         } else if (it.stage === 'active') {
           this.move(it, 'ready', SYSTEM, { holder: null, lease_until: null, last_worker: it.holder, stalls: it.stalls + 1, touching: '[]' });
@@ -1862,7 +1947,7 @@ export class Hub extends EventEmitter {
             item: it, actor: SYSTEM, type: 'lease_expired',
             headline: `${it.last_worker} went quiet on #${it.seq}; it's back in the queue`,
             summary: last ? `Their last update: "${last.headline}"` : 'They left no updates.',
-            data: { agent: it.last_worker },
+            data: { agent: it.last_worker, stage: 'active', cause: why },
           });
         } else {
           this.patch(it, { holder: null, lease_until: null });
@@ -1877,6 +1962,26 @@ export class Hub extends EventEmitter {
     return expired.length + lapsed.length;
   }
 
+  // What only time changes (#530): an agent going quiet, away or a day unseen (so "no operator connected"), a
+  // runner going down. Pages don't refetch on a timer, so the hub says so when one flips since the last look.
+  // At most every TIME_FLIP_MS, so the sweep before each operation stays cheap.
+  timeFlips(t = this.now()) {
+    if (this._flipsAt == null) { this._flipsAt = t; return; }
+    const prev = this._flipsAt;
+    if (t - prev < TIME_FLIP_MS) return;
+    this._flipsAt = t;
+    // Seen at s, an agent crosses idle b once t - b reaches s: s in (prev - b, t - b].
+    const crossed = TIME_FLIPS.map(() => '(last_seen > ? AND last_seen <= ?)').join(' OR ');
+    const ids = this.q(`SELECT DISTINCT project_id FROM agents WHERE ${crossed}`).all(...TIME_FLIPS.flatMap((b) => [prev - b, t - b]));
+    for (const { project_id } of ids) {
+      const p = this.q('SELECT * FROM projects WHERE id = ?').get(project_id);
+      if (p) this.changed(p, { kind: 'time' });
+    }
+    const down = this.q('SELECT 1 FROM runners WHERE seen_at + ? * poll_ms > ? AND seen_at + ? * poll_ms <= ? LIMIT 1')
+      .get(RUNNER_DOWN_POLLS, prev, RUNNER_DOWN_POLLS, t);
+    if (down) this.changed(null, { kind: 'time' }); // a runner shows on every project it staffs
+  }
+
   // ── agent operations ────────────────────────────────────────────────────
 
   // slug may be empty: then the agent's folder (root) picks the project, or the hub routes it to work.
@@ -1886,7 +1991,7 @@ export class Hub extends EventEmitter {
   // remote: the agent's repository (normalized origin remote), which finds the project on any machine.
   // identity: who is calling when the hub has logins, { id: the token behind it, session: a person's browser
   // session }; the agent name is bound to the first token that uses it (bindAgent). null: no logins.
-  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [], cursor = '', identity = null } = {}) {
+  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [], cursor = '', identity = null, operate = token?.operator ?? true } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     // A field the operation doesn't take is a typo, never silently dropped (#521).
@@ -1950,7 +2055,7 @@ export class Hub extends EventEmitter {
       if (presence && (presence.fresh || presence.wasSignedOff || presence.gap > AWAY_MS)) this.mark(null, 'presence');
       // Its role (#238): a runner's token says worker on every call; a checkin says the rest, and where it runs.
       if (presence) {
-        const claimed = op === 'checkin' ? this.claimedRole(token, args) : token?.runner ? { role: 'worker', runner: token.runner } : null;
+        const claimed = op === 'checkin' ? this.claimedRole(token, args, { operate }) : token?.runner ? { role: 'worker', runner: token.runner } : null;
         if (claimed || (op === 'checkin' && args.machine)) this.setRole(p, agent, claimed, op === 'checkin' ? str(args.machine) : '');
       }
       this.noteToken(p, agent, token?.name);
@@ -1959,6 +2064,9 @@ export class Hub extends EventEmitter {
       if (presence) this.renewHeld(p, agent);
       // Its session's keys (#335): the listener beside it sends the same, and wakes it alone.
       if (op === 'checkin' && session.length) this.q('UPDATE agents SET session = ? WHERE project_id = ? AND name = ?').run(session.join(','), p.id, agent);
+      // Answering or escalating operator questions takes what checking in as one does (#609), even for a session
+      // that became an operator before that was checked.
+      if (!operate && (op === 'answer' || (op === 'ask' && args?.escalates != null && args.escalates !== ''))) throw notOperator();
       const need = powers && this.powerFor(p, op, args ?? {});
       if (need && !powers.includes(need)) {
         throw new UserError(`This agent's token can't ${need} (its powers: ${powers.join(', ')})`, {
@@ -1977,7 +2085,7 @@ export class Hub extends EventEmitter {
         const steers = this.pendingSteers(p, agent);
         if (steers.length) {
           r.steers = steers;
-          r.hint = `The human has steered you; read it, adjust, then ack. ${r.hint ?? ''}`.trim();
+          r.hint = `${steeredBy(steers)}; read it, adjust, then ack. ${r.hint ?? ''}`.trim();
         }
       }
       const renamed = renamedTags(op === 'checkin' ? args?.has : ['propose', 'refine'].includes(op) ? args?.needs : null);
@@ -2079,6 +2187,7 @@ export class Hub extends EventEmitter {
         about: a.item_seq ? `#${a.item_seq}` : 'project',
         question: a.question,
         answer: a.status === 'confirmed' ? `Your assumption stands: ${a.assumption}` : answerFor(a),
+        by: speaker(a.answered_by),
       })) : undefined,
       feedback: feedback.length ? feedback.map((e) => ({
         item: `#${e.seq}`,
@@ -2148,17 +2257,19 @@ export class Hub extends EventEmitter {
     // holds it too, since that answer is usually the live evidence (#298); the builder's questions to the
     // human don't: the reviewer judges the assumption. And a reviewer who handed it off doesn't get it
     // back until something new arrives on it: an answer, a new submission or a comment.
+    // Not the caller's own work, by implementedBy's rule (#660): any of the names its token works under (#622).
+    const names = this.namesOf(p.id, agent ?? ''), marks = names.map(() => '?').join(',');
     const reviews = p.autonomy !== 'full' || !may('review') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'verifying' AND holder IS NULL
-        AND COALESCE(implementer, '') != ?
-        AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent = ? AND a.stage = 'submitted' AND a.closed = 0)
-        AND NOT EXISTS (SELECT 1 FROM events r WHERE r.item_id = items.id AND r.actor = ? AND r.type = 'rebased' AND r.at >= items.stage_since
+        AND COALESCE(implementer, '') NOT IN (${marks})
+        AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = items.id AND a.agent IN (${marks}) AND a.stage = 'submitted' AND a.closed = 0)
+        AND NOT EXISTS (SELECT 1 FROM events r WHERE r.item_id = items.id AND r.actor IN (${marks}) AND r.type = 'rebased' AND r.at >= items.stage_since
           AND json_extract(r.data, '$.conflicts') = 1)
         AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.item_id = items.id AND q.status = 'open' AND CASE WHEN q.audience = 'operator'
           THEN ? = 0 ELSE q.at >= items.stage_since AND q.asked_by != COALESCE(items.implementer, '') END)
         AND NOT EXISTS (SELECT 1 FROM events h WHERE h.item_id = items.id AND h.actor = ? AND h.type = 'handoff' AND h.at >= items.stage_since
           AND NOT EXISTS (SELECT 1 FROM events n WHERE n.item_id = items.id AND n.at > h.at AND n.actor != h.actor
             AND n.type IN ('answered', 'assumption_confirmed', 'question_withdrawn', 'submitted', 'comment')))
-      ORDER BY stage_since`).all(p.id, agent, agent, agent, operator ? 1 : 0, agent ?? '').filter(reviewable).map((item) => ({ mode: 'review', item }));
+      ORDER BY stage_since`).all(p.id, ...names, ...names, ...names, operator ? 1 : 0, agent ?? '').filter(reviewable).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
     // An open pull request lands it: GitHub's merge marks it done. Unless it conflicts with main: then an
@@ -2166,6 +2277,9 @@ export class Hub extends EventEmitter {
     const lands = !may('build') ? [] : this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'landing' AND holder IS NULL
         AND NOT EXISTS (SELECT 1 FROM prs WHERE prs.item_id = items.id AND prs.state = 'open' AND prs.blocked != 'conflict') ORDER BY stage_since`).all(p.id)
       .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
+      // A runner's worker pushes only nuworq/ branches, through the hub (#472): work on origin that can't land
+      // through the hub's pull request (no GitHub App for it) needs a session or the operator to push main.
+      .filter((i) => !(role === 'worker' && this.remoteMode(p, i) && !this.prMode(p, i)))
       .map((item) => ({ mode: 'land', item }));
     if (p.parked) return [...lands.map(ranked), ...reviews.map(ranked)];
     const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id);
@@ -2420,8 +2534,10 @@ const NOTES_HINT = (item, p) => [
   `You hold #${item.seq}, a field-notes review, for ${dur(LEASE_MS)}. No branch. For each note its summary lists, check whether the lesson is now in the code, the agents' guide or a test (search the repo for it), and whether another note says the same.`,
   p.autonomy === 'full'
     ? 'Retire each one whose lesson is built in with retire { notes, reason }, the reason naming where it lives now. Merge duplicates: learn the combined note, then retire { notes: [the duplicates], into: <its id>, reason }. Keep the rest.'
-    : `Don't retire anything yourself in this project: ask the person one question listing the notes to retire or merge and why (the reason naming where each lesson lives now); they retire them on the project page.`,
-  `Then submit #${item.seq} with what you kept, merged and retired; that finishes it.`,
+    : `Don't retire anything yourself in this project: recommend it with distill (recommend retire, and why: where the lesson lives now), and the person decides with one tap on the project page.`,
+  // Memory for people (#552): what distill records, and that a decision is always a person's.
+  'Then distill { direction, notes }: Direction today, a one-line gist for each decision and field note, and for each field note keep, retire or decide (a draft decision a person accepts; never make one yourself).',
+  `Then submit #${item.seq} with what you kept, merged, retired and recommended; that finishes it.`,
   MODE_RULES.notes,
 ].join(' ');
 // Infra work is built by workers; only its live step needs the operator (#272).
@@ -2474,7 +2590,7 @@ const CI_TESTS = 'Tests: run the ones near your change. Not the whole suite: CI 
 const OWN_TESTS = 'Tests: run the ones near your change as you work, and the whole suite once, just before you submit.';
 
 // Remote work that lands through a pull request: the lander only pushes; the hub opens the PR.
-const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
+const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: it is reviewed as pushed, then the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
 const PR_OPEN_HINT = (item) => `${item.branch} is on origin but has no pull request yet. Submit #${item.seq}: the hub opens one with auto-merge on, and GitHub's merge marks it done. Don't push to main yourself.`;
 
 // Its pull request conflicts with main: rebase the branch and push it again; the PR and its auto-merge stay.
@@ -2529,9 +2645,12 @@ async function openPr(p, id) {
     });
     return this.changed(p);
   }
-  try { auto = await this.github.autoMerge({ repo, number: pr.number, id: pr.node_id }); } catch (e) { noAuto = e.message; }
+  // Both pinned to the head the review accepted (#605): GitHub refuses either when the PR's head is anything else.
+  const head = item.reviewed_sha;
+  let moved = false;
+  try { auto = await this.github.autoMerge({ repo, number: pr.number, id: pr.node_id, ...(head ? { sha: head } : {}) }); } catch (e) { noAuto = e.message; }
   if (auto?.ready) {
-    try { merged = await this.github.merge({ repo, number: pr.number }); } catch (e) { noMerge = e.message; }
+    try { merged = await this.github.merge({ repo, number: pr.number, ...(head ? { head } : {}) }); } catch (e) { noMerge = e.message; moved = !!e.moved; }
   }
   let row;
   this.tx(() => {
@@ -2552,7 +2671,8 @@ async function openPr(p, id) {
     });
     if (merged) prMerged(this, p, row, { ...merged, base });
   });
-  if (noMerge) mergeFailed.call(this, p, row, noMerge);
+  if (moved) this.tx(() => headMovedBack.call(this, p, this.itemById(id), { head: pr.head_sha ?? '' }));
+  else if (noMerge) mergeFailed.call(this, p, row, noMerge);
   this.changed(p);
 }
 
@@ -2565,13 +2685,29 @@ async function mergeReady() {
     try { pr = await this.github.pull({ repo: row.repo, number: row.number }); } catch { continue; } // GitHub didn't answer: the next pass asks again
     const p = this.q('SELECT * FROM projects WHERE id = ?').get(row.project_id);
     if (!p) continue;
-    // Ready with no auto-merge to wait for (opened before the hub merged those, or auto-merge is off).
+    // Its head moved after acceptance (#605): the same change rebased carries on; anything else goes back to review,
+    // with auto-merge off. The hub's copy is fetched first, so it has the commit GitHub names.
+    const item = this.itemById(row.item_id);
+    if (pr.state === 'open' && item?.reviewed_sha && pr.head_sha && pr.head_sha !== item.reviewed_sha) {
+      this.repoFor(p, item, { fresh: true });
+      if (this.tx(() => reviewedHead.call(this, p, item, pr.head_sha)) === 'moved') {
+        this.tx(() => headMovedBack.call(this, p, item, { head: pr.head_sha }));
+        this.changed(p);
+        continue;
+      }
+    }
+    // Ready with no auto-merge to wait for (opened before the hub merged those, or auto-merge is off). Only the
+    // reviewed head (#605): GitHub refuses the merge when the PR's head has moved since.
     if (pr.state === 'open' && pr.mergeable_state === 'clean' && !pr.auto_merge) {
+      const head = this.itemById(row.item_id)?.reviewed_sha ?? '';
       try {
-        pr = { ...pr, ...await this.github.merge({ repo: row.repo, number: row.number }), state: 'merged' };
+        pr = { ...pr, ...await this.github.merge({ repo: row.repo, number: row.number, ...(head ? { head } : {}) }), state: 'merged' };
         this._mergeFailed.delete(row.item_id);
       } catch (e) {
-        mergeFailed.call(this, p, row, e.message);
+        if (e.moved) {
+          this.tx(() => headMovedBack.call(this, p, this.itemById(row.item_id), { head: pr.head_sha ?? '' }));
+          this.changed(p);
+        } else mergeFailed.call(this, p, row, e.message);
         continue;
       }
     }
@@ -2621,6 +2757,62 @@ function mergeFailed(p, row, why) {
   this.changed(p);
 }
 
+// Where an item's branch stands against the head its review accepted (#605): 'same'; 'rebased', the same change on a
+// newer base (reviewed_sha moves to it); 'moved', anything else; null when there's nothing to compare (no reviewed
+// head on record, or no branch to see). head: the branch's head as GitHub has it; else the hub's copy's.
+function reviewedHead(p, item, head = null) {
+  if (!item.reviewed_sha || !item.branch) return null;
+  const repo = this.repoFor(p, item);
+  head ||= repo ? shaOf(repo.path, item.branch) : null;
+  if (!head) return null;
+  if (head === item.reviewed_sha) return 'same';
+  const base = repo && baseOf(repo.path);
+  if (base && sameChange(repo.path, base, item.reviewed_sha, head)) {
+    this.event(p, { item, actor: SYSTEM, type: 'head_rebased', headline: `${item.branch} was rebased (${head.slice(0, 7)}): the same change #${item.seq}'s review accepted, so it still lands`, data: { reviewed: item.reviewed_sha, head } });
+    this.patch(item, { reviewed_sha: head });
+    return 'rebased';
+  }
+  return 'moved';
+}
+
+// Accepted work whose branch moved to something its review didn't see (#605): back to review, and nothing merges it
+// meanwhile. Its pull request stays open with auto-merge off; the next acceptance pins the new head. by: who pushed,
+// when the hub knows: then they don't review it (implementedBy reads the 'rebased' event with conflicts).
+function headMovedBack(p, item, { by = SYSTEM, head = '' } = {}) {
+  const was = item.reviewed_sha;
+  this.move(item, 'verifying', by, { holder: null, lease_until: null, ...(by === SYSTEM ? {} : { last_worker: by }) });
+  this.event(p, {
+    item, actor: by, type: 'rebased',
+    headline: `${item.branch} changed after #${item.seq} was accepted${was ? ` (${was.slice(0, 7)} → ${head ? head.slice(0, 7) : 'a new head'})` : ''}: it goes back to review before it lands`,
+    summary: was ? 'What would land is no longer what the review accepted, and not the same change rebased. Review the branch as it is now.'
+      : 'The hub never saw the head the review accepted, so what was pushed since gets a review of its own.',
+    data: { conflicts: true, head_moved: true, reviewed: was, head },
+  });
+  const row = this.q(`SELECT * FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
+  if (row && this.github?.disableAutoMerge) {
+    const off = (async () => {
+      const pr = await this.github.pull({ repo: row.repo, number: row.number });
+      if (pr.auto_merge) await this.github.disableAutoMerge({ repo: row.repo, id: pr.node_id });
+    })().catch((e) => this.tx(() => this.event(p, {
+      item, actor: SYSTEM, type: 'pr_merge_failed', headline: `The hub couldn't turn off auto-merge on PR #${row.number} for #${item.seq}: ${clip(e.message)}`,
+      summary: `Turn it off on GitHub (${row.url}) until #${item.seq} is reviewed again.`, data: { url: row.url, number: row.number, error: e.message },
+    })));
+    const key = `auto-merge off ${item.id}`;
+    this._opening.set(key, off);
+    off.finally(() => this._opening.delete(key));
+  }
+}
+
+// A land job whose branch isn't what its review accepted (#605): back to review, and the lander says so.
+function movedHint(p, agent, item) {
+  const head = shaOf(this.repoFor(p, item)?.path, item.branch) ?? '';
+  headMovedBack.call(this, p, item, { by: agent, head });
+  this.setStatus(p, agent, `Sent #${item.seq} back for review: its branch isn't what was accepted`);
+  const reviewer = p.autonomy === 'full' ? 'Another agent reviews it' : 'The human verifies it';
+  const why = item.reviewed_sha ? `isn't the head #${item.seq}'s review accepted, nor that change rebased` : `is on origin now, but the hub never saw the head #${item.seq}'s review accepted`;
+  return { ok: true, hint: `${item.branch} ${why}, so it is verifying again. ${reviewer}, then it lands. Call next.` };
+}
+
 // Submit on a land job: done when git shows main has the branch; back to review when the rebase changed it.
 function finishLanding(p, agent, item, { headline, summary, detail, conflicts }) {
   const reviewer = p.autonomy === 'full' ? 'Another agent reviews it again' : 'The human verifies it again';
@@ -2663,6 +2855,8 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
     if (!contains(repo.path, item.branch, land.base)) {
       throw new UserError(`${item.branch} on origin doesn't contain ${land.base} yet`, { status: 409, hint: PR_REBASE_HINT(item, conflicted, land.base) });
     }
+    // Auto-merge carries on only for the change its review accepted, rebased (#605); anything more is reviewed first.
+    if (reviewedHead.call(this, p, item) === 'moved') return movedHint.call(this, p, agent, item);
     this.q(`UPDATE prs SET blocked = '' WHERE item_id = ? AND state = 'open'`).run(item.id);
     this.patch(item, { holder: null, lease_until: null });
     this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased ${item.branch} onto ${land.base} for PR #${conflicted.number}; auto-merge carries on`, summary, detail });
@@ -2671,6 +2865,8 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   }
   // Pushed for a pull request: the hub opens it, and GitHub's merge marks the item done.
   if (land.pending && this.prMode(p, item) && !this.prFailed(item)) {
+    // The hub opens a PR only for the head a review accepted (#605): one it never saw, or one that moved, is reviewed first.
+    if (!item.reviewed_sha || reviewedHead.call(this, p, item) === 'moved') return movedHint.call(this, p, agent, item);
     this.event(p, { item, actor: agent, type: 'pushed', headline: `${agent} pushed ${item.branch} for #${item.seq}; the hub opens its pull request`, summary, detail });
     this.openPr(p, item);
     this.setStatus(p, agent, `Pushed #${item.seq} for its pull request`);
@@ -2825,6 +3021,13 @@ const LOOK_TOP = 5;
 const QUIET_OPS = ['look', 'next', 'progress', 'checkin'];
 // Seen again after this long, an agent is back: the page shows it arriving.
 const AWAY_MS = 30 * MIN;
+
+// Whether an agent may turn a field note off (retire, or learn with replaces; #611): never one a person pinned to every
+// agent (always), which stays until a person unpins or retires it, and only where agents retire notes at all.
+function notRetirable(p, n) {
+  if (n.always) throw new UserError(`A person pinned field note ${n.id}, so it stays until a person unpins or retires it`, { status: 403, hint: 'Leave it, or ask the person one question saying why it should go; they unpin or retire it on the project page.' });
+  if (p.autonomy !== 'full') throw new UserError('In this project a person retires field notes', { status: 403, hint: 'Ask the person one question listing the notes to retire or merge and why; they retire them on the project page.' });
+}
 
 const AGENT_OPS = {
   checkin(p, agent, args, presence) {
@@ -3057,7 +3260,8 @@ const AGENT_OPS = {
     // Settled after all: the escalation no longer needs the human.
     this.q(`UPDATE questions SET status = 'withdrawn' WHERE escalates = ? AND status = 'open'`).run(q.id);
     HUMAN_OPS.answer.call(this, p, { question: q.id, answer: args.answer }, agent);
-    this.q(`UPDATE questions SET held_by = '', held_until = 0 WHERE id = ?`).run(q.id);
+    // for_people (#497): a change on a live system or a call no decision covers shows in Worth knowing for a day.
+    this.q(`UPDATE questions SET held_by = '', held_until = 0, for_people = ? WHERE id = ?`).run(args.for_people === true || args.for_people === 'true' ? 1 : 0, q.id);
     const item = this.itemById(q.item_id);
     return {
       ok: true,
@@ -3248,6 +3452,9 @@ const AGENT_OPS = {
     let replaced = null;
     if (args.replaces) {
       replaced = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(Number(args.replaces), p.id);
+      // Replacing turns the old note off, so it answers to retire's rules (#611): never a note a person pinned, and
+      // in a project below "Run with it", never at all.
+      if (replaced) notRetirable(p, replaced);
       if (replaced) this.q('UPDATE notes SET active = 0 WHERE id = ?').run(replaced.id);
     }
     const r = this.q(`INSERT INTO notes (project_id, item_id, kind, author, body, at) VALUES (?, ?, 'learning', ?, ?, ?)`)
@@ -3269,11 +3476,16 @@ const AGENT_OPS = {
     if (!reason) throw new UserError('reason is required', { hint: 'Say where the lesson lives now (a file, the guide section, a test), or for a merge which note carries it.' });
     const review = this.q(`SELECT * FROM items WHERE project_id = ? AND notes_review = 1 AND holder = ? AND stage = 'active'`).get(p.id, agent);
     if (!review) throw new UserError('Only a field-notes review retires notes', { status: 403, hint: 'The hub reviews notes when their item lands and every week. To correct one now, learn a better note with replaces set to its id.' });
-    if (p.autonomy !== 'full') throw new UserError('In this project a person retires field notes', { status: 403, hint: 'Ask the person one question listing the notes to retire or merge and why; they retire them on the project page.' });
     const note = (id) => this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(id, p.id);
     const into = args.into != null ? note(Number(args.into)) : null;
     if (args.into != null && (!into || !into.active || ids.includes(into.id))) throw new UserError(`No active field note ${args.into} to merge into`, { status: 404, hint: 'learn the combined note first, then pass its id as into.' });
     const rows = ids.map((id) => note(id) ?? (() => { throw new UserError(`No field note ${id}`, { status: 404 }); })());
+    // Only the notes this review lists (#611): it was opened for those, and a person sees them in its summary. A merge
+    // may take a duplicate from elsewhere, since its lesson lives on in the note it merges into.
+    const listed = new Set(json(review.tidy, []));
+    const unlisted = into ? [] : rows.filter((n) => !listed.has(`note:${n.id}`)).map((n) => n.id);
+    if (unlisted.length) throw new UserError(`#${review.seq} doesn't list field note${unlisted.length === 1 ? '' : 's'} ${unlisted.join(', ')}`, { status: 403, hint: `Retire only the notes #${review.seq}'s summary lists; a duplicate from elsewhere goes by merging it (into). Another note can wait for its own review.` });
+    for (const n of rows) notRetirable(p, n);
     const done = [];
     for (const n of rows.filter((x) => x.active)) {
       this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
@@ -3285,6 +3497,13 @@ const AGENT_OPS = {
       done.push(n.id);
     }
     return { ok: true, retired: done, hint: 'On the record with your reason; a person can bring any back.' };
+  },
+
+  // Memory distilled for people (#552, src/fieldnotes.js distill): Direction today, gists and recommendations.
+  distill(p, agent, args) {
+    const review = this.q(`SELECT * FROM items WHERE project_id = ? AND notes_review = 1 AND holder = ? AND stage = 'active'`).get(p.id, agent);
+    if (!review) throw new UserError('Only a field-notes review distills memory', { status: 403, hint: 'The hub opens one when the decisions, steering or field notes change, and weekly; next offers it.' });
+    return distill(this, p, agent, review, args);
   },
 
   signoff(p, agent, args) {
@@ -3521,8 +3740,11 @@ Object.assign(Hub.prototype, {
       const nocode = absent && this.noCode(p, item, branch);
       const unseen = absent && !nocode;
       const landing = !!land?.pending || unseen;
+      // The head this review accepted (#605), as the hub sees it now (toLand just fetched): landing merges only it,
+      // or the same change rebased. '' when the hub can't see the branch: whatever is pushed later gets a review.
+      const reviewed = land ? shaOf(this.repoFor(p, item).path, branch) ?? '' : '';
       this.move(item, landing ? 'landing' : 'done', actor, {
-        holder: null, lease_until: null, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
+        holder: null, lease_until: null, reviewed_sha: reviewed, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
       });
       const viaPr = landing && this.prMode(p, item);
       this.event(p, {
@@ -3530,7 +3752,7 @@ Object.assign(Hub.prototype, {
         headline: `${who} accepted #${item.seq}${kept ? ` (${kept.agent}'s attempt)` : ''}${headline ? `: ${headline}` : ''}`,
         summary: [
           land?.pending && viaPr ? `${branch} lands through a pull request: the hub opens it with auto-merge on, and GitHub's merge marks #${item.seq} done.` : '',
-          unseen && viaPr ? `${branch} lands through a pull request: the hub can't see it on origin yet, so an agent pushes it, then the hub opens the PR.` : '',
+          unseen && viaPr ? `${branch} lands through a pull request: the hub can't see it on origin yet, so an agent pushes it, it is reviewed as pushed, then the hub opens the PR.` : '',
           land?.pending && !viaPr ? `${branch} lands on ${land.base} next: an agent rebases it, runs the checks and fast-forwards ${land.base}.` : '',
           unseen && !viaPr ? `${branch} lands next: the hub can't see it on origin yet, so the lander pushes it first, then rebases it, runs the checks and pushes it to main.` : '',
           nocode ? `#${item.seq} had no code to land: ${branch} isn't on origin, it has no pull request, and its evidence names no commit origin lacks. So it is done.` : '',
@@ -3693,6 +3915,27 @@ const HUMAN_OPS = {
     this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'always', headline: `${You(by)} ${on ? 'always shows' : 'stopped always showing'} a field note: ${clip(n.body, 100)}` });
   },
 
+  // A review's recommendation for a field note (#552), decided with one tap: keep it (the advice goes), or make it a
+  // decision (promote: the draft, or the person's edit of it, becomes a decision and the note retires).
+  keep(p, { note }, by) {
+    const n = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(Number(note), p.id);
+    if (!n) throw new UserError(`No field note ${note}`, { status: 404 });
+    this.q('UPDATE notes SET advice = ? WHERE id = ?').run(JSON.stringify({ do: 'keep', why: 'kept by a person', by }), n.id);
+    this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'kept', headline: `${You(by)} kept a field note: ${clip(n.gist || n.body, 100)}` });
+  },
+
+  promote(p, { note, body }, by) {
+    const n = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning' AND active = 1`).get(Number(note), p.id);
+    if (!n) throw new UserError(`No active field note ${note}`, { status: 404 });
+    let draft = '';
+    try { draft = JSON.parse(n.advice || '{}').draft ?? ''; } catch { /* no advice */ }
+    const text = str(body) || draft;
+    if (!text) throw new UserError('Say the decision', { hint: 'body: the standing rule, as every agent should read it.' });
+    this.addNote(p, 'decision', text, null, null, by);
+    this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
+    this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'retired', headline: `${You(by)} made a field note a decision: ${clip(text, 100)}`, data: { note: n.id } });
+  },
+
   comment(p, { item, body }, by) {
     const { headline, summary } = layered(body, '', '', 'comment');
     this.event(p, { item: item ? this.item(p, item) : null, actor: by, type: 'comment', headline, summary });
@@ -3711,7 +3954,7 @@ const HUMAN_OPS = {
       this.move(it, args.stage, by, { holder: null, lease_until: null });
       const verb = { ready: 'moved', proposed: 'moved', done: 'marked', dropped: 'dropped' }[args.stage];
       this.event(p, { item: it, actor: by, type: 'staged', headline: `${You(by)} ${verb} #${it.seq}${args.stage !== 'dropped' ? ` to ${args.stage}` : ''}`, summary: str(args.note) });
-      for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder, by);
+      for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder, by, { notice: true });
     }
   },
 
@@ -3764,8 +4007,11 @@ const HUMAN_OPS = {
     }
   },
 
-  dismiss(p, { key }) {
-    this.q('INSERT OR REPLACE INTO dismissals (project_id, key, at) VALUES (?, ?, ?)').run(p.id, str(key), this.now());
+  // keys: several at once, for Worth knowing's "Got it, all" (#497).
+  dismiss(p, { key, keys }) {
+    for (const k of [].concat(keys ?? [], key ?? []).map(str).filter(Boolean)) {
+      this.q('INSERT OR REPLACE INTO dismissals (project_id, key, at) VALUES (?, ?, ?)').run(p.id, k, this.now());
+    }
   },
 
   seen(p) {
@@ -3818,8 +4064,18 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, security, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, security, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality, sandbox_hosts }, by) {
     const changes = [];
+    // What workers' sandbox may reach besides the hub, GitHub and package registries (#472): hosts, e.g. "api.stripe.com" or "*.example.com".
+    if (sandbox_hosts !== undefined) {
+      let hosts;
+      try { hosts = sandboxHosts(sandbox_hosts); } catch (e) { throw new UserError(e.message, { hint: e.hint }); }
+      if (JSON.stringify(hosts) !== JSON.stringify(json(p.sandbox_hosts, []))) {
+        this.q('UPDATE projects SET sandbox_hosts = ? WHERE id = ?').run(JSON.stringify(hosts), p.id);
+        p.sandbox_hosts = JSON.stringify(hosts);
+        this.event(p, { actor: by, type: 'runner', headline: hosts.length ? `${You(by)} let workers' tests here reach ${hosts.join(', ')}` : `${You(by)} let workers here reach only the hub, GitHub and package registries` });
+      }
+    }
     // The quality bar routing keeps to (#349): how close to the best model's results a cheaper one must come.
     if (model_quality != null && model_quality !== '') {
       const q = str(model_quality).toLowerCase();
@@ -3955,7 +4211,7 @@ const HUMAN_OPS = {
     if (parked != null && !!parked !== !!p.parked) {
       this.q('UPDATE projects SET parked = ? WHERE id = ?').run(parked ? 1 : 0, p.id);
       this.event(p, { actor: by, type: 'parked', headline: parked ? `${You(by)} parked the project` : `${You(by)} unparked the project` });
-      if (parked) this.addNote(p, 'steer', 'The project is parked. Finish or hand off what you hold; start nothing new.', null, null, by);
+      if (parked) this.addNote(p, 'steer', 'The project is parked. Finish or hand off what you hold; start nothing new.', null, null, by, { notice: true });
     }
     if (name != null && str(name) && str(name) !== p.name) { this.q('UPDATE projects SET name = ? WHERE id = ?').run(str(name), p.id); changes.push('name'); }
     if (mission != null && str(mission) !== p.mission) { this.q('UPDATE projects SET mission = ? WHERE id = ?').run(str(mission), p.id); changes.push('mission'); }
@@ -3963,18 +4219,22 @@ const HUMAN_OPS = {
       if (!AUTONOMY[autonomy]) throw new UserError('autonomy must be ask, balanced or full');
       this.q('UPDATE projects SET autonomy = ? WHERE id = ?').run(autonomy, p.id);
       changes.push('autonomy');
-      this.addNote(p, 'steer', `Autonomy is now "${AUTONOMY[autonomy].label}": ${AUTONOMY[autonomy].agent}`, null, null, by);
+      this.event(p, { actor: by, type: 'autonomy', headline: `${You(by)} set autonomy to "${AUTONOMY[autonomy].label}"` });
+      this.addNote(p, 'steer', `Autonomy is now "${AUTONOMY[autonomy].label}": ${AUTONOMY[autonomy].agent}`, null, null, by, { notice: true });
     }
     if (changes.includes('mission')) this.event(p, { actor: by, type: 'mission', headline: `${You(by)} updated the mission`, summary: str(mission) });
   },
 };
 
 Object.assign(Hub.prototype, {
-  addNote(p, kind, body, item = null, target = null, author = HUMAN) {
+  // notice: a steer the hub writes itself (#550). Agents get it as any steer; the record already has the fact it
+  // follows (dropped, parked, autonomy), so it adds no "steered" event of its own.
+  addNote(p, kind, body, item = null, target = null, author = HUMAN, { notice = false } = {}) {
     const text = str(body);
     if (!text) throw new UserError(`${kind} text is required`);
-    const r = this.q('INSERT INTO notes (project_id, item_id, kind, target, author, body, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(p.id, item?.id ?? null, kind, target, author, text, this.now());
+    const r = this.q('INSERT INTO notes (project_id, item_id, kind, target, author, body, at, notice) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(p.id, item?.id ?? null, kind, target, author, text, this.now(), notice ? 1 : 0);
+    if (notice) return Number(r.lastInsertRowid);
     this.event(p, {
       item, actor: author, type: kind,
       headline: kind === 'decision' ? `Decision: ${clip(text)}` : `${You(author)} steered${item ? ` #${item.seq}` : ''}: ${clip(text)}`,

@@ -22,6 +22,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STOP_GRACE_MS = 12_000; // past the hub's own 10 s drain (#545), so it's never cut short
 const HEALTHY_MS = 15_000;
 const TEST_TIMEOUT_MS = 10 * 60_000;
+const CI_WAIT_MS = 30 * 60_000; // a commit whose CI check never shows up is tested here after this (#543)
 const SMOKE_MS = 60_000; // a smoke boot's migrations run on copies of all the live data
 // A loopback port nothing listens on, for a smoke boot.
 const freePort = () => new Promise((resolve, reject) => {
@@ -184,9 +185,13 @@ export function firstFailure(out) {
 // On a hub with workspaces (#561): which workspace has the project that lives in repo, read straight from the
 // workspaces' databases (read-only). Matched by the repository's remote, or by its folder for a project that names
 // one. workspace: only that one (serve --follow --workspace). { workspace, project }, or null when none has it.
-export function findWorkspace({ workspaces, workspace = null, repo, remote = '' }) {
+// Several workspaces may link one repository (a paid one can link a public repo it doesn't own, #614): then it's the
+// one the repository's GitHub App installation is bound to (installation: its id, from GitHub), and with none of
+// theirs bound, it refuses, naming them, rather than pick one by its name.
+export function findWorkspace({ workspaces, workspace = null, repo, remote = '', installation = null }) {
   if (!workspaces || !existsSync(workspaces)) return null;
   const names = workspace ? [String(workspace).toLowerCase()] : readdirSync(workspaces).filter((f) => f.endsWith('.db')).map((f) => f.slice(0, -3)).sort();
+  const found = [];
   for (const name of names) {
     const file = join(workspaces, `${name}.db`);
     if (!existsSync(file)) continue;
@@ -195,10 +200,25 @@ export function findWorkspace({ workspaces, workspace = null, repo, remote = '' 
       d = new DatabaseSync(file, { readOnly: true });
       const p = d.prepare(`SELECT slug FROM projects WHERE archived_at = 0 AND ((? <> '' AND id IN (SELECT project_id FROM project_remotes WHERE remote = ?)) OR path = ?) ORDER BY id LIMIT 1`)
         .get(remote, remote, repo);
-      if (p) return { workspace: name, project: p.slug };
+      if (p) found.push({ workspace: name, project: p.slug });
     } catch { /* not a workspace's database, or one from before projects had remotes */ } finally { d?.close(); }
   }
-  return null;
+  if (found.length <= 1) return found[0] ?? null;
+  const bound = installation != null ? boundTo(workspaces, installation) : null;
+  const owner = found.find((f) => f.workspace === bound);
+  if (owner) return owner;
+  throw new Error(`${found.length} workspaces have a project for ${remote || repo} (${found.map((f) => f.workspace).join(', ')}) and none is bound to its GitHub App installation: name the one that owns it with serve --follow --workspace <name>`);
+}
+
+// The workspace a GitHub App installation is bound to, from the hub's directory (read-only), or null.
+function boundTo(workspaces, id) {
+  const file = join(workspaces, 'directory.sqlite');
+  if (!existsSync(file)) return null;
+  let d;
+  try {
+    d = new DatabaseSync(file, { readOnly: true });
+    return d.prepare('SELECT workspace FROM installations WHERE id = ?').get(Number(id))?.workspace ?? null;
+  } catch { return null; } finally { d?.close(); }
 }
 
 async function answers(url) {
@@ -217,8 +237,10 @@ function place(repo, path, sha) {
 // candidates are tested in. args: the hub's serve flags. url: where the hub answers. cwd: the hub's
 // working directory (relative --db paths mean what they did).
 // store: where the database is copied before each move (see backups()); null: no copies (--demo).
+// ci: { app: the hub's github-app.json } when GitHub can say whether CI passed a commit (#543), else null: then the suite
+// runs here. sys.ci(sha) asks src/followhub.js, which reads the app (or NUWORQ_GITHUB_APP_*) and calls checkOn.
 // workspaces: the workspaces' folder when the hub serves them, and workspace the one to report a red main in.
-export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null, smokeMs = SMOKE_MS, workspaces = null, workspace = null }) {
+export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 'bin/nuworq.js', cwd = process.cwd(), fetchMs = 30_000, store = null, ci = null, smokeMs = SMOKE_MS, workspaces = null, workspace = null }) {
   let child = null;
   let testing = null;
   let smoking = null;
@@ -237,6 +259,22 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
   };
   let closed = false;
   const killGroup = (p, sig) => { try { process.kill(-p.pid, sig); } catch {} };
+  // One op of src/followhub.js, run as a short child with the code of the commit the hub runs, which passed (or,
+  // for a commit from before #546, the one beside this file); this process loads none of the hub's code.
+  const helper = async (op, input) => {
+    const file = existsSync(join(dir, HELPER)) ? join(dir, HELPER) : join(import.meta.dirname, posix.basename(HELPER));
+    const out = await new Promise((resolve, reject) => {
+      let text = '';
+      const p = spawn(process.execPath, [file, op, JSON.stringify(input)], { cwd: repo, stdio: ['ignore', 'pipe', 'inherit'] });
+      p.stdout.on('data', (d) => { text += d; });
+      p.on('error', reject);
+      p.on('close', () => resolve(text));
+    });
+    let r;
+    try { r = JSON.parse(out); } catch { throw new Error(`${HELPER} answered ${JSON.stringify(out.trim().slice(0, 200))}`); }
+    if (r?.error) throw new Error(r.error);
+    return r;
+  };
   return {
     // main as it is here, after taking whatever its upstream (GitHub) has that it doesn't: a server
     // checkout pulls; a checkout where agents land locally is usually ahead, and is left alone.
@@ -244,6 +282,12 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
       pull(branch);
       try { return git(repo, 'rev-parse', '--verify', '-q', `${branch}^{commit}`); } catch { return null; }
     },
+    // Whether a is b or an ancestor of it: whether main still has a.
+    isAncestor(a, b) {
+      try { git(repo, 'merge-base', '--is-ancestor', a, b); return true; } catch { return false; }
+    },
+    // CI's verdict on sha (checkOn in src/ghapp.js), or null when it ended without one.
+    ci: ci && ((sha) => helper('ci', { repo, sha, app: ci.app })),
     // Move the hub's own worktree: only while the hub is stopped, right before it starts.
     checkout: (sha) => place(repo, dir, sha),
     // Copy the database aside before leaving sha, and put it back on a rollback: only while stopped.
@@ -275,7 +319,7 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
         p.on('close', (code, sig) => finish(code === 0, sig ? `the tests were stopped (${sig})` : 'the test suite exited with an error'));
       });
     },
-    // Boot sha, as tested in the candidates' worktree, on a free loopback port against copies of the live
+    // Boot sha, checked out in the candidates' worktree, on a free loopback port against copies of the live
     // database(s) (#544): its migrations meet real data before the switch, not after. `serve --smoke` starts
     // no pushes, sweeps or hub.json, and runs without the hub's NUWORQ_* settings, so the copy reaches nobody.
     // Stopped and its copies removed either way. { ok } or { ok: false, failed: why }.
@@ -284,6 +328,8 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
       const root = mkdtempSync(join(tmpdir(), 'nuworq-smoke-'));
       let p = null, out = '';
       try {
+        // Checked out here, not left to test(): a commit CI passed (#543) never ran test() on this machine.
+        if (!existsSync(join(next, '.git')) || git(next, 'rev-parse', 'HEAD') !== sha) place(repo, next, sha);
         const copies = store.copyTo(root);
         if (!copies) return { ok: true, skipped: 'no live data to boot on' };
         const port = await freePort();
@@ -347,24 +393,11 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
       }
       return false;
     },
-    // Main is red: one "fix main" item at priority now (src/followhub.js), with the code of the commit the
-    // hub runs, which passed; this process loads none of the hub's. Returns "#12 in nuworq", or null.
+    // Main is red: one "fix main" item at priority now (src/followhub.js). Returns "#12 in nuworq", or null.
     // running: the commit the hub runs (the red one itself when the supervisor just started on it).
     // With workspaces (#561), it is filed in the workspace whose project lives in this repo (findWorkspace).
     async redMain(sha, failed, running) {
-      // The running commit's helper, else (a commit from before #546) the one beside this file.
-      const helper = existsSync(join(dir, HELPER)) ? join(dir, HELPER) : join(import.meta.dirname, posix.basename(HELPER));
-      const out = await new Promise((resolve, reject) => {
-        let text = '';
-        const p = spawn(process.execPath, [helper, 'red', JSON.stringify({ url, repo, sha, failed, running, workspaces, workspace })], { cwd: repo, stdio: ['ignore', 'pipe', 'inherit'] });
-        p.stdout.on('data', (d) => { text += d; });
-        p.on('error', reject);
-        p.on('close', () => resolve(text));
-      });
-      let r;
-      try { r = JSON.parse(out); } catch { throw new Error(`${HELPER} answered ${JSON.stringify(out.trim().slice(0, 200))}`); }
-      if (r.error) throw new Error(r.error);
-      return r.where;
+      return (await helper('red', { url, repo, sha, failed, running, workspaces, workspace, app: ci?.app ?? null })).where;
     },
     // The last commit that passed its tests, kept beside the hub's worktree, so a restarted supervisor
     // doesn't test the commit it already took again.
@@ -411,6 +444,33 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
     }
   }
 
+  // Whether sha may go live (#543): CI's required check, when GitHub can say (sys.ci), so this machine doesn't run
+  // the suite again. { ok, by: 'CI' } once it passed, { ok: false, failed } once it failed, { pending } while it
+  // runs. Without GitHub (no app, not a GitHub remote, said once), or a check that never shows up within
+  // CI_WAIT_MS or ends without a verdict, the suite runs here as before. GitHub failing to answer (no install on
+  // the repo, no checks:read, a revoked key) counts as a check that never showed up: said once, then the suite.
+  async function verdict(sha) {
+    if (sys.ci) {
+      let c;
+      try { c = await sys.ci(sha); } catch (e) { c = { state: 'pending', missing: true, error: e.message.split('\n')[0] }; }
+      if (state.waiting?.sha !== sha) state.waiting = { sha, since: now() };
+      if (c?.error && !state.waiting.unasked) {
+        state.waiting.unasked = true;
+        log(`can't ask GitHub about ${short(sha)} (${c.error}); still waiting, and its tests run here after ${CI_WAIT_MS / 60_000} minutes`);
+      }
+      if (c?.state === 'passed') return { ok: true, by: 'CI' };
+      if (c?.state === 'failed') return { ok: false, failed: c.failed };
+      if (c?.state === 'pending' && !(c.missing && now() - state.waiting.since > CI_WAIT_MS)) return { pending: true };
+      log(c?.error ? `still can't ask GitHub about ${short(sha)} (${c.error}); running its tests here`
+        : c ? `CI's test check never showed up for ${short(sha)}; running its tests here` : `CI's test check ended without a verdict on ${short(sha)}; running its tests here`);
+    } else if (!state.local) {
+      state.local = true;
+      log("no GitHub App for this repository's remote, so each commit's tests run here");
+    }
+    return sys.test(sha);
+  }
+  const now = () => sys.now?.() ?? Date.now();
+
   // The hub moved, but this process still runs the code it started with. If the move changed that code,
   // under systemd: stop the hub, then exit so systemd starts the new supervisor (from the checkout the
   // move updated). In a terminal: say so, once per commit.
@@ -433,11 +493,15 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
     log(`${what}; restart serve --follow to run it`);
   }
 
-  // Start on main as it is (there is nothing better to run), then test it like any other commit,
-  // so a supervisor restarted in a red streak still stops the line.
+  // Start on the last commit that passed (#620), when main still has it and has moved past it since: a restart (its
+  // own code changed, a reboot) never runs what CI hasn't passed, and tick() takes main through its verdict from
+  // there. Else on main as it is (there is nothing better to run), tested like any other commit, so a supervisor
+  // restarted in a red streak still stops the line.
   async function boot() {
-    const sha = sys.head(branch);
-    if (!sha) throw new Error(`there is no ${branch} branch to follow`);
+    const head = sys.head(branch);
+    if (!head) throw new Error(`there is no ${branch} branch to follow`);
+    const last = sys.passed?.();
+    const sha = last && last !== head && sys.isAncestor?.(last, head) ? last : head;
     sys.checkout(sha);
     await sys.start();
     if (!(await sys.healthy())) {
@@ -445,16 +509,19 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       throw new Error(`the hub didn't answer at ${short(sha)} within ${HEALTHY_MS / 1000}s`);
     }
     Object.assign(state, { running: sha, good: sha });
+    if (sha !== head) return log(`hub running at ${short(sha)}, the last commit that passed; following ${branch}, which takes ${short(head)} once it passes`);
     // A supervisor restarted on the commit it had taken (its own code changed) doesn't test it again (#546).
     if (sys.passed?.() === sha) return log(`hub running at ${short(sha)}; following ${branch}; ${short(sha)} already passed its tests`);
     log(`hub running at ${short(sha)}; following ${branch}, testing ${short(sha)}`);
     state.busy = true;
     try {
-      const t = await sys.test(sha);
+      const t = await verdict(sha);
       if (state.closed) return;
-      if (t.ok) {
+      state.waiting = null;
+      if (t.pending) log(`CI's test check on ${short(sha)} hasn't finished; the hub runs it meanwhile, as it would without one`);
+      else if (t.ok) {
         sys.pass?.(sha);
-        log(`${short(sha)} passes its tests`);
+        log(`${short(sha)} ${t.by === 'CI' ? "passed CI's test check" : 'passes its tests'}`);
       } else await red(sha, t.failed);
     } finally {
       state.busy = false;
@@ -474,10 +541,13 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
       }
       const sha = sys.head(branch);
       if (!sha || sha === state.running || sha === state.skip) return;
-      log(`${branch} moved to ${short(sha)}; running its tests`);
-      const t = await sys.test(sha);
-      if (state.closed) return;
+      // Said once per commit, not on every check while CI runs.
+      if (state.waiting?.sha !== sha) log(`${branch} moved to ${short(sha)}; ${sys.ci ? "waiting for CI's test check" : 'running its tests'}`);
+      const t = await verdict(sha);
+      if (state.closed || t.pending) return;
+      state.waiting = null;
       if (!t.ok) return await red(sha, t.failed);
+      const passed = t.by === 'CI' ? "passed CI's test check" : 'passes its tests';
       // Booted on copies of the live data first, while the hub runs on (#544): a migration that fails on real
       // data stops here, not after the switch.
       if (sys.smoke) {
@@ -485,12 +555,12 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
         if (state.closed) return;
         if (!s.ok) {
           state.skip = sha;
-          return log(`${short(sha)} passes its tests but didn't boot on copies of the live data (${s.failed}); staying on ${short(state.running)} and not trying ${short(sha)} again`);
+          return log(`${short(sha)} ${passed} but didn't boot on copies of the live data (${s.failed}); staying on ${short(state.running)} and not trying ${short(sha)} again`);
         }
         if (!s.skipped) log(`${short(sha)} boots on copies of the live data`);
       }
       sys.pass?.(sha);
-      log(`${short(sha)} passes its tests${state.red ? ` (${branch} is green again)` : ''}; restarting the hub on it`);
+      log(`${short(sha)} ${passed}${state.red ? ` (${branch} is green again)` : ''}; restarting the hub on it`);
       state.red = false;
       const from = state.running;
       await sys.stop();
@@ -541,8 +611,8 @@ export function follower(sys, { branch = 'main', log = () => {} } = {}) {
 }
 
 // Run it: start the hub, check main every few seconds, and stop the hub on SIGINT, SIGTERM or SIGHUP.
-export async function follow({ repo, dir, next, args, url, branch = 'main', every = 10_000, log, store = null, workspaces = null, workspace = null }) {
-  const sys = system({ repo, dir, next, args, url, store, workspaces, workspace });
+export async function follow({ repo, dir, next, args, url, branch = 'main', every = 10_000, log, store = null, ci = null, workspaces = null, workspace = null }) {
+  const sys = system({ repo, dir, next, args, url, store, ci, workspaces, workspace });
   const f = follower(sys, { branch, log });
   let timer;
   let stopping = false;
@@ -568,7 +638,7 @@ export async function follow({ repo, dir, next, args, url, branch = 'main', ever
 }
 
 // `node src/follow.js <json>`: the supervisor on its own (#546). The CLI's serve --follow works out the
-// settings and hands over: { repo, dir, next, args, url, store: backups() options or null, color, hint }.
+// settings and hands over: { repo, dir, next, args, url, store: backups() options or null, ci (see system()), color, hint }.
 // It exits as the supervisor does (RESTART_EXIT when its own code changed under systemd).
 if (import.meta.filename === process.argv[1]) {
   const { store, color, hint, ...opts } = JSON.parse(process.argv[2]);

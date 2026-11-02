@@ -81,7 +81,8 @@ describe('connect asks one question at a time (#490)', () => {
     assert.deepEqual(ran(m.log), ['staff app 20', 'install runner', 'start operator']);
     assert.match(p.asked[0], /^Staff App with workers on this machine\? .*background service.*spend on your Claude account, up to a daily cap/);
     assert.match(p.asked[2], /^Start an operator now\? It opens Claude Code in \/src\/app with \/nuworq:operator: .*uses your Claude account/);
-    assert.match(m.log.at(-2), /^say Last, to plan work with a shaper: open \/src\/app in the Claude Code app and type \/nuworq:shaper\.$/);
+    assert.match(m.log.at(-3), /^say Last, to plan work with a shaper: open \/src\/app in the Claude Code app and type \/nuworq:shaper\.$/);
+    assert.match(m.log.at(-2), /^say From now on, and after any restart: nuworq up /, 'then the one command (#559)');
   });
 
   test('no to each: nothing runs, and each no prints the command for later', async () => {
@@ -109,6 +110,19 @@ describe('connect asks one question at a time (#490)', () => {
     assert.equal(p.asked.length, 1, 'only the staffing question');
     assert.match(said(m.log), /^App isn't cloned on this machine\. Clone it with: git clone https:\/\/github\.com\/acme\/app\.git \/src\/app\n/);
     assert.match(said(m.log), /Once it's cloned: cd into it and run nuworq operator --start/);
+  });
+
+  test('a project already staffed is not asked about again: connect says so, with the command for this machine (#643)', async () => {
+    const m = machine();
+    const p = person('n');
+    const r = await finishSetup({ mode: 'ask', ask: p.ask, say: m.say, project: { ...app, runner: true }, folder: '/src/app', actions: m.actions });
+    assert.deepEqual(p.asked.map((q) => q.split('?')[0]), ['Start an operator now'], 'only the operator question');
+    assert.deepEqual(ran(m.log), [], 'nothing staffed or installed');
+    assert.equal(r.staffed, false);
+    assert.match(said(m.log), /^App is already staffed: nuworq run starts its workers\. To run them on this machine too: nuworq run --install {3}\(in \/src\/app\)$/m);
+    const on = machine();
+    await finishSetup({ mode: 'yes', ask: null, say: on.say, project: { ...app, runner: true }, folder: '/src/app', actions: on.actions });
+    assert.deepEqual(ran(on.log), ['start operator'], '--yes doesn\'t staff it twice');
   });
 
   test("staffing that's refused says why and how to try later, and installs nothing", async () => {

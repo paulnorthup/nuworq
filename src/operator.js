@@ -5,6 +5,8 @@
 // never sent by the hub (see the decision "Never run code fetched at runtime", and #477).
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { OPS, OPERATOR_WAIT } from './protocol.js';
+import { flag, short, GIT_RUNS, rebaseRuns } from './gitrules.js';
 
 const OS = { darwin: ['macos', 'macOS'], linux: ['linux', 'Linux'], win32: ['windows', 'Windows'] };
 const first = (s) => String(s ?? '').trim().split('\n')[0];
@@ -18,6 +20,18 @@ export function saveLocal(file, patch) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   return next;
+}
+
+// A change to this machine's infra settings (#607), saved only once confirm(question) says yes: a person at a
+// terminal (bin/nuworq.js passes null without one, as in an agent's shell). The check is a command --detect runs
+// with /bin/sh, so whoever sets it runs code here later. Returns the settings, or null when nothing changed.
+export async function changeInfra(file, patch, confirm) {
+  const check = patch.infra_check;
+  const question = check ? `--detect will run ${JSON.stringify(check)} with /bin/sh to decide whether this machine declares infra. Set it?`
+    : check !== undefined ? 'Clear this machine\'s infra check?'
+    : patch.without_infra ? 'Declare no infra on this machine?' : 'Declare infra on this machine again?';
+  if (!confirm || !await confirm(question)) return null;
+  return saveLocal(file, patch);
 }
 
 // repos: the project's repositories (github.com/owner/name). chrome: a Chrome or Chromium is installed.
@@ -79,13 +93,17 @@ export function sshHost(check) {
 // Claude Code matches rule text: `*` is any text, spaces included, and `:*` means "and anything" only at the
 // very end. Commands it allows outright; checkout (its path form discards work) and the rest of remote still ask.
 export const OPERATOR_GIT_CMDS = ['status', 'diff', 'log', 'show', 'fetch', 'pull', 'switch', 'add', 'commit', 'rebase', 'push', 'branch', 'tag', 'worktree', 'rev-parse', 'ls-remote'];
-// A flag, wherever it sits: first (`git push -fu`) or later (`git push origin x --force`), with its value attached or not.
-const flag = (cmd, ...flags) => flags.flatMap((f) => [`Bash(${cmd} ${f}*)`, `Bash(${cmd} * ${f}*)`]);
+// flag, short and GIT_RUNS (src/gitrules.js): a flag wherever it sits, a short one bundled, and the options that make
+// git run a program or write a file, denied on every git command the operator may run (#607).
+// nuworq's commands an operator runs without prompts (#607): the agent operations, which only talk to the hub,
+// and what reads: --detect, --check, the listener and the guide. Never `nuworq:*`: other commands start
+// programs, write files or change this machine's settings, so they ask.
+const NUWORQ = () => [...OPS.map((o) => o.name), 'operator --detect', 'operator --check', OPERATOR_WAIT.replace(/^nuworq /, '').replace(/ --follow$/, ''), 'guide'];
 export function rules({ host = null } = {}) {
   const git = OPERATOR_GIT_CMDS;
   const gh = ['pr', 'run', 'repo view', 'issue view', 'issue list', 'release view', 'release list'];
   const allow = [
-    'Bash(nuworq:*)', 'mcp__nuworq', 'mcp__plugin_nuworq_nuworq',
+    ...NUWORQ().map((c) => `Bash(nuworq ${c}:*)`), 'mcp__nuworq', 'mcp__plugin_nuworq_nuworq',
     ...git.map((c) => `Bash(git ${c}:*)`),
     'Bash(git remote)', 'Bash(git remote -v)', 'Bash(git remote get-url *)',
     ...gh.map((c) => `Bash(gh ${c}:*)`),
@@ -96,13 +114,22 @@ export function rules({ host = null } = {}) {
   const deny = [
     // Force-pushes, and deleting or rewriting refs on a remote: --delete, an empty source (`origin :x`), --mirror, --prune.
     // `:**`, not `:*`: at the end, `:*` would read as "and anything" and deny every push.
-    ...flag('git push', '-f', '--force', '-d', '--delete', '--mirror', '--prune'), 'Bash(git push * +*)', 'Bash(git push * :**)',
+    ...flag('git push', '--force', '--delete', '--mirror', '--prune'), ...short('git push', '46dfnquv', 'f', 'd'), 'Bash(git push * +*)', 'Bash(git push * :**)',
     // Deleting, moving or force-resetting branches and tags.
-    ...flag('git branch', '-d', '-D', '--delete', '-f', '--force', '-M'),
-    ...flag('git tag', '-d', '--delete', '-f', '--force'),
+    ...flag('git branch', '--delete', '--force'), ...short('git branch', 'acCdDfilmMqrtuv', 'd', 'D', 'f', 'M', 'C'),
+    ...flag('git tag', '--delete', '--force'), ...short('git tag', 'adefFilmnsuv', 'd', 'f'),
     // Throwing away uncommitted work.
-    ...flag('git switch', '-f', '--force', '--discard-changes', '-C'),
-    ...flag('git worktree remove', '-f', '--force'),
+    ...flag('git switch', '--force', '--discard-changes'), ...short('git switch', 'cCdfmqt', 'f', 'C'),
+    ...flag('git worktree remove', '--force'), ...short('git worktree remove', 'fq', 'f'),
+    // Running a program or writing a file (#607): through the transport, a configured diff or textconv driver,
+    // --output, or rebase's exec, interactive editor and merge strategy (a git-merge-* on PATH).
+    ...git.flatMap((c) => flag(`git ${c}`, ...GIT_RUNS)),
+    ...rebaseRuns(),
+    ...flag('git pull', '--strategy', '--rebase=i'), ...short('git pull', '46afknqrstuv', 's'),
+    ...short('git ls-remote', 'bhqtu', 'u'),
+    // This machine's operator settings: its infra check is a command --detect runs (they also need a person at a
+    // terminal, bin/nuworq.js operatorCmd).
+    ...flag('nuworq operator', '--infra-check', '--with', '--allow', '--start'),
     // gh api only reads: no method but GET, and no fields or input (which make it a write).
     ...flag('gh api', '-X', '--method', '-f', '-F', '--field', '--raw-field', '--input'),
     'Bash(gh repo delete:*)', 'Bash(gh release delete:*)', 'Bash(gh run delete:*)',

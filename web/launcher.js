@@ -1,7 +1,7 @@
 // The quick launcher (#290): ⌘K, then a number or a few letters to open any item, go anywhere, change a setting,
-// act on what needs you, or create, without the mouse. Pure: app.js fetches the index once when it opens (GET
+// act on what needs you, or create, without the mouse. Pure: actions.js fetches the index once when it opens (GET
 // /api/launcher), renders what this returns and runs what is picked; typing makes no request.
-// Each command's `run` is data app.js carries out: { go: hash } | { action } | { zoom } | { open: { slug, item, focus } }
+// Each command's `run` is data actions.js carries out: { go: hash } | { action } | { zoom } | { open: { slug, item, focus } }
 // | { human: op, slug, body, msg }. A command with `confirm` takes a second Enter, after that line is shown.
 
 const LIMIT = 12; // a short ranked list (Hick's law): narrow it by typing, not by scrolling
@@ -70,9 +70,11 @@ const PRIORITIES = ['now', 'soon', 'later'];
 const ZOOMS = ['30s', '5m', '30m'];
 
 // Every command this viewer may run here, before any typing. ctx: { index, current (slug or null), view (the open
-// project's view or null), zoom, role, billingOwner }. index.can is what the viewer's role may do (PERSON_CAN):
+// project's view or null), zoom, role, billingOwner, theme (this browser's appearance) }. index.can is what the viewer's role may do (PERSON_CAN):
 // nothing it doesn't allow is listed, and removing or deleting anything never is.
-export function commands({ index, current = null, view = null, zoom = '30s', role = 'owner', billingOwner = false }) {
+// The appearances a browser can choose (#485): web/views/rail.js draws them as the rail's Appearance setting.
+export const THEMES = [['device', 'Match device'], ['light', 'Light'], ['dark', 'Dark']];
+export function commands({ index, current = null, view = null, zoom = '30s', role = 'owner', billingOwner = false, theme = 'device' }) {
   const can = new Set(index.can ?? []);
   const names = new Map((index.projects ?? []).map((p) => [p.slug, p.name]));
   const out = [];
@@ -88,6 +90,9 @@ export function commands({ index, current = null, view = null, zoom = '30s', rol
   // Change settings: depth anywhere; the open project's own settings, by role.
   const set = (label, confirm, run) => out.push({ kind: 'set', label, hint: 'Change', confirm, run });
   for (const k of ZOOMS) if (k !== zoom) set(`Depth ${k}`, `Depth: ${zoom} → ${k}. Only what you see changes.`, { zoom: k });
+  // Appearance (#485): in this browser only.
+  const now = THEMES.find(([k]) => k === theme)?.[1] ?? THEMES[0][1];
+  for (const [k, label] of THEMES) if (k !== theme) set(`Appearance: ${label}`, `Appearance: ${now} → ${label}, in this browser only.`, { theme: k });
   const P = view?.project;
   if (P && current === P.slug) {
     const h = (body, msg) => ({ human: 'settings', slug: P.slug, body, msg });

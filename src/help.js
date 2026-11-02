@@ -29,7 +29,7 @@ export const COMMANDS = [
       ['--hub <url>', 'the hub, when you give a workspace name'],
       ['--token <t>', 'use this token instead of signing in through the browser; - reads one line (hidden)'],
       ['--no-browser', "print the sign-in link and code instead of opening the browser"],
-      ['--no-mcp', "don't add the MCP server to Claude Code, Codex or opencode"],
+      ['--no-mcp', "don't add the MCP server to Claude Code, Codex, opencode or pi"],
       ['--skills', 'without the nuworq plugin in Claude Code, write the server and skills without asking'],
       ['--off', 'the same as nuworq disconnect'],
       ['--yes', 'answer yes to each follow-up (install the plugin, remove old leftovers, staff this project, start an operator) without asking'],
@@ -45,14 +45,32 @@ export const COMMANDS = [
     ],
   },
   {
-    name: 'run', group: 'start', brief: 'keep workers on waiting work in your projects',
+    name: 'up', group: 'start', brief: 'bring it all up: a runner, and an operator per project',
+    does: 'bring this machine\'s setup up: the runner with automatic workers, and an operator in its own terminal for each unparked project',
+    usage: ['up [--dry-run]'],
+    flags: [
+      ['--dry-run', 'print what it would do, and the table, and do nothing'],
+      ['--yes', 'staff the projects that aren\'t, without asking'],
+      ['--no', "don't staff them, and don't ask again"],
+      ['--budget <usd>', 'with staffing: the daily cap for their workers', '20'],
+    ],
+    example: 'nuworq up',
+    notes: [
+      'The runner: it installs nuworq run as a service with --workers auto, restarts one whose flags differ, and leaves one that matches alone. Unstaffed projects that aren\'t parked: it asks once whether to staff them; a no is remembered.',
+      'Operators: each unparked project with no operator on the hub gets Claude Code with /nuworq:operator in its clone here: in tmux when it is installed (the nuworq session, a window per project: tmux attach -t nuworq), else a Terminal or iTerm window on a Mac, else it prints the command. A project with no clone here is skipped, with where to clone it. Parked projects get none.',
+      'Run it again any time: it starts only what is missing, and ends with a table of each project and the runner. nuworq down stops what it started.',
+    ],
+  },
+  {
+    name: 'run', group: 'start', brief: 'start workers: keep them on waiting work in your projects',
     does: 'keep up to N headless workers on waiting work in the projects you opted in',
     usage: ['run [flags]', 'run --sweep [--dry-run]', 'run --install [run flags]', 'run --uninstall'],
     flags: [
       ['--workers <n|auto>', 'workers at once; auto: one more only while the 1-minute load is under 80% of the cores and 2 GB of memory is free (at least one), and it says why when it holds', '1'],
       ['--max-workers <m>', 'with --workers auto: the most at once', 'half the cores'],
-      ['--agent <name>', 'claude, codex or opencode', 'claude'],
-      ['--model <m>', 'the model workers use; opencode needs <provider>/<model>'],
+      ['--agent <name>', 'claude, codex, opencode or pi', 'claude'],
+      ['--can-read-keys', "start codex, opencode or pi workers, whose shells can read this machine's keys (only Claude's sandbox hides them)"],
+      ['--model <m>', 'the model workers use; opencode and pi need <provider>/<model>'],
       ['--folder <path>', 'a folder workers may work in, added to ~/.nuworq/folders.json'],
       ['--until-idle', 'exit once no work is waiting, instead of waiting for more'],
       ['--staff <project>', 'let nuworq run staff that project first (its "Staff it with nuworq run" switch); with none staffed, run says so and offers this clone\'s'],
@@ -64,6 +82,7 @@ export const COMMANDS = [
       ['--browser', 'each worker gets a headless Chrome (Claude only), as with worker --browser'],
       ['--agent-token <t>', 'the agent token workers get on a hub with login'],
       ['--proxy <url>', 'send workers through llm-proxy, as with worker --proxy'],
+      ['--env <names>', "variables workers get from here, as with worker --env; an installed runner keeps their values"],
       ['--sweep', 'remove leftovers now (the runner does it weekly)'],
       ['--dry-run', 'with --sweep: list what would go'],
       ['--install', 'run it as a service that survives closed terminals and reboots'],
@@ -74,7 +93,7 @@ export const COMMANDS = [
       ['NUWORQ_REPOS', 'more folders holding checkouts, offered when it asks which folders to use'],
       ['NUWORQ_LLM_PROXY_URL', "llm-proxy's address, instead of --proxy"],
       ['NUWORQ_LLM_PROXY_TOKEN', "llm-proxy's owner token, for Claude and Codex workers with --proxy"],
-      ['NUWORQ_LLM_PROXY_KEY', 'a personal llm-proxy key, for opencode with --model proxy/<model>'],
+      ['NUWORQ_LLM_PROXY_KEY', 'a personal llm-proxy key, for opencode and pi with --model proxy/<model>'],
     ],
     example: 'nuworq run --workers 3 --agent claude',
     notes: [
@@ -103,7 +122,7 @@ export const COMMANDS = [
     ],
   },
   {
-    name: 'operator', group: 'agents', brief: 'the line that starts an operator session',
+    name: 'operator', group: 'start', brief: 'start an operator: Claude Code in a terminal (--start)',
     does: 'print the tags an operator session declares and the line that starts it (runs nothing)',
     usage: ['operator [--project p] [--has tags]', 'operator --start [--has tags]', 'operator --check <level>'],
     flags: [
@@ -123,26 +142,29 @@ export const COMMANDS = [
     usage: ['worker [flags]'],
     flags: [
       ['--run', 'start it; without --run it prints the command'],
-      ['--agent <name>', 'claude, codex or opencode', 'claude'],
-      ['--model <m>', 'the model; opencode needs <provider>/<model>, e.g. ollama/qwen3.8:27b-mtp-q4_K_M'],
+      ['--agent <name>', 'claude, codex, opencode or pi', 'claude'],
+      ['--can-read-keys', "needed for codex, opencode or pi: their shell can read this machine's keys (only Claude's sandbox hides them)"],
+      ['--model <m>', 'the model; opencode and pi need <provider>/<model>, e.g. ollama/qwen3.8:27b-mtp-q4_K_M'],
       ['--project <p>', 'that project, instead of where the hub routes it'],
       ['--here', 'work in this folder, not its own worktree'],
       ['--as <name>', 'its name', 'the agent and 4 random hex digits'],
       ['--allow <tools>', 'more tools it may use without asking'],
       ['--has <tags>', 'what else this machine can do'],
       ['--browser', 'a headless Chrome (Playwright MCP, local pages only) to check UI work with; Claude only'],
-      ['--proxy <url>', "go through llm-proxy: its LAN or tailnet address for claude and codex; opencode with --model proxy/<model>"],
+      ['--proxy <url>', "go through llm-proxy: its LAN or tailnet address for claude and codex; opencode and pi with --model proxy/<model>"],
       ['--agent-token <t>', 'with --run on a hub with login: the agent token it gets (never your own)'],
+      ['--env <names>', "variables it gets from this shell, e.g. DOCKER_HOST,VIRTUAL_ENV: it starts with only where things are and its model's key"],
+      ['--env-secret <names>', 'the same for a name that looks like a key, token or password: its agent can read it'],
     ],
     env: [
       ['NUWORQ_AGENT_TOKEN', 'the agent token, instead of --agent-token'],
       ['NUWORQ_LLM_PROXY_URL', "llm-proxy's address, instead of --proxy"],
       ['NUWORQ_LLM_PROXY_TOKEN', "llm-proxy's owner token, for claude and codex"],
-      ['NUWORQ_LLM_PROXY_KEY', 'a personal llm-proxy key, for opencode'],
+      ['NUWORQ_LLM_PROXY_KEY', 'a personal llm-proxy key, for opencode and pi'],
     ],
     example: 'nuworq worker --agent claude --run',
     notes: [
-      'It works in its own git worktree, with a branch per item, and reports what this machine has (macos/linux, docker, gpu). Ollama is set up for opencode for you.',
+      'It works in its own git worktree, with a branch per item, and reports what this machine has (macos/linux, docker, gpu). Ollama is set up for opencode and pi for you. pi gets a config folder of its own (~/.nuworq/pi/<name>), so your pi extensions, skills, MCP servers and sign-ins stay out: give its provider key in the environment.',
     ],
   },
   {
@@ -246,7 +268,7 @@ export const COMMANDS = [
       ['--role <role>', 'human or agent', 'agent'],
       ['--project <a,b>', 'limit an agent token to those projects'],
       ['--person <handle>', 'the person a human token acts as', 'one named like the token, created as owner'],
-      ['--powers <list>', 'what an agent token may do: shape, build, review'],
+      ['--powers <list>', 'what an agent token may do: shape, build, review; and operate, only by name, to act as an operator when no steward or owner minted it'],
       ['--minted-by <handle>', 'who answers for an agent token'],
       ['--runner [name]', "a runner's token, which names the runner"],
       ['--workspace <name>', "that workspace's tokens"],
@@ -281,6 +303,12 @@ export const COMMANDS = [
     notes: ['On a hub with logins, an owner approves it in the browser.'],
   },
   {
+    name: 'down', group: 'more',
+    does: 'stop the operators nuworq up started (each signs itself off) and the runner service',
+    usage: ['down'],
+    example: 'nuworq down',
+  },
+  {
     name: 'disconnect', group: 'more',
     does: 'revoke the token connect saved, remove what connect added, and forget the hub',
     usage: ['disconnect'],
@@ -294,7 +322,7 @@ export const COMMANDS = [
   },
   {
     name: 'init', group: 'more',
-    does: 'print the MCP setup for Claude Code, Codex, opencode and other agents; --project pins this folder',
+    does: 'print the MCP setup for Claude Code, Codex, opencode, pi and other agents; --project pins this folder',
     usage: ['init [--project p] [--force]'],
     flags: [['--project <p>', 'write .nuworq.json, pinning this folder to that project'], ['--force', 'overwrite an existing .nuworq.json']],
     example: 'nuworq init',
@@ -404,6 +432,7 @@ const AGENT = {
   feedback: { example: 'nuworq feedback "next gave me an item I can\'t build" --as claude-1' },
   look: { example: 'nuworq look 12 --as claude-1' },
   retire: { example: 'nuworq retire 31 --reason "built into checkin" --as claude-1' },
+  distill: { example: 'nuworq distill --direction "Agents come first: small responses|decision 3" --notes "12|Rebase, test, then push|keep" --as claude-1' },
   signoff: { example: 'nuworq signoff "Nothing left for me" --as claude-1' },
 };
 const AGENT_NOTE = 'Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url. Each <argument> can be given as its flag instead. "-" as a value reads it from stdin; a list takes "a,b" or JSON, and a list of objects "x|y" per flag, repeated.';
@@ -496,6 +525,11 @@ const styler = (style) => (line, names = []) => {
   return s;
 };
 
+// Get going leads with the setup that works (#489): connect, then its three sessions in web/connect.js's order
+// (workers on run, an operator, a shaper: no command, but a line typed in the Claude Code app), then the rest.
+const SHAPER = { name: '/nuworq:shaper', brief: 'shape work with a shaper: type it in the Claude Code app' };
+export const GET_GOING = ['connect', 'run', 'operator', SHAPER.name, 'up', 'status', 'update'];
+
 // A bare `nuworq`: one screen.
 export function bare({ width = 80, style = plain } = {}) {
   const s = styler(style);
@@ -503,7 +537,8 @@ export function bare({ width = 80, style = plain } = {}) {
   // One column for every group, as wide as the widest name listed.
   const at = 2 + Math.max(...COMMANDS.filter((c) => c.brief).map((c) => (c.label ?? c.name).length)) + 4;
   for (const [g, title] of GROUPS) {
-    const cmds = COMMANDS.filter((c) => c.group === g && !c.under);
+    const cmds = g === 'start' ? GET_GOING.map((n) => (n === SHAPER.name ? SHAPER : command(n)))
+      : COMMANDS.filter((c) => c.group === g && !c.under);
     if (!cmds.length) continue;
     if (g === 'protocol' || g === 'more') {
       out.push(...wrap(`${title}: ${cmds.map((c) => c.name).join(', ')}`, width, { hang: '  ' }), '');

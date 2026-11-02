@@ -5,6 +5,7 @@ import { Hub, DAY, HOUR } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { drift } from '../src/tidy.js';
 import { boardWork } from '../web/oldwork.js';
+import { appSource } from './appsource.js';
 
 // A project whose clock we move: #1 "Workers" with its parts #2 and #3, and a loose #4.
 function setup() {
@@ -51,7 +52,7 @@ describe('old work leaves the board (#442)', () => {
     assert.deepEqual(b.rows.map((i) => i.item), ['#1', '#2', '#4']);
     assert.deepEqual(b.dropped.map((i) => i.item), ['#3']);
     assert.ok(v.all.some((i) => i.item === '#3'), 'still on record');
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /const stages = f\.stages\.filter\(\(s\) => s\.stage !== 'dropped'\);/, "Flow has no dropped pill");
     const all = app.slice(app.indexOf('function allWork('), app.indexOf('\n}\n', app.indexOf('function allWork(')));
     assert.match(all, /data-key="all:dropped"/);

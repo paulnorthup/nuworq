@@ -36,6 +36,15 @@ export const NEW = {
   'always-show': '2026-10-31', // #443: Always show on a field note, so every agent gets it whatever it works on
   'verified-install': '2026-11-01', // #473: Connect an agent's install checks the release's signature before installing it
   'security-reviews': '2026-11-01', // #480: Settings' Security reviews switch: a review before each release, an area each month
+  'needs-rank': '2026-11-01', // #506: Needs you most important first, each card with its priority (the section's hint)
+  appearance: '2026-11-01', // #485: Match device, Light or Dark, in the rail's footer (behind Menu on a phone)
+  'worth-knowing-lines': '2026-11-01', // #497: Worth knowing holds only what you might act on, one line each, with Got it, all
+  'show-more': '2026-11-01', // #501: at 30m, All work and earlier agents come a page at a time, with Show more for the next
+  'setup-that-works': '2026-11-01', // #489: Connect an agent leads with the setup that works: workers, an operator, a shaper
+  'agents-told': '2026-11-01', // #550: an item's "Agents told each other", the operators' and the hub's steers, out of Your steering
+  'memory-distilled': '2026-11-01', // #552: Steering & memory's Direction today, gists and one-tap recommendations
+  'setup-folded': '2026-11-01', // #644: Connect an agent shows one block to copy; what connect sets up is folded beneath it
+  'retire-in-menu': '2026-11-02', // #651: Retire shows where it's recommended; on other decisions and notes it's behind the row's ⋯
 };
 
 const DAYS = 7;

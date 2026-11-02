@@ -6,7 +6,7 @@ import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_AGENT_CAN, STAGES, normRemote, slugify, refuseSecrets, providerOf, MIN, HOUR, DAY } from './core.js';
 import { checkLocalModels } from './llmproxy.js';
-import { view, itemView, projectList, homeView, withEntry } from './insight.js';
+import { view, itemView, projectList, homeView, withEntry, liveOperators } from './insight.js';
 import { tools, guide, LISTENER, protocolVersion } from './protocol.js';
 import { Auth, SESSION_MS } from './auth.js';
 import { Devices } from './device.js';
@@ -25,7 +25,8 @@ import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP, ADMIN_SESSION_MS } from './directory.js';
 import { getStarted, facts, finished, finish } from './getstarted.js';
 import { guidePage } from './userguide.js';
-import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, installState, readInstallState } from './ghapp.js';
+import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, WORK_PERMISSIONS, installState, readInstallState } from './ghapp.js';
+import { proxyPush } from './gitproxy.js';
 import { writeFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
@@ -97,7 +98,7 @@ const SECURITY_HEADERS = {
 };
 // A page of the Connect GitHub flow that the hub serves itself: the sign-in card's look (style.css,
 // login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
-const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><script src="${base}/theme.js"></script><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>nuworq · ${title}</title><link rel="icon" href="${FAVICON}"><link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/login.css"></head>
 <body><main class="login"><div class="login-card flow-card"><div class="brand">${LOGO}<span>nuworq</span></div>
 <h1>${title}</h1>${body}</div></main></body></html>`;
@@ -115,7 +116,7 @@ const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
 // What an agent-role token may reach in required mode.
-const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^POST \/api\/runner$/, /^POST \/api\/staff$/,/^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
+const AGENT_ROUTES = [/^POST \/api\/p\/[^/]+\/agent\/[a-z]+$/, /^POST \/api\/agent\/[a-z]+$/, /^(GET|POST) \/api\/git\//, /^POST \/api\/runner$/, /^POST \/api\/staff$/, /^GET \/api\/(tools|guide|info|me|route|where|projects|claims|wait|finished)$/, /^GET \/agents\.md$/, /^GET \/api\/p\/[^/]+\/outcomes$/, /^GET \/api\/outcomes$/];
 // Addresses a proxy in front of the hub connects from: loopback and private networks (cloudflared, Caddy, a load balancer).
 const TRUSTED_HOP = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::ffff:(127|10)\.|f[cd][0-9a-f]{2}:|unknown$)/i;
 // Open streams (browser tabs), operator waits and runners' waits for work (#542) per sign-in or token, and waits
@@ -295,7 +296,46 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     return send(200, r);
   };
   // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
-  const minted = new Map(); // `${agent}|${item id}|${repo}` → { token, expires_at, repo }
+  const minted = new Map(); // `${agent}|${item id}|${repo}|r or w` → { token, expires_at, repo }
+  // The item an agent holds (building or landing), in a project its token reaches: held is { it, p }, or undefined.
+  // With logins, only for the token that agent uses (#469): other says the name is someone else's.
+  const heldBy = (hub, agent, caller) => {
+    const holding = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
+      .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
+      .filter(({ p }) => !caller.scope || caller.scope.includes(p.slug));
+    const held = holding.find(({ p }) => !caller.identity || hub.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.token_id === caller.identity.id);
+    return { held, other: !held && holding.length > 0 };
+  };
+  // A token for the repository of the item an agent holds, for an hour: read-only for the worker to fetch with;
+  // write (#472) only for the hub itself, to pass the worker's pushes on. git asks on every fetch and push, so the
+  // same agent, item, repository and kind reuse it while it's good. Each mint and refusal is on the record.
+  const itemToken = async (hub, { agent, it, p, caller, write = false }) => {
+    const repo = it.repo || hub.remotesOf(p)[0] || '';
+    const key = `${hub.workspace ?? ''}|${agent}|${it.id}|${repo}|${write ? 'w' : 'r'}`;
+    const have = minted.get(key);
+    if (have && Date.parse(have.expires_at) - 5 * 60_000 > Date.now()) return have;
+    let t;
+    try {
+      t = await appOf(hub).mint(repo, write ? WORK_PERMISSIONS : CLONE_PERMISSIONS);
+      for (const [k, v] of minted) if (Date.parse(v.expires_at) < Date.now()) minted.delete(k);
+      minted.set(key, t);
+    } catch (e) {
+      if (e instanceof UserError) {
+        hub.event(p, { item: it, actor: agent, type: 'credential_refused', headline: `No GitHub token for ${agent} on #${it.seq}: ${e.message}`, summary: e.hint ?? '', data: { agent, repo } });
+        hub.changed(p);
+      }
+      throw e;
+    }
+    const until = new Date(t.expires_at).toISOString().slice(11, 16);
+    hub.event(p, {
+      item: it, actor: agent, type: 'credential',
+      headline: write ? `The hub got a GitHub token for ${t.repo} to pass ${agent}'s pushes on #${it.seq} on, until ${until} UTC`
+        : `${agent} got a read-only GitHub token for ${t.repo} on #${it.seq}, until ${until} UTC`,
+      data: { agent, item: it.seq, repo: t.repo, expires_at: t.expires_at, token: caller.token?.name ?? null, write }, // the agent token that asked
+    });
+    hub.changed(p);
+    return t;
+  };
   // The hub's own address names no workspace: the base domain, or the public URL's host (e.g. auth.<base-domain>).
   const rootHost = publicUrl ? hostname(new URL(publicUrl).host) : '';
   const required = spaces ? true : auth === 'required';
@@ -433,7 +473,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!mine.some((m) => m.workspace === ws)) mine.unshift({ workspace: ws, handle: person.handle, role: person.role });
     return {
       org: ws,
-      orgs: mine.map((m) => ({ workspace: m.workspace, role: m.role, current: m.workspace === ws, address: homeOf(req, m.workspace), enter: `${authOrigin(req)}/api/orgs/${encodeURIComponent(m.workspace)}/enter` })),
+      orgs: mine.map((m) => ({ workspace: m.workspace, role: m.role, current: m.workspace === ws, address: homeOf(req, m.workspace), enter: `${authOrigin(req)}/?enter=${encodeURIComponent(m.workspace)}` })),
       new_org: `${authOrigin(req)}/?new`,
     };
   };
@@ -466,9 +506,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     try {
       flow = sso.claim(provider, url.searchParams.get('state'), jarOf(req).get(FLOW_COOKIE));
     } catch (e) {
-      return send(400, `<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
+      return send(400, `<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
     }
-    if (!!flow.admin !== admin) return send(400, '<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: it was started on another address. Start again where you want to sign in.', 'text/html; charset=utf-8');
+    if (!!flow.admin !== admin) return send(400, '<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>nuworq</title><p>Sign-in failed: it was started on another address. Start again where you want to sign in.', 'text/html; charset=utf-8');
     if (admin) {
       const back = (msg) => redirect(res, `/#error=${encodeURIComponent(msg)}`);
       if (url.searchParams.get('error')) return back(`${sso.providers[provider].label} sign-in was cancelled`);
@@ -492,8 +532,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (spaces && !flow.ws) return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket('', spaces.directory.createSession(id.id))}`);
     const hub = spaces ? spaces.get(flow.ws) : target;
     if (!hub) return fail('that workspace is gone');
-    const r = scopeOf(hub).authz.signInByEmail(email, provider);
+    // With workspaces, someone not yet a member there is asked on the hub's own page first (#630): a sign-in
+    // link alone never adds anyone.
+    const r = scopeOf(hub).authz.signInByEmail(email, provider, { join: !spaces });
     if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
+    if (r.pending) return redirect(res, `${authOrigin(req)}/api/oauth/finish?ticket=${sso.ticket('', spaces.directory.createSession(id.id))}&enter=${encodeURIComponent(flow.ws)}`);
     spaces?.directory.join(email, flow.ws);
     if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy, r.held);
     return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}${dev ? `&${dev}` : ''}`);
@@ -673,7 +716,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', admin: true });
     if (req.method === 'GET' && path === '/api/oauth') return send(200, { providers: sso.list().map((p) => ({ ...p, start: `/auth/${p.name}/start` })) });
     const page = path === '/' ? '/admin.html' : path;
-    if (req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/instant.js', '/style.css'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
+    if (req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/instant.js', '/style.css', '/theme.js'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
     if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'GET /api/early-access/sources', 'POST /api/early-access/decide', 'GET /api/feedback/list', 'POST /api/feedback/decide', 'POST /api/feedback/autonomy', 'GET /api/workspaces', 'POST /api/workspaces/plan', 'GET /api/github/app/wiring'].includes(`${req.method} ${path}`)) {
       return deny(404, 'the admin host serves only the admin dashboard', `Workspaces live at ${publicUrl || 'the hub\'s own address'}.`);
     }
@@ -724,7 +767,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const sid = sso.redeem(url.searchParams.get('ticket'), '');
       if (!sid) return deny(400, 'that sign-in link was already used or expired', 'Sign in again.');
       res.setHeader('set-cookie', `${HUB_COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
-      return redirect(res, '/');
+      // Signed in to join a workspace (#630): back to the page that asks, for that workspace only.
+      const asked = String(url.searchParams.get('enter') ?? '').toLowerCase();
+      return redirect(res, /^[a-z0-9-]{1,40}$/.test(asked) ? `/?enter=${asked}` : '/');
     }
     // GitHub's setup page after the app was installed from inside an organization (/api/github/install):
     // the signed state says which one, and the installation is bound to it once GitHub confirms, through the
@@ -798,7 +843,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     // The pages the hub's own address shows: joining (the early-access link) and the owners' request list.
     const page = path === '/' ? '/join.html' : path;
     if (page === '/guide' && req.method === 'GET') return send(200, guideHtml(''), TYPES['.html']);
-    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css', '/login.css', '/guide.css', '/guide.js', '/copy.js'].includes(page) && req.method === 'GET') {
+    if (['/join.html', '/join.js', '/requests.html', '/requests.js', '/style.css', '/login.css', '/guide.css', '/guide.js', '/copy.js', '/theme.js'].includes(page) && req.method === 'GET') {
       return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
     }
     const sid = jarOf(req).get(HUB_COOKIE);
@@ -810,7 +855,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
 
     // An organization as the browser reaches it: its address, and a link that signs you in there.
-    const org = (m) => ({ ...m, address: homeOf(req, m.workspace), enter: `/api/orgs/${m.workspace}/enter` });
+    const org = (m) => ({ ...m, address: homeOf(req, m.workspace), enter: `/?enter=${encodeURIComponent(m.workspace)}` });
     if (req.method === 'GET' && path === '/api/me') return send(200, { auth: 'required', email: me.email, orgs: dir.orgsOf(me, spaces).map(org) });
     if (req.method === 'POST' && path === '/api/logout') {
       dir.deleteSession(sid);
@@ -849,17 +894,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       dir.join(me.email, slug, { created: true });
       return send(200, { ok: true, ...org({ workspace: slug, handle: person.handle, role: 'owner', created: true }) });
     }
+    // Into an organization (#630): a POST from this site (checked above), never a link another site can send. A
+    // member goes straight in; someone with only an invite or an owner's typed email there is shown the offer
+    // ({ pending }) and joins only on their own yes ({ confirm: true }). go: where the browser goes next.
     const enter = path.match(/^\/api\/orgs\/([^/]+)\/enter$/);
-    if (req.method === 'GET' && enter) {
+    if (req.method === 'POST' && enter) {
       const ws = decodeURIComponent(enter[1]).toLowerCase();
       const hub = spaces.get(ws);
-      // The person with this email there, or an open invite to it: the same rule as signing in there.
-      const r = hub && scopeOf(hub).authz.signInByEmail(me.email, me.provider);
+      const b = await body(req);
+      const r = hub && scopeOf(hub).authz.signInByEmail(me.email, me.provider, { join: b.confirm === true });
       if (!r) return deny(404, `${me.email} isn't a member of "${ws}"`, 'Ask an owner there for an invite (to this email).');
+      if (r.pending) return send(200, { pending: { workspace: ws, ...r.pending } });
       dir.join(me.email, ws);
       if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy, r.held);
-      return redirect(res, `${homeOf(req, ws)}/api/oauth/finish?ticket=${sso.ticket(ws, r.sid)}`);
+      return send(200, { ok: true, go: `${homeOf(req, ws)}/api/oauth/finish?ticket=${sso.ticket(ws, r.sid)}` });
     }
+    if (enter) return deny(405, 'use POST', 'Open /?enter=<workspace> on the hub: it asks there, then enters.');
     return deny(405, `use ${path === '/api/orgs' ? 'POST' : 'GET'}`);
   }
 
@@ -892,7 +942,37 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...out.headers, ...(vary ? { vary } : {}) });
       res.end(out.body);
     };
+    // The app's own files (#526): asked for again on every load (no-cache), but answered 304 when the browser's copy
+    // is current. The ETag is the file's content, so an edit in a checkout shows at once, as a new commit does; a
+    // gzipped copy is other bytes, so it has a tag of its own.
+    const sendFile = (body, type) => {
+      const hash = createHash('sha1').update(body).digest('base64url');
+      const tag = (enc) => `"${hash}${enc ? `-${enc}` : ''}"`;
+      const had = String(req.headers['if-none-match'] ?? '').split(/,\s*/).find((t) => t === tag() || t === tag('gzip'));
+      if (had) {
+        res.writeHead(304, { etag: had, 'cache-control': 'no-cache' });
+        return res.end();
+      }
+      const out = encode(req, body, type);
+      const vary = [res.getHeader('vary'), out.headers.vary].filter(Boolean).join(', ');
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', etag: tag(out.headers['content-encoding']), ...out.headers, ...(vary ? { vary } : {}) });
+      res.end(out.body);
+    };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
+    // A reply that holds a credential (#623): sent, never kept for a retry, which asks again instead.
+    const sendSecret = (status, body) => { answered = null; send(status, body); };
+    // A worker's git pushes through the hub (#472) with basic auth, as git does: its name, and its agent token as
+    // the password. Asked first, so git's credential helper answers (nuworq git-credential).
+    let gitAgent = '';
+    if (/^(\/w\/[^/]+)?\/api\/git\//.test(path)) {
+      const [user, ...pass] = Buffer.from(String(req.headers.authorization ?? '').match(/^basic\s+(\S+)/i)?.[1] ?? '', 'base64').toString('utf8').split(':');
+      if (!user) {
+        res.writeHead(401, { 'www-authenticate': 'Basic realm="nuworq"', 'content-type': 'text/plain' });
+        return res.end('nuworq: pushes through the hub need the worker\'s name and agent token (nuworq git-credential)\n');
+      }
+      gitAgent = user;
+      req.headers.authorization = `Bearer ${pass.join(':')}`;
+    }
     try {
       if (onAdmin(req)) return await adminRoot(req, res, url, path, { send, deny });
       let am;
@@ -975,6 +1055,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const { authz, devices, clients } = scopeOf(hub);
       adopt(hub, req, base);
       hub.appWiring ??= wiringFor(hub);
+      hub.cacheViews = true; // one build of each project's page per change, for every tab, the home and the Notifier (#501)
       // Where Free's limit points its owners (#228): the workspace's settings, where Upgrade is, while it sells.
       if (spaces && canSell(billing) && !hub.upgradeUrl) {
         const page = `${homeOf(req, ws)}/#/settings`;
@@ -1136,7 +1217,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (adminHost && ['requests.html', 'requests.js', 'admin.html', 'admin.js'].includes(file)) return toAdmin(req, res);
         try {
           const body = await readFile(join(WEB, file));
-          return send(200, extname(file) === '.html' ? withLogo(body.toString('utf8')) : body, TYPES[extname(file)] ?? 'application/octet-stream');
+          return sendFile( extname(file) === '.html' ? withLogo(body.toString('utf8')) : body, TYPES[extname(file)] ?? 'application/octet-stream');
         } catch {
           return send(404, 'not found', 'text/plain');
         }
@@ -1150,7 +1231,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         who = bearer ? authz.verifyToken(bearer) : sid ? authz.verifySession(sid) : null;
         if (who) who.via = bearer ? 'bearer' : 'cookie';
         if (req.method === 'GET' && path === '/api/me') {
-          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null, ...(who?.projects ? { projects: who.projects } : {}), ...(spaces && who?.person ? orgsHere(req, hub, ws, who.person) : {}) });
+          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null, ...(who?.runner ? { runner: who.runner } : {}), ...(who?.projects ? { projects: who.projects } : {}), ...(spaces && who?.person ? orgsHere(req, hub, ws, who.person) : {}) });
         }
         if (!who) {
           return deny(401, bearer ? 'invalid or revoked token' : 'login required',
@@ -1164,6 +1245,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           authz.revoke(who.id);
           return send(200, { ok: true, revoked: who.name });
         }
+        // A machine's device login mints its runner token (#656): nuworq run hands that one to its workers.
+        if (req.method === 'POST' && path === '/api/me/runner-token') {
+          if (who.via !== 'bearer' || who.role !== 'agent' || who.runner) {
+            return deny(400, who.runner ? 'this is a runner token already' : 'only an agent token can mint a runner token',
+              'Send the machine\'s connect token (nuworq connect) as Authorization: Bearer <token>.');
+          }
+          try {
+            return send(200, { ok: true, ...authz.runnerToken(who.id) });
+          } catch (e) {
+            return deny(400, e.message, 'Give the workers a token of their own: nuworq run --agent-token <token>.');
+          }
+        }
         if (who.role === 'agent' && !AGENT_ROUTES.some((r) => r.test(`${req.method} ${path}`))) {
           return deny(403, 'agent tokens can only use agent operations', 'Use a human token for the UI and human actions.');
         }
@@ -1171,16 +1264,29 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 
       // What a token-bearing agent may reach, and its token (name for the record; powers, provenance).
       const caller = { scope: who.projects ?? null, token: who.via === 'bearer' ? who : null, identity: required ? { id: who.id, session: who.via === 'cookie' } : null };
+      // Who may act as an operator (#609): an agent by its token (Auth.identity), a person if a steward or owner, and
+      // anyone on a hub without logins.
+      caller.operate = who.role === 'agent' ? !!who.operator : who.person ? PERSON_AGENT_CAN[who.person.role] === null : true;
       // A person acts as "@handle" with their role; without accounts the one human is "you", an owner.
       const by = who.person ? `@${who.person.handle}` : HUMAN;
       const personRole = who.person?.role ?? 'owner';
       // A person on an agent route acts with their role (#469): a viewer with none, a member only as on the human routes.
+      // An agent token acts with its minter's role as it is now (#629, Auth.identity), so a member's machine can't do
+      // what the member can't.
+      const agentRole = who.person ? personRole : who.role === 'agent' ? who.actsAs ?? null : null;
       const agentRefused = (op) => {
-        const may = PERSON_AGENT_CAN[personRole];
-        if (!who.person || may === null || may?.includes(op)) return false;
-        deny(403, `a ${personRole} can't ${op === 'credential' ? 'get a push token' : op} here`, personRole === 'viewer'
-          ? 'A viewer only reads. Ask an owner of this workspace for a member role.'
-          : 'Ask an owner of this workspace for a steward role, or connect an agent with its own token (Connect an agent).');
+        const may = PERSON_AGENT_CAN[agentRole];
+        if (!agentRole || may === null || may?.includes(op)) return false;
+        const what = op === 'credential' ? 'get a push token' : op;
+        if (!who.person) {
+          deny(403, `this token can't ${what} here: it was minted by a ${agentRole}`, agentRole === 'viewer'
+            ? 'Its minter is a viewer now, and a viewer\'s tokens do nothing. An owner of this workspace can give them a role again.'
+            : 'A member\'s machine checks in, looks, proposes and comments. For one that builds and reviews, a steward or owner connects it, or an owner makes its minter a steward.');
+        } else {
+          deny(403, `a ${agentRole} can't ${what} here`, agentRole === 'viewer'
+            ? 'A viewer only reads. Ask an owner of this workspace for a member role.'
+            : 'Ask an owner of this workspace for a steward role, or connect an agent with its own token (Connect an agent).');
+        }
         return true;
       };
       // A connected machine asks to staff a project with its workers, up to a daily budget (#490, nuworq connect).
@@ -1268,13 +1374,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           if (path === '/api/invites/revoke') { authz.revokeInvite(b.id); return send(200, { ok: true }); }
           const inv = authz.createInvite(b.role, { email: b.email, by: by === HUMAN ? '' : by });
           // The link is shown this once; only its hash is kept.
-          return send(200, { ok: true, id: inv.id, role: inv.role, link: `${origin(req)}${base}/invite.html#${inv.token}`, expires_in: '7 days' });
+          return sendSecret(200, { ok: true, id: inv.id, role: inv.role, link: `${origin(req)}${base}/invite.html#${inv.token}`, expires_in: '7 days' });
         } catch (e) {
           throw new UserError(e.message);
         }
       }
       if (path === '/api/people' || path === '/api/people/role') {
-        if (req.method === 'GET' && path === '/api/people') return send(200, authz.listPeople());
+        // Emails are how sign-in matches a person (#470): only owners, who manage people, see them (#631).
+        if (req.method === 'GET' && path === '/api/people') {
+          const people = authz.listPeople();
+          return send(200, personRole === 'owner' ? people : people.map(({ handle, name, role, created_at }) => ({ handle, name, role, created_at })));
+        }
         if (req.method !== 'POST') return deny(405, 'use GET or POST');
         if (personRole !== 'owner') return deny(403, 'only an owner manages people', 'Ask an owner of this workspace.');
         const b = await body(req);
@@ -1293,7 +1403,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const peek = devices.peek(b.user_code);
         if (!peek.ok) return deny(410, peek.error, 'Check the code the CLI shows, or start the device login again.');
         const staff = peek.request.staff;
-        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, ...(staff ? { staff } : {}), expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
+        // role: the approver's, so the page says what the machine will be able to do (#629).
+        if (path === '/api/device/peek') return send(200, { ok: true, machine: peek.request.machine, role: personRole, ...(staff ? { staff } : {}), expires_in: Math.max(0, Math.round((peek.request.expires_at - authz.now()) / 1000)) });
         const approve = b.approve !== false;
         if (approve && personRole === 'viewer') return deny(403, "a viewer can't connect machines", 'Ask an owner for a member role.');
         if (approve && staff && !PERSON_CAN[personRole]?.includes('settings')) return deny(403, `a ${personRole} can't staff projects`, 'Ask an owner of this workspace to approve it.');
@@ -1336,7 +1447,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Agents get only what a worker needs to find its checkout, for the projects their token may reach.
       if (req.method === 'GET' && path === '/api/projects' && who.role === 'agent') {
         return send(200, hub.projects().filter((p) => !caller.scope || caller.scope.includes(p.slug))
-          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner })));
+          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner, sandbox_hosts: JSON.parse(p.sandbox_hosts || '[]'), operators: liveOperators(hub, p) })));
       }
       if (req.method === 'GET' && path === '/api/projects' && url.searchParams.get('archived')) {
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
@@ -1499,7 +1610,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       let m;
       if ((m = path.match(/^\/api\/p\/([^/]+)\/view$/)) && req.method === 'GET') {
         hub.sweep();
-        return send(200, view(hub, decodeURIComponent(m[1]), { viewer }));
+        // depth (30s, 5m, 30m): only what that depth shows (#501); all and agents: how many of each the page has asked for.
+        const depth = url.searchParams.get('depth') || undefined;
+        const pages = { all: url.searchParams.get('all'), agents: url.searchParams.get('agents') };
+        return send(200, view(hub, decodeURIComponent(m[1]), { viewer, depth, pages }));
       }
       // What finished work came to, for other tools (docs/API.md is the contract). Agent tokens read only their projects'.
       if ((m = path.match(/^\/api\/p\/([^/]+)\/outcomes$/)) && req.method === 'GET') {
@@ -1553,8 +1667,44 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
         return send(200, withFeedback(m[2], agent, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), cursor: cursorOf(req), ...caller }))));
       }
-      // git asks for a credential (nuworq git-credential): a token for the repository of the item this
-      // agent holds, minted by the GitHub App for that one repository and an hour. On the record, never shown.
+      // A worker's push (#472): only to the repository of the item it holds, only nuworq/ branches (src/gitproxy.js),
+      // with the hub's token for that one repository, which the worker never sees. On the record either way.
+      if ((m = path.match(/^\/api\/git\/(github\.com\/[^/]+\/[^/]+?)(?:\.git)?\/(info\/refs|git-receive-pack|git-upload-pack)$/))) {
+        const text = (status, msg) => { res.writeHead(status, { 'content-type': 'text/plain' }); return res.end(`nuworq: ${msg}\n`); };
+        const [, repo, service] = m;
+        if (service === 'git-upload-pack' || (service === 'info/refs' && url.searchParams.get('service') !== 'git-receive-pack')) return text(403, 'the hub only takes pushes; fetch from GitHub');
+        if (service === 'git-receive-pack' && req.method !== 'POST') return text(405, 'git-receive-pack takes a POST');
+        if (!app) return text(404, "this hub has no GitHub App, so it can't pass pushes on");
+        if (agentRefused('credential')) return;
+        const { held, other } = heldBy(hub, gitAgent, caller);
+        if (other) return text(403, `${gitAgent} is another agent's name here: pushes go only through the token the agent holding the item uses`);
+        if (!held) return text(403, `${gitAgent} holds no item to push for: claim one (next), then push`);
+        const { it, p } = held;
+        const want = it.repo || hub.remotesOf(p)[0] || '';
+        if (normRemote(repo).toLowerCase() !== want.toLowerCase()) return text(403, `#${it.seq} lands in ${want}, not ${repo}`);
+        let token;
+        try {
+          token = (await itemToken(hub, { agent: gitAgent, it, p, caller, write: true })).token;
+        } catch (e) {
+          if (!(e instanceof UserError)) throw e;
+          return text(e.status || 424, e.message);
+        }
+        const names = (cmds) => cmds.map((c) => c.ref.replace(/^refs\/heads\//, '')).join(', ');
+        return await proxyPush(req, res, {
+          git: `${gh.web}/${want.slice('github.com/'.length)}.git`, service, token, branch: it.branch,
+          onRefused: (cmds, reasons) => { hub.event(p, { item: it, actor: gitAgent, type: 'push_refused', headline: `The hub refused ${gitAgent}'s push of ${names(cmds)} to ${want}: ${[...new Set(reasons.filter(Boolean))].join('; ')}`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } }); hub.changed(p); },
+          onPushed: (cmds) => {
+            if (!cmds.length) return;
+            hub.event(p, { item: it, actor: gitAgent, type: 'pushed_via_hub', headline: `${gitAgent} pushed ${names(cmds)} to ${want} through the hub`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } });
+            hub.changed(p);
+            // Accepted work whose branch just moved (#605): unless it's the reviewed change rebased, back to review.
+            if (it.stage === 'landing') hub.headMoved(p, it.id).catch((e) => console.error('checking a pushed branch failed', e));
+          },
+        });
+      }
+      // git asks for a credential (nuworq git-credential): a read-only token for the repository of the item this
+      // agent holds, minted by the GitHub App for that one repository and an hour. Pushes go through the hub
+      // (above), so no worker holds a token that writes. On the record, never shown.
       if (path === '/api/agent/credential' && req.method === 'POST') {
         const b = await body(req);
         const agent = header(req, 'agent') || b.agent;
@@ -1583,43 +1733,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
             data: { agent: who, repo: t.repo, purpose: 'clone', expires_at: t.expires_at, token: caller.token?.name ?? null },
           });
           hub.changed(p);
-          return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
+          return sendSecret(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
         }
-        // A push token is for the agent's own token (#469), never a person's browser session.
+        // A token is for the agent's own token (#469), never a person's browser session.
         if (caller.identity?.session) return deny(403, "a person's browser session gets no push token", 'Push tokens are for the agent that holds the item: its own token asks (nuworq git-credential).');
-        const holding = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
-          .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
-          .filter(({ p }) => !caller.scope || caller.scope.includes(p.slug));
-        const held = holding.find(({ p }) => !caller.identity || hub.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.token_id === caller.identity.id);
-        if (!held && holding.length) return deny(403, `${agent} is another agent's name here`, 'A push token goes only to the token the agent holding the item uses. Pick a name of your own and claim work with next.');
-        if (!held) return deny(409, `${agent || 'this agent'} holds no item to push for`, 'Tokens are for the item you hold: claim one (next), then push.');
-        const { it, p } = held;
-        const repo = it.repo || hub.remotesOf(p)[0] || '';
-        // git asks on every fetch and push: the same agent, item and repository reuse the token while it's good.
-        const key = `${hub.workspace ?? ''}|${agent}|${it.id}|${repo}`;
-        const have = minted.get(key);
-        if (have && Date.parse(have.expires_at) - 5 * 60_000 > Date.now()) {
-          return send(200, { ok: true, username: 'x-access-token', password: have.token, repo: have.repo, expires_at: have.expires_at });
-        }
-        let t;
-        try {
-          t = await appOf(hub).mint(repo);
-          for (const [k, v] of minted) if (Date.parse(v.expires_at) < Date.now()) minted.delete(k);
-          minted.set(key, t);
-        } catch (e) {
-          if (e instanceof UserError) {
-            hub.event(p, { item: it, actor: agent, type: 'credential_refused', headline: `No GitHub token for ${agent} on #${it.seq}: ${e.message}`, summary: e.hint ?? '', data: { agent, repo } });
-            hub.changed(p);
-          }
-          throw e;
-        }
-        hub.event(p, {
-          item: it, actor: agent, type: 'credential',
-          headline: `${agent} got a GitHub token for ${t.repo} on #${it.seq}, until ${new Date(t.expires_at).toISOString().slice(11, 16)} UTC`,
-          data: { agent, item: it.seq, repo: t.repo, expires_at: t.expires_at, token: caller.token?.name ?? null }, // the agent token that asked
-        });
-        hub.changed(p);
-        return send(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
+        const { held, other } = heldBy(hub, agent, caller);
+        if (other) return deny(403, `${agent} is another agent's name here`, 'A push token goes only to the token the agent holding the item uses. Pick a name of your own and claim work with next.');
+        if (!held) return deny(409, `${agent || 'this agent'} holds no item to fetch for`, 'Tokens are for the item you hold: claim one (next), then fetch.');
+        const t = await itemToken(hub, { agent, ...held, caller });
+        return sendSecret(200, { ok: true, username: 'x-access-token', password: t.token, repo: t.repo, expires_at: t.expires_at });
       }
       // No project named: the agent's folder picks it, or the hub routes the agent to the most valuable work.
       if ((m = path.match(/^\/api\/agent\/([a-z]+)$/)) && req.method === 'POST') {
@@ -1805,7 +1927,18 @@ function replyTo(hub, id) {
   const r = hub.q('SELECT status, body FROM replies WHERE id = ? AND at >= ?').get(id, hub.now() - REPLY_MS);
   return r ? { status: r.status, body: JSON.parse(r.body) } : null;
 }
+// A reply holding a credential is never kept (#623): the hub stores hashes, never the secret itself. Routes that
+// return one say so (sendSecret); this catches any that forgets: a field named for a secret, or a value shaped like
+// a nuworq, invite or GitHub token. Not a field named token: events name the token that acted there.
+const SECRET_FIELDS = new Set(['password', 'secret', 'client_secret', 'webhook_secret', 'private_key', 'device_code']);
+const SECRET_VALUE = /\b(nwq|nwi|ghs|ghp|gho|ghu|ghr|github_pat)_[A-Za-z0-9_-]{4,}/;
+export function holdsSecret(body) {
+  if (typeof body === 'string') return SECRET_VALUE.test(body);
+  if (!body || typeof body !== 'object') return false;
+  return Object.entries(body).some(([k, v]) => (SECRET_FIELDS.has(k) && typeof v === 'string' && v !== '') || holdsSecret(v));
+}
 function keepReply(hub, id, status, body) {
+  if (holdsSecret(body)) return;
   hub.q('DELETE FROM replies WHERE at < ?').run(hub.now() - REPLY_MS);
   hub.q('INSERT OR REPLACE INTO replies (id, status, body, at) VALUES (?, ?, ?, ?)').run(id, status, JSON.stringify(body ?? null), hub.now());
 }

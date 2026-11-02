@@ -169,8 +169,8 @@ describe('agents keep the groups true (#202)', () => {
     agent('refine', 'w1', { item: '#4', parent: '#1', reason: 'Runners are part of getting workers going' }); // emptied by the move
     const done = agent('submit', 'w1', { item: r.item, headline: 'Moved #4 and #5 under #1; #3 stays loose on purpose' });
     assert.match(done.hint, /is done/);
-    assert.deepEqual(view(hub, 'p').attention.filter((a) => a.kind === 'tidied').map((a) => [a.level, a.headline]),
-      [['know', 'w1 tidied the milestones: Moved #4 and #5 under #1; #3 stays loose on purpose']], 'worth knowing sums it up in one line');
+    assert.ok(!view(hub, 'p').attention.some((a) => a.kind === 'tidied'), 'a tidy result stays out of Worth knowing (#497)');
+    assert.match(hub.q(`SELECT headline FROM events WHERE type = 'tidied'`).get().headline, /^w1 tidied the milestones: Moved #4 and #5 under #1/, 'history keeps it');
     assert.notEqual(agent('next', 'w1').mode, 'tidy', 'what it listed and left alone is not raised again');
   });
 

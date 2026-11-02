@@ -13,9 +13,13 @@
    Priority (now, soon, later) shows by weight, not color. Every Needs you card is --you, whatever its kind.
    Text that carries information is --muted or darker, at least 4.5:1 on its background (#195); --faint is decoration
    only (borders, disabled states, placeholders), never text. Hierarchy comes from size and weight.
-   test/colors.test.js keeps them apart: the five state colors are at least ΔE76 30 from each other and 4.5:1 on
-   --panel (white text on them too); each provider color is at least ΔE76 30 from every state color and the other
-   providers, and 3:1 on --panel; --brand is at least ΔE76 30 from every state color and 25 from every provider.
+   Text on a state fill is --on-fill; on an --ink fill, --panel; on Ready's grey (--queue), --on-queue.
+   Light and dark (#484): dark follows the device (or data-theme="dark" on <html>), with a calm graphite instead of
+   near-black, softer text and softer state colors. Every meaning above stays; only the values change.
+   test/colors.test.js keeps them apart, in both themes: the five state colors are at least ΔE76 30 from each other
+   and 4.5:1 on --panel (--on-fill on them too); each provider color is at least ΔE76 30 from every state color and
+   the other providers, and 3:1 on --panel; --brand is at least ΔE76 30 from every state color and 25 from every
+   provider. Dark stays comfortable: --bg L* 9 to 14, --ink 10 to 12.5:1 on --panel, state chroma 45 at most.
 
    The shape map (#391): one strict set, so every part fits. Use only these; /styleguide shows each one in use.
      --fs-1..6  type: 11 labels and caps · 12 meta · 13 secondary · 14 body · 16 titles · 20 headlines and big figures
@@ -43,7 +47,7 @@
   --agents-tint: #ecf0fd;
   --queue: #8b9099;
   --queue-tint: #eceef1;
-  /* Outside's stripes (#209): white labels sit on --hatch and ink text on --hatch-tint, 4.5:1 on every stripe. */
+  /* Outside's stripes (#209): --on-fill labels sit on --hatch and ink text on --hatch-tint, 4.5:1 on every stripe. */
   --hatch: repeating-linear-gradient(135deg, var(--muted) 0 4px, var(--ink) 4px 7px);
   --hatch-tint: repeating-linear-gradient(135deg, var(--sunken) 0 5px, var(--line-strong) 5px 7px);
   --ok: #2a7549;
@@ -57,7 +61,14 @@
   --p-open: #9933bb;
   --p-google: #5588dd;
 
-  --brand: #d4e034; /* citron (#319): the logo's tile, with the mark in --ink on it */
+  --brand: #d4e034; /* citron (#319): the logo's tile, with the mark in --brand-ink on it */
+  --brand-ink: #14161a; /* the mark on the tile: dark in both themes */
+
+  --on-fill: #ffffff; /* text on a state fill (a badge, a bar segment, a toast) */
+  --on-queue: #14161a; /* text on Ready's grey (--queue) */
+  --scrim: rgba(20, 22, 26, .3); /* behind a dialog or the launcher */
+  --scrim-soft: rgba(20, 22, 26, .18); /* behind the drawer */
+  --hover: rgba(127, 127, 127, .08); /* a row under the pointer: a neutral wash, the same in both themes */
 
   /* Type: six sizes, each with its line height and weight. */
   --fs-1: 11px; --lh-1: 1.4;  --fw-1: 600;
@@ -78,12 +89,86 @@
   --accent: 3px;
   --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-  color-scheme: light; /* light only, on every device (#141): no dark theme */
+  color-scheme: light dark;
 }
+/* Dark (#484): when the device prefers it, unless the theme choice says light; or whenever it says dark. The two
+   blocks hold the same values; test/colors.test.js checks they match. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1d21;
+    --panel: #22252a;
+    --sunken: #17191d;
+    --ink: #d8dbe0;
+    --muted: #9ba1ab;
+    --faint: #6b717a;
+    --line: #30343a;
+    --line-strong: #3d424a;
+    --you: #d987bb;
+    --you-tint: #3a2433;
+    --you-line: #5e3249;
+    --agents: #8aa5e8;
+    --agents-tint: #232b42;
+    --queue: #878d97;
+    --queue-tint: #2a2d33;
+    --ok: #74bb8f;
+    --ok-tint: #1d3326;
+    --warn: #cdb062;
+    --bad: #e98f78;
+    --bad-tint: #3d2620;
+    --p-anthropic: #cc4230;
+    --p-openai: #00909c;
+    --p-open: #a85ac0;
+    --p-google: #007ef0;
+    --on-fill: #16181c;
+    --on-queue: #16181c;
+    --scrim: rgba(0, 0, 0, .5);
+    --scrim-soft: rgba(0, 0, 0, .5);
+    --e-1: none;
+    --e-2: 0 12px 40px rgba(0, 0, 0, .5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1b1d21;
+  --panel: #22252a;
+  --sunken: #17191d;
+  --ink: #d8dbe0;
+  --muted: #9ba1ab;
+  --faint: #6b717a;
+  --line: #30343a;
+  --line-strong: #3d424a;
+  --you: #d987bb;
+  --you-tint: #3a2433;
+  --you-line: #5e3249;
+  --agents: #8aa5e8;
+  --agents-tint: #232b42;
+  --queue: #878d97;
+  --queue-tint: #2a2d33;
+  --ok: #74bb8f;
+  --ok-tint: #1d3326;
+  --warn: #cdb062;
+  --bad: #e98f78;
+  --bad-tint: #3d2620;
+  --p-anthropic: #cc4230;
+  --p-openai: #00909c;
+  --p-open: #a85ac0;
+  --p-google: #007ef0;
+  --on-fill: #16181c;
+  --on-queue: #16181c;
+  --scrim: rgba(0, 0, 0, .5);
+  --scrim-soft: rgba(0, 0, 0, .5);
+  --e-1: none;
+  --e-2: 0 12px 40px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--ink); font: var(--fw-4) var(--fs-4)/var(--lh-4) var(--font); -webkit-font-smoothing: antialiased; }
+/* Light text on dark, drawn antialiased so it doesn't look heavier than dark text on light (#484). */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) body { -moz-osx-font-smoothing: grayscale; } }
+:root[data-theme="dark"] body { -moz-osx-font-smoothing: grayscale; }
 a { color: var(--ink); text-decoration: none; }
 /* One link style everywhere (#190): ink with a quiet underline that turns ink on hover. No state color, and the
    underline shows it's a link without color. Anchors with a class of their own (buttons, rail rows, refs) style themselves. */
@@ -119,6 +204,13 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .rail-foot .rail-item { color: var(--muted); }
 .rail-foot .tag { text-transform: none; letter-spacing: 0; padding: var(--sp-h) var(--sp-1); } /* Upgrade (#308): narrow enough to leave its label whole */
 .rail-menu, .rail-break { display: none; }
+/* Appearance (#485): the footer's one setting, its label over its three choices. */
+.appearance { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) var(--sp-1); }
+.appearance .seg-label { align-self: flex-start; margin: 0; }
+.appearance .seg { display: flex; }
+.appearance .seg button { flex: 1 1 auto; padding: var(--sp-1) var(--sp-2); }
+/* Changing it: the other theme at once, nothing eased in. */
+html.theming *, html.theming *::before, html.theming *::after { transition-property: none !important; }
 /* The sidebar in the phone top bar's terms (#141): chips for projects, the count beside its label, quiet actions. */
 @media (min-width: 861px) {
   .rail-item { padding: var(--sp-2) var(--sp-3); border-radius: var(--r-m); }
@@ -141,7 +233,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .org-item.on { font-weight: 600; }
 .org-item.on::before { content: '✓'; color: var(--ink); } /* where you are, not a state (#191) */
 .org-role { font-size: var(--fs-1); color: var(--muted); }
-.badge { background: var(--you); color: #fff; border-radius: var(--r-full); font-size: var(--fs-1); font-weight: 650; min-width: 19px; height: 19px; padding: 0 var(--sp-2); display: inline-flex; align-items: center; justify-content: center; }
+.badge { background: var(--you); color: var(--on-fill); border-radius: var(--r-full); font-size: var(--fs-1); font-weight: 650; min-width: 19px; height: 19px; padding: 0 var(--sp-2); display: inline-flex; align-items: center; justify-content: center; }
 
 .dot { width: 8px; height: 8px; border-radius: var(--r-full); flex: none; background: var(--queue); }
 .state-needs-you .dot, .dot.needs-you { background: var(--you); }
@@ -223,6 +315,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .cards { display: flex; flex-direction: column; gap: var(--sp-3); }
 .card { background: var(--panel); border: var(--rule) solid var(--line); border-left: var(--accent) solid var(--you); border-radius: var(--r-m); padding: var(--sp-4) var(--sp-4); box-shadow: var(--e-1); }
 .card-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; font-size: var(--fs-2); color: var(--muted); }
+.card-prio { margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-1); } /* the card's priority, at the right edge (#506) */
+@media (max-width: 600px) { .card-top .sub { order: 1; } } /* on a phone the priority stays on the first line, beside the kind */
 .kind { font-weight: 650; text-transform: uppercase; letter-spacing: .05em; font-size: var(--fs-1); color: var(--you); }
 .ref { font-family: var(--mono); font-size: var(--fs-2); color: var(--muted); background: var(--sunken); padding: 0 var(--sp-2); border-radius: var(--r-s); cursor: pointer; }
 .ref:hover { color: var(--ink); text-decoration: none; }
@@ -284,16 +378,30 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 /* A row you pick (e.g. a repository): looks like any list row, not the browser's button. */
 button.row-item { width: 100%; text-align: left; background: transparent; border: 0; border-top: var(--rule) solid var(--line); border-radius: 0; color: inherit; font: inherit; cursor: pointer; }
 .rows > button.row-item:first-child { border-top: 0; }
-button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127, 127, .08); outline: none; }
+button.row-item:hover, button.row-item:focus-visible { background: var(--hover); outline: none; }
 #np-repos { max-height: 50vh; overflow-y: auto; }
+/* What agents and the hub told each other about an item (#550): one plain line each, its whole text on a tap. */
+.told-item + .told-item { border-top: var(--rule) solid var(--line); }
+.told-item > button.row-item { border-top: 0; font-size: var(--fs-3); }
+.told-item > .row-item .h { flex: 1; font-weight: var(--fw-4); }
+.told-item > .row-item .h b { font-weight: 600; }
+.told-body { padding: 0 var(--sp-4) var(--sp-3); font-size: var(--fs-3); color: var(--muted); }
+/* On a phone the line gets the width, and when it retires goes under it. */
+@media (max-width: 600px) { .told-item > .row-item { flex-wrap: wrap; } .told-item > .row-item .age { flex-basis: 100%; margin-left: 0; } }
 .row-item .h { font-weight: 520; }
 .row-item .s { color: var(--muted); font-size: var(--fs-2); }
 .row-item .acts { display: flex; gap: var(--sp-1); flex: none; align-items: center; }
+/* Worth knowing (#497): one line a card, the rest behind Open. */
+.wk-line { align-items: center; padding-block: var(--sp-2); }
+.wk-line .h { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.wk-open .body > .acts { flex-wrap: wrap; }
+/* On a phone the line gets the room: Got it, all and an opened card still clear one. */
+@media (max-width: 600px) { .wk-line .wk-got, .wk-hint { display: none; } }
 .row-item.clickable { cursor: pointer; }
 .row-item.clickable:hover { background: var(--sunken); }
 .tag { font-size: var(--fs-1); font-weight: 600; border-radius: var(--r-s); padding: var(--sp-h) var(--sp-2); text-transform: uppercase; letter-spacing: .04em; flex: none; }
 /* Every Needs you card is magenta (#189); priority shows by weight, never a state color: now in ink, soon muted, later outlined. */
-.tag.now { background: var(--ink); color: #fff; }
+.tag.now { background: var(--ink); color: var(--panel); }
 .tag.you { background: var(--you-tint); color: var(--you); }
 .tag.soon { background: var(--sunken); color: var(--muted); }
 .tag.go { background: var(--ok-tint); color: var(--ok); }
@@ -318,8 +426,24 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .touch { margin-top: var(--sp-1); display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .touch code { font-size: var(--fs-1); color: var(--muted); }
 .headsup { color: var(--warn); font-size: var(--fs-2); margin-top: var(--sp-1); }
-.sublabel { font-size: var(--fs-2); font-weight: 600; color: var(--ink); margin: 0 0 var(--sp-2); display: flex; gap: var(--sp-2); align-items: baseline; }
-.sublabel span { font-weight: 400; color: var(--muted); }
+.sublabel { font-size: var(--fs-2); font-weight: 600; color: var(--ink); margin: 0 0 var(--sp-2); display: flex; flex-wrap: wrap; gap: 0 var(--sp-2); align-items: baseline; }
+.sublabel > span:last-child { font-weight: 400; color: var(--muted); }
+/* Memory distilled for people (#552): Direction today, gists with the full words behind them, a recommendation's taps */
+.direction { margin: 0 0 var(--sp-4); padding-left: var(--sp-5); display: grid; gap: var(--sp-1); }
+.direction .mem-src { font-size: var(--fs-2); color: var(--muted); white-space: nowrap; }
+.mem-full summary { font-size: var(--fs-2); color: var(--muted); cursor: pointer; }
+.mem-words { font-size: var(--fs-2); color: var(--muted); margin-top: var(--sp-1); }
+.mem-advice { margin-top: var(--sp-2); font-size: var(--fs-2); display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.mem-advice blockquote { margin: 0; flex-basis: 100%; padding-left: var(--sp-3); border-left: var(--rule) solid var(--line); color: var(--ink); }
+.mem-acts { display: inline-flex; gap: var(--sp-2); }
+/* A row's ⋯ (#651): what isn't recommended waits here, one tap away */
+.row-more-at { display: inline-flex; }
+.row-more:has(~ .row-menu:popover-open) { background: var(--sunken); color: var(--ink); }
+.row-menu { min-width: 140px; background: var(--panel); color: var(--ink); border: var(--rule) solid var(--line); border-radius: var(--r-m); box-shadow: var(--e-1); padding: var(--sp-1); }
+.row-menu:popover-open { display: flex; flex-direction: column; }
+@supports (anchor-name: --a) { .row-menu { inset: auto; margin: var(--sp-1) 0 0; position-area: bottom span-left; position-try-fallbacks: flip-block; } }
+.row-menu button { display: flex; align-items: center; min-height: 36px; padding: var(--sp-2) var(--sp-3); border: 0; border-radius: var(--r-m); background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.row-menu button:hover, .row-menu button:focus-visible { background: var(--sunken); }
 
 .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-3); }
 .agent-card { background: var(--panel); border: var(--rule) solid var(--line); border-radius: var(--r-m); padding: var(--sp-3) var(--sp-4); }
@@ -380,11 +504,11 @@ button.row-item:hover, button.row-item:focus-visible { background: rgba(127, 127
 .stage-detail { margin-top: var(--sp-3); padding: var(--sp-3) var(--sp-3); background: var(--sunken); border-radius: var(--r-m); font-size: var(--fs-3); }
 .stage-detail .blurb { color: var(--muted); margin-bottom: var(--sp-2); }
 .courtbar { display: flex; height: 26px; border-radius: var(--r-m); overflow: hidden; margin-top: var(--sp-4); gap: var(--sp-h); }
-.courtbar .seg-c { display: flex; align-items: center; justify-content: center; font-size: var(--fs-1); font-weight: 650; color: #fff; min-width: 4px; }
+.courtbar .seg-c { display: flex; align-items: center; justify-content: center; font-size: var(--fs-1); font-weight: 650; color: var(--on-fill); min-width: 4px; }
 /* One token per court (#194): the courtbar, its legend and the lifecycle bar share these rules. */
 .seg-c.agents, i.agents, .lifebar .agents { background: var(--agents); }
 .seg-c.queue, i.queue, .lifebar .queue { background: var(--queue); }
-.seg-c.queue, .lifebar .queue { color: var(--ink); } /* white on grey is 3.2:1; ink is 5.3:1 */
+.seg-c.queue, .lifebar .queue { color: var(--on-queue); } /* dark text on the grey, in both themes: white on it is 3.2:1 */
 .seg-c.you, i.you, .lifebar .you { background: var(--you); }
 .seg-c.external, i.external, .lifebar .external { background: var(--hatch); }
 .legend { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); margin-top: var(--sp-2); font-size: var(--fs-2); color: var(--muted); }
@@ -437,7 +561,7 @@ table.work tr:hover td { background: var(--sunken); cursor: pointer; }
 
 /* ── drawer ── */
 #drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(600px, 100vw); background: var(--panel); border-left: var(--rule) solid var(--line); box-shadow: var(--e-2); overflow-y: auto; z-index: 20; padding: var(--sp-6) var(--sp-7) var(--sp-15); }
-#scrim { position: fixed; inset: 0; background: rgba(20,22,26,.18); z-index: 15; }
+#scrim { position: fixed; inset: 0; background: var(--scrim-soft); z-index: 15; }
 .d-top { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .d-top .x { margin-left: auto; }
 #drawer h2.title { font-size: var(--fs-6); line-height: 1.3; letter-spacing: -.01em; }
@@ -456,7 +580,7 @@ fieldset.quality input { width: auto; flex: none; margin: var(--sp-1) 0 0; }
 .d-sec p { margin: 0 0 var(--sp-2); }
 .d-sec ul { margin: 0 0 var(--sp-2); padding-left: var(--sp-5); }
 .lifebar { display: flex; height: 30px; gap: var(--sp-h); border-radius: var(--r-m); overflow: hidden; }
-.lifebar span { min-width: 6px; display: flex; align-items: center; padding: 0 var(--sp-2); font-size: var(--fs-1); color: #fff; font-weight: 600; overflow: hidden; white-space: nowrap; }
+.lifebar span { min-width: 6px; display: flex; align-items: center; padding: 0 var(--sp-2); font-size: var(--fs-1); color: var(--on-fill); font-weight: 600; overflow: hidden; white-space: nowrap; }
 .life-steps { display: flex; flex-wrap: wrap; gap: var(--sp-h) var(--sp-2); margin-top: var(--sp-2); font-size: var(--fs-2); color: var(--muted); }
 .life-steps b { color: var(--ink); font-weight: 600; }
 .handoff { background: var(--sunken); border-radius: var(--r-m); padding: var(--sp-3) var(--sp-3); font-size: var(--fs-3); }
@@ -509,7 +633,7 @@ a.rail-head:hover, a.rail-head.on { color: var(--ink); }
 .get-started li .copyable { justify-self: stretch; }
 
 /* ── modal & toast ── */
-#modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(20,22,26,.3); padding: var(--sp-4); }
+#modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: var(--scrim); padding: var(--sp-4); }
 #modal[hidden] { display: none; }
 .dialog { background: var(--panel); border-radius: var(--r-m); width: min(680px, 100%); max-height: 88vh; overflow-y: auto; padding: var(--sp-6) var(--sp-6); box-shadow: var(--e-2); }
 .dialog h2 { font-size: var(--fs-5); margin-bottom: var(--sp-1); }
@@ -524,7 +648,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: var(--sp-h) var(--sp-2);
 .rail-search { color: var(--muted); border: var(--rule) solid var(--line) !important; background: var(--panel) !important; margin-bottom: var(--sp-2); }
 .rail-search kbd { margin-left: auto; font-size: var(--fs-1); color: var(--muted); }
 @media not ((hover: hover) and (pointer: fine)) { .rail-search kbd { display: none; } } /* no keyboard, no ⌘K (#394) */
-#launcher { position: fixed; inset: 0; z-index: 40; background: rgba(20,22,26,.3); padding: 12vh var(--sp-4) var(--sp-4); }
+#launcher { position: fixed; inset: 0; z-index: 40; background: var(--scrim); padding: 12vh var(--sp-4) var(--sp-4); }
 #launcher[hidden] { display: none; }
 .ln-box { background: var(--panel); border-radius: var(--r-m); width: min(640px, 100%); margin: 0 auto; box-shadow: var(--e-2); overflow: hidden; }
 .ln-box input { border: 0; border-bottom: var(--rule) solid var(--line); border-radius: 0; padding: var(--sp-4) var(--sp-4); font-size: var(--fs-5); outline: none; }
@@ -572,7 +696,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: var(--sp-h) var(--sp-2);
 .fb-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .tag.fb-tag { background: var(--panel); color: var(--muted); border: var(--rule) solid var(--line); } /* a label, not a move: magenta is the person's (#336); --panel because the stage list is --sunken */
 .fb-only { margin: var(--sp-1) 0 var(--sp-2); min-height: 36px; padding: var(--sp-1) var(--sp-3); border: var(--rule) solid var(--line-strong); border-radius: var(--r-full); background: var(--panel); font: inherit; cursor: pointer; }
-.fb-only.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.fb-only.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
 .acts .btn.ghost.on { color: var(--ink); font-weight: 550; border-color: var(--line-strong); } /* a field note every agent gets (#443) */
 /* On a phone a field note's three controls go under it, so the note keeps the width to be read. */
 @media (max-width: 600px) { .note-item { flex-wrap: wrap; } .note-item .acts { flex-basis: 100%; justify-content: flex-end; } }
@@ -628,12 +752,12 @@ main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--
 .cmds { display: flex; flex-direction: column; gap: var(--sp-h); min-width: 0; }
 .cmd-join { margin: 0; font-size: var(--fs-2); color: var(--muted); } /* "then" between two commands, each with its own Copy (#379) */
 #toast, .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: var(--sp-2) var(--sp-4); border-radius: var(--r-m); font-size: var(--fs-3); z-index: 40; box-shadow: var(--e-2); max-width: 90vw; }
-#toast.err, .toast.err { background: var(--bad); color: #fff; }
+#toast.err, .toast.err { background: var(--bad); color: var(--on-fill); }
 #toast:has(.toast-undo) { width: max-content; display: flex; align-items: center; } /* not squeezed to half the screen by left: 50% */
 #toast .toast-undo { margin-left: var(--sp-3); min-height: 44px; padding: var(--sp-1) var(--sp-3); border: var(--rule) solid currentColor; border-radius: var(--r-m); background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
 #toast a { color: inherit; text-decoration: underline; font-weight: 600; }
 /* The hub out of reach (#142): a bar that stays until it answers, and the pulse marked as possibly stale. */
-#offline { position: sticky; top: 0; z-index: 35; background: var(--warn); color: #fff; font-size: var(--fs-3); font-weight: 550; text-align: center; padding: var(--sp-2) var(--sp-4); }
+#offline { position: sticky; top: 0; z-index: 35; background: var(--warn); color: var(--on-fill); font-size: var(--fs-3); font-weight: 550; text-align: center; padding: var(--sp-2) var(--sp-4); }
 body.offline .pulse { opacity: .55; filter: grayscale(.7); }
 body.offline .pulse .state-chip::after { content: '· out of date'; color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 500; }
 
@@ -666,6 +790,8 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
   #rail.menu-open .rail-menu { background: var(--sunken); color: var(--ink); }
   #rail.menu-open .rail-foot { display: flex; flex-basis: 100%; margin-top: var(--sp-1); padding-top: var(--sp-2); border-top: var(--rule) solid var(--line); }
   #rail.menu-open .rail-foot .rail-item { width: 100%; min-height: 44px; }
+  #rail.menu-open .appearance { padding: var(--sp-2) var(--sp-3); }
+  #rail.menu-open .appearance .seg button { min-height: 44px; padding: var(--sp-2) var(--sp-3); }
   /* The quick launcher (#290): Search beside Menu, thumb-sized; its box the width of the screen. */
   #rail .rail-search { margin: 0 0 0 auto; min-height: 44px; padding: var(--sp-3) var(--sp-4); }
   #rail .rail-search + .rail-menu { margin-left: 0; }
@@ -724,7 +850,7 @@ body.offline .pulse .state-chip::after { content: '· out of date'; color: var(-
 }
 
 /* Wide (#141): the same sections in two columns, the work and beside it the 30-second answer, which stays in
-   view while you act. app.js lays them out from 1024px (WIDE); below that, the phone's single column. */
+   view while you act. web/views/main.js lays them out from 1024px (WIDE); below that, the phone's single column. */
 @media (min-width: 1024px) {
   #main { max-width: 1360px; padding: var(--sp-7) var(--sp-8) var(--sp-20); }
   .cols { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-6); align-items: start; }
@@ -910,6 +1036,8 @@ a:not([class]):active, a.step-where:active, .link:active, .ref:active, .zoom-mor
 .btn.primary:disabled:hover { background: var(--ink); }
 .btn.ghost:disabled:hover, .seg button:disabled:hover { background: none; color: var(--muted); }
 /* Where content is on its way: quiet blocks the size of what comes, never a loading line. */
+/* A project drawn from what the app holds while its view is on its way (#503): a still word beside its name. */
+.updating { margin-left: var(--sp-2); font-size: var(--fs-2); font-weight: var(--fw-2); color: var(--muted); letter-spacing: 0; vertical-align: middle; }
 .ph { display: block; background: var(--sunken); border-radius: var(--r-s); height: 14px; margin: var(--sp-2) 0; }
 .ph.h { height: 22px; width: 60%; margin-bottom: var(--sp-4); }
 .ph.s { width: 85%; }

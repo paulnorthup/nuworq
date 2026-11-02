@@ -11,6 +11,7 @@ import { PASS_ON } from './issues.js';
 import { humanCost, verification } from './outcomes.js';
 import { OPERATOR_TAGS } from './protocol.js';
 import { wiringEntry } from './appwiring.js';
+import { bounceOf, sentence as endSentence } from './bounce.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -18,13 +19,35 @@ const RUNNER_ON_DUTY = 5 * MIN; // a runner that polled this recently is on duty
 const CHURN_AGENTS = 3;
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+// The 30-second line's first part (#506): how many things need you, and how many of them are now ("4 things need
+// you, 3 now."). where: " across 2 projects" on the home.
+const needsLine = (cards, where = '') => {
+  const n = cards.length, now = cards.filter((a) => a.priority === 'now').length;
+  if (!n) return 'Nothing needs you.';
+  const head = `${plural(n, 'thing')}${where} ${n === 1 ? 'needs' : 'need'} you`;
+  return `${head}${!now ? '' : n === 1 ? ' now' : now === n ? ', all now' : `, ${now} now`}.`;
+};
+const NEEDS_LINE = /^(Nothing needs you\.|\d+ things?( across \d+ projects)? needs? you( now|, all now|, \d+ now)?\.)/;
+// A steer as one plain line (#550): an answer's change of course is what to do instead; anything else, its first
+// sentence. The whole text stays behind it.
+export const plainSteer = (body) => {
+  const s = String(body ?? '').replace(/^Change of course(?: on #\d+)?: you assumed "[\s\S]*?"\. Instead: /, '').trim();
+  const first = s.match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] ?? s;
+  const line = first.length > 160 ? `${first.slice(0, 159)}…` : first;
+  return line.charAt(0).toUpperCase() + line.slice(1);
+};
 
 // viewer: the person looking ("@handle"), so "needs you" counts only their own; none in local mode.
 export function projectList(hub, { viewer } = {}) {
   return hub.projects().map((p) => projectLine(hub, p, view(hub, p.slug, { light: true, viewer })));
 }
 
-const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
+const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, sandbox_hosts: json(p.sandbox_hosts, []), operators: liveOperators(hub, p), pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
+
+// The operator sessions a project has (#559), for nuworq up: checked in as operators, not signed off, and seen in the
+// last day. An idle operator only listens, which leaves last_seen alone, and one that ends signs itself off (#558).
+export const liveOperators = (hub, p) => hub.q(`SELECT name, machine, last_seen FROM agents WHERE project_id = ? AND role = 'operator' AND signed_off = 0 AND last_seen > ? ORDER BY last_seen DESC`)
+  .all(p.id, hub.now() - DAY).map((a) => ({ name: a.name, machine: a.machine || null, last_seen: dur(hub.now() - a.last_seen) }));
 
 // The home: does anything need you, anywhere? One aggregate pulse, every act entry of the viewer's across
 // projects (tagged with its project, ranked as on a project page: byNeed), then one line per project. 5m adds
@@ -59,7 +82,7 @@ export function homeView(hub, { viewer } = {}) {
   const stalled = live.filter(({ v }) => v.pulse.state === 'stalled').length;
   const finished = rows.flatMap(({ p, v }) => v.since.finished.map((f) => ({ ...f, project: tag(p) })));
   const sentence = [
-    needs.length ? `${plural(needs.length, 'thing')}${across(new Set(needs.map((a) => a.project.slug)).size)} ${needs.length === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you.',
+    needsLine(needs, across(new Set(needs.map((a) => a.project.slug)).size)),
     inFlight ? `${plural(working, 'agent')} working on ${plural(inFlight, 'item')}${across(live.filter(({ v }) => v.pulse.active).length)}.`
       : stalled ? `Nothing is moving: work is waiting in ${plural(stalled, 'project')}.` : 'No work in flight.',
     finished.length ? `${finished.length} finished since you last looked.` : '',
@@ -96,8 +119,7 @@ export function homeView(hub, { viewer } = {}) {
 // you as now, since it holds up all the workspace's work (#505), counted in the pulse and its sentence.
 export function withEntry(h, entry) {
   const needs = [{ priority: 'now', priority_why: "now: it holds up all of the workspace's work", holds: 3, ...entry, project: null }, ...h.needs].sort(byNeed);
-  const sentence = h.pulse.sentence.replace(/^(Nothing needs you\.|\d+ things?( across \d+ projects)? needs? you\.)/,
-    `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you.`);
+  const sentence = h.pulse.sentence.replace(NEEDS_LINE, needsLine(needs));
   return { ...h, needs, pulse: { ...h.pulse, state: 'needs-you', act: needs.length, sentence } };
 }
 
@@ -123,7 +145,7 @@ function prioritize(hub, p, attention, items) {
   const of = (it) => {
     const e = eff.get(it.id) ?? { priority: it.priority, from: null };
     const from = e.from && items.find((i) => i.seq === e.from);
-    return { priority: e.priority, why: !from ? `${e.priority}: #${it.seq}'s own priority` : ancestor(it, from.id) ? `${e.priority}: part of #${from.seq}` : `${e.priority}: #${from.seq} waits on it` };
+    return { priority: e.priority, from: from ? `#${from.seq}` : null, why: !from ? `${e.priority}: #${it.seq}'s own priority` : ancestor(it, from.id) ? `${e.priority}: part of #${from.seq}` : `${e.priority}: #${from.seq} waits on it` };
   };
   for (const a of attention) {
     const it = a.item ? bySeq.get(a.item) : null;
@@ -138,6 +160,7 @@ function prioritize(hub, p, attention, items) {
     } else r = { priority: 'soon', why: 'soon: it is about no item' };
     a.priority = r.priority;
     a.priority_why = r.why;
+    if (r.from) a.priority_from = r.from; // inherited: the card says "from #468" (#506)
     if (it && picked.has(it.id)) a.picked = true;
     a.holds = a.kind === 'question' && a.parked ? 0 : HOLDS_LANDING.has(a.kind) ? 1 : it?.parent_id ? 2 : 3;
   }
@@ -148,9 +171,135 @@ function repoTag(remotes, it) {
   return remotes.length > 1 ? (it.repo || remotes[0]).split('/').slice(-2).join('/') : null;
 }
 
-export function view(hub, slug, { light = false, viewer } = {}) {
+// A project's page (#501): built once per change from what the hub holds, kept until the project changes or 15
+// seconds pass (so "5m ago" stays true), shared by every tab, the home and the Notifier. What differs per viewer
+// (whose "needs you" is whose, the steps they ticked, the GitHub App card) is laid on top, then cut to the depth:
+// 30s and 5m send counts and the lists they show; 30m sends the rest, the item list and past agents in pages.
+// No depth: everything, as before.
+export const VIEW_TTL = 15_000;
+export const DEPTHS = ['30s', '5m', '30m'];
+export const PAGE = { all: 100, agents: 50 };
+
+export function view(hub, slug, { light = false, viewer, depth, pages = {} } = {}) {
   const p = hub.project(slug);
-  const t = hub.now();
+  const built = cachedBase(hub, p, light);
+  const v = personalize(hub, p, built, viewer);
+  if (light) return { pulse: v.pulse, attention: v.attention, since: v.since };
+  return DEPTHS.includes(depth) ? atDepth(v, depth, pages) : v;
+}
+
+// Only a hub the server runs caches (cacheViews): there every write a page shows says so (hub.changed); a test
+// that writes the database itself, or moves the clock, reads it built afresh.
+function cachedBase(hub, p, light) {
+  if (!hub.cacheViews) return build(hub, p, hub.now(), { light });
+  const cache = (hub._views ??= new Map());
+  const key = hub.changeOf(p), t = hub.now();
+  const have = cache.get(p.id);
+  if (have && have.key === key && t - have.at < VIEW_TTL) return have;
+  const fresh = { key, at: t, ...build(hub, p, t) };
+  cache.set(p.id, fresh);
+  return fresh;
+}
+
+// The viewer's own page from the shared one: the GitHub App card for those it's for, the steps they ticked, and
+// everyone else's "needs you" as worth knowing, then ranked and counted again for the pulse.
+function personalize(hub, p, { v, priv }, viewer) {
+  const attention = v.attention.map((a) => {
+    if (!a._ticks) return a;
+    return Object.fromEntries(Object.entries(a).map(([k, x]) => (k === '_ticks' ? ['ticked', x[viewer ?? HUMAN] ?? []] : [k, x])));
+  });
+  const wiring = hub.appWiring?.(viewer);
+  if (wiring && !priv.dismissed.has(wiringEntry(wiring).key)) {
+    const a = { ...wiringEntry(wiring), level: 'act', kind: 'app-wiring', hubwide: true, priority: 'now', priority_why: "now: it holds up all of the hub's work", holds: 3 };
+    if (priv.people) a.owners = priv.stewards;
+    attention.splice(priv.wiringAt, 0, a);
+  }
+  if (viewer && priv.people) {
+    for (const [k, a] of attention.entries()) {
+      if (a.level !== 'act' || a.owners.includes(viewer)) continue;
+      attention[k] = { ...a, level: 'know', sub: [a.owners.length ? `needs ${a.owners.join(', ')}` : 'needs a steward (none set)', a.sub].filter(Boolean).join(' · ') };
+    }
+  }
+  attention.sort((a, b) => (a.level !== b.level ? (a.level === 'act' ? -1 : 1) : a.level === 'act' ? byNeed(a, b) : a.at - b.at));
+  const act = attention.filter((a) => a.level === 'act');
+  return { ...v, attention, pulse: pulseOf(p, priv.pulse, act, attention.length) };
+}
+
+// The pulse in one sentence, from what the page counted and what needs this viewer (cards).
+function pulseOf(p, { inFlight, working, shaping, readyFree, shapeable, claimable, finished }, cards, all) {
+  const act = cards.length;
+  const state = p.parked ? 'parked' : act ? 'needs-you' : inFlight ? 'flowing' : claimable ? 'stalled' : 'idle';
+  const needs = needsLine(cards);
+  const sentence = (p.parked
+    ? ['Parked: nothing new starts, and nothing will ask for you here until you unpark it.', act ? `${plural(act, 'thing')} already in progress still ${act === 1 ? 'needs' : 'need'} you.` : '']
+    : [
+      needs,
+      inFlight
+        ? `${plural(working, 'agent')} working on ${plural(inFlight, 'item')}${shaping ? ` (${shaping} being shaped)` : ''}.`
+        : readyFree ? `${plural(readyFree, 'item')} ready, but nobody is working.`
+          : shapeable ? `Nothing is moving: ${plural(shapeable, 'idea')} waiting to be shaped.` : 'No work in flight.',
+      p.seen_at && finished ? `${finished} finished since you last looked.` : '',
+    ]).filter(Boolean).join(' ');
+  return { state, sentence, act, know: all - act, working, active: inFlight };
+}
+
+// The page cut to a depth. Every depth: the pulse, needs you and worth knowing, in motion, Flow (with the last
+// items of each stage, for its stage pills), milestones, runners, and counts of what isn't sent. 5m adds the
+// first of Up next, Recently finished and the field notes, steering and decisions. 30m adds the rest, history,
+// and the item list and earlier agents a page at a time (pages: how many of each the page has asked for).
+// Agents: the ones here now, and any other the page names, so it can say who they are.
+function atDepth(v, depth, pages) {
+  const z = DEPTHS.indexOf(depth);
+  const board = v.all.filter((i) => i.stage !== 'dropped' && !i.old);
+  const light = (i) => ({ item: i.item, title: i.title, stage: i.stage, priority: i.priority, last_worker: i.last_worker, repo: i.repo, at: i.at, ago: i.ago, ...(i.feedback ? { feedback: true } : {}) });
+  const stage_items = {};
+  for (const s of Object.keys(v.stages)) {
+    const here = board.filter((i) => i.stage === s);
+    const fb = here.filter((i) => i.feedback).slice(-25);
+    stage_items[s] = [...new Set([...here.slice(-25), ...fb])].sort((a, b) => a.item.slice(1) - b.item.slice(1)).map(light);
+  }
+  const gone = v.agents.filter((a) => !a.present);
+  const counts = {
+    items: v.all.length, board: board.length, dropped: v.all.length - board.length - v.all.filter((i) => i.old).length,
+    old: v.all.filter((i) => i.old).length, agents: v.agents.length, agents_gone: gone.length,
+    queue: v.queue.length, done: v.done.length, notes: v.notes.length,
+  };
+  const { all, agents, activity, queue, done, notes, steers, decisions, proposed, waiting, verifying, ...out } = v;
+  Object.assign(out, { depth, counts, stage_items });
+  // At 5m, the first field notes, and every one waiting for a person's tap or named in Direction today (#552), so
+  // its recommendation and its source link have their note.
+  const waits = (n) => n.advice && !n.advice.by && n.advice.do !== 'keep';
+  const sourced = new Set((v.direction ?? []).map((d) => Number(/^note (\d+)$/.exec(d.source)?.[1])).filter(Boolean));
+  const notes5m = [...new Set([...notes.filter((n) => waits(n) || sourced.has(n.id)), ...notes.slice(0, 3)])];
+  if (z >= 1) Object.assign(out, { queue: z >= 2 ? queue : queue.slice(0, 5), done: z >= 2 ? done : done.slice(0, 5), notes: z >= 2 ? notes : notes5m, steers, decisions });
+  const more = (k) => Math.max(PAGE[k], Number(pages[k]) || 0);
+  if (z >= 2) {
+    const rows = [...board].sort((a, b) => b.item.slice(1) - a.item.slice(1));
+    Object.assign(out, { activity, proposed, waiting, verifying, all: rows.slice(0, more('all')).map(light), dropped: v.all.filter((i) => i.stage === 'dropped').map(light) });
+  }
+  // Since you last looked lists the first 6 of what finished; counts.finished says how many.
+  out.since = { ...v.since, finished: v.since.finished.slice(0, 6) };
+  const earlier = new Set(z >= 2 ? gone.slice(0, more('agents')).map((a) => a.name) : []);
+  const named = namesIn(out, new Set(gone.map((a) => a.name)));
+  const who = (a) => ({ name: a.name, model: a.model, role: a.role, where: a.where, job: a.job, present: false });
+  out.agents = agents.filter((a) => a.present || earlier.has(a.name) || named.has(a.name)).map((a) => (a.present || earlier.has(a.name) ? a : who(a)));
+  if (z >= 2) out.earlier = [...earlier]; // the page of "Show earlier agents", by name
+  return out;
+}
+
+// The names of the given agents that a value mentions anywhere (an actor, a holder, a worker).
+function namesIn(value, names) {
+  const found = new Set();
+  (function walk(o) {
+    if (typeof o === 'string') { if (names.has(o)) found.add(o); return; }
+    if (!o || typeof o !== 'object') return;
+    for (const k in o) walk(o[k]);
+  })(value);
+  return found;
+}
+
+// light: only the pulse, attention and since (the home and the Notifier, uncached).
+function build(hub, p, t, { light = false } = {}) {
   const items = hub.q('SELECT * FROM items WHERE project_id = ? ORDER BY seq').all(p.id);
   const byId = new Map(items.map((i) => [i.id, i]));
   const ref = (i) => `#${i.seq}`;
@@ -203,14 +352,15 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       question: { id: q.id, options: [...(held ? [PASS_ON] : []), ...json(q.options, [])], asked_by: q.asked_by },
       agent: q.asked_by, presence: presence(q.asked_by),
       steps: json(q.steps, []),
-      // The steps this viewer has ticked (#162), counting from 1; each person ticks their own.
-      ticked: hub.q('SELECT step FROM step_ticks WHERE question_id = ? AND person = ? ORDER BY step').all(q.id, viewer ?? HUMAN).map((r) => r.step),
+      // The steps each person has ticked (#162), counting from 1; each person ticks their own (personalize).
+      _ticks: ticksOf(hub, q.id),
       ...(orig ? { escalation: { question: orig.question, asked_by: orig.asked_by }, evidence: json(q.evidence, []) } : {}),
     });
   }
 
-  // What an operator settled on its own in the last day, so you can glance at it.
-  const settled = hub.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'answered' AND answered_at > ?
+  // What an operator marked for people in the last day (#497): a change it made on a live system, or a call no
+  // decision covers. Its other answers live only in their item's history.
+  const settled = hub.q(`SELECT * FROM questions q WHERE project_id = ? AND audience = 'operator' AND status = 'answered' AND for_people = 1 AND answered_at > ?
     AND NOT EXISTS (SELECT 1 FROM questions e WHERE e.escalates = q.id AND e.status = 'answered') ORDER BY answered_at`).all(p.id, t - DAY);
   for (const q of settled) {
     const it = byId.get(q.item_id);
@@ -222,11 +372,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     });
   }
 
-  // What a tidy job changed in the groups in the last day (#202), in one line: each change is in the groups' history.
-  for (const e of hub.q(`SELECT * FROM events WHERE project_id = ? AND type = 'tidied' AND at > ? ORDER BY at`).all(p.id, t - DAY)) {
-    const it = byId.get(e.item_id);
-    push({ key: `tidied:${e.id}`, level: 'know', kind: 'tidied', at: e.at, headline: e.headline, sub: `${dur(t - e.at)} ago`, why: e.summary, item: it ? ref(it) : null });
-  }
+  // Tidy results and field-note reviews never show here (#497): they stay in their items' history.
 
   // Unless no operator has been here for a day: then one line, so the questions don't wait forever.
   const forOperator = openQs.filter((q) => q.audience === 'operator');
@@ -289,9 +435,9 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   }
 
   // The hub's GitHub App is missing events or permissions the hub handles (#220): its owners, with the steps.
-  // The same entry on every project; the home shows it once (hubwide).
-  const wiring = hub.appWiring?.(viewer);
-  if (wiring) push({ ...wiringEntry(wiring), level: 'act', kind: 'app-wiring', hubwide: true });
+  // The same entry on every project; the home shows it once (hubwide). Whose it is differs per viewer: personalize
+  // puts it here.
+  const wiringAt = attention.length;
 
   // Free's limit stopped a second agent here (#228): the workspace's owners can upgrade, while billing is on.
   // Gone once the plan isn't Free, the agent got work, or an hour has passed without another refusal.
@@ -357,14 +503,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
         sub: shaped ? `${shaped.actor} shaped it ${dur(t - shaped.at)} ago` : `${it.created_by === HUMAN ? 'You' : it.created_by} proposed it ${dur(t - it.created_at)} ago`,
         why: [shaped?.headline, it.summary].filter(Boolean).join('\n\n'), acceptance: it.acceptance, item: ref(it),
       });
-    } else if (it.created_at > p.seen_at && !isHuman(it.created_by)) {
-      push({
-        key: `proposal:${it.id}`, level: 'know', kind: 'proposal', at: it.created_at,
-        headline: `${it.created_by} proposed: ${it.title}`,
-        sub: 'agents can shape this into ready work themselves',
-        why: it.summary, item: ref(it),
-      });
     }
+    // An agent's raw proposal isn't for you (#497): agents shape it into ready work themselves.
   }
 
   for (const it of in_('verifying')) {
@@ -393,20 +533,25 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     }
   }
 
+  // Work that keeps bouncing (#564), said from its history: only when a person can help, with that person's step.
   // Accepted work in landing is agents' to put on main, and a stuck land job is its own signal: nothing for the human (#216).
   for (const it of items.filter((i) => OPEN_STAGES.includes(i.stage) && i.stage !== 'landing' && i.stalls + i.rejections >= 2)) {
-    const h = json(it.handoff, null);
-    const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
-    const parts = [it.rejections && `sent back ${times(it.rejections)}`, it.stalls && `agents went quiet ${times(it.stalls)}`].filter(Boolean).join(', ');
+    const b = bounceOf(hub, p, it, { agents, openQs, unmet, t });
+    if (!b?.step) continue; // a review loop with a fix to build, a dependency someone can take, lapses from restarts
+    const s = b.step;
+    // A blocking question already has its own card: it carries why the work bounces, rather than a second card.
+    const own = s.kind === 'answer' && attention.find((a) => a.key === `q:${s.question.id}`);
+    if (own) { own.why = [`${ref(it)} keeps bouncing. ${b.line}`, own.why].filter(Boolean).join('\n\n'); continue; }
     push({
-      key: `struggle:${it.id}:${it.stalls + it.rejections}`, level: 'act', kind: 'struggling', at: it.updated_at,
+      key: `struggle:${it.id}:${b.failures}:${s.kind}`, level: 'act', kind: 'struggling', at: it.updated_at,
       headline: it.title,
-      sub: `${plural(it.attempts, 'attempt')}: ${parts}`,
-      why: [
-        h && `Latest: ${h.by === HUMAN ? 'you' : h.by} — "${h.headline}"`,
-        'Agents keep failing to land this. The intent may be unclear, the acceptance criteria may be wrong, or it may be too big. Clarify it with a steer, split it, or drop it.',
+      sub: `Bounced ${b.failures === 2 ? 'twice' : `${b.failures} times`} · ${s.kind === 'answer' ? `answer question ${s.question.id}` : s.kind === 'capability' ? `start ${s.missing.some((m) => OPERATOR_TAGS.includes(m)) ? 'an operator' : 'an agent'} with ${s.missing.join(', ')}` : 'clarify, split or drop it'}`,
+      why: [endSentence(`What happened: ${b.happened}`), endSentence(`Now it waits on ${b.waits}`),
+        s.kind === 'clarify' && `It keeps failing the same way: ${s.why}. The intent may be unclear, the acceptance wrong, or it may be too big. Clarify it with a steer, split it, or drop it.`,
       ].filter(Boolean).join('\n\n'),
-      item: ref(it),
+      item: ref(it), step: s.kind,
+      ...(s.kind === 'answer' ? { question: { id: s.question.id, question: s.question.question, options: json(s.question.options, []), asked_by: s.question.asked_by } } : {}),
+      ...(s.kind === 'capability' ? { how: capabilitySteps(p, s.target, s.missing) } : {}),
     });
   }
 
@@ -421,13 +566,17 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     });
   }
 
+  // Your steering: what a person wrote (#550). An operator's answer to a worker and the hub's own notices reach agents
+  // all the same, but a person can't judge them: they show on their item, or as facts in the history.
   const steers = hub.q(`SELECT n.*, i.seq AS item_seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
-      WHERE n.project_id = ? AND n.kind = 'steer' AND n.active = 1 AND n.at > ? ORDER BY n.at DESC`).all(p.id, t - 3 * DAY)
+      WHERE n.project_id = ? AND n.kind = 'steer' AND n.active = 1 AND n.notice = 0 AND n.at > ? ORDER BY n.at DESC`).all(p.id, t - 3 * DAY)
+    .filter((n) => isHuman(n.author))
     .map((n) => {
       const acks = hub.q('SELECT * FROM acks WHERE note_id = ? ORDER BY at').all(n.id);
-      return { id: n.id, body: n.body, item: n.item_seq ? `#${n.item_seq}` : null, at: n.at, acks: acks.map((a) => ({ agent: a.agent, response: a.response, at: a.at })) };
+      return { id: n.id, body: n.body, by: n.author, item: n.item_seq ? `#${n.item_seq}` : null, at: n.at, acks: acks.map((a) => ({ agent: a.agent, response: a.response, at: a.at })) };
     });
-  for (const s of steers.filter((s) => !s.acks.length && t - s.at > 15 * MIN)) {
+  // Only a steer a person wrote: one made from an answer ("Change of course") is the answerer's (#497).
+  for (const s of steers.filter((s) => isHuman(s.by) && !s.acks.length && t - s.at > 15 * MIN)) {
     push({
       key: `steer:${s.id}`, level: 'know', kind: 'steer-unseen', at: s.at,
       headline: `No agent has picked up your steer yet (${dur(t - s.at)})`,
@@ -504,17 +653,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
       sub: idle.sub, why: idle.why, cause: idle.cause, how: idle.how, staff: idle.staff,
       start: true,
     });
-  } else if (!p.parked && !claimable && !inFlight && recentAgents.length) {
-    const approvals = in_('proposed').filter((i) => !i.holder && i.acceptance && waitsForOk(p, i)).length;
-    if (in_('waiting').length || approvals) {
-      push({
-        key: `starved:${Math.floor(t / (6 * HOUR))}`, level: 'know', kind: 'starved', at: t,
-        headline: 'Agents are out of work',
-        sub: [approvals && `${approvals} shaped proposal${approvals === 1 ? '' : 's'} to approve`, in_('waiting').length && `${in_('waiting').length} waiting on your answer`].filter(Boolean).join(' · '),
-        why: 'Everything left is waiting on you.',
-      });
-    }
   }
+  // Agents out of work because the rest waits on you isn't news (#497): what waits on you is already in Needs you.
 
   if (!p.parked) {
     for (const c of hub.q('SELECT id, kind, last_error, failing_since FROM channels WHERE failing_since IS NOT NULL').all()) {
@@ -528,22 +668,17 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   }
 
   // With people, every "needs you" has owners: whoever steered the item, else the project's stewards.
-  // The viewer's own stay act; everyone else's become worth knowing, so "needs you" means you.
-  if (hub.hasPeople()) {
+  // The viewer's own stay act; everyone else's become worth knowing (personalize), so "needs you" means you.
+  const people = hub.hasPeople();
+  if (people) {
     const bySeq = new Map(items.map((i) => [ref(i), i]));
     for (const a of attention.filter((x) => x.level === 'act')) {
       // Work kept parked is the parker's to release.
       // Some are the workspace owners' alone (an upgrade).
       a.owners ??= a.parked_by?.startsWith('@') ? [a.parked_by] : hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
-      if (viewer && !a.owners.includes(viewer)) {
-        a.level = 'know';
-        a.sub = [a.owners.length ? `needs ${a.owners.join(', ')}` : 'needs a steward (none set)', a.sub].filter(Boolean).join(' · ');
-      }
     }
   }
   prioritize(hub, p, attention, items);
-  attention.sort((a, b) => (a.level !== b.level ? (a.level === 'act' ? -1 : 1) : a.level === 'act' ? byNeed(a, b) : a.at - b.at));
-  const act = attention.filter((a) => a.level === 'act');
 
   // ── since you last looked ──
   // Counted in SQL; only what finished is loaded (#538).
@@ -565,23 +700,13 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     },
   };
 
-  // ── pulse: one sentence ──
+  // ── pulse: one sentence, counted per viewer (personalize) ──
   const working = new Set([...[...active, ...shaping].map((i) => i.holder).filter(Boolean), ...racers.map((a) => a.agent)]);
-  const state = p.parked ? 'parked' : act.length ? 'needs-you' : inFlight ? 'flowing' : claimable ? 'stalled' : 'idle';
-  const needs = act.length ? `${plural(act.length, 'thing')} ${act.length === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you.';
-  const sentence = (p.parked
-    ? ['Parked: nothing new starts, and nothing will ask for you here until you unpark it.', act.length ? `${plural(act.length, 'thing')} already in progress still ${act.length === 1 ? 'needs' : 'need'} you.` : '']
-    : [
-      needs,
-      inFlight
-        ? `${plural(working.size, 'agent')} working on ${plural(inFlight, 'item')}${shaping.length ? ` (${shaping.length} being shaped)` : ''}.`
-        : readyFree.length ? `${plural(readyFree.length, 'item')} ready, but nobody is working.`
-          : shapeable.length ? `Nothing is moving: ${plural(shapeable.length, 'idea')} waiting to be shaped.` : 'No work in flight.',
-      p.seen_at && finished.length ? `${finished.length} finished since you last looked.` : '',
-    ]).filter(Boolean).join(' ');
-  const pulse = { state, sentence, act: act.length, know: attention.length - act.length, working: working.size, active: inFlight };
-
-  if (light) return { pulse, attention, since };
+  const priv = {
+    pulse: { inFlight, working: working.size, shaping: shaping.length, readyFree: readyFree.length, shapeable: shapeable.length, claimable, finished: finished.length },
+    wiringAt, dismissed, people, stewards: people ? hub.stewardsOf(p) : [],
+  };
+  if (light) return { v: { pulse: null, attention, since }, priv };
 
   // ── in motion ──
   const lines = [
@@ -595,8 +720,8 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const a = agents.find((x) => x.name === agent);
     return {
       item: ref(it), title: it.title, priority: it.priority, repo: repoTag(remotes, it), agent, model: a?.model ?? '', provider: providerOf(a?.model),
-      last: last ? { headline: last.headline, summary: last.summary, ago: dur(t - last.at), type: last.type } : null,
-      for: dur(t - since), lease_left: dur(lease - t), attempt: it.attempts,
+      last: last ? { headline: last.headline, summary: last.summary, ago: dur(t - last.at), at: last.at, type: last.type } : null,
+      for: dur(t - since), since_at: since, lease_left: dur(lease - t), lease_until: lease, attempt: it.attempts,
       quiet: lease - t < LEASE_MS - 10 * MIN, // no milestone or heartbeat in 10 minutes
       touching: json(touching, []),
       heads_up: hub.headsUp(p, agent, it) ?? null,
@@ -612,7 +737,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   // ── queues ──
   const brief = (it) => ({
     item: ref(it), title: it.title, priority: it.priority, stage: it.stage, holder: it.holder,
-    needs: json(it.needs, []), size: it.size || null, repo: repoTag(remotes, it), by: it.created_by, ago: dur(t - it.stage_since), summary: it.summary,
+    needs: json(it.needs, []), size: it.size || null, repo: repoTag(remotes, it), by: it.created_by, ago: dur(t - it.stage_since), at: it.stage_since, summary: it.summary,
     blocked_by: unmet(it).map(ref), last_worker: it.last_worker, attempts: it.attempts,
     handoff: json(it.handoff, null),
     ...(it.feedback ? { feedback: true } : {}), // approved feedback about nuworq (#295)
@@ -647,7 +772,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     const via = tok?.runner ? `runner ${tok.runner}` : tok?.handle ? `via @${tok.handle}` : null;
     return {
       name: a.name, model: a.model, client: a.client, provider: providerOf(a.model), tokens: a.tokens ? a.tokens.split(',') : [], via, has: json(a.has, []),
-      status, present: isPresent(a, holding, t), line: a.status, holding, last_seen: dur(idle), first_seen: dur(t - a.first_seen),
+      status, present: isPresent(a, holding, t), line: a.status, holding, last_seen: dur(idle), seen_at: a.last_seen, first_seen: dur(t - a.first_seen),
       ...hub.presenceOf(p, a, snap), // role, where it runs, its current job (#238)
       record: {
         landed: rec.landed ?? 0, sent_back: rec.sent_back ?? 0, stalls: rec.stalls ?? 0,
@@ -659,22 +784,35 @@ export function view(hub, slug, { light = false, viewer } = {}) {
     };
   });
 
-  const decisions = hub.decisions(p).map((d) => ({ id: d.id, body: d.body, ago: dur(t - d.at) }));
+  // Memory distilled for people (#552): each decision and field note with its gist, a field note with the review's
+  // advice, and Direction today.
+  const advice = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
+  const decisions = hub.decisions(p).map((d) => ({ id: d.id, body: d.body, gist: d.gist || null, ago: dur(t - d.at), at: d.at }));
   const notes = hub.q(`SELECT n.*, i.seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
       WHERE n.project_id = ? AND n.kind = 'learning' AND n.active = 1 ORDER BY n.always DESC, n.at DESC`).all(p.id)
-    .map((n) => ({ id: n.id, body: n.body, by: n.author, item: n.seq ? `#${n.seq}` : null, ago: dur(t - n.at), always: !!n.always }));
+    .map((n) => ({ id: n.id, body: n.body, gist: n.gist || null, advice: advice(n.advice), by: n.author, item: n.seq ? `#${n.seq}` : null, ago: dur(t - n.at), at: n.at, always: !!n.always }));
+  const directionToday = advice(p.direction) ?? [];
   const activity = hub.q(`SELECT e.*, i.seq AS item_seq FROM events e LEFT JOIN items i ON i.id = e.item_id
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
-  return {
-    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), fresh: !!p.fresh, security: !!p.security, live: !!p.live, releases: p.releases || 'off', ci: p.ci || 'auto', autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
-    pulse, since, attention, motion, flow,
+  const v = {
+    // runners_here (#643): runners that reached this project in the last week; staffing is offered only once one has.
+    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), runners_here: hub.runnersFor(p.slug).length, fresh: !!p.fresh, security: !!p.security, live: !!p.live, releases: p.releases || 'off', ci: p.ci || 'auto', autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
+    pulse: null, since, attention, motion, flow, // pulse: personalize's
     ...groupsOf(hub, p, items, { agents, openQs, t, stalled: stalledGroups }),
     queue, proposed, waiting, verifying, done,
-    agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
+    agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, direction: directionToday, activity,
     stages: STAGES,
     all: items.map(brief),
   };
+  return { v, priv };
+}
+
+// Who has ticked which of a question's steps: person → the steps, counting from 1.
+function ticksOf(hub, id) {
+  const out = {};
+  for (const r of hub.q('SELECT person, step FROM step_ticks WHERE question_id = ? ORDER BY step').all(id)) (out[r.person] ??= []).push(r.step);
+  return out;
 }
 
 // How to get work that needs capabilities nobody connected has picked up (#201): an operator session for what
@@ -712,9 +850,11 @@ function idleCause(hub, p, t) {
       cause: 'no-runner',
       sub: last ? `No runner is up: ${last.name} was last seen ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''}` : 'No runner has ever reported here',
       why: `Nothing starts workers for this project: no \`nuworq run\` is up${last ? ` (${last.name} went quiet ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''})` : ''}. Start one, or start an agent yourself. Or park the project if it should stay quiet.`,
+      // Not staffed yet (#643): the runner staffs it as it starts (--staff), rather than a switch nothing could act on
+      // yet. Its install doesn't repeat that: a service that re-staffed on every start would undo turning it off.
       how: [
-        ...(p.runner ? [] : [{ do: 'Let nuworq run staff this project: click Settings at the top of this page (5m), then turn on "Staff it with nuworq run"', check: 'The switch is on, and Runners appears on this page' }]),
-        { do: `On ${last?.machine || 'a machine connected to this hub'}, start a runner`, where: run, check },
+        p.runner ? { do: `On ${last?.machine || 'a machine connected to this hub'}, start a runner`, where: run, check }
+          : { do: `On ${last?.machine || 'a machine connected to this hub'}, start a runner that staffs this project`, where: `${run} --staff ${p.slug}`, check },
         { do: 'To keep it going after the terminal closes and across reboots, install it instead', where: `${run} --install` },
       ],
     };
@@ -1025,8 +1165,17 @@ export function itemView(hub, slug, ref) {
         escalation: orig ? { question: orig.question, asked_by: orig.asked_by } : undefined,
       };
     });
-  const steers = hub.q(`SELECT * FROM notes WHERE item_id = ? AND kind = 'steer' ORDER BY at`).all(it.id)
-    .map((n) => ({ id: n.id, body: n.body, active: !!n.active, ago: dur(t - n.at), acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
+  // A person's steering on it, and what agents and the hub told each other about it (#550): an operator's change of
+  // course, a drop or move notice to whoever held it (sent to the holder, so it names the item rather than sits on it).
+  const allSteers = hub.q(`SELECT * FROM notes WHERE kind = 'steer' AND (item_id = ? OR (project_id = ? AND item_id IS NULL AND notice = 1 AND body GLOB ?)) ORDER BY at`)
+    .all(it.id, p.id, `#${it.seq} was *`);
+  const steers = allSteers.filter((n) => isHuman(n.author) && !n.notice)
+    .map((n) => ({ id: n.id, body: n.body, by: n.author, active: !!n.active, ago: dur(t - n.at), at: n.at, acks: hub.q('SELECT * FROM acks WHERE note_id = ?').all(n.id) }));
+  const told = allSteers.filter((n) => !isHuman(n.author) || n.notice).map((n) => {
+    const from = n.notice ? 'nuworq' : hub.q('SELECT role FROM agents WHERE project_id = ? AND name = ?').get(p.id, n.author)?.role === 'operator' ? 'Operator' : n.author;
+    const retires = !n.active ? 'Retired.' : n.item_id ? `Retires when #${it.seq} lands.` : '';
+    return { id: n.id, from, author: n.author, to: n.target || 'every agent', line: plainSteer(n.body), body: n.body, retires, at: n.at };
+  });
   const agentNames = [...new Set(events.filter((e) => !isHuman(e.actor) && !isSystem(e.actor)).map((e) => e.actor))];
   const models = Object.fromEntries(agentNames.map((n) => [n, hub.q('SELECT model FROM agents WHERE project_id = ? AND name = ?').get(p.id, n)?.model ?? '']));
   const parent = hub.itemById(it.parent_id);
@@ -1036,11 +1185,11 @@ export function itemView(hub, slug, ref) {
     stage: it.stage, stage_label: STAGES[it.stage].label, stage_blurb: STAGES[it.stage].blurb, court: courtOf(it.stage, p.autonomy),
     priority: it.priority, effective_priority: hub.effectiveLabel(p, it) ?? null, needs: json(it.needs, []), size: it.size || null, repo: repoTag(hub.remotesOf(p), it),
     model_why: it.route_why || null, // which model routing picked for its job, and why (#349)
-    created_by: it.created_by, created: dur(t - it.created_at), in_stage: dur(t - it.stage_since),
-    holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null,
+    created_by: it.created_by, created: dur(t - it.created_at), created_at: it.created_at, in_stage: dur(t - it.stage_since), stage_since: it.stage_since,
+    holder: it.holder, lease_left: it.holder ? dur(it.lease_until - t) : null, lease_until: it.holder ? it.lease_until : null,
     race: it.race,
     ...(waitsForOk(p, it) ? { waits_for_ok: true } : {}), // a shaped proposal waits for a person's approval (#296)
-    racers: it.race > 1 ? hub.attemptsOf(it).map((a) => ({ agent: a.agent, model: a.model, stage: a.stage, lease_left: a.lease_until ? dur(a.lease_until - t) : null })) : [],
+    racers: it.race > 1 ? hub.attemptsOf(it).map((a) => ({ agent: a.agent, model: a.model, stage: a.stage, lease_left: a.lease_until ? dur(a.lease_until - t) : null, lease_until: a.lease_until || null })) : [],
     submissions: hub.submissions(it),
     implementer: it.implementer, last_worker: it.last_worker,
     attempts: it.attempts, stalls: it.stalls, rejections: it.rejections,
@@ -1054,7 +1203,14 @@ export function itemView(hub, slug, ref) {
     fixed_by: hub.q('SELECT seq, title, stage FROM items WHERE fixes = ? ORDER BY seq').all(it.id).map((f) => ({ item: `#${f.seq}`, title: f.title, stage: f.stage })),
     evidence: submit?.data?.evidence ?? [], git: submit?.data?.git ?? null, git_warning: gitWarning(submit?.data?.git), submission: submit ?? null,
     prs: prsOf(hub, p, it),
-    questions, steers, lifecycle,
+    questions, steers, told, lifecycle,
+    // Why it keeps bouncing, in one line (#564), while it's open and outside landing: whether or not a person can help.
+    bounce: OPEN_STAGES.includes(it.stage) && it.stage !== 'landing' && it.stalls + it.rejections >= 2
+      ? bounceOf(hub, p, it, {
+        agents: hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id),
+        openQs: hub.q(`SELECT * FROM questions WHERE project_id = ? AND status = 'open' ORDER BY at`).all(p.id),
+        unmet: (i) => hub.unmetDeps(i), t,
+      })?.line ?? null : null,
     court_totals: Object.fromEntries(Object.entries(courtTotals).map(([k, v]) => [k, dur(v)])),
     court_ms: courtTotals,
     agents: agentNames.map((n) => ({ name: n, model: models[n], provider: providerOf(models[n]) })),

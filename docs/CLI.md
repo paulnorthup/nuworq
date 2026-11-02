@@ -19,7 +19,7 @@ Flags
   --token <t>     use this token instead of signing in through the browser; -
                   reads one line (hidden)
   --no-browser    print the sign-in link and code instead of opening the browser
-  --no-mcp        don't add the MCP server to Claude Code, Codex or opencode
+  --no-mcp        don't add the MCP server to Claude Code, Codex, opencode or pi
   --skills        without the nuworq plugin in Claude Code, write the server and
                   skills without asking
   --off           the same as nuworq disconnect
@@ -48,6 +48,38 @@ here (nuworq staff), and start an operator (operator --start). --yes or --no
 answers each without asking; with no terminal, it's no.
 ```
 
+### nuworq up
+
+```text
+nuworq up: bring this machine's setup up: the runner with automatic workers, and
+  an operator in its own terminal for each unparked project
+
+Usage
+  nuworq up [--dry-run]
+
+Flags
+  --dry-run       print what it would do, and the table, and do nothing
+  --yes           staff the projects that aren't, without asking
+  --no            don't staff them, and don't ask again
+  --budget <usd>  with staffing: the daily cap for their workers (default: 20)
+
+Example
+  nuworq up
+
+The runner: it installs nuworq run as a service with --workers auto, restarts
+one whose flags differ, and leaves one that matches alone. Unstaffed projects
+that aren't parked: it asks once whether to staff them; a no is remembered.
+
+Operators: each unparked project with no operator on the hub gets Claude Code
+with /nuworq:operator in its clone here: in tmux when it is installed (the
+nuworq session, a window per project: tmux attach -t nuworq), else a Terminal or
+iTerm window on a Mac, else it prints the command. A project with no clone here
+is skipped, with where to clone it. Parked projects get none.
+
+Run it again any time: it starts only what is missing, and ends with a table of
+each project and the runner. nuworq down stops what it started.
+```
+
 ### nuworq run
 
 ```text
@@ -66,8 +98,11 @@ Flags
                       (at least one), and it says why when it holds (default: 1)
   --max-workers <m>   with --workers auto: the most at once (default: half the
                       cores)
-  --agent <name>      claude, codex or opencode (default: claude)
-  --model <m>         the model workers use; opencode needs <provider>/<model>
+  --agent <name>      claude, codex, opencode or pi (default: claude)
+  --can-read-keys     start codex, opencode or pi workers, whose shells can read
+                      this machine's keys (only Claude's sandbox hides them)
+  --model <m>         the model workers use; opencode and pi need
+                      <provider>/<model>
   --folder <path>     a folder workers may work in, added to
                       ~/.nuworq/folders.json
   --until-idle        exit once no work is waiting, instead of waiting for more
@@ -85,6 +120,8 @@ Flags
                       worker --browser
   --agent-token <t>   the agent token workers get on a hub with login
   --proxy <url>       send workers through llm-proxy, as with worker --proxy
+  --env <names>       variables workers get from here, as with worker --env; an
+                      installed runner keeps their values
   --sweep             remove leftovers now (the runner does it weekly)
   --dry-run           with --sweep: list what would go
   --install           run it as a service that survives closed terminals and
@@ -98,8 +135,8 @@ Environment
   NUWORQ_LLM_PROXY_URL    llm-proxy's address, instead of --proxy
   NUWORQ_LLM_PROXY_TOKEN  llm-proxy's owner token, for Claude and Codex workers
                           with --proxy
-  NUWORQ_LLM_PROXY_KEY    a personal llm-proxy key, for opencode with --model
-                          proxy/<model>
+  NUWORQ_LLM_PROXY_KEY    a personal llm-proxy key, for opencode and pi with
+                          --model proxy/<model>
 
 Example
   nuworq run --workers 3 --agent claude
@@ -161,8 +198,6 @@ by itself at most every 10 minutes; after one updates it in the background, the
 next command says once what changed.
 ```
 
-## Work with agents
-
 ### nuworq operator
 
 ```text
@@ -189,6 +224,8 @@ claude-cli, infra (the project's live infrastructure: servers and VMs, DNS,
 cloud accounts, deploys), github-admin, browser.
 ```
 
+## Work with agents
+
 ### nuworq worker
 
 ```text
@@ -199,33 +236,44 @@ Usage
   nuworq worker [flags]
 
 Flags
-  --run              start it; without --run it prints the command
-  --agent <name>     claude, codex or opencode (default: claude)
-  --model <m>        the model; opencode needs <provider>/<model>, e.g.
-                     ollama/qwen3.8:27b-mtp-q4_K_M
-  --project <p>      that project, instead of where the hub routes it
-  --here             work in this folder, not its own worktree
-  --as <name>        its name (default: the agent and 4 random hex digits)
-  --allow <tools>    more tools it may use without asking
-  --has <tags>       what else this machine can do
-  --browser          a headless Chrome (Playwright MCP, local pages only) to
-                     check UI work with; Claude only
-  --proxy <url>      go through llm-proxy: its LAN or tailnet address for claude
-                     and codex; opencode with --model proxy/<model>
-  --agent-token <t>  with --run on a hub with login: the agent token it gets
-                     (never your own)
+  --run                 start it; without --run it prints the command
+  --agent <name>        claude, codex, opencode or pi (default: claude)
+  --can-read-keys       needed for codex, opencode or pi: their shell can read
+                        this machine's keys (only Claude's sandbox hides them)
+  --model <m>           the model; opencode and pi need <provider>/<model>, e.g.
+                        ollama/qwen3.8:27b-mtp-q4_K_M
+  --project <p>         that project, instead of where the hub routes it
+  --here                work in this folder, not its own worktree
+  --as <name>           its name (default: the agent and 4 random hex digits)
+  --allow <tools>       more tools it may use without asking
+  --has <tags>          what else this machine can do
+  --browser             a headless Chrome (Playwright MCP, local pages only) to
+                        check UI work with; Claude only
+  --proxy <url>         go through llm-proxy: its LAN or tailnet address for
+                        claude and codex; opencode and pi with --model
+                        proxy/<model>
+  --agent-token <t>     with --run on a hub with login: the agent token it gets
+                        (never your own)
+  --env <names>         variables it gets from this shell, e.g.
+                        DOCKER_HOST,VIRTUAL_ENV: it starts with only where
+                        things are and its model's key
+  --env-secret <names>  the same for a name that looks like a key, token or
+                        password: its agent can read it
 
 Environment
   NUWORQ_AGENT_TOKEN      the agent token, instead of --agent-token
   NUWORQ_LLM_PROXY_URL    llm-proxy's address, instead of --proxy
   NUWORQ_LLM_PROXY_TOKEN  llm-proxy's owner token, for claude and codex
-  NUWORQ_LLM_PROXY_KEY    a personal llm-proxy key, for opencode
+  NUWORQ_LLM_PROXY_KEY    a personal llm-proxy key, for opencode and pi
 
 Example
   nuworq worker --agent claude --run
 
 It works in its own git worktree, with a branch per item, and reports what this
-machine has (macos/linux, docker, gpu). Ollama is set up for opencode for you.
+machine has (macos/linux, docker, gpu). Ollama is set up for opencode and pi for
+you. pi gets a config folder of its own (~/.nuworq/pi/<name>), so your pi
+extensions, skills, MCP servers and sign-ins stay out: give its provider key in
+the environment.
 ```
 
 ## Run a hub
@@ -396,7 +444,9 @@ Flags
   --project <a,b>       limit an agent token to those projects
   --person <handle>     the person a human token acts as (default: one named
                         like the token, created as owner)
-  --powers <list>       what an agent token may do: shape, build, review
+  --powers <list>       what an agent token may do: shape, build, review; and
+                        operate, only by name, to act as an operator when no
+                        steward or owner minted it
   --minted-by <handle>  who answers for an agent token
   --runner [name]       a runner's token, which names the runner
   --workspace <name>    that workspace's tokens
@@ -575,7 +625,11 @@ nuworq answer: answer a question asked to: "operator" (next hands it to you as
   mode "answer")
 
 Usage
-  nuworq answer <question-id> <answer>
+  nuworq answer <question-id> <answer> [flags]
+
+Flags
+  --for-people  true when you changed a live system or made a call no decision
+                covers: people see it in Worth knowing
 
 Example
   nuworq answer 40 "Done: it is installed" --as operator-1
@@ -823,7 +877,8 @@ Usage
 
 Flags
   --item <item>   the item it came up on
-  --replaces <n>  the id of an outdated note this replaces
+  --replaces <n>  the id of an outdated note this replaces: under Run with it,
+                  and never one a person pinned
 
 Example
   nuworq learn "npm test needs Node 24: older ones lack node:sqlite" --as
@@ -850,6 +905,31 @@ Flags
 
 Example
   nuworq retire 31 --reason "built into checkin" --as claude-1
+
+Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url.
+Each <argument> can be given as its flag instead. "-" as a value reads it from
+stdin; a list takes "a,b" or JSON, and a list of objects "x|y" per flag,
+repeated.
+```
+
+### nuworq distill
+
+```text
+nuworq distill: in a field-notes review: Direction today, a gist per decision
+  and field note, a recommendation per field note
+
+Usage
+  nuworq distill [flags]
+
+Flags
+  --direction <line|source>   at most 7 plain lines
+  --notes <note|gist|recommend|why|draft>
+                              field notes take recommend (default keep); why for
+                              retire or decide; draft, the decision, for decide
+
+Example
+  nuworq distill --direction "Agents come first: small responses|decision 3"
+      --notes "12|Rebase, test, then push|keep" --as claude-1
 
 Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url.
 Each <argument> can be given as its flag instead. "-" as a value reads it from
@@ -944,6 +1024,19 @@ Example
 On a hub with logins, an owner approves it in the browser.
 ```
 
+### nuworq down
+
+```text
+nuworq down: stop the operators nuworq up started (each signs itself off) and
+  the runner service
+
+Usage
+  nuworq down
+
+Example
+  nuworq down
+```
+
 ### nuworq disconnect
 
 ```text
@@ -972,7 +1065,7 @@ Example
 ### nuworq init
 
 ```text
-nuworq init: print the MCP setup for Claude Code, Codex, opencode and other
+nuworq init: print the MCP setup for Claude Code, Codex, opencode, pi and other
   agents; --project pins this folder
 
 Usage

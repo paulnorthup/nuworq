@@ -9,6 +9,7 @@ import { view } from '../src/insight.js';
 import { OPS } from '../src/protocol.js';
 import { nextVersion, tagRelease, tagsSettled } from '../src/releases.js';
 import { prMerged } from '../src/github.js';
+import { appSource } from './appsource.js';
 
 // When a milestone finishes, the hub drafts the next release (#399).
 const T0 = Date.UTC(2026, 9, 1);
@@ -252,7 +253,7 @@ describe('the Releases setting (#399)', () => {
   });
 
   test('Settings has a Releases switch and a button to release now', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /row\('releases', 'Release per milestone'/);
     assert.match(app, /data-action="release-now"/);
   });

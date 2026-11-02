@@ -31,6 +31,15 @@ describe('what the hub sends is checked before a shell sees it', () => {
     assert.equal(printable('Fix \u001b[31mred\u001b[0m\u0007 title\nnext\tline'), 'Fix [31mred[0m title\nnext\tline');
   });
 
+  test('provider and llm-proxy keys are redacted too, by shape, in a header, or as a secret of the runner (#626)', () => {
+    const env = { NUWORQ_LLM_PROXY_TOKEN: 'owner-token-shapeless-9f8e7d6c', NUWORQ_TOKEN_FILE: '/home/me/.nuworq/tokens/w.token', SHORT_KEY: 'abc', HOME: '/home/me' };
+    assert.equal(redact('ant sk-ant-api03-Abc123def456 oai sk-proj-Zyx987wvu654 proxy sk-proxy-0a1b2c3d4e5f', env), 'ant sk-[redacted] oai sk-[redacted] proxy sk-[redacted]');
+    assert.equal(redact('Authorization: Bearer tok_abc.def\nx-proxy-token: anything-at-all\nX-Api-Key: k123', env), 'Authorization: Bearer [redacted]\nx-proxy-token: [redacted]\nX-Api-Key: [redacted]');
+    assert.equal(redact('owner was owner-token-shapeless-9f8e7d6c.', env), 'owner was [redacted].');
+    assert.equal(redact('file /home/me/.nuworq/tokens/w.token, abc, task-list', env), 'file /home/me/.nuworq/tokens/w.token, abc, task-list', 'paths, short values and ordinary words stay');
+    assert.equal(JSON.parse(redact(JSON.stringify({ h: 'Authorization: Bearer sk-ant-api03-Abc123def456' }), env)).h, 'Authorization: Bearer [redacted]', 'JSON stays JSON');
+  });
+
   test("a worker's environment holds no token: the person's, an agent's, or a git helper that carries one", () => {
     const env = withoutTokens({
       PATH: '/bin', NUWORQ_TOKEN: 'nwq_human1234', NUWORQ_AGENT_TOKEN: 'nwq_agent1234', TRELLIS_TOKEN: 'x', NUWORQ_URL: 'http://h',

@@ -31,9 +31,10 @@ describe('tools by role', () => {
     for (const role of [null, 'operator', 'worker']) assert.ok(!JSON.stringify(list(role)).includes('"roles"'), String(role));
   });
 
-  test('a worker\'s list is at most 15,000 characters, and the precondition schema is sent once', () => {
+  // 16,000 since distill (#552): workers take field-notes reviews, so they need it; main had 124 characters to spare.
+  test('a worker\'s list is at most 16,000 characters, and the precondition schema is sent once', () => {
     const worker = JSON.stringify(list('worker'));
-    assert.ok(worker.length <= 15_000, `${worker.length} characters`);
+    assert.ok(worker.length <= 16_000, `${worker.length} characters`);
     assert.equal(worker.split('NUWORQ_CRED').length - 1, 1, 'propose carries it; refine refers to it');
     assert.ok(props('worker', 'propose').precondition.properties.kind);
     assert.match(props('worker', 'refine').precondition.description, /propose/);

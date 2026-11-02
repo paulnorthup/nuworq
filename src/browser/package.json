@@ -1,0 +1,8 @@
+{
+  "name": "nuworq-browser",
+  "private": true,
+  "description": "The Playwright MCP server nuworq's browser workers use, pinned with its dependencies by sha512 in package-lock.json (#626).",
+  "dependencies": {
+    "@playwright/mcp": "0.0.83"
+  }
+}

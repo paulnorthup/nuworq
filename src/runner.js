@@ -1,5 +1,7 @@
 // nuworq run: keep up to N headless workers on waiting work in the projects the human opted in.
 // plan() decides, run() does the I/O; everything outside is injected so tests start no real agents.
+import { readFileSync, realpathSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 
 // What to launch now. routes: the hub's /api/route?runner=1 (value order, one entry per project, with
 // how much is claimable and who holds work there). running: live workers this runner started.
@@ -38,9 +40,31 @@ export function capacity(running, { load = 0, cores = 1, free = Infinity } = {},
   return { workers: running + 1, holding: null };
 }
 
+// Whether the runner's own git may read a worker's worktree (#640): its .git file names a folder in
+// <home>/.git/worktrees, whose commondir is "../.." and whose gitdir points back at this worktree's .git, as git
+// worktree add made them. A worker may write the checkout's .git (to commit), so it could point another worker's
+// folder elsewhere, and the runner's unsandboxed git would then read config from there and run as the person.
+// home: the checkout; without it (a worktree of another project's), only the shape is checked.
+export function worktreeTrusted(worktree, home = null) {
+  try {
+    const dotgit = join(worktree, '.git');
+    const named = readFileSync(dotgit, 'utf8').match(/^gitdir: (.+)$/m)?.[1]?.trim();
+    if (!named) return false;
+    const admin = realpathSync(resolve(worktree, named));
+    if (basename(dirname(admin)) !== 'worktrees') return false;
+    if (readFileSync(join(admin, 'commondir'), 'utf8').trim() !== '../..') return false;
+    if (home && realpathSync(resolve(admin, '../..')) !== realpathSync(join(home, '.git'))) return false;
+    return realpathSync(resolve(admin, readFileSync(join(admin, 'gitdir'), 'utf8').trim())) === realpathSync(dotgit);
+  } catch {
+    return false;
+  }
+}
+const CHANGED = 'its worktree pointers were changed';
+
 // After a worker exits, its worktree goes (#172), unless something in it would be lost: uncommitted changes, or
 // commits no branch holds. git(args) runs git and resolves to its output. Returns { kept, why? }.
 export async function cleanWorktree(worktree, git) {
+  if (!worktreeTrusted(worktree)) return { kept: true, why: CHANGED };
   if ((await git(['-C', worktree, 'status', '--porcelain'])).trim()) return { kept: true, why: 'it has uncommitted changes' };
   if (!(await git(['-C', worktree, 'for-each-ref', '--contains', 'HEAD', '--count=1', 'refs/heads', 'refs/remotes'])).trim()) {
     return { kept: true, why: 'it has commits that are on no branch' };
@@ -49,6 +73,53 @@ export async function cleanWorktree(worktree, git) {
   await git(['--git-dir', common, 'worktree', 'remove', worktree]);
   return { kept: false };
 }
+
+// The branches and tags of the checkout a worker shares, as ref → sha (#618): its sandbox writes refs so it can
+// commit in its worktree, so a prompt-injected worker could move any of them.
+export async function refsOf(home, git) {
+  const out = await git(['-C', home, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads', 'refs/tags']);
+  return new Map(out.split('\n').filter(Boolean).map((l) => l.split(' ')));
+}
+
+// The branches checked out in the checkout's worktrees, the person's own included: ref → that worktree's path.
+export async function checkedOut(home, git) {
+  const held = new Map();
+  let path = null;
+  for (const l of (await git(['-C', home, 'worktree', 'list', '--porcelain'])).split('\n')) {
+    if (l.startsWith('worktree ')) path = l.slice(9);
+    else if (l.startsWith('branch ')) held.set(l.slice(7), path);
+  }
+  return held;
+}
+
+// After a worker exits (#618): every branch or tag of the shared checkout that moved or went while it ran goes back
+// where it was, so the person (or an operator, or a sibling) never pushes what a worker put there. Left alone: the
+// worker's own branch (own), a branch checked out in another live worker's worktree (live: its sibling moves it), and
+// a branch now on a commit origin has (a pull; the caller fetches first, so origin's refs are origin's). A branch
+// checked out in any other worktree, the person's checkout included, is never moved: under their files it would
+// look like their commit vanished. It is reported instead (kept), to check by hand. Refs it made are named, not
+// deleted. Returns { restored: [{ ref, from, to }], kept: [{ ref, from, to, path }], created: [ref] }.
+export async function restoreRefs(home, before, git, { own = [], live = [] } = {}) {
+  const after = await refsOf(home, git);
+  const skip = new Set([...own, ...live].filter(Boolean).map((b) => (b.startsWith('refs/') ? b : `refs/heads/${b}`)));
+  const held = await checkedOut(home, git);
+  const restored = [], kept = [];
+  for (const [ref, from] of before) {
+    const to = after.get(ref) ?? null;
+    if (to === from || skip.has(ref)) continue;
+    if (to && ref.startsWith('refs/heads/') && (await git(['-C', home, 'branch', '-r', '--contains', to]).catch(() => '')).trim()) continue;
+    if (to && held.has(ref)) { kept.push({ ref, from, to, path: held.get(ref) }); continue; }
+    // Only from where it is now: one the person moves meanwhile is theirs.
+    await git(['-C', home, 'update-ref', ref, from, ...(to ? [to] : [])]);
+    restored.push({ ref, from, to });
+  }
+  const created = [...after.keys()].filter((ref) => !before.has(ref) && !skip.has(ref));
+  return { restored, kept, created };
+}
+// One line a person can act on: what moved, where it went back to, and how to undo that.
+export const restoredLine = (home, { ref, from, to }) => `${ref.replace(/^refs\/heads\//, '')} was ${to ? `moved to ${to.slice(0, 7)}` : 'deleted'} while the worker ran; it is back at ${from.slice(0, 7)}${to ? ` (if that move was yours: git -C ${home} update-ref ${ref} ${to})` : ''}`;
+// A branch left where it is because a worktree has it checked out: what moved, to check.
+export const keptLine = ({ ref, from, to, path }) => `${ref.replace(/^refs\/heads\//, '')} (checked out in ${path}) moved from ${from.slice(0, 7)} to ${to.slice(0, 7)} while the worker ran: check it (left as it is)`;
 
 // The commits on ref whose work would be lost with it (#455), as "<short sha> <subject>" lines: none when every
 // commit is on origin, when its item's PR merged (merged: a Set of branch names), or when main has each one's
@@ -107,6 +178,8 @@ export async function sweep({ home, finished, merged = new Set(), git, idle, kee
     if (!ours(t.path) || keep.includes(t.path) || t.prunable || t.branch && !finished.has(t.branch)) continue;
     try {
       if (!t.branch && await idle(t.path) < DETACHED_IDLE_MS) continue;
+      // No git of the runner's in a worktree whose pointers a worker changed (#640).
+      if (!worktreeTrusted(t.path, home)) { out.kept.push({ what: name(t.path), why: CHANGED }); continue; }
       // --no-optional-locks: looking doesn't rewrite its index, so the worktree stays as idle as it was.
       if ((await git(['--no-optional-locks', '-C', t.path, 'status', '--porcelain'])).trim()) { out.kept.push({ what: name(t.path), why: 'uncommitted changes' }); continue; }
       const lacks = await unlanded(t.path, 'HEAD', t.branch, merged, git);

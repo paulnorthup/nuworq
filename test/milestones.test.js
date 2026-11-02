@@ -5,9 +5,10 @@ import { Hub, HOUR } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { milestonesSection } from '../web/milestones.js';
 import { NEW } from '../web/new.js';
+import { appSource } from './appsource.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 // What a person reads: text between tags, and the attributes a person sees (placeholder, title, aria-label).
 const visible = (html) => [
   ...html.replace(/<[^>]*>/g, '\n').split('\n'),

@@ -248,6 +248,34 @@ describe('the hub follows main', () => {
     assert.ok(w.said.includes('hub running at bbbbbbb; following main; bbbbbbb already passed its tests'));
   });
 
+  test('a restarted supervisor starts on the last commit that passed, not untested main (#620)', async () => {
+    const w = world({ red: ['ccccccc3'] });
+    let passed = 'aaaaaaa1';
+    const ancestors = { aaaaaaa1: ['bbbbbbb2', 'ccccccc3'], bbbbbbb2: ['ccccccc3'] }; // main moved past what passed
+    Object.assign(w, { passed: () => passed, pass: (sha) => { passed = sha; }, isAncestor: (a, b) => a === b || !!ancestors[a]?.includes(b) });
+    w.main = 'bbbbbbb2';
+    const f = follow(w);
+    await f.boot();
+    assert.equal(w.up, 'aaaaaaa1', 'the hub runs the commit that passed, not main');
+    assert.equal(count(w, 'test'), 0, 'nothing is tested at boot');
+    assert.ok(w.said.includes('hub running at aaaaaaa, the last commit that passed; following main, which takes bbbbbbb once it passes'));
+    await f.tick();
+    assert.equal(w.up, 'bbbbbbb2', 'main goes live once it passes, as any move does');
+    // Restarted again, main now red: it stays on what passed and stops the line, never running the red commit.
+    w.main = 'ccccccc3';
+    const again = follow(w);
+    await again.boot();
+    assert.equal(w.up, 'bbbbbbb2');
+    await again.tick();
+    assert.equal(w.up, 'bbbbbbb2', 'a red main never goes live');
+    assert.equal(count(w, 'red ccccccc3'), 1, 'and its fix is asked for');
+    // Main rewritten past it (not an ancestor any more): main as it is, tested, as before.
+    passed = 'ddddddd4';
+    const third = follow(w);
+    await third.boot();
+    assert.equal(w.up, 'ccccccc3');
+  });
+
   test("the supervisor's own code is follow.js alone, and it imports only node: modules (#546)", () => {
     assert.deepEqual([...own], ['src/follow.js']);
     const text = readFileSync(join(root, 'src/follow.js'), 'utf8');
@@ -446,6 +474,8 @@ describe('database backups, on real files', () => {
 
 describe('a smoke boot on copies of the live data, for real (#544)', () => {
   const ROOT = realpathSync(new URL('..', import.meta.url));
+  // ROOT as it is checked out: smoke() checks out any other commit in next, and next is this checkout here.
+  const HEAD = execFileSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-smokes-')));
   const smokes = () => readdirSync(tmpdir()).filter((f) => f.startsWith('nuworq-smoke-')).sort();
   const columns = (file) => { const d = new DatabaseSync(file); try { return d.prepare('PRAGMA table_info(items)').all().map((c) => c.name); } finally { d.close(); } };
@@ -464,7 +494,7 @@ describe('a smoke boot on copies of the live data, for real (#544)', () => {
     hub.db.close();
     const before = smokes();
     const sys = system({ repo: ROOT, dir: join(root, 'hub-src'), next: ROOT, url: 'http://127.0.0.1:1', store: backups({ dir: join(root, 'backups'), db }) });
-    assert.deepEqual(await sys.smoke('abcdef1234'), { ok: true });
+    assert.deepEqual(await sys.smoke(HEAD), { ok: true });
     assert.deepEqual(smokes(), before, 'the copies are removed');
     assert.ok(!existsSync(join(home, '.nuworq', 'hub.json')), "a smoke boot doesn't tell this machine's agents about itself");
   });
@@ -477,13 +507,13 @@ describe('a smoke boot on copies of the live data, for real (#544)', () => {
     spaces.create('beta');
     spaces.close();
     const sys = system({ repo: ROOT, dir: join(root, 'hub-src'), next: ROOT, url: 'http://127.0.0.1:1', store: backups({ dir: join(root, 'backups'), workspaces: ws }) });
-    assert.deepEqual(await sys.smoke('abcdef1234'), { ok: true });
+    assert.deepEqual(await sys.smoke(HEAD), { ok: true });
     const broken = new DatabaseSync(join(ws, 'beta.db'));
     broken.exec('DROP TABLE items; CREATE VIEW items AS SELECT 1 AS id');
     broken.close();
-    const r = await sys.smoke('abcdef1234');
+    const r = await sys.smoke(HEAD);
     assert.equal(r.ok, false, "a workspace that can't open fails the boot, though nothing asked for it");
-    assert.match(r.failed, /^it exited with code 1 at abcdef1: \w*Error: /);
+    assert.match(r.failed, new RegExp(`^it exited with code 1 at ${HEAD.slice(0, 7)}: \\w*Error: `));
   });
 
   test("in a repo, a commit whose migration fails on the live data doesn't boot, and names why; the live database is untouched", async () => {
@@ -520,12 +550,13 @@ http.createServer((req, res) => res.end('{"ok":true}')).listen(Number(at('--port
     process.env.NUWORQ_TOKEN_FOR_SMOKE_TEST = 'secret';
     try {
       const before = smokes();
-      assert.deepEqual(await sys.test(good), { ok: true });
+      // No sys.test first: a commit CI passed (#543) reaches smoke() with nothing checked out for it yet.
       assert.deepEqual(await sys.smoke(good), { ok: true }, 'booted while the live database is open');
       assert.deepEqual(await sys.test(bad), { ok: true }, 'its tests pass: only real data shows it');
       const r = await sys.smoke(bad);
       assert.equal(r.ok, false);
       assert.equal(r.failed, `it exited with code 1 at ${bad.slice(0, 7)}: Error: no such table: nope`);
+      assert.deepEqual(await sys.smoke(good), { ok: true }, 'it boots the commit asked for, not the one last tested');
       assert.deepEqual(smokes(), before, 'the copies are removed either way');
       assert.deepEqual(columns(db), ['id', 'title'], 'only the copies were migrated');
     } finally {
@@ -652,6 +683,28 @@ describe('the real world, in a scratch repo', () => {
     } finally {
       if (saved === undefined) delete process.env.NUWORQ_TOKEN; else process.env.NUWORQ_TOKEN = saved;
       server.close();
+      spaces.close();
+    }
+  });
+
+  test("fix main files only in the workspace bound to the repo's installation (#614)", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-redbound-')));
+    const spaces = new Workspaces({ dir: join(root, 'ws') });
+    // "aaa" sorts first and links acme's public repository too; acme is the one its App installation is bound to.
+    for (const name of ['aaa', 'acme']) {
+      spaces.create(name);
+      const h = spaces.get(name);
+      h.tx(() => h.project('app', { create: true }));
+      h.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(h.project('app').id, 'github.com/acme/app', 0);
+    }
+    try {
+      const find = (o = {}) => findWorkspace({ workspaces: join(root, 'ws'), repo: join(root, 'repo'), remote: 'github.com/acme/app', ...o });
+      assert.throws(() => find(), /2 workspaces have a project for github\.com\/acme\/app \(aaa, acme\) and none is bound .*--workspace <name>/, 'never the first by name');
+      spaces.directory.bindInstallation(4242, 'acme');
+      assert.deepEqual(find({ installation: 4242 }), { workspace: 'acme', project: 'app' }, 'the installation decides');
+      assert.throws(() => find({ installation: 999 }), /none is bound/, 'an installation bound elsewhere decides nothing');
+      assert.deepEqual(find({ workspace: 'aaa' }), { workspace: 'aaa', project: 'app' }, 'a workspace the host names stands');
+    } finally {
       spaces.close();
     }
   });

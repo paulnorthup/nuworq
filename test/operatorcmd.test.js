@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { guide, skill, operatorSkill, operatorStart, operatorAsks, OPERATOR_WAIT, OPERATOR_NEXT, OPS, LISTENER, MODE_RULES } from '../src/protocol.js';
 import { staleListener } from '../src/update.js';
+import { saveLocal, changeInfra } from '../src/operator.js';
 import { MONITORS } from '../src/plugin.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
@@ -46,15 +47,38 @@ describe('nuworq operator', () => {
     assert.match(d.stdout, /✗ claude-cli: claude doesn't run here/, 'PATH holds no claude');
     assert.match(d.stdout, /✓ infra: a person started this attended operator here/);
     assert.match(d.stdout.trim().split('\n').at(-1), /^Operator: /);
-    assert.match((await run('--infra-check', 'false')).stdout, /infra is declared only while false passes/);
+    // Set as a person's confirmed change saves it (the command itself needs a terminal: below).
+    const file = join(home, '.nuworq', 'operator.json');
+    saveLocal(file, { infra_check: 'false' });
     assert.match((await run('--detect')).stdout, /✗ infra: its check failed \(false\)/);
-    assert.match((await run('--infra-check', 'true')).stdout, /only while true passes/);
+    saveLocal(file, { infra_check: 'true' });
     assert.match((await run('--detect')).stdout, /✓ infra: its check passed \(true\)/);
-    assert.match((await run('--without', 'infra')).stdout, /declares no infra/);
+    saveLocal(file, { without_infra: true });
     assert.match((await run('--detect')).stdout, /✗ infra: this machine was set --without infra/);
-    await run('--with', 'infra');
-    await run('--infra-check', '');
+    saveLocal(file, { without_infra: null, infra_check: null });
     assert.match((await run('--detect')).stdout, /✓ infra: a person started/);
+  });
+
+  // #607: --detect runs the check with /bin/sh, so setting one is running code later. An agent's shell has no
+  // terminal: from there nothing changes, whichever way it's asked.
+  test('infra check changes only with a person\'s confirmation', async () => {
+    const file = join(home, '.nuworq', 'operator.json');
+    saveLocal(file, { infra_check: 'true' });
+    const before = readFileSync(file, 'utf8');
+    for (const args of [['--infra-check', 'touch pwned'], ['--detect', '--infra-check', 'touch pwned'], ['--infra-check', 'touch pwned', '--yes'], ['--without', 'infra'], ['--with', 'infra'], ['--infra-check', '']]) {
+      const r = await run(...args).catch((e) => e);
+      assert.equal(r.code, 1, args.join(' '));
+      assert.match(r.stdout, /Nothing changed: only a person at a terminal changes this machine's infra settings/);
+      assert.equal(readFileSync(file, 'utf8'), before, `${args.join(' ')}: the file is as it was`);
+    }
+    const asked = [];
+    const confirm = (answer) => async (q) => { asked.push(q); return answer; };
+    assert.equal(await changeInfra(file, { infra_check: 'touch pwned' }, null), null, 'no terminal: no change');
+    assert.equal(await changeInfra(file, { infra_check: 'touch pwned' }, confirm(false)), null, 'the person said no');
+    assert.equal(readFileSync(file, 'utf8'), before);
+    assert.deepEqual(await changeInfra(file, { infra_check: 'ssh vm true' }, confirm(true)), { infra_check: 'ssh vm true' });
+    assert.match(asked[0], /^--detect will run "touch pwned" with \/bin\/sh to decide whether this machine declares infra\. Set it\?$/, 'the person sees the command');
+    saveLocal(file, { infra_check: null });
   });
 
   test('--allow writes the rules into the project\'s settings.local.json only on a yes, and --off takes exactly those out', async () => {
@@ -68,7 +92,8 @@ describe('nuworq operator', () => {
     assert.match((await at('--allow', '--yes')).stdout, /Added \d+ rules to .*settings\.local\.json\. Undo: nuworq operator --allow --off/);
     const cfg = JSON.parse(readFileSync(file, 'utf8'));
     assert.equal(cfg.model, 'x', 'the rest stays');
-    assert.ok(cfg.permissions.allow.includes('Bash(nuworq:*)') && cfg.permissions.allow.includes('Bash(ls:*)'));
+    assert.ok(cfg.permissions.allow.includes('Bash(nuworq checkin:*)') && cfg.permissions.allow.includes('Bash(ls:*)'));
+    assert.ok(!cfg.permissions.allow.includes('Bash(nuworq:*)'), 'never every nuworq command (#607)');
     assert.ok(cfg.permissions.deny.includes('Bash(git push --force*)'));
     await at('--allow', '--off');
     assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { permissions: { allow: ['Bash(ls:*)'] }, model: 'x' });
@@ -116,7 +141,7 @@ describe('nuworq operator', () => {
 
   test('help lists it', async () => {
     const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'help'], { env: { ...process.env, NO_COLOR: '1' } });
-    assert.match(stdout, /^ {2}operator +the line that starts an operator session$/m);
+    assert.match(stdout, /^ {2}operator +start an operator: Claude Code in a terminal \(--start\)$/m);
     const own = (await promisify(execFile)(process.execPath, [BIN, 'help', 'operator'], { env: { ...process.env, NO_COLOR: '1' } })).stdout;
     assert.match(own, /^ {2}nuworq operator \[--project p\] \[--has tags\]$/m);
   });

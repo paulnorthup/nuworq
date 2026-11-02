@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { missingProject } from '../web/missing.js';
+import { appSource } from './appsource.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -26,8 +27,8 @@ describe('a link to a project that isn\'t here', () => {
   });
 
   test('the page renders it whenever the address names a project the hub doesn\'t list', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
-    assert.match(app, /if \(S\.slug && !S\.projects\.some\(\(p\) => p\.slug === S\.slug\)\) \{/);
-    assert.match(app, /S\.missing \? missingProject\(S\.missing, \{ esc \}\) : overview\(\)/);
+    const app = appSource();
+    assert.match(app, /if \(!S\.projects\.some\(\(p\) => p\.slug === slug\)\) \{/);
+    assert.match(app, /if \(S\.missing\) return missingProject\(S\.missing, \{ esc \}\);/);
   });
 });

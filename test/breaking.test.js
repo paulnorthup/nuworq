@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { itemView } from '../src/insight.js';
 import { MODE_RULES, OPS } from '../src/protocol.js';
+import { appSource } from './appsource.js';
 
 // Items say when they break someone (#398): who must do what once it ships, so the release knows how to bump.
 const WHO = 'Machines on Node 24 must upgrade to 26 before `nuworq update`';
@@ -45,7 +46,7 @@ describe('the breaking flag (#398)', () => {
   });
 
   test('the drawer shows who must act when it ships', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /it\.breaking \? `<div class="d-sec"><div class="label"><span data-new="breaking">/);
   });
 });

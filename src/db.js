@@ -569,6 +569,49 @@ export const MIGRATIONS = [
       if (stale.length) console.log(`Retired ${stale.length} of ${of} active steers: they were about items already done or dropped (#551).`);
     },
   },
+  {
+    // Hosts a project's tests need beyond the hub, GitHub and package registries (#472): workers' sandbox reaches them too.
+    // A JSON list of host names; only a person sets it (settings).
+    name: 'a project can name hosts its workers\' tests need',
+    up(db) { addColumn(db, "ALTER TABLE projects ADD COLUMN sandbox_hosts TEXT NOT NULL DEFAULT '[]'"); },
+  },
+  {
+    // An operator answer marked for people (#497): a change on a live system, or a call no decision covers. Only
+    // those show in Worth knowing; the rest live in their item's history.
+    name: 'an operator can mark an answer for people',
+    up(db) { addColumn(db, 'ALTER TABLE questions ADD COLUMN for_people INTEGER NOT NULL DEFAULT 0'); },
+  },
+  {
+    // A steer the hub wrote itself (#550): a drop or move notice to a holder, the project parked, autonomy changed.
+    // Agents get it as any steer; people see it as a fact, not as their steering. Once, for those from before: by
+    // their words, which the hub alone writes.
+    name: "steers the hub wrote are notices, not a person's steering",
+    up(db) {
+      addColumn(db, 'ALTER TABLE notes ADD COLUMN notice INTEGER NOT NULL DEFAULT 0');
+      db.exec(`UPDATE notes SET notice = 1 WHERE kind = 'steer' AND (body GLOB '#[0-9]* was dropped (*' OR body GLOB '#[0-9]* was dropped by the human; *'
+        OR body GLOB '#[0-9]* was moved to * by the human; *' OR body = 'The project is parked. Finish or hand off what you hold; start nothing new.'
+        OR body GLOB 'Autonomy is now "*')`);
+    },
+  },
+  {
+    // Memory distilled for people (#552, src/fieldnotes.js): a note's one-line gist and, for a field note, the
+    // review's advice ({ do: keep | retire | decide, why, draft }); the project's Direction today ([{ line, source }]),
+    // and the inputs it was distilled from (distilled_sig) and when.
+    name: 'memory distilled for people: gists, advice and direction',
+    up(db) {
+      addColumn(db, "ALTER TABLE notes ADD COLUMN gist TEXT NOT NULL DEFAULT ''");
+      addColumn(db, "ALTER TABLE notes ADD COLUMN advice TEXT NOT NULL DEFAULT ''");
+      addColumn(db, "ALTER TABLE projects ADD COLUMN direction TEXT NOT NULL DEFAULT '[]'");
+      addColumn(db, "ALTER TABLE projects ADD COLUMN distilled_sig TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'ALTER TABLE projects ADD COLUMN distilled_at INTEGER NOT NULL DEFAULT 0');
+    },
+  },
+  {
+    // The head a review accepted (#605): the commit of the item's branch the hub saw at acceptance. Landing merges
+    // only that, or the same change rebased; '' when the hub couldn't see the branch then.
+    name: 'landing merges only the reviewed head',
+    up(db) { addColumn(db, "ALTER TABLE items ADD COLUMN reviewed_sha TEXT NOT NULL DEFAULT ''"); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

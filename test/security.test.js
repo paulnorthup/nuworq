@@ -84,6 +84,26 @@ describe('a review before each release (#480)', () => {
     assert.throws(() => w.hub.agentOp('p', 'claim', 'a4', { item: `#${rev.seq}` }), /reviews changes you built/);
   });
 
+  test("a token can't take the review of a release it built under another name (#622)", async () => {
+    const { Auth } = await import('../src/auth.js');
+    const w = world();
+    w.ship(['a1']);
+    const [rev] = w.reviews('release');
+    // One token acts as a1 (which built Part 1) and as a9; a runner's token is shared by its workers by design.
+    const auth = new Auth(w.hub.db);
+    auth.createToken('box', 'agent');
+    auth.createToken('ci', 'agent', { runner: 'ci' });
+    const id = (name) => w.hub.db.prepare('SELECT id FROM tokens WHERE name = ?').get(name).id;
+    for (const a of ['a1', 'a9', 'r1']) w.hub.agentOp('p', 'checkin', a, {});
+    const bind = (agent, token) => w.hub.db.prepare('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ?').run(id(token), w.hub.project('p').id, agent);
+    bind('a1', 'box'); bind('a9', 'box');
+    assert.throws(() => w.hub.agentOp('p', 'claim', 'a9', { item: `#${rev.seq}` }), /reviews changes you built/);
+    assert.notEqual(w.hub.agentOp('p', 'next', 'a9', { claim: false }).item, `#${rev.seq}`, "and isn't offered it");
+    // Moved to the runner's token, a1's work no longer makes a runner sibling its builder.
+    bind('a1', 'ci'); bind('r1', 'ci');
+    assert.equal(w.next('r1').item, `#${rev.seq}`);
+  });
+
   test('once the review is done the release is free to land', () => {
     const w = world();
     w.ship(['a1']);

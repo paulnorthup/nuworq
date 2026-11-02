@@ -70,7 +70,7 @@ describe('what just shipped', () => {
   test('every listed key has a real date and is used by some element in the app', () => {
     // The page and the pure modules it renders with (e.g. web/milestones.js, web/groupline.js).
     const web = new URL('../web/', import.meta.url);
-    const app = readdirSync(web).filter((f) => f.endsWith('.js')).map((f) => readFileSync(new URL(f, web), 'utf8')).join('\n');
+    const app = readdirSync(web, { recursive: true }).filter((f) => f.endsWith('.js')).map((f) => readFileSync(new URL(f, web), 'utf8')).join('\n');
     assert.ok(Object.keys(NEW).length >= 2);
     for (const [key, date] of Object.entries(NEW)) {
       assert.match(date, /^\d{4}-\d{2}-\d{2}$/, key);

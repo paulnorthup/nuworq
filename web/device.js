@@ -11,6 +11,11 @@ let staff = null; // what a staffing request asks for, when it is one
 const show = (msg) => { error.textContent = msg; error.hidden = !msg; };
 const post = (path, body) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   .then(async (r) => ({ ok: r.ok, status: r.status, j: await r.json().catch(() => ({})) }));
+// What a machine approved by this role can do: never more than the person may themselves (#629).
+const canDo = (role) => (role === 'member'
+  ? 'As a member, its agents can check in, look, propose work and comment, but not claim, build, review or push: a steward or owner connects machines that do.'
+  : role === 'viewer' ? 'A viewer can\'t connect machines.'
+  : 'Its agents will work here: claim, build, review and push.');
 const done = (msg) => { lead.textContent = msg; code.hidden = go.hidden = deny.hidden = true; };
 
 async function check() {
@@ -30,7 +35,7 @@ async function check() {
   // A staffing request (#490): the machine is connected already, and asks to start workers on one project.
   lead.textContent = staff
     ? `"${j.machine}" asks to staff ${staff.name ?? staff.project} with its workers, spending up to $${staff.budget} a day. Approving turns on staffing for ${staff.name ?? staff.project} with that daily budget. Only approve it if you just asked for this on that machine.`
-    : `"${j.machine}" asks for an agent token in your name. Its agents will work here, and you answer for them. Only approve it if you just started this on that machine.`;
+    : `"${j.machine}" asks for an agent token in your name. ${canDo(j.role)} You answer for them. Only approve it if you just started this on that machine.`;
   go.textContent = staff ? `Staff ${staff.name ?? staff.project}` : `Approve ${j.machine}`;
   deny.hidden = false;
 }

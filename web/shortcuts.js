@@ -1,5 +1,5 @@
 // Keyboard shortcuts (#274). The keydown handler in app.js dispatches from this list and the ? dialog renders from it,
-// so a shortcut can't exist without being listed. Adding one? Add it here, with its handler in app.js's KEYS.
+// so a shortcut can't exist without being listed. Adding one? Add it here, with its handler in actions.js's KEYS.
 // The first match wins, so the order is the precedence (Esc closes a dialog before it leaves an item).
 const plain = (e) => !e.metaKey && !e.ctrlKey && !e.altKey;
 

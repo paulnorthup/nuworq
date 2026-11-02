@@ -137,4 +137,199 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.equal(hub.q("SELECT token_id FROM agents WHERE name = 'olivia-ui'").get().token_id, null);
     assert.equal((await op('look', { token: tok.box, agent: 'olivia-ui' })).status, 200);
   });
+
+  test('operator role needs a token a steward or owner minted', async () => {
+    auth.addPerson('sam', 'steward');
+    const minted = (name, by, powers) => auth.createToken(name, 'agent', { mintedBy: by, ...(powers ? { powers } : {}) });
+    const t = { mo: minted('mo-device', 'mo'), sam: minted('sam-device', 'sam'), olivia: minted('olivia-device', 'olivia'), named: minted('mo-operate', 'mo', 'shape,build,review,operate') };
+    const as = (token, agent) => op('checkin', { token, agent, body: { has: ['operator', 'macos'] } });
+
+    // A member's device login: refused as an operator, with a hint; fine as an agent.
+    const refused = await as(t.mo, 'mo-op');
+    assert.equal(refused.status, 403);
+    assert.match(refused.json.error, /can't act as an operator/);
+    assert.match(refused.json.hint, /steward or owner minted[^]*--powers shape,build,review,operate/);
+    assert.equal((await op('checkin', { token: t.mo, agent: 'mo-op', body: { has: ['macos'] } })).status, 200);
+    assert.equal(hub.roleOf(hub.project('api'), 'mo-op'), 'session');
+
+    // A steward's, an owner's, one with the operate power by name, and one made on the hub host (no person minted it).
+    for (const [token, agent] of [[t.sam, 'sam-op'], [t.olivia, 'olivia-op'], [t.named, 'mo-named-op'], [tok.box, 'box-op']]) {
+      assert.equal((await as(token, agent)).status, 200, agent);
+      assert.equal(hub.roleOf(hub.project('api'), agent), 'operator', agent);
+    }
+
+    // A member signed in in the browser checks in, but not as an operator.
+    const moSid = auth.createSession(hub.db.prepare("SELECT id FROM tokens WHERE name = 'mo-laptop'").get().id);
+    assert.equal((await op('checkin', { cookie: moSid, agent: 'mo-ui', body: { has: ['operator'] } })).status, 403);
+
+    // answer and escalate check the same, even for a session that became an operator before this was checked.
+    hub.humanOp('api', 'create', { title: 'Needs an operator', acceptance: 'x' });
+    const ask = () => hub.agentOp('api', 'ask', 'asker', { question: 'Restart the VM?', assumption: 'yes', to: 'operator' }).question;
+    hub.agentOp('api', 'checkin', 'asker', {});
+    hub.db.prepare("UPDATE agents SET role = 'operator' WHERE name = 'mo-op'").run();
+    const q1 = ask();
+    assert.equal((await op('answer', { token: t.mo, agent: 'mo-op', body: { question: q1, answer: 'done' } })).status, 403);
+    assert.equal((await op('ask', { token: t.mo, agent: 'mo-op', body: { question: 'Paul?', escalates: q1 } })).status, 403);
+    assert.equal((await op('answer', { token: t.sam, agent: 'sam-op', body: { question: q1, answer: 'Restarted it.' } })).status, 200);
+  });
+
+  test("a token can't review work it built under another name (#622)", async () => {
+    const build = async (token, agent, title) => {
+      const { item } = hub.humanOp('api', 'create', { title, acceptance: 'x' });
+      assert.equal((await op('claim', { token, agent, body: { item } })).status, 200, `${agent} claims ${item}`);
+      assert.equal((await op('submit', { token, agent, body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+      return item;
+    };
+    const review = (token, agent, item) => op('review', { token, agent, body: { item, verdict: 'accept', headline: 'looks right' } });
+    hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
+    // One token, two names: the second name can't review what the first built.
+    const mine = await build(tok.box, 'box-builder', 'Built by one name');
+    const r = await review(tok.box, 'box-reviewer', mine);
+    assert.notEqual(r.status, 200);
+    assert.match(r.json.error, /can't review your own work/);
+    assert.equal(hub.item(hub.project('api'), mine).stage, 'verifying', 'still waiting for someone else');
+    // Nor does next offer it to that name (#660, #654): it offers other work, so the agent isn't stuck on a refusal.
+    hub.humanOp('api', 'create', { title: 'Work for anyone', acceptance: 'x' });
+    const offered = await op('next', { token: tok.box, agent: 'box-reviewer', body: { claim: false } });
+    assert.equal(offered.status, 200);
+    assert.ok(offered.json.item, 'it gets a job');
+    assert.notEqual(offered.json.item, mine, "next doesn't offer the review it would refuse");
+    assert.ok(!hub.claimable(hub.project('api'), 'box-reviewer').some((o) => o.mode === 'review' && `#${o.item.seq}` === mine));
+    assert.ok(hub.claimable(hub.project('api'), 'other-reviewer').some((o) => o.mode === 'review' && `#${o.item.seq}` === mine), 'another token is offered it');
+    // Another token reviews it.
+    assert.equal((await review(tok.other, 'other-reviewer', mine)).status, 200);
+    // A runner's workers share its token by design: one may review another's work.
+    const runner = auth.createToken('ci-runner-2', 'agent', { runner: 'ci2' });
+    const theirs = await build(runner, 'ci-builder', 'Built by a runner worker');
+    assert.equal((await review(runner, 'ci-reviewer', theirs)).status, 200);
+  });
+
+  test("a machine's workers review each other's work with the runner token its device login mints (#656)", async () => {
+    hub.humanOp('api', 'settings', { autonomy: 'full' });
+    // A token does no more than its minter may (#629), so a steward connects the machine.
+    auth.addPerson('rita', 'steward');
+    const device = auth.createToken('rita@laptop', 'agent', { mintedBy: 'rita' }); // what nuworq connect gets
+    const mint = (token) => call('/api/me/runner-token', { token });
+    const me = async (token) => (await fetch(`${url}/api/me`, { headers: { authorization: `Bearer ${token}` } })).json();
+    const r = await mint(device);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual([r.json.name, r.json.runner], ['rita@laptop.runner', 'rita@laptop']);
+    const runner = r.json.token;
+    assert.deepEqual([(await me(runner)).role, (await me(runner)).runner], ['agent', 'rita@laptop'], 'it says which runner it is');
+    assert.equal((await mint(runner)).status, 400, "a runner token can't mint another");
+    assert.equal((await mint(tok.olivia)).status, 400, "nor can a person's token");
+    const row = auth.listTokens().find((t) => t.name === 'rita@laptop.runner');
+    assert.equal(row.minted_by, 'rita', 'the person who connected the machine answers for it');
+    // A member's machine gets a runner token too, but can't build with it (#629).
+    const members = await mint(auth.createToken('mo@laptop', 'agent', { mintedBy: 'mo' }));
+    assert.equal(members.status, 200, JSON.stringify(members.json));
+    const { item: theirs } = hub.humanOp('api', 'create', { title: 'Not for a member', acceptance: 'x' });
+    assert.match((await op('claim', { token: members.json.token, agent: 'mo-worker', body: { item: theirs } })).json.error, /minted by a member/);
+
+    // Worker A builds, worker B's next offers the review, and B's review is accepted. Earlier tests' reviews go first.
+    const clearer = auth.createToken('clearer', 'agent');
+    for (const { id } of hub.q("SELECT id FROM items WHERE stage = 'verifying'").all()) {
+      assert.equal((await op('review', { token: clearer, agent: 'clearer', body: { item: `#${id}`, verdict: 'accept', headline: 'ok' } })).status, 200);
+    }
+    const { item } = hub.humanOp('api', 'create', { title: 'Built by worker A', acceptance: 'x', priority: 'now' });
+    assert.equal((await op('claim', { token: runner, agent: 'worker-a', body: { item } })).status, 200);
+    assert.equal((await op('submit', { token: runner, agent: 'worker-a', body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+    const next = await op('next', { token: runner, agent: 'worker-b', body: { claim: false } });
+    assert.deepEqual([next.json.mode, next.json.item], ['review', item], JSON.stringify(next.json));
+    assert.equal((await op('review', { token: runner, agent: 'worker-b', body: { item, verdict: 'accept', headline: 'looks right' } })).status, 200);
+
+    // The person's own token still can't review what it built under another name.
+    const { item: own } = hub.humanOp('api', 'create', { title: 'Built on the connect token', acceptance: 'x' });
+    assert.equal((await op('claim', { token: device, agent: 'rita-laptop-a', body: { item: own } })).status, 200);
+    assert.equal((await op('submit', { token: device, agent: 'rita-laptop-a', body: { item: own, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+    assert.match((await op('review', { token: device, agent: 'rita-laptop-b', body: { item: own, verdict: 'accept', headline: 'x' } })).json.error, /can't review your own work/);
+
+    // Minting again replaces it; disconnecting the machine revokes its runner token too.
+    const again = (await mint(device)).json.token;
+    assert.equal((await me(runner)).role, null, 'the old runner token is revoked');
+    assert.equal((await me(again)).runner, 'rita@laptop');
+    assert.equal((await call('/api/me/revoke', { token: device })).status, 200);
+    assert.equal((await me(again)).role, null, "the device login's runner token went with it");
+  });
+
+  test("only owners see people's emails (#631)", async () => {
+    const people = async (token) => { const r = await fetch(`${url}/api/people`, { headers: { authorization: `Bearer ${token}` } }); return { status: r.status, json: await r.json() }; };
+    hub.db.prepare("UPDATE people SET email = handle || '@acme.test'").run();
+    for (const who of ['mo', 'vic']) {
+      const r = await people(tok[who]);
+      assert.equal(r.status, 200, `${who} still lists people`);
+      assert.ok(r.json.length >= 3);
+      for (const p of r.json) assert.deepEqual(Object.keys(p).sort(), ['created_at', 'handle', 'name', 'role'], `${who} sees no email`);
+    }
+    const owner = await people(tok.olivia);
+    assert.equal(owner.json.find((p) => p.handle === 'mo').email, 'mo@acme.test', 'an owner does');
+  });
+
+  test("workers of one runner on a person's device token review each other's work (#658)", async () => {
+    hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
+    // A person's machine: one device token, no runner tag, running nuworq run's workers and an interactive session.
+    const device = auth.createToken('olivia-mbp', 'agent', { mintedBy: 'olivia' });
+    for (const w of ['mbp-w1', 'mbp-w2']) {
+      assert.equal((await op('checkin', { token: device, agent: w, body: { role: 'worker', runner: 'olivia-mbp' } })).status, 200, w);
+    }
+    const build = async (agent, title) => {
+      const { item } = hub.humanOp('api', 'create', { title, acceptance: 'x' });
+      assert.equal((await op('claim', { token: device, agent, body: { item } })).status, 200);
+      assert.equal((await op('submit', { token: device, agent, body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+      return item;
+    };
+    const review = (agent, item) => op('review', { token: device, agent, body: { item, verdict: 'accept', headline: 'looks right' } });
+    const built = await build('mbp-w1', 'Built by one worker of the runner');
+    assert.equal((await review('mbp-w2', built)).status, 200, "a sibling worker reviews it, as before #622");
+    // #622's case stands: two plain sessions on one token are one builder.
+    const own = await build('mbp-session', 'Built by a session on the device token');
+    const r = await review('mbp-other-session', own);
+    assert.notEqual(r.status, 200);
+    assert.match(r.json.error, /can't review your own work/);
+  });
+
+  test('next, peeking or claiming, never offers a review that review refuses (#665)', async () => {
+    hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
+    const clearer = auth.createToken('clearer-665', 'agent');
+    const clear = async () => { // earlier tests' reviews go first
+      for (const { id } of hub.q("SELECT id FROM items WHERE stage = 'verifying'").all()) {
+        assert.equal((await op('review', { token: clearer, agent: 'clearer-665', body: { item: `#${id}`, verdict: 'accept', headline: 'ok' } })).status, 200);
+      }
+    };
+    const build = async (token, agent, title) => {
+      const { item } = hub.humanOp('api', 'create', { title, acceptance: 'x', priority: 'now' });
+      assert.equal((await op('claim', { token, agent, body: { item } })).status, 200, `${agent} claims ${item}`);
+      assert.equal((await op('submit', { token, agent, body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+      return item;
+    };
+    await clear();
+
+    // claude-d25d's loop (feedback #8): two names on one non-runner token; one builds, the other asks for work.
+    const device = auth.createToken('loop-device', 'agent');
+    const mine = await build(device, 'loop-builder', 'Built by one name of the device');
+    const never = (r, how) => {
+      assert.equal(r.status, 200, `${how}: ${JSON.stringify(r.json)}`);
+      assert.doesNotMatch(JSON.stringify(r.json), /can't review your own work/, how);
+      assert.ok(!(r.json.mode === 'review' && r.json.item === mine), `${how} doesn't offer the review it would refuse`);
+    };
+    // It is offered other ready work instead, peeking and claiming alike.
+    hub.humanOp('api', 'create', { title: 'Work for anyone', acceptance: 'x' });
+    const peek = await op('next', { token: device, agent: 'loop-reviewer', body: { claim: false } });
+    never(peek, 'peek');
+    assert.equal(peek.json.mode, 'work', 'it peeks at other work');
+    const claimed = await op('next', { token: device, agent: 'loop-reviewer' });
+    never(claimed, 'claim');
+    assert.deepEqual([claimed.json.mode, claimed.json.item], ['work', peek.json.item], 'it claims the work it peeked at');
+    assert.equal(hub.item(hub.project('api'), mine).stage, 'verifying', 'the review waits for someone else');
+    await clear();
+
+    // #658's rule: two runner workers on one runner token can each be offered the other's review.
+    const runner = auth.createToken('loop-runner', 'agent', { runner: 'loop-box' });
+    const a = await build(runner, 'loop-worker-a', 'Built by runner worker A');
+    const b = await build(runner, 'loop-worker-b', 'Built by runner worker B');
+    for (const [agent, theirs] of [['loop-worker-a', b], ['loop-worker-b', a]]) {
+      const r = await op('next', { token: runner, agent, body: { claim: false } });
+      assert.deepEqual([r.json.mode, r.json.item], ['review', theirs], `${agent}: ${JSON.stringify(r.json)}`);
+    }
+  });
 });

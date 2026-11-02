@@ -218,11 +218,12 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     while (job.mode === 'shape') { await op('a1', 'refine', { item: job.item, acceptance: 'x' }); await op('a1', 'submit', { item: job.item, headline: 'Shaped' }); job = await op('a1', 'next'); }
     assert.equal(job.mode, 'work');
     assert.equal(job.item, `#${n}`);
+    // Its token only reads (#472): it fetches from GitHub with it, and pushes through the hub.
     const cred = await post('/api/agent/credential', {}, { 'x-nuworq-agent': 'a1' });
     assert.equal(cred.status, 200, JSON.stringify(cred.body));
     assert.equal(cred.body.repo, 'github.com/acme/api');
     assert.ok(Date.parse(cred.body.expires_at) - Date.now() <= 3600_000, 'an hour at most');
-    assert.deepEqual(gh.state.mints.get(cred.body.password), { repositories: ['api'], permissions: WORK_PERMISSIONS });
+    assert.deepEqual(gh.state.mints.get(cred.body.password), { repositories: ['api'], permissions: CLONE_PERMISSIONS });
     const url = `${stub}/acme/api.git`;
     const asWorker = tokenEnv(url, cred.body.password, {});
     const wt = join(root, 'worker');
@@ -231,7 +232,30 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     writeFileSync(join(wt, 'things.js'), 'export const things = [];\n');
     git(wt, ['add', '.']);
     git(wt, ['commit', '-q', '-m', 'GET /things']);
+    await assert.rejects(netGit(wt, ['push', '-q', 'origin', job.branch], asWorker), /403/, "GitHub refuses the worker's own token a push");
+    // Through the hub, as the worker's git does (pushInsteadOf): name and agent token as basic auth.
+    const via = `${base.replace('//', '//a1:none@')}/api/git/github.com/acme/api.git`;
+    git(wt, ['remote', 'set-url', '--push', 'origin', via]);
     await netGit(wt, ['push', '-q', 'origin', job.branch], asWorker);
+    assert.equal(git(gh.bare, ['rev-parse', job.branch]), git(wt, ['rev-parse', 'HEAD']), 'the branch is on GitHub');
+    // main, a tag, another branch or a deletion never gets past the hub, and git says why.
+    const before = git(gh.bare, ['rev-parse', 'main']);
+    for (const [refspec, why] of [[`${job.branch}:main`, /workers never push main/], ['HEAD:refs/tags/v9', /only refs\/heads\/nuworq\/\*/], ['HEAD:refs/heads/other', /only refs\/heads\/nuworq\/\*/], [`:${job.branch}`, /never delete branches/]]) {
+      await assert.rejects(netGit(wt, ['push', 'origin', refspec], asWorker), (e) => why.test(e.message) && /remote rejected/.test(e.message), refspec);
+    }
+    assert.equal(git(gh.bare, ['rev-parse', 'main']), before, 'main is untouched');
+    assert.equal(git(gh.bare, ['tag', '--list']), '', 'no tag');
+    assert.equal(git(gh.bare, ['rev-parse', job.branch]), git(wt, ['rev-parse', 'HEAD']), 'nor is the branch deleted');
+    assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE type = 'push_refused'`).get().n, 4, 'each refusal is on the record');
+    // Not the repository of the item it holds, or no name: refused before anything reaches GitHub.
+    const other = await fetch(`${base}/api/git/github.com/acme/web.git/info/refs?service=git-receive-pack`, { headers: { authorization: `Basic ${Buffer.from('a1:none').toString('base64')}` } });
+    assert.equal(other.status, 403);
+    assert.match(await other.text(), /lands in github\.com\/acme\/api, not github\.com\/acme\/web/);
+    const anon = await fetch(`${base}/api/git/github.com/acme/api.git/info/refs?service=git-receive-pack`);
+    assert.equal(anon.status, 401);
+    assert.match(anon.headers.get('www-authenticate'), /^Basic/);
+    const idle = await fetch(`${base}/api/git/github.com/acme/api.git/info/refs?service=git-receive-pack`, { headers: { authorization: `Basic ${Buffer.from('a9:none').toString('base64')}` } });
+    assert.equal(idle.status, 403, 'an agent holding nothing pushes nothing');
     await op('a1', 'submit', { item: job.item, headline: 'GET /things', evidence: [{ label: 'npm test: 3 passed' }] });
     assert.equal(item(n).stage, 'verifying');
 
@@ -264,14 +288,55 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     assert.equal(hub.q('SELECT state FROM issues WHERE number = ?').get(issueNo).state, 'closed');
     assert.equal(gh.state.issues.get(n === 1 ? 12 : 11).state, 'open', 'the other issue is untouched');
 
-    // 6. No long-lived credential on the agent's side: every push to the repository used a per-claim token,
-    // minted for this one repository with work permissions; the hub's own reads used read-only ones.
-    const pushes = gh.state.gitAuth.filter((a) => a.push);
+    // 6. No long-lived credential on the agent's side, and none that writes: every push that reached the repository
+    // came from the hub, with a token minted for this one repository with work permissions; the rest only read.
+    const pushes = gh.state.gitAuth.filter((a) => a.push && a.token !== cred.body.password);
     assert.ok(pushes.length >= 1);
-    for (const a of pushes) assert.equal(a.token, cred.body.password);
+    for (const a of pushes) assert.deepEqual(gh.state.mints.get(a.token), { repositories: ['api'], permissions: WORK_PERMISSIONS });
     const claimTokens = hub.q(`SELECT data FROM events WHERE type = 'credential'`).all().map((e) => JSON.parse(e.data));
-    assert.deepEqual(claimTokens.map((d) => [d.agent, d.item, d.repo]), [['a1', n, 'github.com/acme/api']]);
-    for (const a of gh.state.gitAuth.filter((x) => x.token !== cred.body.password)) assert.deepEqual(gh.state.mints.get(a.token).permissions, CLONE_PERMISSIONS);
+    assert.deepEqual(claimTokens.map((d) => [d.agent, d.item, d.repo, d.write]), [['a1', n, 'github.com/acme/api', false], ['a1', n, 'github.com/acme/api', true]]);
+    for (const a of gh.state.gitAuth.filter((x) => !pushes.includes(x))) assert.deepEqual(gh.state.mints.get(a.token).permissions, CLONE_PERMISSIONS);
+  });
+
+  // #605: holding one item never rewrites another's branch, accepted or not, fast-forward or forced.
+  test("the hub passes on a push only to the held item's branch", async () => {
+    for (const title of ['One', 'Two']) await post('/api/p/api/human/create', { title, acceptance: 'x' });
+    const url = `${stub}/acme/api.git`;
+    const via = (agent) => `${base.replace('//', `//${agent}:none@`)}/api/git/github.com/acme/api.git`;
+    // An agent claims an item, commits on its branch and pushes it through the hub.
+    const claimAndPush = async (agent) => {
+      await op(agent, 'checkin', { model: 'claude-opus-5-5' });
+      const job = await op(agent, 'next');
+      assert.equal(job.mode, 'work');
+      const cred = await post('/api/agent/credential', {}, { 'x-nuworq-agent': agent });
+      const env = tokenEnv(url, cred.body.password, {});
+      const wt = join(root, agent);
+      await netGit(root, ['clone', '-q', url, wt], env);
+      git(wt, ['switch', '-q', '-c', job.branch, 'origin/main']);
+      writeFileSync(join(wt, `${agent}.txt`), `${agent}\n`);
+      git(wt, ['add', '.']);
+      git(wt, ['commit', '-q', '-m', `work by ${agent}`]);
+      git(wt, ['remote', 'set-url', '--push', 'origin', via(agent)]);
+      await netGit(wt, ['push', '-q', 'origin', job.branch], env);
+      return { job, wt, env };
+    };
+    const two = await claimAndPush('a2');
+    const one = await claimAndPush('a1');
+    assert.notEqual(one.job.branch, two.job.branch);
+    const theirs = git(gh.bare, ['rev-parse', two.job.branch]);
+    // a1 tries to put a commit on a2's branch: a fast-forward on top of it, and its own commit, forced.
+    await netGit(one.wt, ['fetch', '-q', 'origin', two.job.branch], one.env);
+    git(one.wt, ['switch', '-q', '-c', 'on-top', 'FETCH_HEAD']);
+    writeFileSync(join(one.wt, 'extra.txt'), 'slipped in\n');
+    git(one.wt, ['add', '.']);
+    git(one.wt, ['commit', '-q', '-m', 'slipped in']);
+    for (const args of [['push', 'origin', `on-top:refs/heads/${two.job.branch}`], ['push', '--force', 'origin', `${one.job.branch}:refs/heads/${two.job.branch}`]]) {
+      await assert.rejects(netGit(one.wt, args, one.env), (e) => new RegExp(`only the branch of the item they hold: ${one.job.branch}`).test(e.message) && /remote rejected/.test(e.message), args.join(' '));
+    }
+    assert.equal(git(gh.bare, ['rev-parse', two.job.branch]), theirs, "a2's branch is untouched");
+    assert.equal(git(gh.bare, ['rev-parse', one.job.branch]), git(one.wt, ['rev-parse', one.job.branch]), 'its own branch went through');
+    const refused = hub.q(`SELECT data FROM events WHERE type = 'push_refused'`).all().map((e) => JSON.parse(e.data));
+    assert.deepEqual(refused.map((d) => [d.agent, d.refs]), [['a1', [`refs/heads/${two.job.branch}`]], ['a1', [`refs/heads/${two.job.branch}`]]], 'each refusal on the record');
   });
 
   test('a delivery not signed with the app\'s secret changes nothing; ping answers; an unknown repository reaches no project', async () => {

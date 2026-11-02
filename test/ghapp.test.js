@@ -4,7 +4,7 @@ import http from 'node:http';
 import { generateKeyPairSync, createVerify, createHmac } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, realpathSync, statSync, readFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -119,22 +119,23 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     assert.match(r.json.hint, /claim one/);
   });
 
-  test('a claim gets a token restricted to its one repository, and the mint is on the record without the token', async () => {
+  test('a claim gets a read-only token restricted to its one repository, and the mint is on the record without the token', async () => {
     hub.agentOp('api', 'claim', 'a1', { item: '#1' });
     const r = await credential('a1');
     assert.equal(r.status, 200, JSON.stringify(r.json));
     const expires = r.json.expires_at;
     assert.deepEqual({ ...r.json, password: undefined }, { ok: true, username: 'x-access-token', password: undefined, repo: 'github.com/acme/api', expires_at: expires });
     assert.equal(r.json.password, 'ghs_secret1');
-    assert.deepEqual(gh.state.mints[0], { repositories: ['api'], permissions: { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read' } });
+    // Read only (#472): a worker's pushes go through the hub, so no worker holds a token that writes.
+    assert.deepEqual(gh.state.mints[0], { repositories: ['api'], permissions: { contents: 'read', metadata: 'read' } });
     const jwt = gh.state.jwts.at(-1);
     assert.equal(jwt.iss, '1234');
     assert.ok(jwt.exp - jwt.iat <= 600, 'the app JWT lives at most 10 minutes');
 
     const e = hub.q(`SELECT * FROM events WHERE type = 'credential'`).get();
     assert.equal(e.actor, 'a1');
-    assert.match(e.headline, new RegExp(`a1 got a GitHub token for github\\.com/acme/api on #1, until ${expires.slice(11, 16)} UTC`));
-    assert.deepEqual(JSON.parse(e.data), { agent: 'a1', item: 1, repo: 'github.com/acme/api', expires_at: expires, token: null });
+    assert.match(e.headline, new RegExp(`a1 got a read-only GitHub token for github\\.com/acme/api on #1, until ${expires.slice(11, 16)} UTC`));
+    assert.deepEqual(JSON.parse(e.data), { agent: 'a1', item: 1, repo: 'github.com/acme/api', expires_at: expires, token: null, write: false });
     assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE data LIKE '%ghs_%' OR headline LIKE '%ghs_%'`).get().n, 0, 'the token itself is never stored');
   });
 
@@ -166,6 +167,9 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     assert.equal(other.stdout, '');
     assert.match(other.stderr, /the token is for github\.com\/acme\/api/);
     assert.equal((await git('protocol=https\nhost=gitlab.com\npath=acme/api.git\n\n')).stdout, '');
+    // The hub, where its pushes go (#472): the worker's name, and its agent token (none on this hub) as the password.
+    assert.equal((await git(`protocol=http\nhost=127.0.0.1:${port}\npath=api/git/github.com/acme/api.git\n\n`)).stdout, 'username=a1\npassword=none\n');
+    assert.equal((await git(`protocol=https\nhost=127.0.0.1:${port}\n\n`)).stdout, '', 'not over another protocol');
   });
 
   test('git asking again reuses the token until 5 minutes before it expires: one mint, one event', async () => {
@@ -276,7 +280,7 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       const action = html.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&');
       assert.ok(action.startsWith(`${stub}/settings/apps/new?state=`), action);
       const m = JSON.parse(html.match(/name="manifest" value="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
-      assert.deepEqual(m.default_permissions, { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' });
+      assert.deepEqual(m.default_permissions, { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', issues: 'write', vulnerability_alerts: 'read', members: 'read' });
       assert.equal(m.redirect_url, 'http://hub.test/api/github/app/callback');
       assert.equal(m.hook_attributes.url, 'http://hub.test/api/hooks/github-app');
       const state = new URL(action).searchParams.get('state');
@@ -320,11 +324,32 @@ describe('workers ask git for tokens through the helper', () => {
     const server = createServer(hub);
     const port = await listen(server);
     try {
+      // The person's own helpers, as a Mac with gh has them (#472): the worker must never reach them.
+      const leak = (who) => `"!f() { echo username=${who}; echo password=leaked; }; f"`;
+      writeFileSync(join(dir, '.gitconfig'), `[credential]\n\thelper = ${leak('keychain')}\n[credential "https://github.com"]\n\thelper = ${leak('gh')}\n`);
       const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${port}`, '--project', 'api', '--as', 'w1'], { env: { ...process.env, HOME: dir }, cwd: dir });
-      // Every value in it quoted (#477): git runs the helper through sh.
-      assert.match(stdout, /export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=credential\.https:\/\/github\.com\.helper GIT_CONFIG_VALUE_0='!NUWORQ_URL='\\''http:\/\/127\.0\.0\.1:\d+'\\'' node '\\''[^']+'\\'' git-credential --as '\\''w1'\\'''/);
-      assert.match(stdout, /GIT_CONFIG_KEY_1=credential\.https:\/\/github\.com\.useHttpPath GIT_CONFIG_VALUE_1=true/);
-      assert.doesNotMatch(execFileSync('git', ['-C', home, 'config', '--list', '--local'], { encoding: 'utf8' }), /credential/);
+      const line = stdout.match(/^unset SSH_AUTH_SOCK && export GIT_CONFIG_COUNT=.*(?= && \\\n)/m)?.[0];
+      assert.ok(line, stdout);
+      const env = { PATH: process.env.PATH, HOME: dir, GIT_TERMINAL_PROMPT: '0' };
+      const asWorker = (...a) => execFileSync('/bin/sh', ['-c', `${line} && git ${a.join(' ')}`], { cwd: home, encoding: 'utf8', env }).trim();
+      // What git's credential lookup really gets: the person's helpers answer outside the worker, never inside it,
+      // where nuworq's is the only one (this hub has no GitHub App, so it gives GitHub nothing).
+      // The helper asks this process's hub: never synchronously, or nobody answers it.
+      const fill = (input, worker = true) => new Promise((resolve) => {
+        const child = execFile('/bin/sh', ['-c', `${worker ? `${line} && ` : ''}git credential fill`], { cwd: home, encoding: 'utf8', env, timeout: 20_000 }, (e, out) => resolve(out ?? ''));
+        child.stdin.end(input);
+      });
+      assert.match(await fill('protocol=https\nhost=github.com\npath=acme/api.git\n\n', false), /password=leaked/, 'the person\'s own helpers are there');
+      assert.doesNotMatch(await fill('protocol=https\nhost=github.com\npath=acme/api.git\n\n'), /leaked/);
+      assert.equal(await fill(`protocol=http\nhost=127.0.0.1:${port}\npath=api/git/github.com/acme/api.git\n\n`), `protocol=http\nhost=127.0.0.1:${port}\npath=api/git/github.com/acme/api.git\nusername=w1\npassword=none\n`);
+      // Pushes go to the hub; fetches stay on GitHub, SSH addresses over HTTPS; no SSH agent.
+      assert.equal(asWorker('remote', 'get-url', '--push', 'origin'), `http://127.0.0.1:${port}/api/git/github.com/acme/api.git`);
+      assert.equal(asWorker('remote', 'get-url', 'origin'), 'https://github.com/acme/api.git');
+      execFileSync('git', ['-C', home, 'remote', 'set-url', 'origin', 'git@github.com:acme/api.git']);
+      assert.equal(asWorker('remote', 'get-url', '--push', 'origin'), `http://127.0.0.1:${port}/api/git/github.com/acme/api.git`);
+      assert.equal(asWorker('remote', 'get-url', 'origin'), 'https://github.com/acme/api.git');
+      assert.equal(execFileSync('/bin/sh', ['-c', `SSH_AUTH_SOCK=/tmp/agent.sock; ${line} && echo "[$SSH_AUTH_SOCK]"`], { encoding: 'utf8' }).trim(), '[]');
+      assert.doesNotMatch(execFileSync('git', ['-C', home, 'config', '--list', '--local'], { encoding: 'utf8' }), /credential|insteadof/i);
     } finally { server.close(); }
   });
 });

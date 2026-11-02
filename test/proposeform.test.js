@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { proposeForm, proposal, sentToast } from '../web/propose.js';
 import { NEW } from '../web/new.js';
 import { STEPS } from '../src/userguide.js';
+import { appSource } from './appsource.js';
 
 describe('propose from the board', () => {
   test('one field and one button at first; done means, context and priority open on demand', () => {
@@ -28,13 +29,13 @@ describe('propose from the board', () => {
     assert.match(open, /id="nw-pre"/);
     assert.match(open, /data-action="add-ready"[^>]*>Add to Ready</);
     assert.match(open, /Add to Ready skips that: it goes straight into the queue/);
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /'add-ready': \(\) => addWork\(true\)/);
     assert.match(app, /precondition: pre \? toPrecondition\(pre\)/);
   });
 
   test('wired in: the board\'s + Work opens it and is tagged new', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /proposeForm\(\{ more: S\.addMore/);
     assert.match(app, /data-action="toggle-add"[^>]*data-new="propose-work"/);
     assert.match(app, /human\('create', body/);
@@ -58,7 +59,7 @@ describe('propose from the board', () => {
     assert.equal(sentToast({ waits: true }), 'Proposed: an agent shapes it next, and once it\'s ready it waits until that holds');
     assert.equal(sentToast({ ready: true }), 'Added to Ready');
     assert.equal(sentToast({ ready: true, waits: true }), 'Added; it waits until that holds');
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /human\('create', body, sentToast\(\{ ready, waits: !!pre \}\)\)/);
   });
 

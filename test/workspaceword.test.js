@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // People see "workspace", never "organization", for the top level: projects live within a workspace (#159).
-const dir = (d) => readdirSync(new URL(`../${d}/`, import.meta.url)).map((f) => `${d}/${f}`);
+const dir = (d) => readdirSync(new URL(`../${d}/`, import.meta.url), { recursive: d === 'web' }).filter((f) => /\.\w+$/.test(f)).map((f) => `${d}/${f}`);
 const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
 const hits = (f, lines) => lines.flatMap((l, i) => (/organi[sz]ation/i.test(l) ? [`${f}:${i + 1}: ${l.trim()}`] : []));
 

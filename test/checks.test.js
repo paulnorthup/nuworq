@@ -2,10 +2,11 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { checkChip, checkResult } from '../web/checks.js';
+import { appSource } from './appsource.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 
 describe('a failing check shows a red ✗, never inside a green ✓ (#192)', () => {
   test('failed: red with ✗ and no ✓; passed: ✓; anything else: no mark, and it says what it is', () => {

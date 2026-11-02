@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { appSource } from './appsource.js';
 
 // A project's settings are in one dialog (#213): the header keeps Depth, Autonomy and Settings.
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 const fn = (name) => { const s = app.indexOf(`function ${name}(`); return app.slice(s, app.indexOf('\n}\n', s)); };
 const header = (() => { const p = fn('project'); return p.slice(p.indexOf('<div class="phead">'), p.indexOf('${projectBody(')); })();
 const dialog = fn('settingsModal');
@@ -50,6 +51,22 @@ test('a change made from the dialog keeps focus on the control that made it, aft
   assert.match(s, /settingsModal\(\);\s*if \(row\) \$\(`#\$\{row\}`\)\?\.closest\('\.setting'\)\?\.querySelector\(':scope > button'\)\?\.focus\(\);/, 'and focused again after the redraw');
   // Every row's control is the row's own button, so the row finds it: switches, GitHub, Park or Unpark, Remove.
   assert.match(dialog, /<div class="setting"><div class="body"><div class="h" id="set-\$\{id\}">\$\{name\}<\/div><div class="s">\$\{what\}<\/div><\/div>\$\{control\}<\/div>/);
+});
+
+// #643: a yes on the page with no runner anywhere staffs nothing, so the page offers staffing only once a runner has
+// reached the project; until then connect asks, on the machine that would run the workers.
+test('the page offers staffing only once a runner has reported for the project', async () => {
+  const { Hub } = await import('../src/core.js');
+  const { view } = await import('../src/insight.js');
+  const hub = new Hub();
+  hub.tx(() => hub.project('demo', { create: true }));
+  hub.tx(() => hub.project('other', { create: true }));
+  assert.equal(view(hub, 'demo').project.runners_here, 0, 'no runner yet');
+  hub.reportRunner({ machine: 'elsewhere' }, { name: 'r-other', scope: ['other'] });
+  assert.equal(view(hub, 'demo').project.runners_here, 0, "a runner that can't reach it doesn't count");
+  hub.reportRunner({ machine: 'mac' }, { name: 'r-mac', scope: ['demo'] });
+  assert.equal(view(hub, 'demo').project.runners_here, 1);
+  assert.match(header, /\$\{!P\.runner && P\.staffing && !P\.staffing\.asked && P\.runners_here \? `<div class="staff-ask">/, 'the banner waits for it');
 });
 
 test("the staffing line's Change is a 44px target that doesn't stretch its line", () => {
