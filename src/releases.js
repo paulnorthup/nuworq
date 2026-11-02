@@ -30,12 +30,24 @@ export const openRelease = (hub, p) => hub.q(`SELECT * FROM items WHERE project_
 // A milestone: a top-level item with parts.
 const isMilestone = (hub, it) => !it.parent_id && !!hub.q('SELECT 1 FROM items WHERE parent_id = ? LIMIT 1').get(it.id);
 
-// What the next release holds: the work done since the last one (the last release item's draft, or the
-// last tag's commit, whichever is later), with the version it comes to.
+// a < b, b = a, a > b as -1, 0, 1.
+const compare = (a, b) => {
+  const [x, y] = [a, b].map((v) => (SEMVER.exec(v ?? '') ?? [0, 0, 0, 0]).slice(1).map(Number));
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return Math.sign(x[i] - y[i]);
+  return 0;
+};
+
+// What the next release holds: the work done since the last one, with the version it comes to. The last one
+// is the release item that landed, until a tag newer than it shows (#735): its tag can lag its landing, so its
+// version is the floor and its draft's cut-off the start, or work done while it was under way goes missing.
 function contents(hub, p) {
-  const last = lastRelease(hub.repoFor(p)?.path) ?? { version: '0.0.0', tag: null, at: 0 };
+  const tagged = lastRelease(hub.repoFor(p)?.path) ?? { version: '0.0.0', tag: null, at: 0 };
   const prev = hub.q(`SELECT MAX(release_through) AS t FROM items WHERE project_id = ? AND release = 1 AND stage = 'done'`).get(p.id).t ?? 0;
-  const since = Math.max(prev, last.at);
+  const shipped = hub.q(`SELECT * FROM items WHERE project_id = ? AND release = 1 AND stage = 'done' ORDER BY release_through DESC, seq DESC LIMIT 1`).get(p.id);
+  const shippedVersion = releaseVersion(shipped);
+  const ours = shippedVersion && compare(shippedVersion, tagged.version) >= 0;
+  const last = ours ? { version: shippedVersion, tag: shippedVersion === tagged.version ? tagged.tag : null, at: prev } : tagged;
+  const since = ours ? prev : Math.max(prev, tagged.at);
   const items = hub.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? AND release = 0 AND sweep = 0 AND tidy = '' AND security = '' ORDER BY seq`).all(p.id, since);
   const milestones = items.filter((it) => isMilestone(hub, it));
   const version = nextVersion(last.version, { breaking: items.some((it) => it.breaking), milestone: milestones.length > 0 });
