@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Hub } from '../src/core.js';
 import { projectList, liveOperators } from '../src/insight.js';
 import { launchdPlist, systemdUnit } from '../src/service.js';
-import { upPlan, upClones, readService, autoArgs, launcherFor, launchCommands, operatorShell, appleString, upTable } from '../src/up.js';
+import { upPlan, upClones, readService, autoArgs, withCaps, launcherFor, launchCommands, operatorShell, appleString, upTable } from '../src/up.js';
 
 const NODE = '/opt/homebrew/bin/node', BIN = '/usr/local/lib/node_modules/nuworq/bin/nuworq.js';
 const auto = { supported: true, args: ['--workers', 'auto'], cwd: '/src/nuworq', up: true };
@@ -48,18 +48,21 @@ describe('the runner', () => {
     }
   });
 
-  test('--workers auto replaces any --workers, and keeps the rest', () => {
-    assert.deepEqual(autoArgs(['--workers', '3', '--agent', 'codex']), ['--agent', 'codex', '--workers', 'auto']);
-    assert.deepEqual(autoArgs(['--workers=1']), ['--workers', 'auto']);
-    assert.deepEqual(autoArgs([]), ['--workers', 'auto']);
+  const CAPS = ['--max-minutes', '90', '--worker-usd', '25'];
+  test('--workers auto replaces any --workers, and keeps the rest; the default caps are written out unless set (#761)', () => {
+    assert.deepEqual(autoArgs(['--workers', '3', '--agent', 'codex']), ['--agent', 'codex', '--workers', 'auto', ...CAPS]);
+    assert.deepEqual(autoArgs(['--workers=1']), ['--workers', 'auto', ...CAPS]);
+    assert.deepEqual(autoArgs([]), ['--workers', 'auto', ...CAPS]);
+    assert.deepEqual(autoArgs(['--max-minutes', '0', '--worker-usd=40']), ['--max-minutes', '0', '--worker-usd=40', '--workers', 'auto'], "the person's own caps stay");
+    assert.deepEqual(withCaps(['--workers', '2']), ['--workers', '2', ...CAPS]);
   });
 
   test('installed when there is none, restarted when its flags differ or it is down, else left alone', () => {
     const at = (runner) => upPlan({ projects: [], runner }).runner;
     assert.equal(at({ supported: true, args: null }).action, 'install');
-    assert.deepEqual(at({ supported: true, args: null }).args, ['--workers', 'auto']);
+    assert.deepEqual(at({ supported: true, args: null }).args, ['--workers', 'auto', ...CAPS]);
     const differ = at({ supported: true, args: ['--workers', '2'], cwd: '/src/x', up: true });
-    assert.deepEqual([differ.action, differ.args, differ.cwd], ['restart', ['--workers', 'auto'], '/src/x']);
+    assert.deepEqual([differ.action, differ.args, differ.cwd], ['restart', ['--workers', 'auto', ...CAPS], '/src/x']);
     assert.match(differ.why, /--workers 2/);
     assert.deepEqual([at({ ...auto, up: false }).action, at({ ...auto, up: false }).why], ['restart', "it isn't running"]);
     assert.equal(at(auto).action, 'keep');

@@ -23,7 +23,8 @@ export function normUsage(u) {
   const cost = rawCost == null || rawCost === '' ? null : count(rawCost, 'cost_usd');
   const model = String(u.model ?? '').trim().slice(0, 100);
   if (!input && !output && cost == null) return null;
-  return { input_tokens: input, output_tokens: output, cost_usd: cost, model };
+  // estimated: priced by nuworq from the run's tokens, not by its CLI (#761).
+  return { input_tokens: input, output_tokens: output, cost_usd: cost, model, ...(u.estimated === true || u.estimated === 'true' ? { estimated: true } : {}) };
 }
 
 // Split one run's usage across the items it worked on, by weight (time held). Integer tokens; the
@@ -47,15 +48,37 @@ export function split(u, weights) {
 // total_cost_usd and usage; `system/init` names the model), codex (exec --json: `turn.completed`
 // carries token counts, no cost), opencode (run --format json: `step_finish` parts carry tokens and cost),
 // pi (-p --mode json: an assistant `message_end` carries its usage, cost.total among it).
+// While it runs (#761), claude's spend so far is estimated from each assistant message's usage and the model's
+// price, so a runaway run can be stopped and counted before it exits; its `result` replaces the estimate. A run
+// killed before its `result` keeps the estimate, marked estimated: true. Codex is priced from the same table.
 export function tap(agent, { model = '' } = {}) {
-  let input = 0, output = 0, cost = null, seen = false, name = model;
+  let input = 0, output = 0, cost = null, seen = false, name = model, estimated = false;
   const add = (i, o, c) => { seen = true; input += Number(i) || 0; output += Number(o) || 0; if (c != null && Number.isFinite(Number(c))) cost = (cost ?? 0) + Number(c); };
   const text = (blocks) => (Array.isArray(blocks) ? blocks.filter((b) => b?.type === 'text' && b.text).map((b) => b.text).join('\n') : '') || null;
+  // claude's messages so far, by id: stream-json repeats a message's usage on each of its content blocks.
+  const messages = new Map();
+  let finished = false;
+  const estimate = () => {
+    if (finished || !messages.size) return;
+    const t = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+    for (const u of messages.values()) {
+      t.input += Number(u.input_tokens) || 0; t.output += Number(u.output_tokens) || 0;
+      t.cache_read += Number(u.cache_read_input_tokens) || 0; t.cache_write += Number(u.cache_creation_input_tokens) || 0;
+    }
+    seen = true; estimated = true;
+    input = t.input + t.cache_read + t.cache_write; output = t.output;
+    cost = priceOf(name, t);
+  };
   const parsers = {
     claude(e) {
       if (e.type === 'system' && e.subtype === 'init') { name ||= e.model ?? ''; return null; }
-      if (e.type === 'assistant') return text(e.message?.content);
+      if (e.type === 'assistant') {
+        const m = e.message ?? {};
+        if (m.usage) { messages.set(m.id ?? messages.size, m.usage); name ||= m.model ?? ''; estimate(); }
+        return text(m.content);
+      }
       if (e.type === 'result') {
+        finished = true; estimated = false; input = 0; output = 0; cost = null;
         const u = e.usage ?? {};
         // Cached input is still input the model read: count it, so tokens match the bill.
         add((u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), u.output_tokens, e.total_cost_usd);
@@ -65,7 +88,13 @@ export function tap(agent, { model = '' } = {}) {
       return null;
     },
     codex(e) {
-      if (e.type === 'turn.completed') { add(e.usage?.input_tokens, e.usage?.output_tokens, null); return null; }
+      if (e.type === 'turn.completed') {
+        // Its input_tokens include the cached ones.
+        const u = e.usage ?? {};
+        const cached = Number(u.cached_input_tokens) || 0;
+        add(u.input_tokens, u.output_tokens, priceOf(name, { input: Math.max((Number(u.input_tokens) || 0) - cached, 0), cache_read: cached, output: Number(u.output_tokens) || 0 }));
+        return null;
+      }
       if (e.type === 'item.completed' && e.item?.type === 'agent_message') return e.item.text ?? null;
       return null;
     },
@@ -101,9 +130,34 @@ export function tap(agent, { model = '' } = {}) {
     usage() {
       if (!seen) return null;
       const unpriced = /^(ollama|proxy)\//.test(name);
-      return { input_tokens: input, output_tokens: output, cost_usd: unpriced ? null : cost, model: name.replace(/^(ollama|proxy)\//, '') };
+      return { input_tokens: input, output_tokens: output, cost_usd: unpriced ? null : cost, model: name.replace(/^(ollama|proxy)\//, ''), ...(estimated ? { estimated: true } : {}) };
     },
+    // Dollars so far, for the runner's caps: 0 while unknown.
+    spent() { return /^(ollama|proxy)\//.test(name) ? 0 : cost ?? 0; },
   };
+}
+
+// Dollars per million tokens, for a run its CLI didn't price (#761): a claude run killed before its `result`, and
+// codex, which reports tokens only. First match wins; cache reads cost a tenth of input, cache writes 1.25×.
+// A model not here is unpriced (cost null), never $0.
+const PRICES = [
+  [/opus-4(-[01])?(-\d{8})?$|claude-3-opus/, 15, 75], // Opus 4 and 4.1; later ones cost less
+  [/opus/, 5, 25],
+  [/sonnet/, 3, 15],
+  [/haiku-3-5|3-5-haiku/, 0.8, 4],
+  [/haiku/, 1, 5],
+  [/^gpt-5(\.\d+)?-mini/, 0.25, 2],
+  [/^gpt-5(\.\d+)?-nano/, 0.05, 0.4],
+  [/^gpt-5(\.\d+)?(-codex)?$|^gpt-5(\.\d+)?-codex/, 1.25, 10],
+  [/^codex-mini/, 1.5, 6],
+];
+// tokens: { input, output, cache_read, cache_write }. null when the model has no price here.
+export function priceOf(model, { input = 0, output = 0, cache_read = 0, cache_write = 0 } = {}) {
+  const m = String(model ?? '').toLowerCase().replace(/^(anthropic|openai)\//, '');
+  const row = m && PRICES.find(([re]) => re.test(m));
+  if (!row) return null;
+  const [, i, o] = row;
+  return (input * i + cache_read * i * 0.1 + cache_write * i * 1.25 + output * o) / 1e6;
 }
 
 // A stream splitter for tap(): feed chunks, get whole lines.

@@ -1031,6 +1031,10 @@ function workerSetup(target, agent, flags, s, token = null) {
   if (has('package.json')) lines.push('export NUWORQ_TEST_CONCURRENCY=${NUWORQ_TEST_CONCURRENCY:-2}');
   // Started here (--run), the agent speaks JSON, so its usage can be read and recorded (src/usage.js tap).
   const json = flags.run ? { claude: ' \\\n  --output-format stream-json --verbose', codex: ' --json', opencode: ' --format json', pi: ' --mode json' }[agent] : '';
+  // The runner's per-worker cap (#761), held by claude itself too: it stops at the cap even between the runner's polls.
+  // A land job's own cap (#752) applies too: the lower one wins.
+  const usdCaps = [flags.run && Number(flags.budget), landing && Number(flags.capUsd)].filter((x) => x > 0 && Number.isFinite(x));
+  const budget = usdCaps.length ? ` --max-budget-usd ${Math.min(...usdCaps)}` : '';
   // Model traffic says who it is, so llm-proxy (when it goes through one) can be read per worker (#76).
   // Other endpoints ignore the header.
   const label = clientLabel(target.slug, name);
@@ -1047,7 +1051,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     // only the name Claude Code scrubs carries it.
     if (flags.proxy !== undefined) lines.push(`export ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN"`, 'unset NUWORQ_LLM_PROXY_TOKEN');
     // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: its shell, hooks and MCP servers start without Claude Code's own credentials (#616).
-    lines.push(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''}${landing && flags.capUsd ? ` --max-budget-usd ${Number(flags.capUsd)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts, landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${budget}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts, landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
@@ -1125,7 +1129,8 @@ async function runService(flags, { argv = process.argv.slice(3), cwd = process.c
   await chooseWorkFolders(flags, await createClient(flags).get('/api/projects').catch(() => []), resolveSettings(flags));
   // --agent-token never goes on the service's command line, where ps shows it: a 0600 file it reads instead.
   const taken = svc.takeToken(args);
-  args = taken.args;
+  // Its default caps written out (#761), so the service file says what a runaway worker is stopped at.
+  args = (await import('../src/up.js')).withCaps(taken.args);
   const agentTokenFile = taken.token ? tokenFile(dirname(HUB_FILE), 'run-agent', taken.token) : kept;
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
   // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
@@ -1213,7 +1218,10 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, runnerGit } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, runnerGit, runCaps } = await import('../src/runner.js');
+  // --max-minutes, --max-usd and --worker-usd, with their defaults (#761); 0 turns one off.
+  let caps;
+  try { caps = runCaps(flags); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
   // The worktrees of the workers running now: each one's branch is its own to move (#618).
   const live = new Set();
   const logs = join(dirname(HUB_FILE), 'logs');
@@ -1266,7 +1274,7 @@ async function runCmd(flags) {
     const routed = r.model || capUsd ? { ...(r.model ? { model: r.model } : {}), job: r, ...(capUsd ? { capUsd } : {}) } : {};
     let setup;
     try {
-      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true, chosen, ...routed }, s, client, token);
+      setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true, chosen, budget: caps.workerUsd, ...routed }, s, client, token);
     } catch (e) {
       // This machine can't work on the project (no checkout of it here): the runner leaves it to others.
       if (e instanceof HubError) e.skip = true;
@@ -1326,7 +1334,8 @@ async function runCmd(flags) {
         }
         done(code ?? (sig ? `${sig}` : 1));
       })),
-      spent: () => usage()?.cost_usd ?? 0, // what its CLI said it cost, for --max-usd
+      // Spend so far (#761), for the caps and the hub's daily budget; null when its model is unpriced.
+      spent: () => { const u = usage(); return u && u.cost_usd == null ? null : u?.cost_usd ?? 0; },
       cap: capUsd, // a land job's (#752): the runner stops it once what it reports passes this
     };
   };
@@ -1364,7 +1373,8 @@ async function runCmd(flags) {
   const maxWorkers = auto ? num(flags['max-workers'], autoMax(availableParallelism())) : undefined;
   const reporter = createClient({ url: s.url, token: token ?? s.token });
   const howMany = auto ? `as many ${agent} workers as this machine has room for (up to ${maxWorkers})` : `up to ${workers} ${agent} worker${workers > 1 ? 's' : ''}`;
-  console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`${howMany} on opted-in projects at ${s.url}; Ctrl-C stops`)}`);
+  const limits = [caps.maxMinutes < Infinity && `${caps.maxMinutes}m`, caps.workerUsd < Infinity && `$${caps.workerUsd}`].filter(Boolean);
+  console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`${howMany} on opted-in projects at ${s.url}${limits.length ? `; each stops at ${limits.join(' or ')}` : ''}${caps.maxUsd < Infinity ? `; $${caps.maxUsd} in all` : ''}; Ctrl-C stops`)}`);
   // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
   const startedOn = installed(ROOT);
   const { supervised } = await import('../src/service.js');
@@ -1395,8 +1405,7 @@ async function runCmd(flags) {
     signoff: (w) => Promise.race([reporter.call('signoff', { headline: 'Worker exited' }, { agent: w.name, project: w.project }), new Promise((r) => setTimeout(r, 5000).unref())]),
     maxRuns: num(flags['max-runs'], Infinity),
     untilIdle: !!flags['until-idle'],
-    maxMinutes: num(flags['max-minutes'], Infinity),
-    maxUsd: num(flags['max-usd'], Infinity),
+    ...caps,
     pollSeconds: num(flags.poll, 30),
     onInterrupt: (fn) => {
       process.on('SIGINT', () => { console.log(dim('\nStopping: no new workers; asking running ones to stop (Ctrl-C again to kill them).')); fn(); });
