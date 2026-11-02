@@ -11,6 +11,7 @@ import { PASS_ON } from './issues.js';
 import { humanCost, verification } from './outcomes.js';
 import { OPERATOR_TAGS } from './protocol.js';
 import { wiringEntry } from './appwiring.js';
+import { bounceOf, sentence as endSentence } from './bounce.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -519,20 +520,25 @@ function build(hub, p, t, { light = false } = {}) {
     }
   }
 
+  // Work that keeps bouncing (#564), said from its history: only when a person can help, with that person's step.
   // Accepted work in landing is agents' to put on main, and a stuck land job is its own signal: nothing for the human (#216).
   for (const it of items.filter((i) => OPEN_STAGES.includes(i.stage) && i.stage !== 'landing' && i.stalls + i.rejections >= 2)) {
-    const h = json(it.handoff, null);
-    const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
-    const parts = [it.rejections && `sent back ${times(it.rejections)}`, it.stalls && `agents went quiet ${times(it.stalls)}`].filter(Boolean).join(', ');
+    const b = bounceOf(hub, p, it, { agents, openQs, unmet, t });
+    if (!b?.step) continue; // a review loop with a fix to build, a dependency someone can take, lapses from restarts
+    const s = b.step;
+    // A blocking question already has its own card: it carries why the work bounces, rather than a second card.
+    const own = s.kind === 'answer' && attention.find((a) => a.key === `q:${s.question.id}`);
+    if (own) { own.why = [`${ref(it)} keeps bouncing. ${b.line}`, own.why].filter(Boolean).join('\n\n'); continue; }
     push({
-      key: `struggle:${it.id}:${it.stalls + it.rejections}`, level: 'act', kind: 'struggling', at: it.updated_at,
+      key: `struggle:${it.id}:${b.failures}:${s.kind}`, level: 'act', kind: 'struggling', at: it.updated_at,
       headline: it.title,
-      sub: `${plural(it.attempts, 'attempt')}: ${parts}`,
-      why: [
-        h && `Latest: ${h.by === HUMAN ? 'you' : h.by} — "${h.headline}"`,
-        'Agents keep failing to land this. The intent may be unclear, the acceptance criteria may be wrong, or it may be too big. Clarify it with a steer, split it, or drop it.',
+      sub: `Bounced ${b.failures === 2 ? 'twice' : `${b.failures} times`} · ${s.kind === 'answer' ? `answer question ${s.question.id}` : s.kind === 'capability' ? `start ${s.missing.some((m) => OPERATOR_TAGS.includes(m)) ? 'an operator' : 'an agent'} with ${s.missing.join(', ')}` : 'clarify, split or drop it'}`,
+      why: [endSentence(`What happened: ${b.happened}`), endSentence(`Now it waits on ${b.waits}`),
+        s.kind === 'clarify' && `It keeps failing the same way: ${s.why}. The intent may be unclear, the acceptance wrong, or it may be too big. Clarify it with a steer, split it, or drop it.`,
       ].filter(Boolean).join('\n\n'),
-      item: ref(it),
+      item: ref(it), step: s.kind,
+      ...(s.kind === 'answer' ? { question: { id: s.question.id, question: s.question.question, options: json(s.question.options, []), asked_by: s.question.asked_by } } : {}),
+      ...(s.kind === 'capability' ? { how: capabilitySteps(p, s.target, s.missing) } : {}),
     });
   }
 
@@ -1166,6 +1172,13 @@ export function itemView(hub, slug, ref) {
     evidence: submit?.data?.evidence ?? [], git: submit?.data?.git ?? null, git_warning: gitWarning(submit?.data?.git), submission: submit ?? null,
     prs: prsOf(hub, p, it),
     questions, steers, lifecycle,
+    // Why it keeps bouncing, in one line (#564), while it's open and outside landing: whether or not a person can help.
+    bounce: OPEN_STAGES.includes(it.stage) && it.stage !== 'landing' && it.stalls + it.rejections >= 2
+      ? bounceOf(hub, p, it, {
+        agents: hub.q('SELECT * FROM agents WHERE project_id = ? ORDER BY last_seen DESC').all(p.id),
+        openQs: hub.q(`SELECT * FROM questions WHERE project_id = ? AND status = 'open' ORDER BY at`).all(p.id),
+        unmet: (i) => hub.unmetDeps(i), t,
+      })?.line ?? null : null,
     court_totals: Object.fromEntries(Object.entries(courtTotals).map(([k, v]) => [k, dur(v)])),
     court_ms: courtTotals,
     agents: agentNames.map((n) => ({ name: n, model: models[n], provider: providerOf(models[n]) })),

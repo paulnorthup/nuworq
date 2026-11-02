@@ -840,6 +840,19 @@ function cardActions(a, hasMore, open, key) {
       <button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}
     </div>`;
   }
+  // Keeps bouncing (#564): only the actions for its case. A question to you: answer it here. A missing capability:
+  // the steps to start an agent that has it (the card's how list). A real bounce: clarify, split or drop.
+  if (a.kind === 'struggling' && a.step === 'answer') {
+    const q = a.question;
+    return `<div class="answer"><div class="label" style="margin-top:0">Question ${q.id}: ${esc(q.question)}</div>
+      ${q.options?.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+      <div class="answer-row"><input data-draft="ans-${q.id}" id="ans-${q.id}" placeholder="${q.options?.length ? 'Or write your own answer…' : 'Your answer…'}"><button class="btn primary" data-action="answer-text" data-q="${q.id}">Answer</button></div>
+      <div class="actions" style="margin-top:0"><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button><span style="flex:1"></span>${moreBtn}</div>
+    </div>`;
+  }
+  if (a.kind === 'struggling' && a.step === 'capability') {
+    return `<div class="actions"><button class="btn" data-action="open" data-item="${esc(a.item)}">Open</button><button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}</div>`;
+  }
   if (a.kind === 'struggling') {
     const r = `cl:${a.item}`;
     return `<div class="actions">
@@ -1307,6 +1320,7 @@ function renderDrawer() {
     ${it.submission && it.stage === 'verifying' && !it.submissions?.length ? `<div class="d-sec"><div class="label">What the agent says</div><p><b>${esc(it.submission.headline)}</b></p>${md(it.submission.summary)}
       ${it.evidence.length ? `<div class="evidence">${it.evidence.map((x) => `<span class="ev">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>` : esc(x.label)}</span>`).join('')}</div>` : '<div class="warn">⚠ No evidence attached</div>'}
       ${commits(it.git)}${it.git_warning ? `<div class="warn">⚠ ${esc(it.git_warning)}</div>` : ''}</div>` : ''}
+    ${it.bounce ? `<div class="d-sec"><div class="label">Keeps bouncing</div><p>${esc(it.bounce)}</p></div>` : ''}
     ${handoff}
     ${it.prs?.length ? `<div class="d-sec"><div class="label">Pull requests</div>${it.prs.map((pr) => `<p><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a> <b>${esc(pr.state)}</b> · ${esc(pr.title)}
       ${pr.ci ? ` · CI <b class="${pr.ci === 'fail' ? 'bad' : pr.ci === 'pass' ? 'ok' : ''}">${pr.ci === 'pass' ? '✓ passing' : pr.ci === 'fail' ? '✗ failing' : '… running'}</b>` : ''}</p>

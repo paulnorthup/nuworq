@@ -351,6 +351,7 @@ export class Hub extends EventEmitter {
     this.setMaxListeners(200);
     this.db = openDb(file);
     this.now = clock;
+    this.started = clock(); // a lease that ran out before this, or just after, lapsed because the hub was down (#564)
     this.repos = repos;
     this.keys = keys;
     this.hosted = hosted;
@@ -1845,6 +1846,15 @@ export class Hub extends EventEmitter {
     const lapsed = this.q(`SELECT * FROM attempts WHERE stage = 'active' AND closed = 0 AND lease_until < ?`).all(t);
     if (!expired.length && !lapsed.length) return 0;
     const touched = new Map();
+    // Why a lease lapsed (#564), so a bouncing item counts only real failures: 'restart' when it ran out while the hub
+    // was down (or in the minute after, before agents reconnected), 'session' when its agent's session ended (signed
+    // off) or it was a runner's worker (the runner renews a running worker's lease, #540, so a lapse means the worker
+    // or the runner stopped), '' when the agent just went quiet.
+    const cause = (p, agent, until) => {
+      if (until < this.started + MIN) return 'restart';
+      const a = this.q('SELECT runner, signed_off FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
+      return a && (a.runner || a.signed_off) ? 'session' : '';
+    };
     this.tx(() => {
       // A lapsed race attempt frees its slot; the other racers carry on.
       for (const a of lapsed) {
@@ -1858,7 +1868,7 @@ export class Hub extends EventEmitter {
           item: it, actor: SYSTEM, type: 'lease_expired',
           headline: `${a.agent} went quiet on #${it.seq}; their race slot is open again`,
           summary: last ? `Their last update: "${last.headline}"` : 'They left no updates.',
-          data: { agent: a.agent },
+          data: { agent: a.agent, stage: 'active', cause: cause(p, a.agent, a.lease_until) },
         });
         this.stepUp(p, it, 'stalled');
         this.settleRace(p, it, SYSTEM);
@@ -1867,12 +1877,13 @@ export class Hub extends EventEmitter {
         const p = this.q('SELECT * FROM projects WHERE id = ?').get(it.project_id);
         touched.set(p.id, p);
         const last = this.q(`SELECT headline FROM events WHERE item_id = ? AND actor = ? ORDER BY at DESC LIMIT 1`).get(it.id, it.holder);
+        const why = cause(p, it.holder, it.lease_until);
         if (it.stage === 'proposed') {
           this.patch(it, { holder: null, lease_until: null, last_worker: it.holder, stalls: it.stalls + 1 });
           this.event(p, {
             item: it, actor: SYSTEM, type: 'lease_expired',
             headline: `${it.last_worker} went quiet while shaping #${it.seq}; it's open for shaping again`,
-            summary: last ? `Their last update: "${last.headline}"` : '', data: { agent: it.last_worker },
+            summary: last ? `Their last update: "${last.headline}"` : '', data: { agent: it.last_worker, stage: 'proposed', cause: why },
           });
         } else if (it.stage === 'active') {
           this.move(it, 'ready', SYSTEM, { holder: null, lease_until: null, last_worker: it.holder, stalls: it.stalls + 1, touching: '[]' });
@@ -1880,7 +1891,7 @@ export class Hub extends EventEmitter {
             item: it, actor: SYSTEM, type: 'lease_expired',
             headline: `${it.last_worker} went quiet on #${it.seq}; it's back in the queue`,
             summary: last ? `Their last update: "${last.headline}"` : 'They left no updates.',
-            data: { agent: it.last_worker },
+            data: { agent: it.last_worker, stage: 'active', cause: why },
           });
         } else {
           this.patch(it, { holder: null, lease_until: null });
