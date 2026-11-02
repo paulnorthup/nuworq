@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS runners (
   name     TEXT PRIMARY KEY,                  -- its token's runner name, else what it calls itself (the machine)
   machine  TEXT NOT NULL DEFAULT '',
   scope    TEXT NOT NULL DEFAULT '',          -- the projects its token reaches, comma-separated; '' = all
-  state    TEXT NOT NULL DEFAULT '{}',        -- { running, workers, skipping: [{ project, reason, until? }], paused: { until, reason } | null, spent, stopped }
+  state    TEXT NOT NULL DEFAULT '{}',        -- { running, workers, skipping: [{ project, reason, until? }], paused: { until, reason } | null, spent, stopped, spending, runs }
   poll_ms  INTEGER NOT NULL,                  -- how often it polls: silent for 3 of these, it is down
   seen_at  INTEGER NOT NULL
 );
@@ -661,6 +661,11 @@ export const MIGRATIONS = [
     // Commands workers may run beyond the project's checks (#768): a JSON list only a person sets (settings).
     name: 'a project can add commands its workers may run',
     up(db) { addColumn(db, "ALTER TABLE projects ADD COLUMN worker_commands TEXT NOT NULL DEFAULT '[]'"); },
+  },
+  {
+    // Stop it (#767): the workers a person asked a runner to stop, as a JSON list of names, until they're gone.
+    name: "a runner's workers a person stopped",
+    up(db) { addColumn(db, "ALTER TABLE runners ADD COLUMN stop TEXT NOT NULL DEFAULT '[]'"); },
   },
 ];
 

@@ -55,6 +55,7 @@ export const NEW = {
   'default-tiers': '2026-11-02', // #723: Staffing's Claude models say the default tiers are in use, and when trials can't run
   'worker-commands': '2026-11-02', // #768: Settings' Worker commands: workers run the project's checks, and the commands a person adds
   'stall-causes': '2026-11-02', // #754: analytics' Why work stalled, stalled jobs by cause (exited, timeout, budget, went quiet…)
+  'spend-alerts': '2026-11-02', // #767: Needs you at 80% of the daily budget (Raise budget, Pause runners) and for a worker past $50 or an hour (Stop it)
 };
 
 const DAYS = 7;

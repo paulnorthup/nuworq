@@ -12,8 +12,11 @@ export const KINDS = {
   slack: 'Slack incoming webhook URL, e.g. https://hooks.slack.com/services/…',
   webhook: 'any URL that accepts a JSON POST: { text, title, url, entries }',
 };
-const LABEL = { question: 'question', review: 'verify', proposal: 'approve', struggling: 'struggling', direction: 'pick what matters', 'no-agents': 'no agent working', 'group-stalled': 'stalled on a capability' };
+const LABEL = { question: 'question', review: 'verify', proposal: 'approve', struggling: 'struggling', direction: 'pick what matters', 'no-agents': 'no agent working', 'group-stalled': 'stalled on a capability', 'budget-near': 'budget', 'run-spend': 'worker spend' };
 const FORGET = HOUR; // an entry gone this long may be pushed again if it comes back (e.g. "What matters most?")
+// Spend alerts (#767) go once per day or worker run, gone or not: their keys name the day or the run, and are
+// remembered past both.
+const ONCE = ['budget:%', 'run-spend:%'];
 
 const clip = (s, n = 100) => { const line = String(s ?? '').split('\n')[0]; return line.length > n ? line.slice(0, n - 1).trimEnd() + '…' : line; };
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
@@ -237,8 +240,9 @@ export class Notifier {
         if (!seen.run(t, e.project_id, e.entry.key).changes) this.pending.add(k); // never pushed before
       }
       // Forget entries long gone from projects we looked at, so a situation that recurs is news again.
-      const forget = db.prepare('DELETE FROM notified WHERE project_id = ? AND seen_at < ?');
-      for (const id of looked) forget.run(id, t - FORGET);
+      const once = ONCE.map(() => 'key LIKE ?').join(' OR ');
+      const forget = db.prepare(`DELETE FROM notified WHERE project_id = ? AND (seen_at < ? AND NOT (${once}) OR seen_at < ?)`);
+      for (const id of looked) forget.run(id, t - FORGET, ...ONCE, t - 2 * DAY);
       if ((this.pending.size || this.unsent().length) && !this.batch) this.batch = setTimeout(() => this.flush().catch((e) => console.error('notify flush failed', e)), this.windowMs);
     } catch (e) {
       console.error('notify scan failed', e);
