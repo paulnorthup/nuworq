@@ -64,7 +64,7 @@ function overview() {
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}
       ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div></div>
-    ${homePage(S.home, { z: z(), pulse, card: (a) => each([a], card), esc, plural, who, wide: WIDE.matches, gs: getStarted() })}`;}
+    ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, gs: getStarted() })}`;}
 
 // ── project ──
 function project(v) {

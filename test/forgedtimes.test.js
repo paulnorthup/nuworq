@@ -70,4 +70,21 @@ describe("a card's written text can't forge or break its times", () => {
     assert.equal(logged.length, 1);
     assert.match(String(logged[0][0]), /broken/);
   });
+
+  test('on the home too: a card that fails to render is left out and logged, and the rest draws', async () => {
+    const { homePage } = await import('../web/home.js');
+    const needs = [{ key: 'broken', project: { slug: 'p', name: 'P' } }, { key: 'good', project: { slug: 'q', name: 'Q' } }];
+    const card = (a) => { if (a.key === 'broken') throw new TypeError('boom'); return `<div class="card">Good card</div>`; };
+    const logged = [];
+    const error = console.error;
+    console.error = (...a) => logged.push(a);
+    let html;
+    try {
+      html = homePage({ needs, projects: [], pulse: {}, worth_knowing: [], motion: [] },{ z: 0, pulse: () => '', card, esc, plural: (n, w) => `${n} ${w}` });
+    } finally { console.error = error; }
+    assert.match(html, /Good card/, 'the good card draws');
+    assert.doesNotMatch(html, /data-project="p"/, 'the bad card is left out, frame and all');
+    assert.equal(logged.length, 1);
+    assert.match(String(logged[0][0]), /broken/);
+  });
 });
