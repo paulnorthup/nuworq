@@ -135,11 +135,29 @@ export class Workspaces {
     return this.get(due, { touch: false });
   }
 
-  create(slug) {
+  // claim(name): what must hold before it's made (an early-access grant, say), run once the name starts clean: it may
+  // bind the name in the directory, and throws to refuse.
+  create(slug, { claim } = {}) {
     const s = Workspaces.check(slug);
     if (existsSync(this.file(s))) throw new UserError(`Workspace "${s}" already exists`, { status: 409 });
+    this.forgetName(s);
+    claim?.(s);
     new Hub({ file: this.file(s) }).db.close();
     return s;
+  }
+
+  // A name with no workspace hands nothing on (#749): rows a workspace of that name left in the directory, removed
+  // before remove forgot them (#728), go before the name is used again. Opens no directory that isn't there yet.
+  forgetName(s) {
+    if (this._directory || existsSync(join(this.dir, 'directory.sqlite'))) this.directory.forget(s);
+  }
+
+  // Each name the directory holds rows for with no workspace of that name: forgotten, and returned (names only).
+  forgetGone() {
+    if (!this._directory && !existsSync(join(this.dir, 'directory.sqlite'))) return [];
+    const gone = this.directory.named().filter((s) => !existsSync(this.file(s)));
+    for (const s of gone) this.directory.forget(s);
+    return gone;
   }
 
   // A single hub's database becomes a workspace (#204): copied whole (projects, items, history, decisions,
@@ -151,6 +169,7 @@ export class Workspaces {
     const s = Workspaces.check(slug);
     if (existsSync(this.file(s))) throw new UserError(`Workspace "${s}" already exists`, { status: 409, hint: 'Pick another name, or remove that workspace first.' });
     if (!source || !existsSync(source)) throw new UserError(`No hub database at ${source}`, { status: 404, hint: 'Point --db at the single hub\'s database (default ~/.nuworq/nuworq.db).' });
+    this.forgetName(s);
     const stamp = new Date(this.clock?.() ?? Date.now()).toISOString().slice(0, 19).replace(/[:T]/g, '-');
     const backup = `${source}.before-workspaces-${stamp}`;
     const src = new DatabaseSync(source);

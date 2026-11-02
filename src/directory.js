@@ -291,6 +291,13 @@ export class Directory {
     } catch (e) { this.db.exec('ROLLBACK'); throw e; }
   }
 
+  // Every workspace name something here could hand on (#749): what forget clears, so a caller can find the names of
+  // workspaces removed before forget existed.
+  named() {
+    return this.db.prepare(`SELECT workspace FROM installations UNION SELECT workspace FROM plans UNION SELECT workspace FROM memberships
+      UNION SELECT workspace FROM org_grants WHERE workspace IS NOT NULL UNION SELECT workspace FROM billing WHERE workspace IS NOT NULL`).all().map((r) => r.workspace);
+  }
+
   // ── early access ──
 
   // Ask to come in. The same email again is the same request, brought up to date; it keeps the first source it had.

@@ -364,6 +364,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   spaces?.holdOpen((hub) => (scopes.get(hub)?.clients.size ?? 0) > 0);
   // And so does one with background work still running against its database.
   spaces?.holdOpen((hub) => hub._running > 0);
+  // Workspaces removed before remove forgot them (#728) left rows their names would hand on (#749): gone at start.
+  // Names only in the log, never what the rows held.
+  try {
+    for (const s of spaces?.forgetGone() ?? []) console.log(`nuworq: the directory forgot "${s}", a workspace removed earlier: its name starts clean (#749)`);
+  } catch (e) { console.error('forgetting removed workspaces failed', e); }
   const running = (hub, work) => {
     hub._running = (hub._running ?? 0) + 1;
     return work.finally(() => hub._running--);
@@ -883,11 +888,19 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Plans on: one free organization per signed-in account (organizations the hub owner is in are never free).
       const free = spaces.plans ? spaces.freeCreatedBy(me) : [];
       if (free.length) return deny(402, `you already have a free workspace (${free[0]}); an account gets one`, `Use ${free[0]}, or upgrade it to Pro and then create more.`);
-      // In early access, an organization takes an approved request's grant (its owners need none).
-      if (earlyAccess?.gate && !owner && !dir.useGrant(b.grant, me, slug)) {
-        return deny(403, 'nuworq is in early access: making a workspace takes an invitation', 'Request access on nuworq.com; the link you get when you are let in makes your workspace.');
-      }
-      try { spaces.create(slug); } catch (e) { if (earlyAccess?.gate && !owner) dir.returnGrant(b.grant); throw e; }
+      // In early access, an organization takes an approved request's grant (its owners need none): taken once the
+      // name starts clean (#749), so what an old workspace of this name left can't count as it.
+      const gated = earlyAccess?.gate && !owner;
+      let granted = false;
+      try {
+        spaces.create(slug, {
+          claim: () => {
+            if (!gated) return;
+            if (!dir.useGrant(b.grant, me, slug)) throw new UserError('nuworq is in early access: making a workspace takes an invitation', { status: 403, hint: 'Request access on nuworq.com; the link you get when you are let in makes your workspace.' });
+            granted = true;
+          },
+        });
+      } catch (e) { if (granted) dir.returnGrant(b.grant); throw e; }
       const hub = spaces.get(slug);
       const authz = scopeOf(hub).authz;
       const person = authz.addPerson(Auth.handleOf(me.email.split('@')[0]), 'owner', { email: me.email, verified: true });
