@@ -76,7 +76,7 @@ export const COMMANDS = [
       ['--staff <project>', 'let nuworq run staff that project first (its "Staff it with nuworq run" switch); with none staffed, run says so and offers this clone\'s'],
       ['--max-runs <n>', 'stop after starting n workers'],
       ['--max-minutes <t>', 'stop a worker that runs past t minutes; 0: no limit', '90'],
-      ['--worker-usd <x>', "stop a worker once it has spent $x, counted while it runs (claude also gets --max-budget-usd x); 0: no cap", '25'],
+      ['--worker-usd <x>', 'stop a worker once it has spent $x so far (claude also gets --max-budget-usd x); 0: no cap', '25'],
       ['--max-usd <x>', "stop starting workers once they've spent $x in all, running ones' spend so far included; 0: no cap (local models and unpriced codex models count nothing)"],
       ['--land-usd <x>', 'the most one land job may spend; its worker is stopped there (0: no cap)', '2'],
       ['--poll <s>', 'the most seconds between looks; new work is heard at once', '30'],
