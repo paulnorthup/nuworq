@@ -2575,7 +2575,7 @@ export class Hub extends EventEmitter {
     }
     if (item.stage !== 'ready') throw new UserError(`#${item.seq} is ${item.stage}`, { status: 409 });
     // A pre-release security review is read by someone who built none of what the release ships (#480).
-    if (builtWhatItReviews(this, item, agent)) throw new UserError(`#${item.seq} reviews changes you built`, { status: 403, hint: 'A security review before a release goes to an agent that built none of what it ships. Pick other work with next.' });
+    if (builtWhatItReviews(this, item, agent)) throw new UserError(`#${item.seq} audits changes you built`, { status: 403, hint: 'A security audit before a release goes to an agent that built none of what it ships. Pick other work with next.' });
     const unmet = this.unmetDeps(item);
     if (unmet.length) throw new UserError(`#${item.seq} depends on unfinished work: ${unmet.map((d) => `#${d.seq}`).join(', ')}`, { status: 409, hint: 'Work on a dependency, or pick other work with next.' });
     this.move(item, 'active', agent, { holder: agent, lease_until: t + LEASE_MS, last_worker: agent, attempts: item.attempts + 1, branch: item.branch || itemBranch(item) });
@@ -2669,7 +2669,7 @@ export class Hub extends EventEmitter {
     const release = version ? ` This is a release: set the version file to ${version} (package.json's version, else VERSION) and put the summary at the top of CHANGELOG.md under "## ${version} (${new Date(this.now()).toISOString().slice(0, 10)})". Nothing else changes. ${MODE_RULES.release}` : '';
     // The weekly freshness sweep (#181): how to do it.
     const sweep = item.sweep ? ` ${MODE_RULES.fresh}` : '';
-    const security = item.security ? ` ${MODE_RULES.security}` : ''; // a security review (#480)
+    const security = item.security ? ` ${MODE_RULES.security}` : ''; // a security audit (#480)
     // Operator-only work (only an operator builds it): it builds only its live step.
     const live = operatorOnly(item) ? ` ${MODE_RULES.operator}` : '';
     // Tests (#532): where CI checks the pull request, the whole suite is CI's; elsewhere it's the builder's.
@@ -2716,7 +2716,7 @@ export class Hub extends EventEmitter {
 const TOUCHING_HINT = 'As soon as you know which files you will change, post progress with a headline and touching, so other agents steer clear.';
 // A field-notes review (#443, src/fieldnotes.js): who retires depends on the autonomy.
 const NOTES_HINT = (item, p) => [
-  `You hold #${item.seq}, a field-notes review, for ${dur(LEASE_MS)}. No branch. For each note its summary lists, check whether the lesson is now in the code, the agents' guide or a test (search the repo for it), and whether another note says the same.`,
+  `You hold #${item.seq}, a field-notes tidy, for ${dur(LEASE_MS)}. No branch. For each note its summary lists, check whether the lesson is now in the code, the agents' guide or a test (search the repo for it), and whether another note says the same.`,
   p.autonomy === 'full'
     ? 'Retire each one whose lesson is built in with retire { notes, reason }, the reason naming where it lives now. Merge duplicates: learn the combined note, then retire { notes: [the duplicates], into: <its id>, reason }. Keep the rest.'
     : `Don't retire anything yourself in this project: recommend it with distill (recommend retire, and why: where the lesson lives now), and the person decides with one tap on the project page.`,
@@ -3539,7 +3539,7 @@ const AGENT_OPS = {
     if (item.tidy) {
       this.move(item, 'done', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
       if (item.notes_review) reviewed(this, item); // the notes it listed were looked at (#443)
-      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} ${item.notes_review ? 'reviewed the field notes' : 'tidied the milestones'}: ${headline}`, summary, detail, data: { evidence } });
+      this.event(p, { item, actor: agent, type: 'tidied', headline: `${agent} ${item.notes_review ? 'tidied the field notes' : 'tidied the milestones'}: ${headline}`, summary, detail, data: { evidence } });
       return { ok: true, hint: `#${item.seq} is done. Call next for more work.` };
     }
     const reviewer = p.autonomy === 'full' ? 'Another agent will peer-review it.' : 'The human will verify it.';
@@ -3732,7 +3732,7 @@ const AGENT_OPS = {
     if (!ids.length) throw new UserError('notes is required', { hint: 'The ids of the field notes to retire, as the review lists them, e.g. notes: [12, 40].' });
     if (!reason) throw new UserError('reason is required', { hint: 'Say where the lesson lives now (a file, the guide section, a test), or for a merge which note carries it.' });
     const review = this.q(`SELECT * FROM items WHERE project_id = ? AND notes_review = 1 AND holder = ? AND stage = 'active'`).get(p.id, agent);
-    if (!review) throw new UserError('Only a field-notes review retires notes', { status: 403, hint: 'The hub reviews notes when their item lands and every week. To correct one now, learn a better note with replaces set to its id.' });
+    if (!review) throw new UserError('Only a field-notes tidy retires notes', { status: 403, hint: 'The hub reviews notes when their item lands and every week. To correct one now, learn a better note with replaces set to its id.' });
     const note = (id) => this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(id, p.id);
     const into = args.into != null ? note(Number(args.into)) : null;
     if (args.into != null && (!into || !into.active || ids.includes(into.id))) throw new UserError(`No active field note ${args.into} to merge into`, { status: 404, hint: 'learn the combined note first, then pass its id as into.' });
@@ -3759,7 +3759,7 @@ const AGENT_OPS = {
   // Memory distilled for people (#552, src/fieldnotes.js distill): Direction today, gists and recommendations.
   distill(p, agent, args) {
     const review = this.q(`SELECT * FROM items WHERE project_id = ? AND notes_review = 1 AND holder = ? AND stage = 'active'`).get(p.id, agent);
-    if (!review) throw new UserError('Only a field-notes review distills memory', { status: 403, hint: 'The hub opens one when the decisions, steering or field notes change, and weekly; next offers it.' });
+    if (!review) throw new UserError('Only a field-notes tidy distills memory', { status: 403, hint: 'The hub opens one when the decisions, steering or field notes change, and weekly; next offers it.' });
     return distill(this, p, agent, review, args);
   },
 
@@ -4409,7 +4409,7 @@ const HUMAN_OPS = {
     if (security != null && !!security !== !!p.security) {
       this.q('UPDATE projects SET security = ? WHERE id = ?').run(security ? 1 : 0, p.id);
       p.security = security ? 1 : 0;
-      this.event(p, { actor: by, type: 'settings', headline: security ? `${You(by)} turned on security reviews: one before each release, and one area each month` : `${You(by)} turned off security reviews: releases no longer wait for one` });
+      this.event(p, { actor: by, type: 'settings', headline: security ? `${You(by)} turned on security audits: one before each release, and one area each month` : `${You(by)} turned off security audits: releases no longer wait for one` });
       const open = security && openRelease(this, p);
       if (open && ['proposed', 'ready', 'outside', 'waiting'].includes(open.stage)) reviewRelease(this, p, open, by);
     }

@@ -33,5 +33,5 @@ test('section names stay on one line', () => {
 
 test("the 30s footer names what 5m adds", () => {
   const footer = app.match(/That's the 30-second view\.[^`]*`/)[0];
-  for (const words of ['worth knowing', "what's next", 'what finished', 'agents']) assert.ok(footer.includes(words), words);
+  for (const words of ['worth knowing', "what's next", 'what landed', 'agents']) assert.ok(footer.includes(words), words);
 });

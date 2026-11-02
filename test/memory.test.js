@@ -140,7 +140,7 @@ describe('memory distilled for people (#552)', () => {
 
   test('only the review distills, Direction today stays short and names real sources, and a retire or decide says why', () => {
     const s = setup({ autonomy: 'balanced' });
-    assert.throws(() => s.agent('distill', 'a1', distillArgs(s.ids)), /Only a field-notes review/);
+    assert.throws(() => s.agent('distill', 'a1', distillArgs(s.ids)), /Only a field-notes tidy/);
     review(s);
     const lines = Array.from({ length: DIRECTION_MAX + 1 }, () => ({ line: 'x', source: `decision ${s.ids.decision}` }));
     assert.throws(() => s.agent('distill', 'r1', { direction: lines }), /at most 7 lines/);

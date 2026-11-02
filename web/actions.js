@@ -155,9 +155,9 @@ function settingsModal() {
       sw('runner', !!P.runner, P.runner ? 'runner-off' : 'runner-on'))}
     ${row('fresh', 'Keep it fresh weekly', 'Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade.',
       sw('fresh', !!P.fresh, P.fresh ? 'fresh-off' : 'fresh-on'))}
-    <div data-new="security-reviews">${row('security', 'Security reviews', P.security
-    ? 'On: before each release an agent that built none of it reviews what it ships, and the release waits for it. Each month, one area in turn.'
-    : 'Before each release, a review of what it ships by an agent that built none of it; each month, one area in turn.',
+    <div data-new="security-reviews">${row('security', 'Security audits', P.security
+    ? 'On: before each release an agent that built none of it audits what it ships, and the release waits for it. Each month, one area in turn.'
+    : 'Before each release, an audit of what it ships by an agent that built none of it; each month, one area in turn.',
       sw('security', !!P.security, P.security ? 'security-off' : 'security-on'))}</div>
     <div data-new="releases">${row('releases', 'Release per milestone', P.releases === 'milestone'
     ? 'On: when a milestone finishes, the hub drafts "Release vX.Y.Z" with its changelog and upgrade notes, for you to edit and sign.'
@@ -536,7 +536,7 @@ export const ACTIONS = {
     const kind = S.composeKind;
     clearDraft('compose');
     $('#compose').value = '';
-    const r = kind === 'note' ? await human('comment', { body }, 'Noted')
+    const r = kind === 'comment' ? await human('comment', { body }, 'Comment added')
       : kind === 'decision' ? await human('decide', { body }, 'Decision recorded: every agent will carry it')
       : await human('steer', { body }, 'Steer sent: agents will acknowledge it');
     // Refused: what they wrote goes back in the box, so nothing is lost.
@@ -653,8 +653,8 @@ export const ACTIONS = {
   'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
   'fresh-on': () => setting({ fresh: true }, 'The weekly freshness sweep is on'),
-  'security-on': () => setting({ security: true }, 'Security reviews are on: the first one opens within a minute'),
-  'security-off': () => { if (confirm('Turn off security reviews? Releases stop waiting for a review of what they ship, and the monthly reviews stop.')) setting({ security: false }, 'Security reviews are off'); },
+  'security-on': () => setting({ security: true }, 'Security audits are on: the first one opens within a minute'),
+  'security-off': () => { if (confirm('Turn off security audits? Releases stop waiting for an audit of what they ship, and the monthly audits stop.')) setting({ security: false }, 'Security audits are off'); },
   'releases-on': () => setting({ releases: 'milestone' }, 'When a milestone finishes, the hub drafts the next release'),
   'releases-off': () => setting({ releases: 'off' }, 'Releases per milestone are off'),
   // The drafted release opens, so the person reads (and can edit) the changelog at once.
@@ -682,7 +682,7 @@ export const ACTIONS = {
     return human('steer', { item: el.dataset.item, body }, 'Steer attached to the item');
   },
   'item-steer': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('steer', { item: el.dataset.item, body }, 'Steer attached: whoever works on it must acknowledge'); },
-  'item-note': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('comment', { item: el.dataset.item, body }, 'Noted'); },
+  'item-note': (el) => { const k = `ic:${el.dataset.item}`; const body = val(k); if (!body) return; clearDraft(k); return human('comment', { item: el.dataset.item, body }, 'Comment added'); },
   'edit-item': () => { setState({ editItem: !S.editItem }); clearDraft('ei-title', 'ei-summary', 'ei-acceptance', 'ei-priority', 'ei-race', 'ei-fixes', 'ei-parent'); render({ force: true }); },
   'ei-priority': (el) => { putIn('drafts', 'ei-priority', el.dataset.p); render({ force: true }); },
   'ei-race': (el) => { putIn('drafts', 'ei-race', el.dataset.n); render({ force: true }); },

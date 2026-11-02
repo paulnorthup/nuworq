@@ -85,7 +85,7 @@ describe('a tidy job reviews the field notes (#443)', () => {
     human('update', { item: '#2', stage: 'done' });
     const r = agent('next', 'a2');
     assert.equal(r.mode, 'tidy');
-    assert.equal(r.title, "Review App's field notes");
+    assert.equal(r.title, "Tidy App's field notes");
     assert.match(r.summary, new RegExp(`note ${ids.item} \\(about #2\\), #2 landed: Storage timeouts`));
     assert.doesNotMatch(r.summary, /Unrelated lesson/, 'only the landed item\'s notes');
     assert.match(r.hint, /retire \{ notes, reason \}/);
@@ -158,7 +158,7 @@ describe('a tidy job reviews the field notes (#443)', () => {
   test('only a review retires notes', () => {
     const { agent, ids } = setup();
     agent('checkin', 'a2');
-    assert.throws(() => agent('retire', 'a2', { notes: [ids.item], reason: 'x' }), /Only a field-notes review retires notes/);
+    assert.throws(() => agent('retire', 'a2', { notes: [ids.item], reason: 'x' }), /Only a field-notes tidy retires notes/);
   });
 
   test('the review\'s hint says how (#527)', () => {

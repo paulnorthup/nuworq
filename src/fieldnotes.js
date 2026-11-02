@@ -143,7 +143,7 @@ const DISTILL = (hub, p) => {
     stale.length ? `\n* field notes without a gist: ${stale.join(', ')} (look with notes "all" for their words)` : ''}`;
 };
 
-const SUMMARY = (hub, p, due) => `${due.length ? `Review these field notes: merge duplicates into one, and retire each note whose lesson is now in the code, the agents' guide or a test.\n${
+const SUMMARY = (hub, p, due) => `${due.length ? `Tidy these field notes: merge duplicates into one, and retire each note whose lesson is now in the code, the agents' guide or a test.\n${
   due.map(({ n, why }) => `- note ${n.id}${n.seq ? ` (about #${n.seq})` : ''}${why === 'weekly' ? '' : `, ${why}`}: ${clip(n.body)}`).join('\n')}\n` : ''}${DISTILL(hub, p)}`;
 const ACCEPTANCE = [
   '- Each note listed is kept, merged or retired. Keep it when its lesson still saves the next agent time.',
@@ -235,7 +235,7 @@ export function reviewUp(hub, p) {
   }
   if (weekly) hub.q('UPDATE projects SET notes_at = ? WHERE id = ?').run(hub.now(), p.id);
   if (!due.length && !stale) return null;
-  const it = hub.createItem(p, SYSTEM, { title: `Review ${p.name}'s field notes`, summary: SUMMARY(hub, p, due), acceptance: ACCEPTANCE, priority: 'soon' });
+  const it = hub.createItem(p, SYSTEM, { title: `Tidy ${p.name}'s field notes`, summary: SUMMARY(hub, p, due), acceptance: ACCEPTANCE, priority: 'soon' });
   hub.patch(it, { tidy: keys, notes_review: 1 });
   if (it.stage !== 'ready') hub.move(it, 'ready', SYSTEM);
   return it;

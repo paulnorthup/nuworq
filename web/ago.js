@@ -19,7 +19,7 @@ export function ago(at, { left = false, fallback = '', now = Date.now() } = {}) 
   return `<span data-at="${Number(at)}"${left ? ' data-left' : ''}>${dur(left ? at - now : now - at)}</span>`;
 }
 
-// A hub sentence with times in it (#689: "finished it 3m ago"): each time the hub sent beside it (times: [at, as
+// A hub sentence with times in it (#689: "submitted it 3m ago"): each time the hub sent beside it (times: [at, as
 // said]) becomes an ago() span, so the tick keeps it current. render turns the rest into markup (esc, named...).
 // Written text in the sentence can't make a time (#781): its own \u0000 is dropped first, and a placeholder with no
 // time beside it renders as nothing.
