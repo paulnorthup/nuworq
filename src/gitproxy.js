@@ -9,6 +9,9 @@ import https from 'node:https';
 export const PUSH_REFS = 'refs/heads/nuworq/';
 const ZERO = /^0+$/;
 const MAX_HEAD = 1 << 20; // the commands come first and are small; a head this big isn't a push
+// How long GitHub may go quiet, before answering or mid-answer (#738): git has no HTTP timeout of its own, so a
+// hung GitHub would hang every worker's push with it.
+export const UPSTREAM_MS = 30_000;
 
 // The commands at the head of a git-receive-pack request: [{ old, new, ref }] and the client's capabilities,
 // and where they end (the flush). null while more bytes are needed; throws on anything that isn't a push.
@@ -63,34 +66,56 @@ export function refusal(cmds, reasons, caps, note) {
 }
 
 // A request to the repository on GitHub over smart HTTP, as the hub (basic auth with its token). write(r) sends
-// the body, if any, and ends it. Resolves to the response.
-function upstream(url, { method = 'GET', headers = {}, token, from, write = (r) => r.end() }) {
+// the body, if any, and ends it. Resolves to the response. Quiet for timeoutMs, it's cut (code UPSTREAM_TIMEOUT);
+// signal cuts it when the worker goes.
+function upstream(url, { method = 'GET', headers = {}, token, from, write = (r) => r.end(), signal, timeoutMs = UPSTREAM_MS }) {
   const u = new URL(url);
   return new Promise((resolve, reject) => {
     const r = (u.protocol === 'https:' ? https : http).request(u, {
-      method,
+      method, signal,
       headers: {
         ...headers, authorization: `Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`, 'user-agent': 'nuworq-hub',
         ...(from.headers['git-protocol'] ? { 'git-protocol': from.headers['git-protocol'] } : {}),
       },
     }, resolve);
+    r.setTimeout(timeoutMs, () => r.destroy(Object.assign(new Error(`GitHub didn't answer in ${timeoutMs / 1000}s`), { code: 'UPSTREAM_TIMEOUT' })));
     r.on('error', reject);
     write(r);
   });
 }
 
-// Passes GitHub's answer back as it comes.
+// Passes GitHub's answer back as it comes. GitHub cut off mid-answer: so is the worker, whose git says the push failed.
 const relay = (up, res) => {
   const keep = ['content-type', 'cache-control', 'content-encoding'];
   res.writeHead(up.statusCode, Object.fromEntries(keep.filter((k) => up.headers[k]).map((k) => [k, up.headers[k]])));
+  up.on('error', () => res.destroy());
+  up.on('aborted', () => res.destroy());
   up.pipe(res);
 };
+
+// GitHub didn't answer, or couldn't be reached: a line git shows the worker as "remote: nuworq: …", unless the answer
+// had begun (then the connection is cut) or the worker is gone.
+function unreachable(res, e) {
+  if (res.headersSent || res.destroyed) return res.destroy();
+  res.writeHead(502, { 'content-type': 'text/plain', connection: 'close' });
+  res.end(`nuworq: ${e.code === 'UPSTREAM_TIMEOUT' ? e.message : `couldn't reach GitHub (${e.code || e.message})`}. Try the push again in a minute.\n`);
+}
 
 // One push through the hub. git: the repository's address on GitHub (https://github.com/o/r.git), service the
 // smart HTTP path (info/refs or git-receive-pack), token the hub's write token for it, branch the held item's
 // (refusedRef). onRefused(cmds, reasons) and onPushed(cmds) put it on the record.
-export async function proxyPush(req, res, { git, service, token, branch = '', onRefused, onPushed }) {
-  if (service === 'info/refs') return relay(await upstream(`${git}/info/refs?service=git-receive-pack`, { token, from: req }), res);
+export async function proxyPush(req, res, { git, service, token, branch = '', onRefused, onPushed, timeoutMs = UPSTREAM_MS }) {
+  // The worker gone before its answer is: so is the request to GitHub.
+  const gone = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) gone.abort(); });
+  const opts = { token, from: req, signal: gone.signal, timeoutMs };
+  if (service === 'info/refs') {
+    try {
+      return relay(await upstream(`${git}/info/refs?service=git-receive-pack`, opts), res);
+    } catch (e) {
+      return unreachable(res, e);
+    }
+  }
   if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') {
     res.writeHead(415, { 'content-type': 'text/plain' });
     return res.end('nuworq: send the push uncompressed\n');
@@ -113,17 +138,27 @@ export async function proxyPush(req, res, { git, service, token, branch = '', on
     res.writeHead(200, { 'content-type': 'application/x-git-receive-pack-result', 'cache-control': 'no-cache' });
     return res.end(refusal(parsed.cmds, reasons, parsed.caps, `nuworq: ${[...new Set(reasons.filter(Boolean))].join('; ')}.`));
   }
-  const up = await upstream(`${git}/git-receive-pack`, {
-    method: 'POST', token, from: req,
-    headers: { 'content-type': 'application/x-git-receive-pack-request', accept: 'application/x-git-receive-pack-result' },
-    write: (r) => {
-      r.write(head);
-      (async () => {
-        for await (const c of { [Symbol.asyncIterator]: () => it }) if (!r.write(c)) await new Promise((d) => r.once('drain', d));
-        r.end();
-      })().catch((e) => r.destroy(e));
-    },
-  });
+  let up;
+  try {
+    up = await upstream(`${git}/git-receive-pack`, {
+      ...opts, method: 'POST',
+      headers: { 'content-type': 'application/x-git-receive-pack-request', accept: 'application/x-git-receive-pack-result' },
+      write: (r) => {
+        r.write(head);
+        // Not for await: leaving that loop would destroy the worker's request before it hears why.
+        (async () => {
+          for (;;) {
+            const { value, done } = await it.next();
+            if (done || r.destroyed) break;
+            if (!r.write(value)) await new Promise((d) => { r.once('drain', d); r.once('close', d); });
+          }
+          if (!r.destroyed) r.end();
+        })().catch((e) => r.destroy(e));
+      },
+    });
+  } catch (e) {
+    return unreachable(res, e);
+  }
   if (up.statusCode === 200) onPushed?.(parsed.cmds);
   return relay(up, res);
 }
