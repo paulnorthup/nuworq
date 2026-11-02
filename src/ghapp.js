@@ -384,7 +384,9 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
     async openPr({ repo, head, base, title, body }) {
       const [owner, name] = parts(repo);
       const token = await tokenFor(repo);
-      const r = await app.call('POST', `/repos/${owner}/${name}/pulls`, { title, head, base, body }, token);
+      // No answer at all (a timeout, a dropped connection) or a rate limit still running is a blip too (#742).
+      const r = await app.call('POST', `/repos/${owner}/${name}/pulls`, { title, head, base, body }, token)
+        .catch((e) => { throw Object.assign(e, { transient: true }); });
       if (r.status === 201) return shape(r.json);
       // Already open for this branch (opened by hand, or by an earlier try): use that one.
       if (r.status === 422) {

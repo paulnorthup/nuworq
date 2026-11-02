@@ -492,6 +492,37 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     }
   });
 
+  test('prClient marks a 5xx, a 429, a rate-limit 403 and no answer as a blip; a 422 or another 403 is a refusal (#742)', async () => {
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    let answer;
+    const api = http.createServer(async (req, res) => {
+      for await (const _ of req);
+      const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+      if (req.url === '/repos/acme/api/installation') return json(200, { id: 7 });
+      if (req.url === '/app/installations/7/access_tokens') return json(201, { token: 'ghs_one', expires_at: '2099-01-01T00:00:00Z' });
+      if (req.method === 'POST' && req.url === '/repos/acme/api/pulls') return json(...answer);
+      if (req.method === 'GET' && req.url.startsWith('/repos/acme/api/pulls?')) return json(200, []);
+      json(404, { message: 'Not Found' });
+    });
+    await new Promise((r) => api.listen(0, '127.0.0.1', r));
+    try {
+      const gh = prClient(new GitHubApp({ id: 1, key: privateKey.export({ type: 'pkcs8', format: 'pem' }), api: `http://127.0.0.1:${api.address().port}` }));
+      const args = { repo: 'github.com/acme/api', head: 'nuworq/1-x', base: 'main', title: 'X', body: 'b' };
+      const fails = async (a) => { answer = a; return gh.openPr(args).then(() => assert.fail('opened'), (e) => e); };
+      for (const a of [[502, { message: 'Bad Gateway' }], [503, {}], [429, { message: 'Too many' }], [403, { message: 'You have exceeded a secondary rate limit' }]]) {
+        assert.equal((await fails(a)).transient, true, `${a[0]} is a blip`);
+      }
+      assert.equal((await fails([422, { message: 'Validation Failed', errors: [{ message: 'No commits between main and nuworq/1-x' }] }])).transient, undefined, '422 is a refusal');
+      assert.equal((await fails([403, { message: 'Resource not accessible by integration' }])).transient, undefined, 'a permission 403 is a refusal');
+      api.close();
+      api.closeAllConnections();
+      answer = [201, {}];
+      assert.equal((await fails(answer)).transient, true, 'no answer at all is a blip');
+    } finally {
+      api.close();
+    }
+  });
+
   test('without a GitHub client, remote landing is unchanged', async () => {
     const w = world();
     w.hub.github = null;
