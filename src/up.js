@@ -3,6 +3,7 @@
 // from data the CLI gathers (the hub's projects, the runner's service file, local clones, the operators it started),
 // and the commands that open terminals are built here too, so tests check both without running anything.
 import { sq } from './runtrust.js';
+import { normRemote } from './text.js';
 
 export const SESSION = 'nuworq'; // the tmux session operators open in, one window per project
 
@@ -59,9 +60,12 @@ const isAuto = (args = []) => args.some((a, i) => a === '--workers=auto' || (a =
 export function upClones(projects = [], { chosen = [], exists, inChosen, remoteOf, checkout }) {
   const clones = {};
   for (const p of projects) {
-    const remotes = p.remotes ?? [];
+    // The hub's remotes as checkoutOf takes them: normalized, and none empty, since a folder with no origin has the
+    // remote '' and a hub that lists '' must never match it (#617).
+    const remotes = (p.remotes ?? []).map((r) => normRemote(r)).filter(Boolean);
     const own = p.path && exists(p.path);
-    if (own && remotes.length <= 1 && (inChosen(p.path, chosen) || (remotes.length && remotes.includes(remoteOf(p.path))))) { clones[p.slug] = { folder: p.path }; continue; }
+    const theirs = own && remotes.length ? remoteOf(p.path) : '';
+    if (own && remotes.length <= 1 && (inChosen(p.path, chosen) || (theirs && remotes.includes(theirs)))) { clones[p.slug] = { folder: p.path }; continue; }
     if (!remotes.length) {
       clones[p.slug] = { hint: own ? `${p.path} isn't a folder you chose for workers here: nuworq run --folder ${p.path} chooses it` : `link ${p.name ?? p.slug}'s repository on the hub, or run nuworq operator --start in its folder` };
       continue;

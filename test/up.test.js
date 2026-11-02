@@ -112,7 +112,11 @@ describe('staffing and operators', () => {
       { slug: 'evil', path: '/home/me/.ssh', remotes: [] }, // a hostile hub's folder, chosen by nobody
       { slug: 'notes', path: '/home/me/notes', remotes: ['github.com/acme/notes'] }, // not chosen, not a clone of it
       { slug: 'site', path: '/home/me/.ssh', remotes: ['github.com/acme/site'] }, // a folder elsewhere: its checkout by remote
+      { slug: 'blank', path: '/home/me/.ssh', remotes: [''] }, // a hub listing '' to match a folder with no origin
+      { slug: 'https', path: '/home/me/src/app', remotes: ['https://github.com/acme/app.git'] }, // the hub's remote, not normalized
     ], world);
+    assert.deepEqual(clones.blank, { hint: "/home/me/.ssh isn't a folder you chose for workers here: nuworq run --folder /home/me/.ssh chooses it" }, "'' is no remote");
+    assert.deepEqual(clones.https, { folder: '/home/me/src/app' });
     assert.deepEqual(clones.app, { folder: '/home/me/src/app' });
     assert.deepEqual(clones.evil, { hint: "/home/me/.ssh isn't a folder you chose for workers here: nuworq run --folder /home/me/.ssh chooses it" });
     assert.deepEqual(clones.notes, { hint: 'clone github.com/acme/notes beside this folder' }, 'not started in the folder the hub named');
