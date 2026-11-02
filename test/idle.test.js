@@ -49,8 +49,8 @@ describe('Needs you says why nothing is working (#173)', () => {
     const a = idle();
     assert.equal(a.cause, 'unstaffed');
     assert.equal(a.staff, true);
-    assert.match(a.why, /mini is up, but this project doesn't let `nuworq run` start workers/);
-    assert.match(steps(a)[0], /Let nuworq run staff this project/);
+    assert.match(a.why, /mini is up, but this project isn't staffed with `nuworq run`/);
+    assert.match(steps(a)[0], /Staff it with nuworq run/);
   });
 
   test('every runner skips it: the reason it gave', () => {

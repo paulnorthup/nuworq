@@ -76,7 +76,7 @@ describe('keyboard shortcuts come from one list (#274)', () => {
   test('the dialog lists every shortcut by place, as keycaps, with ⌘ on a Mac and Ctrl elsewhere', () => {
     const html = shortcutsHtml({ mac: true });
     assert.match(html, /<h2>Keyboard shortcuts<\/h2>/);
-    for (const g of ['Everywhere', 'A project or All projects', 'An open item', 'While typing']) assert.ok(html.includes(`<h4>${g}</h4>`), g);
+    for (const g of ['Everywhere', 'A project or Home', 'An open item', 'While typing']) assert.ok(html.includes(`<h4>${g}</h4>`), g);
     for (const s of SHORTCUTS) assert.ok(html.includes(s.does), s.id);
     assert.match(html, /<kbd>1<\/kbd> <kbd>2<\/kbd> <kbd>3<\/kbd><\/dt><dd>Depth 30s, 5m, 30m/);
     assert.match(html, /<kbd>\?<\/kbd><\/dt><dd>Show these shortcuts/);
