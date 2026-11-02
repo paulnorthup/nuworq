@@ -412,7 +412,8 @@ and propose; viewers read. remove revokes the tokens they held or minted.
 
 forget <email> answers a privacy request: it deletes that email's sign-in,
 sessions, workspace memberships and early-access request from the hub's
-directory (--data-dir), and prints what it kept. --dry-run only lists them.
+directory (--data-dir), blanks their email on feedback they sent, and prints
+what it kept. --dry-run only lists them.
 ```
 
 ### nuworq invite

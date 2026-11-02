@@ -1952,10 +1952,11 @@ async function personForget(email, flags) {
   const dry = !!flags['dry-run'];
   const spaces = new Workspaces({ dir: workspacesDir(flags), backups: join(dataHome(flags), 'backups') });
   const f = spaces.directory.forgetPerson(e, { dryRun: dry });
-  const plural = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  const count = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
   console.log(`${dry ? amber('Dry run') : green('Forgot')} ${bold(e)} (hub directory in ${spaces.dir}):
-  ${dry ? 'Would remove' : 'Removed'}: ${plural(f.identities, 'sign-in identity').replace('identitys', 'identities')}, ${plural(f.sessions, 'session')}, ${plural(f.memberships.length, 'workspace membership')}${f.memberships.length ? ` (${f.memberships.join(', ')})` : ''}, ${plural(f.access_requests, 'early-access request')}, ${plural(f.grants, 'grant')}.
-  ${dim('Kept: Stripe billing records (the law requires them; they hold a customer id, no sign-in); feedback, filed under a handle or an agent name, not an email;')}
+  ${dry ? 'Would remove' : 'Removed'}: ${count(f.identities, 'sign-in identity', 'sign-in identities')}, ${count(f.sessions, 'session')}, ${count(f.memberships.length, 'workspace membership')}${f.memberships.length ? ` (${f.memberships.join(', ')})` : ''}, ${count(f.access_requests, 'early-access request')}, ${count(f.grants, 'grant')}.
+  ${dry ? 'Would blank' : 'Blanked'} the email on ${count(f.feedback, 'piece of feedback', 'pieces of feedback')} they sent and ${count(f.decisions, 'decision')} they made as an owner.
+  ${dim('Kept: the words of that feedback, under their handle, for the hub\'s owners; Stripe billing records (the law requires them; they hold a customer id, no sign-in);')}
   ${dim("the person's row inside each workspace (the workspace's own data: its owner removes it); backups, which age out. See docs/DEPLOY.md, Deleting a person's data.")}`);
   if (dry) console.log(dim('  Nothing was changed. Run it without --dry-run to delete.'));
 }

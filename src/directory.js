@@ -560,8 +560,9 @@ export class Directory {
   }
 
   // A person's data on request (#769): their identity, hub sessions, memberships and early-access request (with its
-  // grants), found by email. dryRun only counts. Stripe's billing rows, feedback (filed under a handle or an agent's
-  // name, not an email) and the people rows inside workspaces are not here; the CLI names them.
+  // grants), found by email. Feedback they sent keeps its words under their handle, its email blanked; so do the
+  // requests and feedback they decided as an owner. dryRun only counts. Stripe's billing rows and the people rows
+  // inside workspaces are not here; the CLI names them.
   forgetPerson(email, { dryRun = false } = {}) {
     const e = String(email).trim().toLowerCase();
     const id = this.db.prepare('SELECT id FROM identities WHERE email = ?').get(e)?.id ?? null;
@@ -573,6 +574,8 @@ export class Directory {
       memberships: id === null ? [] : this.db.prepare('SELECT workspace FROM memberships WHERE identity_id = ? ORDER BY workspace').all(id).map((m) => m.workspace),
       access_requests: req === null ? 0 : 1,
       grants: req === null ? 0 : n('SELECT COUNT(*) AS n FROM org_grants WHERE request_id = ?', req),
+      feedback: n('SELECT COUNT(*) AS n FROM feedback WHERE email = ?', e),
+      decisions: n('SELECT (SELECT COUNT(*) FROM feedback WHERE decided_by = ?) + (SELECT COUNT(*) FROM access_requests WHERE decided_by = ? AND email != ?) AS n', e, e, e),
     };
     if (dryRun) return found;
     this.db.exec('BEGIN IMMEDIATE');
@@ -587,6 +590,9 @@ export class Directory {
         this.db.prepare('DELETE FROM org_grants WHERE request_id = ?').run(req);
         this.db.prepare('DELETE FROM access_requests WHERE id = ?').run(req);
       }
+      this.db.prepare("UPDATE feedback SET email = '' WHERE email = ?").run(e);
+      this.db.prepare("UPDATE feedback SET decided_by = '' WHERE decided_by = ?").run(e);
+      this.db.prepare("UPDATE access_requests SET decided_by = '' WHERE decided_by = ?").run(e);
       this.db.exec('COMMIT');
     } catch (err) { this.db.exec('ROLLBACK'); throw err; }
     return found;
