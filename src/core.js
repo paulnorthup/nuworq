@@ -3600,6 +3600,9 @@ const AGENT_OPS = {
       this.patch(item, { holder: null, lease_until: null });
     } else if (item.stage === 'proposed') {
       this.patch(item, { holder: null, lease_until: null, last_worker: agent, handoff: JSON.stringify({ kind: 'handoff', by: agent, headline, summary, at: this.now() }) });
+    } else if (item.stage === 'landing') {
+      // A land job let go stays landing, as a lapsed lease does (#729): the accepted review stands, the note waits for the next lander.
+      this.patch(item, { holder: null, lease_until: null, last_worker: agent, touching: '[]', handoff: JSON.stringify({ kind: 'handoff', by: agent, headline, summary, at: this.now() }) });
     } else {
       // The third hand-back since the last submit (or unpark) parks it for a person instead (#734).
       park = item.stage === 'active' && this.handbacks(item) + 1 >= HANDBACKS;
@@ -3617,8 +3620,9 @@ const AGENT_OPS = {
         data: { handbacks: HANDBACKS },
       });
     }
-    // A reviewer letting a review go isn't a failed attempt at the work.
-    if (item.stage !== 'verifying') this.stepUp(p, item, 'was handed off');
+    // A reviewer letting a review go isn't a failed attempt at the work, nor is a lander letting a land job go: the
+    // land tier counts its own takes (tierUp).
+    if (item.stage !== 'verifying' && item.stage !== 'landing') this.stepUp(p, item, 'was handed off');
     if (racing) this.settleRace(p, item, agent);
     this.setStatus(p, agent, `Handed off #${item.seq}`);
     return { ok: true, hint: 'Handed off; the next agent will see your note. Call next or signoff.' };

@@ -78,7 +78,7 @@ describe('model routing', () => {
     assert.equal(hub.route('', { runner: true, kind: 'codex' })[0].model, undefined, 'a codex runner with no --model and no tiers: its own model');
   });
 
-  test('a landing that loses its lease, is handed off, or a build sent back: the next attempt steps up, and the history says so', () => {
+  test('a landing that loses its lease, or a build sent back: the next attempt steps up, and the history says so', () => {
     const { hub, clock, set, op, row, route, landing, history } = world();
     set({ model_routing: true, model_tiers: TIERS });
     hub.humanOp('p', 'create', { title: 'Build', acceptance: 'x' });
@@ -91,9 +91,11 @@ describe('model routing', () => {
     assert.deepEqual([route().mode, route().model], ['land', 'claude-sonnet-5-5']);
     assert.deepEqual(history(1), ['#1 lost its lease, so its next attempt steps up a tier: claude-sonnet-5-5']);
     assert.ok(op('l2', 'next').history.some((h) => h.type === 'stepped_up'), "it's in the history the next lander reads");
+    // A land job handed off stays landing and isn't a failed attempt at the work (#729), but the land tier still
+    // climbs: it counts the land jobs taken since the item reached landing.
     op('l2', 'handoff', { item: '#1', headline: 'out of time' });
-    assert.equal(row(1).tier_up, 2);
-    hub.q("UPDATE items SET stage = 'landing', stage_since = 0 WHERE seq = 1").run();
+    assert.equal(row(1).stage, 'landing');
+    assert.equal(row(1).tier_up, 1);
     assert.equal(route().model, 'claude-opus-5-5');
 
     // A build sent back: it was on the top tier already, so it steps up without changing models or saying so.
