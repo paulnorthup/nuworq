@@ -315,6 +315,7 @@ html.theming *, html.theming *::before, html.theming *::after { transition-prope
 .zero .link { padding: 0; font-size: inherit; }
 .missing-links { margin-top: var(--sp-2); font-size: var(--fs-3); }
 .missing-links .link { padding: 0; font-size: inherit; }
+.stage-detail .age .link { padding: 0; font-size: inherit; } /* "Go to 5m" sits inline, like the page's other one (#750) */
 .zoom-more { font-size: var(--fs-2); color: var(--muted); margin-top: var(--sp-2); }
 .zoom-more button { border: 0; background: none; padding: 0; font-size: inherit; }
 

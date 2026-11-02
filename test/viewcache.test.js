@@ -7,6 +7,7 @@ import { createServer } from '../src/server.js';
 import { seedHub, SLUG } from './seedhub.js';
 
 const MIN = 60_000;
+const STATEMENTS_30S = 356; // what a 30s view ran on seedHub() before #750
 
 // #501: a project's page is built once per change and shared; what differs per viewer goes on top; the depth
 // decides what's sent. P1 is stewarded by @a, P2 by @b, each with a blocking question for its steward.
@@ -102,15 +103,25 @@ describe('the page takes the depth (#501)', () => {
     });
     assert.ok(v.since.finished.length <= 6);
     assert.equal(v.since.counts.finished, full.since.counts.finished);
-    // Agents (#750): a line each for the ones here now, and no one else; In motion without the last words, files and heads-up.
-    assert.deepEqual(v.agents.map((a) => a.name), full.agents.filter((a) => a.present).map((a) => a.name));
+    // Agents (#750): a line each for the ones here now, and the others the sections 30s draws name; not the rest.
+    const gone = new Set(full.agents.filter((a) => !a.present).map((a) => a.name));
+    const drawn = JSON.stringify([v.attention, v.motion, v.groups, v.project]);
+    assert.deepEqual(v.agents.map((a) => a.name), full.agents.filter((a) => a.present || drawn.includes(`"${a.name}"`)).map((a) => a.name));
+    assert.ok(v.agents.some((a) => gone.has(a.name)) && v.agents.length < full.agents.length, 'some who are gone, not all');
     assert.ok(v.agents.every((a) => Object.keys(a).join() === 'name,model,role,where,job,present'));
+    // Each agent Needs you names has its model, for the provider dot and the tooltip.
+    const asks = v.attention.filter((a) => a.agent);
+    assert.ok(asks.some((a) => gone.has(a.agent)), 'Needs you names someone who is gone');
+    for (const a of asks) assert.equal(v.agents.find((x) => x.name === a.agent)?.model, full.agents.find((x) => x.name === a.agent).model, a.agent);
+    // In motion without the last words, files and heads-up.
     assert.deepEqual(v.motion.map((m) => m.item), full.motion.map((m) => m.item));
     assert.ok(v.motion.every((m) => !('touching' in m) && !('heads_up' in m) && Object.keys(m.last ?? {}).join() === 'ago,at'));
   });
 
-  test('30s is at most half what it was (123,212 bytes), and 5m and 30m carry the stage lists and agents', () => {
-    assert.ok(JSON.stringify(at('30s')).length <= 61_606, `${JSON.stringify(at('30s')).length} bytes at 30s`);
+  test('30s is at most half what it was (123,212 bytes), and 5m and 30m carry the stage lists and agents', (t) => {
+    const bytes = JSON.stringify(at('30s')).length;
+    t.diagnostic(`${bytes} bytes at 30s`);
+    assert.ok(bytes <= 61_606, `${bytes} bytes at 30s`);
     for (const depth of ['5m', '30m']) {
       const v = at(depth);
       // Flow's stage pills open to the last 25 items of each stage.
@@ -125,6 +136,26 @@ describe('the page takes the depth (#501)', () => {
       assert.ok(named.every((a) => said.includes(`"${a.name}"`)), 'each one is named elsewhere on the page');
       assert.deepEqual(v.motion, full.motion);
     }
+  });
+
+  test('a 30s view runs no more statements than it did before #750, nor more than 5m', (t) => {
+    const statements = (fn) => {
+      let n = 0;
+      const q = hub.q;
+      hub.q = (sql) => {
+        const s = q.call(hub, sql);
+        return { get: (...a) => (n++, s.get(...a)), all: (...a) => (n++, s.all(...a)), run: (...a) => (n++, s.run(...a)), iterate: (...a) => (n++, s.iterate(...a)) };
+      };
+      try { fn(); } finally { hub.q = q; }
+      return n;
+    };
+    hub.cacheViews = false; // built fresh, as after a change
+    try {
+      const [s30, s5] = ['30s', '5m'].map((depth) => statements(() => at(depth)));
+      t.diagnostic(`30s ${s30}, 5m ${s5} statements`);
+      assert.ok(s30 <= STATEMENTS_30S, `30s ran ${s30} statements, more than ${STATEMENTS_30S}`);
+      assert.ok(s30 <= s5, `30s ran ${s30}, 5m ${s5}`);
+    } finally { hub.cacheViews = true; }
   });
 
   test('5m: the first of Up next, Recently finished and the field notes, steering and decisions; under 150 KB', () => {

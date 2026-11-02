@@ -286,11 +286,11 @@ function atDepth(v, depth, pages) {
   // Since you last looked lists the first 6 of what finished; counts.finished says how many.
   out.since = { ...v.since, finished: v.since.finished.slice(0, 6) };
   const earlier = new Set(z >= 2 ? gone.slice(0, more('agents')).map((a) => a.name) : []);
-  const named = z >= 1 ? namesIn(out, new Set(gone.map((a) => a.name))) : new Set(); // 30s names only who's here now (#750)
-  const who = (a) => ({ name: a.name, model: a.model, role: a.role, where: a.where, job: a.job, present: false });
-  const here = (a) => ({ name: a.name, model: a.model, role: a.role, where: a.where, job: a.job, present: true }); // all 30s names
-  if (z === 0) out.agents = agents.filter((a) => a.present).map(here);
-  else out.agents = agents.filter((a) => a.present || earlier.has(a.name) || named.has(a.name)).map((a) => (a.present || earlier.has(a.name) ? a : who(a)));
+  // 30s names the agents in the sections it draws (#750): Needs you, In motion, milestones and the project.
+  const named = namesIn(z >= 1 ? out : [out.attention, out.motion, out.groups, out.project], new Set(gone.map((a) => a.name)));
+  const line = (a) => ({ name: a.name, model: a.model, role: a.role, where: a.where, job: a.job, present: !!a.present });
+  out.agents = agents.filter((a) => a.present || earlier.has(a.name) || named.has(a.name))
+    .map((a) => (z === 0 || !(a.present || earlier.has(a.name)) ? line(a) : a)); // 30s: a line each, here now or not
   if (z >= 2) out.earlier = [...earlier]; // the page of "Show earlier agents", by name
   return out;
 }
