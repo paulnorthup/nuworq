@@ -1,5 +1,129 @@
 # Changelog
 
+## 0.7.0 (2026-11-02)
+
+What landed since v0.6.0.
+
+**nuworq is easy on the eyes in the dark: a calm graphite theme in the app and on the site (#482)**
+
+- The app has a calm dark theme that follows the device: graphite, softer text, softer state colors (#484)
+- You can set the app to Match device, Light or Dark, and each browser remembers it (#485)
+
+**Getting going takes one copied block and a few yeses, and ends in the setup that works: workers, an operator in a terminal, a shaper (#488)**
+
+- nuworq suggests the setup that works: workers on nuworq run, an operator in a terminal, and a shaper in the Claude Code app (#489)
+- Setup is measured, not assumed: a newcomer's walk to the three sessions is timed and counted, before and after, and meets its targets (#492)
+- /nuworq:operator with nothing after it declares everything the session can really do, and its routine commands run without prompts (#494)
+- Claude Code gets nuworq in every project: connect installs the plugin for the person's account and clears nuworq's own leftovers (#496)
+- nuworq up brings everything up: a runner with automatic workers and one operator per unparked project, each in its own terminal (#559)
+- nuworq up never starts a duplicate operator against a hub that doesn't list operators, and a restarted runner keeps its agent token (#582)
+- The guide's "The operator" essential can be linked again: no two elements share id="operator" (#592)
+- Staffing is asked once, where it can happen: the project page doesn't offer it before a machine can run workers, and connect skips it when… (#643)
+- Connect an agent shows one block to copy; what connect sets up for you sits folded beneath it (#644)
+- Wherever nuworq names the shaper and operator commands, it gives the form this machine has: /nuworq:… with the plugin, /nuworq-… without (#645)
+- The setup lines name the command first and the no-plugin form after it: "type /nuworq:operator (or /nuworq-operator without the plugin)" (#646)
+
+**Switching projects feels instant: a project shows the moment you click it, and even nuworq's page is quick to build and send (#499)**
+
+- The hub builds each project's page once per change and sends only what the depth shows: nuworq's in under 100 ms and 150 KB (#501)
+- A project appears the moment you click it: its header from what the app already knows, the rest filled in place (#503)
+- Live hub measured after #502: time per live update for nuworq under 50 ms, and agents' p95 before and after (#513)
+- A click on a big project draws its header in the first frame and the rest in the next, so it shows within 100 ms (#637)
+
+**Needs you puts the most important first: cards ranked by the priority of the work they hold up, in the order agents work (#504)**
+
+- Needs you shows why each card is where it is: a quiet priority mark on each, most important first, and the 30-second line counts what's now (#506)
+- Push messages list what needs you most important first, and their first line says how many are now (#507)
+
+**Steering & memory reads as direction a person can own: only people's steering, item steering retires itself, memory in plain words (#549)**
+
+- Your steering shows only what people wrote; operators' answers and the hub's notices live on their item, as one plain line (#550)
+- Steering about an item retires itself when the item is finished or dropped, and today's stale steering goes, each with its reason (#551)
+- Memory is distilled for people: a short Direction today, a plain gist and a recommendation for each note, one-line decisions (#552)
+- Live Steering & memory after #552's first distill: what a person must read, against the 2026-11-01 baseline (#619)
+
+**Also in this release**
+
+- Workers stay inside their job: a sandboxed shell, exact commands, pushes only to their own branch, and landing on main done by the hub (#472)
+- Code reaches people's machines only with Paul's approval: he approves each release before it's signed, and the plugin installs from releases (#473)
+- Security stays checked: a threat model in the repository, and a fresh review before every release that holds it on a serious finding (#480)
+- The release signer runs #473's code: it signs only approved releases, and origin's `release` branch exists (#486)
+- A headless claude with #472's worker sandbox settings is refused writes outside its worktree, ~/.ssh reads and off-allowlist network (#487)
+- pi works with nuworq like the other harnesses: connect registers it, nuworq run starts pi workers, and it's tested end to end (#495)
+- Worth knowing holds only what a person might act on: agents' assumptions, unseen steers and real trouble, one line each (#497)
+- app.nuworq.com sends #479's edge: HSTS on every response, generic 500s with an id, no `bin` in /api/info (#508)
+- Writes through the tunnel stop failing: the hub keeps idle connections longer than cloudflared does, and says how long it keeps them (#515)
+- Only real changes travel: reads and lease renewals change nothing, and each change names the project and item it touched (#517)
+- Each project loads once per request: views, checkin, next and route compute from one snapshot instead of a query per row (#518)
+- Every agent sees the whole rulebook: a guide core that fits Claude Code's limit, mode rules in next's hints, tools by role (#520)
+- The CLI is generated from the protocol: every operation and parameter reachable, unknown flags and fields refused with a did-you-mean (#521)
+- Many workspaces cost little: a workspace opens when it's used and closes when idle, and push work runs only where channels exist (#525)
+- Agents get compact JSON, gzipped when they accept it, and look without an item gives counts and the top items per stage (#528)
+- Relative times tick in the browser, so the page drops its 30-second refresh (#530)
+- Where CI checks every pull request, workers run only the tests near their change, and a red CI sends the work back (#532)
+- Drift detection (tidyUp, reviewUp) runs on the sweep timer, not on every claim (#536)
+- A per-project snapshot: view, homeView, projectList, claimable, briefing and groupsOf compute from one load instead of a query per row (#538)
+- After the first checkin, an agent session gets only what changed: mission, decisions and field notes sent once per session (#539)
+- Leases renew without the model: the runner renews its live workers, and an attended session's MCP process renews while it's active (#540)
+- The MCP process refetches tools and the guide only when the hub's protocol changes, not every 60 seconds (#541)
+- A commit goes live only once CI's required check passed for it; the VM stops running the full suite (#543)
+- Before a deploy switches, the new code boots on a side port against copies of the live databases and answers health (#544)
+- The hub drains on shutdown: in-flight requests finish, waits answer empty and live streams reconnect, within 10 seconds (#545)
+- The follow supervisor imports only node: modules and follow.js, so a commit that changes the CLI never restarts it (#546)
+- runner.test.js's --max-minutes test waits for the signals instead of a fixed 50 ms, so it doesn't fail and hang the file under load (#553)
+- headsup.test.js's "keeps its answer without running merge-base" doesn't race a queued refresh under load (#556)
+- refreshBehind runs one at a time, so the "heads haven't moved" test can't count a background refresh's git calls (#557)
+- A session that ends signs itself off: its MCP server hands back what its agent held, and the hub stops listing it at once (#558)
+- A red main reaches someone on a hub with workspaces: follow files "fix main" in the workspace that owns the repo (#561)
+- A bouncing item says why and what it waits on, and reaches Needs you only when a person can actually help (#564)
+- wait.test.js's restarted-hub test passes on a loaded machine: its 1-second bound doesn't fail at 1.1 s (#569)
+- wait.test.js's hub-restart test stops failing on a busy machine: its 1-second bound has room over the ~0.9 s it takes (#576)
+- Workers can't read Claude Code's or opencode's own credentials: DENY_READ covers ~/.claude/.credentials.json and ~/.config/opencode (#580)
+- Workers can't read opencode's stored provider keys: DENY_READ covers ~/.local/share/opencode/auth.json (#581)
+- wait.test.js's restarted-hub assertion accepts a wait asked in the same millisecond the item became ready (#584)
+- Main is green again: docs/CLI.md is regenerated with the pi env vars help all now prints (#588)
+- The app's files revalidate instead of downloading again: no-cache with a content ETag, 304 when unchanged (#598)
+- The app starts with its requests in parallel, and fetches nothing twice (#599)
+- The app's state lives in a store module: every field declared up front, changed only through setters (#600)
+- The app keeps each answer per URL until a change event says it changed (#601)
+- An update redraws only the region whose data changed: rail, main and drawer each a pure view module (#602)
+- A release signed by hand is GitHub's own build of a tag Paul approved, on main (#603)
+- Workers push only their held item's branch, and landing merges only the head that was reviewed (#605)
+- A worker on a project without an origin can't write what unsandboxed git or agents later read (#606)
+- The operator's commands that run without a prompt never run a program or write files the person didn't ask for (#607)
+- Plugin installs from before #473 move onto the release branch when nuworq connects (#608)
+- Only a token a steward or owner minted can act as an operator (#609)
+- Agents can tell an operator's answer and steer from a person's (#610)
+- A field note a person pinned stays until a person unpins or retires it (#611)
+- A verified sign-in never vouches for a session someone else opened from an invite link (#612)
+- An outsider's issue keeps the title a person let in (#613)
+- "Fix main" files only in the workspace bound to the repository's GitHub App installation (#614)
+- Every worker harness starts with the machine's keys unreadable, or the person opts in knowing it can read them (#615)
+- Workers' read denies and environment cover every stored credential (#616)
+- nuworq up starts operators only in folders the person chose (#617)
+- A worker exiting leaves the checkout's other branches where they were (#618)
+- A restarted hub supervisor starts on the last commit that passed CI, not on untested main (#620)
+- Only GitHub Actions' test check counts as CI's verdict (#621)
+- A token can't review or security-review work it built under another agent name (#622)
+- Replies kept for retried requests never hold a credential (#623)
+- The runner checks the sandbox hosts the hub sends are host names (#624)
+- The worker allowlist refuses git options that run a program (#625)
+- Worker logs hold no provider or llm-proxy keys, and the browser MCP server comes from the package, not npx (#626)
+- An agent token does no more than its minter's current role allows (#629)
+- Joining a workspace takes the person's own confirmation: no cross-site link signs them into a workspace they were invited to (#630)
+- People's emails show only to those who manage people; others see handles and roles (#631)
+- A memory distill never retires a field note a person pinned (#633)
+- Main holds no stray test logs: .test-550.txt and .test-550b.txt leave the repository root, and a test keeps them out (#635)
+- A machine's workers can review each other's work: nuworq run gives them a runner token, not the person's connect token (#656)
+- Workers of one runner review each other's work again: a runner's workers count as themselves alone, whatever token the runner uses (#658)
+- next never offers a review that review would refuse as the caller's own work (#660)
+
+**Upgrade notes**
+
+- Machines running nuworq run or worker with --agent codex, opencode or pi must add --can-read-keys; for an installed runner, run nuworq run --install again with it. (#615)
+- Workers no longer inherit the runner's environment: a project whose build or tests need a variable (DOCKER_HOST, VIRTUAL_ENV, JAVA_OPTS…) names it with nuworq run --env NAME (an installed runner: nuworq run --install again with it) (#616)
+- Worker or operator machines a member connected can no longer claim, review or push: a steward or owner reconnects them (nuworq connect), or an owner makes the member a steward. (#629)
+
 ## 0.6.0 (2026-11-01)
 
 What landed since v0.5.0.
