@@ -32,9 +32,10 @@ describe('tools by role', () => {
   });
 
   // 16,000 since distill (#552): workers take field-notes reviews, so they need it; main had 124 characters to spare.
-  test('a worker\'s list is at most 16,000 characters, and the precondition schema is sent once', () => {
+  // 16,500 since text limits (#765): each field states its limit, in the short "≤4,000 characters" form; about 16,300 then.
+  test('a worker\'s list is at most 16,500 characters, and the precondition schema is sent once', () => {
     const worker = JSON.stringify(list('worker'));
-    assert.ok(worker.length <= 16_000, `${worker.length} characters`);
+    assert.ok(worker.length <= 16_500, `${worker.length} characters`);
     assert.equal(worker.split('NUWORQ_CRED').length - 1, 1, 'propose carries it; refine refers to it');
     assert.ok(props('worker', 'propose').precondition.properties.kind);
     assert.match(props('worker', 'refine').precondition.description, /propose/);

@@ -110,8 +110,8 @@ export const MODE_RULES = {
 const REPO = s('Optional. The repository it lands in, e.g. "github.com/acme/api"; default the project\'s first.');
 const LAYERS = {
   headline: s('One line, outcome first, ≤100 characters.'),
-  summary: s('Optional. The 5-minute version: what, why, what next.'),
-  detail: s('Optional. The 30-minute version: logs, reasoning, alternatives.'),
+  summary: s('Optional. The 5-minute version: what, why, what next. ≤4,000 characters.'),
+  detail: s('Optional. The 30-minute version: logs, reasoning, alternatives. ≤32,000 characters.'),
 };
 
 export const OPS = [
@@ -150,16 +150,16 @@ export const OPS = [
     description: 'Ask a question. Prefer non-blocking: give the assumption you proceed with; blocking parks the item.',
     params: {
       item: { ...ITEM, description: 'Optional. The item this is about.' },
-      question: s('The question, one line.'),
-      context: s('Why it matters and what you know.'),
+      question: s('The question, one line. ≤2,000 characters.'),
+      context: s('Why it matters and what you know. ≤2,000 characters.'),
       detail: s('Optional. Findings, trade-offs, links.'),
-      options: { type: 'array', items: { type: 'string' }, description: 'Optional. Likely answers, one click each.' },
+      options: { type: 'array', maxItems: 6, items: { type: 'string' }, description: 'Optional. Likely answers, one click each. ≤200 characters each.' },
       steps: {
         type: 'array', maxItems: 12,
         items: { type: 'object', properties: { do: s('What to do, with exact values.'), where: s('Optional. A URL, or one command as typed, no backticks.'), check: s('Optional. How they see it worked.') }, required: ['do'] },
-        description: 'Required when a person must do something: what to do, in order.',
+        description: 'Required when a person must do something: what to do, in order. ≤500 characters a field.',
       },
-      assumption: s('What you assume and proceed with unless told otherwise.'),
+      assumption: s('What you assume and proceed with unless told otherwise, ≤2,000 characters.'),
       blocking: { type: 'boolean', description: 'True only if you cannot go on without an answer.' },
       to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: 'Optional. "operator" for running things, permissions or real infra; "reporter" for an issue\'s author; left out, the hub picks.' },
       escalates: { type: 'integer', roles: OPERATOR_ONLY, description: 'The operator question that needs the human\'s approval; their answer answers it too.' },
@@ -198,8 +198,8 @@ export const OPS = [
       difficulty_why: DIFFICULTY.difficulty_why,
       conflicts: s('Landing only: conflict fixes that change what was approved; it goes back for review.'),
       evidence: {
-        type: 'array',
-        description: 'Proof it meets done_means: tests and results, commits, links.',
+        type: 'array', maxItems: 20,
+        description: 'Proof it meets done_means: tests and results, commits, links. Labels ≤300 characters.',
         items: { type: 'object', properties: { label: s('What this shows, e.g. "npm test: 48 passed".'), url: { type: 'string' } }, required: ['label'] },
       },
       usage: USAGE,
@@ -223,12 +223,12 @@ export const OPS = [
     description: "Add work you noticed (don't silently expand your current item).",
     params: {
       title: s('One line: the outcome, not the activity.'),
-      summary: s('Why it matters and what you know.'),
+      summary: s('Why it matters and what you know. ≤4,000 characters.'),
       detail: LAYERS.detail,
-      acceptance: s('What done means: checkable criteria.'),
+      acceptance: s('What done means: checkable criteria. ≤4,000 characters.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'], description: 'Default "soon".' },
       parent: { ...ITEM, description: 'Optional. The item this is part of.' },
-      depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Items that must be done first.' },
+      depends_on: { type: 'array', maxItems: 30, items: { type: 'string' }, description: 'Optional. Items that must be done first.' },
       fixes: FIXES,
       breaking: BREAKING,
       needs: NEEDS,
@@ -249,7 +249,7 @@ export const OPS = [
       detail: s('Optional.'),
       acceptance: s('Optional. What done means.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
-      depends_on: { type: 'array', items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
+      depends_on: { type: 'array', maxItems: 30, items: { type: 'string' }, description: 'Optional. Replaces the dependency list.' },
       parent: s('Optional. The item it is part of, e.g. "#170"; "" makes it top-level.'),
       pr: s('Optional. An untracked pull request a tidy job lists, e.g. "acme/api#12": it becomes this item\'s.'),
       reason: s('Optional. Why, one line, for the record; a tidy job always gives one.'),
@@ -551,8 +551,8 @@ Model traffic through llm-proxy? Label it \`x-client-name: nuworq/<project>/<you
 - Your role (worker, shaper, operator, session) is fixed at checkin; ${c('next')} offers only what it may take.
 
 ## Write in layers (0-30-5-30)
-- headline: one line, outcome first ("Retries added; 2 flaky tests remain").
-- summary: the 5-minute version. detail: the 30-minute version.
+- headline: one line, outcome first ("Retries added; 2 flaky tests remain"). Past 140 characters, the rest moves into the summary and counts toward its limit.
+- summary: the 5-minute version (at most 4,000 characters). detail: the 30-minute version (32,000). Long logs go in the repo.
 Say nothing when nothing is worth saying. Responses are small: ${c('look')} for more.
 `;
 }

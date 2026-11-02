@@ -31,7 +31,13 @@ const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take 
 // One agent can't flood a hub (#766): its writes per minute, and what a project or hub holds at most.
 const WRITE_OPS = ['propose', 'ask', 'comment', 'learn', 'usage'];
 const WRITES_PER_MIN = 60;
-export const LIMITS = { projects: 100, openQuestions: 200, proposed: 500 };
+// The most an agent's (or a person's) text may hold (#765), in characters, or entries for lists. Past one, the write
+// is refused with a hint, never cut silently: every open page and many agents read these back on each change.
+export const LIMITS = {
+  projects: 100, openQuestions: 200, proposed: 500,
+  summary: 4_000, detail: 32_000, acceptance: 4_000, context: 2_000, assumption: 2_000, question: 2_000, step: 500, option: 200,
+  evidence: 20, evidence_label: 300, evidence_url: 2_000, depends_on: 30,
+};
 
 export class UserError extends Error {
   constructor(message, { status = 400, hint } = {}) {
@@ -178,6 +184,49 @@ export function providerOf(model = '') {
   if (/gpt|openai|codex|^o\d/.test(m)) return 'OpenAI';
   if (/gemini/.test(m)) return 'Google';
   return 'Open-weight';
+}
+
+const LONG_HINT = 'Say it shorter: the summary is the 5-minute version and the detail the 30-minute one. Put long logs and output in the repository (a file on your branch) and point to it.';
+const commas = (x) => x.toLocaleString('en-US');
+// Refused when over max, naming the field and the limit.
+function capped(text, max, field, hint = LONG_HINT) {
+  text = typeof text === 'string' ? text.trim() : '';
+  if (text.length > max) throw new UserError(`${field} is ${commas(text.length)} characters, over the ${commas(max)} limit`, { hint });
+}
+const evidenceOf = (raw) => (Array.isArray(raw) ? raw : raw ? [raw] : []);
+// What an agent or a person sends, checked against LIMITS where it enters (agentOp, humanOp), never inside
+// layered() or createItem(): the hub's own text, like a release's whole changelog, is kept at any length.
+function refuseLong(args) {
+  for (const k of ['summary', 'detail', 'acceptance', 'context', 'assumption', 'question']) capped(args[k], LIMITS[k], k);
+  // A headline past its line spills into the summary in layered() (a title, a person's comment body or note too; a
+  // question's later lines into its context): the two together are held to that limit, or a long headline would
+  // take the summary's place.
+  for (const [k, into, whole] of [['headline', 'summary'], ['title', 'summary'], ['body', 'summary'], ['note', 'summary'], ['question', 'context', true]]) {
+    if (typeof args[k] !== 'string' || !args[k].trim()) continue;
+    const { summary } = layered(args[k], typeof args[into] === 'string' ? args[into] : '', '', k, { whole });
+    if (summary.length > LIMITS[into]) {
+      throw new UserError(`${k} and ${into} together are ${commas(summary.length)} characters, over the ${commas(LIMITS[into])} limit for the ${into}`, {
+        hint: `A ${k} is one line: what's past its first line${whole ? '' : ` or its first ${HEADLINE_MAX} characters`} moves into the ${into}. ${LONG_HINT}`,
+      });
+    }
+  }
+  if (Array.isArray(args.steps)) {
+    args.steps.forEach((s, i) => {
+      for (const k of ['do', 'where', 'check']) capped(typeof s === 'string' && k === 'do' ? s : s?.[k], LIMITS.step, `step ${i + 1}'s ${k}`, 'A step is one action a person takes: split a long one into several steps, and put background in context.');
+    });
+  }
+  if (Array.isArray(args.options)) {
+    args.options.forEach((o, i) => capped(o, LIMITS.option, `option ${i + 1}`, 'An option is one short answer a person clicks; put the explanation in context.'));
+  }
+  const evidence = evidenceOf(args.evidence);
+  if (evidence.length > LIMITS.evidence) throw new UserError(`At most ${LIMITS.evidence} pieces of evidence, not ${evidence.length}`, { hint: 'Keep the ones a reviewer checks first: the test run, the commit, a screenshot. Put the rest in one file on your branch and link it.' });
+  for (const e of evidence) {
+    capped(typeof e === 'string' ? e : e?.label, LIMITS.evidence_label, 'an evidence label');
+    capped(e?.url, LIMITS.evidence_url, 'an evidence url');
+  }
+  if (Array.isArray(args.depends_on) && args.depends_on.length > LIMITS.depends_on) {
+    throw new UserError(`At most ${LIMITS.depends_on} dependencies, not ${args.depends_on.length}`, { hint: 'Depend on the milestone that groups them instead (its parts finish it).' });
+  }
 }
 
 // Everything written into nuworq has up to three layers. Be forgiving: an over-long
@@ -2118,6 +2167,7 @@ export class Hub extends EventEmitter {
     const odd = unknownField(op, args);
     if (odd) throw new UserError(`${op} has no field "${odd.field}"${odd.near ? `: did you mean "${odd.near}"?` : ''}`, { hint: `See the ${op} tool's parameters, or: nuworq help ${op}` });
     refuseSecrets(args);
+    refuseLong(args);
     this.sweep();
     const agent = this.requireAgent(name);
     const powers = token?.powers ?? null;
@@ -3078,11 +3128,16 @@ function finishShaping(p, agent, item, { headline, summary, detail, acceptance, 
 
 // Evidence as agents send it: strings or { label, url }, one or many.
 function evidenceList(raw) {
-  return (Array.isArray(raw) ? raw : raw ? [raw] : [])
-    .map((e) => (typeof e === 'string' ? { label: e } : { label: str(e.label || e.url), url: str(e.url) || undefined }))
+  return evidenceOf(raw)
+    .map((e) => (typeof e === 'string' ? { label: str(e) } : { label: str(e.label || e.url), url: str(e.url) || undefined }))
     // Agents sometimes put the result where the link goes ("unit tests|2 passed"): keep it as text, not a broken link.
     .map((e) => (e.url && !/^https?:\/\//i.test(e.url) ? { label: e.label === e.url ? e.label : `${e.label}: ${e.url}` } : e))
     .filter((e) => e.label);
+}
+
+// A question's one-click answers: at most 6.
+function optionList(raw) {
+  return Array.isArray(raw) ? raw.map(str).filter(Boolean).slice(0, 6) : [];
 }
 
 // What a person must do, in order: [{ do, where?, check? }]. `where` is the exact place: a URL or one bare command.
@@ -3158,7 +3213,7 @@ function escalate(p, agent, args) {
   const tidied = [];
   const steps = stepList(args.steps, tidied);
   requireSteps(question, steps);
-  const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
+  const options = optionList(args.options);
   const item = this.itemById(orig.item_id);
   const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, escalates, evidence, steps)
     VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?, ?, ?)`).run(p.id, orig.item_id, agent, question.headline, question.summary, question.detail,
@@ -3376,7 +3431,7 @@ const AGENT_OPS = {
     }
     if (issue && !this.github) throw new UserError("This hub has no GitHub App, so it can't post on the issue", { hint: 'Ask the human instead: leave out to.' });
     const blocking = !!issue || args.blocking === true || args.blocking === 'true' || (!assumption && args.blocking == null);
-    const options = Array.isArray(args.options) ? args.options.map(str).filter(Boolean).slice(0, 6) : [];
+    const options = optionList(args.options);
     // Left out, `to` is picked from what the question is about (src/audience.js); given, it is kept as is.
     const routed = to ? null : defaultAudience({ question: question.headline, context: `${question.summary}\n${question.detail}` });
     const operator = (to || routed.audience) === 'operator';
@@ -4447,6 +4502,7 @@ Object.assign(Hub.prototype, {
     const fn = HUMAN_OPS[action];
     if (!fn) throw new UserError(`Unknown action "${action}"`, { status: 404 });
     refuseSecrets(args);
+    refuseLong(args ?? {});
     this.sweep();
     const p = this.project(slug, { create: action === 'create' && args.createProject });
     const result = this.tx(() => fn.call(this, p, args ?? {}, by)) ?? {};

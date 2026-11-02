@@ -603,7 +603,7 @@ Flags
   --steps <do|where|check>    required when a person must do something: what to
                               do, in order
   --assumption <assumption>   what you assume and proceed with unless told
-                              otherwise
+                              otherwise, ≤2,000 characters
   --blocking                  true only if you cannot go on without an answer
   --to <human|reporter|operator>
                               "operator" for running things, permissions or real
