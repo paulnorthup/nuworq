@@ -121,22 +121,25 @@ export function itemBranch(item) {
   return `nuworq/${item.seq}-${short || 'work'}`;
 }
 
-// repo: the project's main checkout. agent: the submitter. own: the item's branch, if it has one.
-// Returns null when there is no repo to ask.
-export function gitFacts(repo, agent, claim, own = '') {
+// repo: the project's main checkout. agent: the submitter. own: the item's branch, if it has one. holderOf(branch):
+// the other live item that holds a branch, if any (#759): a branch named only in the claim is taken only when it is
+// no other item's, and `taken` says which item kept it. Returns null when there is no repo to ask.
+export function gitFacts(repo, agent, claim, own = '', holderOf = () => null) {
   if (!isRepo(repo)) return null;
   const base = baseOf(repo);
   const text = [claim.headline, claim.summary, ...(claim.evidence ?? []).map((e) => e.label)].join(' ');
   // The item's own branch first; then worker branches, nuworq/<agent> (or trellis/<agent> from before the rename).
+  const mine = [own, `nuworq/${agent}`, `trellis/${agent}`];
   const named = text.match(/\b(?:nuworq|trellis)\/[\w.@-]+/)?.[0];
-  const branch = [own, `nuworq/${agent}`, `trellis/${agent}`, named].find((b) => b && exists(repo, b)) ?? null;
+  const holder = named && !mine.includes(named) ? holderOf(named) : null;
+  const branch = [...mine, holder ? null : named].find((b) => b && exists(repo, b)) ?? null;
   const commits = branch && base
     ? (git(repo, 'log', '--format=%h%x09%s', '-n', String(MAX_COMMITS), `${base}..${branch}`) ?? '')
       .split('\n').filter(Boolean).map((l) => { const [hash, ...s] = l.split('\t'); return { hash, subject: s.join('\t') }; })
     : [];
   const behind = branch && base ? count(repo, `${branch}..${base}`) : 0;
   const missing = claimedHashes(claim).filter((h) => !exists(repo, h));
-  return { branch, base, commits, behind, missing };
+  return { branch, base, commits, behind, missing, ...(holder ? { taken: { branch: named, seq: holder.seq } } : {}) };
 }
 
 // One line for the human, or null when git has nothing to worry about.

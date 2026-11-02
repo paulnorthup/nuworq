@@ -37,8 +37,9 @@ export function readCommands(buf) {
 
 // Why the hub won't pass this update on, or '' when it may. branch: the one the hub named for the item the pushing
 // agent holds (#605); every other ref is refused, other items' nuworq/ branches among them, so holding one item
-// never rewrites another's accepted branch.
-export function refusedRef({ new: to, ref }, branch = '') {
+// never rewrites another's accepted branch. holder: the other live item that holds branch too (#759), say "#12";
+// then even that branch is refused, so an item whose branch field names another's can't push to it.
+export function refusedRef({ new: to, ref }, branch = '', holder = '') {
   if (!ref.startsWith(PUSH_REFS)) {
     return ref === 'refs/heads/main' || ref === 'refs/heads/master'
       ? 'workers never push main: the hub lands accepted work itself'
@@ -47,6 +48,7 @@ export function refusedRef({ new: to, ref }, branch = '') {
   if (!branch || ref !== `refs/heads/${branch}`) {
     return branch ? `workers push only the branch of the item they hold: ${branch}` : 'the item you hold has no branch yet: push it after the hub names one';
   }
+  if (holder) return `${branch} is ${holder}'s branch, and another item's branch takes no pushes from this one`;
   if (ZERO.test(to)) return 'workers never delete branches: the hub deletes a landed one itself';
   return '';
 }
@@ -103,8 +105,9 @@ function unreachable(res, e) {
 
 // One push through the hub. git: the repository's address on GitHub (https://github.com/o/r.git), service the
 // smart HTTP path (info/refs or git-receive-pack), token the hub's write token for it, branch the held item's
-// (refusedRef). onRefused(cmds, reasons) and onPushed(cmds) put it on the record.
-export async function proxyPush(req, res, { git, service, token, branch = '', onRefused, onPushed, timeoutMs = UPSTREAM_MS }) {
+// (refusedRef), holder the other live item holding that branch too, if any. onRefused(cmds, reasons) and
+// onPushed(cmds) put it on the record.
+export async function proxyPush(req, res, { git, service, token, branch = '', holder = '', onRefused, onPushed, timeoutMs = UPSTREAM_MS }) {
   // The worker gone before its answer is: so is the request to GitHub.
   const gone = new AbortController();
   res.on('close', () => { if (!res.writableFinished) gone.abort(); });
@@ -131,7 +134,7 @@ export async function proxyPush(req, res, { git, service, token, branch = '', on
     if (!parsed && head.length > MAX_HEAD) throw new Error('not a git push');
   }
   if (!parsed) throw new Error('not a git push');
-  const reasons = parsed.cmds.map((c) => refusedRef(c, branch));
+  const reasons = parsed.cmds.map((c) => refusedRef(c, branch, holder));
   if (reasons.some(Boolean)) {
     for await (const _ of { [Symbol.asyncIterator]: () => it }) { /* drain the pack: nothing goes on */ }
     onRefused?.(parsed.cmds, reasons);

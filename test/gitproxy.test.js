@@ -32,6 +32,7 @@ describe('the hub reads a push before passing it on', () => {
     assert.match(refusedRef({ new: B, ref: 'refs/tags/v1.0.0' }, own), /only refs\/heads\/nuworq\/\*/);
     assert.match(refusedRef({ new: B, ref: 'refs/heads/nuworqx' }, own), /only refs\/heads\/nuworq\/\*/);
     assert.match(refusedRef({ new: Z, ref: 'refs/heads/nuworq/12-fix' }, own), /never delete/);
+    assert.match(refusedRef({ new: B, ref: 'refs/heads/nuworq/12-fix' }, own, '#7'), /nuworq\/12-fix is #7's branch/, 'another live item holds it (#759)');
   });
 
   test('a refusal git understands: each ref rejected with its reason, in the side band when asked', () => {
