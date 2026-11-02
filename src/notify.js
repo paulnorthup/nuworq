@@ -238,7 +238,7 @@ export class Notifier {
       // Forget entries long gone from projects we looked at, so a situation that recurs is news again.
       const forget = db.prepare('DELETE FROM notified WHERE project_id = ? AND seen_at < ?');
       for (const id of looked) forget.run(id, t - FORGET);
-      if (this.pending.size && !this.batch) this.batch = setTimeout(() => this.flush(), this.windowMs);
+      if (this.pending.size && !this.batch) this.batch = setTimeout(() => this.flush().catch((e) => console.error('notify flush failed', e)), this.windowMs);
     } catch (e) {
       console.error('notify scan failed', e);
     }

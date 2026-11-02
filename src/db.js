@@ -655,14 +655,19 @@ export function migrate(db, migrations = MIGRATIONS) {
 export function openDb(file, { migrations = MIGRATIONS } = {}) {
   if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
-  const mode = db.prepare('PRAGMA journal_mode = WAL').get().journal_mode;
-  // In WAL mode NORMAL syncs at checkpoints instead of on every commit. Still safe: a crash of the hub loses
-  // nothing, and a power cut can only roll back the last commits, never corrupt the database.
-  if (mode === 'wal') db.exec('PRAGMA synchronous = NORMAL');
-  db.exec('PRAGMA busy_timeout = 3000');
-  db.exec(SCHEMA);
-  migrate(db, migrations);
-  // Fold PRs recorded twice (see PR_TWINS) at start too, in case the hub stopped between the land step's writes.
-  for (const sql of PR_TWINS) db.exec(sql);
+  try {
+    const mode = db.prepare('PRAGMA journal_mode = WAL').get().journal_mode;
+    // In WAL mode NORMAL syncs at checkpoints instead of on every commit. Still safe: a crash of the hub loses
+    // nothing, and a power cut can only roll back the last commits, never corrupt the database.
+    if (mode === 'wal') db.exec('PRAGMA synchronous = NORMAL');
+    db.exec('PRAGMA busy_timeout = 3000');
+    db.exec(SCHEMA);
+    migrate(db, migrations);
+    // Fold PRs recorded twice (see PR_TWINS) at start too, in case the hub stopped between the land step's writes.
+    for (const sql of PR_TWINS) db.exec(sql);
+  } catch (e) {
+    db.close(); // a file that won't open or migrate (#740) holds no handle while it waits to be tried again
+    throw e;
+  }
   return db;
 }

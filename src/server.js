@@ -381,7 +381,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     checkApp();
     sweepMirrors(); // mirrors are the process's, not one hub's
     // Workspaces nobody uses close; one closed workspace a tick opens for its sweep (and closes again later).
-    if (spaces) { spaces.closeIdle(IDLE_MS); spaces.wake(WAKE_MS); }
+    if (spaces) {
+      try { spaces.closeIdle(IDLE_MS); } catch (e) { console.error('closing idle workspaces failed', e); }
+      try { spaces.wake(WAKE_MS); } catch (e) { console.error('waking a workspace failed', e); }
+    }
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); securityUp(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
       try { hub.tidyAll(); } catch (e) { console.error('checking milestones and field notes failed', e); } // #536
@@ -2032,6 +2035,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     server.closeIdleConnections();
   });
   return server;
+}
+
+// A rejection nobody handled would end the process, and everything in flight with it (#740): serve logs it under
+// an id, as a request's error is, and keeps serving. Installed once per process.
+export function keepServing(proc = process) {
+  if (proc._keepServing) return;
+  proc._keepServing = true;
+  proc.on('unhandledRejection', (e) => {
+    const id = randomBytes(6).toString('hex');
+    console.error(`error ${id}: unhandled in the background; still serving`, e);
+  });
 }
 
 // A per-address limit's times for ip within the window (the caller pushes the new one). The map keeps addresses
