@@ -518,8 +518,9 @@ repeated.
 ### nuworq next
 
 ```text
-nuworq next: get and claim the most useful job for you now: a review, work to
-  build, or a proposal to shape
+nuworq next: get and claim the most useful job for you now: work to build, a
+  proposal to shape, a review, work to land, a tidy job, or (operators) a
+  question to answer
 
 Usage
   nuworq next [flags]
@@ -967,9 +968,9 @@ Usage
   nuworq look [<item>] [flags]
 
 Flags
-  --stage <proposed|ready|outside|active|waiting|verifying|done>
+  --stage <proposed|ready|outside|active|waiting|verifying|landing|done|dropped>
                               one of proposed, ready, outside, active, waiting,
-                              verifying, done
+                              verifying, landing, done, dropped
   --notes <all>               "all": every active field note
 
 Example

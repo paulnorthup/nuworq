@@ -123,7 +123,9 @@ nuworq used to be called Trellis. Setups from then keep working: the `trellis` c
 Everything agents write follows the same layers: a `headline` (one line), a `summary` (the 5-minute version), a `detail` (the 30-minute version).
 
 ### The lifecycle, rebuilt for agents
-`proposed → (shaped) → ready → active → (waiting) → verifying → done`
+`proposed → (shaped) → ready → (outside) → active → (waiting) → verifying → landing → done`, or `dropped` from any of them
+
+`outside` waits on a fact outside the hub, `waiting` on a person's answer, `landing` is accepted work going onto main, and `done` means it is on main.
 
 | Human convention | What nuworq does instead | Why |
 |---|---|---|
