@@ -131,6 +131,31 @@ describe('a role typed before its person signed in', () => {
     assert.equal(b.verifySession(first.sid), null);
   });
 
+  // #732: an owner typed by email hasn't signed in, so they don't count as the owner who'd be left.
+  test('a workspace always keeps an owner: an unverified owner is not the second one', () => {
+    const a = new Auth(new Hub().db);
+    a.addPerson('alice', 'owner', { email: 'alice@acme.test', verified: true });
+    a.addPerson('bob', 'owner', { email: 'bob@acme.test' });
+    assert.throws(() => a.setRole('alice', 'member'), /last owner/);
+    assert.throws(() => a.removePerson('alice'), /last owner/);
+    const r = a.signInByEmail('bob@acme.test', 'github');
+    assert.deepEqual([r.person.role, r.held], ['viewer', 'owner'], 'alice still owns it, so #612 stands');
+    assert.deepEqual(a.listPeople().filter((p) => p.role === 'owner').map((p) => p.handle), ['alice']);
+
+    // Sign-in that would demote the only owner keeps them owner, by invite or by holding the role.
+    const b = new Auth(new Hub().db);
+    b.addPerson('bob', 'owner', { email: 'bob@acme.test' });
+    b.createInvite('member', { email: 'bob@acme.test' });
+    assert.equal(b.signInByEmail('bob@acme.test', 'github').person.role, 'owner');
+    assert.equal(b.person('bob').role, 'owner');
+    const c = new Auth(new Hub().db);
+    c.addPerson('bob', 'owner', { email: 'bob@acme.test' });
+    const kept = c.signInByEmail('bob@acme.test', 'github');
+    assert.deepEqual([kept.person.role, kept.held, c.person('bob').role], ['owner', undefined, 'owner']);
+    c.addPerson('cy', 'member');
+    assert.throws(() => c.setRole('bob', 'member'), /last owner/);
+  });
+
   test('a host-vouched person (person add on the command line) signs in with their role', () => {
     const a = auth();
     a.addPerson('dee', 'steward', { email: 'dee@acme.test', verified: true });

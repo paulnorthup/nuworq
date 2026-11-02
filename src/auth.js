@@ -104,11 +104,17 @@ export class Auth {
     return this.db.prepare('SELECT id, handle, name, email, role, created_at FROM people ORDER BY id').all();
   }
 
+  // Is p the last owner? Only owners who proved their email (or have none to prove) count as the one left (#732):
+  // an owner typed by email who never signed in comes in as a viewer, so the workspace would have none.
+  lastOwner(p) {
+    return p.role === 'owner' && !this.db.prepare(`SELECT 1 FROM people WHERE role = 'owner' AND id != ? AND (verified_at IS NOT NULL OR email = '')`).get(p.id);
+  }
+
   setRole(handle, role) {
     if (!PERSON_ROLES.includes(role)) throw new Error(`role must be one of ${PERSON_ROLES.join(', ')}`);
     const p = this.person(handle);
     if (!p) throw new Error(`no person @${String(handle).replace(/^@/, '')}`);
-    if (p.role === 'owner' && role !== 'owner' && this.db.prepare(`SELECT COUNT(*) AS n FROM people WHERE role = 'owner'`).get().n === 1) {
+    if (role !== 'owner' && this.lastOwner(p)) {
       throw new Error(`@${p.handle} is the last owner; make someone else an owner first`);
     }
     this.db.prepare('UPDATE people SET role = ? WHERE id = ?').run(role, p.id);
@@ -194,10 +200,13 @@ export class Auth {
         // A verified sign-in never vouches for a session it didn't create (#612): whoever opened an invite link to this
         // email was signed in as this row without proving it, so what they hold ends before the row becomes verified.
         if (typed) this.revokeUnproven(typed);
+        // Never demote the only owner (#732): with nobody else to confirm a role, the workspace keeps them.
+        const keepOwner = typed && this.lastOwner(typed);
         if (inv) {
           if (typed) {
-            this.db.prepare('UPDATE people SET role = ?, verified_at = ? WHERE id = ?').run(inv.role, t, typed.id);
-            p = { ...typed, role: inv.role, verified_at: t };
+            const role = keepOwner ? 'owner' : inv.role;
+            this.db.prepare('UPDATE people SET role = ?, verified_at = ? WHERE id = ?').run(role, t, typed.id);
+            p = { ...typed, role, verified_at: t };
           } else {
             const stem = Auth.handleOf(email.split('@')[0]).slice(0, 36);
             let handle = stem;
@@ -209,7 +218,7 @@ export class Auth {
           joined = true;
         } else {
           // Made by accepting an invite link to this email: that invite gave the role, so it stands.
-          const role = accepted ? typed.role : 'viewer';
+          const role = accepted || keepOwner ? typed.role : 'viewer';
           if (role !== typed.role) held = typed.role;
           joined = !accepted; // accepting the link already said they joined
           this.db.prepare('UPDATE people SET role = ?, verified_at = ? WHERE id = ?').run(role, t, typed.id);
@@ -316,7 +325,7 @@ export class Auth {
   removePerson(handle) {
     const p = this.person(handle);
     if (!p) throw new Error(`no person @${String(handle).replace(/^@/, '')}`);
-    if (p.role === 'owner' && this.db.prepare(`SELECT COUNT(*) AS n FROM people WHERE role = 'owner'`).get().n === 1) {
+    if (this.lastOwner(p)) {
       throw new Error(`@${p.handle} is the last owner; make someone else an owner first`);
     }
     const ids = this.db.prepare('SELECT id FROM tokens WHERE person_id = ? OR minted_by = ?').all(p.id, p.id).map((t) => t.id);
