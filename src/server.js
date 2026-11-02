@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_AGENT_CAN, STAGES, normRemote, slugify, refuseSecrets, providerOf, MIN, HOUR, DAY } from './core.js';
+import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_AGENT_CAN, STAGES, normRemote, slugify, refuseSecrets, requireFields, providerOf, MIN, HOUR, DAY } from './core.js';
 import { checkLocalModels } from './llmproxy.js';
 import { view, itemView, projectList, homeView, withEntry, liveOperators } from './insight.js';
 import { tools, guide, LISTENER, protocolVersion } from './protocol.js';
@@ -602,6 +602,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // The feedback tool: the hub attaches the agent's name, client and model (as its latest checkin said) and its own
   // version. item: the one it was on, named with its project when the call names one.
   const agentFeedback = (req, hub, ws, slug, agent, b, caller) => {
+    requireFields('feedback', b);
     if (!feedbackOn) throw FEEDBACK_OFF();
     const name = hub.requireAgent(agent);
     if (slug) hub.inScope(caller.scope, slug);
@@ -2110,6 +2111,6 @@ async function body(req) {
     const v = JSON.parse(raw);
     return v && typeof v === 'object' ? v : {};
   } catch {
-    throw new UserError('Request body must be JSON');
+    throw new UserError('Request body must be JSON', { hint: 'Send one JSON object with content-type application/json, e.g. {"item": "#12", "headline": "Retries added"}; {} when there are no fields.' });
   }
 }

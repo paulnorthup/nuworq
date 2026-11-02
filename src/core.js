@@ -20,7 +20,7 @@ import { BUDGET as DEFAULT_BUDGET } from './setup.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
-import { unknownField, nearestOf } from './agentargs.js';
+import { unknownField, nearestOf, missingField } from './agentargs.js';
 import { slugify, normRemote } from './text.js';
 import { Snapshot } from './snapshot.js';
 import { commandParts } from '../web/commands.js';
@@ -47,6 +47,13 @@ export class UserError extends Error {
     this.hint = hint;
   }
 }
+// A required field an agent operation was called without is named, never read as "undefined" further in (#715).
+export function requireFields(op, args) {
+  const gap = missingField(op, args);
+  if (gap) throw new UserError(`${gap.field} is required`, { hint: `${gap.finds ? `${gap.finds} ` : ''}e.g. ${op} ${gap.example}` });
+}
+// How to find a real item when the one named doesn't exist (#715).
+export const NO_ITEM_HINT = 'look lists the items, and look with stage set (e.g. "ready") lists one stage in full.';
 
 export const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 const RUNNER_DOWN_POLLS = 3; // a runner silent for this many of its poll intervals is down (#171)
@@ -1227,10 +1234,11 @@ export class Hub extends EventEmitter {
   // ── small helpers ───────────────────────────────────────────────────────
 
   item(p, ref) {
-    const n = Number(String(ref ?? '').trim().replace(/^#/, '').replace(/^[a-z]+-?/i, ''));
+    if (!String(ref ?? '').trim()) throw new UserError('item is required', { hint: 'Name it as "#12" or "12"; look lists the items.' });
+    const n = Number(String(ref).trim().replace(/^#/, '').replace(/^[a-z]+-?/i, ''));
     if (!Number.isInteger(n) || n < 1) throw new UserError(`Not an item reference: "${ref}"`, { hint: 'Use "#12" or "12".' });
     const it = this.q('SELECT * FROM items WHERE project_id = ? AND seq = ?').get(p.id, n);
-    if (!it) throw new UserError(`No item #${n} in ${p.slug}`, { status: 404 });
+    if (!it) throw new UserError(`No item #${n} in ${p.slug}`, { status: 404, hint: NO_ITEM_HINT });
     return it;
   }
 
@@ -2177,6 +2185,7 @@ export class Hub extends EventEmitter {
     // A field the operation doesn't take is a typo, never silently dropped (#521).
     const odd = unknownField(op, args);
     if (odd) throw new UserError(`${op} has no field "${odd.field}"${odd.near ? `: did you mean "${odd.near}"?` : ''}`, { hint: `See the ${op} tool's parameters, or: nuworq help ${op}` });
+    requireFields(op, args);
     refuseLong(args);
     this.sweep();
     const agent = this.requireAgent(name);
@@ -3673,7 +3682,7 @@ const AGENT_OPS = {
   ack(p, agent, args) {
     const id = Number(String(args.steer ?? '').replace(/^#/, ''));
     const note = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'steer'`).get(id, p.id);
-    if (!note) throw new UserError(`No steer ${args.steer}`, { status: 404, hint: 'Use the steer id from checkin or a response.' });
+    if (!note) throw new UserError(`No steer ${args.steer} in ${p.slug}`, { status: 404, hint: "Use a steer id from checkin's steering or a progress response; checkin again to see the steers open for you." });
     const response = str(args.response).slice(0, 300);
     this.q('INSERT OR REPLACE INTO acks (note_id, agent, response, at) VALUES (?, ?, ?, ?)').run(id, agent, response, this.now());
     const item = this.itemById(note.item_id);

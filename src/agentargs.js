@@ -206,6 +206,35 @@ export function agentArgs(name, argv, { read = () => '' } = {}) {
 const EXTRA = { checkin: ['role', 'runner'], retire: ['note'], usage: ['usage'] };
 
 // The first field args has that op doesn't take, with the nearest one it does: { field, near } or null.
+// A sample value for each required field, so a missing-field error can show a whole valid body (#715).
+const SAMPLES = {
+  item: '#12', headline: 'Retries added; 2 flaky tests remain', verdict: 'accept', title: 'Retry failed webhooks',
+  note: 'Run one test file with npm test -- test/x.test.js', text: 'The submit hint named a step that does not exist',
+  reason: 'Answered in a planning session', answer: 'Port 8080 is free on the runner',
+};
+const sampleOf = (field, schema) => (schema?.type === 'integer' ? 7
+  : schema?.type === 'array' ? [7]
+  : field === 'question' ? 'Which port should the dev server use?'
+  : SAMPLES[field] ?? 'some text');
+// Where a real value comes from, for the fields an agent has to look up.
+const FINDS = {
+  item: 'look lists the items, and next or claim gives you one.',
+  steer: "The steer id comes with each steer: checkin's steering, or a progress response.",
+};
+
+// The first required field an operation was called without, with an example body that has them all; null when none
+// is missing. Blank strings count as missing.
+export function missingField(name, args) {
+  const op = opOf(name);
+  for (const field of op?.required ?? []) {
+    const v = args?.[field];
+    if (v != null && !(typeof v === 'string' && !v.trim())) continue;
+    const example = Object.fromEntries(op.required.map((f) => [f, sampleOf(f, op.params[f])]));
+    return { field, example: JSON.stringify(example), finds: FINDS[field] ?? null };
+  }
+  return null;
+}
+
 export function unknownField(name, args) {
   const op = opOf(name);
   if (!op && !EXTRA[name]) return null;
