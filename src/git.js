@@ -71,6 +71,14 @@ export function sameChange(repo, base, a, b) {
   const x = change(a);
   return !!x && x === change(b);
 }
+// Whether base already has commit c's change (#686): c is in it, or merging c into it changes nothing (the change
+// came in some other way, such as a squash holding more). A conflict, or git not being able to say, is false.
+export function holdsChange(repo, base, c) {
+  if (!shaOf(repo, c)) return false;
+  if (contains(repo, base, c)) return true;
+  const tree = git(repo, 'merge-tree', '--write-tree', base, c);
+  return !!tree && tree === git(repo, 'rev-parse', `${base}^{tree}`);
+}
 // Whether a file is in the tree at ref.
 export const hasFile = (repo, ref, file) => git(repo, 'cat-file', '-e', `${ref}:${file}`) !== null;
 // Files under paths that differ between two commits, and the subjects of the commits that changed them
