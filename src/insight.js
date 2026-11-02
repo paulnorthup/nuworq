@@ -796,7 +796,8 @@ function build(hub, p, t, { light = false } = {}) {
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
   const v = {
-    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), fresh: !!p.fresh, security: !!p.security, live: !!p.live, releases: p.releases || 'off', ci: p.ci || 'auto', autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
+    // runners_here (#643): runners that reached this project in the last week; staffing is offered only once one has.
+    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), runners_here: hub.runnersFor(p.slug).length, fresh: !!p.fresh, security: !!p.security, live: !!p.live, releases: p.releases || 'off', ci: p.ci || 'auto', autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
     pulse: null, since, attention, motion, flow, // pulse: personalize's
     ...groupsOf(hub, p, items, { agents, openQs, t, stalled: stalledGroups }),
     queue, proposed, waiting, verifying, done,
@@ -849,9 +850,11 @@ function idleCause(hub, p, t) {
       cause: 'no-runner',
       sub: last ? `No runner is up: ${last.name} was last seen ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''}` : 'No runner has ever reported here',
       why: `Nothing starts workers for this project: no \`nuworq run\` is up${last ? ` (${last.name} went quiet ${last.last_seen} ago${last.machine ? ` on ${last.machine}` : ''})` : ''}. Start one, or start an agent yourself. Or park the project if it should stay quiet.`,
+      // Not staffed yet (#643): the runner staffs it as it starts (--staff), rather than a switch nothing could act on
+      // yet. Its install doesn't repeat that: a service that re-staffed on every start would undo turning it off.
       how: [
-        ...(p.runner ? [] : [{ do: 'Let nuworq run staff this project: click Settings at the top of this page (5m), then turn on "Staff it with nuworq run"', check: 'The switch is on, and Runners appears on this page' }]),
-        { do: `On ${last?.machine || 'a machine connected to this hub'}, start a runner`, where: run, check },
+        p.runner ? { do: `On ${last?.machine || 'a machine connected to this hub'}, start a runner`, where: run, check }
+          : { do: `On ${last?.machine || 'a machine connected to this hub'}, start a runner that staffs this project`, where: `${run} --staff ${p.slug}`, check },
         { do: 'To keep it going after the terminal closes and across reboots, install it instead', where: `${run} --install` },
       ],
     };

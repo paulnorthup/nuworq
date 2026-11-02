@@ -533,6 +533,8 @@ function project(v) {
       ? `<div class="inline-form"><input data-draft="remote" id="remote-in" placeholder="github.com/acme/api, or any git remote URL"><button class="btn primary small" data-action="remote-add">Link</button><button class="btn ghost small" data-action="remote-cancel">Cancel</button></div>`
       : `<button class="link" data-action="remote-new" title="Link a git remote: every clone of it, on any machine, reaches this project">+ repo</button>`}</div>`;
   const empty = !(v.counts?.items ?? v.all.length) && !(v.counts?.agents ?? v.agents.length);
+  // The staffing banner only once a runner has reached this project (#643): before that a yes starts nothing, and
+  // connect asks on the machine that would run the workers.
   return `
     <div class="phead">
       <div class="titles"><h1>${esc(P.name)}${updating(P.slug)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
@@ -542,7 +544,7 @@ function project(v) {
         <button class="btn settings-btn" data-action="settings" data-new="project-settings" title="Staffing, freshness, GitHub, park or remove">Settings</button></div>` : ''}
       </div>
     </div>
-    ${!P.runner && P.staffing && !P.staffing.asked ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
+    ${!P.runner && P.staffing && !P.staffing.asked && P.runners_here ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
       <div class="actions"><button class="btn primary" data-action="runner-on">Let run staff it</button><button class="btn ghost" data-action="staff-not-now">Not now</button></div></div>` : ''}
     ${projectBody(v, empty)}`;
 }
@@ -1530,9 +1532,11 @@ async function connect() {
   modal(`<h2>Connect an agent</h2>
     <p class="lead">Any model can work here, and many agents at once. Set a machine up once: agents find their project from the folder they're in, and anywhere else the hub sends them to the work that matters most.</p>
     <h4>Set up this machine (once)</h4>
-    <p class="lead">Paste it in a terminal, in a clone of the project. ${c.verified ? '<span data-new="verified-install">It downloads this hub\'s newest signed release and checks its signature against nuworq\'s release key; if that doesn\'t match, it stops before anything installs.</span> Then it installs nuworq (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), which keeps itself up to date.' : c.install ? 'It installs nuworq from this hub (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), and keeps it up to date.' : 'This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed first.'} It signs you in through the browser, then asks, one at a time, to install the Claude Code plugin, staff the project with workers here, and start an operator. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.setup)}
+    <p class="lead">Paste it in a terminal, in a clone of the project. ${c.verified ? '<span data-new="verified-install">It downloads this hub\'s newest signed release and checks its signature against nuworq\'s release key; if that doesn\'t match, it stops before anything installs.</span> Then it installs nuworq (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), which keeps itself up to date.' : c.install ? 'It installs nuworq from this hub (Node 24 or newer: <code>node --version</code>; older or missing, get it from nodejs.org), and keeps it up to date.' : 'This hub serves no package of nuworq (it doesn\'t run from a git checkout), so install nuworq the way this hub was installed first.'} It signs you in through the browser, then asks, one at a time, to install the Claude Code plugin, staff the project with workers here, and start an operator, and says how to start a shaper. That one block is all there is to copy. <code>nuworq disconnect</code> undoes it all.</p>${commandBlocks(c.setup)}
+    <details class="setup-fold" data-new="setup-folded"><summary>What connect sets up, to do by hand</summary>
     ${setupSection()}
     <h4>Then, and after any restart</h4><p class="lead">The first two for every project that isn't parked, in one command: the runner with automatic workers, and an operator in its own terminal for each (tmux when you have it). Run it again any time: it starts only what's missing. <code>nuworq down</code> stops it all.</p>${commandBlocks(c.up)}
+    </details>
     ${gh ? `<h4>GitHub App (once, for this hub)</h4>${appStatus(gh)}` : ''}
     ${where || S.view?.project.remotes?.length ? '' : `<p class="lead">⚠ The hub doesn't know ${esc(S.view?.project.name ?? 'this project')}'s repository yet. Start the first worker from a clone of it (add --here), or link the repo in the project header, so later workers find it.</p>`}
     ${z() >= 2 ? `<h3>Setting up by hand</h3>

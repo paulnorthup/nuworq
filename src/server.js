@@ -1355,7 +1355,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
       }
       if (path === '/api/people' || path === '/api/people/role') {
-        if (req.method === 'GET' && path === '/api/people') return send(200, authz.listPeople());
+        // Emails are how sign-in matches a person (#470): only owners, who manage people, see them (#631).
+        if (req.method === 'GET' && path === '/api/people') {
+          const people = authz.listPeople();
+          return send(200, personRole === 'owner' ? people : people.map(({ handle, name, role, created_at }) => ({ handle, name, role, created_at })));
+        }
         if (req.method !== 'POST') return deny(405, 'use GET or POST');
         if (personRole !== 'owner') return deny(403, 'only an owner manages people', 'Ask an owner of this workspace.');
         const b = await body(req);

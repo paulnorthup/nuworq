@@ -4,6 +4,8 @@ node_modules/
 *.db-wal
 *.db-shm
 .claude/settings.local.json
+# Test logs a full run was pointed at (#635): write them outside the repository.
+.test-*.txt
 # Keys, environment files and release artifacts never go in a commit.
 *.pem
 *.key
