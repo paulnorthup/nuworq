@@ -76,6 +76,40 @@ describe('the workspace registry', () => {
     spaces.create('acme');
     assert.throws(() => spaces.create('acme'), /already exists/);
   });
+
+  // #728: remove left acme's directory rows, so whoever made acme next could mint tokens through the old tenant's
+  // GitHub installation, got its webhooks, its plan and grant, and the old creator still counted it as theirs.
+  test('a name freed by remove starts clean: no old installation, plan, grant, members or creator', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-ws-'));
+    const spaces = new Workspaces({ dir });
+    const d = spaces.directory;
+    const old = d.identify('old@acme.test', 'github'), next = d.identify('new@other.test', 'github');
+    const { code } = d.decide(d.request({ email: 'old@acme.test', building: 'rockets' }).id, true, 'owner');
+    spaces.create('acme');
+    assert.equal(d.useGrant(code, old, 'acme'), true);
+    d.join('old@acme.test', 'acme', { created: true });
+    assert.equal(d.bindInstallation(4242, 'acme'), true);
+    spaces.setPlan('acme', 'unlimited', 'owner');
+    d.setting('adopted:acme', join(dir, 'gone.db'));
+    d.giveFeedback({ kind: 'agent', sender: 'claude-1', workspace: 'acme', text: 'The old tenant\'s private words' });
+    assert.equal(d.installation(4242), 'acme');
+
+    spaces.remove('acme');
+    spaces.create('acme');
+    d.join('new@other.test', 'acme', { created: true });
+    assert.equal(d.installation(4242), null, "the old installation routes nowhere: no tokens, no webhooks");
+    assert.equal(d.plan('acme'), null, 'the default plan');
+    assert.equal(d.madeByGrant('acme'), false, 'no early-access grant');
+    assert.deepEqual(d.created(old), [], "not the old creator's any more");
+    assert.deepEqual(d.created(next), ['acme']);
+    assert.equal(d.creator('acme').email, 'new@other.test', 'only its new creator');
+    assert.equal(d.db.prepare("SELECT COUNT(*) AS n FROM memberships WHERE workspace = 'acme'").get().n, 1);
+    assert.equal(d.setting('adopted:acme'), null);
+    assert.equal(d.useGrant(code, next, 'acme'), false, 'the old grant stays used');
+    // Feedback stays for the owners, but the next acme's claude-1 sees none of the old one's at checkin.
+    assert.deepEqual(d.feedbackFrom({ kind: 'agent', sender: 'claude-1', workspace: 'acme' }), []);
+    assert.deepEqual(d.db.prepare('SELECT workspace FROM feedback').all().map((f) => f.workspace), ['acme (removed)']);
+  });
 });
 
 describe('one server, two workspaces', () => {

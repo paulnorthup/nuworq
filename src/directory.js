@@ -275,6 +275,22 @@ export class Directory {
     return this.db.prepare('SELECT workspace FROM memberships WHERE identity_id = ? AND created = 1').all(identity.id).map((m) => m.workspace);
   }
 
+  // A removed workspace leaves nothing its name could hand on (#728): whoever creates the name next gets no GitHub
+  // installation, plan, members, creator or early-access grant of the old one. Stripe's records stay, unbound;
+  // feedback stays for the owners, under a name no workspace can take ("acme (removed)": slugs have no spaces), so
+  // the next acme's senders don't see the old one's words or count against its daily limit.
+  forget(workspace) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const table of ['installations', 'plans', 'memberships']) this.db.prepare(`DELETE FROM ${table} WHERE workspace = ?`).run(workspace);
+      this.db.prepare('UPDATE org_grants SET workspace = NULL WHERE workspace = ?').run(workspace);
+      this.db.prepare('UPDATE billing SET workspace = NULL WHERE workspace = ?').run(workspace);
+      this.db.prepare(`UPDATE feedback SET workspace = workspace || ' (removed)' WHERE workspace = ?`).run(workspace);
+      this.db.prepare('DELETE FROM settings WHERE key = ?').run(`adopted:${workspace}`);
+      this.db.exec('COMMIT');
+    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+  }
+
   // ── early access ──
 
   // Ask to come in. The same email again is the same request, brought up to date; it keeps the first source it had.
