@@ -1,7 +1,8 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readdirSync, rmSync, copyFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -10,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { Workspaces } from '../src/workspaces.js';
 import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
-import { LEASE_MS, MIN } from '../src/core.js';
+import { Hub, LEASE_MS, MIN } from '../src/core.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 const BASE = 'nuworq.test';
@@ -153,11 +154,51 @@ describe('the workspace registry', () => {
     } finally { console.log = log; }
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     await new Promise((r) => server.close(r));
-    assert.deepEqual(logs.filter((l) => /#749/.test(l)), ['nuworq: the directory forgot "acme", a workspace removed earlier: its name starts clean (#749)']);
+    const copies = readdirSync(w.dir).filter((f) => f.startsWith('directory.before-forget-'));
+    assert.equal(copies.length, 1);
+    assert.deepEqual(logs.filter((l) => /#749/.test(l)), [`nuworq: the directory forgot "acme", a workspace removed earlier: its name starts clean (#749); its rows are kept in ${join(w.dir, copies[0])}`]);
     const d = new Workspaces({ dir: w.dir }).directory;
     assert.deepEqual(d.named().sort(), ['globex']);
     w.spaces.create('acme');
     startsClean({ ...w, d });
+  });
+
+  test('a workspace file moved aside: start forgets its rows from a dated copy kept first; putting both back restores them (#755)', () => {
+    const w = removedBefore728();
+    w.spaces.directory.close(); // the restart below opens it again
+    const spaces = new Workspaces({ dir: w.dir, clock: () => Date.UTC(2026, 10, 2, 9, 30) });
+    const { gone, copy } = spaces.forgetGone();
+    assert.deepEqual(gone, ['acme']);
+    assert.equal(copy, join(w.dir, 'directory.before-forget-2026-11-02-09-30-00.sqlite'));
+    assert.equal(spaces.directory.installation(4242), null, 'forgotten');
+    // The copy still holds them.
+    const held = new DatabaseSync(copy);
+    assert.equal(held.prepare('SELECT workspace FROM installations WHERE id = 4242').get().workspace, 'acme');
+    held.close();
+    // Put the copy and the file back: everything acme had is there again, and the next start forgets nothing.
+    spaces.directory.close();
+    for (const f of ['directory.sqlite-wal', 'directory.sqlite-shm']) rmSync(join(w.dir, f), { force: true });
+    copyFileSync(copy, join(w.dir, 'directory.sqlite'));
+    new Hub({ file: spaces.file('acme') }).db.close(); // acme.db back where it was
+    const back = new Workspaces({ dir: w.dir });
+    assert.deepEqual(back.forgetGone(), { gone: [], copy: null }, 'nothing gone, no copy');
+    assert.equal(back.directory.installation(4242), 'acme');
+    assert.equal(back.directory.plan('acme'), 'unlimited');
+    assert.equal(back.directory.madeByGrant('acme'), true);
+    assert.deepEqual(back.directory.created(w.old).sort(), ['acme', 'globex']);
+    assert.equal(readdirSync(w.dir).filter((f) => f.startsWith('directory.before-forget-')).length, 1, 'only the one copy');
+  });
+
+  test('an installation bound to no workspace names nothing: no "null" forgotten (#755)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-ws-'));
+    // A directory from before installations.workspace was NOT NULL.
+    const old = new DatabaseSync(join(dir, 'directory.sqlite'));
+    old.exec('CREATE TABLE installations (id INTEGER PRIMARY KEY, workspace TEXT, at INTEGER NOT NULL); INSERT INTO installations VALUES (7, NULL, 0)');
+    old.close();
+    const spaces = new Workspaces({ dir });
+    assert.deepEqual(spaces.directory.named(), []);
+    assert.deepEqual(spaces.forgetGone(), { gone: [], copy: null });
+    assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith('directory.before-forget-')), []);
   });
 
   test('creating a name forgets what a workspace of that name left, with no restart in between (#749)', () => {

@@ -299,9 +299,9 @@ export class Directory {
   }
 
   // Every workspace name something here could hand on (#749): what forget clears, so a caller can find the names of
-  // workspaces removed before forget existed.
+  // workspaces removed before forget existed. An installation not bound to one (#755) names nothing.
   named() {
-    return this.db.prepare(`SELECT workspace FROM installations UNION SELECT workspace FROM plans UNION SELECT workspace FROM memberships
+    return this.db.prepare(`SELECT workspace FROM installations WHERE workspace IS NOT NULL UNION SELECT workspace FROM plans UNION SELECT workspace FROM memberships
       UNION SELECT workspace FROM org_grants WHERE workspace IS NOT NULL UNION SELECT workspace FROM billing WHERE workspace IS NOT NULL`).all().map((r) => r.workspace);
   }
 

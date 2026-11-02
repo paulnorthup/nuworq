@@ -366,9 +366,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // And so does one with background work still running against its database.
   spaces?.holdOpen((hub) => hub._running > 0);
   // Workspaces removed before remove forgot them (#728) left rows their names would hand on (#749): gone at start.
-  // Names only in the log, never what the rows held.
+  // Names only in the log, never what the rows held, with the copy kept from before (#755).
   try {
-    for (const s of spaces?.forgetGone() ?? []) console.log(`nuworq: the directory forgot "${s}", a workspace removed earlier: its name starts clean (#749)`);
+    const { gone = [], copy } = spaces?.forgetGone() ?? {};
+    for (const s of gone) console.log(`nuworq: the directory forgot "${s}", a workspace removed earlier: its name starts clean (#749); its rows are kept in ${copy}`);
   } catch (e) { console.error('forgetting removed workspaces failed', e); }
   const running = (hub, work) => {
     hub._running = (hub._running ?? 0) + 1;
