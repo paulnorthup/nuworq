@@ -384,14 +384,18 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
     async openPr({ repo, head, base, title, body }) {
       const [owner, name] = parts(repo);
       const token = await tokenFor(repo);
-      const r = await app.call('POST', `/repos/${owner}/${name}/pulls`, { title, head, base, body }, token);
+      // No answer at all (a timeout, a dropped connection) or a rate limit still running is a blip too (#742).
+      const r = await app.call('POST', `/repos/${owner}/${name}/pulls`, { title, head, base, body }, token)
+        .catch((e) => { throw Object.assign(e, { transient: true }); });
       if (r.status === 201) return shape(r.json);
       // Already open for this branch (opened by hand, or by an earlier try): use that one.
       if (r.status === 422) {
         const open = await app.call('GET', `/repos/${owner}/${name}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}`, null, token);
         if (open.status === 200 && open.json[0]) return shape(open.json[0]);
       }
-      throw new Error(`GitHub didn't open the pull request (${said(r)}${r.json.errors?.[0]?.message ? `; ${r.json.errors[0].message}` : ''})`);
+      // A 5xx, a 429 or a rate-limit 403 is GitHub's blip, not a refusal: the hub tries again before giving up.
+      const blip = r.status >= 500 || r.status === 429 || (r.status === 403 && /rate limit|abuse|secondary/i.test(r.json.message ?? ''));
+      throw Object.assign(new Error(`GitHub didn't open the pull request (${said(r)}${r.json.errors?.[0]?.message ? `; ${r.json.errors[0].message}` : ''})`), blip ? { transient: true } : {});
     },
     // { ready: true } when GitHub won't turn it on because the PR has nothing left to wait for: merge it instead.
     // sha (#605): the head that was reviewed; GitHub refuses if the PR's head is anything else by then.

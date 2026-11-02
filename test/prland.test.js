@@ -326,6 +326,55 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     assert.equal(w.item(1).stage, 'landing');
   });
 
+  describe('a GitHub blip while opening the PR (#742)', () => {
+    // A 502 for the first `until` tries (all of them if omitted), then the fake opens the PR.
+    const blip = (w, until = Infinity) => {
+      const real = w.hub.github.openPr;
+      let n = 0;
+      w.hub.github.pull = async () => { throw new Error('unused'); };
+      w.hub.github.openPr = async (args) => {
+        if (++n <= until) throw Object.assign(new Error("GitHub didn't open the pull request (502: Bad Gateway)"), { transient: true });
+        return real(args);
+      };
+    };
+
+    test('one 502 is retried on a later sweep: PR opened with auto-merge, no pr_failed, no land job', async () => {
+      const w = world();
+      w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+      w.build('a1');
+      blip(w, 1);
+      w.hub.humanOp('demo', 'accept', { item: '#1' });
+      await w.hub.prsSettled();
+      assert.equal(w.calls.opened.length, 0);
+      assert.equal(w.events(1, 'pr_failed').length, 0);
+      assert.equal(w.item(1).holder, 'github', 'still held by the hub');
+      assert.notEqual(w.op('a1', 'next').mode, 'land', 'no land job offered');
+      w.advance(61_000);
+      await w.hub.mergeReady();
+      await w.hub.prsSettled();
+      assert.equal(w.calls.opened.length, 1);
+      assert.equal(w.calls.auto.length, 1, 'auto-merge on');
+      assert.equal(w.events(1, 'pr_failed').length, 0);
+      assert.equal(w.item(1).holder, null);
+    });
+
+    test('an hour of failures falls back with pr_failed', async () => {
+      const w = world();
+      w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+      w.build('a1');
+      blip(w);
+      w.hub.humanOp('demo', 'accept', { item: '#1' });
+      await w.hub.prsSettled();
+      for (let i = 0; i < 59; i++) { w.advance(61_000); await w.hub.mergeReady(); await w.hub.prsSettled(); }
+      assert.equal(w.events(1, 'pr_failed').length, 0, 'still retrying inside the hour');
+      w.advance(5 * 60_000);
+      await w.hub.mergeReady();
+      await w.hub.prsSettled();
+      assert.equal(w.events(1, 'pr_failed').length, 1);
+      assert.equal(w.op('a1', 'next').mode, 'land');
+    });
+  });
+
   test("GitHub refusing the PR goes on the record and it becomes an ordinary land job", async () => {
     const w = world({ fail: 'GitHub didn\'t open the pull request (403: Resource not accessible by integration)' });
     w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
@@ -438,6 +487,37 @@ describe('accepted remote work lands through a pull request the hub opens', () =
       await assert.rejects(gh.merge({ repo: 'github.com/acme/api', number: 5, head: 'ccc' }), (e) => e.moved === true && /isn't the reviewed ccc/.test(e.message));
       await gh.disableAutoMerge({ repo: 'github.com/acme/api', id: 'PR_5' });
       assert.match(seen.at(-1).body.query, /disablePullRequestAutoMerge\(input: \{ pullRequestId: \$id \}\)/);
+    } finally {
+      api.close();
+    }
+  });
+
+  test('prClient marks a 5xx, a 429, a rate-limit 403 and no answer as a blip; a 422 or another 403 is a refusal (#742)', async () => {
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    let answer;
+    const api = http.createServer(async (req, res) => {
+      for await (const _ of req);
+      const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+      if (req.url === '/repos/acme/api/installation') return json(200, { id: 7 });
+      if (req.url === '/app/installations/7/access_tokens') return json(201, { token: 'ghs_one', expires_at: '2099-01-01T00:00:00Z' });
+      if (req.method === 'POST' && req.url === '/repos/acme/api/pulls') return json(...answer);
+      if (req.method === 'GET' && req.url.startsWith('/repos/acme/api/pulls?')) return json(200, []);
+      json(404, { message: 'Not Found' });
+    });
+    await new Promise((r) => api.listen(0, '127.0.0.1', r));
+    try {
+      const gh = prClient(new GitHubApp({ id: 1, key: privateKey.export({ type: 'pkcs8', format: 'pem' }), api: `http://127.0.0.1:${api.address().port}` }));
+      const args = { repo: 'github.com/acme/api', head: 'nuworq/1-x', base: 'main', title: 'X', body: 'b' };
+      const fails = async (a) => { answer = a; return gh.openPr(args).then(() => assert.fail('opened'), (e) => e); };
+      for (const a of [[502, { message: 'Bad Gateway' }], [503, {}], [429, { message: 'Too many' }], [403, { message: 'You have exceeded a secondary rate limit' }]]) {
+        assert.equal((await fails(a)).transient, true, `${a[0]} is a blip`);
+      }
+      assert.equal((await fails([422, { message: 'Validation Failed', errors: [{ message: 'No commits between main and nuworq/1-x' }] }])).transient, undefined, '422 is a refusal');
+      assert.equal((await fails([403, { message: 'Resource not accessible by integration' }])).transient, undefined, 'a permission 403 is a refusal');
+      api.close();
+      api.closeAllConnections();
+      answer = [201, {}];
+      assert.equal((await fails(answer)).transient, true, 'no answer at all is a blip');
     } finally {
       api.close();
     }
