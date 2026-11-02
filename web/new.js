@@ -47,6 +47,8 @@ export const NEW = {
   'retire-in-menu': '2026-11-02', // #651: Retire shows where it's recommended; on other decisions and notes it's behind the row's ⋯
   'question-numbers': '2026-11-02', // #710: each question shows its number (Q207), and ⌘K finds it by q207 or "question 207"
   'operator-question': '2026-11-02', // #712: with no operator connected, its questions are yours: steps to tick and an answer, and How to start an operator
+  'feedback-groups': '2026-11-02', // #688: the admin dashboard's feedback in groups: what covers each, a suggested call, one tap, Undo
+  'feedback-waiting': '2026-11-02', // #688: for the hub's owners, the rail's line of feedback waiting, opening the groups
 };
 
 const DAYS = 7;

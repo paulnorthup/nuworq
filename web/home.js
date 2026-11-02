@@ -8,8 +8,9 @@
 // A project's sentence without its "needs you" part: the badge says that.
 const short = (s) => String(s ?? '').replace(/^(Nothing needs you\.|\d+ things? needs? you( now|, all now|, \d+ now)?\.)\s*/, '');
 
-// wide: lay it out in two columns; gs: the Get started card, if any.
-export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(name), wide = false, gs = '' }) {
+// wide: lay it out in two columns; gs: the Get started card, if any; fb: the line of feedback waiting for a hub
+// owner (#688), if any, above the projects.
+export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(name), wide = false, gs = '', fb = '' }) {
   const tag = (p) => `<a class="proj-tag" href="#/p/${encodeURIComponent(p.slug)}">${esc(p.name)}</a>`;
   // One card that fails to render is left out and logged, and the rest draws (#781).
   const homeCard = (a) => {
@@ -31,7 +32,7 @@ export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(n
         ${z >= 2 ? `<div class="m">${[p.remotes?.length ? esc(p.remotes.join(', ')) : 'No repo linked', p.runner ? 'nuworq run staffs it' : 'nuworq run leaves it alone'].join(' · ')}</div>` : ''}</div>
       ${p.needs ? `<span class="badge" title="${plural(p.needs, 'thing')} ${p.needs === 1 ? 'needs' : 'need'} you">${p.needs}</span>` : ''}
     </div>`;
-  const projects = `<section class="sec home-projects"><header><h2>Projects</h2></header><div class="ov-lines">
+  const projects = `${fb ? `<section class="sec home-feedback"><div class="ov-lines">${fb}</div></section>` : ''}<section class="sec home-projects"><header><h2>Projects</h2></header><div class="ov-lines">
       ${(z >= 1 ? [...live, ...parked] : live).map(line).join('')}
       ${z < 1 && parked.length ? `<button class="ov-line folded" data-action="zoom" data-zoom="5m">${plural(parked.length, 'parked project')}</button>` : ''}
     </div></section>`;

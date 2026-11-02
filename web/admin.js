@@ -49,10 +49,10 @@ async function main() {
     <p class="lead">How far the people from each source got. A source is the ?ref= tag on nuworq.com's link, or the site they came from.</p>
     <div class="seg admin-filter src-filter" role="group" aria-label="Count">${SPANS.map(([v, label]) => `<button data-span="${v}" aria-pressed="${v === span}" class="${v === span ? 'on' : ''}">${label}</button>`).join('')}</div>
     <div id="sources" aria-live="polite">${placeholder(3, { head: false })}</div>
-    <h2 class="admin-h2" id="feedback">Feedback</h2>
+    <h2 class="admin-h2" id="feedback"><span data-new="feedback-groups">Feedback</span></h2>
     <p class="lead" id="fb-lead">What got in people's and agents' way. Approve makes it a proposal agents shape; Decline closes it, with a note to the sender if you like.</p>
     <div id="fb-level"></div>
-    <div class="seg admin-filter fb-filter" role="group" aria-label="Show feedback">${STATES.map(([v, label]) => `<button data-fb-state="${v}" aria-pressed="${v === fbState}" class="${v === fbState ? 'on' : ''}">${label}</button>`).join('')}</div>
+    <div class="seg admin-filter fb-filter" role="group" aria-label="Show feedback">${FB_STATES.map(([v, label]) => `<button data-fb-state="${v}" aria-pressed="${v === fbState}" class="${v === fbState ? 'on' : ''}">${label}</button>`).join('')}</div>
     <div id="fb-list" aria-live="polite">${placeholder(3, { head: false })}</div>
     <h2 class="admin-h2">Workspaces</h2>
     <div id="spaces" aria-live="polite">${placeholder(3, { head: false })}</div>`;
@@ -133,44 +133,96 @@ function sourceCard(s, c, max) {
   </article>`;
 }
 
-// ── feedback (#295): newest first; each says who sent it, from which workspace, and what came with it ──
+// ── feedback (#295), in groups (#688): pieces that report the same thing are one card, newest first. Each says
+// who sent it, what already covers it, and the call it suggests; one tap decides it, and Undo takes it back. ──
+const FB_STATES = [['new', 'New'], ['decided', 'Decided'], ['', 'All']];
 let fbState = 'new';
 const fbFocus = Number(new URLSearchParams(location.search).get('feedback')) || 0; // the piece a push linked to
+const picked = new Set(); // groups ticked for one decision together
+let fbMax = 1; // the most senders any group in view has: the bars' shared scale
 
 async function loadFeedback() {
   const el = $('#fb-list');
   try {
-    const { on, project, autonomy, feedback } = await api(`/api/feedback/list?state=${encodeURIComponent(fbState)}`);
+    const { on, project, autonomy, groups: all } = await api('/api/feedback/groups');
     $('#fb-lead').textContent = on
-      ? `What got in people's and agents' way, for ${project}.`
+      ? `What got in people's and agents' way, for ${project}. The same report from many senders is one group: decide it once.`
       : 'Feedback is off on this hub: the host turns it on with --feedback-project <workspace>/<project> (NUWORQ_FEEDBACK_PROJECT).';
     $('#fb-level').innerHTML = on ? fbLevel(autonomy) : '';
     markNew($('#fb-level'));
-    if (fbFocus && fbState && !feedback.some((f) => f.id === fbFocus) && !loadFeedback.widened) {
+    const groups = all.filter((g) => !fbState || (fbState === 'new' ? g.state === 'new' : g.state !== 'new'));
+    if (fbFocus && fbState && !groups.some((g) => g.pieces.some((p) => p.id === fbFocus)) && !loadFeedback.widened) {
       loadFeedback.widened = true;
       return document.querySelector('.fb-filter button[data-fb-state=""]').click();
     }
-    el.innerHTML = feedback.length ? feedback.map(fbCard).join('') : `<p class="faint">${fbState === 'new' ? 'No new feedback.' : 'Nothing here.'}</p>`;
-    document.getElementById(`fb-${fbFocus}`)?.scrollIntoView({ block: 'center' });
+    for (const id of picked) if (!groups.some((g) => g.id === id && g.state === 'new')) picked.delete(id);
+    fbMax = Math.max(1, ...groups.map((g) => g.senders.length));
+    el.innerHTML = `<div id="fb-bulk"></div>${groups.length ? groups.map(fbGroup).join('') : `<p class="faint">${fbState === 'new' ? 'No new feedback.' : 'Nothing here.'}</p>`}`;
+    fbBulk();
+    markNew(document);
+    document.querySelector(`[data-pieces~="${fbFocus}"]`)?.scrollIntoView({ block: 'center' });
   } catch (e) { el.innerHTML = `<p class="bad">${esc(e.message)}</p>`; }
 }
 
-function fbCard(f) {
+const ACT = { link: (s) => `Link to ${s.ref}`, approve: () => 'New work', decline: () => 'Decline' };
+const DONE = { linked: 'Linked to', approved: 'New work:', declined: 'Declined' };
+
+function sentWith(f) {
   const c = f.context ?? {};
-  const sent = f.kind === 'agent'
+  return (f.kind === 'agent'
     ? [c.client, c.model, c.version && `nuworq ${c.version}`, f.item && `about ${f.item}`]
-    : [c.page, c.version && `nuworq ${c.version}`, c.browser];
-  const who = f.kind === 'agent' ? `Agent ${esc(f.sender)}` : `${esc(f.sender)}${f.email ? ` <span class="faint">${esc(f.email)}</span>` : ''}`;
-  const decided = f.auto ? `Proposed at once (${LEVELS[f.auto]?.label ?? esc(f.auto)}) ${esc(ago(f.decided_at))}${f.proposal ? `: proposal ${esc(f.proposal)}` : ''}`
-    : f.state === 'approved' ? `Approved by ${esc(f.decided_by)} ${esc(ago(f.decided_at))}${f.proposal ? `: proposal ${esc(f.proposal)}` : ''}`
-    : f.state === 'declined' ? `Declined by ${esc(f.decided_by)} ${esc(ago(f.decided_at))}${f.note ? `: “${esc(f.note)}”` : ''}` : '';
-  return `<article class="admin-card${f.id === fbFocus ? ' focus' : ''}" id="fb-${f.id}" data-who="${esc(f.sender)}">
-    <div class="h">${who} · ${esc(f.workspace)}</div>
-    <p class="s fb-text">${esc(f.text)}</p>
-    <p class="faint">Sent ${esc(ago(f.created_at))}${sent.filter(Boolean).length ? ` · ${sent.filter(Boolean).map(esc).join(' · ')}` : ''}</p>
-    ${decided ? `<p class="faint">${decided}</p>` : ''}
-    ${f.state === 'new' ? `<div class="admin-acts"><button class="btn primary" data-fb="${f.id}" data-approve="1">Approve</button><button class="btn" data-fb="${f.id}">Decline</button></div>` : ''}
+    : [c.page, c.version && `nuworq ${c.version}`, c.browser]).filter(Boolean);
+}
+
+function fbGroup(g) {
+  const lead = g.pieces[0];
+  const spaces = [...new Set(g.senders.map((s) => s.workspace))];
+  const who = `${g.senders[0].kind === 'agent' ? 'Agent ' : ''}${esc(g.senders[0].sender)}${g.senders.length > 1 ? ` and ${g.senders.length - 1} more` : ''}`;
+  const email = g.senders.length === 1 && lead.email ? ` <span class="faint">${esc(lead.email)}</span>` : '';
+  const focus = g.pieces.some((p) => p.id === fbFocus);
+  const s = g.suggest;
+  // The suggested call first and filled; the others beside it. Link only when something covers it.
+  const acts = s ? [s.action, ...['link', 'approve', 'decline'].filter((a) => a !== s.action && (a !== 'link' || g.known))] : [];
+  const d = g.decision;
+  const decided = d ? `${d.auto ? `Proposed at once (${LEVELS[d.auto]?.label ?? esc(d.auto)})` : `${DONE[d.state] ?? esc(d.state)}`}${d.ref ? ` <b>${esc(d.ref)}</b>${d.title ? ` <span class="faint">${esc(d.title)}</span>` : ''}` : d.state !== 'declined' && d.proposal ? ` ${esc(d.proposal)}` : ''}${d.note ? `: “${esc(d.note)}”` : ''}
+    <span class="faint">· ${d.by ? `${esc(d.by)} ` : ''}${esc(ago(d.at))}</span>` : '';
+  return `<article class="admin-card fb-group${focus ? ' focus' : ''}" id="fbg-${g.id}" data-group="${g.id}" data-pieces="${g.pieces.map((p) => p.id).join(' ')}">
+    <div class="fb-g-head">
+      ${g.state === 'new' ? `<input type="checkbox" class="fb-pick" data-pick="${g.id}" aria-label="Pick this group"${picked.has(g.id) ? ' checked' : ''}>` : ''}
+      <div class="h">${who}${email} · ${spaces.map(esc).join(', ')}</div>
+    </div>
+    ${g.count > 1 ? `<div class="fb-g-count" title="${g.senders.length} sent it"><span class="fb-g-bar"><span style="width:${(g.senders.length / fbMax) * 100}%"></span></span><b>${g.senders.length}</b></div>` : ''}
+    <p class="s fb-text">${esc(lead.text)}</p>
+    <p class="faint">${g.count > 1 ? `First ${esc(ago(g.first_at))}, latest ${esc(ago(g.last_at))}` : `Sent ${esc(ago(g.first_at))}`}${g.count === 1 && sentWith(lead).length ? ` · ${sentWith(lead).map(esc).join(' · ')}` : ''}</p>
+    ${g.count > 1 ? `<details class="fb-g-all"><summary>All ${g.count}</summary><ul>${g.pieces.map((p) => `<li><b>${esc(p.sender)}</b> <span class="faint">${esc(ago(p.created_at))}</span><span class="fb-words">${esc(p.text)}</span></li>`).join('')}</ul></details>` : ''}
+    ${g.known && g.state === 'new' ? `<p class="fb-known"><b>${esc(g.known.line)}</b> <span class="faint">${esc(g.known.title)}</span></p>` : ''}
+    ${s ? `<p class="fb-suggest"><span class="label">Suggested</span> ${esc(ACT[s.action](s))}: ${esc(s.why)}</p>
+      <input class="fb-note" data-note="${g.id}" aria-label="A note to the senders, if you decline" placeholder="A note to them, if you decline" value="${esc(s.note ?? '')}">
+      <div class="admin-acts">${acts.map((a, i) => `<button class="btn${i ? '' : ' primary'}" data-g="${g.id}" data-g-act="${a}"${a === 'link' ? ` data-ref="${esc(s.ref ?? g.known?.ref)}"` : ''}>${esc(ACT[a](a === 'link' ? { ref: s.ref ?? g.known?.ref } : s))}</button>`).join('')}</div>` : ''}
+    ${decided ? `<div class="fb-decided"><p>${decided}</p><button class="btn ghost" data-g-undo="${g.id}">Undo</button></div>` : ''}
   </article>`;
+}
+
+// Groups ticked together: one tap takes each one's suggestion, or declines them all.
+function fbBulk() {
+  const el = $('#fb-bulk');
+  if (!el) return;
+  el.innerHTML = picked.size ? `<div class="fb-bulk" role="group" aria-label="Decide the picked groups"><span>${picked.size} picked</span>
+    <button class="btn primary" data-bulk="suggested">Take the suggestions</button><button class="btn" data-bulk="decline">Decline</button></div>` : '';
+}
+
+async function decideGroups(ids, body, from) {
+  if (from) from.disabled = true;
+  try {
+    const r = await api(body.undo ? '/api/feedback/groups/undo' : '/api/feedback/groups/decide', { groups: ids, ...body });
+    showError('');
+    for (const g of r.groups) {
+      picked.delete(g.id);
+      const card = document.getElementById(`fbg-${g.id}`);
+      if (card) card.outerHTML = fbGroup(g);
+    }
+    fbBulk();
+  } catch (err) { showError(err.message); if (from) from.disabled = false; }
 }
 
 // How far feedback goes on its own (#296): the project autonomy levels, each with the one line on what it does.
@@ -226,6 +278,13 @@ function space(w) {
 
 document.addEventListener('click', (e) => dismissNew(e), true);
 
+document.addEventListener('change', (e) => {
+  const pk = e.target.closest?.('input[data-pick]');
+  if (!pk) return;
+  pk.checked ? picked.add(Number(pk.dataset.pick)) : picked.delete(Number(pk.dataset.pick));
+  fbBulk();
+});
+
 document.addEventListener('toggle', (e) => {
   const d = e.target.closest?.('.admin-space');
   if (d) d.open ? expanded.add(d.dataset.name) : expanded.delete(d.dataset.name);
@@ -257,23 +316,16 @@ document.addEventListener('click', async (e) => {
   if (sp) { span = sp.dataset.span; for (const b of document.querySelectorAll('.src-filter button')) { b.classList.toggle('on', b === sp); b.setAttribute('aria-pressed', String(b === sp)); } return loadSources(); }
   const fs = e.target.closest('button[data-fb-state]');
   if (fs) { fbState = fs.dataset.fbState; for (const b of document.querySelectorAll('.fb-filter button')) { b.classList.toggle('on', b === fs); b.setAttribute('aria-pressed', String(b === fs)); } return loadFeedback(); }
-  const fb = e.target.closest('button[data-fb]');
-  if (fb) {
-    const who = fb.closest('.admin-card').dataset.who, approve = !!fb.dataset.approve;
-    let note = '';
-    if (approve) { if (!confirm(`Approve ${who}'s feedback? It becomes a proposal agents shape; nothing is built until it's shaped.`)) return; }
-    else {
-      note = prompt(`Decline ${who}'s feedback? This can't be undone here.\n\nA note to them (optional):`, '');
-      if (note === null) return;
-    }
-    fb.disabled = true;
-    try {
-      const r = await api('/api/feedback/decide', { id: Number(fb.dataset.fb), approve, note });
-      showError('');
-      fb.closest('.admin-card').outerHTML = fbCard(r.feedback);
-    } catch (err) { showError(err.message); fb.disabled = false; }
-    return;
+  // A group's call, in one tap: no dialog, since Undo takes it back. Decline sends the note in its card.
+  const ga = e.target.closest('button[data-g-act]');
+  if (ga) {
+    const id = Number(ga.dataset.g), action = ga.dataset.gAct;
+    return decideGroups([id], { action, ...(action === 'link' ? { ref: ga.dataset.ref } : {}), ...(action === 'decline' ? { note: document.querySelector(`[data-note="${id}"]`)?.value ?? '' } : {}) }, ga);
   }
+  const gu = e.target.closest('button[data-g-undo]');
+  if (gu) return decideGroups([Number(gu.dataset.gUndo)], { undo: true }, gu);
+  const bk = e.target.closest('button[data-bulk]');
+  if (bk) return decideGroups([...picked], { action: bk.dataset.bulk }, bk);
   const f = e.target.closest('button[data-state]');
   if (f) { state = f.dataset.state; for (const b of document.querySelectorAll('.admin-filter button')) { b.classList.toggle('on', b === f); b.setAttribute('aria-pressed', String(b === f)); } return load(); }
   const c = e.target.closest('button[data-copy]');

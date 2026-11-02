@@ -9,6 +9,7 @@ import { createServer } from '../src/server.js';
 import { Auth } from '../src/auth.js';
 import { SYSTEM } from '../src/core.js';
 import { features, sameReport, suggest, VAGUE_NOTE } from '../src/feedbackgroups.js';
+import { feedbackWaiting } from '../web/feedback.js';
 
 const ADMIN = 'admin.example.test', APP = 'app.example.test';
 
@@ -209,7 +210,13 @@ describe('feedback arrives in groups (#688)', () => {
       assert.equal((await seen()).waiting, undefined, 'nothing waits');
       for (const [name, text, item] of LOOP.slice(0, 3)) await h.send(name, text, item);
       await h.send(...OTHER);
-      assert.deepEqual((await seen()).waiting, { groups: 2, pieces: 4, url: `http://${ADMIN}/#feedback` });
+      const { waiting } = await seen();
+      assert.deepEqual(waiting, { groups: 2, pieces: 4, url: `http://${ADMIN}/#feedback` });
+      const line = feedbackWaiting(waiting, (s) => String(s));
+      assert.match(line, /href="http:\/\/admin.example.test\/#feedback"/);
+      assert.match(line, /4 pieces of feedback wait for you/);
+      assert.match(line, /in 2 groups: 2 decisions/);
+      assert.equal(feedbackWaiting(undefined, String), '', 'nothing waits: no line');
     } finally { h.close(); }
   });
 });

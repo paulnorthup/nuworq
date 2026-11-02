@@ -28,7 +28,7 @@ export function railHtml() {
       <button class="rail-item" data-action="notify">Notifications</button>
       <a class="rail-item" href="guide"><span data-new="guide">Getting started guide</span></a>
       <button class="rail-item kbd-hint" data-action="shortcuts"><span data-new="shortcuts"><kbd>?</kbd> Shortcuts</span></button>
-      ${S.feedback?.on ? '<button class="rail-item" data-action="feedback"><span data-new="feedback">Feedback</span></button>' : ''}
+      ${S.feedback?.on ? `<button class="rail-item" data-action="feedback"><span data-new="feedback">Feedback</span>${S.feedback.waiting ? `<span class="badge" title="${S.feedback.waiting.pieces} waiting for you: the home's line opens them">${S.feedback.waiting.pieces}</span>` : ''}</button>` : ''}
       ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings"><span class="name">Workspace settings</span>${S.billing.plans?.length ? '<span class="tag now">Upgrade</span>' : ''}</button>` : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${appearance()}
