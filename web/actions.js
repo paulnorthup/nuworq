@@ -3,6 +3,7 @@ import { ago } from './ago.js';
 import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { proposal, sentToast } from './propose.js';
 import { trialNote } from './trialnote.js';
+import { routingConfirm } from './routingconfirm.js';
 import { errorHtml, fieldReason } from './errors.js';
 import { toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
@@ -668,7 +669,10 @@ export const ACTIONS = {
     if (r) closeModal();
   },
   'models-on': () => {
-    if (confirm('Turn on cheaper models for rote jobs?\n\nLanding and tidy jobs start on the cheapest model listed (Claude\'s default ones if you set none, else the runner\'s --model). When an attempt is sent back, stalls or is handed off, that item\'s next attempt steps up one model. Building, reviews and shaping stay on the top model. Each routed worker does one job, then stops.\n\nTurn it off any time from here.')) modelRouting(true);
+    // The bar and shares as shown in the dialog, typed or not yet saved (#770).
+    const m = S.view?.project?.staffing?.models ?? {};
+    const quality = m.qualities?.[$('#modal input[name="st-quality"]:checked')?.value ?? m.quality ?? 'balanced'];
+    if (confirm(routingConfirm({ quality, trial: val('st-trial') || m.trial, race: val('st-race') || m.race }))) modelRouting(true);
   },
   'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },

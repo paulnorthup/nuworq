@@ -4544,7 +4544,7 @@ const HUMAN_OPS = {
       // data: a person chose (#723), so the migration that turns routing on by default leaves this project alone.
       this.event(p, {
         actor: by, type: 'runner', data: { model_routing: !!model_routing },
-        headline: model_routing ? `${You(by)} turned on model routing: landing and tidy jobs start on the cheapest tier and step up when an attempt fails`
+        headline: model_routing ? `${You(by)} turned on model routing: builds move to cheaper models that meet the quality bar, rote jobs start on the cheapest, failures step up`
           : `${You(by)} turned off model routing: every worker runs on its runner's own model`,
       });
     }

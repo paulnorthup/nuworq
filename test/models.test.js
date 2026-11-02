@@ -92,7 +92,7 @@ describe('model routing', () => {
     set({ model_routing: false });
     set({ model_routing: true, model_tiers: TIERS });
     assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, own: TIERS, defaults: DEFAULT_TIERS, trial: 10, race: 0, quality: 'balanced', qualities: QUALITY });
-    assert.match(hub.q("SELECT headline FROM events WHERE type = 'runner' ORDER BY id DESC").get().headline, /turned on model routing: landing and tidy jobs start on the cheapest tier/);
+    assert.match(hub.q("SELECT headline FROM events WHERE type = 'runner' ORDER BY id DESC").get().headline, /turned on model routing: builds move to cheaper models that meet the quality bar, rote jobs start on the cheapest, failures step up/);
     hub.humanOp('p', 'create', { title: 'Build', acceptance: 'x' });
     assert.deepEqual([route().mode, route().model], ['work', 'claude-opus-5-5']);
     op('a', 'checkin');
