@@ -132,6 +132,7 @@ export const STEPS = [
     hand: [
       '**Needs you**, at the top of the home and of each project, lists what only you can do. Healthy work never shows up there.',
       'A question: pick an option, or type an answer. Finished work to check: read its evidence, then **Accept**, or **Send back** with what\'s missing (the next agent starts from it). A step for you to do: it lists each one, where to do it and how to check it.',
+      'An agent names a question by its number, such as "question 207"? Each question shows its number beside its item, as Q207. Press ⌘K (Ctrl K elsewhere) and type `q207`: it opens that question, whether it is still open or already answered.',
     ],
     auto: 'Under **Run with it**, agents review each other\'s work, so far less waits for you (see Autonomy). Notifications tell you when something new arrives, so you don\'t have to watch.',
     check: 'The card leaves Needs you, and the item moves on.',

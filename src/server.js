@@ -1454,14 +1454,19 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       if (req.method === 'GET' && path === '/api/projects') return send(200, projectList(hub, { viewer }));
       // The quick launcher's index (#290): every item the viewer can see, light (project, number, title, stage,
-      // priority), what needs them, and what their role may do. Fetched when ⌘K opens; the browser does the matching.
+      // priority), every question by its number (#710: agents and the hub name them "question 207"), what needs
+      // them, and what their role may do. Fetched when ⌘K opens; the browser does the matching.
       if (req.method === 'GET' && path === '/api/launcher') {
         if (who.role === 'agent') return deny(403, 'the launcher is for people', 'Agents find work with next.');
         const ps = hub.projects();
         const items = ps.flatMap((p) => hub.q('SELECT seq, title, stage, priority FROM items WHERE project_id = ? ORDER BY seq').all(p.id)
           .map((i) => ({ p: p.slug, n: i.seq, t: i.title, s: i.stage, pr: i.priority })));
-        const needs = homeView(hub, { viewer }).needs.map((a) => ({ key: a.key, kind: a.kind, item: a.item ?? null, headline: a.headline, project: a.project?.slug ?? null, question: a.question?.id ?? null }));
-        return send(200, { projects: ps.map((p) => ({ slug: p.slug, name: p.name })), items, needs, can: PERSON_CAN[personRole] ?? [],
+        const clip = (s, len) => (s.length > len ? `${s.slice(0, len - 1).trimEnd()}…` : s);
+        const questions = ps.flatMap((p) => hub.q(`SELECT q.id, q.question, q.status, q.answer, q.asked_by, i.seq FROM questions q
+          LEFT JOIN items i ON i.id = q.item_id WHERE q.project_id = ? ORDER BY q.id`).all(p.id)
+          .map((q) => ({ id: q.id, p: p.slug, n: q.seq ?? null, t: clip(q.question, 200), st: q.status, a: clip(q.answer, 200), by: q.asked_by })));
+        const needs = homeView(hub, { viewer }).needs.map((a) => ({ key: a.key, kind: a.kind, item: a.item ?? null, headline: a.headline, project: a.project?.slug ?? null, question: a.question?.id ?? null, questions: a.questions ?? null }));
+        return send(200, { projects: ps.map((p) => ({ slug: p.slug, name: p.name })), items, questions, needs, can: PERSON_CAN[personRole] ?? [],
           stages: Object.fromEntries(Object.entries(STAGES).map(([k, s]) => [k, { label: s.label, court: s.court }])) });
       }
       // The home (#124): what needs the viewer across every project, in one request; Mark all seen for all of them.

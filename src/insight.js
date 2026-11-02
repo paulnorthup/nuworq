@@ -395,7 +395,8 @@ function build(hub, p, t, { light = false } = {}) {
     push({
       key: `operator:${forOperator[0].id}`, level: 'act', kind: 'operator-missing', at: forOperator[0].at,
       headline: `${plural(forOperator.length, 'question')} ${forOperator.length === 1 ? 'waits' : 'wait'} for an operator; none connected`,
-      sub: forOperator.map((q) => q.question).slice(0, 3).join(' · '),
+      sub: forOperator.map((q) => `Q${q.id}: ${q.question}`).slice(0, 3).join(' · '),
+      questions: forOperator.map((q) => q.id), // by number (#710): ⌘K's "q207" lands on this card
       why: 'Agents asked an operator: a trusted, attended session that checks in with has: ["operator"] to run things, grant permissions or verify on real infra. None has checked in here in the last day. Start an operator session (the guide\'s Operators section says how).',
       guide: '/agents.md#operators',
     });

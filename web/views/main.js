@@ -16,7 +16,7 @@ import { roleCounts } from '../agentline.js';
 import { placeholder } from '../instant.js';
 import { shell } from '../switching.js';
 import { S } from '../store.js';
-import { KEYBOARD, WIDE, Z, commits, esc, inline, md, plural, refLink, repoTag, stepWhere, when, zero } from './html.js';
+import { KEYBOARD, WIDE, Z, commits, esc, inline, md, plural, qref, refLink, repoTag, stepWhere, when, zero } from './html.js';
 import { attemptsGrid, courtOf, named, stagePill, who, z } from './parts.js';
 
 // The agents here now as counts by role, each opening to its agents (#441, web/agentline.js). scope keeps each page's open counts apart.
@@ -212,8 +212,10 @@ function card(a) {
       ${a.acceptance ? `<div class="label">Done means</div>${md(a.acceptance)}` : ''}
       ${a.detail ? `<div class="label">Detail</div>${md(a.detail)}` : ''}
     </div>` : '';
-  return `<article class="card kind-${a.kind}">
-    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}<span class="sub">${timed(a.sub, a.sub_at, (s) => named(s, a.agent, a.presence))}</span>${cardPriority(a)}</div>
+  // The questions a card holds, by number (#710): agents and the hub say "question 207", and ⌘K finds it here.
+  const qs = a.question?.id ? [a.question.id] : a.questions ?? [];
+  return `<article class="card kind-${a.kind}"${qs.length ? ` data-qs="${qs.join(' ')}" tabindex="-1"` : ''}>
+    <div class="card-top"><span class="kind">${label}</span>${refLink(a.item)}${a.question?.id ? qref(a.question.id) : ''}<span class="sub">${timed(a.sub, a.sub_at, (s) => named(s, a.agent, a.presence))}</span>${cardPriority(a)}</div>
     <h3>${timed(a.headline, a.headline_at, esc)}</h3>
     ${a.attempts?.length > 1 ? attemptsGrid(a.item, a.attempts) : `${a.evidence?.length ? `<div class="evidence">${a.evidence.map((e) => `<span class="ev">${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.label)}</a>` : esc(e.label)}</span>`).join('')}</div>` : ''}
     ${commits(a.git)}`}

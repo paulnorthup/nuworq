@@ -2,7 +2,7 @@
 // act on what needs you, or create, without the mouse. Pure: actions.js fetches the index once when it opens (GET
 // /api/launcher), renders what this returns and runs what is picked; typing makes no request.
 // Each command's `run` is data actions.js carries out: { go: hash } | { action } | { zoom } | { open: { slug, item, focus } }
-// | { human: op, slug, body, msg }. A command with `confirm` takes a second Enter, after that line is shown.
+// | { human: op, slug, body, msg } | { question } (an index.questions entry: open its card, its item's row, or itself). A command with `confirm` takes a second Enter, after that line is shown.
 
 const LIMIT = 12; // a short ranked list (Hick's law): narrow it by typing, not by scrolling
 
@@ -65,6 +65,8 @@ export function marked(text, hits, esc) {
   return [...String(text)].map((c, i) => (on.has(i) ? `<mark>${esc(c)}</mark>` : esc(c))).join('');
 }
 
+// A question's status in a person's words (questions.status in src/db.js).
+export const QSTATUS = { open: 'Open', answered: 'Answered', confirmed: 'Confirmed', shipped: 'Landed as assumed', withdrawn: 'Withdrawn' };
 const quote = (s) => `“${s.length > 60 ? `${s.slice(0, 60)}…` : s}”`;
 const PRIORITIES = ['now', 'soon', 'later'];
 const ZOOMS = ['30s', '5m', '30m'];
@@ -168,7 +170,15 @@ export function rank(index, query, ctx = {}) {
     return [...cmds.filter((c) => c.kind === 'needs'), ...recents].slice(0, limit);
   }
   const num = q.match(/^#?(\d+)$/)?.[1];
+  // A question by its number (#710): "q207", "Q207", "question 207". Agents and the hub name questions that way.
+  const qnum = Number(q.match(/^(?:q|question)\s*#?(\d+)$/i)?.[1]);
   const scored = [];
+  for (const x of qnum ? (index.questions ?? []).filter((x) => x.id === qnum) : []) {
+    const card = (index.needs ?? []).some((a) => a.question === x.id || a.questions?.includes(x.id));
+    scored.push({ r: { kind: 'question', label: x.t, hits: [], ref: `Q${x.id}`, slug: x.p, status: x.st,
+      hint: [x.n ? `#${x.n}` : '', x.p === current ? '' : name(x.p), QSTATUS[x.st] ?? x.st].filter(Boolean).join(' · '),
+      run: { question: { ...x, card, project: name(x.p) } } }, tier: -1, score: 0 });
+  }
   for (const i of index.items ?? []) {
     const here = !current || i.p === current;
     if (num && i.n === Number(num)) { scored.push({ r: item(i), tier: here ? 0 : 1, score: 0 }); continue; }
@@ -180,7 +190,7 @@ export function rank(index, query, ctx = {}) {
     if (f) scored.push({ r: { ...c, hits: f.hits }, tier: 2, score: f.score });
   }
   scored.sort((a, b) => a.tier - b.tier || b.score - a.score);
-  const made = num ? [] : creates(q, { current, index, can }); // a number is looking something up, not writing
+  const made = num || qnum ? [] : creates(q, { current, index, can }); // a number is looking something up, not writing
   return [...scored.slice(0, limit - made.length).map((s) => s.r), ...made];
 }
 
@@ -189,11 +199,21 @@ export function resultsHtml(results, { sel = 0, stages = {}, esc }) {
   if (!results.length) return '<div class="ln-empty">Nothing matches. Try a number, or fewer letters.</div>';
   const pill = (s) => `<span class="stage-pill ${s === 'done' ? 'done' : `court-${stages[s]?.court ?? ''}`}">${esc(stages[s]?.label ?? s)}</span>`;
   return results.map((r, i) => `<button class="ln-row${i === sel ? ' on' : ''}" role="option" aria-selected="${i === sel}" data-ln="${i}">
-    ${r.kind === 'item'
-      ? `<span class="ln-ref">${esc(r.ref)}</span><span class="ln-label">${marked(r.label, r.hits, esc)}</span>${r.project ? `<span class="ln-hint">${esc(r.project)}</span>` : r.hint ? `<span class="ln-hint">${esc(r.hint)}</span>` : ''}${pill(r.stage)}`
+    ${r.kind === 'question'
+      ? `<span class="ln-ref">${esc(r.ref)}</span><span class="ln-label">${esc(r.label)}</span><span class="ln-hint">${esc(r.hint)}</span>`
+      : r.kind === 'item'
+      ?`<span class="ln-ref">${esc(r.ref)}</span><span class="ln-label">${marked(r.label, r.hits, esc)}</span>${r.project ? `<span class="ln-hint">${esc(r.project)}</span>` : r.hint ? `<span class="ln-hint">${esc(r.hint)}</span>` : ''}${pill(r.stage)}`
       : `<span class="ln-label">${marked(r.label, r.hits, esc)}</span><span class="ln-hint">${esc(r.hint ?? '')}</span>`}
   </button>`).join('');
 }
+
+// A question with no item has no card once it's settled, and no row to open (#710): it opens on its own.
+// q: a launcher result's run.question.
+export const questionHtml = (q, { esc }) => `<h2>Q${q.id} · ${esc(QSTATUS[q.st] ?? q.st)}</h2>
+  <p><b>${esc(q.t)}</b></p>
+  <p class="faint">Asked by ${esc(q.by)} in ${esc(q.project)}.</p>
+  ${q.a ? `<p>Answer: <b>${esc(q.a)}</b></p>` : ''}
+  <div class="foot"><button class="btn" data-action="question-project" data-slug="${esc(q.p)}">Open ${esc(q.project)}</button><button class="btn primary" data-action="close-modal">Done</button></div>`;
 
 // The second Enter: what will change and what follows, in place of the list.
 export const confirmHtml = (r, { esc }) => `<div class="ln-confirm" role="alert"><p>${esc(r.confirm)}</p>
