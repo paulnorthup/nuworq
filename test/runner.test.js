@@ -73,7 +73,7 @@ describe('nuworq worker --agent opencode', () => {
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
-    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'oc', '--agent', 'opencode', ...a], { env: { ...process.env, NUWORQ_TOKEN: '' } });
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'oc', '--agent', 'opencode', '--can-read-keys', ...a], { env: { ...process.env, NUWORQ_TOKEN: '' } });
     try {
       const { stdout } = await cli('--model', 'ollama/qwen3:8b', '--as', 'oc-1');
       // Its own worktree, detached at main (reused if it exists); each item it claims gets a branch from the latest main.
@@ -121,7 +121,7 @@ describe('nuworq worker --agent pi', () => {
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
     const env = { ...process.env, HOME: home, NUWORQ_TOKEN: '', NUWORQ_LLM_PROXY_KEY: 'llmp_secret' };
-    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'pp', '--agent', 'pi', ...a], { env });
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'pp', '--agent', 'pi', '--can-read-keys', ...a], { env });
     try {
       const { stdout } = await cli('--model', 'ollama/qwen3:8b', '--as', 'pi-1');
       const dir = join(home, '.nuworq', 'pi', 'pi-1');
@@ -344,7 +344,54 @@ describe('nuworq worker --browser', () => {
       assert.deepEqual(Object.keys(own.settings.permissions), ['deny'], 'and gets the file denies, not the file allows');
       assert.ok(own.settings.permissions.deny.includes('Read(~/.ssh/**)'));
 
-      await assert.rejects(cli('--agent', 'codex', '--browser'), (e) => e.stderr.includes('--browser is for Claude workers only'));
+      await assert.rejects(cli('--agent', 'codex', '--can-read-keys', '--browser'), (e) => e.stderr.includes('--browser is for Claude workers only'));
+    } finally {
+      server.close();
+    }
+  });
+});
+
+// Only Claude Code's sandbox keeps a worker's shell from the machine's keys (#615): any other harness starts only
+// when the person says they know, and says in one line what it can read.
+describe('an unsandboxed harness needs its opt-in flag', () => {
+  const MODEL = { claude: [], codex: [], opencode: ['--model', 'ollama/qwen3:8b'], pi: ['--model', 'ollama/qwen3:8b'] };
+  const SAYS = {
+    codex: /A codex worker's shell can read this machine's keys \(~\/\.ssh, ~\/\.aws, ~\/\.nuworq, [^)]*\): Codex's workspace-write sandbox limits writes and network, not reads\./,
+    opencode: /A opencode worker's shell can read this machine's keys \(~\/\.ssh[^)]*\): opencode has no sandbox\./,
+    pi: /A pi worker's shell can read this machine's keys \(~\/\.ssh[^)]*\): pi has no sandbox\./,
+  };
+
+  test('codex, opencode and pi are refused without --can-read-keys, by worker and by run, before anything starts', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-keys-')));
+    const env = { ...process.env, HOME: home, NUWORQ_TOKEN: '' };
+    // No hub at this address: the refusal comes first, so nothing is asked of a hub, cloned or started.
+    for (const cmd of ['worker', 'run']) {
+      for (const agent of ['codex', 'opencode', 'pi']) {
+        await assert.rejects(promisify(execFile)(process.execPath, [BIN, cmd, '--url', 'http://127.0.0.1:9', '--agent', agent, ...MODEL[agent]], { env, cwd: home }), (e) => {
+          assert.match(e.stderr, new RegExp(`${agent} workers can read this machine's keys, so they start only with --can-read-keys`), `${cmd} ${agent}`);
+          assert.match(e.stderr, SAYS[agent], `${cmd} ${agent}: what it can read`);
+          assert.match(e.stderr, /--agent claude/);
+          assert.equal(e.stdout, '', 'nothing printed to run');
+          return true;
+        });
+      }
+    }
+  });
+
+  test('with --can-read-keys, the command says in one line what it can read; a Claude worker needs no flag', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-keys-')));
+    const hub = new Hub();
+    hub.tx(() => hub.project('k', { create: true }));
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: home };
+    const cli = (agent, ...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'k', '--agent', agent, '--as', `${agent}-1`, ...MODEL[agent], ...a], { env, cwd: home });
+    try {
+      for (const agent of ['codex', 'opencode', 'pi']) {
+        const { stdout } = await cli(agent, '--can-read-keys');
+        assert.equal(stdout.split('\n').filter((l) => SAYS[agent].test(l)).length, 1, `${agent}: one line\n${stdout}`);
+      }
+      assert.doesNotMatch((await cli('claude')).stdout, /can read this machine's keys/);
     } finally {
       server.close();
     }

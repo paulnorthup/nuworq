@@ -1521,7 +1521,7 @@ async function connect() {
     <h4>The Claude Code plugin</h4><p class="lead">The MCP server and the nuworq skills in one install. Connect this machine all the same: the plugin holds no token.</p>${commandBlocks(c.plugin)}
     <h4>Claude Code</h4>${commandBlocks(c.claude)}
     <h4>OpenAI Codex (~/.codex/config.toml)</h4>${copyBlock(c.codex)}
-    <h4>pi (1.4 or newer)</h4><p class="lead">Connect registers it when pi is installed; by hand, it's one command. pi workers get a config folder of their own, so your pi extensions, skills and sign-ins stay out: give the model's provider key in the environment. pi has no sandbox, so its workers run only on projects without a remote.</p>${commandBlocks(c.pi)}${commandBlocks(c.piWorker)}
+    <h4>pi (1.4 or newer)</h4><p class="lead">Connect registers it when pi is installed; by hand, it's one command. pi workers get a config folder of their own, so your pi extensions, skills and sign-ins stay out: give the model's provider key in the environment. pi has no sandbox, so its workers run only on projects without a remote, and can read this machine's keys: starting one takes --can-read-keys.</p>${commandBlocks(c.pi)}${commandBlocks(c.piWorker)}
     <h4>opencode, Goose, Cline, LM Studio or any MCP client (open-weight models included)</h4>${copyBlock(c.mcp)}
     <h4>Any agent with a shell (no MCP needed)</h4>${commandBlocks(c.guide)}
     <p class="lead" style="margin-top:var(--sp-2)">Add a line to the repo's AGENTS.md or CLAUDE.md: <i>"Coordinate work through nuworq: run the command above and follow it."</i></p>

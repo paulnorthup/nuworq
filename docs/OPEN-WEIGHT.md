@@ -12,8 +12,8 @@ node scripts/live-opencode.mjs qwen3.8:27b-mtp-q4_K_M small 12 run  # through nu
 Headless open-weight workers:
 
 ```bash
-nuworq worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --run
-nuworq run --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --workers 1
+nuworq worker --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --can-read-keys --run
+nuworq run --agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M --can-read-keys --workers 1
 ```
 
 The worker passes opencode its config through `OPENCODE_CONFIG_CONTENT`: the nuworq MCP server, an Ollama provider for `ollama/...` models (override with `OLLAMA_URL`), and a deny on `git push`. That keeps the worktree free of config files the agent could commit. opencode has no sandbox, so apart from `git push` it can run any shell command.
@@ -54,8 +54,8 @@ node scripts/live-pi.mjs qwen3.8:27b-mtp-q4_K_M small 15 run      # through nuwo
 Set it up beside you: `nuworq connect` runs `pi mcp add nuworq --exposure direct -- nuworq mcp` when pi is installed (it writes `~/.pi/agent/mcp.json`), and `nuworq disconnect` removes it. Headless pi workers:
 
 ```bash
-nuworq worker --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --run
-nuworq run --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --workers 1
+nuworq worker --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --can-read-keys --run
+nuworq run --agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M --can-read-keys --workers 1
 ```
 
 What a pi worker gets:
