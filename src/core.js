@@ -1189,6 +1189,15 @@ export class Hub extends EventEmitter {
     return this.q(`SELECT branch FROM items WHERE project_id = ? AND stage IN ('done', 'dropped') AND branch != '' ORDER BY seq`).all(p.id).map((r) => r.branch);
   }
 
+  // The live item (not done or dropped) other than item that holds branch in project p, or null (#759): a branch
+  // belongs to one item, so naming it in a claim or holding a second item never takes it over. An item's own
+  // name (nuworq/<seq>-…) is always its own, even when another item took it before this rule.
+  branchHolder(p, branch, item) {
+    if (!branch || branch.startsWith(`nuworq/${item.seq}-`)) return null;
+    return this.q(`SELECT id, seq, title FROM items WHERE project_id = ? AND id != ? AND branch = ? AND stage NOT IN ('done', 'dropped') ORDER BY seq LIMIT 1`)
+      .get(p.id, item.id, branch) ?? null;
+  }
+
   // Of those, the done items' branches whose pull request merged (#455): their work is on main even when a
   // squash or a rebase left the local branch with commits origin never had.
   mergedBranches(slug, { scope = null } = {}) {
@@ -2417,10 +2426,12 @@ export class Hub extends EventEmitter {
       delete result[GIT_CHECK];
       // Fetched now: the agent has likely just pushed, and a stale mirror would say it hadn't.
       const repo = this.repoFor(p, this.itemById(check.about), { fresh: true });
-      const g = repo ? gitFacts(repo.path, agent, check.claim, check.branch) : null;
+      const about = this.itemById(check.about);
+      const g = repo ? gitFacts(repo.path, agent, check.claim, check.branch, (b) => about && this.branchHolder(p, b, about)) : null;
       if (g && repo.mode === 'remote' && !g.branch && check.branch) g.unpushed = check.branch;
       if (g) {
         if (check.item && g.branch && g.branch !== check.branch) this.q('UPDATE items SET branch = ? WHERE id = ?').run(g.branch, check.item);
+        if (g.taken) result.hint = `${g.taken.branch} is #${g.taken.seq}'s branch, so #${about.seq} keeps ${check.branch || 'its own'}: a claim can't take another live item's branch. ${result.hint}`;
         const e = this.q('SELECT data FROM events WHERE id = ?').get(check.event);
         this.q('UPDATE events SET data = ? WHERE id = ?').run(JSON.stringify({ ...json(e.data, {}), git: g }), check.event);
         const warn = gitWarning(g);

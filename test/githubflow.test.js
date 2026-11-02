@@ -337,6 +337,18 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     assert.equal(git(gh.bare, ['rev-parse', one.job.branch]), git(one.wt, ['rev-parse', one.job.branch]), 'its own branch went through');
     const refused = hub.q(`SELECT data FROM events WHERE type = 'push_refused'`).all().map((e) => JSON.parse(e.data));
     assert.deepEqual(refused.map((d) => [d.agent, d.refs]), [['a1', [`refs/heads/${two.job.branch}`]], ['a1', [`refs/heads/${two.job.branch}`]]], 'each refusal on the record');
+
+    // #759: an item whose branch field names a2's (taken before the rule) still can't push to it.
+    const mine = item(Number(one.job.item.slice(1))), seqTwo = two.job.item;
+    hub.q('UPDATE items SET branch = ? WHERE id = ?').run(two.job.branch, mine.id);
+    await assert.rejects(netGit(one.wt, ['push', '--force', 'origin', `${one.job.branch}:refs/heads/${two.job.branch}`], one.env),
+      (e) => new RegExp(`${two.job.branch} is ${seqTwo}'s branch`).test(e.message) && /remote rejected/.test(e.message));
+    assert.equal(git(gh.bare, ['rev-parse', two.job.branch]), theirs, "a2's branch is still untouched");
+    hub.q('UPDATE items SET branch = ? WHERE id = ?').run(one.job.branch, mine.id);
+    // Naming a2's branch in a submit doesn't make it a1's item's branch; the hint says why.
+    const sub = await op('a1', 'submit', { item: one.job.item, headline: `Done on ${two.job.branch}`, evidence: [{ label: `branch ${two.job.branch}` }] });
+    assert.equal(item(mine.seq).branch, one.job.branch, 'the item keeps its own branch');
+    assert.match(sub.hint, new RegExp(`${two.job.branch} is ${seqTwo}'s branch, so ${one.job.item} keeps ${one.job.branch}`));
   });
 
   test('a delivery not signed with the app\'s secret changes nothing; ping answers; an unknown repository reaches no project', async () => {
