@@ -311,7 +311,7 @@ function runningPid(file) {
 }
 
 async function upCmd(flags) {
-  const { upPlan, readService, launcherFor, launchCommands, operatorShell, upTable, SESSION } = await import('../src/up.js');
+  const { upPlan, upClones, readService, launcherFor, launchCommands, operatorShell, upTable, SESSION } = await import('../src/up.js');
   const svc = await import('../src/service.js');
   const { userInfo } = await import('node:os');
   const dryRun = !!flags['dry-run'];
@@ -329,13 +329,13 @@ async function upCmd(flags) {
   const runner = { supported: !!s, args: read?.args ?? null, cwd: read?.cwd && existsSync(read.cwd) ? read.cwd : null, tokenFile: read?.tokenFile && existsSync(read.tokenFile) ? read.tokenFile : null, up };
 
   // Each project's clone here, found as the runner finds them: from where it runs, beside it, and NUWORQ_REPOS.
+  // The hub's folder for a project only when the person chose it, or it's a checkout of the project's repo (#617).
   const from = runner.cwd ?? process.cwd();
-  const clones = {};
-  for (const p of projects) {
-    if (p.path && existsSync(p.path) && (p.remotes ?? []).length <= 1) { clones[p.slug] = { folder: p.path }; continue; }
-    if (!(p.remotes ?? []).length) { clones[p.slug] = { hint: `link ${p.name ?? p.slug}'s repository on the hub, or run nuworq operator --start in its folder` }; continue; }
-    try { clones[p.slug] = { folder: checkoutOf(p.remotes, { cwd: from }) }; } catch (e) { clones[p.slug] = { hint: e.hint ?? e.message }; }
-  }
+  const clones = upClones(projects, {
+    chosen: chosenFolders(dirname(HUB_FILE)), exists: existsSync, inChosen,
+    remoteOf: (dir) => { try { return repoRemote(dir); } catch { return ''; } },
+    checkout: (remotes) => checkoutOf(remotes, { cwd: from }),
+  });
   const local = Object.fromEntries(projects.filter((p) => runningPid(pidOf(p.slug))).map((p) => [p.slug, true]));
 
   // Staffing, asked once for every unparked project that isn't staffed; a no is remembered.

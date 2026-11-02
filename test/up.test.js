@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Hub } from '../src/core.js';
 import { projectList, liveOperators } from '../src/insight.js';
 import { launchdPlist, systemdUnit } from '../src/service.js';
-import { upPlan, readService, autoArgs, launcherFor, launchCommands, operatorShell, appleString, upTable } from '../src/up.js';
+import { upPlan, upClones, readService, autoArgs, launcherFor, launchCommands, operatorShell, appleString, upTable } from '../src/up.js';
 
 const NODE = '/opt/homebrew/bin/node', BIN = '/usr/local/lib/node_modules/nuworq/bin/nuworq.js';
 const auto = { supported: true, args: ['--workers', 'auto'], cwd: '/src/nuworq', up: true };
@@ -95,6 +95,31 @@ describe('staffing and operators', () => {
     assert.deepEqual(op['llm-proxy'], { state: 'skip', why: 'no clone here: git clone github.com/p/llm-proxy /src/llm-proxy' });
     assert.equal(op['cancer-hub'].state, 'running');
     assert.match(op['cancer-hub'].why, /op-old; cancer-hub is parked, so stop it/);
+  });
+
+  test('nuworq up starts operators only in folders the person chose (#617)', () => {
+    // The machine: ~/src/app is chosen and a clone of acme/app; ~/.ssh and ~/notes exist but nobody chose them.
+    const disk = { '/home/me/src/app': 'github.com/acme/app', '/home/me/.ssh': '', '/home/me/notes': '', '/home/me/clones/site': 'github.com/acme/site' };
+    const world = {
+      chosen: ['/home/me/src'],
+      exists: (p) => p in disk,
+      inChosen: (p, chosen) => chosen.some((c) => p === c || p.startsWith(`${c}/`)),
+      remoteOf: (p) => disk[p] ?? '',
+      checkout: (remotes) => { const f = Object.keys(disk).find((p) => remotes.includes(disk[p])); if (f) return f; throw Object.assign(new Error('none'), { hint: `clone ${remotes[0]} beside this folder` }); },
+    };
+    const clones = upClones([
+      { slug: 'app', path: '/home/me/src/app', remotes: ['github.com/acme/app'] }, // chosen: as named
+      { slug: 'evil', path: '/home/me/.ssh', remotes: [] }, // a hostile hub's folder, chosen by nobody
+      { slug: 'notes', path: '/home/me/notes', remotes: ['github.com/acme/notes'] }, // not chosen, not a clone of it
+      { slug: 'site', path: '/home/me/.ssh', remotes: ['github.com/acme/site'] }, // a folder elsewhere: its checkout by remote
+    ], world);
+    assert.deepEqual(clones.app, { folder: '/home/me/src/app' });
+    assert.deepEqual(clones.evil, { hint: "/home/me/.ssh isn't a folder you chose for workers here: nuworq run --folder /home/me/.ssh chooses it" });
+    assert.deepEqual(clones.notes, { hint: 'clone github.com/acme/notes beside this folder' }, 'not started in the folder the hub named');
+    assert.deepEqual(clones.site, { folder: '/home/me/clones/site' }, 'a checkout whose remote matches the project');
+    const plan = upPlan({ projects: ['app', 'evil', 'notes', 'site'].map((slug) => ({ slug, name: slug, parked: false, runner: true, operators: [] })), clones, runner: auto });
+    assert.deepEqual(plan.rows.filter((r) => r.operator.state === 'start').map((r) => [r.slug, r.operator.folder]), [['app', '/home/me/src/app'], ['site', '/home/me/clones/site']]);
+    assert.match(plan.rows.find((r) => r.slug === 'evil').operator.why, /isn't a folder you chose/);
   });
 
   test("#582: a hub that doesn't list operators gets none started, and up says why", () => {

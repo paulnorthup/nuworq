@@ -50,6 +50,27 @@ export function autoArgs(args = []) {
 
 const isAuto = (args = []) => args.some((a, i) => a === '--workers=auto' || (a === '--workers' && args[i + 1] === 'auto'));
 
+// Each project's folder for its operator, as upPlan's clones (#617). An operator is attended and unsandboxed, so the
+// hub's word for a folder isn't enough (a hostile hub could name any folder here): its folder counts only when the
+// person chose it for workers on this machine (chosen, as nuworq run keeps them), or it is a checkout of one of the
+// project's repositories. Otherwise the checkout is found by remote, as the runner finds it, or the project is
+// skipped with why. The world comes in as functions: exists(path), inChosen(path, chosen), remoteOf(path) (its
+// origin, normalized), checkout(remotes) (a checkout of one of them near here, or throws with a hint).
+export function upClones(projects = [], { chosen = [], exists, inChosen, remoteOf, checkout }) {
+  const clones = {};
+  for (const p of projects) {
+    const remotes = p.remotes ?? [];
+    const own = p.path && exists(p.path);
+    if (own && remotes.length <= 1 && (inChosen(p.path, chosen) || (remotes.length && remotes.includes(remoteOf(p.path))))) { clones[p.slug] = { folder: p.path }; continue; }
+    if (!remotes.length) {
+      clones[p.slug] = { hint: own ? `${p.path} isn't a folder you chose for workers here: nuworq run --folder ${p.path} chooses it` : `link ${p.name ?? p.slug}'s repository on the hub, or run nuworq operator --start in its folder` };
+      continue;
+    }
+    try { clones[p.slug] = { folder: checkout(remotes) }; } catch (e) { clones[p.slug] = { hint: e.hint ?? e.message }; }
+  }
+  return clones;
+}
+
 // What to do. Everything outside comes in as data:
 //   projects: the hub's list ({ slug, name, parked, runner, operators: [{ name, machine }] }), archived ones left out;
 //   declined: slugs whose staffing the person said no to before;
