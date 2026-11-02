@@ -68,6 +68,11 @@ const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'stee
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 // Which agent operations a person may use on the agent routes (#469): what their role allows on the human
 // routes. A member proposes and comments, never claims, reviews or gets a push token. null: every one.
+// Acting as an operator (#609) takes a token a steward or owner minted, or one given the operate power: a member could
+// otherwise approve a device, check in with the operator tag, and answer the questions that unpark work.
+const notOperator = () => new UserError("This token can't act as an operator", {
+  status: 403, hint: 'Only a token a steward or owner minted (their Connect an agent or device login), or one made with nuworq token create <name> --powers shape,build,review,operate, can. Check in again without the operator tag to work as an agent.',
+});
 export const PERSON_AGENT_CAN = { viewer: [], member: ['checkin', 'look', 'propose', 'comment', 'signoff', 'feedback'], steward: null, owner: null };
 
 // The lifecycle. "court" is whose move it is while work sits in that stage.
@@ -1371,7 +1376,7 @@ export class Hub extends EventEmitter {
   // The role a call says this session has (#238), from how it started: a runner's token makes a worker (as does
   // role "worker" with its runner, from nuworq run on a hub without logins), the operator tag an operator, role
   // "shaper" (the shaper skill) a shaper. null: the call says nothing, so the session keeps what it has.
-  claimedRole(token, args = {}) {
+  claimedRole(token, args = {}, { operate = true } = {}) {
     const said = str(args.role).toLowerCase();
     if (said && !ROLES.includes(said)) {
       throw new UserError(`role must be one of ${ROLES.join(', ')}, not "${args.role}"`, { hint: 'Leave it out unless you are a shaper (role: "shaper"); the hub knows workers and operators by how they started.' });
@@ -1390,7 +1395,10 @@ export class Hub extends EventEmitter {
     if (said === 'operator' && !has.includes('operator')) {
       throw new UserError('An operator declares the operator tag', { hint: 'Check in with has: ["operator", ...]; nuworq operator prints the line.' });
     }
-    if (has.includes('operator')) return { role: 'operator', runner: '' };
+    if (has.includes('operator')) {
+      if (!operate) throw notOperator();
+      return { role: 'operator', runner: '' };
+    }
     if (said) return { role: said, runner: '' };
     return null;
   }
@@ -1935,7 +1943,7 @@ export class Hub extends EventEmitter {
   // remote: the agent's repository (normalized origin remote), which finds the project on any machine.
   // identity: who is calling when the hub has logins, { id: the token behind it, session: a person's browser
   // session }; the agent name is bound to the first token that uses it (bindAgent). null: no logins.
-  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [], cursor = '', identity = null } = {}) {
+  agentOp(slug, op, name, args = {}, { root = '', remote = '', scope = null, token = null, session = [], cursor = '', identity = null, operate = token?.operator ?? true } = {}) {
     const fn = AGENT_OPS[op];
     if (!fn) throw new UserError(`Unknown operation "${op}"`, { status: 404, hint: `Operations: ${Object.keys(AGENT_OPS).join(', ')}` });
     // A field the operation doesn't take is a typo, never silently dropped (#521).
@@ -1999,7 +2007,7 @@ export class Hub extends EventEmitter {
       if (presence && (presence.fresh || presence.wasSignedOff || presence.gap > AWAY_MS)) this.mark(null, 'presence');
       // Its role (#238): a runner's token says worker on every call; a checkin says the rest, and where it runs.
       if (presence) {
-        const claimed = op === 'checkin' ? this.claimedRole(token, args) : token?.runner ? { role: 'worker', runner: token.runner } : null;
+        const claimed = op === 'checkin' ? this.claimedRole(token, args, { operate }) : token?.runner ? { role: 'worker', runner: token.runner } : null;
         if (claimed || (op === 'checkin' && args.machine)) this.setRole(p, agent, claimed, op === 'checkin' ? str(args.machine) : '');
       }
       this.noteToken(p, agent, token?.name);
@@ -2008,6 +2016,9 @@ export class Hub extends EventEmitter {
       if (presence) this.renewHeld(p, agent);
       // Its session's keys (#335): the listener beside it sends the same, and wakes it alone.
       if (op === 'checkin' && session.length) this.q('UPDATE agents SET session = ? WHERE project_id = ? AND name = ?').run(session.join(','), p.id, agent);
+      // Answering or escalating operator questions takes what checking in as one does (#609), even for a session
+      // that became an operator before that was checked.
+      if (!operate && (op === 'answer' || (op === 'ask' && args?.escalates != null && args.escalates !== ''))) throw notOperator();
       const need = powers && this.powerFor(p, op, args ?? {});
       if (need && !powers.includes(need)) {
         throw new UserError(`This agent's token can't ${need} (its powers: ${powers.join(', ')})`, {

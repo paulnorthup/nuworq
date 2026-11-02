@@ -9,6 +9,10 @@ const ROLES = ['human', 'agent'];
 export const PERSON_ROLES = ['owner', 'steward', 'member', 'viewer'];
 // What an agent token may do; reading, asking, proposing and notes are always allowed (see core.js).
 export const POWERS = ['shape', 'build', 'review'];
+// The power to act as an operator (#609), given only by name: never part of a token's default powers.
+export const OPERATE = 'operate';
+// Whose agent tokens may act as an operator without it: a steward's or an owner's.
+const OPERATOR_MINTERS = ['owner', 'steward'];
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 const same = (a, b) => a.length === b.length && timingSafeEqual(a, b);
@@ -244,8 +248,8 @@ export class Auth {
       }
       if (powers != null) {
         const list = (Array.isArray(powers) ? powers : String(powers).split(/[\s,]+/)).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
-        const bad = list.filter((x) => !POWERS.includes(x));
-        if (bad.length || !list.length) throw new Error(`powers: one or more of ${POWERS.join(', ')}`);
+        const bad = list.filter((x) => ![...POWERS, OPERATE].includes(x));
+        if (bad.length || !list.length) throw new Error(`powers: one or more of ${[...POWERS, OPERATE].join(', ')}`);
         power = JSON.stringify([...new Set(list)]);
       }
     }
@@ -280,9 +284,12 @@ export class Auth {
     if (!row) return null;
     const out = { id: row.id, name: row.name, role: row.role };
     if (row.role === 'agent') {
-      const full = this.db.prepare('SELECT powers, projects FROM tokens WHERE id = ?').get(row.id);
+      const full = this.db.prepare('SELECT t.powers, t.projects, t.minted_by, m.role AS minter_role FROM tokens t LEFT JOIN people m ON m.id = t.minted_by WHERE t.id = ?').get(row.id);
       out.powers = full?.powers ? JSON.parse(full.powers) : [...POWERS];
       out.projects = scopeOf(full?.projects);
+      // May it act as an operator (#609)? A steward's or owner's token, one made on the hub host (no person minted
+      // it), or one given the operate power by name. A member's device login isn't, nor is a runner's token.
+      out.operator = !row.runner && (out.powers.includes(OPERATE) || full?.minted_by == null || OPERATOR_MINTERS.includes(full?.minter_role));
       if (row.runner) out.runner = row.runner; // a runner's token: the runner it reports as (#171)
     }
     if (row.role === 'human') {

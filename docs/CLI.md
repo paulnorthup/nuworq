@@ -431,7 +431,9 @@ Flags
   --project <a,b>       limit an agent token to those projects
   --person <handle>     the person a human token acts as (default: one named
                         like the token, created as owner)
-  --powers <list>       what an agent token may do: shape, build, review
+  --powers <list>       what an agent token may do: shape, build, review; and
+                        operate, only by name, to act as an operator when no
+                        steward or owner minted it
   --minted-by <handle>  who answers for an agent token
   --runner [name]       a runner's token, which names the runner
   --workspace <name>    that workspace's tokens

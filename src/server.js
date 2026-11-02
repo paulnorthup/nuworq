@@ -1237,6 +1237,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 
       // What a token-bearing agent may reach, and its token (name for the record; powers, provenance).
       const caller = { scope: who.projects ?? null, token: who.via === 'bearer' ? who : null, identity: required ? { id: who.id, session: who.via === 'cookie' } : null };
+      // Who may act as an operator (#609): an agent by its token (Auth.identity), a person if a steward or owner, and
+      // anyone on a hub without logins.
+      caller.operate = who.role === 'agent' ? !!who.operator : who.person ? PERSON_AGENT_CAN[who.person.role] === null : true;
       // A person acts as "@handle" with their role; without accounts the one human is "you", an owner.
       const by = who.person ? `@${who.person.handle}` : HUMAN;
       const personRole = who.person?.role ?? 'owner';
