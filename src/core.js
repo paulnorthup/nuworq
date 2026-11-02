@@ -1835,8 +1835,9 @@ export class Hub extends EventEmitter {
       questions: questions.length ? questions.map((q) => ({
         question_id: q.id, question: q.question, status: q.status, blocking: !!q.blocking,
         assumption: q.assumption || undefined, answer: q.answer ? answerFor(q) : undefined,
+        by: q.answer && q.answered_by ? speaker(q.answered_by) : undefined,
       })) : undefined,
-      steers: steers.length ? steers.map((n) => ({ steer: n.id, from: n.author, body: n.body, ago: dur(this.now() - n.at) })) : undefined,
+      steers: steers.length ? steers.map((n) => ({ steer: n.id, from: isHuman(n.author) ? n.author : speaker(n.author), body: n.body, ago: dur(this.now() - n.at) })) : undefined,
       // The hub can't tell whether two people's steers conflict; the agent can, and its question reaches both.
       steered_by: steerers.length > 1
         ? `Steers from ${steerers.slice(0, -1).join(', ')} and ${steerers.at(-1)}. If they disagree, ask: the question goes to all of them.`

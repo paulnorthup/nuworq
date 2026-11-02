@@ -34,6 +34,15 @@ describe("an agent's words are labelled as an agent's", () => {
     assert.equal(c.steers[0].from, 'op (an agent, not a person)');
     assert.equal(c.answers[0].answer, 'Use the canary instead.');
     assert.equal(c.answers[0].by, 'op (an agent, not a person)');
+
+    // The item's own context (look, and what next and claim return) carries the same labels.
+    const look = agent('s', 'look', { item: '#1' });
+    agent('s', 'handoff', { item: '#1', headline: 'Halfway' });
+    for (const it of [look, agent('s', 'claim', { item: '#1' })]) {
+      assert.equal(it.item, '#1');
+      assert.equal(it.steers.find((s) => /Change of course/.test(s.body)).from, 'op (an agent, not a person)');
+      assert.equal(it.questions[0].by, 'op (an agent, not a person)');
+    }
   });
 
   test("a person's answer and steer still say the human", () => {
@@ -45,5 +54,6 @@ describe("an agent's words are labelled as an agent's", () => {
     assert.match(r.hint, /^The human has steered you/);
     const c = agent('s', 'checkin');
     assert.equal(c.answers[0].by, 'the human');
+    assert.equal(agent('s', 'look', { item: '#1' }).questions[0].by, 'the human');
   });
 });
