@@ -20,6 +20,7 @@ const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && exist
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
 const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect', 'smoke', 'can-read-keys']);
 const MULTI = new Set(['option', 'evidence', 'env', 'env-secret']);
+const LAND_USD = 2; // the most one land job may spend unless --land-usd says otherwise (#752)
 
 function parse(argv) {
   const pos = [];
@@ -959,7 +960,9 @@ function workerSetup(target, agent, flags, s, token = null) {
   const main = isRepo ? mainBranch(home) : 'main';
   const cwd = worktree ?? home;
   const has = (f) => existsSync(join(home, f));
-  const browser = agent === 'claude' && !!flags.browser; // --browser: a headless Chrome to look at UI work with
+  // A land job (#752) is a rebase, the tests near it and a push: a short brief, no browser, and a dollar cap (capUsd).
+  const landing = flags.job?.mode === 'land';
+  const browser = agent === 'claude' && !!flags.browser && !landing; // --browser: a headless Chrome to look at UI work with
   const tags = detectHas(flags);
   // The model it runs on, when one is named (--model, or the job's under model routing, #347): the agent starts on
   // it, and checks in saying so. opencode and pi name their own (provider/model) below.
@@ -980,9 +983,10 @@ function workerSetup(target, agent, flags, s, token = null) {
       ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login. When you ship a visible UI feature, add its key with today\'s date to web/new.js and data-new="<key>" to its element, so people see it\'s new.'
       : 'To check UI work, start the app from this worktree on a free local port, in the background.'),
     browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide (browser_resize), in light and in dark: the app follows the device, so to check dark set document.documentElement.dataset.theme = "dark" with browser_evaluate. Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
-    'While you work, run only the tests that cover what you change. For the whole suite, follow the hint `next` gives: where CI checks the pull request, CI runs it; otherwise run it once, just before you submit.',
-    // Routed (#347), it was started on the model this one job calls for, so it takes that job and no other.
-    flags.job ? `You were started on ${model} for one job: ${flags.job.mode} ${flags.job.item}. After checkin, claim ${flags.job.item}, do that job, then sign off. If you can't claim it, sign off; don't take other work.`
+    landing ? 'Follow the steps the claim gives you, and nothing more: no reading around, no other changes.'
+      : 'While you work, run only the tests that cover what you change. For the whole suite, follow the hint `next` gives: where CI checks the pull request, CI runs it; otherwise run it once, just before you submit.',
+    // Routed (#347), it was started on the model this one job calls for, so it takes that job and no other. So is a land job.
+    flags.job ? `You were started${model ? ` on ${model}` : ''} for one job: ${flags.job.mode} ${flags.job.item}. After checkin, claim ${flags.job.item}, do that job, then sign off. If you can't claim it, sign off; don't take other work.`
       : 'Keep going until next says there is nothing left for you, then sign off.',
   ].filter(Boolean).join(' ');
 
@@ -1043,7 +1047,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     // only the name Claude Code scrubs carries it.
     if (flags.proxy !== undefined) lines.push(`export ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN"`, 'unset NUWORQ_LLM_PROXY_TOKEN');
     // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: its shell, hooks and MCP servers start without Claude Code's own credentials (#616).
-    lines.push(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts, landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''}${landing && flags.capUsd ? ` --max-budget-usd ${Number(flags.capUsd)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts, landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
@@ -1204,6 +1208,8 @@ async function runCmd(flags) {
   await staffing(client, await hubProjects(client), flags);
   const token = await agentToken(client, flags);
   const num =(v, d) => (v === undefined ? d : Number(v) > 0 ? Number(v) : (() => { throw new HubError(`expected a positive number, got "${v}"`, { hint: 'See: nuworq help' }); })());
+  // The most one land job may spend (#752): a rebase, the tests near it and a push cost cents. 0: no cap.
+  const landUsd = String(flags['land-usd']) === '0' ? 0 : num(flags['land-usd'], LAND_USD);
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
@@ -1255,7 +1261,9 @@ async function runCmd(flags) {
     // The route names the repository of the work it found; with several, the worker starts there.
     const repo = (target.remotes ?? []).length > 1 ? r.repo : null;
     // A project that routes models (#347) names the one this job calls for: the worker starts on it, for that one job.
-    const routed = r.model ? { model: r.model, job: r } : {};
+    // A land job (#752) too, routed or not: one cheap run for it alone, capped at --land-usd.
+    const capUsd = r.mode === 'land' ? landUsd : 0;
+    const routed = r.model || capUsd ? { ...(r.model ? { model: r.model } : {}), job: r, ...(capUsd ? { capUsd } : {}) } : {};
     let setup;
     try {
       setup = await setupOrClone({ ...target, repo }, agent, { ...flags, as: undefined, run: true, chosen, ...routed }, s, client, token);
@@ -1319,6 +1327,7 @@ async function runCmd(flags) {
         done(code ?? (sig ? `${sig}` : 1));
       })),
       spent: () => usage()?.cost_usd ?? 0, // what its CLI said it cost, for --max-usd
+      cap: capUsd, // a land job's (#752): the runner stops it once what it reports passes this
     };
   };
 

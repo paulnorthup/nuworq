@@ -704,12 +704,24 @@ describe('a worker for a project with no checkout on this machine', () => {
       assert.match(log, /"NUWORQ_MODEL":"claude-haiku-5-5"/, 'and its MCP server checks in saying so');
       assert.match(log, /You were started on claude-haiku-5-5 for one job: land #1\. After checkin, claim #1, do that job, then sign off/);
       assert.doesNotMatch(log, /Keep going until next says/);
+      // A land job (#752): a short brief and a dollar cap Claude stops itself at.
+      assert.match(log, /^ARG --max-budget-usd\nARG 2$/m, 'capped at the default --land-usd');
+      assert.match(log, /Follow the steps the claim gives you, and nothing more/);
+      assert.doesNotMatch(log, /run only the tests that cover what you change/);
 
       w.hub.humanOp('far', 'settings', { model_routing: false });
       rmSync(logs, { recursive: true });
-      await run();
+      await run('--land-usd', '0.5');
       assert.doesNotMatch(read(), /ARG --model/, "off, without --model: the agent's own default, as before");
+      assert.match(read(), /You were started for one job: land #1\./, 'a land job is still one capped run of its own');
+      assert.match(read(), /^ARG --max-budget-usd\nARG 0\.5$/m);
+
+      // Any other job: no cap, and the worker keeps going.
+      w.hub.q("UPDATE items SET stage = 'ready' WHERE seq = 1").run();
+      rmSync(logs, { recursive: true });
+      await run();
       assert.match(read(), /Keep going until next says/);
+      assert.doesNotMatch(read(), /max-budget-usd/);
     } finally {
       server.close();
     }
@@ -868,6 +880,27 @@ describe('run: the supervising loop', () => {
     assert.match(res.why, /reached --max-usd 2\.5 \(\$3\.10 spent\); letting 1 running worker\(s\) finish/);
     assert.equal(res.spent, 3.1);
     assert.match(w.lines.at(-1), /2 launched, 2 exited cleanly, 0 failed .*; \$3\.10 spent\.$/);
+  });
+
+  test("stops a land job's worker once what it reports passes its cap (#752); others aren't capped", async () => {
+    const w = world([[route('a', 5)]]);
+    const launch = w.opts.launch;
+    const p = run({ ...w.opts, workers: 2, launch: async (r) => Object.assign(await launch(r), { cap: r.cap }), maxRuns: 2 });
+    await checked(w, p, async () => {
+      await until(() => w.workers.length >= 2, 'two workers');
+      w.workers[0].cap = 2;
+      w.workers[0].spent = () => 1.5;
+      w.workers[1].spent = () => 9;
+      await new Promise((r) => setTimeout(r, 20));
+      assert.deepEqual(w.workers[0].signals, [], 'under its cap');
+      w.workers[0].spent = () => 2.4;
+      await until(() => w.workers[0].signals.length, 'SIGTERM at the cap');
+      assert.equal(w.workers[0].signals[0], 'SIGTERM');
+      assert.deepEqual(w.workers[1].signals, [], 'no cap: left alone');
+      assert.ok(w.lines.some((l) => /w1 spent past its \$2 cap for a land job: stopping it/.test(l)));
+    });
+    w.workers.forEach((x) => x.finish(0));
+    await p;
   });
 
   test('without a budget, workers that report no spend change nothing', async () => {

@@ -113,6 +113,8 @@ Flags
   --max-minutes <t>   stop after t minutes
   --max-usd <x>       stop starting workers once their reported spend reaches x
                       (codex and local models report none)
+  --land-usd <x>      the most one land job may spend; its worker is stopped
+                      there (0: no cap) (default: 2)
   --poll <s>          the most seconds between looks; new work is heard at once
                       (default: 30)
   --has <tags>        what else this machine can do, e.g. browser,linux-vm
