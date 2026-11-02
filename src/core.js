@@ -41,10 +41,12 @@ export const LIMITS = {
 };
 
 export class UserError extends Error {
-  constructor(message, { status = 400, hint } = {}) {
+  // keep: the operation's writes stay although it refuses (a note saved before saying so, #733).
+  constructor(message, { status = 400, hint, keep = false } = {}) {
     super(message);
     this.status = status;
     this.hint = hint;
+    this.keep = keep;
   }
 }
 // A required field an agent operation was called without is named, never read as "undefined" further in (#715).
@@ -503,6 +505,10 @@ export class Hub extends EventEmitter {
       this.db.exec('COMMIT');
       return r;
     } catch (e) {
+      if (e instanceof UserError && e.keep) {
+        try { this.db.exec('COMMIT'); } catch { this.db.exec('ROLLBACK'); this._snaps.clear(); }
+        throw e;
+      }
       this.db.exec('ROLLBACK');
       this._snaps.clear(); // a rollback undoes changes without turning SQLite's counters back
       throw e;
@@ -2290,7 +2296,8 @@ export class Hub extends EventEmitter {
     // A clone of the project's repository is the right place to work, wherever it sits on disk.
     const ownClone = !!remote && this.projectByRemote(remote)?.id === p.id;
     const marks = this._marks = []; // a throw leaves it to the next operation, which starts its own
-    const result = this.tx(() => {
+    let result;
+    try { result = this.tx(() => {
       this.ownsAgent(p, agent, identity);
       // A session that ends signs off by itself, and the runner signs off a worker that exited (#558): an agent that
       // already did, or never checked in here, has nothing to hand back, so it isn't put on the record again.
@@ -2384,7 +2391,11 @@ export class Hub extends EventEmitter {
           : `${p.slug} is a new project here, made by this checkin. ${r.next}`;
       }
       return r;
-    });
+    }); } catch (e) {
+      // A refusal that kept its writes (UserError keep) is still a change the views show.
+      if (e instanceof UserError && e.keep) { this._marks = null; this.changed(p, marks.find((m) => m.item) ?? marks[0] ?? { kind: op }); }
+      throw e;
+    }
     const check = result[GIT_CHECK];
     if (check) {
       delete result[GIT_CHECK];
@@ -3486,7 +3497,7 @@ const AGENT_OPS = {
       // Don't lose the work: keep the note on the record, then explain.
       this.event(p, { item, actor: agent, type: 'comment', headline, summary, detail });
       throw new UserError(`You no longer hold #${item.seq}${item.holder ? ` (${item.holder} does)` : ''}. Your update was saved as a comment.`, {
-        status: 409, hint: 'Your lease probably expired. Call next to continue with whatever is most useful.',
+        status: 409, keep: true, hint: 'Your lease probably expired. Call next to continue with whatever is most useful.',
       });
     }
     this.renew(item, agent);
