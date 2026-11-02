@@ -20,13 +20,14 @@ import { BUDGET as DEFAULT_BUDGET } from './setup.js';
 import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
-import { unknownField } from './agentargs.js';
+import { unknownField, nearestOf } from './agentargs.js';
 import { slugify, normRemote } from './text.js';
 import { Snapshot } from './snapshot.js';
 import { commandParts } from '../web/commands.js';
 export { slugify, normRemote };
 
 const GIT_CHECK = Symbol('git check');
+const CREATED = Symbol('created'); // on the project row project() just created
 const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take an optional usage
 // One agent can't flood a hub (#766): its writes per minute, and what a project or hub holds at most.
 const WRITE_OPS = ['propose', 'ask', 'comment', 'learn', 'usage'];
@@ -564,6 +565,7 @@ export class Hub extends EventEmitter {
       this.q('INSERT INTO projects (slug, name, created_at, fresh_at, notes_at, staff_asked) VALUES (?, ?, ?, ?, ?, 0)').run(s, str(name) || s, this.now(), this.now(), this.now());
       p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);
       this.event(p, { actor: SYSTEM, type: 'project', headline: `Project ${p.name} created` });
+      p[CREATED] = true;
     }
     if (!p) throw new UserError(`No project "${s}"`, { status: 404, hint: 'An agent checkin creates a project automatically, or create one in the UI.' });
     return p;
@@ -2306,6 +2308,15 @@ export class Hub extends EventEmitter {
         } else if (where) {
           r.workspace = where;
         }
+      }
+      // A typo'd slug makes a project like any other (#714): say so once, on the checkin that made it, and name the
+      // project it most likely meant, however far off, before the agent works alone in an empty one.
+      if (op === 'checkin' && p[CREATED]) {
+        const others = this.projects().map((x) => x.slug).filter((s) => s !== p.slug && (!scope || scope.includes(s)));
+        const meant = nearestOf(p.slug, others, Infinity);
+        r.next = meant
+          ? `${p.slug} is a new project here; did you mean ${meant}? If so, check in to ${meant} instead (a person can archive ${p.slug}). If not: ${r.next}`
+          : `${p.slug} is a new project here, made by this checkin. ${r.next}`;
       }
       return r;
     });

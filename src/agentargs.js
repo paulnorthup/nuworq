@@ -46,13 +46,13 @@ function distance(a, b) {
   }
   return row[b.length];
 }
-// The nearest of words to word, within 3 edits (or one containing the other); null when none is close.
-export function nearestOf(word, words) {
+// The nearest of words to word, within max edits (or one containing the other); null when none is close.
+export function nearestOf(word, words, max = 3) {
   const w = String(word).toLowerCase();
   let best = null;
   for (const c of words) {
     const n = c.includes(w) || w.includes(c) ? Math.min(distance(w, c), 2) : distance(w, c);
-    if (n <= 3 && (!best || n < best.n)) best = { c, n };
+    if (n <= max && (!best || n < best.n)) best = { c, n };
   }
   return best?.c ?? null;
 }
