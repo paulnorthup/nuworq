@@ -33,6 +33,16 @@ describe('Needs you says why nothing is working (#173)', () => {
     assert.ok(a.how[0].check);
   });
 
+  // #643: no switch before a runner exists to act on it; the runner it says to start staffs the project itself.
+  test('no runner and not staffed: no staffing switch, a runner that staffs it as it starts', () => {
+    const { idle } = setup({ staffed: false });
+    const a = idle();
+    assert.equal(a.cause, 'no-runner');
+    assert.ok(!a.how.some((s) => /Settings|switch/.test(s.do)), steps(a).join(' | '));
+    assert.deepEqual(a.how.map((s) => s.where), ['nuworq run --workers 1 --staff p', 'nuworq run --workers 1 --install'], 'the service, once staffed, without --staff');
+    assert.match(steps(a)[0], /start a runner that staffs this project/);
+  });
+
   test('runners up but the project not staffed: the fix is the one button', () => {
     const { report, idle } = setup({ staffed: false });
     report({});

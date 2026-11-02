@@ -52,7 +52,7 @@ export async function chooseProject({ projects, named, remote, root, mode, ask, 
   return p ? { project: p, folder: null } : { none: 'No project chosen: connect again from a clone of one, or pass --project <slug>.' };
 }
 
-// The questions, in order. project: { slug, name }; folder: its clone here, or null with clone: the command that
+// The questions, in order. project: { slug, name, runner } (runner: already staffed); folder: its clone here, or null with clone: the command that
 // makes it. plugin: whether Claude Code has the nuworq plugin (its commands are /nuworq:…, else /nuworq-…).
 // actions: staff(project, budget) and installRunner() return lines to print; startOperator() hands the terminal
 // to Claude Code (last, as it returns only when the session ends). Returns what was done: { staffed, operator }.
@@ -62,8 +62,10 @@ export async function finishSetup({ mode, ask, say, project, folder, clone, plug
   const out = { staffed: false, operator: false };
   if (!folder && clone) say(`${name} isn't cloned on this machine. Clone it with: ${clone}`);
 
-  // 2. Workers on this machine.
-  if (await yes(`Staff ${name} with workers on this machine? It turns on staffing for ${name} and installs nuworq run as a background service, which starts Claude Code workers on waiting work, also after a reboot. They spend on your Claude account, up to a daily cap you set next.`)) {
+  // 2. Workers on this machine. Already staffed (#643): said, not asked again; this machine's runner is one command.
+  if (project.runner) {
+    say(`${name} is already staffed: nuworq run starts its workers. To run them on this machine too: nuworq run --install   (in ${folder ?? 'its clone'})`);
+  } else if (await yes(`Staff ${name} with workers on this machine? It turns on staffing for ${name} and installs nuworq run as a background service, which starts Claude Code workers on waiting work, also after a reboot. They spend on your Claude account, up to a daily cap you set next.`)) {
     const usd = await budgetOf(mode, ask, budget);
     try {
       for (const l of await actions.staff(project, usd)) say(l);
