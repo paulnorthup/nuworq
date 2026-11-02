@@ -17,7 +17,7 @@
 // otherwise the person decides with one tap. A review opens when those inputs change (at most hourly) and weekly.
 // Agents still get every note's full text.
 import { createHash } from 'node:crypto';
-import { DAY, SYSTEM, UserError } from './core.js';
+import { DAY, HUMAN, SYSTEM, UserError } from './core.js';
 
 export const NOTES_SHOWN = 10;
 export const ALWAYS_MAX = 3;
@@ -121,7 +121,7 @@ export const ADVICE = ['keep', 'retire', 'decide'];
 // retires itself; and not the hub's own notices, #550) and field notes. sig changes whenever any of them does.
 export function memoryInputs(hub, p) {
   const rows = hub.q(`SELECT id, kind, body, gist, advice, author FROM notes WHERE project_id = ? AND active = 1
-    AND (kind IN ('decision', 'learning') OR (kind = 'steer' AND item_id IS NULL AND target IS NULL AND notice = 0)) ORDER BY id`).all(p.id);
+    AND (kind IN ('decision', 'learning') OR (kind = 'steer' AND item_id IS NULL AND target IS NULL AND notice = 0 AND (author = ? OR author LIKE '@%'))) ORDER BY id`).all(p.id, HUMAN);
   const sig = createHash('sha256').update(rows.map((n) => `${n.id}:${n.kind}:${n.body}`).join('\n')).digest('hex').slice(0, 16);
   return { rows, sig };
 }
@@ -129,7 +129,8 @@ export function memoryInputs(hub, p) {
 // Whether memory needs distilling: its inputs changed since the last distill, and that was an hour ago or more.
 export function distillDue(hub, p) {
   const { rows, sig } = memoryInputs(hub, p);
-  return rows.length > 0 && sig !== (p.distilled_sig ?? '') && hub.now() - (p.distilled_at ?? 0) >= DISTILL_EVERY;
+  // Steering alone (and the hub's own notices, such as an autonomy change) is already plain: nothing to distill.
+  return rows.some((n) => n.kind !== 'steer') && sig !== (p.distilled_sig ?? '') && hub.now() - (p.distilled_at ?? 0) >= DISTILL_EVERY;
 }
 
 const sourceOf = (n) => `${n.kind === 'learning' ? 'note' : n.kind} ${n.id}`;

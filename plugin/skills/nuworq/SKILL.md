@@ -52,7 +52,7 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - `ack`: Acknowledge steering, saying in one line how you are adjusting.
 - `learn`: Leave a field note for future agents: something learned the hard way (a command, a trap, a convention).
 - `retire`: In a field-notes review (next mode "tidy"): retire notes whose lesson now lives in code, the guide or a test, or merge duplicates.
-- `distill`: In a field-notes review: distill memory for people, as Direction today, a gist for each decision and field note, and a recommendation for each field note.
+- `distill`: In a field-notes review: Direction today, a gist per decision and field note, a recommendation per field note.
 - `feedback`: Tell nuworq's developers when nuworq itself got in your way: a misleading hint, a missing tool, a confusing rule.
 - `look`: Look around.
 - `signoff`: End your session; anything you hold is handed off with your note.

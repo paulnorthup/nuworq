@@ -448,7 +448,7 @@ describe('the nuworq skill is generated from the protocol', () => {
     assert.deepEqual(named, OPS.map((o) => o.name), 'every operation, and nothing that is not one');
     assert.match(text, /https:\/\/hub\.test\/agents\.md/);
     assert.match(text, /follow the hub/);
-    assert.ok(text.split('\n').length <= 60, `${text.split('\n').length} lines`);
+    assert.ok(text.split('\n').length <= 61, `${text.split('\n').length} lines`); // 61 since distill's line (#552)
   });
 
   test('it stays out of the slash menu but loads on its own (#432)', () => {

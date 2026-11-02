@@ -899,19 +899,17 @@ repeated.
 ### nuworq distill
 
 ```text
-nuworq distill: in a field-notes review: distill memory for people, as Direction
-  today, a gist for each decision and field note, and a recommendation for each
-  field note
+nuworq distill: in a field-notes review: Direction today, a gist per decision
+  and field note, a recommendation per field note
 
 Usage
   nuworq distill [flags]
 
 Flags
-  --direction <line|source>   at most 7 plain lines a person reads in a minute,
-                              each with its source
+  --direction <line|source>   at most 7 plain lines
   --notes <note|gist|recommend|why|draft>
-                              decisions and field notes, each with a one-line
-                              gist; a field note also with your recommendation
+                              field notes take recommend (default keep); why for
+                              retire or decide; draft, the decision, for decide
 
 Example
   nuworq distill --direction "Agents come first: small responses|decision 3"

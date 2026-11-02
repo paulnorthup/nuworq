@@ -314,25 +314,12 @@ export const OPS = [
   },
   {
     name: 'distill',
-    description: 'In a field-notes review: distill memory for people, as Direction today, a gist for each decision and field note, and a recommendation for each field note.',
+    description: 'In a field-notes review: Direction today, a gist per decision and field note, a recommendation per field note.',
     params: {
-      direction: {
-        type: 'array', description: 'At most 7 plain lines a person reads in a minute, each with its source.',
-        items: { type: 'object', properties: { line: s('One plain line.'), source: s('"decision 12", "steer 40", "note 7" or "#468".') }, required: ['line', 'source'] },
-      },
+      direction: { type: 'array', description: 'At most 7 plain lines.', items: { type: 'object', properties: { line: { type: 'string' }, source: s('"decision 12", "steer 40", "note 7" or "#468".') }, required: ['line', 'source'] } },
       notes: {
-        type: 'array', description: 'Decisions and field notes, each with a one-line gist; a field note also with your recommendation.',
-        items: {
-          type: 'object',
-          properties: {
-            note: { type: 'integer', description: 'The decision or field note id.' },
-            gist: s('One line a person understands without looking anything up.'),
-            recommend: { type: 'string', enum: ['keep', 'retire', 'decide'], description: 'Field notes only. Default keep.' },
-            why: s('For retire or decide: why, e.g. "the lesson is now in src/x.js".'),
-            draft: s('For decide: the decision, for a person to accept.'),
-          },
-          required: ['note', 'gist'],
-        },
+        type: 'array', description: 'Field notes take recommend (default keep); why for retire or decide; draft, the decision, for decide.',
+        items: { type: 'object', properties: { note: { type: 'integer' }, gist: s('One plain line.'), recommend: { type: 'string', enum: ['keep', 'retire', 'decide'] }, why: { type: 'string' }, draft: { type: 'string' } }, required: ['note', 'gist'] },
       },
     },
     required: [],
