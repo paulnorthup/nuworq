@@ -195,4 +195,17 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     const theirs = await build(runner, 'ci-builder', 'Built by a runner worker');
     assert.equal((await review(runner, 'ci-reviewer', theirs)).status, 200);
   });
+
+  test("only owners see people's emails (#631)", async () => {
+    const people = async (token) => { const r = await fetch(`${url}/api/people`, { headers: { authorization: `Bearer ${token}` } }); return { status: r.status, json: await r.json() }; };
+    hub.db.prepare("UPDATE people SET email = handle || '@acme.test'").run();
+    for (const who of ['mo', 'vic']) {
+      const r = await people(tok[who]);
+      assert.equal(r.status, 200, `${who} still lists people`);
+      assert.ok(r.json.length >= 3);
+      for (const p of r.json) assert.deepEqual(Object.keys(p).sort(), ['created_at', 'handle', 'name', 'role'], `${who} sees no email`);
+    }
+    const owner = await people(tok.olivia);
+    assert.equal(owner.json.find((p) => p.handle === 'mo').email, 'mo@acme.test', 'an owner does');
+  });
 });
