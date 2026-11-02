@@ -391,7 +391,9 @@ export function prClient(app, { web = 'https://github.com' } = {}) {
         const open = await app.call('GET', `/repos/${owner}/${name}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}`, null, token);
         if (open.status === 200 && open.json[0]) return shape(open.json[0]);
       }
-      throw new Error(`GitHub didn't open the pull request (${said(r)}${r.json.errors?.[0]?.message ? `; ${r.json.errors[0].message}` : ''})`);
+      // A 5xx, a 429 or a rate-limit 403 is GitHub's blip, not a refusal: the hub tries again before giving up.
+      const blip = r.status >= 500 || r.status === 429 || (r.status === 403 && /rate limit|abuse|secondary/i.test(r.json.message ?? ''));
+      throw Object.assign(new Error(`GitHub didn't open the pull request (${said(r)}${r.json.errors?.[0]?.message ? `; ${r.json.errors[0].message}` : ''})`), blip ? { transient: true } : {});
     },
     // { ready: true } when GitHub won't turn it on because the PR has nothing left to wait for: merge it instead.
     // sha (#605): the head that was reviewed; GitHub refuses if the PR's head is anything else by then.

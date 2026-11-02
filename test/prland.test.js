@@ -326,6 +326,55 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     assert.equal(w.item(1).stage, 'landing');
   });
 
+  describe('a GitHub blip while opening the PR (#742)', () => {
+    // A 502 for the first `until` tries (all of them if omitted), then the fake opens the PR.
+    const blip = (w, until = Infinity) => {
+      const real = w.hub.github.openPr;
+      let n = 0;
+      w.hub.github.pull = async () => { throw new Error('unused'); };
+      w.hub.github.openPr = async (args) => {
+        if (++n <= until) throw Object.assign(new Error("GitHub didn't open the pull request (502: Bad Gateway)"), { transient: true });
+        return real(args);
+      };
+    };
+
+    test('one 502 is retried on a later sweep: PR opened with auto-merge, no pr_failed, no land job', async () => {
+      const w = world();
+      w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+      w.build('a1');
+      blip(w, 1);
+      w.hub.humanOp('demo', 'accept', { item: '#1' });
+      await w.hub.prsSettled();
+      assert.equal(w.calls.opened.length, 0);
+      assert.equal(w.events(1, 'pr_failed').length, 0);
+      assert.equal(w.item(1).holder, 'github', 'still held by the hub');
+      assert.notEqual(w.op('a1', 'next').mode, 'land', 'no land job offered');
+      w.advance(61_000);
+      await w.hub.mergeReady();
+      await w.hub.prsSettled();
+      assert.equal(w.calls.opened.length, 1);
+      assert.equal(w.calls.auto.length, 1, 'auto-merge on');
+      assert.equal(w.events(1, 'pr_failed').length, 0);
+      assert.equal(w.item(1).holder, null);
+    });
+
+    test('an hour of failures falls back with pr_failed', async () => {
+      const w = world();
+      w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+      w.build('a1');
+      blip(w);
+      w.hub.humanOp('demo', 'accept', { item: '#1' });
+      await w.hub.prsSettled();
+      for (let i = 0; i < 59; i++) { w.advance(61_000); await w.hub.mergeReady(); await w.hub.prsSettled(); }
+      assert.equal(w.events(1, 'pr_failed').length, 0, 'still retrying inside the hour');
+      w.advance(5 * 60_000);
+      await w.hub.mergeReady();
+      await w.hub.prsSettled();
+      assert.equal(w.events(1, 'pr_failed').length, 1);
+      assert.equal(w.op('a1', 'next').mode, 'land');
+    });
+  });
+
   test("GitHub refusing the PR goes on the record and it becomes an ordinary land job", async () => {
     const w = world({ fail: 'GitHub didn\'t open the pull request (403: Resource not accessible by integration)' });
     w.hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });

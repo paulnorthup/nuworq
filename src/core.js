@@ -78,6 +78,7 @@ export const SYSTEM = 'nuworq';
 export const HANDBACKS = 3;
 const GITHUB = 'github'; // holds accepted work while the hub opens its pull request
 const PR_LEASE = 2 * MIN;
+const PR_RETRY_FOR = 60 * MIN; // how long a GitHub blip opening a pull request is retried before the work becomes a land job
 const PR_PASS = MIN; // how often the hub looks at landing work's pull requests itself (mergeReady)
 const CI_RECENT = 30 * DAY; // checks recorded this recently mean CI checks the project's pull requests (ciGated)
 const MIRROR_RETRY = 5 * MIN; // after GitHub refuses the app a token for a mirror, ask again this often
@@ -466,6 +467,7 @@ export class Hub extends EventEmitter {
     this.github = null;
     this.publicUrl = '';
     this._opening = new Map(); // item id → the pull request being opened for it
+    this._prRetry = new Map(); // item id -> when opening its PR first failed on a blip GitHub may recover from
     this._prPass = { at: 0, running: null }; // the periodic look at landing PRs (mergeReady)
     this._mergeFailed = new Map(); // item id → why GitHub last wouldn't merge its ready PR (on the record once)
     this._rebaseTried = new Map(); // item id → the PR head GitHub was last asked to rebase (#752): once per head
@@ -686,6 +688,15 @@ export class Hub extends EventEmitter {
     while (this._opening.size) await Promise.all(this._opening.values());
   }
 
+  // A blip while opening a PR (see openPr below): try again, holding the item meanwhile so no land job is offered.
+  retryPrs() {
+    for (const id of [...this._prRetry.keys()]) {
+      const item = this.itemById(id), p = item && this.q('SELECT * FROM projects WHERE id = ?').get(item.project_id);
+      if (!p || item.stage !== 'landing' || item.holder !== GITHUB) this._prRetry.delete(id);
+      else this.openPr(p, item);
+    }
+  }
+
   // The hub's own look at landing work's open pull requests, at most once a minute (the server's sweep calls
   // it): no webhook may reach the hub, and GitHub won't turn auto-merge on for a PR with nothing to wait for.
   // A PR that is ready with no auto-merge gets merged; one GitHub merged lands its item; one closed, or in
@@ -695,6 +706,7 @@ export class Hub extends EventEmitter {
     if (pass.running) return pass.running;
     if (!this.github?.pull || this.now() - pass.at < PR_PASS) return Promise.resolve(0);
     pass.at = this.now();
+    this.retryPrs();
     return (pass.running = mergeReady.call(this).finally(() => { pass.running = null; }));
   }
 
@@ -2910,6 +2922,14 @@ async function openPr(p, id) {
   try {
     pr = await this.github.openPr({ repo, head: item.branch, base, title: item.title, body: prBody.call(this, p, item) });
   } catch (e) {
+    // A 5xx, a timeout or a rate limit may pass: keep the item held and let the sweep try again, for an hour.
+    const since = this._prRetry.get(id) ?? this.now();
+    if (e.transient && this.now() - since < PR_RETRY_FOR) {
+      this._prRetry.set(id, since);
+      this.patch(this.itemById(id), { lease_until: this.now() + PR_LEASE });
+      return;
+    }
+    this._prRetry.delete(id);
     this.tx(() => {
       release();
       this.event(p, {
@@ -2919,6 +2939,7 @@ async function openPr(p, id) {
     });
     return this.changed(p);
   }
+  this._prRetry.delete(id);
   // Both pinned to the head the review accepted (#605): GitHub refuses either when the PR's head is anything else.
   const head = item.reviewed_sha;
   let moved = false;
