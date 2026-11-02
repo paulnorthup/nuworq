@@ -36,7 +36,7 @@ export function drift(hub, p) {
     // Only a group someone could submit: one already submitted (verifying) or parked on a person's question waits on others.
     if (!['ready', 'active'].includes(g.stage) || hub.q("SELECT 1 FROM questions WHERE item_id = ? AND status = 'open' AND blocking = 1").get(g.id)) continue;
     if (kids.get(g.id).every((k) => !open(k))) {
-      out.push({ key: `finished:${g.seq}:${g.stage}:${kids.get(g.id).length}`, kind: 'finished', text: `#${g.seq} "${g.title}" is still ${g.stage}, but all its parts are done or dropped: submit it or close it.` });
+      out.push({ key: `finished:${g.seq}:${g.stage}:${kids.get(g.id).length}`, kind: 'finished', text: `#${g.seq} "${g.title}" is still ${g.stage}, but all its parts are done or dropped: submit it, or ask a person whether to drop it (then refine with drop).` });
     }
   }
   // Source files each group's open parts are changing (what their holders said in progress touching, without

@@ -106,7 +106,7 @@ export const STAGES = {
   waiting:   { label: 'Waiting',   court: 'you',     blurb: 'An agent hit a question only you can answer and parked the work (it took other work meanwhile). Your answer returns it to Ready.' },
   verifying: { label: 'Verifying', court: 'review',  blurb: 'The agent says it is done and attached evidence. Someone other than the implementer checks it.' },
   landing:   { label: 'Landing',   court: 'agents',  blurb: 'Accepted, and an agent is putting it on main: rebase onto the latest main, run the checks, fast-forward main. It is done when git shows main contains it.' },
-  done:      { label: 'Done',      court: null,      blurb: 'Accepted.' },
+  done:      { label: 'Done',      court: null,      blurb: 'Landed: on main.' },
   dropped:   { label: 'Dropped',   court: null,      blurb: 'Decided not to do. Kept for the record.' },
 };
 export const OPEN_STAGES = ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'landing'];

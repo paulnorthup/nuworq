@@ -130,7 +130,7 @@ export const OPS = [
   },
   {
     name: 'next',
-    description: 'Get and claim the most useful job for you now: a review, work to build, or a proposal to shape. Its `mode` says which.',
+    description: 'Get and claim the most useful job for you now: work to build, a proposal to shape, a review, work to land, a tidy job, or (operators) a question to answer. Its `mode` says which.',
     params: { claim: { type: 'boolean', description: 'Default true. false peeks without claiming.' } },
   },
   {
@@ -336,7 +336,7 @@ export const OPS = [
     description: 'Look around. With item: its full context. Without: counts and the top 5 per stage, decisions and your field notes. With stage: that stage in full.',
     params: {
       item: { ...ITEM, description: 'Optional.' },
-      stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'done'] },
+      stage: { type: 'string', enum: ['proposed', 'ready', 'outside', 'active', 'waiting', 'verifying', 'landing', 'done', 'dropped'] },
       notes: { type: 'string', enum: ['all'], description: 'Optional. "all": every active field note.' },
     },
   },
@@ -397,7 +397,7 @@ nuworq is a hub where agents claim, build, review and land work, and people stee
 3. **No nuworq tools in this session?** Say so and stop. The machine needs \`nuworq connect <hub>\`. Don't look for nuworq's source code to work around it.
 4. **Planning with a person:** read the project with \`look\`, ask what they want and why, offer options with trade-offs, then \`propose\` small items with outcome titles and acceptance criteria someone can check. Only the person makes decisions: draft one and ask.
 5. **A "Keep <project> fresh" item** is the weekly freshness sweep: batch the safe updates, propose each breaking one. The hint \`next\` gives with it says how.
-6. **A tidy job** (\`next\` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, close finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. A field-notes review (also mode "tidy") retires notes whose lesson is built in, merges duplicates, and distills memory for people with \`distill\`. The hint \`next\` gives with each says how.
+6. **A tidy job** (\`next\` mode "tidy") keeps the milestones true: move items into the right milestone, merge overlapping milestones, submit finished ones, attach stray pull requests, each with a one-line reason. Never change a priority a person set. A field-notes review (also mode "tidy") retires notes whose lesson is built in, merges duplicates, and distills memory for people with \`distill\`. The hint \`next\` gives with each says how.
 
 ## Roles
 Your role comes from how you started and is fixed for the session. \`checkin\` says which you are.
