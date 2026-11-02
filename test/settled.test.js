@@ -80,3 +80,64 @@ describe('worth knowing only holds what you can still act on (#182)', () => {
     assert.equal(asks(view(hub, 'p')).length, 1);
   });
 });
+
+// Q204: the person's steps that landed work needs to run closed with "#648 landed", never done (#692).
+describe('steps a person still has to do outlive the work that landed (#692)', () => {
+  const STEPS = [{ do: 'Grant the GitHub App Actions: Read', where: 'https://github.com/settings/apps/nuworq/permissions', check: 'Actions shows Read' }];
+  const askAll = (hub) => {
+    hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Can you grant the app Actions: Read?', assumption: 'granted before it deploys', steps: STEPS, to: 'human' });
+    hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Tabs or spaces?', assumption: 'spaces' });
+    hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Which database?', blocking: true });
+  };
+  const card = (hub) => asks(view(hub, 'p')).find((a) => a.question.id === 1);
+
+  test('landing leaves the step-question open, as a card to act on that says the work landed; the rest settle as before', () => {
+    const hub = setup();
+    askAll(hub);
+    hub.humanOp('p', 'update', { item: '#1', stage: 'done' });
+    assert.deepEqual(qs(hub).map((q) => [q.status, q.closed_reason]), [['open', ''], ['shipped', '#1 landed'], ['withdrawn', '#1 landed']]);
+    assert.deepEqual(asks(view(hub, 'p')).map((a) => a.question.id), [1], 'only the steps show');
+    const c = card(hub);
+    assert.equal(c.level, 'act');
+    assert.deepEqual(c.steps.map((s) => s.do), [STEPS[0].do]);
+    assert.match(c.sub, /#1 landed; these steps are still to do/);
+  });
+
+  test('ticking its steps closes it as before', () => {
+    const hub = setup();
+    askAll(hub);
+    hub.humanOp('p', 'update', { item: '#1', stage: 'done' });
+    assert.equal(hub.humanOp('p', 'step', { question: 1, step: 1 }).answered, true);
+    assert.equal(qs(hub)[0].status, 'answered');
+    assert.equal(card(hub), undefined);
+  });
+
+  test('its asker can still withdraw it', () => {
+    const hub = setup();
+    askAll(hub);
+    hub.humanOp('p', 'update', { item: '#1', stage: 'done' });
+    hub.agentOp('p', 'withdraw', 'w1', { question: 1, reason: 'Paul granted it in a planning session' });
+    assert.equal(qs(hub)[0].status, 'withdrawn');
+    assert.equal(card(hub), undefined);
+  });
+
+  test('dropping the work withdraws its steps too: they were for work that never shipped', () => {
+    const hub = setup();
+    askAll(hub);
+    hub.humanOp('p', 'update', { item: '#1', stage: 'dropped' });
+    assert.deepEqual(qs(hub).map((q) => q.status), ['withdrawn', 'withdrawn', 'withdrawn']);
+    assert.equal(asks(view(hub, 'p')).length, 0);
+  });
+
+  test('a restart leaves them open', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'nuworq-settled-')), 'hub.db');
+    const hub = setup(new Hub({ file, clock: () => Date.UTC(2026, 9, 30, 9) }));
+    askAll(hub);
+    hub.humanOp('p', 'update', { item: '#1', stage: 'done' });
+    hub.db.close();
+    const again = new Hub({ file, clock: () => Date.UTC(2026, 9, 30, 10) });
+    assert.deepEqual(qs(again).map((q) => q.status), ['open', 'shipped', 'withdrawn']);
+    assert.equal(card(again).level, 'act');
+    again.db.close();
+  });
+});
