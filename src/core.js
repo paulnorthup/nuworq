@@ -1446,8 +1446,8 @@ export class Hub extends EventEmitter {
   recordUsage(p, item, agent, u, source) {
     const a = this.q('SELECT model, role FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
     const model = u.model || a?.model || '';
-    this.q(`INSERT INTO usage (project_id, item_id, agent, model, input_tokens, output_tokens, cost_usd, source, at, role)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, model, u.input_tokens, u.output_tokens, u.cost_usd, source, this.now(), a?.role ?? '');
+    this.q(`INSERT INTO usage (project_id, item_id, agent, model, input_tokens, output_tokens, cost_usd, source, at, role, turns)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, item?.id ?? null, agent, model, u.input_tokens, u.output_tokens, u.cost_usd, source, this.now(), a?.role ?? '', u.turns ?? null);
   }
 
   // One item's usage, per agent and model, with totals. Cost stays null while any part of it is unknown.

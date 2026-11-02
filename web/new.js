@@ -28,6 +28,7 @@ export const NEW = {
   breaking: '2026-10-31', // #398: an item that breaks someone says who must do what, in its drawer
   'copy-each-command': '2026-10-31', // #379: several commands in a step, each with its own Copy that copies clean
   'live-view': '2026-10-31', // #358: Settings → Anyone can watch, the project's public live page
+  'turns-per-job': '2026-11-02', // #751: analytics' Turns per job, the median turns per kind of job
   'propose-work': '2026-10-31', // #389: propose work from a project's board, one field first, the rest on demand
   'instant-actions': '2026-10-31', // #393: actions show their result on the tap, and go back if the hub refuses (the Autonomy switch)
   'present-agents': '2026-10-31', // #441: the agents here now as counts by role ("2 workers · 1 operator"), each opening to its names

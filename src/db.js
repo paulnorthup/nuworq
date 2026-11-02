@@ -652,6 +652,11 @@ export const MIGRATIONS = [
       db.exec('UPDATE prs SET opened_at = updated_at WHERE opened_at = 0');
     },
   },
+  {
+    // Turns per run (#751): read from the agent's CLI (src/usage.js tap). NULL: the CLI didn't say, not none.
+    name: 'turns per run beside its tokens and cost',
+    up(db) { addColumn(db, 'ALTER TABLE usage ADD COLUMN turns INTEGER'); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

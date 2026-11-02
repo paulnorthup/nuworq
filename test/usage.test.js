@@ -54,15 +54,15 @@ describe('usage from agent CLI output', () => {
   test('claude: the result event gives tokens (cached input included) and cost; the log keeps only the text', () => {
     const { shown, usage } = feed('claude', [...CLAUDE, 'a plain warning line']);
     assert.deepEqual(shown, ['Checking in.', 'a plain warning line']);
-    assert.deepEqual(usage, { input_tokens: 44200, output_tokens: 2500, cost_usd: 0.4215, model: 'claude-opus-5-5' });
+    assert.deepEqual(usage, { input_tokens: 44200, output_tokens: 2500, cost_usd: 0.4215, model: 'claude-opus-5-5', turns: 3 });
   });
 
   test('codex: turn.completed token counts add up, priced from the model table (#761); a model not in it is unpriced, not $0', () => {
     const { shown, usage } = feed('codex', CODEX, { model: 'gpt-5' });
     assert.deepEqual(shown, ['Working on #3.']);
     // 6000 uncached × $1.25 + 4000 cached × $0.125 + 1000 out × $10, per million.
-    assert.deepEqual({ ...usage, cost_usd: Math.round(usage.cost_usd * 1e6) / 1e6 }, { input_tokens: 10000, output_tokens: 1000, cost_usd: 0.018, model: 'gpt-5' });
-    assert.deepEqual(feed('codex', CODEX, { model: 'some-new-model' }).usage, { input_tokens: 10000, output_tokens: 1000, cost_usd: null, model: 'some-new-model' });
+    assert.deepEqual({ ...usage, cost_usd: Math.round(usage.cost_usd * 1e6) / 1e6 }, { input_tokens: 10000, output_tokens: 1000, cost_usd: 0.018, model: 'gpt-5', turns: 2 });
+    assert.deepEqual(feed('codex', CODEX, { model: 'some-new-model' }).usage, { input_tokens: 10000, output_tokens: 1000, cost_usd: null, model: 'some-new-model', turns: 2 });
     assert.equal(feed('codex', CODEX).usage.cost_usd, null, 'no model named: unpriced');
   });
 
@@ -113,6 +113,27 @@ describe('usage from agent CLI output', () => {
     assert.equal(usage.model, 'anthropic/claude-sonnet-5-5', 'named from the messages when the runner gave none');
     // On a local model pi prices it at $0: cost unknown, as for opencode.
     assert.deepEqual(feed('pi', PI, { model: 'ollama/qwen3:8b' }).usage, { input_tokens: 11000, output_tokens: 500, cost_usd: null, model: 'qwen3:8b' });
+  });
+
+  test('turns per run (#751): claude\'s num_turns, one per codex turn.completed, NULL (not 0) where the CLI gives none', () => {
+    const record = (agent, lines) => {
+      const hub = new Hub();
+      hub.tx(() => hub.project('p', { create: true }));
+      hub.agentOp('p', 'checkin', 'w1');
+      hub.agentOp('p', 'usage', 'w1', { usage: feed(agent, lines).usage });
+      return hub.q('SELECT turns FROM usage WHERE agent = ?').get('w1').turns;
+    };
+    const claude = CLAUDE.map((l) => (JSON.parse(l).type === 'result' ? JSON.stringify({ ...JSON.parse(l), num_turns: 7 }) : l));
+    assert.equal(record('claude', claude), 7);
+    assert.equal(record('codex', [...CODEX, CODEX.at(-1)]), 3);
+    assert.equal(record('opencode', OPENCODE), null);
+    assert.equal(record('pi', PI), null);
+    // Split across items like tokens: whole turns, the total kept; none stays none.
+    const parts = split({ input_tokens: 10, output_tokens: 10, cost_usd: null, model: 'm', turns: 7 }, [1, 2]);
+    assert.deepEqual(parts.map((x) => x.turns), [2, 5]);
+    assert.deepEqual(split({ input_tokens: 10, output_tokens: 10, cost_usd: null, model: 'm' }, [1, 2]).map((x) => x.turns ?? null), [null, null]);
+    assert.equal(normUsage({ input_tokens: 1, turns: '4' }).turns, 4);
+    assert.equal(normUsage({ input_tokens: 1 }).turns, undefined);
   });
 
   test('split keeps the totals exact', () => {

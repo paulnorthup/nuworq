@@ -95,6 +95,7 @@ An item names the landed work it repairs with `fixes` (on `propose` and `refine`
 | `trial` | `"down"` \| `"race"` \| null | a building job that tried a cheaper model: one tier down, or raced against the top tier |
 | `at` | number (ms) | when it was taken |
 | `result` | string | building: `landed` (accepted and on main), `escaped` (landed, and a later item repairs it), `sent_back`, `not_chosen` (a race kept another attempt), `stalled` (handed off, or its lease lapsed) or `open` (still going, or accepted and not landed yet). Any other job: `done`, `stalled` or `open` |
+| `turns` | number \| null | the turns its agent's runs took on the item from this take until its next one, as their CLIs counted them (claude's `num_turns`, codex's `turn.completed` events); null when none said (#751) |
 
 `human_actions`: what the work cost people over the same window, on any item or none.
 
@@ -153,6 +154,8 @@ For an owner deciding where agents, money and attention go: which projects need 
 `by_model`, `by_agent`: as in project outcomes, over every project's finished items in the period. `summary`: the same figures for all of them together, plus `median_wait_ms` across projects.
 
 `calibration`: whether an item's difficulty foretells its cost and attempts better than its size does, over the landed items in the period. `by_difficulty` (rote, standard, hard) and `by_size` (small, large) each give per group `{ key, landed, median_cost, mean_attempts }`, counting only items rated with it: an item without a difficulty is in no difficulty group, an unsized one in no size group (`median_cost` over priced items, null when none). `spread.difficulty` and `spread.size` give `{ cost, attempts }`: the largest group's figure over the smallest's, among groups with 3 or more landed (null with fewer than two such groups). `predicts`: `"difficulty"` or `"size"` when one spreads cost at least 1.25 times as much as the other, `"neither"` when they spread about the same, null when there is too little to tell. `landed`, `rated`, `sized`: how many landed, how many of those had a difficulty, and how many a size.
+
+`turns` (#751): per kind of job with finished jobs in the period, `{ job, jobs, recorded, median_turns }`: how many finished, how many of those recorded turns, and their median (null: not recorded).
 
 `routing` (#349): what model routing picks from. `cells`, busiest first, each `{ job, difficulty, models }`, `job` being `work`, `review`, `shape`, `land` or `tidy`; `models` per model `{ model, attempts, clean, rate, cost_per_clean }`, best rate first. An attempt is a finished job (still going, or a raced attempt not chosen, doesn't count); clean is a build that landed without being sent back or escaping, or any other job finished. `cost_per_clean` is everything its attempts cost, rework included, over the clean ones, in USD (null unless every attempt is priced). `saved_usd`: against running each cell's clean jobs on its dearest model per clean job, what the cheaper ones saved (negative when they cost more), or null when nothing is priced to compare.
 

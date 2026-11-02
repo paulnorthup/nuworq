@@ -116,3 +116,16 @@ describe('analytics', () => {
     assert.match(app, /if \(S\.analytics\) \{\n\s*await loadProjects\(\);\n\s*setState\(\{ outcomes: await data\.read\(`\/api\/outcomes\?period=\$\{encodeURIComponent\(S\.period\)\}`, \{ fresh \}\) \}\);/);
   });
 });
+
+// #751: the median turns per kind of job, a bar each on one scale; "not recorded" where no run counted turns.
+describe('turns per job', () => {
+  test('a bar per kind of job, how many it covers, and "not recorded" where none said', () => {
+    const html = page(outcomes({ turns: [{ job: 'work', jobs: 4, recorded: 3, median_turns: 40 }, { job: 'land', jobs: 2, recorded: 2, median_turns: 10 },
+      { job: 'review', jobs: 1, recorded: 0, median_turns: null }] }));
+    assert.match(html, /data-new="turns-per-job">Turns per job</);
+    assert.match(html, /Building <span class="s">3 of 4<\/span><\/dt>\s*<dd><span class="bar" style="width:100%"><\/span><\/dd><dd class="n">40</);
+    assert.match(html, /Landing <span class="s">2<\/span><\/dt>\s*<dd><span class="bar" style="width:25%"><\/span><\/dd><dd class="n">10</);
+    assert.match(html, /Reviewing <span class="s">1<\/span><\/dt>\s*<dd class="none">not recorded<\/dd>/);
+    assert.doesNotMatch(page(), /Turns per job/, 'nothing taken: no section');
+  });
+});

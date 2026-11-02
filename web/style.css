@@ -584,6 +584,7 @@ fieldset.quality .check-label b { color: var(--ink); font-weight: 600; }
 fieldset.quality input { width: auto; flex: none; margin: var(--sp-1) 0 0; }
 .an-cal .step.unrated dt { grid-column: 1 / -1; } /* items without that rating (#720): a count, no bar */
 .an-cal .step.faint .bar { opacity: .4; } /* a model with fewer than 20 attempts in its kind: routing doesn't count it yet */
+.an-cal .step dd.none { grid-column: 2 / -1; height: auto; background: none; color: var(--muted); font-size: var(--fs-2); } /* no turns recorded (#751): words, no bar */
 .d-model { margin-top: var(--sp-1); font-size: var(--fs-2); color: var(--muted); overflow-wrap: anywhere; } /* which model, and why (#349) */
 .d-sec { margin-top: var(--sp-6); }
 .d-sec > .label { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; margin-bottom: var(--sp-2); display: flex; gap: var(--sp-2); align-items: baseline; }
