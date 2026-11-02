@@ -27,7 +27,7 @@ export function seedHub({ items: total = 500, agents: crowd = 450, progress = 20
     const args = { title: `Item ${s}: ${['fix', 'build', 'shape', 'check'][s % 4]} the ${['view', 'runner', 'guide', 'hub'][s % 3]}`, acceptance: s % 11 ? `It works (${s})` : '', priority: ['now', 'soon', 'later'][s % 3] };
     if (s % 25 === 1) { hub.humanOp(SLUG, 'create', { ...args, title: `Milestone ${s}` }); milestone = s; continue; }
     if (milestone && s % 3) args.parent = `#${milestone}`;
-    if (s % 7 === 0) args.depends_on = [`#${s - 1}`];
+    if (s % 7 === 0 && s - 1 !== milestone) args.depends_on = [`#${s - 1}`]; // a part can't wait on its own milestone (#730)
     if (s % 13 === 0) args.needs = ['browser'];
     if (s % 17 === 0) args.needs = ['operator', 'infra'];
     if (s % 5 === 0) op('propose', names[s % crowd], { ...args, summary: `Proposed by an agent (${s})` });
