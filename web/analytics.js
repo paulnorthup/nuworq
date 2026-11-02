@@ -100,7 +100,7 @@ export function stallSection(list) {
   const others = rest ? `<div class="step unrated"><dt>Other causes <span class="s">${rest}</span></dt></div>` : '';
   return `<section class="sec"><header><h2 data-new="stall-causes">Why work stalled</h2><span class="count">${total}</span><span class="hint">jobs handed back or left to lapse, by cause</span></header>
     <p class="an-verdict">${verdict}</p>
-    <div class="an-lines"><dl class="funnel an-cal">${rows}${others}</dl></div></section>`;
+    <div class="an-lines"><div class="an-line"><dl class="funnel an-cal">${rows}${others}</dl></div></div></section>`;
 }
 
 const JOBS = { work: 'Building', land: 'Landing', tidy: 'Tidying', review: 'Reviewing', shape: 'Shaping' };
