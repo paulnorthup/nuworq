@@ -175,7 +175,7 @@ export function guidePage({ version = '', base = '', logo = '', favicon = '' } =
     <h4>How you know it worked</h4>${para(s.check)}</div></details></li>`;
   const essential = (e) => `<li><details id="${e.key}"><summary><span class="t"><b>${esc(e.title)}</b><span class="g">${inline(e.glance)}</span></span></summary>
     <div class="body">${e.body.map(para).join('')}</div></details></li>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>nuworq · Getting started</title>${favicon ? `<link rel="icon" href="${favicon}">` : ''}<link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/guide.css"></head>
 <body><main class="guide">
 <header><div class="brand">${logo}<span>nuworq</span></div><a class="btn primary small" href="${base}/">Open nuworq</a></header>

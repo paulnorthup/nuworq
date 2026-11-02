@@ -98,7 +98,7 @@ const SECURITY_HEADERS = {
 };
 // A page of the Connect GitHub flow that the hub serves itself: the sign-in card's look (style.css,
 // login.css, the brand), so the step between nuworq and GitHub reads like the rest of nuworq.
-const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+const flowPage = (base, title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>nuworq · ${title}</title><link rel="icon" href="${FAVICON}"><link rel="stylesheet" href="${base}/style.css"><link rel="stylesheet" href="${base}/login.css"></head>
 <body><main class="login"><div class="login-card flow-card"><div class="brand">${LOGO}<span>nuworq</span></div>
 <h1>${title}</h1>${body}</div></main></body></html>`;
@@ -503,9 +503,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     try {
       flow = sso.claim(provider, url.searchParams.get('state'), jarOf(req).get(FLOW_COOKIE));
     } catch (e) {
-      return send(400, `<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
+      return send(400, `<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>nuworq</title><p>Sign-in failed: ${e.message.replace(/[<>&"]/g, '')}. Go back to your workspace's login page and start again.`, 'text/html; charset=utf-8');
     }
-    if (!!flow.admin !== admin) return send(400, '<!doctype html><meta charset="utf-8"><title>nuworq</title><p>Sign-in failed: it was started on another address. Start again where you want to sign in.', 'text/html; charset=utf-8');
+    if (!!flow.admin !== admin) return send(400, '<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>nuworq</title><p>Sign-in failed: it was started on another address. Start again where you want to sign in.', 'text/html; charset=utf-8');
     if (admin) {
       const back = (msg) => redirect(res, `/#error=${encodeURIComponent(msg)}`);
       if (url.searchParams.get('error')) return back(`${sso.providers[provider].label} sign-in was cancelled`);
