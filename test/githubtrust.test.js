@@ -85,4 +85,29 @@ describe('GitHub events count only from those entitled to send them (#478)', () 
     assert.equal(item().rejections, before);
     assert.equal(hub.q(`SELECT COUNT(*) AS n FROM deliveries WHERE id = 'd-1'`).get().n, 1);
   });
+
+  // #727: merging counted from any branch: a merged "Fix #1 typo" from fix/typo marked #1 done and deleted its branch.
+  const merged = (number, opts) => { const e = pr(number, { ...opts, state: 'closed' }); e.pull_request.merged = true; return e; };
+  test("only the item's own branch merging lands it", async () => {
+    toLanding();
+    assert.equal((await deliver('pull_request', merged(20, { ref: 'fix/typo', title: 'Fix #1 typo' }))).state, 'merged');
+    assert.equal(item().stage, 'landing', 'another branch naming #1 merged: #1 still landing');
+    assert.equal(item().branch, BRANCH, 'and its own branch kept');
+    await deliver('pull_request', merged(21));
+    assert.equal(item().stage, 'done', 'its own branch merged: done, as before');
+  });
+
+  test("a CI-failed item's pull request lands it while it's being fixed only from its own branch", async () => {
+    const prMode = hub.prMode;
+    hub.prMode = () => true; // the hub opened its PR with auto-merge on
+    try {
+      hub.tx(() => hub.move(item(), 'active', 'claude-1', { branch: BRANCH, holder: 'claude-1' }));
+      await deliver('pull_request', pr(22, { ref: 'fix/other', title: 'Other #1' }));
+      await deliver('pull_request', merged(22, { ref: 'fix/other', title: 'Other #1' }));
+      assert.equal(item().stage, 'active', 'another branch merged: still with its builder');
+      await deliver('pull_request', pr(23));
+      await deliver('pull_request', merged(23));
+      assert.equal(item().stage, 'done', 'its own branch merged once green: done');
+    } finally { hub.prMode = prMode; }
+  });
 });
