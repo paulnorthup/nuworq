@@ -5,14 +5,30 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { generateKeyPairSync, createPublicKey, createHash, sign, verify } from 'node:crypto';
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { archive, newestSigned, packageAt, releasePackage, signatureOf, PACKAGE_NAME } from '../src/package.js';
-import { round, watch, newer, releaseItem, writeApproval, approvalOf, proposedRelease, RELEASE_BRANCH } from '../scripts/signer.js';
+import { round, watch, newer, releaseItem, writeApproval, approvalOf, proposedRelease, pinnedCommand, RELEASE_BRANCH } from '../scripts/signer.js';
 
 const SIGN = fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url));
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+// A checkout of this code at a release approved with key (#756): its own git repository, as v9.9.9, with the
+// approval in home's approvals folder. The signer's commands run from code like this, never from main.
+function approvedSigner(at, home, key) {
+  mkdirSync(at, { recursive: true });
+  for (const d of ['scripts', 'src', 'web']) cpSync(join(ROOT, d), join(at, d), { recursive: true });
+  copyFileSync(join(ROOT, 'package.json'), join(at, 'package.json'));
+  execFileSync('git', ['init', '-q', '-b', 'main', at]);
+  git(at, '-c', 'user.email=t@example.com', '-c', 'user.name=T', 'add', '-A');
+  git(at, '-c', 'user.email=t@example.com', '-c', 'user.name=T', 'commit', '-qm', 'Release v9.9.9');
+  git(at, 'config', 'user.email', 't@example.com'); git(at, 'config', 'user.name', 'T');
+  const commit = git(at, 'rev-parse', 'HEAD');
+  writeApproval(join(home, '.nuworq', 'release-approvals'), key, { tag: 'v9.9.9', commit });
+  return { repo: at, commit, script: join(at, 'scripts', 'sign-release.js') };
+}
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: { ...process.env, GIT_COMMITTER_DATE: `${stamp} +0000`, GIT_AUTHOR_DATE: `${stamp} +0000` } }).trim();
 let stamp = 1_700_000_000;
@@ -341,6 +357,8 @@ describe('the release signer (#430)', () => {
     const home = join(dir, 'home');
     const pem = join(dir, 'release-key.pem');
     writeFileSync(pem, ours.key.export({ type: 'pkcs8', format: 'pem' }));
+    // Run from a checkout at a release this key approved, as the signer must be (#756).
+    const SIGN = approvedSigner(join(dir, 'signer-code'), home, ours.key).script;
     const pkg = (c) => readFileSync(join(hubDir, `nuworq-${c}.tgz`));
     const signature = (c) => join(home, '.nuworq', 'signatures', `nuworq-${c}.tgz.sig`);
     const approve = (tag, c) => writeApproval(join(home, '.nuworq', 'release-approvals'), ours.key, { tag, commit: c });
@@ -380,6 +398,56 @@ describe('the release signer (#430)', () => {
     assert.ok(r.ok, r.out);
     assert.match(r.out, /^Signed 0\.3\.0/);
     assert.ok(verify(null, pkg(c), createPublicKey(ours.key), Buffer.from(readFileSync(signature(c), 'utf8'), 'base64')), 'GitHub\'s build, approved, on main: signed');
+  });
+
+  // #756: release, watch and approve load the release key, so they run only as a release a person approved here.
+  test('the signer runs only from a checkout at a release approved with its key, with no local changes', async () => {
+    const home = join(dir, 'home');
+    const pem = join(dir, 'release-key.pem');
+    writeFileSync(pem, ours.key.export({ type: 'pkcs8', format: 'pem' }));
+    const run = (script, ...args) => promisify(execFile)(process.execPath, [script, ...args], { cwd: repo, env: { ...process.env, HOME: home }, timeout: 20_000 })
+      .then((r) => ({ ok: true, out: r.stdout }), (e) => ({ ok: false, out: `${e.stdout}${e.stderr}` }));
+    const unreachable = 'http://127.0.0.1:9';
+    // watch only where it's refused: past the check it would sign on, every few minutes.
+    const each = (script, { watch = true } = {}) => Promise.all([
+      run(script, 'release', unreachable, pem), run(script, 'approve', 'v0.3.0', pem), ...(watch ? [run(script, 'watch', unreachable, pem, join(dir, 'dest'))] : []),
+    ]);
+    // This checkout's code, at a commit no one approved with this key: each is refused before it does anything.
+    for (const r of await each(SIGN)) {
+      assert.ok(!r.ok);
+      assert.match(r.out, /not a release approved with this key, so its code doesn't get the release key \(#756\)\. No approved release is recorded/);
+    }
+    // The same code, approved as a release: each gets past the check (and stops for reasons of its own).
+    const code = approvedSigner(join(dir, 'signer-code'), home, ours.key);
+    const [rel, appr] = await each(code.script, { watch: false });
+    assert.doesNotMatch(rel.out, /#756/);
+    assert.match(rel.out, /fetch failed|ECONNREFUSED/, 'release went on to ask the hub');
+    assert.match(appr.out, /approve needs a person at a terminal/, 'approve went on to its own check');
+    // Moved off it, or changed locally: refused again, naming the release to go back to.
+    writeFileSync(join(code.repo, 'src', 'update.js'), '// someone\'s change\n');
+    const [changed] = await each(code.script);
+    assert.match(changed.out, /is at v9\.9\.9, but its code has local changes \(1 file\(s\)/);
+    git(code.repo, 'commit', '-qam', 'main moved on');
+    const [moved] = await each(code.script);
+    assert.match(moved.out, new RegExp(`not a release approved with this key.*Check out the newest release you approved: git -C ${code.repo} checkout ${code.commit.slice(0, 12)} \\(v9\\.9\\.9\\)`));
+  });
+
+  test("the installed signer's own shell keeps it on the approved release, whatever the checkout's code says", async () => {
+    const code = approvedSigner(join(dir, 'signer-code'), join(dir, 'home'), ours.key);
+    const sh = async () => {
+      const [cmd, ...args] = pinnedCommand({ repo: code.repo, commit: code.commit, tag: 'v9.9.9', command: ['echo', 'ran'], wait: 0 });
+      return promisify(execFile)(cmd, args).then((r) => ({ ok: true, out: r.stdout }), (e) => ({ ok: false, out: e.stderr }));
+    };
+    assert.deepEqual(await sh(), { ok: true, out: 'ran\n' });
+    writeFileSync(join(code.repo, 'scripts', 'signer.js'), '// no checks here\n');
+    let r = await sh();
+    assert.ok(!r.ok);
+    assert.match(r.out, /is no longer v9\.9\.9 \(\w{7}\) as installed, or its code has local changes, so it won't run code no one approved \(#756\)/);
+    git(code.repo, 'commit', '-qam', 'main moved on');
+    r = await sh();
+    assert.ok(!r.ok, 'a new commit, however clean, is refused too');
+    const [, , , , node] = pinnedCommand({ repo: code.repo, commit: code.commit, tag: 'v9.9.9', command: ['/usr/bin/node', 'x'] });
+    assert.equal(node, '/usr/bin/node', 'the signer itself comes after the check, as its arguments');
   });
 
   test('versions compare as numbers, and a release item is found by its title', () => {

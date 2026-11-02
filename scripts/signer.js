@@ -45,7 +45,19 @@ export const newer = (a, b) => {
 export { RELEASE_BRANCH };
 
 // An approval: what the release key signs to say a person approved tag at commit. Kept as <dir>/<tag>.json.
-const approvalText = (tag, commit) => `nuworq release approval: ${tag} ${commit}\n`;
+// sign-release.js's approvedCode checks the same words before anything is imported (#756).
+export const approvalText = (tag, commit) => `nuworq release approval: ${tag} ${commit}\n`;
+
+// The signer service's command, pinned to the approved release it was installed from (#756): before node starts,
+// the service's own shell checks that repo is still at commit with no local changes to its code. The check lives
+// in the service file, not in the checkout, so a checkout moved to code no one approved can't remove it. Moved
+// off it, it says why once, waits (an hour: launchd and systemd restart what exits), and exits.
+export function pinnedCommand({ repo, commit, tag, command, wait = 3600 }) {
+  const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+  const why = `nuworq signer: ${repo} is no longer ${tag} (${commit.slice(0, 7)}) as installed, or its code has local changes, so it won't run code no one approved (#756). Check out ${tag} again, or approve the next release, check it out and run watch --install from it.`;
+  const check = `[ "$(git -C ${q(repo)} rev-parse HEAD)" = ${q(commit)} ] && [ -z "$(git -C ${q(repo)} status --porcelain --untracked-files=all -- scripts src bin web package.json)" ]`;
+  return ['/bin/sh', '-c', `${check} || { echo ${q(why)} >&2; sleep ${Number(wait)}; exit 1; }; exec "$@"`, 'nuworq-signer', ...command];
+}
 const approvalFile = (dir, tag) => join(dir, `${tag}.json`);
 export function writeApproval(dir, key, { tag, commit }, at = Date.now()) {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
