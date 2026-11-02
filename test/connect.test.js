@@ -362,11 +362,11 @@ describe('nuworq connect', () => {
   test('the plugin covers Claude Code only when installed for the account', () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-scope-')));
     const write = (installs) => { mkdirSync(join(home, '.claude', 'plugins'), { recursive: true }); writeFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'nuworq@nuworq': installs, 'other@x': [{ scope: 'user' }] } })); };
-    assert.deepEqual(pluginScopes(home), { account: false, folders: [] }, 'no plugins file');
+    assert.deepEqual(pluginScopes(home), { account: false, folders: [], installs: [] }, 'no plugins file');
     write([{ scope: 'local', projectPath: '/a' }, { scope: 'project', projectPath: '/b' }]);
-    assert.deepEqual(pluginScopes(home), { account: false, folders: ['/a', '/b'] });
+    assert.deepEqual(pluginScopes(home), { account: false, folders: ['/a', '/b'], installs: [{ scope: 'local', projectPath: '/a' }, { scope: 'project', projectPath: '/b' }] });
     write([{ scope: 'local', projectPath: '/a' }, { scope: 'user' }]);
-    assert.deepEqual(pluginScopes(home), { account: true, folders: ['/a'] });
+    assert.deepEqual(pluginScopes(home), { account: true, folders: ['/a'], installs: [{ scope: 'local', projectPath: '/a' }] });
     write({ installPath: '/old', version: '0.1.0' });
     assert.equal(pluginScopes(home).account, true, 'an entry from before scopes was the account\'s');
   });
