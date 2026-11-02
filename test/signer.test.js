@@ -1,8 +1,10 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
-import { generateKeyPairSync, createPublicKey, sign, verify } from 'node:crypto';
+import { generateKeyPairSync, createPublicKey, createHash, sign, verify } from 'node:crypto';
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -10,6 +12,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import { archive, newestSigned, packageAt, releasePackage, signatureOf, PACKAGE_NAME } from '../src/package.js';
 import { round, watch, newer, releaseItem, writeApproval, approvalOf, proposedRelease, RELEASE_BRANCH } from '../scripts/signer.js';
 
+const SIGN = fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url));
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: { ...process.env, GIT_COMMITTER_DATE: `${stamp} +0000`, GIT_AUTHOR_DATE: `${stamp} +0000` } }).trim();
 let stamp = 1_700_000_000;
@@ -330,6 +333,53 @@ describe('the release signer (#430)', () => {
     await release('0.4.0', { branch: 'side', approved: false });
     assert.match((await proposedRelease(repo, 'v0.4.0')).refusal, /isn't on origin's main/);
     assert.equal(await proposedRelease(repo, 'v9.9.9'), null);
+  });
+
+  // #603: signing by hand (sign-release.js release) checked only files inside the package the hub served, so a
+  // compromised hub could have its own build signed. It makes the signer's checks now.
+  test('a release signed by hand is GitHub\'s build of an approved tag', async () => {
+    const home = join(dir, 'home');
+    const pem = join(dir, 'release-key.pem');
+    writeFileSync(pem, ours.key.export({ type: 'pkcs8', format: 'pem' }));
+    const pkg = (c) => readFileSync(join(hubDir, `nuworq-${c}.tgz`));
+    const signature = (c) => join(home, '.nuworq', 'signatures', `nuworq-${c}.tgz.sig`);
+    const approve = (tag, c) => writeApproval(join(home, '.nuworq', 'release-approvals'), ours.key, { tag, commit: c });
+    // A hub serving bytes as its package of c; release runs in the signer's checkout, as a person would.
+    const byHand = async (c, bytes) => {
+      const s = createServer((req, res) => {
+        if (req.url !== '/api/package') return res.end(bytes);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ package: { commit: c, sha256: createHash('sha256').update(bytes).digest('hex') } }));
+      });
+      const url = `http://127.0.0.1:${await listen(s)}`;
+      try {
+        return await promisify(execFile)(process.execPath, [SIGN, 'release', url, pem], { cwd: repo, env: { ...process.env, HOME: home } })
+          .then((r) => ({ ok: true, out: r.stdout }), (e) => ({ ok: false, out: e.stderr }));
+      } finally { s.close(); s.closeAllConnections(); }
+    };
+
+    const c = await release('0.3.0', { approved: false });
+    let r = await byHand(c, pkg(c));
+    assert.ok(!r.ok, 'an unapproved tag is refused');
+    assert.match(r.out, /not signed: v0\.3\.0 isn't approved \(no one has approved it\): approve it first/);
+    approve('v0.3.0', c);
+    // The hub's own build: the same commit.txt, version, changelog and key inside, one file's bytes changed.
+    const tar = gunzipSync(pkg(c)).toString('latin1');
+    assert.ok(tar.includes('// nuworq\n'));
+    r = await byHand(c, gzipSync(Buffer.from(tar.replace('// nuworq\n', '// evil!!\n'), 'latin1')));
+    assert.ok(!r.ok, 'a package that differs from GitHub\'s build is refused');
+    assert.match(r.out, new RegExp(`not signed: the hub's package of ${c.slice(0, 7)} isn't GitHub's build of it`));
+    const side = await release('0.4.0', { branch: 'side' });
+    approve('v0.4.0', side);
+    r = await byHand(side, pkg(side));
+    assert.ok(!r.ok, 'a commit not on main is refused');
+    assert.match(r.out, new RegExp(`not signed: ${side.slice(0, 7)} isn't on origin's main`));
+    assert.ok(!existsSync(signature(c)) && !existsSync(signature(side)), 'nothing signed');
+
+    r = await byHand(c, pkg(c));
+    assert.ok(r.ok, r.out);
+    assert.match(r.out, /^Signed 0\.3\.0/);
+    assert.ok(verify(null, pkg(c), createPublicKey(ours.key), Buffer.from(readFileSync(signature(c), 'utf8'), 'base64')), 'GitHub\'s build, approved, on main: signed');
   });
 
   test('versions compare as numbers, and a release item is found by its title', () => {
