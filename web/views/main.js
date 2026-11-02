@@ -64,7 +64,7 @@ function overview() {
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}
       ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div></div>
-    ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, gs: getStarted() })}`;}
+    ${homePage(S.home, { z: z(), pulse, card: (a) => each([a], card), esc, plural, who, wide: WIDE.matches, gs: getStarted() })}`;}
 
 // ── project ──
 function project(v) {
@@ -179,11 +179,16 @@ function composer(v) {
     ${S.addWork ? proposeForm({ more: S.addMore, priority: S.drafts['nw-priority'] ?? 'soon', autonomy: v?.project.autonomy }) : ''}`;
 }
 
+// One entry that fails to render is left out and logged, and the rest draws (#781): a card can't blank the page.
+const each = (entries, draw) => entries.map((a) => {
+  try { return draw(a); } catch (e) { console.error(`nuworq: left out the entry ${a?.key ?? a?.kind} that failed to render`, e); return ''; }
+}).join('');
+
 // ── 30s: what needs you ──
 function needsYou(v) {
   const act = v.attention.filter((a) => a.level === 'act');
   const body = act.length
-    ? `<div class="cards">${act.map(card).join('')}</div>`
+    ? `<div class="cards">${each(act, card)}</div>`
     : `<div class="zero"><span class="check good">✓</span><div><b>Nothing needs you.</b> ${v.pulse.active ? 'Agents are working; you\'ll see things here when they need a decision, an answer or a verification.' : 'When agents need a decision, an answer or a verification, it shows up here.'}</div></div>`;
   return `<section class="sec"><header><h2>Needs you</h2>${act.length ? `<span class="count">${act.length}</span>` : ''}
     ${act.length ? '<span class="hint" data-new="needs-rank">most important first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
@@ -374,7 +379,7 @@ function worthKnowing(v) {
   if (!know.length) return '';
   const allKey = `wk:all:${S.slug}`;
   const shown = S.open.has(allKey) ? know : know.slice(0, WK_SHOWN);
-  const rows = shown.map((a) => {
+  const rows = each(shown, (a) => {
     const open = S.open.has(`wk:${a.key}`);
     const openBtn = `<button class="btn ghost small" data-action="toggle" data-key="wk:${esc(a.key)}" aria-expanded="${open}">${open ? 'Close' : 'Open'}</button>`;
     if (!open) {
@@ -401,7 +406,7 @@ function worthKnowing(v) {
     else if (/data-action="(open|connect|notify)"/.test(acts)) acts = acts.replace('>Got it</button>', '>Hide</button>');
     return `<div class="row-item wk-open"${a.key ? ` data-key="know:${esc(a.key)}"` : ''}><div class="body"><div class="h">${esc(a.headline)}</div><div class="s">${a.item ? refLink(a.item) + ' ' : ''}${timed(a.sub, a.sub_at, esc)}</div>
       ${a.why ? `<div class="s" style="margin-top:var(--sp-1)">${esc(a.why)}</div>` : ''}${a.how?.length ? howList(a.how) : ''}<div class="acts" style="margin-top:var(--sp-2)">${acts}</div></div><div class="acts">${openBtn}</div></div>`;
-  }).join('');
+  });
   const more = know.length > WK_SHOWN
     ? `<button class="link wk-more" data-action="toggle" data-key="${esc(allKey)}" aria-expanded="${S.open.has(allKey)}">${S.open.has(allKey) ? 'Show fewer' : `${know.length - WK_SHOWN} more`}</button>` : '';
   const all = `<button class="btn ghost small" data-action="dismiss-all" data-keys="${esc(JSON.stringify(know.map((a) => a.key)))}">Got it, all</button>`;
