@@ -3,7 +3,7 @@
 // reaches only the hub, GitHub, the project's package registries and the hosts a person added for its tests.
 // Its allowlist names the project's own test and build commands, never an interpreter (node, python3, …) that
 // would run anything. Setting names: https://code.claude.com/docs/en/sandboxing (checked 2026-11-01).
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 export const HOSTS_HINT = 'Give host names only, e.g. api.stripe.com or *.example.com, separated by commas.';
@@ -49,14 +49,32 @@ export const gitWrites = (home, name) => [
   ...(name ? [join(home, '.git', 'worktrees', name)] : []),
 ];
 
+// What an unsandboxed tool later reads from a folder a worker may write (#606): Claude Code's project settings (an
+// operator in the checkout, or the next worker in this worktree, starts with them; `nuworq operator --allow` writes
+// there), direnv's .envrc (the person's shell) and VS Code's tasks and settings.
+export const AGENT_SETTINGS = ['.claude', '.envrc', '.vscode'];
+
+// Other workers' folders in the checkout's .git/worktrees (#606), as they are when this worker starts: their
+// commondir and gitdir point the runner's unsandboxed git (its cleanup when they exit) at a config, so a worker that
+// may write the whole checkout must not write them. name: this worker's own folder, left out.
+export function otherWorktrees(home, name) {
+  try {
+    return readdirSync(join(home, '.git', 'worktrees'), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name !== name).map((d) => join(home, '.git', 'worktrees', d.name));
+  } catch { return []; }
+}
+
 // Never written, whatever else is: what git runs or reads its settings from. Exact paths, not globs: on Linux a
 // sandbox path takes only a trailing /** (code.claude.com/docs/en/settings-reference, "Sandbox settings").
 // The worktree's own .git file too: pointed at a folder of the worker's making, the runner's git there (its
-// cleanup when the worker exits) would read that folder's config.
-export const gitDenies = (home, worktree) => [
+// cleanup when the worker exits) would read that folder's config. And the agent settings in the checkout and the
+// worktree; with landsHere, where the worker may write the whole checkout, every other worker's .git/worktrees folder.
+export const gitDenies = (home, worktree, { landsHere = false } = {}) => [
   ...['hooks', 'config', 'config.lock', 'config.worktree', 'modules', 'info', 'commondir'].map((p) => join(home, '.git', p)),
   ...(worktree ? ['config.worktree', 'commondir', 'gitdir'].map((p) => join(home, '.git', 'worktrees', basename(worktree), p)) : []),
   ...(worktree ? [join(worktree, '.git')] : []),
+  ...(landsHere ? otherWorktrees(home, worktree && basename(worktree)) : []),
+  ...[home, worktree].filter(Boolean).flatMap((d) => AGENT_SETTINGS.map((f) => join(d, f))),
 ];
 
 // Claude Code's sandbox for a worker: hub is the hub's address, home the project's checkout (its .git holds the
@@ -79,7 +97,7 @@ export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = f
     },
     filesystem: {
       allowWrite: landsHere ? [home] : gitWrites(home, worktree && basename(worktree)),
-      denyWrite: gitDenies(home, worktree),
+      denyWrite: gitDenies(home, worktree, { landsHere }),
       denyRead: DENY_READ,
       ...(tokenFile ? { allowRead: [tokenFile] } : {}),
     },
@@ -101,7 +119,7 @@ export function filePermissions({ home, worktree, cwd = worktree ?? home, landsH
     allow: ['Read', 'Glob', 'Grep', ...writable.map((p) => rule('Edit', `${p}/**`))],
     deny: [
       ...DENY_READ.flatMap((p) => [...tree('Read', p), ...tree('Edit', p)]),
-      ...gitDenies(home, worktree).flatMap((p) => tree('Edit', p)),
+      ...gitDenies(home, worktree, { landsHere }).flatMap((p) => tree('Edit', p)),
     ],
   };
 }

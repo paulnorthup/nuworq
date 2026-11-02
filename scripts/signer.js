@@ -104,6 +104,24 @@ async function builtFrom(repo, commit, bytes) {
   }
 }
 
+// Why a person signing by hand (sign-release.js release) mustn't sign bytes, the hub's package of commit, as tag:
+// '' when they may (#603). The checks a round makes, never the hub's word nor files inside the package it serves:
+// origin's tag is on that commit, the commit is on origin's main, a person approved the tag at it here, and the
+// bytes are GitHub's build of it. commit may be the hub's short form; the tag's full commit is what's checked.
+export async function handRefusal(repo, { tag, commit, bytes, key, approvals }) {
+  let tags;
+  try { tags = await releaseTags(repo); } catch (e) { return `couldn't read origin's main and tags from ${repo} (${e.message.split('\n')[0]}): run it in a checkout of nuworq whose origin is GitHub`; }
+  const t = tags.find((x) => x.tag === tag);
+  const short = commit.slice(0, 7);
+  if (!t) return `origin has no ${tag} tag: sign a release only once its item has landed and the hub tagged it`;
+  if (!t.commit.startsWith(commit)) return `${tag} is ${t.commit.slice(0, 7)} on origin, not ${short} as the hub serves: wait until the hub runs ${tag}, then sign`;
+  if (!(await git(repo, ['merge-base', '--is-ancestor', t.commit, MAIN]).then(() => true, () => false))) return `${short} isn't on origin's main`;
+  const unapproved = approvalOf(approvals, key, tag, t.commit);
+  if (unapproved) return `${tag} isn't approved (${unapproved}): approve it first, at a terminal: node scripts/sign-release.js approve ${tag} <release-key.pem>`;
+  if (!(await builtFrom(repo, t.commit, bytes))) return `the hub's package of ${short} isn't GitHub's build of it, so it isn't signed`;
+  return '';
+}
+
 // Why the plugin's branch mustn't move to t, the release the hub says it serves: '' when it may. t must be on
 // origin's main, and approved here or signed by key: the hub's package of it and its .sig, checked by us, and the
 // package must be GitHub's build of t.commit, so a hub can't replay another release's signed package under its name.

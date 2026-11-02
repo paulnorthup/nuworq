@@ -51,7 +51,7 @@ describe('the weekly guide walk-through (#386)', () => {
     assert.match(w.summary, /Connect asks which workspace \(#400\)/);
     assert.match(w.summary, /src\/connect\.js/);
     assert.doesNotMatch(w.summary, /#401|README/, 'only what touched a covered area');
-    for (const part of [/Follow \/guide/, /fresh workspace/, /375px/, /fixed on this branch/, /npm test passes/, /its own proposal/, /guide matches/]) assert.match(w.acceptance, part);
+    for (const part of [/Follow \/guide/, /fresh workspace/, /375px/, /fixed on this branch/, /npm test passes/, /its own proposal/, /guide matches/, /node scripts\/setup-walkthrough\.js[\s\S]*every target met[\s\S]*docs\/evals\/setup\.md/]) assert.match(w.acceptance, part);
     walkthrough(hub);
     assert.equal(walks().length, 1, 'once a week, not every tick');
   });

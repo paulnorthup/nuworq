@@ -18,13 +18,16 @@ export const COVERED = [
   'src/workspaces.js', // sign-in, workspaces and invites
   'src/ghapp.js', // connecting GitHub
   'src/connect.js', 'bin/nuworq.js', // install, connect and the CLI
+  'src/setup.js', // connect's questions: the plugin, staffing, an operator, then the shaper (#490)
   'src/runner.js', // nuworq run
+  'scripts/setup-walkthrough.js', // the setup, measured against docs/evals/setup.md's targets (#492)
 ];
 
 const MAX_LISTED = 10;
 
 const ACCEPTANCE = [
   '- Follow /guide from the first step on a fresh workspace (a hub with no data, not the demo), in a browser at 375px and at desktop width, doing each step as a new user would.',
+  '- Run node scripts/setup-walkthrough.js: it times and counts the setup from a signed-in workspace to the three sessions, and must end with every target met. Record its numbers in docs/evals/setup.md, and compare each step\'s words with the guide\'s.',
   '- Every step that no longer matches is fixed on this branch: the guide when it is out of date, the product when it is what\'s wrong. npm test passes.',
   '- Anything bigger than a fix is its own proposal, saying which step it affects, instead of being done here.',
   '- Evidence: the steps you followed, where they differed and what you changed, with 375px and desktop screenshots. Nothing differed: submit "guide matches" with the screenshots.',

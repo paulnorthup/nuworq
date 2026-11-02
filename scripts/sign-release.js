@@ -8,7 +8,9 @@
 //                                                      as ~/.nuworq/signatures/nuworq-<commit>.tgz.sig, and copied
 //                                                      beside it with scp.
 //                                                      Run it in a checkout of nuworq: the package must be a
-//                                                      release, its version tagged vX.Y.Z on that commit (#400)
+//                                                      release, its version tagged vX.Y.Z on that commit (#400),
+//                                                      on origin's main, approved (approve, below), and GitHub's
+//                                                      own build of it, as the signer checks (#603)
 //   node scripts/sign-release.js watch <hub> <release-key.pem> <scp destination> [--install]
 //                                                      every few minutes, sign each new vX.Y.Z tag on origin's main
 //                                                      that a person approved, built from GitHub (scripts/signer.js,
@@ -59,17 +61,19 @@ if (cmd === 'keygen' && a) {
     throw new Error(`${short} doesn't carry this key's release-key.pub, so installs would refuse it: commit release-key.pub to main and let the hub run it first`);
   }
   // A release is a version (#400): its package.json version, tagged vX.Y.Z on this very commit, with its
-  // CHANGELOG.md entry first. The tag comes from origin (the hub tags a release once it lands), into the
-  // checkout this runs in.
+  // CHANGELOG.md entry first.
   const version = versionOf(fileInTarball(bytes, 'package.json'));
   if (!version) throw new Error(`${short}'s package.json has no version (X.Y.Z), so it isn't a release`);
   const tag = `v${version}`;
-  try { execFileSync('git', ['fetch', '-q', 'origin', 'tag', tag], { stdio: 'ignore', timeout: 30_000 }); } catch {}
-  let tagged = '';
-  try { tagged = execFileSync('git', ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}^{commit}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch {}
-  if (!tagged) throw new Error(`${short} says it is ${version}, but there is no ${tag} tag (looked in this checkout and its origin): sign a release only once its item has landed and the hub tagged it`);
-  if (!tagged.startsWith(p.commit) && !p.commit.startsWith(tagged)) throw new Error(`${tag} is ${tagged.slice(0, 7)}, not ${short} as the hub serves: wait until the hub runs ${tag}, then sign`);
   if (changelogEntry(fileInTarball(bytes, 'CHANGELOG.md'), version, { first: true }) == null) throw new Error(`${short}'s CHANGELOG.md doesn't begin with ${version} (a "## ${version}" heading first), so installs couldn't say what changed`);
+  // Everything above reads the hub's own package, which a compromised hub writes. So, as the signer does (#603):
+  // origin's tag on this commit, on origin's main, approved here with this key, and the bytes GitHub's build of it.
+  const { repoRoot } = await import('../src/client.js');
+  const { handRefusal } = await import('./signer.js');
+  const repo = repoRoot(process.cwd());
+  if (!repo) throw new Error('run release in a checkout of nuworq: it checks the package against GitHub\'s build of the release tag');
+  const refused = await handRefusal(repo, { tag, commit: p.commit, bytes, key, approvals: await approvalsDir() });
+  if (refused) throw new Error(`not signed: ${refused}`);
   // Into a folder of its own, not the checkout it runs in, so a signature never ends up in a commit.
   const sigs = join(homedir(), '.nuworq', 'signatures');
   mkdirSync(sigs, { recursive: true });
