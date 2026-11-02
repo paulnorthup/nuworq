@@ -36,10 +36,11 @@ export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.aws', '~/.config/gh', '~/.c
   '~/.mozilla', '~/.config/google-chrome', '~/.config/chromium', '~/.config/BraveSoftware', '~/.config/microsoft-edge'];
 
 // A project's extra hosts, as a person gives them: a list, or names split by commas or spaces. Host names only
-// ("api.example.com", "*.example.com", "localhost:8080"), never a URL or a path.
+// ("api.example.com", "*.example.com", "localhost:8080"), never a URL or a path. A wildcard covers a domain, never a
+// whole top-level one ("*.com"). The runner checks what the hub sends with this too (#624).
 export function sandboxHosts(v) {
   const list = (Array.isArray(v) ? v : String(v ?? '').split(/[\s,]+/)).map((h) => String(h ?? '').trim().toLowerCase()).filter(Boolean);
-  const bad = list.filter((h) => !/^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/.test(h));
+  const bad = list.filter((h) => !/^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/.test(h) || /^\*\.[^.]+$/.test(h));
   if (bad.length) throw Object.assign(new Error(`${bad.join(', ')} ${bad.length === 1 ? "isn't a host name" : "aren't host names"}`), { hint: HOSTS_HINT });
   return [...new Set(list)];
 }
