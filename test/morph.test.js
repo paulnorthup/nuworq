@@ -193,6 +193,21 @@ describe('a live update redraws only the sections whose markup changed (#682)', 
     assert.match(parsed[0], /<p>36s<\/p>/, 'a plain 36s is a real change');
   });
 
+  // #747: widening the window put the unchanged pulse and Flow inside a new <aside>, as <!--same:…--> stand-ins
+  // nothing drew, so the side column was empty until a reload.
+  test('one column becoming two, and back, draws every section once, the unchanged ones too', () => {
+    const { root } = page('');
+    const memory = new Map();
+    const s = { pulse: sec('pulse', '<div class="pulse">2 things need you</div>'), composer: sec('composer', '<div class="composer">Steer</div>'),
+      needs: sec('needs', '<section class="sec"><div class="card">Verify #3</div></section>'), flow: sec('flow', '<section class="sec"><h2>Flow</h2></section>') };
+    const narrow = s.pulse + s.needs + s.composer + s.flow;
+    const wide = `<div class="cols"><div class="col-main">${s.composer}${s.needs}</div><aside class="col-side">${s.pulse}${s.flow}</aside></div>`;
+    for (const html of [narrow, wide, narrow, wide, wide]) {
+      morph(root, html, { memory });
+      assert.equal(root.innerHTML, html, 'the page reads as its markup, every section in it once');
+    }
+  });
+
   test('the project page marks its sections, and the page region paints with a memory of them', () => {
     assert.match(readFileSync(new URL('../web/views/main.js', import.meta.url), 'utf8'), /<!--sec:\$\{k\}-->\$\{s\[k\]\}<!--\/sec:\$\{k\}-->/);
     assert.match(appSource(), /paint\(el, mainHtml\(\), mainSections\)/);

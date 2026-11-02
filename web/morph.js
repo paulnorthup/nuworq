@@ -112,11 +112,28 @@ function morphChildren(from, to, own) {
       used.add(match);
       morphNode(match, n, own);
     } else {
-      from.insertBefore(n, cur); // n leaves the parsed markup: nothing to copy
+      from.insertBefore(drawn(n, own), cur); // n leaves the parsed markup: nothing to copy
     }
   }
   settle();
   while (cur) { const next = cur.nextSibling; if (!used.has(cur)) from.removeChild(cur); cur = next; }
+}
+
+// A new element put in whole may hold sections the same as last time, whose old nodes are elsewhere: one column
+// becoming two puts Flow and the pulse inside a new <aside> (#747). Its <!--same:K--> stand-ins are drawn from
+// their markup, or the column would show nothing.
+function drawn(n, own) {
+  if (n.nodeType !== ELEMENT || !own.same.size) return n;
+  const stand = [];
+  const walk = (x) => { for (let c = x.firstChild; c; c = c.nextSibling) if (own.same.has(sameKey(c))) stand.push(c); else walk(c); };
+  walk(n);
+  for (const m of stand) {
+    const t = m.ownerDocument.createElement('template');
+    t.innerHTML = own.same.get(sameKey(m));
+    for (const c of kids(t.content)) m.parentNode.insertBefore(c, m);
+    m.parentNode.removeChild(m);
+  }
+  return n;
 }
 
 function morphNode(from, to, own) {
