@@ -155,6 +155,30 @@ describe('a tidy job reviews the field notes (#443)', () => {
     assert.equal((review().summary.match(/^- note /gm) ?? []).length, 34, 'with every note it listed');
   });
 
+  test('the review reads cleanly in the drawer: a full first sentence, "Then…" only after the tidy part, lists that render (#719)', async () => {
+    const { md } = await import('../web/views/html.js');
+    const { hub, human, tick } = setup();
+    human('decide', { body: 'Zero runtime dependencies: Node 24+ and its built-in SQLite only.' });
+    tick(60 * 60_000);
+    const review = () => hub.q('SELECT summary FROM items WHERE notes_review = 1 AND stage = ?').get('ready')?.summary;
+    hub.tidyAll(); // the sweep opens the review: memory to distill, no note old enough yet
+    const alone = review();
+    assert.match(alone, /^Distill memory for people with distill: /, 'no leading blank line, no "Then" with nothing before it');
+    assert.doesNotMatch(alone, /^\* /m, 'lists use "- "');
+    assert.match(alone, /\n\n- decision \d+: Zero runtime dependencies/);
+    const html = md(alone);
+    assert.match(html, /^<p>Distill memory/);
+    assert.match(html, /<ul><li>decision \d+: Zero runtime dependencies[^<]*<\/li><li>field notes without a gist: /, 'the list renders as a list');
+
+    human('update', { item: '#2', stage: 'done' });
+    hub.tidyAll();
+    const both = review();
+    assert.match(both, /^Tidy these field notes: .*\n\n- note \d+ \(about #2\), #2 landed: Storage timeouts.*\n\nThen distill memory for people/s, 'the notes first, then the distill part');
+    const parts = md(both);
+    assert.equal((parts.match(/<ul>/g) ?? []).length, 2, 'both lists render');
+    assert.doesNotMatch(parts, /<br>- |<br>\* /, 'no raw bullets');
+  });
+
   test('only a review retires notes', () => {
     const { agent, ids } = setup();
     agent('checkin', 'a2');
