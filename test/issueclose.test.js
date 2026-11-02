@@ -8,27 +8,31 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Hub } from '../src/core.js';
 import { GitHubApp } from '../src/ghapp.js';
-import { takeIssue, closeLanded, PR_GRACE } from '../src/issues.js';
+import { takeIssue, closeLanded, PR_GRACE, RETRY_FIRST } from '../src/issues.js';
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const PEM = privateKey.export({ type: 'pkcs8', format: 'pem' });
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 const issue = (number) => ({ number, title: `Issue ${number}`, body: '', state: 'open', labels: [], author_association: 'OWNER', html_url: `https://github.com/acme/api/issues/${number}` });
 
-// GitHub's issues API for acme/api: each issue's state, and every call the hub makes. down: answer 500.
+// GitHub's issues API for acme/api: each issue's state, and every call the hub makes (minting included, in
+// requests). down: answer 500. locked: issues whose close GitHub refuses (403). limit: headers for one 429.
 function github() {
-  const state = { issues: new Map(), calls: [], down: false };
+  const state = { issues: new Map(), calls: [], requests: 0, down: false, locked: new Set(), limit: null };
   const server = http.createServer(async (req, res) => {
-    const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+    const json = (status, b, headers = {}) => { res.writeHead(status, { 'content-type': 'application/json', ...headers }); res.end(JSON.stringify(b)); };
     let raw = '';
     for await (const c of req) raw += c;
+    state.requests++;
     if (req.method === 'GET' && req.url === '/repos/acme/api/installation') return json(200, { id: 42 });
     if (req.method === 'POST' && req.url === '/app/installations/42/access_tokens') return json(201, { token: 'ghs_issues', expires_at: '2026-10-29T13:00:00Z' });
     const m = req.url.match(/^\/repos\/acme\/api\/issues\/(\d+)(\/comments)?$/);
     if (!m || req.headers.authorization !== 'Bearer ghs_issues') return json(404, { message: 'Not Found' });
     const n = Number(m[1]);
     state.calls.push({ method: req.method, number: n, ...(m[2] ? { comment: JSON.parse(raw).body } : {}), ...(req.method === 'PATCH' ? { body: JSON.parse(raw) } : {}) });
+    if (state.limit) { const h = state.limit; state.limit = null; return json(429, { message: 'API rate limit exceeded' }, h); }
     if (state.down) return json(500, { message: 'Server Error' });
+    if (req.method === 'PATCH' && state.locked.has(n)) return json(403, { message: 'Issue is locked' });
     if (req.method === 'GET') return json(200, { number: n, state: state.issues.get(n) ?? 'open' });
     if (req.method === 'POST' && m[2]) return json(201, { id: 5000 + state.calls.length });
     if (req.method === 'PATCH') { state.issues.set(n, JSON.parse(raw).state); return json(200, { number: n, state: JSON.parse(raw).state }); }
@@ -46,7 +50,7 @@ describe('an issue-linked item closes its GitHub issue when it lands', () => {
 
   beforeEach(async () => {
     gh = github();
-    app = new GitHubApp({ id: 1, key: PEM, api: `http://127.0.0.1:${await listen(gh.server)}` });
+    app = new GitHubApp({ id: 1, key: PEM, api: `http://127.0.0.1:${await listen(gh.server)}`, now: () => now });
     repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-issueclose-')));
     git = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     git(repo, 'init', '-q', '-b', 'main');
@@ -143,6 +147,8 @@ describe('an issue-linked item closes its GitHub issue when it lands', () => {
 
     gh.state.down = false;
     gh.state.calls = [];
+    assert.deepEqual(await closeLanded(hub, p, app), { closed: 0 }, 'not yet: the first retry is a minute later');
+    now += RETRY_FIRST;
     assert.deepEqual(await closeLanded(hub, p, app), { closed: 1 });
     assert.deepEqual(changes().map((c) => c.method), ['POST', 'PATCH']);
     assert.deepEqual(row(7), { state: 'closed', close_error: '', landed_comment: row(7).landed_comment });
@@ -162,8 +168,77 @@ describe('an issue-linked item closes its GitHub issue when it lands', () => {
     gh.server.removeAllListeners('request');
     gh.server.on('request', orig);
     gh.state.calls = [];
+    now += RETRY_FIRST;
     await closeLanded(hub, p, app);
     assert.deepEqual(changes().map((c) => c.method), ['PATCH']);
+  });
+
+  // Issue #N comes in as an item that is done, ready to close.
+  const doneIssue = (n) => {
+    hub.tx(() => takeIssue(hub, p, 'github.com/acme/api', issue(n)));
+    hub.humanOp('demo', 'update', { item: `#${hub.q('SELECT i.seq FROM issues s JOIN items i ON i.id = s.item_id WHERE s.number = ?').get(n).seq}`, stage: 'done' });
+  };
+  const tries = (n) => hub.q('SELECT close_tries FROM issues WHERE number = ?').get(n).close_tries;
+
+  test("an issue GitHub won't close is tried less and less: at most a dozen times in an hour of sweeps, and a pass that tries nothing changes nothing", async () => {
+    doneIssue(7);
+    gh.state.locked.add(7);
+    let changed = 0;
+    const was = hub.changed.bind(hub);
+    hub.changed = (...a) => { changed++; return was(...a); };
+    let passes = 0, quiet = 0;
+    for (const end = now + 3_600_000; now < end; now += 15_000) {
+      const calls = gh.state.calls.length, before = changed;
+      await closeLanded(hub, p, app);
+      passes++;
+      if (gh.state.calls.length === calls) { quiet++; assert.equal(changed, before, 'a pass that tried nothing changes nothing'); }
+    }
+    const closes = gh.state.calls.filter((c) => c.method === 'PATCH').length;
+    assert.equal(passes, 240, 'every 15 s for an hour, as the server sweeps');
+    assert.ok(closes <= 12, `${closes} tries in an hour`);
+    assert.equal(closes, 6, 'at 0, 1, 3, 7, 15 and 31 minutes');
+    assert.equal(quiet, passes - closes);
+    assert.equal(tries(7), 6);
+    assert.equal(gh.state.calls.filter((c) => c.method === 'POST').length, 1, 'the landed comment went once');
+  });
+
+  test('after a day of failures the hub stops trying that issue and says so once on the item', async () => {
+    doneIssue(7);
+    gh.state.locked.add(7);
+    const start = now;
+    for (const end = now + 26 * 3_600_000; now < end; now += 60_000) await closeLanded(hub, p, app);
+    const said = hub.q(`SELECT headline, summary FROM events WHERE type = 'issue_close_failed' ORDER BY id`).all();
+    assert.equal(said.length, 2, 'the first failure, and the giving up');
+    assert.match(said[0].headline, /couldn't close .*after #1 landed: GitHub didn't close it \(403\)/);
+    assert.match(said[1].headline, /stopped trying to close https:\/\/github\.com\/acme\/api\/issues\/7: it failed for a day/);
+    assert.match(said[1].summary, /Close it on GitHub by hand/);
+    const last = gh.state.calls.length;
+    assert.ok(tries(7) <= 16, `${tries(7)} tries in a day`);
+    now = start + 30 * 24 * 3_600_000;
+    await closeLanded(hub, p, app);
+    assert.equal(gh.state.calls.length, last, 'given up: no more calls, even a month later');
+    assert.equal(item(1).stage, 'done');
+    assert.equal(row(7).state, 'open');
+  });
+
+  test("a rate limit GitHub answers holds every call for the installation until it resets, and isn't held against the other issues", async () => {
+    doneIssue(7);
+    doneIssue(8);
+    gh.state.limit = { 'retry-after': '120' };
+    assert.deepEqual(await closeLanded(hub, p, app), { closed: 0 });
+    assert.deepEqual(gh.state.calls.map((c) => [c.method, c.number]), [['GET', 7]], "#7's look got the 429; #8 waited without a call");
+    assert.deepEqual([tries(7), tries(8)], [1, 0]);
+
+    const requests = gh.state.requests;
+    now += RETRY_FIRST; // #7 is due again, but the limit runs another minute
+    assert.deepEqual(await closeLanded(hub, p, app), { closed: 0 });
+    await assert.rejects(app.mint('github.com/acme/api'), (e) => e.status === 429 && e.rateLimited && /rate limit/.test(e.message));
+    assert.equal(gh.state.requests, requests, 'nothing went to GitHub, not even for a token');
+    assert.deepEqual([tries(7), tries(8)], [1, 0], 'waiting is not failing');
+
+    now += 61_000;
+    assert.deepEqual(await closeLanded(hub, p, app), { closed: 2 });
+    assert.deepEqual([row(7).state, row(8).state], ['closed', 'closed']);
   });
 
   test('items with no issue make no GitHub calls', async () => {

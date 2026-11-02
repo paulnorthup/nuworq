@@ -612,6 +612,19 @@ export const MIGRATIONS = [
     name: 'landing merges only the reviewed head',
     up(db) { addColumn(db, "ALTER TABLE items ADD COLUMN reviewed_sha TEXT NOT NULL DEFAULT ''"); },
   },
+  {
+    // GitHub calls back off (#739): an issue the hub couldn't close, and a reporter question it couldn't post, are
+    // tried less and less often: failures in a row, when to try next, and since when it has failed (0: not failing).
+    name: 'failed GitHub closes and reporter questions back off',
+    up(db) {
+      addColumn(db, 'ALTER TABLE issues ADD COLUMN close_tries INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'ALTER TABLE issues ADD COLUMN close_next INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'ALTER TABLE issues ADD COLUMN close_since INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'ALTER TABLE questions ADD COLUMN issue_tries INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'ALTER TABLE questions ADD COLUMN issue_next INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'ALTER TABLE questions ADD COLUMN issue_since INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

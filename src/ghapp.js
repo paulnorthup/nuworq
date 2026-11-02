@@ -16,6 +16,19 @@ export const CLONE_PERMISSIONS = { contents: 'read', metadata: 'read' };
 
 const b64 = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url');
 
+// Until when GitHub's rate limit stops calls for an installation (#739), from one answer: a 403 or 429 that says
+// when to come back (retry-after, in seconds), or that none of the hour's calls are left (x-ratelimit-remaining 0,
+// until x-ratelimit-reset). 0 when the answer isn't a rate limit. Never past an hour, GitHub's longest window.
+export function limitUntil(status, headers, now) {
+  if (status !== 403 && status !== 429) return 0;
+  const get = (h) => headers?.get?.(h) ?? headers?.[h] ?? null;
+  const after = Number(get('retry-after'));
+  if (get('retry-after') !== null && after > 0) return now + Math.min(after, 3600) * 1000;
+  if (get('x-ratelimit-remaining') !== '0') return 0;
+  const reset = Number(get('x-ratelimit-reset')) * 1000;
+  return reset > now ? Math.min(reset, now + 3600_000) : now + 60_000;
+}
+
 // Every page of a GitHub list, 100 at a time (at most 50 pages). what: what is listed, for the error.
 async function pages(what, get, pick) {
   const out = [];
@@ -92,6 +105,33 @@ export class GitHubApp {
     this.api = api.replace(/\/+$/, '');
     this.web = web.replace(/\/+$/, '');
     this.now = now;
+    // GitHub's rate limit per installation (#739): installation id → until when; which installation each repository
+    // ("owner/name") and each token the hub minted belongs to. Shared with every scoped() view of the app.
+    this._limits = new Map();
+    this._repoInst = new Map();
+    this._tokenInst = new Map();
+  }
+
+  // Throws, without calling GitHub, while installation inst is rate limited: a UserError (429) saying until when.
+  waitLimit(inst) {
+    const until = this._limits.get(inst) ?? 0;
+    if (until <= this.now()) return;
+    throw Object.assign(new UserError(`GitHub's rate limit for this installation runs until ${new Date(until).toISOString().slice(11, 16)} UTC; the hub waits until then`, {
+      status: 429, hint: 'Nothing to do: the hub calls GitHub again after that.',
+    }), { rateLimited: true, until });
+  }
+
+  // Remembers a rate limit GitHub answered for installation inst (limitUntil).
+  noteLimit(inst, r) {
+    const until = limitUntil(r.status, r.headers, this.now());
+    if (inst && until > (this._limits.get(inst) ?? 0)) this._limits.set(inst, until);
+  }
+
+  // A token the hub minted for installation inst, so call() can tell which installation it spends; expired ones go.
+  ownToken(token, inst, expiresAt) {
+    const t = this.now();
+    for (const [k, v] of this._tokenInst) if (v.until <= t) this._tokenInst.delete(k);
+    this._tokenInst.set(token, { inst, until: Date.parse(expiresAt) || t + 3600_000 });
   }
 
   // Whether the person who just installed the app can see installation id, by their own word to GitHub:
@@ -152,14 +192,20 @@ export class GitHubApp {
     return true;
   }
 
+  // With an installation token the hub minted, nothing goes to GitHub while that installation is rate limited,
+  // and an answer that says it is starts the wait (#739).
   async call(method, path, body, token = this.jwt()) {
+    const inst = this._tokenInst.get(token)?.inst;
+    if (inst) this.waitLimit(inst);
     const r = await fetch(`${this.api}${path}`, {
       method,
       headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'nuworq', ...(body ? { 'content-type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(10_000),
     });
-    return { status: r.status, json: await r.json().catch(() => ({})) };
+    const out = { status: r.status, json: await r.json().catch(() => ({})), headers: r.headers };
+    if (inst) this.noteLimit(inst, out);
+    return out;
   }
 
   // A metadata-only token for one installation, reused until 5 minutes before it expires (memory only).
@@ -170,6 +216,7 @@ export class GitHubApp {
     const tok = await this.call('POST', `/app/installations/${id}/access_tokens`, { permissions: { metadata: 'read' } });
     if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for installation ${id} (${tok.status})`, { status: 502 });
     this._inst.set(id, { token: tok.json.token, expires_at: tok.json.expires_at });
+    this.ownToken(tok.json.token, id, tok.json.expires_at);
     return tok.json.token;
   }
 
@@ -217,6 +264,9 @@ export class GitHubApp {
     const m = String(repo).match(/^github\.com\/([^/]+)\/([^/]+)$/);
     if (!m) throw new UserError(`${repo || 'This project'} isn't a GitHub repository, so there is no GitHub token for it`, { hint: 'Link the project to its GitHub repository (github.com/owner/name).' });
     const [, owner, name] = m;
+    // A repository whose installation is rate limited waits without asking GitHub anything (#739).
+    const known = this._repoInst.get(`${owner}/${name}`.toLowerCase());
+    if (known) this.waitLimit(known);
     const inst = await this.call('GET', `/repos/${owner}/${name}/installation`);
     if (inst.status === 404) {
       throw new UserError(`The nuworq GitHub App isn't installed on ${owner}/${name} (or was uninstalled), so the hub can't give out tokens for it`, {
@@ -230,13 +280,18 @@ export class GitHubApp {
         status: 403, hint: `An owner of ${owner} installs the app for this workspace, starting from its Connect page, so the hub knows the installation is yours.`,
       });
     }
+    this._repoInst.set(`${owner}/${name}`.toLowerCase(), inst.json.id);
+    this.waitLimit(inst.json.id);
     const tok = await this.call('POST', `/app/installations/${inst.json.id}/access_tokens`, { repositories: [name], permissions });
+    this.noteLimit(inst.json.id, tok);
+    this.waitLimit(inst.json.id);
     if (tok.status === 403 || tok.status === 404) {
       throw new UserError(`GitHub refused a token for ${owner}/${name}: the app's installation there is suspended or removed`, {
         status: 424, hint: `An owner of ${owner} re-enables it: ${this.installUrl()}.`,
       });
     }
     if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for ${owner}/${name} (${tok.status}${tok.json.message ? `: ${tok.json.message}` : ''})`, { status: 502 });
+    this.ownToken(tok.json.token, inst.json.id, tok.json.expires_at);
     return { token: tok.json.token, expires_at: tok.json.expires_at, repo: `github.com/${owner}/${name}` };
   }
 

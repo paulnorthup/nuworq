@@ -23,7 +23,7 @@ const issue = { number: 7, title: 'Export is slow', body: 'It takes a minute.', 
 
 // GitHub as far as this uses it: a token for the installation, and comments on issues (ids that only grow).
 function github() {
-  const state = { comments: [], refuse: false };
+  const state = { comments: [], refuse: false, tries: 0 };
   const server = http.createServer(async (req, res) => {
     const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
     let raw = '';
@@ -32,6 +32,7 @@ function github() {
     if (req.method === 'POST' && req.url === '/app/installations/42/access_tokens') return json(201, { token: 'ghs_t', expires_at: new Date(Date.now() + HOUR).toISOString() });
     let m;
     if (req.method === 'POST' && (m = req.url.match(/^\/repos\/acme\/api\/issues\/(\d+)\/comments$/))) {
+      state.tries++;
       if (state.refuse) return json(502, { message: 'down' });
       state.comments.push({ number: Number(m[1]), body: JSON.parse(raw).body });
       return json(201, { id: 5000 + state.comments.length });
@@ -157,9 +158,31 @@ describe('ask to: "reporter" puts the question on the GitHub issue', () => {
     assert.equal(question().issue_comment, 0);
     assert.equal(stage(2), 'waiting');
     gh.state.refuse = false;
-    const { askReporters } = await import('../src/issues.js');
+    const { askReporters, RETRY_FIRST } = await import('../src/issues.js');
+    assert.deepEqual(await askReporters(hub, hub.project('app'), hub.github.app), { asked: 0 }, 'not yet: the first retry is a minute later');
+    t += RETRY_FIRST;
     assert.deepEqual(await askReporters(hub, hub.project('app'), hub.github.app), { asked: 1 });
     assert.equal(gh.state.comments.length, 1);
+  });
+
+  test('GitHub keeps refusing: the sweep backs off, a dozen tries at most in an hour, and after a day it stops and says so', async () => {
+    const { askReporters } = await import('../src/issues.js');
+    gh.state.refuse = true;
+    await agent('ask', 'w1', { item: '#2', to: 'reporter', question: 'CSV or PDF?' });
+    const sweep = async (ms, step) => { for (const end = t + ms; t < end; t += step) await askReporters(hub, hub.project('app'), hub.github.app); };
+    gh.state.tries = 0;
+    await sweep(HOUR, 15_000);
+    assert.ok(gh.state.tries <= 12, `${gh.state.tries} posts in an hour`);
+    await sweep(26 * HOUR, 60_000);
+    const said = hub.q(`SELECT headline, summary FROM events WHERE type = 'issue' AND headline LIKE 'The hub stopped trying%'`).all();
+    assert.equal(said.length, 1);
+    assert.match(said[0].headline, /question \d+ on acme\/api#7: GitHub refused it for a day/);
+    const tries = gh.state.tries;
+    t += 30 * 24 * HOUR;
+    await askReporters(hub, hub.project('app'), hub.github.app);
+    assert.equal(gh.state.tries, tries, 'given up: no more posts');
+    assert.equal(question().status, 'open', 'the question stays for a person');
+    assert.equal(stage(2), 'waiting');
   });
 });
 
