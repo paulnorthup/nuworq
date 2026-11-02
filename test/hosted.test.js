@@ -74,8 +74,9 @@ describe('hosted: a new organization, from sign-in to an agent finishing an item
 
     const made = await request(port, 'POST', '/api/orgs', { headers: { cookie: hubSession, origin }, body: { name: 'Acme' } });
     assert.equal(made.status, 200, made.text);
-    const go = await request(port, 'GET', at(made.json.enter), { headers: { cookie: hubSession } });
-    const acme = cookie(await request(port, 'GET', at(go.headers.location)));
+    const ws = new URL(made.json.enter, origin).searchParams.get('enter');
+    const go = await request(port, 'POST', `/api/orgs/${ws}/enter`, { headers: { cookie: hubSession, origin }, body: {} });
+    const acme = cookie(await request(port, 'GET', at(go.json.go)));
     const owner = { cookie: acme, origin };
 
     const proj = await request(port, 'POST', '/w/acme/api/projects', { headers: owner, body: { name: 'api', mission: 'Never lose an order.', remotes: ['github.com/acme/api'] } });

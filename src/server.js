@@ -470,7 +470,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!mine.some((m) => m.workspace === ws)) mine.unshift({ workspace: ws, handle: person.handle, role: person.role });
     return {
       org: ws,
-      orgs: mine.map((m) => ({ workspace: m.workspace, role: m.role, current: m.workspace === ws, address: homeOf(req, m.workspace), enter: `${authOrigin(req)}/api/orgs/${encodeURIComponent(m.workspace)}/enter` })),
+      orgs: mine.map((m) => ({ workspace: m.workspace, role: m.role, current: m.workspace === ws, address: homeOf(req, m.workspace), enter: `${authOrigin(req)}/?enter=${encodeURIComponent(m.workspace)}` })),
       new_org: `${authOrigin(req)}/?new`,
     };
   };
@@ -529,8 +529,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (spaces && !flow.ws) return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket('', spaces.directory.createSession(id.id))}`);
     const hub = spaces ? spaces.get(flow.ws) : target;
     if (!hub) return fail('that workspace is gone');
-    const r = scopeOf(hub).authz.signInByEmail(email, provider);
+    // With workspaces, someone not yet a member there is asked on the hub's own page first (#630): a sign-in
+    // link alone never adds anyone.
+    const r = scopeOf(hub).authz.signInByEmail(email, provider, { join: !spaces });
     if (!r) return fail(`${email} isn't a member here. Ask an owner for an invite (to this email)`);
+    if (r.pending) return redirect(res, `${authOrigin(req)}/api/oauth/finish?ticket=${sso.ticket('', spaces.directory.createSession(id.id))}&enter=${encodeURIComponent(flow.ws)}`);
     spaces?.directory.join(email, flow.ws);
     if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy, r.held);
     return redirect(res, `${flow.back}/api/oauth/finish?ticket=${sso.ticket(flow.ws, r.sid)}${dev ? `&${dev}` : ''}`);
@@ -761,7 +764,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       const sid = sso.redeem(url.searchParams.get('ticket'), '');
       if (!sid) return deny(400, 'that sign-in link was already used or expired', 'Sign in again.');
       res.setHeader('set-cookie', `${HUB_COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`);
-      return redirect(res, '/');
+      // Signed in to join a workspace (#630): back to the page that asks, for that workspace only.
+      const asked = String(url.searchParams.get('enter') ?? '').toLowerCase();
+      return redirect(res, /^[a-z0-9-]{1,40}$/.test(asked) ? `/?enter=${asked}` : '/');
     }
     // GitHub's setup page after the app was installed from inside an organization (/api/github/install):
     // the signed state says which one, and the installation is bound to it once GitHub confirms, through the
@@ -847,7 +852,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
 
     // An organization as the browser reaches it: its address, and a link that signs you in there.
-    const org = (m) => ({ ...m, address: homeOf(req, m.workspace), enter: `/api/orgs/${m.workspace}/enter` });
+    const org = (m) => ({ ...m, address: homeOf(req, m.workspace), enter: `/?enter=${encodeURIComponent(m.workspace)}` });
     if (req.method === 'GET' && path === '/api/me') return send(200, { auth: 'required', email: me.email, orgs: dir.orgsOf(me, spaces).map(org) });
     if (req.method === 'POST' && path === '/api/logout') {
       dir.deleteSession(sid);
@@ -886,17 +891,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       dir.join(me.email, slug, { created: true });
       return send(200, { ok: true, ...org({ workspace: slug, handle: person.handle, role: 'owner', created: true }) });
     }
+    // Into an organization (#630): a POST from this site (checked above), never a link another site can send. A
+    // member goes straight in; someone with only an invite or an owner's typed email there is shown the offer
+    // ({ pending }) and joins only on their own yes ({ confirm: true }). go: where the browser goes next.
     const enter = path.match(/^\/api\/orgs\/([^/]+)\/enter$/);
-    if (req.method === 'GET' && enter) {
+    if (req.method === 'POST' && enter) {
       const ws = decodeURIComponent(enter[1]).toLowerCase();
       const hub = spaces.get(ws);
-      // The person with this email there, or an open invite to it: the same rule as signing in there.
-      const r = hub && scopeOf(hub).authz.signInByEmail(me.email, me.provider);
+      const b = await body(req);
+      const r = hub && scopeOf(hub).authz.signInByEmail(me.email, me.provider, { join: b.confirm === true });
       if (!r) return deny(404, `${me.email} isn't a member of "${ws}"`, 'Ask an owner there for an invite (to this email).');
+      if (r.pending) return send(200, { pending: { workspace: ws, ...r.pending } });
       dir.join(me.email, ws);
       if (r.joined) joined(hub, r.person, r.person.role, r.invitedBy, r.held);
-      return redirect(res, `${homeOf(req, ws)}/api/oauth/finish?ticket=${sso.ticket(ws, r.sid)}`);
+      return send(200, { ok: true, go: `${homeOf(req, ws)}/api/oauth/finish?ticket=${sso.ticket(ws, r.sid)}` });
     }
+    if (enter) return deny(405, 'use POST', 'Open /?enter=<workspace> on the hub: it asks there, then enters.');
     return deny(405, `use ${path === '/api/orgs' ? 'POST' : 'GET'}`);
   }
 

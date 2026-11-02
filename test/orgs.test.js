@@ -76,10 +76,13 @@ describe('organizations: who belongs where, and making one', () => {
   const me = (c) => request(port, 'GET', '/api/me', { headers: { cookie: c } });
   const create = (c, b) => request(port, 'POST', '/api/orgs', { headers: { cookie: c, origin }, body: b });
   // One click into an organization: a workspace session there, via a one-time ticket.
-  async function enter(c, ws) {
-    const r = await request(port, 'GET', `/api/orgs/${ws}/enter`, { headers: { cookie: c } });
-    if (r.status !== 302) return { status: r.status, json: r.json };
-    const fin = new URL(r.headers.location);
+  // A POST from the hub's own page (#630); confirm: the person's yes to an invite. Entered: status 302, as the
+  // finish link answers; an invite not yet accepted: { pending }.
+  async function enter(c, ws, confirm = false) {
+    const r = await request(port, 'POST', `/api/orgs/${ws}/enter`, { headers: { cookie: c, origin }, body: { confirm } });
+    if (r.json?.pending) return { status: 200, pending: r.json.pending };
+    if (!r.json?.go) return { status: r.status, json: r.json };
+    const fin = new URL(r.json.go);
     assert.equal(fin.pathname, `/w/${ws}/api/oauth/finish`);
     return { status: 302, session: cookie(await request(port, 'GET', fin.pathname + fin.search)) };
   }
@@ -103,7 +106,7 @@ describe('organizations: who belongs where, and making one', () => {
     const owner = new Auth(spaces.get('acme').db).person('ann');
     assert.equal(owner.role, 'owner');
     assert.equal(owner.email, 'ann@example.com');
-    assert.deepEqual((await me(ann)).json.orgs, [{ workspace: 'acme', handle: 'ann', role: 'owner', created: true, address: `${origin}/w/acme`, enter: '/api/orgs/acme/enter' }]);
+    assert.deepEqual((await me(ann)).json.orgs, [{ workspace: 'acme', handle: 'ann', role: 'owner', created: true, address: `${origin}/w/acme`, enter: '/?enter=acme' }]);
 
     const inside = await enter(ann, 'acme');
     const who = await request(port, 'GET', '/w/acme/api/people/me', { headers: { cookie: inside.session } });
@@ -153,11 +156,13 @@ describe('organizations: who belongs where, and making one', () => {
     const b = await enter(bob, 'beta');
     const inv = await request(port, 'POST', '/w/beta/api/invites', { headers: { cookie: b.session, origin }, body: { role: 'member', email: 'ann@example.com' } });
     assert.equal(inv.status, 200, inv.text);
-    const a = await enter(ann, 'beta');
-    assert.equal(a.status, 302, 'the invite to her email lets her in');
+    const offer = await enter(ann, 'beta');
+    assert.deepEqual(offer.pending, { workspace: 'beta', role: 'member', invited_by: '@bob' }, 'the invite is offered, not taken (#630)');
+    const a = await enter(ann, 'beta', true);
+    assert.equal(a.status, 302, 'the invite to her email lets her in, on her yes');
     assert.deepEqual((await request(port, 'GET', '/w/beta/api/people/me', { headers: { cookie: a.session } })).json, { person: '@ann', role: 'member' });
     const beta = () => me(ann).then((r) => r.json.orgs.find((o) => o.workspace === 'beta'));
-    assert.deepEqual(await beta(), { workspace: 'beta', handle: 'ann', role: 'member', created: false, address: `${origin}/w/beta`, enter: '/api/orgs/beta/enter' });
+    assert.deepEqual(await beta(), { workspace: 'beta', handle: 'ann', role: 'member', created: false, address: `${origin}/w/beta`, enter: '/?enter=beta' });
 
     await request(port, 'POST', '/w/beta/api/people/role', { headers: { cookie: b.session, origin }, body: { handle: 'ann', role: 'steward' } });
     assert.equal((await beta()).role, 'steward');
@@ -217,8 +222,8 @@ describe('organizations: who belongs where, and making one', () => {
     const r = await request(port, 'GET', '/w/acme/api/me', { headers: { cookie: a.session } });
     assert.equal(r.json.org, 'acme');
     assert.deepEqual(r.json.orgs, [
-      { workspace: 'acme', role: 'owner', current: true, address: `${origin}/w/acme`, enter: `${origin}/api/orgs/acme/enter` },
-      { workspace: 'acme-labs', role: 'owner', current: false, address: `${origin}/w/acme-labs`, enter: `${origin}/api/orgs/acme-labs/enter` },
+      { workspace: 'acme', role: 'owner', current: true, address: `${origin}/w/acme`, enter: `${origin}/?enter=acme` },
+      { workspace: 'acme-labs', role: 'owner', current: false, address: `${origin}/w/acme-labs`, enter: `${origin}/?enter=acme-labs` },
     ]);
     assert.equal(r.json.new_org, `${origin}/?new`);
     const b = await enter(bob, 'beta');

@@ -7,6 +7,11 @@ const fromLink = new URLSearchParams(location.search).get('grant');
 if (fromLink) { localStorage.setItem(KEY, fromLink); history.replaceState(null, '', '/'); }
 const grant = localStorage.getItem(KEY);
 const step = $('#step');
+// Into a workspace (#630): ?enter=<workspace>, from the switcher or a sign-in that needs your yes. Kept across
+// signing in to the hub, so the page comes back to it.
+const ENTER = 'nuworq-enter';
+const asked = new URLSearchParams(location.search).get('enter');
+if (asked) sessionStorage.setItem(ENTER, asked);
 
 // A link from before this hub had workspaces (#/p/<slug>/<n>): its project lives in the root workspace now (#204).
 if (location.hash.startsWith('#/p/')) {
@@ -22,6 +27,11 @@ async function main() {
       ${providers.map((p) => `<a class="btn primary" href="${esc(p.start)}">Sign in with ${esc(p.label ?? p.name)}</a>`).join(' ') || '<p class="faint">This hub has no sign-in set up.</p>'}`;
     return;
   }
+  const into = sessionStorage.getItem(ENTER);
+  if (into) {
+    sessionStorage.removeItem(ENTER);
+    return enter(into);
+  }
   const fresh = new URLSearchParams(location.search).has('new');
   if (me.orgs?.length && !grant && !fresh) {
     step.innerHTML = `<p class="lead">Your workspaces:</p>${me.orgs.map((o) => `<p><a href="${esc(o.enter)}">${esc(o.workspace)}</a> <span class="faint">${esc(o.role)}</span></p>`).join('')}
@@ -29,6 +39,23 @@ async function main() {
     return;
   }
   createOrg(me);
+}
+
+// A member goes straight in. Someone invited (or added by an owner) sees the offer, and joins only on their yes.
+async function enter(ws, confirm = false) {
+  const r = await fetch(`/api/orgs/${encodeURIComponent(ws)}/enter`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm }) }).catch(() => null);
+  const j = await r?.json().catch(() => null);
+  if (j?.go) { location.href = j.go; return; }
+  history.replaceState(null, '', '/');
+  if (!j?.pending) {
+    step.innerHTML = `<p class="lead">${esc(j?.error ?? 'The hub did not answer')}.</p>${j?.hint ? `<p class="faint">${esc(j.hint)}</p>` : ''}<p><a class="btn" href="/">Your workspaces</a></p>`;
+    return;
+  }
+  const p = j.pending;
+  step.innerHTML = `<p class="lead">Join <b>${esc(p.workspace)}</b> as ${esc(p.role)}${p.invited_by ? `, invited by ${esc(p.invited_by)}` : ''}?</p>
+    <p class="faint">You were invited with this email. You're added only if you join.</p>
+    <p><button class="btn primary" id="join">Join ${esc(p.workspace)}</button> <a class="btn" href="/">Not now</a></p>`;
+  $('#join').addEventListener('click', () => { $('#join').disabled = true; enter(ws, true); });
 }
 
 // Step 1 of 3: a name, and the address it becomes (suggested from the name, editable), checked as you type.

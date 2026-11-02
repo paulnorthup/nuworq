@@ -65,11 +65,13 @@ describe('a new person makes an organization, a project, connects a machine, and
 
   // Follows a hub-relative or absolute link on this hub, keeping only its path.
   const at = (link) => { const u = new URL(link, origin); return u.pathname + u.search; };
-  // One click on an organization in the switcher: its enter link, then the one-time ticket.
+  // One click on an organization in the switcher: its enter link opens the hub's page, which posts to enter
+  // (#630), then the one-time ticket.
   const enter = async (hubSession, link) => {
-    const r = await request(port, 'GET', at(link), { headers: { cookie: hubSession } });
-    assert.equal(r.status, 302, r.text);
-    return cookie(await request(port, 'GET', at(r.headers.location)));
+    const ws = new URL(link, origin).searchParams.get('enter');
+    const r = await request(port, 'POST', `/api/orgs/${ws}/enter`, { headers: { cookie: hubSession, origin }, body: {} });
+    assert.ok(r.json?.go, r.text);
+    return cookie(await request(port, 'GET', at(r.json.go)));
   };
 
   test('end to end, with nothing set up but sign-in', async () => {
