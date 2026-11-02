@@ -929,6 +929,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...out.headers, ...(vary ? { vary } : {}) });
       res.end(out.body);
     };
+    // The app's own files (#526): asked for again on every load (no-cache), but answered 304 when the browser's copy
+    // is current. The ETag is the file's content, so an edit in a checkout shows at once, as a new commit does; a
+    // gzipped copy is other bytes, so it has a tag of its own.
+    const sendFile = (body, type) => {
+      const hash = createHash('sha1').update(body).digest('base64url');
+      const tag = (enc) => `"${hash}${enc ? `-${enc}` : ''}"`;
+      const had = String(req.headers['if-none-match'] ?? '').split(/,\s*/).find((t) => t === tag() || t === tag('gzip'));
+      if (had) {
+        res.writeHead(304, { etag: had, 'cache-control': 'no-cache' });
+        return res.end();
+      }
+      const out = encode(req, body, type);
+      const vary = [res.getHeader('vary'), out.headers.vary].filter(Boolean).join(', ');
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', etag: tag(out.headers['content-encoding']), ...out.headers, ...(vary ? { vary } : {}) });
+      res.end(out.body);
+    };
     const deny = (status, error, hint) => send(status, { ok: false, error, ...(hint ? { hint } : {}) });
     // A worker's git pushes through the hub (#472) with basic auth, as git does: its name, and its agent token as
     // the password. Asked first, so git's credential helper answers (nuworq git-credential).
@@ -1186,7 +1202,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (adminHost && ['requests.html', 'requests.js', 'admin.html', 'admin.js'].includes(file)) return toAdmin(req, res);
         try {
           const body = await readFile(join(WEB, file));
-          return send(200, extname(file) === '.html' ? withLogo(body.toString('utf8')) : body, TYPES[extname(file)] ?? 'application/octet-stream');
+          return sendFile( extname(file) === '.html' ? withLogo(body.toString('utf8')) : body, TYPES[extname(file)] ?? 'application/octet-stream');
         } catch {
           return send(404, 'not found', 'text/plain');
         }
