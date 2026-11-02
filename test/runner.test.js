@@ -476,6 +476,7 @@ describe('workers on a hub that requires login', () => {
       const file = join(home, '.nuworq', 'tokens', 'w.token');
       assert.match(ran, new RegExp(`ARGS: .*"NUWORQ_TOKEN_FILE":"${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
       // Its git's credential helper reads that file inside the sandbox, which denies the rest of ~/.nuworq (#472).
+      // Up to the next flag: its deny rules hold spaces (#625).
       const { sandbox } = JSON.parse(ran.match(/--settings (\{.*?\}) --disable-slash-commands/)[1]);
       assert.ok(sandbox.filesystem.denyRead.includes('~/.nuworq'));
       assert.deepEqual(sandbox.filesystem.allowRead, [file], 'its own token file, nothing else of ~/.nuworq');
