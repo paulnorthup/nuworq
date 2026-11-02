@@ -1522,12 +1522,28 @@ export class Hub extends EventEmitter {
     return item.holder === agent || (this.racing(item) && !!this.attemptOf(item, agent));
   }
 
-  // Racers can't review the race they ran, nor an agent the conflicts it resolved while landing (#264).
+  // The names an agent's token acts as here (#622): one token may use any number of names, so work under its other
+  // names is its own too. A runner's token is shared by its workers by design, and an agent with no token (a hub
+  // without logins, a person's session) is only itself.
+  namesOf(projectId, agent) {
+    if (!agent) return [];
+    let rows = [];
+    try {
+      rows = this.q(`SELECT o.name FROM agents a JOIN tokens t ON t.id = a.token_id JOIN agents o ON o.project_id = a.project_id AND o.token_id = a.token_id
+        WHERE a.project_id = ? AND a.name = ? AND t.runner IS NULL`).all(projectId, agent);
+    } catch { /* no tokens table: a hub without logins */ }
+    return [...new Set([agent, ...rows.map((r) => r.name)])];
+  }
+
+  // Racers can't review the race they ran, nor an agent the conflicts it resolved while landing (#264), nor a token
+  // the work it built under another of its names (#622).
   implementedBy(item, agent) {
-    return item.implementer === agent ||
-      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent = ? AND stage = 'submitted' AND closed = 0`).get(item.id, agent) ||
-      !!this.q(`SELECT 1 FROM events WHERE item_id = ? AND actor = ? AND type = 'rebased' AND at >= ? AND json_extract(data, '$.conflicts') = 1`)
-        .get(item.id, agent, item.stage_since);
+    const names = this.namesOf(item.project_id, agent);
+    const marks = names.map(() => '?').join(',');
+    return names.includes(item.implementer) ||
+      !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent IN (${marks}) AND stage = 'submitted' AND closed = 0`).get(item.id, ...names) ||
+      !!this.q(`SELECT 1 FROM events WHERE item_id = ? AND actor IN (${marks}) AND type = 'rebased' AND at >= ? AND json_extract(data, '$.conflicts') = 1`)
+        .get(item.id, ...names, item.stage_since);
   }
 
   leaseOf(item, agent) {
