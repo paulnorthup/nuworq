@@ -30,7 +30,7 @@ describe('a project shows the moment it is picked (#503)', () => {
     assert.match(html, /<h1>api<span class="updating">Updating<\/span><\/h1>/, 'the name at once, marked as updating');
     assert.match(html, /Payments &#60;fast&#62;/, 'the mission, escaped');
     assert.match(html, new RegExp(`class="pulse state-${got.line.pulse.state}"`), 'its pulse');
-    assert.match(html, /<b>1<\/b> needs you/, 'and the needs-you count the rail shows');
+    assert.match(html, /<span class="badge" title="1 thing needs you">1<\/span>/, 'and the needs-you count, as the rail shows it');
     assert.match(html, /aria-busy="true"/, 'quiet blocks where the rest goes, no spinner');
     assert.doesNotMatch(html, /spinner|shimmer|animation/);
     assert.equal(held('gone', { views: new Map(), projects }), null, 'a project the app knows nothing of: nothing held');
@@ -40,7 +40,7 @@ describe('a project shows the moment it is picked (#503)', () => {
     const line = projectList(hub()).find((p) => p.slug === 'web');
     const wide = shell(line, { ...deps, columns: (a, b) => `<main-col>${a}</main-col><side-col>${b}</side-col>` });
     assert.match(wide, /<main-col><div class="ph-block"[^]*<\/main-col><side-col><div class="pulse/);
-    assert.doesNotMatch(wide, /<b>\d+<\/b> needs? you/, 'nothing needs you: no count');
+    assert.doesNotMatch(wide, /class="badge"/, 'nothing needs you: no count');
     const phone = shell(line, deps);
     assert.ok(phone.indexOf('class="pulse') < phone.indexOf('ph-block'), 'on a phone the pulse first, as on the page');
   });

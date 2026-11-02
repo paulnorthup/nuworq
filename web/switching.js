@@ -41,7 +41,7 @@ export async function loadProject({ list, view, item }) {
 // The page before the view arrives, from the project's line: its header, its pulse with the needs-you count, and quiet
 // blocks where the rest goes, laid out as the page is (two columns when wide) so nothing jumps when it fills in.
 export function shell(line, { esc, stateDot, labels, placeholder, depth, updating, columns }) {
-  const needs = line.needs ? ` · <b>${line.needs}</b> ${line.needs === 1 ? 'needs' : 'need'} you` : '';
+  const needs = line.needs ? ` <span class="badge" title="${line.needs} ${line.needs === 1 ? 'thing needs' : 'things need'} you">${line.needs}</span>` : '';
   const pulse = `<div class="pulse state-${line.pulse.state}">
       <div class="state-chip">${stateDot(line.pulse.state)}${labels[line.pulse.state] ?? ''}${needs}</div>
       <div class="sentence">${esc(line.pulse.sentence ?? '')}</div>
