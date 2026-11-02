@@ -18,6 +18,15 @@ const RUNNER_ON_DUTY = 5 * MIN; // a runner that polled this recently is on duty
 const CHURN_AGENTS = 3;
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+// The 30-second line's first part (#506): how many things need you, and how many of them are now ("4 things need
+// you, 3 now."). where: " across 2 projects" on the home.
+const needsLine = (cards, where = '') => {
+  const n = cards.length, now = cards.filter((a) => a.priority === 'now').length;
+  if (!n) return 'Nothing needs you.';
+  const head = `${plural(n, 'thing')}${where} ${n === 1 ? 'needs' : 'need'} you`;
+  return `${head}${!now ? '' : n === 1 ? ' now' : now === n ? ', all now' : `, ${now} now`}.`;
+};
+const NEEDS_LINE = /^(Nothing needs you\.|\d+ things?( across \d+ projects)? needs? you( now|, all now|, \d+ now)?\.)/;
 
 // viewer: the person looking ("@handle"), so "needs you" counts only their own; none in local mode.
 export function projectList(hub, { viewer } = {}) {
@@ -64,7 +73,7 @@ export function homeView(hub, { viewer } = {}) {
   const stalled = live.filter(({ v }) => v.pulse.state === 'stalled').length;
   const finished = rows.flatMap(({ p, v }) => v.since.finished.map((f) => ({ ...f, project: tag(p) })));
   const sentence = [
-    needs.length ? `${plural(needs.length, 'thing')}${across(new Set(needs.map((a) => a.project.slug)).size)} ${needs.length === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you.',
+    needsLine(needs, across(new Set(needs.map((a) => a.project.slug)).size)),
     inFlight ? `${plural(working, 'agent')} working on ${plural(inFlight, 'item')}${across(live.filter(({ v }) => v.pulse.active).length)}.`
       : stalled ? `Nothing is moving: work is waiting in ${plural(stalled, 'project')}.` : 'No work in flight.',
     finished.length ? `${finished.length} finished since you last looked.` : '',
@@ -101,8 +110,7 @@ export function homeView(hub, { viewer } = {}) {
 // you as now, since it holds up all the workspace's work (#505), counted in the pulse and its sentence.
 export function withEntry(h, entry) {
   const needs = [{ priority: 'now', priority_why: "now: it holds up all of the workspace's work", holds: 3, ...entry, project: null }, ...h.needs].sort(byNeed);
-  const sentence = h.pulse.sentence.replace(/^(Nothing needs you\.|\d+ things?( across \d+ projects)? needs? you\.)/,
-    `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you.`);
+  const sentence = h.pulse.sentence.replace(NEEDS_LINE, needsLine(needs));
   return { ...h, needs, pulse: { ...h.pulse, state: 'needs-you', act: needs.length, sentence } };
 }
 
@@ -128,7 +136,7 @@ function prioritize(hub, p, attention, items) {
   const of = (it) => {
     const e = eff.get(it.id) ?? { priority: it.priority, from: null };
     const from = e.from && items.find((i) => i.seq === e.from);
-    return { priority: e.priority, why: !from ? `${e.priority}: #${it.seq}'s own priority` : ancestor(it, from.id) ? `${e.priority}: part of #${from.seq}` : `${e.priority}: #${from.seq} waits on it` };
+    return { priority: e.priority, from: from ? `#${from.seq}` : null, why: !from ? `${e.priority}: #${it.seq}'s own priority` : ancestor(it, from.id) ? `${e.priority}: part of #${from.seq}` : `${e.priority}: #${from.seq} waits on it` };
   };
   for (const a of attention) {
     const it = a.item ? bySeq.get(a.item) : null;
@@ -143,6 +151,7 @@ function prioritize(hub, p, attention, items) {
     } else r = { priority: 'soon', why: 'soon: it is about no item' };
     a.priority = r.priority;
     a.priority_why = r.why;
+    if (r.from) a.priority_from = r.from; // inherited: the card says "from #468" (#506)
     if (it && picked.has(it.id)) a.picked = true;
     a.holds = a.kind === 'question' && a.parked ? 0 : HOLDS_LANDING.has(a.kind) ? 1 : it?.parent_id ? 2 : 3;
   }
@@ -573,7 +582,7 @@ export function view(hub, slug, { light = false, viewer } = {}) {
   // ── pulse: one sentence ──
   const working = new Set([...[...active, ...shaping].map((i) => i.holder).filter(Boolean), ...racers.map((a) => a.agent)]);
   const state = p.parked ? 'parked' : act.length ? 'needs-you' : inFlight ? 'flowing' : claimable ? 'stalled' : 'idle';
-  const needs = act.length ? `${plural(act.length, 'thing')} ${act.length === 1 ? 'needs' : 'need'} you.` : 'Nothing needs you.';
+  const needs = needsLine(act);
   const sentence = (p.parked
     ? ['Parked: nothing new starts, and nothing will ask for you here until you unpark it.', act.length ? `${plural(act.length, 'thing')} already in progress still ${act.length === 1 ? 'needs' : 'need'} you.` : '']
     : [

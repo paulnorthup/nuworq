@@ -6,13 +6,13 @@
 // one of each. Every card sits inside data-project, so its actions reach its own project.
 
 // A project's sentence without its "needs you" part: the badge says that.
-const short = (s) => String(s ?? '').replace(/^(Nothing needs you\.|\d+ things? needs? you\.)\s*/, '');
+const short = (s) => String(s ?? '').replace(/^(Nothing needs you\.|\d+ things? needs? you( now|, all now|, \d+ now)?\.)\s*/, '');
 
 // wide: lay it out in two columns; gs: the Get started card, if any.
 export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(name), wide = false, gs = '' }) {
   const tag = (p) => `<a class="proj-tag" href="#/p/${encodeURIComponent(p.slug)}">${esc(p.name)}</a>`;
   const needs = h.needs.length ? `<section class="sec home-needs"><header><h2>Needs you</h2><span class="count">${h.needs.length}</span>
-      <span class="hint">oldest first, across projects</span></header>
+      <span class="hint" data-new="needs-rank">most important first, across projects</span></header>
       <div class="cards">${h.needs.map((a) => (a.project
         ? `<div class="home-card" data-project="${esc(a.project.slug)}">${tag(a.project)}${card(a)}</div>`
         : `<div class="home-card">${card(a)}</div>`)).join('')}</div></section>` : ''; // project null: the workspace's own (#231)

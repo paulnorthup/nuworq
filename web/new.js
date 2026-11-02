@@ -36,6 +36,7 @@ export const NEW = {
   'always-show': '2026-10-31', // #443: Always show on a field note, so every agent gets it whatever it works on
   'verified-install': '2026-11-01', // #473: Connect an agent's install checks the release's signature before installing it
   'security-reviews': '2026-11-01', // #480: Settings' Security reviews switch: a review before each release, an area each month
+  'needs-rank': '2026-11-01', // #506: Needs you most important first, each card with its priority (the section's hint)
 };
 
 const DAYS = 7;

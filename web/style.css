@@ -308,6 +308,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .cards { display: flex; flex-direction: column; gap: var(--sp-3); }
 .card { background: var(--panel); border: var(--rule) solid var(--line); border-left: var(--accent) solid var(--you); border-radius: var(--r-m); padding: var(--sp-4) var(--sp-4); box-shadow: var(--e-1); }
 .card-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; font-size: var(--fs-2); color: var(--muted); }
+.card-prio { margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-1); } /* the card's priority, at the right edge (#506) */
+@media (max-width: 600px) { .card-top .sub { order: 1; } } /* on a phone the priority stays on the first line, beside the kind */
 .kind { font-weight: 650; text-transform: uppercase; letter-spacing: .05em; font-size: var(--fs-1); color: var(--you); }
 .ref { font-family: var(--mono); font-size: var(--fs-2); color: var(--muted); background: var(--sunken); padding: 0 var(--sp-2); border-radius: var(--r-s); cursor: pointer; }
 .ref:hover { color: var(--ink); text-decoration: none; }
