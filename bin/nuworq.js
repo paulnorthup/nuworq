@@ -9,7 +9,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
-import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
+import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
 import { sandboxSettings, filePermissions, projectCommands } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
@@ -632,7 +632,7 @@ async function worker(flags) {
     target = { ...target, repo: routes.find((r) => r.project === target.slug)?.repo ?? null };
   }
   const token = flags.run ? await agentToken(client, flags) : null;
-  const { name, worktree, main, origin, cwd, cmd, tokenAt, piDir } = await setupOrClone(target, agent, flags, s, client, token);
+  const { name, worktree, main, origin, cwd, cmd, checkout, start, keys, tokenAt, piDir } = await setupOrClone(target, agent, flags, s, client, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
@@ -649,7 +649,17 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
     return;
   }
   const { spawn } = await import('node:child_process');
-  const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['inherit', 'pipe', 'inherit'], env: withoutTokens() });
+  // Its checkout as the runner (the person's git setup, SSH agent included); the agent itself on an allowlisted
+  // environment: only what its harness needs to reach its model, which it keeps from its shell (#616).
+  try {
+    if (checkout) execFileSync('/bin/sh', ['-c', checkout], { stdio: ['ignore', 'inherit', 'inherit'], env: { ...withoutTokens(), GIT_TERMINAL_PROMPT: '0' } });
+  } catch (e) {
+    dropTokenFile(tokenAt);
+    dropPiDir(piDir);
+    process.exitCode = e.status ?? 1;
+    return;
+  }
+  const child = spawn('/bin/sh', ['-c', start], { stdio: ['inherit', 'pipe', 'inherit'], env: workerEnv(keys) });
   const usage = await tapUsage(child, agent, flags, (l) => console.log(l));
   await new Promise((done) => child.on('close', (code) => { process.exitCode = code ?? 1; done(); }));
   dropTokenFile(tokenAt);
@@ -777,6 +787,17 @@ function codexProvider(flags) {
   const top = text.split(/^\s*\[/m)[0];
   const p = top.match(/^\s*model_provider\s*=\s*"([^"]+)"/m)?.[1];
   return p && p !== 'openai' && /^[\w-]+$/.test(p) ? p : null;
+}
+
+// The variable a custom Codex provider takes its key from (env_key in its [model_providers.<p>] table), so a worker's
+// environment keeps it (#616). null when there's none to read.
+function codexKey(provider) {
+  if (!provider) return null;
+  let text = '';
+  try { text = readFileSync(join(homedir(), '.codex', 'config.toml'), 'utf8'); } catch { return null; }
+  const table = text.split(/^\s*(?=\[)/m).find((t) => t.startsWith(`[model_providers.${provider}]`)) ?? '';
+  const k = table.match(/^\s*env_key\s*=\s*"([^"]+)"/m)?.[1];
+  return k && /^\w+$/.test(k) ? k : null;
 }
 
 // What a worker started with --browser gets: Playwright's MCP server (pinned) driving this machine's Google
@@ -951,15 +972,20 @@ function workerSetup(target, agent, flags, s, token = null) {
   // Model traffic says who it is, so llm-proxy (when it goes through one) can be read per worker (#76).
   // Other endpoints ignore the header.
   const label = clientLabel(target.slug, name);
+  // What its harness needs from the environment to reach its model; workerEnv passes on that and no other secret (#616).
+  const codexOwn = agent === 'codex' && flags.proxy === undefined ? codexProvider(flags) : null;
+  const harness = harnessKeys(agent, { proxy: flags.proxy !== undefined, model, codexKey: codexKey(codexOwn) });
   let piDir = null;
   if (agent === 'claude') {
     // The runner's own headers (they may carry llm-proxy's x-proxy-token) are expanded by the shell from the
     // inherited variable, so their values are never in argv or printed (#493).
     const headers = `"\${ANTHROPIC_CUSTOM_HEADERS:+$ANTHROPIC_CUSTOM_HEADERS\n}"${sq(`x-client-name: ${label}`)}`;
     // --proxy: Claude Code's traffic goes to llm-proxy's Anthropic route with the proxy's owner token (not the
-    // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed.
-    const via = flags.proxy === undefined ? '' : `ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN" \\\n  `;
-    lines.push(`${via}ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts: target.sandbox_hosts ?? [], landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    // hub's read-only NUWORQ_LLM_PROXY_KEY). The shell expands it, so it's never in argv or printed; then it goes, so
+    // only the name Claude Code scrubs carries it.
+    if (flags.proxy !== undefined) lines.push(`export ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN"`, 'unset NUWORQ_LLM_PROXY_TOKEN');
+    // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: its shell, hooks and MCP servers start without Claude Code's own credentials (#616).
+    lines.push(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts: target.sandbox_hosts ?? [], landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.
@@ -989,14 +1015,17 @@ function workerSetup(target, agent, flags, s, token = null) {
     // Codex's built-in openai provider takes no headers; a custom one (how traffic reaches llm-proxy) does.
     // --proxy: a provider of its own for llm-proxy's OpenAI route (Responses), keyed by the owner token from the
     // worker's environment (env_key), so the token is never in argv or printed.
-    const provider = flags.proxy === undefined ? codexProvider(flags) : null;
+    const provider = codexOwn;
     const named = flags.proxy !== undefined
       ? ` \\\n  -c ${sq('model_provider="llmproxy"')} \\\n  -c ${sq(`model_providers.llmproxy={name="llm-proxy",base_url=${JSON.stringify(`${proxyUrl(flags)}/openai/v1`)},env_key="NUWORQ_LLM_PROXY_TOKEN",wire_api="responses",http_headers={"x-client-name"=${JSON.stringify(label)}}}`)}`
       : provider ? ` \\\n  -c ${sq(`model_providers.${provider}.http_headers={"x-client-name"=${JSON.stringify(label)}}`)}` : '';
-    lines.push(`codex exec${json}${model ? ` -m ${sq(model)}` : ''} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named} \\\n  ${sq(task)}`);
+    // Its shell starts without the key Codex reaches its model with (#616): by name, and anything named like a key,
+    // token or secret (Codex's default excludes, set here so no config turns them off).
+    const scrub = ` \\\n  -c ${sq('shell_environment_policy.ignore_default_excludes=false')} \\\n  -c ${sq(`shell_environment_policy.exclude=${JSON.stringify(harness.secret)}`)}`;
+    lines.push(`codex exec${json}${model ? ` -m ${sq(model)}` : ''} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named}${scrub} \\\n  ${sq(task)}`);
   }
   return {
-    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd, tokenAt, piDir,
+    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd, tokenAt, piDir, keys: [...harness.secret, ...harness.config],
     checkout: setup.join(' && '), start: lines.join(' && \\\n'), cmd: [...setup, ...lines].join(' && \\\n'),
   };
 }
@@ -1164,7 +1193,7 @@ async function runCmd(flags) {
       if (e instanceof HubError) e.skip = true;
       throw e;
     }
-    const { name, home, worktree, cwd, checkout, start, tokenAt, piDir } = setup;
+    const { name, home, worktree, cwd, checkout, start, keys, tokenAt, piDir } = setup;
     const log = join(logs, `${name}.log`);
     // Its worktree, at the latest main. When git can't do that (e.g. it can't reach origin), the agent never
     // starts: the runner leaves the project alone for a while and the others go on.
@@ -1182,8 +1211,9 @@ async function runCmd(flags) {
       }
     }
     const out = createWriteStream(log, { mode: 0o600 });
-    // Its own process group, so stopping it stops the agent too, not just the shell. Never the runner's tokens.
-    const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: withoutTokens() });
+    // Its own process group, so stopping it stops the agent too, not just the shell. Never the runner's tokens, and
+    // of its other secrets only what the agent's harness reaches its model with (#616).
+    const child = spawn('/bin/sh', ['-c', start], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: workerEnv(keys) });
     // Its log holds no tokens (#477).
     const usage = await tapUsage(child, agent, { ...flags, ...routed }, (l) => out.write(`${redact(l)}\n`));
     child.stderr.setEncoding('utf8');

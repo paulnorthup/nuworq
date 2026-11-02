@@ -185,7 +185,7 @@ describe('runner capture', () => {
     mkdirSync(bin);
     writeFileSync(join(dir, 'sample.jsonl'), CLAUDE.join('\n') + '\n');
     // The fake agent claims #1 as the worker would, then prints the recorded output.
-    writeFileSync(join(bin, 'claude'), `#!/bin/sh\ncurl -s -X POST -H 'content-type: application/json' -H "x-nuworq-agent: w" -d '{"item":"#1"}' "$HUB/api/p/run/agent/claim" > /dev/null\ncat ${JSON.stringify(join(dir, 'sample.jsonl'))}\n`, { mode: 0o755 });
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\ncurl -s -X POST -H 'content-type: application/json' -H "x-nuworq-agent: w" -d '{"item":"#1"}' "$(cat ${JSON.stringify(join(dir, 'hub'))})/api/p/run/agent/claim" > /dev/null\ncat ${JSON.stringify(join(dir, 'sample.jsonl'))}\n`, { mode: 0o755 });
     const hub = new Hub();
     hub.tx(() => hub.project('run', { create: true }));
     hub.humanOp('run', 'settings', { path: dir });
@@ -193,8 +193,10 @@ describe('runner capture', () => {
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
+    // The hub's address in a file: a worker's environment carries only what it needs (#616).
+    writeFileSync(join(dir, 'hub'), url);
     try {
-      const env = { ...process.env, HOME: dir, PATH: `${bin}:${process.env.PATH}`, HUB: url, NUWORQ_TOKEN: '' };
+      const env = { ...process.env, HOME: dir, PATH: `${bin}:${process.env.PATH}`, NUWORQ_TOKEN: '' };
       const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'run', '--here', '--as', 'w', '--run'], { env, cwd: dir });
       assert.match(stdout, /Checking in\./);
       assert.ok(!stdout.includes('"type":"result"'), 'the JSON stays out of what a person reads');

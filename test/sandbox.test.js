@@ -50,6 +50,17 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     for (const p of ['~/.claude/.credentials.json', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent']) assert.ok(filesystem.denyRead.includes(p), p);
   });
 
+  test("DENY_READ covers each harness's and toolchain's stored credentials (#616)", () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
+    const files = filePermissions({ home, worktree });
+    for (const p of ['~/.codex', '~/.claude.json', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials',
+      '~/.terraform.d', '~/.yarnrc.yml', '~/.bash_history', '~/.zsh_history', '~/.local/share/fish', '~/Library/Keychains',
+      '~/Library/Application Support/Google/Chrome', '~/Library/Application Support/Firefox', '~/Library/Safari', '~/.mozilla', '~/.config/google-chrome']) {
+      assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
+      assert.ok(files.deny.includes(`Read(${p})`) && files.deny.includes(`Read(${p}/**)`), `the file tools: ${p}`);
+    }
+  });
+
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree: null, landsHere: true });
     for (const p of ['hooks', 'config', 'modules', 'info']) assert.ok(filesystem.denyWrite.includes(join(home, '.git', p)), p);
