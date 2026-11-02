@@ -84,6 +84,21 @@ export function workerEnv(keys = [], env = process.env) {
   return Object.fromEntries(Object.entries(env).filter(([k, v]) => keep(k) && !new RegExp(TOKENS.source).test(String(v))));
 }
 
+// The project's own variables the person names for workers (#616), e.g. `nuworq run --env DOCKER_HOST,VIRTUAL_ENV`:
+// names only, the values come from the runner's environment. One that looks like a secret is refused unless it's
+// named with --env-secret, so passing a credential to a worker's agent is a choice, never a slip. env, secret: the
+// flags' values (a string, several, or a list).
+const SECRETISH = /KEY|TOKEN|SECRET|PASS|CREDENTIAL|AUTH|PRIVATE|SESSION|COOKIE/i;
+export function namedEnv(env, secret) {
+  const names = (v) => [v ?? []].flat().filter((x) => x !== true).flatMap((x) => String(x).split(/[\s,]+/)).filter(Boolean);
+  const plain = names(env), secrets = names(secret);
+  const bad = [...plain, ...secrets].find((n) => !/^[A-Za-z_]\w*$/.test(n));
+  if (bad) throw Object.assign(new Error(`--env takes variable names, not "${bad}"`), { hint: 'e.g. nuworq run --env DOCKER_HOST,VIRTUAL_ENV: the values come from this shell.' });
+  const looks = plain.filter((n) => SECRETISH.test(n));
+  if (looks.length) throw Object.assign(new Error(`${looks.join(', ')} looks like a secret, so --env doesn't pass it`), { hint: `A worker's agent could read it and send it wherever it reaches. To pass it anyway: --env-secret ${looks.join(',')}` });
+  return [...new Set([...plain, ...secrets])];
+}
+
 // What each harness needs from the environment to reach its model, and which of it is secret: the secrets each one
 // keeps out of its own shell. Claude Code does with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (these four among the names it
 // scrubs, checked in 2.1.309), Codex with shell_environment_policy.exclude. opencode and pi have no sandbox and no

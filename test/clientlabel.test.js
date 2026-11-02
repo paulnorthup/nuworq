@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { guide } from '../src/protocol.js';
-import { workerEnv, harnessKeys, CLAUDE_SCRUBS } from '../src/runtrust.js';
+import { workerEnv, harnessKeys, namedEnv, CLAUDE_SCRUBS } from '../src/runtrust.js';
+import { serviceEnv } from '../src/service.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
@@ -203,5 +204,39 @@ describe("a worker's shell sees no credential variables", () => {
     assert.deepEqual(creds(workerEnv(keys('pi', 'anthropic/claude-sonnet-5-5'), SECRETS)), ['ANTHROPIC_API_KEY']);
     assert.deepEqual(creds(workerEnv(keys('opencode', 'proxy/gpt-5'), SECRETS)), ['NUWORQ_LLM_PROXY_KEY']);
     assert.deepEqual(creds(workerEnv(keys('pi', 'ollama/qwen3:8b'), SECRETS)), []);
+  });
+
+  // The allowlist's addition point: a project whose build reads DOCKER_HOST or VIRTUAL_ENV names them.
+  test('a worker gets a variable the person named, and still no credential variables', async () => {
+    const PROJECT = { DOCKER_HOST: 'unix:///run/docker.sock', VIRTUAL_ENV: '/home/me/app/.venv', DATABASE_URL_TEST: 'postgres://localhost/test', JAVA_OPTS: '-Xmx2g' };
+    const all = { PATH: '/usr/bin:/bin', HOME: '/home/me', ...SECRETS, ...PROJECT };
+    const named = namedEnv(['DOCKER_HOST,VIRTUAL_ENV', 'JAVA_OPTS']);
+    const { secret, config } = harnessKeys('claude');
+    const env = workerEnv([...secret, ...config, ...named], all);
+    assert.deepEqual([env.DOCKER_HOST, env.VIRTUAL_ENV, env.JAVA_OPTS], [PROJECT.DOCKER_HOST, PROJECT.VIRTUAL_ENV, PROJECT.JAVA_OPTS]);
+    assert.equal(env.DATABASE_URL_TEST, undefined, 'only what was named');
+    assert.deepEqual(Object.keys(env).filter((k) => credential(k) && !CLAUDE_SCRUBS.includes(k)), [], "no credential but the ones Claude Code scrubs from its shell");
+    // A name that looks like a secret takes --env-secret, so passing one is a choice; and only names, never values.
+    assert.throws(() => namedEnv('AWS_SECRET_ACCESS_KEY'), (e) => /looks like a secret, so --env doesn't pass it/.test(e.message) && /--env-secret AWS_SECRET_ACCESS_KEY/.test(e.hint));
+    assert.throws(() => namedEnv('NPM_TOKEN,DOCKER_HOST'), /NPM_TOKEN looks like a secret/);
+    assert.throws(() => namedEnv('DOCKER_HOST=tcp://x'), /--env takes variable names, not "DOCKER_HOST=tcp:\/\/x"/);
+    assert.deepEqual(namedEnv(undefined, 'NPM_TOKEN'), ['NPM_TOKEN'], '--env-secret passes it');
+    assert.equal(workerEnv(namedEnv(undefined, 'NPM_TOKEN'), all).NPM_TOKEN, SECRETS.NPM_TOKEN);
+    assert.equal(workerEnv(namedEnv(undefined, 'NUWORQ_TOKEN'), all).NUWORQ_TOKEN, undefined, "a nuworq token's value never goes, named or not");
+    // An installed runner keeps the named values in its service, and only those.
+    const svc = serviceEnv(all, { names: named });
+    assert.deepEqual(Object.keys(svc).filter((k) => k in PROJECT), ['DOCKER_HOST', 'JAVA_OPTS', 'VIRTUAL_ENV']);
+  });
+
+  test('the CLI refuses an --env name it won\'t pass, before anything starts, and --env-secret with --install', async () => {
+    const home = freshHome();
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, ...a], { env: { PATH: process.env.PATH, HOME: home, NO_COLOR: '1', NUWORQ_NO_UPDATE: '1', NUWORQ_URL: 'http://127.0.0.1:9' } }).catch((e) => e);
+    for (const cmd of ['run', 'worker']) {
+      const r = await cli(cmd, '--env', 'GITHUB_TOKEN');
+      assert.notEqual(r.code ?? 0, 0, cmd);
+      assert.match(r.stderr, /GITHUB_TOKEN looks like a secret, so --env doesn't pass it/, cmd);
+    }
+    const r = await cli('run', '--install', '--env-secret', 'NPM_TOKEN');
+    assert.match(r.stderr, /--env-secret isn't kept by an installed runner/);
   });
 });

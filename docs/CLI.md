@@ -119,6 +119,8 @@ Flags
                       worker --browser
   --agent-token <t>   the agent token workers get on a hub with login
   --proxy <url>       send workers through llm-proxy, as with worker --proxy
+  --env <names>       variables workers get from here, as with worker --env; an
+                      installed runner keeps their values
   --sweep             remove leftovers now (the runner does it weekly)
   --dry-run           with --sweep: list what would go
   --install           run it as a service that survives closed terminals and
@@ -233,23 +235,29 @@ Usage
   nuworq worker [flags]
 
 Flags
-  --run              start it; without --run it prints the command
-  --agent <name>     claude, codex, opencode or pi (default: claude)
-  --can-read-keys    needed for codex, opencode or pi: their shell can read this
-                     machine's keys (only Claude's sandbox hides them)
-  --model <m>        the model; opencode and pi need <provider>/<model>, e.g.
-                     ollama/qwen3.8:27b-mtp-q4_K_M
-  --project <p>      that project, instead of where the hub routes it
-  --here             work in this folder, not its own worktree
-  --as <name>        its name (default: the agent and 4 random hex digits)
-  --allow <tools>    more tools it may use without asking
-  --has <tags>       what else this machine can do
-  --browser          a headless Chrome (Playwright MCP, local pages only) to
-                     check UI work with; Claude only
-  --proxy <url>      go through llm-proxy: its LAN or tailnet address for claude
-                     and codex; opencode and pi with --model proxy/<model>
-  --agent-token <t>  with --run on a hub with login: the agent token it gets
-                     (never your own)
+  --run                 start it; without --run it prints the command
+  --agent <name>        claude, codex, opencode or pi (default: claude)
+  --can-read-keys       needed for codex, opencode or pi: their shell can read
+                        this machine's keys (only Claude's sandbox hides them)
+  --model <m>           the model; opencode and pi need <provider>/<model>, e.g.
+                        ollama/qwen3.8:27b-mtp-q4_K_M
+  --project <p>         that project, instead of where the hub routes it
+  --here                work in this folder, not its own worktree
+  --as <name>           its name (default: the agent and 4 random hex digits)
+  --allow <tools>       more tools it may use without asking
+  --has <tags>          what else this machine can do
+  --browser             a headless Chrome (Playwright MCP, local pages only) to
+                        check UI work with; Claude only
+  --proxy <url>         go through llm-proxy: its LAN or tailnet address for
+                        claude and codex; opencode and pi with --model
+                        proxy/<model>
+  --agent-token <t>     with --run on a hub with login: the agent token it gets
+                        (never your own)
+  --env <names>         variables it gets from this shell, e.g.
+                        DOCKER_HOST,VIRTUAL_ENV: it starts with only where
+                        things are and its model's key
+  --env-secret <names>  the same for a name that looks like a key, token or
+                        password: its agent can read it
 
 Environment
   NUWORQ_AGENT_TOKEN      the agent token, instead of --agent-token

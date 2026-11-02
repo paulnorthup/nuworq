@@ -9,7 +9,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
-import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
+import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
 import { sandboxSettings, filePermissions, projectCommands } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
@@ -19,7 +19,7 @@ const ROOT = resolve(dirname(BIN), '..');
 const ON_PATH = (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, 'nuworq')));
 const CLI = ON_PATH ? 'nuworq' : `node ${JSON.stringify(BIN)}`;
 const BOOL = new Set(['peek', 'blocking', 'demo', 'force', 'all', 'help', 'h', 'auth', 'trust-proxy', 'run', 'here', 'workspaces', 'follow', 'until-idle', 'off', 'browser', 'no-browser', 'no-mcp', 'skills','early-access', 'install', 'uninstall', 'operator', 'sweep', 'dry-run', 'yes', 'no', 'start', 'detect', 'smoke', 'can-read-keys']);
-const MULTI = new Set(['option', 'evidence']);
+const MULTI = new Set(['option', 'evidence', 'env', 'env-secret']);
 
 function parse(argv) {
   const pos = [];
@@ -600,6 +600,7 @@ async function agentToken(client, flags) {
 }
 
 async function worker(flags) {
+  envNames(flags);
   const s = resolveSettings(flags);
   const agent = agentOf(flags);
   const client = createClient(flags);
@@ -1025,7 +1026,8 @@ function workerSetup(target, agent, flags, s, token = null) {
     lines.push(`codex exec${json}${model ? ` -m ${sq(model)}` : ''} -s workspace-write \\\n  -c ${sq('mcp_servers.nuworq.command="node"')} \\\n  -c ${sq(`mcp_servers.nuworq.args=${JSON.stringify([BIN, 'mcp'])}`)} \\\n  -c ${sq('mcp_servers.nuworq.default_tools_approval_mode="approve"')} \\\n  -c ${sq(`mcp_servers.nuworq.env=${envToml}`)}${named}${scrub} \\\n  ${sq(task)}`);
   }
   return {
-    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd, tokenAt, piDir, keys: [...harness.secret, ...harness.config],
+    name, home, worktree, main: origin ? `origin/${main}` : main, origin, cwd, tokenAt, piDir,
+    keys: [...harness.secret, ...harness.config, ...namedEnv(flags.env, flags['env-secret'])],
     checkout: setup.join(' && '), start: lines.join(' && \\\n'), cmd: [...setup, ...lines].join(' && \\\n'),
   };
 }
@@ -1035,6 +1037,11 @@ function workerSetup(target, agent, flags, s, token = null) {
 // argv: the run flags the service keeps (connect and staff pass their own: #490). cwd: where it starts, this folder
 // unless given (nuworq up keeps the folder an installed runner had: #559). agentTokenFile: the token file an installed
 // runner had, kept when no --agent-token is given (nuworq up restarting it: #582).
+// The variables named with --env and --env-secret (#616), checked; a name it won't pass is a HubError with its hint.
+function envNames(flags) {
+  try { return namedEnv(flags.env, flags['env-secret']); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+}
+
 async function runService(flags, { argv = process.argv.slice(3), cwd = process.cwd(), agentTokenFile: kept = null } = {}) {
   const svc = await import('../src/service.js');
   const { execFile } = await import('node:child_process');
@@ -1048,6 +1055,10 @@ async function runService(flags, { argv = process.argv.slice(3), cwd = process.c
   }
   let args;
   try { args = svc.serviceArgs(argv); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+  // The variables named with --env go into the service with their values from this shell (#616); a secret never
+  // does: the service's definition isn't a place for one.
+  const named = envNames(flags);
+  if (flags['env-secret'] !== undefined) throw new HubError('--env-secret isn\'t kept by an installed runner: its service definition would hold the secret', { hint: 'Run nuworq run --env-secret … in a terminal instead, or leave it out.' });
   lockDown(dirname(HUB_FILE));
   // The folders its workers may use, chosen now while there's a terminal to ask in (#477).
   await chooseWorkFolders(flags, await createClient(flags).get('/api/projects').catch(() => []), resolveSettings(flags));
@@ -1058,7 +1069,7 @@ async function runService(flags, { argv = process.argv.slice(3), cwd = process.c
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
   // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
   // NUWORQ_SERVICE: it knows it's the service, so it may exit to move onto a newly installed nuworq (#456).
-  const env = { ...svc.serviceEnv(process.env, { repos: besideOf(cwd) }), NUWORQ_SERVICE: svc.LABEL, ...(agentTokenFile ? { NUWORQ_AGENT_TOKEN_FILE: agentTokenFile } : {}) };
+  const env = { ...svc.serviceEnv(process.env, { repos: besideOf(cwd), names: named }), NUWORQ_SERVICE: svc.LABEL, ...(agentTokenFile ? { NUWORQ_AGENT_TOKEN_FILE: agentTokenFile } : {}) };
   const r = await svc.install({ ...where, command: [svc.stableNode(process.execPath), BIN, 'run', ...args], env, log, cwd })
     .catch((e) => { throw new HubError(e.message, { hint: e.hint ?? 'Run it without --install to see what goes wrong.' }); });
   // Loaded isn't running (#250): only report success once the runner is up.
@@ -1128,6 +1139,7 @@ async function staffing(client, projects, flags) {
 // Keep up to --workers headless workers on waiting work in the projects the human opted in.
 async function runCmd(flags) {
   if (flags.install || flags.uninstall) return runService(flags);
+  envNames(flags); // a name it won't pass stops it here, before any work starts
   const s = resolveSettings(flags);
   const agent = agentOf(flags);
   if (agent !== 'claude') console.log(amber(readsKeys(agent)));
