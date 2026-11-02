@@ -7,7 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { createHmac, generateKeyPairSync } from 'node:crypto';
 import http from 'node:http';
 import { Hub, normRemote } from '../src/core.js';
-import { receive } from '../src/github.js';
+import { receive, prSeen } from '../src/github.js';
+import { tagsSettled } from '../src/releases.js';
 import { GitHubApp, prClient } from '../src/ghapp.js';
 
 const SECRET = 'webhook-secret';
@@ -67,10 +68,10 @@ function world({ fail = null, autoFail = null } = {}) {
   };
 
   // GitHub's pull_request webhook, signed with the project's secret.
-  const hook = (number, { merged = false, state = 'closed', head = '', action = 'closed' } = {}) => {
+  const hook = (number, { merged = false, state = 'closed', head = '', sha = 'abc1234def', action = 'closed' } = {}) => {
     const raw = Buffer.from(JSON.stringify({
       action, repository: { full_name: normRemote(origin) },
-      pull_request: { number, title: 'x', state, merged, html_url: `https://github.com/acme/api/pull/${number}`, head: { ref: head, sha: 'abc1234def' }, base: { ref: 'main' }, merge_commit_sha: 'fff0000' },
+      pull_request: { number, title: 'x', state, merged, html_url: `https://github.com/acme/api/pull/${number}`, head: { ref: head, sha }, base: { ref: 'main' }, merge_commit_sha: 'fff0000' },
     }));
     return receive(hub, 'demo', { event: 'pull_request', raw, signature: 'sha256=' + createHmac('sha256', SECRET).update(raw).digest('hex') });
   };
@@ -166,6 +167,102 @@ describe('accepted remote work lands through a pull request the hub opens', () =
     w.hook(101, { merged: false, head: j.branch });
     assert.equal(w.events(1, 'sent_back').length, 1, 'retried: no second note');
     assert.equal(w.item(1).stage, 'ready');
+  });
+
+  // #686: a landing PR GitHub closes unmerged because the branch, after the land rebase, is main. Done when main
+  // already has the change the review accepted; sent back when it doesn't, though the PR's head looks the same.
+  // how: 'squash', the change reached main inside a squash with more in it (another item's), before the review;
+  // 'commit', the reviewed commit itself reached main after the review; 'reset', a rebase gone wrong reset the branch to main, and
+  // the accepted change never got there.
+  const closedEmpty = async ({ how = 'squash', release = false } = {}) => {
+    const w = world();
+    w.hub.humanOp('demo', 'create', { title: release ? 'Release v0.7.0' : 'Thing', acceptance: 'x' });
+    if (release) w.hub.q('UPDATE items SET release = 1 WHERE seq = 1').run();
+    const j = w.build('a1');
+    const reviewed = w.git(j.dir, 'rev-parse', 'HEAD');
+    if (how === 'squash') {
+      w.git(j.dir, 'switch', '-q', '--detach', 'origin/main');
+      writeFileSync(join(j.dir, 'a1.txt'), 'work\n');
+      writeFileSync(join(j.dir, 'more.txt'), 'more\n');
+      w.git(j.dir, 'add', '.');
+      w.git(j.dir, 'commit', '-q', '-m', 'a squash holding it');
+      w.git(j.dir, 'push', '-q', 'origin', 'HEAD:main');
+      w.git(j.dir, 'switch', '-q', j.branch);
+    }
+    w.hub.humanOp('demo', 'accept', { item: '#1' });
+    await w.hub.prsSettled();
+    assert.equal(w.item(1).stage, 'landing');
+    assert.equal(w.item(1).reviewed_sha, reviewed);
+    if (how === 'commit') w.git(j.dir, 'push', '-q', 'origin', 'HEAD:main'); // someone put it on main by hand
+    // The lander's rebase: it drops the commit main already has, or (reset) throws the work away.
+    w.git(j.dir, 'fetch', '-q', 'origin');
+    if (how === 'reset') w.git(j.dir, 'reset', '-q', '--hard', 'origin/main');
+    else w.git(j.dir, 'rebase', '-q', 'origin/main');
+    const head = w.git(j.dir, 'rev-parse', 'HEAD');
+    assert.equal(head, w.git(j.dir, 'rev-parse', 'origin/main'), 'the branch is main: GitHub closes the PR, no diff');
+    w.git(j.dir, 'push', '-q', '--force', 'origin', j.branch);
+    await w.hub.prefetch('demo', { item: '#1' }); // the mirror as its periodic fetch leaves it
+    const close = () => w.hook(101, { merged: false, head: j.branch, sha: head });
+    const seen = () => w.hub.tx(() => prSeen(w.hub, w.hub.project('demo'), w.hub.q('SELECT * FROM prs WHERE item_id = ?').get(w.item(1).id), { state: 'closed', head_sha: head }));
+    return { ...w, j, head, reviewed, close, seen };
+  };
+
+  test('a PR GitHub closes because main already has the reviewed change marks the item done, not sent back (#686)', async () => {
+    for (const how of ['squash', 'commit']) {
+      const w = await closedEmpty({ how });
+      w.close();
+      const it = w.item(1);
+      assert.equal(it.stage, 'done', how);
+      assert.equal(it.holder, null);
+      assert.equal(w.events(1, 'sent_back').length, 0);
+      const landed = w.events(1, 'landed');
+      assert.equal(landed.length, 1);
+      assert.equal(landed[0].headline, "PR #101 closed with nothing to merge: main already holds the change #1's review accepted, so it is done");
+      assert.equal(JSON.parse(landed[0].data).held, true);
+      assert.equal(JSON.parse(landed[0].data).reviewed, w.reviewed);
+      w.close();
+      assert.equal(w.events(1, 'landed').length, 1, 'retried: nothing more');
+    }
+  });
+
+  test('a PR closed empty because the branch was reset to main, losing the reviewed change, is still sent back (#686)', async () => {
+    const w = await closedEmpty({ how: 'reset' });
+    w.close();
+    assert.equal(w.item(1).stage, 'ready');
+    assert.match(JSON.parse(w.item(1).handoff).headline, /PR #101 was closed without merging/);
+    assert.equal(w.events(1, 'landed').length, 0);
+  });
+
+  test('with no reviewed head on record, a PR closed empty is sent back as before (#686)', async () => {
+    const w = await closedEmpty({ how: 'squash' });
+    w.hub.q(`UPDATE items SET reviewed_sha = '' WHERE seq = 1`).run();
+    w.close();
+    assert.equal(w.item(1).stage, 'ready');
+    assert.equal(w.events(1, 'landed').length, 0);
+  });
+
+  test("the hub's own look finding the PR closed agrees: the reviewed change on main is done, otherwise a land job (#686)", async () => {
+    for (const how of ['squash', 'commit', 'reset']) {
+      const w = await closedEmpty({ how });
+      const held = how !== 'reset';
+      assert.equal(w.seen(), true);
+      assert.equal(w.hub.q('SELECT state FROM prs WHERE item_id = ?').get(w.item(1).id).state, 'closed');
+      assert.equal(w.item(1).stage, held ? 'done' : 'landing', how);
+      assert.equal(w.events(1, 'landed').length, held ? 1 : 0);
+      if (!held) assert.match(w.events(1, 'pr').at(-1).headline, /PR #101 was closed without merging; #1 is a land job again/);
+    }
+  });
+
+  test('a release held on main this way is tagged: on its reviewed commit, or on the main that holds its change (#686)', async () => {
+    for (const how of ['commit', 'squash']) {
+      const w = await closedEmpty({ how, release: true });
+      const tags = [];
+      w.hub.github.tag = async (args) => { tags.push(args); };
+      w.close();
+      assert.equal(w.item(1).stage, 'done');
+      await tagsSettled(w.hub);
+      assert.deepEqual(tags.map((t) => [t.tag, t.sha]), [['v0.7.0', how === 'commit' ? w.reviewed : w.head]]);
+    }
   });
 
   test('accepting again while its PR is open opens no second PR', async () => {

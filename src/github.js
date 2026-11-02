@@ -7,6 +7,7 @@ import { issueEvent, issueComment, installedRepos } from './issues.js';
 import { alertEvent } from './alerts.js';
 import { untrackedPr } from './tidy.js';
 import { tagRelease } from './releases.js';
+import { baseOf, contains, headOf, holdsChange, shaOf } from './git.js';
 
 const ACTOR = 'github';
 const OK = new Set(['success', 'neutral', 'skipped']);
@@ -98,6 +99,9 @@ function pullRequest(hub, p, body) {
         data: { pr: pr.number, url: pr.html_url, branch: pr.head?.ref ?? item.branch, base, head: pr.merge_commit_sha ?? '' },
       });
       if (item.release) tagRelease(hub, p, item, pr.merge_commit_sha ?? ''); // its merge is the release (#400)
+    } else if (item.stage === 'landing' && state === 'closed' && ownBranch(item, pr.head?.ref)
+      && heldAlready(hub, p, item, { number: pr.number, url: pr.html_url })) {
+      // Main already held it: done, not sent back (#686).
     } else if (item.stage === 'landing' && state === 'closed' && ownBranch(item, pr.head?.ref)) {
       const headline = `PR #${pr.number} was closed without merging`;
       const summary = 'Read the pull request for why, rework it on the same branch, and submit again.';
@@ -122,6 +126,29 @@ export function prMerged(hub, p, row, { sha = '', base = 'main' } = {}) {
   });
 }
 
+// A landing item's pull request closed unmerged, but its base already holds the change its review accepted (#686):
+// it reached main another way, a squash under another item say, so the land rebase left the branch equal to main
+// and GitHub closed the PR for having no diff. That is landed: the item is done, and a release is tagged. Judged by
+// reviewed_sha, never the PR's head: a rebase gone wrong (main's side taken, the branch reset) also leaves the head
+// on main, with the accepted work lost, and that close is sent back as before. So is one with no reviewed head on
+// record. Read from the mirror as it is, since a webhook doesn't wait on the network. True when it marked the item
+// done. In a transaction.
+function heldAlready(hub, p, item, { number, url }) {
+  const repo = item.reviewed_sha && hub.repoFor(p, item);
+  const base = repo && baseOf(repo.path);
+  if (!base || !holdsChange(repo.path, base, item.reviewed_sha)) return false;
+  hub.move(item, 'done', ACTOR, { holder: null, lease_until: null, touching: '[]' });
+  hub.event(p, {
+    item, actor: ACTOR, type: 'landed',
+    headline: `PR #${number} closed with nothing to merge: ${base} already holds the change #${item.seq}'s review accepted, so it is done`,
+    summary: `GitHub closed it unmerged, and ${base} already has ${item.reviewed_sha.slice(0, 7)}'s change, so there is nothing left to land.`,
+    data: { pr: number, url, branch: item.branch, base, head: headOf(repo.path, base), reviewed: item.reviewed_sha, held: true },
+  });
+  // The release is the reviewed commit when main has it; else main as it is, which holds the change.
+  if (item.release) tagRelease(hub, p, item, (contains(repo.path, base, item.reviewed_sha) ? item.reviewed_sha : shaOf(repo.path, base)) ?? '');
+  return true;
+}
+
 // What the hub's own look at a landing item's open pull request found (its periodic pass, which a hub needs
 // because no webhook may reach it), as pull() in src/ghapp.js says: merged lands it, as the merged webhook
 // does; closed without merging leaves it in landing, a land job again, saying so; conflicting with main
@@ -135,6 +162,7 @@ export function prSeen(hub, p, row, pr) {
   if (item?.stage !== 'landing') return false;
   if (pr.state === 'closed') {
     hub.q(`UPDATE prs SET state = 'closed', updated_at = ? WHERE project_id = ? AND repo = ? AND number = ?`).run(hub.now(), p.id, row.repo, row.number);
+    if (heldAlready(hub, p, item, { number: row.number, url: row.url })) return true;
     if (item.holder) hub.patch(item, { holder: null, lease_until: null });
     hub.event(p, {
       item, actor: ACTOR, type: 'pr', headline: `PR #${row.number} was closed without merging; #${item.seq} is a land job again`,
