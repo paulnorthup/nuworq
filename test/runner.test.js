@@ -335,8 +335,9 @@ describe('nuworq worker --browser', () => {
       assert.equal(b.deny, 'mcp__playwright__browser_run_code_unsafe', 'except its tool that runs any code in the server process');
       assert.ok(b.servers.nuworq.env.NUWORQ_HAS.split(',').includes('browser'), 'it declares browser, as --has browser would');
       assert.match(b.task, /`node bin\/nuworq\.js serve --demo --port 0` in the background/);
-      assert.match(b.task, /desktop width and at 375px wide \(browser_resize\); the app is light only/);
-      assert.doesNotMatch(b.task, /dark mode \(|browser_emulate_media/, 'no dark-mode screenshots (#156)');
+      assert.match(b.task, /desktop width and at 375px wide \(browser_resize\), in light and in dark/);
+      assert.match(b.task, /document\.documentElement\.dataset\.theme = "dark" with browser_evaluate/, 'dark is checked by forcing the theme (#484)');
+      assert.doesNotMatch(b.task, /light only|browser_emulate_media/);
       assert.match(b.task, /describe in your evidence what you saw/);
       const own = parts(await cli('--agent', 'claude', '--browser', '--allow', 'Read'));
       assert.deepEqual(own.allow, ['Read', 'mcp__playwright'], '--allow keeps its list');

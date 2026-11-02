@@ -47,7 +47,7 @@
   --agents-tint: #ecf0fd;
   --queue: #8b9099;
   --queue-tint: #eceef1;
-  /* Outside's stripes (#209): white labels sit on --hatch and ink text on --hatch-tint, 4.5:1 on every stripe. */
+  /* Outside's stripes (#209): --on-fill labels sit on --hatch and ink text on --hatch-tint, 4.5:1 on every stripe. */
   --hatch: repeating-linear-gradient(135deg, var(--muted) 0 4px, var(--ink) 4px 7px);
   --hatch-tint: repeating-linear-gradient(135deg, var(--sunken) 0 5px, var(--line-strong) 5px 7px);
   --ok: #2a7549;
