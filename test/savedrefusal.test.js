@@ -21,10 +21,14 @@ describe('a refusal that says it saved something saved it', () => {
     assert.deepEqual({ ...row }, { type: 'comment', headline: 'Last report: tests pass', actor: 'alice' });
   });
 
-  test('every error that says something was saved as a comment is marked to keep it', () => {
-    const src = readFileSync(new URL('../src/core.js', import.meta.url), 'utf8');
-    const said = [...src.matchAll(/UserError\(`[^`]*saved as a comment[^`]*`, \{[^}]*\}/g)];
+  // "nothing was saved" (refuseSecrets) is true as it stands: test/secrets.test.js checks no row changes.
+  test('every error that says something was saved is marked to keep it', () => {
+    const lines = readFileSync(new URL('../src/core.js', import.meta.url), 'utf8').split('\n');
+    const said = lines.flatMap((l, i) => /new UserError\(.*\bwas saved\b/.test(l) && !/nothing was saved/.test(l) ? [i] : []);
     assert.ok(said.length >= 1);
-    for (const m of said) assert.match(m[0], /keep: true/);
+    for (const i of said) {
+      const call = lines.slice(i, lines.findIndex((l, j) => j >= i && /\}\);\s*$/.test(l)) + 1).join('\n');
+      assert.match(call, /keep: true/, `src/core.js:${i + 1}`);
+    }
   });
 });
