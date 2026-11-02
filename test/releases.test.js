@@ -136,6 +136,12 @@ describe('a finished milestone drafts the release (#399)', () => {
     const s = w.releases()[0].summary;
     assert.match(s, /\*\*One[\s\S]*Thanks to everyone\.\n\nLanded since this was edited:\n\n\*\*Two \(#\d+\)\*\*\n\n- b/);
     assert.equal(s.match(/\*\*One/g).length, 1, 'not repeated');
+    // Still edited at the next redraft: their words stay, and only Three is added (#737).
+    w.milestone('Three', ['c']);
+    const t = w.releases()[0].summary;
+    assert.match(t, /Thanks to everyone\./);
+    assert.equal(t.match(/\*\*Two/g).length, 1, 'Two not repeated');
+    assert.equal(t.match(/\*\*Three/g).length, 1, 'Three added once');
   });
 
   test('once the release is under way, later work goes in the next one', () => {

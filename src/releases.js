@@ -77,13 +77,14 @@ export function draftRelease(hub, p, by = SYSTEM) {
     return it;
   }
   // Untouched, the summary is redrafted whole; edited by a person, only what it doesn't mention is added.
+  // release_draft keeps the hub's own draft, never the merged summary, so an edit stays an edit (#737).
   let summary = draft;
   if (open.summary !== open.release_draft) {
     const fresh = items.filter((it) => !open.summary.includes(`(#${it.seq})`));
     summary = fresh.length ? `${open.summary}\n\nLanded since this was edited:\n\n${changelog(hub, fresh, milestones.filter((m) => fresh.includes(m)))}` : open.summary;
   }
   if (summary === open.summary && title === open.title) { hub.patch(open, { release_through: through }); return open; }
-  hub.patch(open, { title, summary, release_draft: summary, release_through: through });
+  hub.patch(open, { title, summary, release_draft: draft, release_through: through });
   hub.event(p, { item: open, actor: by, type: 'release', headline: `${by === SYSTEM ? 'nuworq' : by} redrafted #${open.seq} as ${title}` });
   return open;
 }
