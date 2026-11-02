@@ -862,7 +862,8 @@ Usage
 
 Flags
   --item <item>   the item it came up on
-  --replaces <n>  the id of an outdated note this replaces
+  --replaces <n>  the id of an outdated note this replaces: under Run with it,
+                  and never one a person pinned
 
 Example
   nuworq learn "npm test needs Node 24: older ones lack node:sqlite" --as

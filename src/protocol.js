@@ -298,7 +298,7 @@ export const OPS = [
     params: {
       note: s('One or two concrete lines.'),
       item: { ...ITEM, description: 'Optional. The item it came up on.' },
-      replaces: { type: 'integer', description: 'Optional. The id of an outdated note this replaces.' },
+      replaces: { type: 'integer', description: 'Optional. The id of an outdated note this replaces: under Run with it, and never one a person pinned.' },
     },
     required: ['note'],
   },
