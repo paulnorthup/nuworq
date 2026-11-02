@@ -314,7 +314,7 @@ describe('version preconditions: work that waits for a version', () => {
     const api = `http://127.0.0.1:${gh.address().port}`;
     try {
       const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-      const app = new GitHubApp({ id: 1, key: privateKey, api });
+      const app = new GitHubApp({ id: 1, key: privateKey.export({ type: 'pkcs8', format: 'pem' }), api });
       const run = async (view) => {
         const { hub, item } = setup();
         hub.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(hub.project('w').id, 'github.com/acme/api', 0);

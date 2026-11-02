@@ -175,4 +175,43 @@ describe('a shared hub keeps organizations apart', () => {
       spaces.close();
     }
   });
+
+  test("the sweep's release preconditions read GitHub only through the workspace's own installation (#758)", async () => {
+    // acme/api is private: its latest release answers only to a token, minted through installation 42 (alpha's).
+    const api = http.createServer((req, res) => {
+      const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+      if (req.url === '/repos/acme/api/installation') return json(200, { id: 42, account: { login: 'acme' } });
+      if (req.method === 'POST' && req.url === '/app/installations/42/access_tokens') return json(201, { token: 'ghs_alpha', expires_at: new Date(Date.now() + 3600e3).toISOString() });
+      if (req.url === '/repos/acme/api/releases/latest') return req.headers.authorization === 'Bearer ghs_alpha' ? json(200, { tag_name: 'v9.9.9' }) : json(404, { message: 'Not Found' });
+      json(404, { message: 'Not Found' });
+    });
+    const apiUrl = `http://127.0.0.1:${await listen(api)}`;
+    const spaces = new Workspaces({ dir: tmp('nuworq-iso-pre-') });
+    const item = {};
+    for (const ws of ['alpha', 'bravo']) {
+      spaces.create(ws);
+      const hub = spaces.get(ws);
+      hub.tx(() => hub.project('w', { create: true }));
+      hub.humanOp('w', 'settings', { autonomy: 'full' });
+      // bravo links alpha's private repository too, and waits on its release.
+      hub.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(hub.project('w').id, 'github.com/acme/api', 0);
+      hub.agentOp('w', 'propose', 'a', { title: 'Adopt', acceptance: 'x', precondition: { kind: 'release', repo: 'acme/api', min: '1.0.0' } });
+      item[ws] = () => hub.item(hub.project('w'), '#1');
+    }
+    spaces.directory.bindInstallation(42, 'alpha');
+    const app = new GitHubApp({ id: 1, key: PEM, api: apiUrl, web: apiUrl });
+    const server = createServer(spaces, { githubApp: app, github: { api: apiUrl, web: apiUrl }, sweepMs: 20 });
+    try {
+      for (let i = 0; i < 250 && !(item.alpha().last_check && item.bravo().last_check); i++) await new Promise((r) => setTimeout(r, 20));
+      assert.equal(item.alpha().stage, 'ready', 'alpha reads its own repository');
+      assert.match(JSON.parse(item.alpha().last_check).detail, /9\.9\.9/);
+      const b = item.bravo();
+      assert.equal(b.stage, 'outside', "bravo gets no token through alpha's installation");
+      assert.doesNotMatch(JSON.parse(b.last_check).detail, /9\.9\.9/, 'and learns no tag');
+    } finally {
+      server.close();
+      api.close();
+      spaces.close();
+    }
+  });
 });
