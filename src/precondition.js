@@ -14,6 +14,8 @@ const HINT = 'e.g. precondition: "https://api.example.com/v2/health" (answers 20
 const VERSION_HINT = 'e.g. { kind: "version", url: "https://api.example.com/version", json_path: "version", min: "2.1.0" } (without json_path, the first version in the body), or { kind: "release", repo: "acme/api", min: "v2.1.0" } (its latest GitHub release).';
 // How long work may sit outside before the human hears about it, unless the project says otherwise.
 export const WAIT_DAYS = 7;
+// After this many checks in a row that err (can't ask, or the answer isn't one), the work is stuck, not waiting (#746).
+export const STUCK_ERRORS = 3;
 
 // Forgiving: a URL string alone is a GET expecting 200. Returns null for none (clear), or the normalized object.
 export function normPrecondition(v) {
@@ -87,7 +89,7 @@ function normDate(v) {
   if (Number.isNaN(at)) throw new UserError(`precondition.after "${s.slice(0, 40)}" isn't a date`, { hint: DATE_HINT });
   return { kind: 'date', after: /T/.test(s) ? new Date(at).toISOString() : s };
 }
-const dateAt = (pre) => Date.parse(/T/.test(pre.after) ? pre.after : `${pre.after}T00:00:00Z`);
+export const dateAt = (pre) => Date.parse(/T/.test(pre.after) ? pre.after : `${pre.after}T00:00:00Z`);
 // Whether a date precondition's day has come (false for any other kind: those the hub has to check).
 export const dateReached = (pre, now) => pre?.kind === 'date' && now >= dateAt(pre);
 
@@ -160,7 +162,7 @@ export async function check(pre, opts = {}) {
     let found;
     if (pre.json_path) {
       let data;
-      try { data = JSON.parse(body); } catch { return { ok: false, detail: 'answered 200, but not with JSON' }; }
+      try { data = JSON.parse(body); } catch { return { ok: false, error: true, detail: 'answered 200, but not with JSON' }; }
       found = dig(data, pre.json_path);
       if (found == null) return { ok: false, detail: `${pre.json_path} is missing` };
       found = String(found).trim().replace(/^v/i, '');
@@ -171,7 +173,7 @@ export async function check(pre, opts = {}) {
   if (pre.contains && !body.includes(pre.contains)) return { ok: false, detail: `answered ${res.status} without "${pre.contains}"` };
   if (pre.json_path) {
     let data;
-    try { data = JSON.parse(body); } catch { return { ok: false, detail: `answered ${res.status}, but not with JSON` }; }
+    try { data = JSON.parse(body); } catch { return { ok: false, error: true, detail: `answered ${res.status}, but not with JSON` }; }
     const got = dig(data, pre.json_path);
     if (pre.equals !== undefined ? JSON.stringify(got) !== JSON.stringify(pre.equals) : got == null) {
       return { ok: false, detail: got === undefined ? `${pre.json_path} is missing` : opts.shared ? `${pre.json_path} doesn't match` : `${pre.json_path} is ${JSON.stringify(got).slice(0, 80)}` };
@@ -183,7 +185,7 @@ export async function check(pre, opts = {}) {
 // Whether a found version reaches min, naming both (a shared hub's tenants see only whether it did).
 function versionResult(pre, said, found, shared) {
   const v = found && semver(found);
-  if (!v) return { ok: false, detail: shared || !found ? `${said} no version` : `${said} "${String(found).slice(0, 40)}", which isn't a version` };
+  if (!v) return { ok: false, error: true, detail: shared || !found ? `${said} no version` : `${said} "${String(found).slice(0, 40)}", which isn't a version` };
   if (compareSemver(v, pre.min) < 0) return { ok: false, detail: shared ? `${said} a version below ${pre.min}` : `${said} ${found}, below ${pre.min}` };
   return { ok: true, detail: shared ? `${said} ${pre.min} or later` : `${said} ${found}, at least ${pre.min}` };
 }
@@ -199,10 +201,10 @@ async function checkRelease(pre, { fetch: get = fetch, timeoutMs = CHECK_MS, git
     res = await get(`${api}/repos/${pre.repo}/releases/latest`, { headers, signal: AbortSignal.timeout(timeoutMs) });
     data = await res.json().catch(() => null);
   } catch (e) {
-    return { ok: false, detail: `GitHub didn't answer (${e.cause?.code ?? e.name})` };
+    return { ok: false, error: true, detail: `GitHub didn't answer (${e.cause?.code ?? e.name})` };
   }
-  if (res.status === 404) return { ok: false, detail: `${pre.repo} has no releases yet, or GitHub can't see it` };
-  if (res.status !== 200) return { ok: false, detail: `GitHub answered ${res.status} for ${pre.repo}'s latest release` };
+  if (res.status === 404) return { ok: false, error: true, detail: `${pre.repo} has no releases yet, or GitHub can't see it` };
+  if (res.status !== 200) return { ok: false, error: true, detail: `GitHub answered ${res.status} for ${pre.repo}'s latest release` };
   const tag = String(data?.tag_name ?? '').trim();
   return versionResult(pre, `${pre.repo}'s latest release is`, firstVersion(tag) ?? tag, false);
 }
@@ -215,11 +217,11 @@ async function fetchUrl(pre, { fetch: get = fetch, env = process.env, timeoutMs 
   if (shared) env = {};
   if (pre.credential) {
     const value = envVar(`CRED_${pre.credential}`, env);
-    if (!value) return { ok: false, detail: `NUWORQ_CRED_${pre.credential} isn't set on the hub's host` };
+    if (!value) return { ok: false, error: true, detail: `NUWORQ_CRED_${pre.credential} isn't set on the hub's host` };
     // Agents choose the URL, so a credential goes only to the hosts the hub's host named for it.
     const host = new URL(pre.url).hostname;
     if (!credentialAllows(pre.credential, host, env)) {
-      return { ok: false, detail: `NUWORQ_CRED_${pre.credential} isn't allowed for ${host}: the hub's host lists where it may go in NUWORQ_CRED_${pre.credential}_HOSTS` };
+      return { ok: false, error: true, detail: `NUWORQ_CRED_${pre.credential} isn't allowed for ${host}: the hub's host lists where it may go in NUWORQ_CRED_${pre.credential}_HOSTS` };
     }
     headers.authorization = /^(Bearer|Basic|token) /i.test(value) ? value : `Bearer ${value}`;
   }
@@ -231,9 +233,9 @@ async function fetchUrl(pre, { fetch: get = fetch, env = process.env, timeoutMs 
     body = await res.text();
   } catch (e) {
     const why = e.cause?.code ?? e.code ?? e.name;
-    if (!shared) return { ok: false, detail: `${new URL(pre.url).host} didn't answer (${why})` };
+    if (!shared) return { ok: false, error: true, detail: `${new URL(pre.url).host} didn't answer (${why})` };
     console.error(`precondition check of ${new URL(pre.url).host} failed: ${e.code === 'EBLOCKED' ? e.message : why}`);
-    return { ok: false, detail: `couldn't check ${new URL(pre.url).host}: a shared hub reaches only public addresses that answer` };
+    return { ok: false, error: true, detail: `couldn't check ${new URL(pre.url).host}: a shared hub reaches only public addresses that answer` };
   }
   return { res, body };
 }
@@ -288,7 +290,10 @@ function settle(hub, id, asked, r) {
       const fails = item.check_fails + 1, pre = JSON.parse(asked);
       // A date has nothing to back off from: look again when it comes.
       const next = pre.kind === 'date' ? dateAt(pre) : t + Math.min(FIRST_RETRY * 2 ** (fails - 1), MAX_RETRY);
-      hub.patch(item, { last_check: JSON.stringify({ at: t, ok: false, detail: r.detail }), check_fails: fails, next_check: next });
+      // errors: how many checks in a row couldn't ask, or got an answer that isn't one (#746), not just "not yet".
+      let errors = 0;
+      if (r.error) try { errors = (JSON.parse(item.last_check || '{}').errors ?? 0) + 1; } catch { errors = 1; }
+      hub.patch(item, { last_check: JSON.stringify({ at: t, ok: false, detail: r.detail, ...(errors ? { errors } : {}) }), check_fails: fails, next_check: next });
       return;
     }
     hub.patch(item, { last_check: JSON.stringify({ at: t, ok: true, detail: r.detail }), check_fails: 0 });

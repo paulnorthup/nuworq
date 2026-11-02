@@ -7,7 +7,7 @@ import { STAGES, AUTONOMY, OPEN_STAGES, CLAIM_TYPES, courtOf, waitsForOk, dur, p
 import { randomUUID } from 'node:crypto';
 import { gitWarning } from './git.js';
 import { prsOf } from './github.js';
-import { WAIT_DAYS } from './precondition.js';
+import { WAIT_DAYS, STUCK_ERRORS, dateAt, describe as describePrecondition } from './precondition.js';
 import { PASS_ON } from './issues.js';
 import { humanCost, verification } from './outcomes.js';
 import { OPERATOR_TAGS } from './protocol.js';
@@ -966,7 +966,7 @@ export function recentlyDone(items, t) {
   return recent.filter((i) => !folded(i)).map((it) => ({ it, parts: folds.has(it.id) ? kids.get(it.id).filter((c) => c.stage !== 'dropped').sort((a, b) => a.seq - b.seq) : null }));
 }
 
-const GROUP_STATE = { you: 0, stuck: 1, moving: 2, queued: 3 };
+const GROUP_STATE = { you: 0, stuck: 1, moving: 2, queued: 3, waiting: 4 };
 
 // The "now" groups stalled on a capability (#201): a group's next step, ready for 4 hours, needs something no
 // agent connected in the last 4 hours has. Group seq → { it: its oldest such step, missing }. Needs you calls
@@ -1035,16 +1035,77 @@ export function groupsOf(hub, p, items, { agents, openQs, t, stalled = new Map()
         ? `${ref(it)} needs an operator (${missing.join(', ')}); none has checked in today`
         : `${ref(it)} needs ${missing.join(', ')}; no agent connected in the last day has it` };
     }
-    const blocked = members.find((i) => i.stage === 'ready' && i.id !== g.id && hub.unmetDeps(i).length);
-    if (blocked) return { ...line, state: 'stuck', reason: `${ref(blocked)} waits on ${hub.unmetDeps(blocked).map(ref).join(', ')}` };
-    const operator = members.find((i) => i.stage === 'waiting' && openQs.some((q) => q.item_id === i.id && q.blocking && q.audience === 'operator'));
-    if (operator) return { ...line, state: 'stuck', reason: `${ref(operator)} waits on an operator` };
-    const outside = members.find((i) => i.stage === 'outside');
-    return { ...line, state: 'stuck', reason: outside ? `${ref(outside)} waits on an outside fact` : 'nothing in it can start' };
+    // The rest waits (#746): on its own time (a day, a check that runs but isn't met yet, work that moves, an
+    // operator who holds the question), or stuck until something changes. Stuck says what; waiting, until when.
+    const w = pick(members.map((i) => waitOf(i, new Set(), { parts: false })));
+    if (!w) return { ...line, state: 'stuck', reason: 'nothing in it can start' };
+    return { ...line, state: w.state, reason: w.reason, ...(w.state === 'waiting' && w.until ? { until: w.until } : {}) };
   }).filter(Boolean).map(({ allIn, ...g }) => ({ ...g, reason: allIn + g.reason }));
-  groups.sort((a, b) => PRIORITY_ORDER[a.effective] - PRIORITY_ORDER[b.effective] || GROUP_STATE[a.state] - GROUP_STATE[b.state] || a.item.slice(1) - b.item.slice(1));
+
+  // The wait that speaks for several (#746): stuck first, then you, then work that can start or moves, then the
+  // wait that ends soonest. null for none.
+  function pick(waits) {
+    const ws = waits.filter(Boolean), first = (s) => ws.find((x) => x.state === s);
+    return first('stuck') ?? first('you') ?? first('queued') ?? first('moving')
+      ?? ws.sort((a, b) => (a.until?.at ?? Infinity) - (b.until?.at ?? Infinity))[0] ?? null;
+  }
+  // What one open item waits on (#746): { state, reason, until? }; why is the reason without the item, so a
+  // dependency's reads on ("#522 waits on #575, which waits until Nov 15"). null: nothing here decides it.
+  // parts: false for a milestone's own members, whose parts are members too and speak for themselves.
+  function waitOf(i, seen = new Set(), { parts: viaParts = true } = {}) {
+    if (seen.has(i.id)) return { state: 'stuck', reason: `${ref(i)} waits on work that waits on it` };
+    seen.add(i.id);
+    const out = (state, why, until) => ({ state, why, reason: `${ref(i)} ${why}`, ...(until ? { until } : {}) });
+    if (waitsOnYou(p, i, openQs)) return out('you', 'waits on you');
+    if (i.holder) return out('moving', `is with ${i.holder}`);
+    if (['active', 'landing', 'verifying'].includes(i.stage)) return out('moving', i.stage === 'active' ? 'is being built' : `is being ${i.stage === 'landing' ? 'landed' : 'verified'}`);
+    // A milestone waits for its parts, and they speak for themselves; any other dependency is told through.
+    const deps = i.stage === 'ready' ? hub.unmetDeps(i).filter((d) => d.parent_id !== i.id) : [];
+    if (deps.length) {
+      const ws = deps.map((d) => ({ d, w: waitOf(d, new Set(seen)) }));
+      const dw = pick(ws.map((x) => x.w)) ?? { state: 'stuck', why: 'nothing in it can start' }, d = ws.find((x) => x.w === dw)?.d ?? deps[0];
+      return out(dw.state === 'stuck' ? 'stuck' : dw.state === 'you' ? 'you' : 'waiting', `waits on ${ref(d)}, which ${dw.why}`, dw.until);
+    }
+    if ((i.stage === 'ready' && !hub.unmetDeps(i).length) || shapeable.has(i.id)) {
+      const missing = missingOf(i);
+      if (!missing.length) return out('queued', 'is ready for the next agent');
+      return out('stuck', missing.some((tag) => OPERATOR_TAGS.includes(tag))
+        ? `needs an operator (${missing.join(', ')}); none has checked in today`
+        : `needs ${missing.join(', ')}; no agent connected in the last day has it`);
+    }
+    const q = i.stage === 'waiting' && openQs.find((x) => x.item_id === i.id && x.blocking && x.audience === 'operator');
+    if (q) return out('waiting', q.held_by && q.held_until > t ? `waits for the operator (${q.held_by} has it)` : 'waits for an operator');
+    if (i.stage === 'outside' && i.precondition) {
+      const pre = json(i.precondition, {}), last = json(i.last_check, null);
+      if (pre.kind === 'date') {
+        const until = { item: ref(i), ...untilOf(pre) };
+        return until.at <= t ? out('queued', `starts now: ${until.text} has come`) : out('waiting', `waits until ${until.text}`, until);
+      }
+      if ((last?.errors ?? 0) >= STUCK_ERRORS) return out('stuck', `can't be checked (${last.detail}): fix or clear its precondition, "${describePrecondition(pre)}"`);
+      return out('waiting', `waits until ${describePrecondition(pre)}`);
+    }
+    // A milestone met as a dependency or a sub-milestone waits as its parts do.
+    if (!viaParts) return null;
+    const parts = (kids.get(i.id) ?? []).filter(open).map((k) => ({ k, w: waitOf(k, new Set(seen)) }));
+    const kw = pick(parts.map((x) => x.w));
+    return kw && out(kw.state, `waits on its part ${ref(parts.find((x) => x.w === kw).k)}, which ${kw.why}`, kw.until);
+  }
+
+  // Waiting milestones step out of the list (#746): they come back when their wait ends, soonest first.
+  const waiting = groups.filter((x) => x.state === 'waiting')
+    .sort((a, b) => (a.until?.at ?? Infinity) - (b.until?.at ?? Infinity) || a.item.slice(1) - b.item.slice(1));
+  const shown = groups.filter((x) => x.state !== 'waiting');
+  shown.sort((a, b) => PRIORITY_ORDER[a.effective] - PRIORITY_ORDER[b.effective] || GROUP_STATE[a.state] - GROUP_STATE[b.state] || a.item.slice(1) - b.item.slice(1));
   const ungrouped = items.filter((i) => open(i) && !i.parent_id && !kids.has(i.id)).length;
-  return { groups, ungrouped };
+  return { groups: shown, groups_waiting: waiting, ungrouped };
+}
+
+// When a dated wait ends (#746): { at, text, time? }, a day as written ("Nov 15") or a time in UTC ("Nov 2, 20:50 UTC";
+// the page shows it in the device's own zone, web/milestones.js).
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function untilOf(pre) {
+  const at = dateAt(pre), d = new Date(at), day = `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  return { at, text: /T/.test(pre.after) ? `${day}, ${d.toISOString().slice(11, 16)} UTC` : day, ...(/T/.test(pre.after) ? { time: true } : {}) };
 }
 const PRIORITY_ORDER = { now: 0, soon: 1, later: 2 };
 

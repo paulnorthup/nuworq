@@ -50,6 +50,7 @@ export const NEW = {
   'one-name': '2026-11-02', // #708: one name per step of getting going: + Project, Home, Guide, Connect an agent, Staff it with nuworq run (the rail's + Project)
   'feedback-groups': '2026-11-02', // #688: the admin dashboard's feedback in groups: what covers each, a suggested call, one tap, Undo
   'feedback-waiting': '2026-11-02', // #688: for the hub's owners, the home's line of feedback waiting, opening the groups
+  'milestones-waiting': '2026-11-02', // #746: milestones that only wait step out of the list behind one quiet line; Stuck means something must change
   'default-tiers': '2026-11-02', // #723: Staffing's Claude models say the default tiers are in use, and when trials can't run
 };
 

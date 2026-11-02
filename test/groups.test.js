@@ -61,15 +61,17 @@ describe('groups at a glance (#200)', () => {
     assert.deepEqual(view(hub, 'p').groups.find((g) => g.item === '#1').state, 'queued');
   });
 
-  test("work parked on an operator's question doesn't wait on you: the group reads stuck on the operator", () => {
+  test("work parked on an operator's question doesn't wait on you: the group waits for the operator (#746)", () => {
     const { hub, create, op } = world();
     create({ title: 'Deploy', priority: 'now' }); // #1
     create({ title: 'Run the migration', parent: '#1' }); // #2
     op('w1', 'claim', { item: '#2' });
     op('w1', 'ask', { item: '#2', question: 'Can someone run the migration on prod?', to: 'operator', blocking: true });
     assert.equal(hub.item(hub.project('p'), '#2').stage, 'waiting');
-    const [g] = view(hub, 'p').groups;
-    assert.deepEqual([g.state, g.reason], ['stuck', '#2 waits on an operator']);
+    const v = view(hub, 'p');
+    assert.equal(v.groups.length, 0, 'waiting: out of the list');
+    const [g] = v.groups_waiting;
+    assert.deepEqual([g.state, g.reason], ['waiting', '#2 waits for an operator']);
     // Answered and back in the queue: still not waiting on you.
     hub.agentOp('p', 'checkin', 'op', { has: ['operator'] });
     hub.agentOp('p', 'answer', 'op', { question: 1, answer: 'Ran it' });
