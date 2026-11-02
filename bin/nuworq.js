@@ -68,6 +68,10 @@ const ignoreSiteHost = (flags) => {
 };
 
 async function status(flags) {
+  // serve --follow on this machine can't keep the hub up (#741): said first, since the hub may not answer.
+  let trouble = null;
+  try { trouble = readFileSync(join(dataHome(flags), 'hub-src.trouble'), 'utf8').trim(); } catch { /* none */ }
+  if (trouble) console.log(`${amber('!')} ${bold('serve --follow')}: ${trouble}`);
   const client = createClient(flags);
   const { url } = client.settings;
   const project = client.settings.project ?? (flags.all ? null : (await client.where()).project);
