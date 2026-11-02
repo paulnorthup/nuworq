@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, DAY } from '../src/core.js';
 import { guide, MODE_RULES } from '../src/protocol.js';
-import { NOTES_SHOWN } from '../src/fieldnotes.js';
+import { NOTES_SHOWN, memoryInputs } from '../src/fieldnotes.js';
 
 // A project with a milestone #1 and its parts #2 (exports), #3 (imports) and #4 (billing), 31 field notes about
 // nothing in particular, and three that bear on #2.
@@ -26,6 +26,8 @@ function setup({ autonomy = 'full' } = {}) {
   now += 1000; ids.path = agent('learn', 'a1', { note: 'src/export.js streams rows; never buffer a whole table.' }).note;
   now += 1000; agent('learn', 'a1', { note: 'The newest lesson: dashboards cache for a minute.' }); // newest, but about nothing here
   const tick = (ms) => { now += ms; };
+  // Memory was just distilled for people (#552, test/memory.test.js), so only the notes bring a review here.
+  hub.q('UPDATE projects SET distilled_sig = ?, distilled_at = ?').run(memoryInputs(hub, hub.project('p')).sig, now);
   const ofIds = (r) => (r.field_notes ?? []).map((n) => n.id);
   return { hub, human, agent, ids, tick, ofIds };
 }
@@ -128,7 +130,7 @@ describe('a tidy job reviews the field notes (#443)', () => {
     const r = agent('next', 'a2');
     assert.equal(r.mode, 'tidy');
     assert.equal((r.summary.match(/^- note /gm) ?? []).length, 34, 'every note older than a day');
-    assert.match(r.hint, /Don't retire anything yourself.*ask the person one question/);
+    assert.match(r.hint, /Don't retire anything yourself.*recommend it with distill.*the person decides with one tap/);
     assert.throws(() => agent('retire', 'a2', { notes: [ids.item], reason: 'built in' }), /a person retires field notes/);
     agent('submit', 'a2', { item: r.item, headline: 'Asked about 2 notes; kept the rest' });
     tick(DAY);

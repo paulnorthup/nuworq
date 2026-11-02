@@ -266,7 +266,12 @@ function atDepth(v, depth, pages) {
   };
   const { all, agents, activity, queue, done, notes, steers, decisions, proposed, waiting, verifying, ...out } = v;
   Object.assign(out, { depth, counts, stage_items });
-  if (z >= 1) Object.assign(out, { queue: z >= 2 ? queue : queue.slice(0, 5), done: z >= 2 ? done : done.slice(0, 5), notes: z >= 2 ? notes : notes.slice(0, 3), steers, decisions });
+  // At 5m, the first field notes, and every one waiting for a person's tap or named in Direction today (#552), so
+  // its recommendation and its source link have their note.
+  const waits = (n) => n.advice && !n.advice.by && n.advice.do !== 'keep';
+  const sourced = new Set((v.direction ?? []).map((d) => Number(/^note (\d+)$/.exec(d.source)?.[1])).filter(Boolean));
+  const notes5m = [...new Set([...notes.filter((n) => waits(n) || sourced.has(n.id)), ...notes.slice(0, 3)])];
+  if (z >= 1) Object.assign(out, { queue: z >= 2 ? queue : queue.slice(0, 5), done: z >= 2 ? done : done.slice(0, 5), notes: z >= 2 ? notes : notes5m, steers, decisions });
   const more = (k) => Math.max(PAGE[k], Number(pages[k]) || 0);
   if (z >= 2) {
     const rows = [...board].sort((a, b) => b.item.slice(1) - a.item.slice(1));
@@ -779,10 +784,14 @@ function build(hub, p, t, { light = false } = {}) {
     };
   });
 
-  const decisions = hub.decisions(p).map((d) => ({ id: d.id, body: d.body, ago: dur(t - d.at), at: d.at }));
+  // Memory distilled for people (#552): each decision and field note with its gist, a field note with the review's
+  // advice, and Direction today.
+  const advice = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
+  const decisions = hub.decisions(p).map((d) => ({ id: d.id, body: d.body, gist: d.gist || null, ago: dur(t - d.at), at: d.at }));
   const notes = hub.q(`SELECT n.*, i.seq FROM notes n LEFT JOIN items i ON i.id = n.item_id
       WHERE n.project_id = ? AND n.kind = 'learning' AND n.active = 1 ORDER BY n.always DESC, n.at DESC`).all(p.id)
-    .map((n) => ({ id: n.id, body: n.body, by: n.author, item: n.seq ? `#${n.seq}` : null, ago: dur(t - n.at), at: n.at, always: !!n.always }));
+    .map((n) => ({ id: n.id, body: n.body, gist: n.gist || null, advice: advice(n.advice), by: n.author, item: n.seq ? `#${n.seq}` : null, ago: dur(t - n.at), at: n.at, always: !!n.always }));
+  const directionToday = advice(p.direction) ?? [];
   const activity = hub.q(`SELECT e.*, i.seq AS item_seq FROM events e LEFT JOIN items i ON i.id = e.item_id
       WHERE e.project_id = ? ORDER BY e.at DESC, e.id DESC LIMIT 150`).all(p.id).map((e) => eventOut(e, t));
 
@@ -791,7 +800,7 @@ function build(hub, p, t, { light = false } = {}) {
     pulse: null, since, attention, motion, flow, // pulse: personalize's
     ...groupsOf(hub, p, items, { agents, openQs, t, stalled: stalledGroups }),
     queue, proposed, waiting, verifying, done,
-    agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, activity,
+    agents: agentRows, runners: hub.runnersOf(p), decisions, notes, steers, direction: directionToday, activity,
     stages: STAGES,
     all: items.map(brief),
   };

@@ -426,8 +426,16 @@ button.row-item:hover, button.row-item:focus-visible { background: var(--hover);
 .touch { margin-top: var(--sp-1); display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .touch code { font-size: var(--fs-1); color: var(--muted); }
 .headsup { color: var(--warn); font-size: var(--fs-2); margin-top: var(--sp-1); }
-.sublabel { font-size: var(--fs-2); font-weight: 600; color: var(--ink); margin: 0 0 var(--sp-2); display: flex; gap: var(--sp-2); align-items: baseline; }
-.sublabel span { font-weight: 400; color: var(--muted); }
+.sublabel { font-size: var(--fs-2); font-weight: 600; color: var(--ink); margin: 0 0 var(--sp-2); display: flex; flex-wrap: wrap; gap: 0 var(--sp-2); align-items: baseline; }
+.sublabel > span:last-child { font-weight: 400; color: var(--muted); }
+/* Memory distilled for people (#552): Direction today, gists with the full words behind them, a recommendation's taps */
+.direction { margin: 0 0 var(--sp-4); padding-left: var(--sp-5); display: grid; gap: var(--sp-1); }
+.direction .mem-src { font-size: var(--fs-2); color: var(--muted); white-space: nowrap; }
+.mem-full summary { font-size: var(--fs-2); color: var(--muted); cursor: pointer; }
+.mem-words { font-size: var(--fs-2); color: var(--muted); margin-top: var(--sp-1); }
+.mem-advice { margin-top: var(--sp-2); font-size: var(--fs-2); display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.mem-advice blockquote { margin: 0; flex-basis: 100%; padding-left: var(--sp-3); border-left: var(--rule) solid var(--line); color: var(--ink); }
+.mem-acts { display: inline-flex; gap: var(--sp-2); }
 
 .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-3); }
 .agent-card { background: var(--panel); border: var(--rule) solid var(--line); border-radius: var(--r-m); padding: var(--sp-3) var(--sp-4); }

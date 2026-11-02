@@ -1065,14 +1065,37 @@ function steering(v) {
       <div class="acks">${ackList({ acks: s.acks, missing, key: `acks:${s.id}`, open: S.open.has(`acks:${s.id}`), responses: z() >= 2 }, { esc })}</div></div>
       <div class="acts"><span class="age">${ago(s.at)} ago</span><button class="btn ghost small" data-action="retire" data-note="${s.id}" title="Stop delivering it">Retire</button></div></div>`;
   }).join('');
-  const decisions = v.decisions.map((d) => `<div class="row-item" data-key="note:${d.id}"><div class="body"><div class="h">${inline(d.body)}</div></div>
+  // Memory distilled for people (#552): a gist first, the full words one tap away; a review's recommendation decided
+  // with one tap. Without a gist yet, the words themselves.
+  const behind = (label, body) => `<details class="mem-full"><summary>${label}</summary><div class="mem-words">${inline(body)}</div></details>`;
+  const decisions = v.decisions.map((d) => `<div class="row-item" data-key="note:${d.id}"><div class="body"><div class="h">${inline(d.gist ?? d.body)}</div>${d.gist ? behind('Full text', d.body) : ''}</div>
     <div class="acts"><span class="age">${when(d)} ago</span><button class="btn ghost small" data-action="retire" data-note="${d.id}">Retire</button></div></div>`).join('');
-  const shownNotes = z() >= 2 ? v.notes : v.notes.slice(0, 3);
+  const all = z() >= 2 || S.open.has(`memory:${S.slug}`);
+  // A recommendation waiting for the person comes first, so it's among those shown before 30m.
+  const pending = (n) => !!n.advice && !n.advice.by && n.advice.do !== 'keep';
+  const ranked = [...v.notes.filter(pending), ...v.notes.filter((n) => !pending(n))];
+  const shownNotes = all ? ranked : ranked.slice(0, 3);
+  const advice = (n) => {
+    const a = n.advice;
+    if (!pending(n)) return a?.do === 'keep' && a.why && !a.by ? `<div class="s">Recommended: keep. ${esc(a.why)}</div>` : '';
+    return a.do === 'retire'
+      ? `<div class="mem-advice"><span>Recommended: retire. ${esc(a.why)}</span><span class="mem-acts"><button class="btn small" data-action="retire" data-note="${n.id}">Retire</button><button class="btn ghost small" data-action="keep" data-note="${n.id}">Keep</button></span></div>`
+      : `<div class="mem-advice"><span>Recommended: make it a decision. ${esc(a.why)}</span><blockquote>${inline(a.draft)}</blockquote><span class="mem-acts"><button class="btn small" data-action="promote" data-note="${n.id}">Make it a decision</button><button class="btn ghost small" data-action="keep" data-note="${n.id}">Keep as a note</button></span></div>`;
+  };
   // Agents get the ten notes that bear on their work (#443); a note marked always-show reaches every one of them.
-  const notes = shownNotes.map((n, i) => `<div class="row-item note-item" data-key="note:${n.id}"><div class="body"><div class="h">${inline(n.note ?? n.body)}</div><div class="s">${who(n.by)}${n.item ? ` on ${refLink(n.item)}` : ''}</div></div>
-    <div class="acts"><span class="age">${when(n)} ago</span><button class="btn ghost small${n.always ? ' on' : ''}" data-action="always" data-note="${n.id}" data-on="${n.always ? 0 : 1}" aria-pressed="${!!n.always}" title="${n.always ? 'Every agent gets it, whatever it works on. Tap to stop' : 'Give it to every agent, whatever it works on (at most 3)'}"${i === 0 ? ' data-new="always-show"' : ''}>${n.always ? 'Always shown' : 'Always show'}</button><button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button></div></div>`).join('');
+  const notes = shownNotes.map((n, i) => `<div class="row-item note-item" data-key="note:${n.id}"><div class="body"><div class="h">${inline(n.gist ?? n.note ?? n.body)}</div>${n.gist ? behind('Agent\'s words', n.body) : ''}<div class="s">${who(n.by)}${n.item ? ` on ${refLink(n.item)}` : ''}</div>${advice(n)}</div>
+    <div class="acts"><span class="age">${when(n)} ago</span><button class="btn ghost small${n.always ? ' on' : ''}" data-action="always" data-note="${n.id}" data-on="${n.always ? 0 : 1}" aria-pressed="${!!n.always}" title="${n.always ? 'Every agent gets it, whatever it works on. Tap to stop' : 'Give it to every agent, whatever it works on (at most 3)'}"${i === 0 ? ' data-new="always-show"' : ''}>${n.always ? 'Always shown' : 'Always show'}</button>${pending(n) && n.advice.do === 'retire' ? '' : `<button class="btn ghost small" data-action="retire" data-note="${n.id}" title="Outdated or wrong">Retire</button>`}</div></div>`).join('');
   const sub = (label, hint) => `<div class="sublabel">${label}<span>${hint}</span></div>`;
+  // Direction today (#552): a few plain lines a person checks direction by, each naming where it comes from.
+  const src = (s) => {
+    const m = String(s ?? '').match(/^(decision|steer|note) (\d+)$/);
+    if (!m) return /^#\d+$/.test(s) ? refLink(s) : '';
+    return `<button class="link faint" data-action="memory-src" data-note="${m[2]}">${{ decision: 'a decision', steer: 'your steering', note: 'a field note' }[m[1]]}</button>`;
+  };
+  const direction = v.direction?.length ? `${sub('<span data-new="memory-distilled">Direction today</span>', 'distilled from your decisions, steering and the notes that matter')}
+    <ol class="direction">${v.direction.map((d) => `<li><span>${inline(d.line)}</span> <span class="mem-src">${src(d.source)}</span></li>`).join('')}</ol>` : '';
   return `<section class="sec"><header><h2>Steering &amp; memory</h2><span class="hint">did your nudges land, and what every agent carries into every session</span></header>
+    ${direction}
     ${steers ? `${sub('Steering', 'acknowledged by')}<div class="rows" style="margin-bottom:var(--sp-4)">${steers}</div>` : ''}
     ${decisions ? `${sub('Decisions', 'standing rules, from you')}<div class="rows" style="margin-bottom:var(--sp-4)">${decisions}</div>` : ''}
     ${notes ? `${sub('Field notes', 'what agents learned the hard way, left for the next one')}<div class="rows">${notes}</div>
@@ -2000,6 +2023,15 @@ const ACTIONS = {
   always: async (el) => {
     const on = el.dataset.on === '1';
     await human('always', { note: Number(el.dataset.note), on }, on ? 'Every agent gets it now, whatever it works on' : 'Agents get it when it bears on their work');
+  },
+  // A review's recommendation (#552), one tap each: keep the note, or make its draft a standing decision.
+  keep: async (el) => { await human('keep', { note: Number(el.dataset.note) }, 'Kept: agents still get it'); },
+  promote: async (el) => { await human('promote', { note: Number(el.dataset.note) }, 'A decision now: every agent gets it, and the note is retired'); },
+  // Direction today names its sources: show that row, opening every note if it's one of the hidden ones.
+  'memory-src': (el) => {
+    S.open.add(`memory:${S.slug}`);
+    render({ force: true });
+    $(`#main [data-key="note:${el.dataset.note}"]`)?.scrollIntoView({ block: 'center' });
   },
   'feed-all': () => { S.feedAll = !S.feedAll; render({ force: true }); },
   connect: () => connect(),

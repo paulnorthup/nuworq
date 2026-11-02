@@ -9,7 +9,15 @@
 // the reason (retire), under "Run with it"; under lower autonomy it asks the person with one question listing them.
 // Submitting the job marks every note it listed as reviewed, so a note is due again only when its item lands anew
 // or a week passes.
-import { DAY, SYSTEM } from './core.js';
+//
+// The same review distills memory for people (#552, distill): Direction today (at most DIRECTION_MAX plain lines from
+// the decisions, people's live steering and the notes that matter, each naming its source), a one-line gist for each
+// decision and field note, and for each field note a recommendation with its reason: keep, retire, or make it a
+// decision (a draft only a person turns into one). Under "Run with it" a retire it recommends is carried out at once;
+// otherwise the person decides with one tap. A review opens when those inputs change (at most hourly) and weekly.
+// Agents still get every note's full text.
+import { createHash } from 'node:crypto';
+import { DAY, HUMAN, SYSTEM, UserError } from './core.js';
 
 export const NOTES_SHOWN = 10;
 export const ALWAYS_MAX = 3;
@@ -101,33 +109,131 @@ export function dueNotes(hub, p) {
 }
 
 const clip = (s, len = 200) => (s.length > len ? `${s.slice(0, len - 1).trimEnd()}…` : s);
-const SUMMARY = (due) => `Review these field notes: merge duplicates into one, and retire each note whose lesson is now in the code, the agents' guide or a test.\n${
-  due.map(({ n, why }) => `- note ${n.id}${n.seq ? ` (about #${n.seq})` : ''}${why === 'weekly' ? '' : `, ${why}`}: ${clip(n.body)}`).join('\n')}`;
+
+// ── memory for people (#552) ──
+
+export const DIRECTION_MAX = 7;
+export const DISTILL_EVERY = 60 * 60_000; // inputs that changed are distilled again at most hourly
+const GIST_MAX = 160;
+export const ADVICE = ['keep', 'retire', 'decide'];
+
+// What memory is distilled from: the active decisions, people's live steering (about the project, not an item: that
+// retires itself; and not the hub's own notices, #550) and field notes. sig changes whenever any of them does.
+export function memoryInputs(hub, p) {
+  const rows = hub.q(`SELECT id, kind, body, gist, advice, author FROM notes WHERE project_id = ? AND active = 1
+    AND (kind IN ('decision', 'learning') OR (kind = 'steer' AND item_id IS NULL AND target IS NULL AND notice = 0 AND (author = ? OR author LIKE '@%'))) ORDER BY id`).all(p.id, HUMAN);
+  const sig = createHash('sha256').update(rows.map((n) => `${n.id}:${n.kind}:${n.body}`).join('\n')).digest('hex').slice(0, 16);
+  return { rows, sig };
+}
+
+// Whether memory needs distilling: its inputs changed since the last distill, and that was an hour ago or more.
+export function distillDue(hub, p) {
+  const { rows, sig } = memoryInputs(hub, p);
+  // Steering alone (and the hub's own notices, such as an autonomy change) is already plain: nothing to distill.
+  return rows.some((n) => n.kind !== 'steer') && sig !== (p.distilled_sig ?? '') && hub.now() - (p.distilled_at ?? 0) >= DISTILL_EVERY;
+}
+
+const sourceOf = (n) => `${n.kind === 'learning' ? 'note' : n.kind} ${n.id}`;
+const DISTILL = (hub, p) => {
+  const { rows } = memoryInputs(hub, p);
+  // Decisions and steers by id and words (checkin gives their words only); field notes by id: look with notes "all".
+  const stale = rows.filter((n) => n.kind === 'learning' && !n.gist).map((n) => n.id);
+  return `\nThen distill memory for people with distill: Direction today (at most ${DIRECTION_MAX} plain lines a person reads in a minute, from the decisions, people's steering and the notes that matter, each naming its source as "decision 12", "steer 40", "note 7" or "#468"), and a one-line gist a person understands without looking anything up for each decision and field note without one, or whose gist no longer fits. For each field note also recommend keep, retire (why: where the lesson lives now, or what supersedes it) or decide (a draft decision for a person to accept).\n${
+    rows.filter((n) => n.kind !== 'learning').map((n) => `* ${sourceOf(n)}${n.gist ? ` (gist: ${n.gist})` : ''}: ${clip(n.body)}`).join('\n')}${
+    stale.length ? `\n* field notes without a gist: ${stale.join(', ')} (look with notes "all" for their words)` : ''}`;
+};
+
+const SUMMARY = (hub, p, due) => `${due.length ? `Review these field notes: merge duplicates into one, and retire each note whose lesson is now in the code, the agents' guide or a test.\n${
+  due.map(({ n, why }) => `- note ${n.id}${n.seq ? ` (about #${n.seq})` : ''}${why === 'weekly' ? '' : `, ${why}`}: ${clip(n.body)}`).join('\n')}\n` : ''}${DISTILL(hub, p)}`;
 const ACCEPTANCE = [
   '- Each note listed is kept, merged or retired. Keep it when its lesson still saves the next agent time.',
   '- A merge is one learn with the combined lesson, then retire with into set to its id and the duplicates in notes.',
   '- A retire names where the lesson lives now (a file, the guide section, a test) in its reason.',
-  '- Under lower autonomy, nothing is retired by you: ask the person one question listing the notes to retire or merge, and why.',
-  '- Submit with what you kept, merged and retired.',
+  '- Under lower autonomy, nothing is retired by you: distill records each recommendation, and the person decides with one tap.',
+  '- distill was called: Direction today, a gist for each decision and field note, and a recommendation for each field note.',
+  '- Submit with what you kept, merged, retired and recommended.',
 ].join('\n');
 
-// Opens a review when notes are due and none is open, or brings the waiting one up to date. Called before next picks
-// work, so a note on an item that just landed is reviewed soon after. Returns the open review, if any.
+// distill (#552), for the holder of the open review: stores Direction today, and each note's gist and advice. Under
+// "Run with it" a retire it recommends is carried out at once, with its reason; "decide" always waits for a person.
+export function distill(hub, p, agent, review, args) {
+  const notes = new Map(memoryInputs(hub, p).rows.map((n) => [n.id, n]));
+  const sourceRef = (s) => {
+    const m = String(s ?? '').trim().match(/^(?:(decision|steer|note) (\d+)|#(\d+))$/);
+    if (!m) throw new UserError(`Not a source: "${s}"`, { hint: 'Name it as "decision 12", "steer 40", "note 7" or "#468".' });
+    if (m[3]) {
+      if (!hub.q('SELECT 1 FROM items WHERE project_id = ? AND seq = ?').get(p.id, Number(m[3]))) throw new UserError(`No item #${m[3]}`, { status: 404 });
+      return `#${m[3]}`;
+    }
+    const n = notes.get(Number(m[2]));
+    if (!n || sourceOf(n) !== `${m[1]} ${m[2]}`) throw new UserError(`No active ${m[1]} ${m[2]}`, { status: 404, hint: 'Sources are the active decisions, steers and field notes the review lists.' });
+    return `${m[1]} ${m[2]}`;
+  };
+  let direction = null;
+  if (args.direction != null) {
+    const lines = [].concat(args.direction).map((d) => (typeof d === 'string' ? { line: d } : d ?? {}));
+    if (lines.length > DIRECTION_MAX) throw new UserError(`Direction today is at most ${DIRECTION_MAX} lines`, { hint: 'Keep what a person must know to check direction in a minute; the rest lives in the decisions and notes.' });
+    direction = lines.map((d) => {
+      const line = clip(String(d.line ?? '').trim(), 240);
+      if (!line) throw new UserError('Each direction line needs its line', { hint: 'e.g. { line: "Agents are primary users: small responses, every error a hint", source: "decision 3" }' });
+      return { line, source: sourceRef(d.source) };
+    });
+  }
+  const done = { gists: 0, retired: [], waiting: [] };
+  for (const g of [].concat(args.notes ?? [])) {
+    const n = notes.get(Number(g?.note ?? g?.id));
+    if (!n || n.kind === 'steer') throw new UserError(`No active decision or field note ${g?.note ?? g?.id}`, { status: 404, hint: 'Gists are for the decisions and field notes the review lists.' });
+    const gist = clip(String(g.gist ?? '').trim(), GIST_MAX);
+    if (!gist) throw new UserError(`${sourceOf(n)} needs a gist`, { hint: 'One plain line a person understands without looking anything up.' });
+    let advice = '';
+    if (n.kind === 'learning') {
+      const rec = g.recommend ?? 'keep';
+      if (!ADVICE.includes(rec)) throw new UserError(`recommend is keep, retire or decide, not "${rec}"`);
+      const why = clip(String(g.why ?? '').trim(), 240);
+      const draft = clip(String(g.draft ?? '').trim(), 600);
+      if (rec !== 'keep' && !why) throw new UserError(`Say why to ${rec} note ${n.id}`, { hint: rec === 'retire' ? 'Where the lesson lives now (a file, a test, the guide), or what supersedes it.' : 'Why it should bind every agent as a standing rule.' });
+      if (rec === 'decide' && !draft) throw new UserError(`A decision draft for note ${n.id} is required`, { hint: 'The decision as a person would write it, for them to accept or edit.' });
+      advice = JSON.stringify({ do: rec, why, ...(rec === 'decide' ? { draft } : {}) });
+      if (rec === 'retire' && p.autonomy === 'full') {
+        hub.q('UPDATE notes SET active = 0, gist = ?, advice = ? WHERE id = ?').run(gist, advice, n.id);
+        hub.event(p, { item: review, actor: agent, type: 'retired', headline: `${agent} retired field note ${n.id}: ${gist}`, summary: `Why: ${why}`, data: { note: n.id, reason: why } });
+        done.retired.push(n.id);
+        continue;
+      }
+      if (rec !== 'keep') done.waiting.push(n.id);
+    }
+    hub.q('UPDATE notes SET gist = ?, advice = ? WHERE id = ?').run(gist, advice, n.id);
+    done.gists++;
+  }
+  // What it was distilled from, as it stands now: what it retired is part of it.
+  if (direction) hub.q('UPDATE projects SET direction = ?, distilled_sig = ?, distilled_at = ? WHERE id = ?').run(JSON.stringify(direction), memoryInputs(hub, p).sig, hub.now(), p.id);
+  else hub.q('UPDATE projects SET distilled_sig = ?, distilled_at = ? WHERE id = ?').run(memoryInputs(hub, p).sig, hub.now(), p.id);
+  hub.event(p, { item: review, actor: agent, type: 'distilled', headline: `${agent} distilled memory: ${direction ? `Direction today in ${direction.length} lines, ` : ''}${done.gists + done.retired.length} gists${done.retired.length ? `, retired ${done.retired.length}` : ''}${done.waiting.length ? `, ${done.waiting.length} waiting for a person` : ''}` });
+  return {
+    ok: true, direction: direction?.length ?? null, gists: done.gists + done.retired.length, retired: done.retired, waiting: done.waiting,
+    hint: done.waiting.length ? 'The person sees each recommendation with its reason on the project page and decides with one tap. Submit the review when you are done.' : 'Submit the review when you are done.',
+  };
+}
+
+// Opens a review when notes are due or memory needs distilling and none is open, or brings the waiting one up to
+// date. Called on the sweep timer, so a note on an item that just landed is reviewed soon after. Returns the open
+// review, if any.
 export function reviewUp(hub, p) {
   if (p.parked) return null;
   const { due, weekly } = dueNotes(hub, p);
+  const stale = distillDue(hub, p); // the weekly review distills too: its summary always asks
   const keys = JSON.stringify(due.map(({ n }) => `note:${n.id}`));
   const cur = openReview(hub, p);
   if (cur) {
     if (!cur.holder && cur.stage === 'ready') {
-      if (!due.length) { hub.move(cur, 'dropped', SYSTEM); return null; }
-      hub.patch(cur, { summary: SUMMARY(due), tidy: keys });
+      if (!due.length && !stale) { hub.move(cur, 'dropped', SYSTEM); return null; }
+      hub.patch(cur, { summary: SUMMARY(hub, p, due), tidy: keys });
     }
     return cur;
   }
   if (weekly) hub.q('UPDATE projects SET notes_at = ? WHERE id = ?').run(hub.now(), p.id);
-  if (!due.length) return null;
-  const it = hub.createItem(p, SYSTEM, { title: `Review ${p.name}'s field notes`, summary: SUMMARY(due), acceptance: ACCEPTANCE, priority: 'soon' });
+  if (!due.length && !stale) return null;
+  const it = hub.createItem(p, SYSTEM, { title: `Review ${p.name}'s field notes`, summary: SUMMARY(hub, p, due), acceptance: ACCEPTANCE, priority: 'soon' });
   hub.patch(it, { tidy: keys, notes_review: 1 });
   if (it.stage !== 'ready') hub.move(it, 'ready', SYSTEM);
   return it;

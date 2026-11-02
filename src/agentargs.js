@@ -11,7 +11,7 @@ export const POSITIONAL = {
   ask: ['item?', 'question...'], answer: ['question', 'answer...'], withdraw: ['question', 'reason...'],
   submit: ['item', 'headline...'], handoff: ['item', 'headline...'], propose: ['title...'], refine: ['item'],
   review: ['item', 'verdict', 'headline...'], comment: ['item?', 'headline...'], ack: ['steer', 'response...'],
-  learn: ['note...'], retire: ['notes...'], feedback: ['text...'], look: ['item'], signoff: ['headline...'],
+  learn: ['note...'], retire: ['notes...'], distill: [], feedback: ['text...'], look: ['item'], signoff: ['headline...'],
 };
 
 // The flags every agent command takes besides its parameters: who you are and which hub and project.
