@@ -164,7 +164,8 @@ export const ESSENTIALS = [
     ],
   },
   {
-    key: 'operator', title: 'The operator', glance: 'An attended agent with your permissions, for what workers can\'t do.',
+    // Not "operator": that id is The setup that works' Start an operator, which Get started's How? opens (#592).
+    key: 'the-operator', title: 'The operator', glance: 'An attended agent with your permissions, for what workers can\'t do.',
     body: [
       'Workers can\'t touch live infrastructure, sign releases or administer GitHub. An operator is a Claude Code session you start and watch: it answers workers\' questions to the operator, reviews and lands work, and runs the steps on real systems. It asks you only what only you can do.',
       'Start it as in The setup that works: Claude Code in a terminal of its own. `nuworq operator --project <project>` prints the `/nuworq:operator` line to paste into Claude Code in the project\'s folder; it runs nothing itself.',
