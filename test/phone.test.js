@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { appSource } from './appsource.js';
 
 // Phone first (#127, #148). The page is browser code, so this reads its stylesheet: on a phone the targets a thumb
 // hits are at least 44px. The measured heights at 375px are in each item's evidence.
@@ -23,7 +24,7 @@ describe('on a phone', () => {
   });
 
   test('an item without done_means wraps its fallback line instead of scrolling the drawer sideways (#256)', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     const fallback = app.match(/<p class="([^"]+)">No acceptance criteria yet\./);
     assert.ok(fallback, 'the Done means fallback is still there');
     assert.notEqual(fallback[1], 'age', '.age is nowrap, for timestamps');

@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { isTextBox, saveFocus, restoreFocus } from '../web/focus.js';
+import { appSource } from './appsource.js';
 
 // Just enough of a page: boxes with a value, a cursor and a scroll, and a document that knows which one is focused.
 function box(tag, { type, draft, id, value = '' } = {}) {
@@ -95,11 +96,11 @@ describe('a box someone is writing in', () => {
 });
 
 describe('the page', () => {
-  const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  const app = appSource();
   test('live updates wait while any box is focused, and every redraw, forced ones too, brings focus back', () => {
     assert.match(app, /const typing = \(\) => isTextBox\(document\.activeElement\);/);
-    const render = app.slice(app.indexOf('function render('), app.indexOf('// ── routing ──'));
-    assert.ok(render.indexOf('saveFocus(document)') < render.indexOf("paint($('#main')"), 'saved before the HTML changes');
+    const render = app.slice(app.indexOf('function render('), app.indexOf('// ── modals ──'));
+    assert.ok(render.indexOf('saveFocus(document)') > 0 && render.indexOf('saveFocus(document)') < render.indexOf('REGIONS[r]()'), 'saved before the HTML changes');
     assert.ok(render.indexOf('restoreFocus(document, writing)') > render.indexOf('el.value = v'), 'restored after the drafts are back');
   });
 });

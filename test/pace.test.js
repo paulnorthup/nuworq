@@ -2,6 +2,7 @@ import { test, describe, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { liveGate } from '../web/pace.js';
+import { appSource } from './appsource.js';
 
 // A fake clock: the gate's timers and its now() both run on it.
 function clock() {
@@ -111,7 +112,7 @@ describe('no refresh piles up (#517)', () => {
 });
 
 describe('the page', () => {
-  const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  const app = appSource();
   test('the stream goes through the gate, and a live redraw waits while the person is busy', () => {
     assert.match(app, /const scheduleRefresh = \(\) => live\.poke\(\);/);
     assert.doesNotMatch(app, /setInterval\(\(\) => refresh\(\)/);

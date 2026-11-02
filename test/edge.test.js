@@ -11,6 +11,7 @@ import { Workspaces } from '../src/workspaces.js';
 import { Directory } from '../src/directory.js';
 import { Auth } from '../src/auth.js';
 import { forgetWorkspace } from '../src/follow.js';
+import { appSource } from './appsource.js';
 
 // #479: the hub's web edge, hardened.
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -234,10 +235,10 @@ describe('the board takes only what it knows', () => {
 });
 
 describe('the page', () => {
-  const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  const app = appSource();
   // md() and stepsBy() as the page has them, run on their own.
   const slice = (from, to) => app.slice(app.indexOf(from), app.indexOf(to, app.indexOf(from)));
-  const src = [slice('const esc =', '\n'), slice('const MD_INLINE', 'function providerOf'), slice('const stepsBy', '\n\n')].join('\n');
+  const src = [slice('const esc =', '\n'), slice('const MD_INLINE', 'function providerOf'), slice('const stepsBy', '\n\n')].join('\n').replace(/^export /gm, '');
   const { md, stepsBy } = new Function(`${src}; return { md, stepsBy };`)();
 
   test('md() links in one pass: a URL inside a link never breaks out of its href', () => {

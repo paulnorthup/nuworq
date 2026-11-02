@@ -6,6 +6,7 @@ import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { guidePage } from '../src/userguide.js';
 import { commands, rank } from '../web/launcher.js';
+import { appSource } from './appsource.js';
 
 // #485: each browser can set the app to Match device, Light or Dark, and no page flashes the other theme.
 const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
@@ -69,8 +70,8 @@ describe('the appearance a browser chose applies before the first paint (#485)',
 
 describe('the Appearance setting', () => {
   test('in the rail footer: a named radio group of three, Match device first, the chosen one reached by Tab', () => {
-    const app = read('web/app.js');
-    assert.match(app, /\$\{appearance\(\)\}\n\s*\$\{versionLine\(\)\}\n\s*<\/div>`\);/, 'in .rail-foot, which a phone opens with Menu');
+    const app = appSource();
+    assert.match(app, /\$\{appearance\(\)\}\n\s*\$\{versionLine\(\)\}\n\s*<\/div>`;/, 'in .rail-foot, which a phone opens with Menu');
     assert.match(app, /role="radiogroup" aria-labelledby="appearance-label"/);
     assert.match(app, /role="radio" aria-checked="\$\{k === now\}" tabindex="\$\{k === now \? 0 : -1\}"/);
     assert.match(app, /radioKeys\(document, '\.appearance \[role="radio"\]', /, 'arrow keys move the choice');

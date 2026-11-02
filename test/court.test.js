@@ -2,9 +2,10 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DOT, dotClass } from '../web/timeline.js';
+import { appSource } from './appsource.js';
 
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 
 // Every event type the hub records: the type literals inside each hub.event(...) / this.event(...) call in src/.
 function eventTypes() {

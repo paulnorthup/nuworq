@@ -5,6 +5,7 @@ import { Hub, DAY, HOUR } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { freshen, FRESH_EVERY } from '../src/freshness.js';
 import { MODE_RULES, skill } from '../src/protocol.js';
+import { appSource } from './appsource.js';
 
 function setup() {
   let t = Date.UTC(2026, 9, 1, 9);
@@ -107,7 +108,7 @@ describe('the weekly freshness sweep (#181)', () => {
   });
 
   test('the settings control confirms before turning it off', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     // The switch lives in the Settings dialog (#213), and is wired to the same two actions.
     const dialog = app.slice(app.indexOf('function settingsModal('), app.indexOf('\n}\n', app.indexOf('function settingsModal(')));
     assert.match(dialog, /sw\('fresh', !!P\.fresh, P\.fresh \? 'fresh-off' : 'fresh-on'\)/);

@@ -1,7 +1,7 @@
 // The app's state (#600): every field declared here with its default, and changed only through the setters below
 // (test/store.test.js fails on a direct S.x = anywhere else). Each field names the regions a change to it redraws
-// (rail, main, drawer); nothing reads that yet beyond the test that pins it. It's the base for redrawing region by
-// region (#526). Read S freely.
+// (rail, main, drawer): a setter marks them, and the next render draws only the regions marked (#602). A view that
+// reads a field must be among its regions (test/regions.test.js checks web/views/). Read S freely.
 
 export const PAGE = { all: 100, agents: 50 }; // a page of All work and of earlier agents (src/insight.js PAGE)
 
@@ -14,6 +14,7 @@ export const FIELDS = {
   view: [null, [M, D]],
   views: [() => new Map(), []], // slug → the last view seen for it this visit, drawn at once when it opens again (#503)
   loading: [null, [M]], // the project whose view is on its way: its page is marked as updating
+  shellOnly: [null, [M]], // the project picked this frame: only its shell is drawn until the frame has painted (#637)
   missing: [null, [M]], // a project that isn't there: { slug, archived } (#143)
   listStale: [true, []], // the project list may have changed since it was fetched: a live change says so (#503)
   pages: [() => ({ all: PAGE.all, agents: PAGE.agents }), [M]], // how much of All work and of earlier agents the page asks for (#501)
@@ -71,20 +72,36 @@ export function createStore() {
   const S = Object.fromEntries(Object.entries(FIELDS).map(([k, [d]]) => [k, typeof d === 'function' ? d() : d]));
   const known = (k) => { if (!Object.hasOwn(FIELDS, k)) throw new Error(`no state field "${k}": declare it in web/store.js`); };
   const keyed = (k) => { known(k); if (!S[k] || typeof S[k] !== 'object') throw new Error(`"${k}" isn't a collection`); return S[k]; };
+  // The regions to draw at the next render: all of them at first, then what changes mark.
+  const dirty = new Set([R, M, D]);
+  const mark = (regions) => { for (const r of regions) dirty.add(r); return regions; };
   return {
     S,
-    // Each setter returns the regions its change affects.
+    // Each setter returns the regions its change affects, and marks them. setState marks only what it changed: a
+    // field set to the value it holds (the same answer, kept by web/data.js) redraws nothing.
     setState(patch) {
       for (const k of Object.keys(patch)) known(k);
+      const changed = Object.keys(patch).filter((k) => !Object.is(S[k], patch[k]));
       Object.assign(S, patch);
+      mark(regionsOf(...changed));
       return regionsOf(...Object.keys(patch));
     },
     // A Set's key in or out; a Map's or a plain object's key set or removed.
-    toggleIn(k, key) { const c = keyed(k); c.has(key) ? c.delete(key) : c.add(key); return regionsOf(k); },
-    addTo(k, key) { keyed(k).add(key); return regionsOf(k); },
-    putIn(k, key, value) { const c = keyed(k); if (c instanceof Map) c.set(key, value); else c[key] = value; return regionsOf(k); },
-    removeFrom(k, ...keys) { const c = keyed(k); for (const key of keys) if (c instanceof Set || c instanceof Map) c.delete(key); else delete c[key]; return regionsOf(k); },
+    toggleIn(k, key) { const c = keyed(k); c.has(key) ? c.delete(key) : c.add(key); return mark(regionsOf(k)); },
+    addTo(k, key) { keyed(k).add(key); return mark(regionsOf(k)); },
+    putIn(k, key, value) { const c = keyed(k); if (c instanceof Map) c.set(key, value); else c[key] = value; return mark(regionsOf(k)); },
+    // Removing keys that aren't there changes nothing, so it marks nothing.
+    removeFrom(k, ...keys) {
+      const c = keyed(k);
+      let gone = 0;
+      for (const key of keys) if (c instanceof Set || c instanceof Map ? c.delete(key) : Object.hasOwn(c, key) && delete c[key]) gone++;
+      return gone ? mark(regionsOf(k)) : regionsOf(k);
+    },
+    // What isn't state but changes a region all the same (the window's width, this browser's theme).
+    markDirty: (...regions) => { mark(regions.filter((r) => [R, M, D].includes(r))); },
+    // The regions marked since the last take, in rail, main, drawer order; none are marked after.
+    takeDirty() { const out = [R, M, D].filter((r) => dirty.has(r)); dirty.clear(); return out; },
   };
 }
 
-export const { S, setState, toggleIn, addTo, putIn, removeFrom } = createStore();
+export const { S, setState, toggleIn, addTo, putIn, removeFrom, markDirty, takeDirty } = createStore();

@@ -70,10 +70,10 @@ describe('one strict set of tokens (#391)', () => {
   });
 
   test('every rule in the stylesheets and the pages uses only tokens for size, space, radius, shadow and borders; no decoration', () => {
-    for (const f of readdirSync(new URL('../web/', import.meta.url)).filter((n) => n.endsWith('.css'))) assert.deepEqual(problems(read(f)), [], f);
-    for (const f of readdirSync(new URL('../web/', import.meta.url)).filter((n) => n.endsWith('.html'))) assert.deepEqual(problems(inline(read(f))), [], f);
+    for (const f of readdirSync(new URL('../web/', import.meta.url), { recursive: true }).filter((n) => n.endsWith('.css'))) assert.deepEqual(problems(read(f)), [], f);
+    for (const f of readdirSync(new URL('../web/', import.meta.url), { recursive: true }).filter((n) => n.endsWith('.html'))) assert.deepEqual(problems(inline(read(f))), [], f);
     // The scripts' inline styles too (#394): a static one is held to the same tokens; a computed one (${…}) is a measure, not a token.
-    for (const f of readdirSync(new URL('../web/', import.meta.url)).filter((n) => n.endsWith('.js'))) {
+    for (const f of readdirSync(new URL('../web/', import.meta.url), { recursive: true }).filter((n) => n.endsWith('.js'))) {
       assert.deepEqual(problems([...read(f).matchAll(/style="([^"$]*)"/g)].map((m) => `{${m[1]}}`).join('\n')), [], f);
     }
     assert.equal((css.match(/gradient\(/g) ?? []).length, 2, 'only --hatch and --hatch-tint are gradients');

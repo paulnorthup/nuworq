@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hub } from '../src/core.js';
 import { view, itemView } from '../src/insight.js';
+import { appSource } from './appsource.js';
 
 // A bouncing item says why and what it waits on, and reaches Needs you only when a person can help (#564).
 const MIN = 60_000, HOUR = 60 * MIN;
@@ -137,7 +138,7 @@ describe('a bouncing item says why, and asks a person only when they can help (#
   });
 
   test('the card offers only what fits: an answer inline, the steps to start an agent, or clarify, split and drop', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /a\.kind === 'struggling' && a\.step === 'answer'/);
     assert.match(app, /a\.kind === 'struggling' && a\.step === 'capability'/);
     assert.match(app, /\$\{it\.bounce \? `<div class="d-sec"><div class="label">Keeps bouncing<\/div>/);

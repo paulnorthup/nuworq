@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { morph } from '../web/morph.js';
 import { documentOf } from './minidom.js';
+import { appSource } from './appsource.js';
 
 const rows = (...ids) => `<h2>Ready</h2><ul>${ids.map((id) => `<li data-item="#${id}"><b>#${id}</b> <span class="t">Item ${id}</span></li>`).join('')}</ul>`;
 const page = (html) => { const doc = documentOf(html); return { doc, root: doc.body }; };
@@ -113,11 +114,11 @@ describe('a redraw changes only what changed (#392)', () => {
 });
 
 describe('the page', () => {
-  const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  const app = appSource();
   test('the rail, the page and the drawer are painted with morph, never replaced with innerHTML', () => {
-    assert.match(app, /paint\(\$\('#main'\), /);
-    assert.match(app, /paint\(\$\('#rail'\), `/);
-    assert.match(app, /paint\(d, `/);
+    assert.match(app, /paint\(el, railHtml\(\)\)/);
+    assert.match(app, /paint\(el, mainHtml\(\)\)/);
+    assert.match(app, /const el = \$\('#drawer'\), html = drawerHtml\(\)[^\n]*\n[^\n]*\n\s*if \(show\) paint\(el, html\);/);
     assert.doesNotMatch(app, /\$\('#(rail|drawer)'\)\.innerHTML|\bd\.innerHTML/);
   });
 });

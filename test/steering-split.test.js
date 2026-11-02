@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Hub } from '../src/core.js';
 import { MIGRATIONS } from '../src/db.js';
 import { view, itemView, plainSteer } from '../src/insight.js';
+import { appSource } from './appsource.js';
 
 // Your steering shows only what people wrote (#550): an operator's answer to a worker and the hub's own notices reach
 // agents as before, but show on their item ("Agents told each other") or as facts in the history.
@@ -111,7 +112,7 @@ describe('Your steering is what people wrote (#550)', () => {
   });
 
   test('the drawer lists them under "Agents told each other", each line opening to its whole text', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /<div class="label" data-new="agents-told">Agents told each other<\/div>/);
     assert.match(app, /data-action="toggle" data-key="\$\{key\}" aria-expanded="\$\{open\}"/);
     assert.match(app, /\$\{open \? `<div class="told-body">\$\{md\(s\.body\)\}<\/div>` : ''\}/);

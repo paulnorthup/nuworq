@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Hub, MIN } from '../src/core.js';
 import { view, itemView } from '../src/insight.js';
+import { appSource } from './appsource.js';
 
 // The project page shows its groups at a glance, and each opens as a map (#200).
 function world() {
@@ -102,7 +103,7 @@ describe('groups at a glance (#200)', () => {
   });
 
   test('the page: groups right below Needs you; one tap sets priority; the map opens in the drawer', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /'needs', 'groups'/, 'right below Needs you, phone and wide');
     assert.match(readFileSync(new URL('../web/milestones.js', import.meta.url), 'utf8'), /data-action="group-priority"/);
     assert.doesNotMatch(app.match(/'group-priority': [^\n]*/)[0], /confirm\(/, 'no dialog: it is reversible');

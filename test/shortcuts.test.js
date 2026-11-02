@@ -2,8 +2,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { SHORTCUTS, shortcutFor, shortcutsHtml } from '../web/shortcuts.js';
+import { appSource } from './appsource.js';
 
-const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+const app = appSource();
 const key = (k, mods = {}) => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
 const none = { inField: false, input: false, compose: false, modal: false, item: false, launcher: false };
 const launcher = { ...none, inField: true, input: true, launcher: true }; // focus in the launcher's box

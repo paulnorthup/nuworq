@@ -59,7 +59,7 @@ async function enter(ws, confirm = false) {
 }
 
 // Step 1 of 3: a name, and the address it becomes (suggested from the name, editable), checked as you type.
-// Step 2 (the first project) and step 3 (connect a machine) happen inside the new workspace (web/app.js).
+// Step 2 (the first project) and step 3 (connect a machine) happen inside the new workspace (web/views/main.js firstProject, web/actions.js connectStep).
 function createOrg(me) {
   step.innerHTML = `<p class="faint">Step 1 of 3 · then your first project, then connect a machine</p>
     <p class="lead">Signed in as ${esc(me.email)}. Name your workspace.</p>

@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dataCache, affects } from '../web/data.js';
+import { appSource } from './appsource.js';
 
 // The app keeps each answer per URL until a change event says it changed (#601).
 function world() {
@@ -85,7 +86,7 @@ describe('the app keeps each answer per URL until a change says it changed (#601
   });
 
   test('the app reads through it, and a live update reads what is kept', () => {
-    const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+    const app = appSource();
     assert.match(app, /const data = dataCache\(\(url\) => api\(url\)\);/);
     assert.match(app, /const live = liveGate\(\{ run: \(\) => refresh\(\{ fresh: false \}\)/);
     assert.match(app, /data\.clear\(\); \/\/ back after a break/);
