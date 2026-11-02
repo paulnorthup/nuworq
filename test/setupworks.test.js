@@ -62,6 +62,12 @@ describe('the setup that works, everywhere the same (#489)', () => {
     const app = read('web/app.js');
     const dialog = app.slice(app.indexOf('async function connect()'), app.indexOf('async function notifySettings()'));
     assert.ok(ascending(order(dialog, ['Set up this machine (once)', '${setupSection()}', 'commandBlocks(c.up)', 'z() >= 2', 'commandBlocks(c.run)', 'OpenAI Codex', 'opencode'])), 'setup, the three, up, then by hand at 30m');
+    // #644: one block to copy on the first screen; the three and nuworq up are folded beneath it, still copyable.
+    const fold = dialog.indexOf('<details class="setup-fold"'), shut = dialog.indexOf('</details>', fold);
+    assert.ok(fold > dialog.indexOf('commandBlocks(c.setup)'), 'after the one block');
+    assert.ok(dialog.indexOf('${setupSection()}') > fold && dialog.indexOf('commandBlocks(c.up)') < shut, 'the three and nuworq up inside the fold');
+    assert.match(dialog.slice(fold, shut), /<summary>.*What connect sets up, to do by hand.*<\/summary>/);
+    assert.deepEqual(dialog.slice(0, fold).match(/commandBlocks\([^)]*\)/g), ['commandBlocks(c.setup)'], 'one block to copy before it');
   });
 
   test('the README opens its usage with the same setup, in the same words and order', () => {
