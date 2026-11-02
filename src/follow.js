@@ -185,9 +185,13 @@ export function firstFailure(out) {
 // On a hub with workspaces (#561): which workspace has the project that lives in repo, read straight from the
 // workspaces' databases (read-only). Matched by the repository's remote, or by its folder for a project that names
 // one. workspace: only that one (serve --follow --workspace). { workspace, project }, or null when none has it.
-export function findWorkspace({ workspaces, workspace = null, repo, remote = '' }) {
+// Several workspaces may link one repository (a paid one can link a public repo it doesn't own, #614): then it's the
+// one the repository's GitHub App installation is bound to (installation: its id, from GitHub), and with none of
+// theirs bound, it refuses, naming them, rather than pick one by its name.
+export function findWorkspace({ workspaces, workspace = null, repo, remote = '', installation = null }) {
   if (!workspaces || !existsSync(workspaces)) return null;
   const names = workspace ? [String(workspace).toLowerCase()] : readdirSync(workspaces).filter((f) => f.endsWith('.db')).map((f) => f.slice(0, -3)).sort();
+  const found = [];
   for (const name of names) {
     const file = join(workspaces, `${name}.db`);
     if (!existsSync(file)) continue;
@@ -196,10 +200,25 @@ export function findWorkspace({ workspaces, workspace = null, repo, remote = '' 
       d = new DatabaseSync(file, { readOnly: true });
       const p = d.prepare(`SELECT slug FROM projects WHERE archived_at = 0 AND ((? <> '' AND id IN (SELECT project_id FROM project_remotes WHERE remote = ?)) OR path = ?) ORDER BY id LIMIT 1`)
         .get(remote, remote, repo);
-      if (p) return { workspace: name, project: p.slug };
+      if (p) found.push({ workspace: name, project: p.slug });
     } catch { /* not a workspace's database, or one from before projects had remotes */ } finally { d?.close(); }
   }
-  return null;
+  if (found.length <= 1) return found[0] ?? null;
+  const bound = installation != null ? boundTo(workspaces, installation) : null;
+  const owner = found.find((f) => f.workspace === bound);
+  if (owner) return owner;
+  throw new Error(`${found.length} workspaces have a project for ${remote || repo} (${found.map((f) => f.workspace).join(', ')}) and none is bound to its GitHub App installation: name the one that owns it with serve --follow --workspace <name>`);
+}
+
+// The workspace a GitHub App installation is bound to, from the hub's directory (read-only), or null.
+function boundTo(workspaces, id) {
+  const file = join(workspaces, 'directory.sqlite');
+  if (!existsSync(file)) return null;
+  let d;
+  try {
+    d = new DatabaseSync(file, { readOnly: true });
+    return d.prepare('SELECT workspace FROM installations WHERE id = ?').get(Number(id))?.workspace ?? null;
+  } catch { return null; } finally { d?.close(); }
 }
 
 async function answers(url) {
@@ -374,7 +393,7 @@ export function system({ repo, dir, next = `${dir}-next`, args = [], url, bin = 
     // running: the commit the hub runs (the red one itself when the supervisor just started on it).
     // With workspaces (#561), it is filed in the workspace whose project lives in this repo (findWorkspace).
     async redMain(sha, failed, running) {
-      return (await helper('red', { url, repo, sha, failed, running, workspaces, workspace })).where;
+      return (await helper('red', { url, repo, sha, failed, running, workspaces, workspace, app: ci?.app ?? null })).where;
     },
     // The last commit that passed its tests, kept beside the hub's worktree, so a restarted supervisor
     // doesn't test the commit it already took again.

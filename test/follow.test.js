@@ -658,6 +658,28 @@ describe('the real world, in a scratch repo', () => {
       spaces.close();
     }
   });
+
+  test("fix main files only in the workspace bound to the repo's installation (#614)", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-redbound-')));
+    const spaces = new Workspaces({ dir: join(root, 'ws') });
+    // "aaa" sorts first and links acme's public repository too; acme is the one its App installation is bound to.
+    for (const name of ['aaa', 'acme']) {
+      spaces.create(name);
+      const h = spaces.get(name);
+      h.tx(() => h.project('app', { create: true }));
+      h.q('INSERT INTO project_remotes (project_id, remote, at) VALUES (?, ?, ?)').run(h.project('app').id, 'github.com/acme/app', 0);
+    }
+    try {
+      const find = (o = {}) => findWorkspace({ workspaces: join(root, 'ws'), repo: join(root, 'repo'), remote: 'github.com/acme/app', ...o });
+      assert.throws(() => find(), /2 workspaces have a project for github\.com\/acme\/app \(aaa, acme\) and none is bound .*--workspace <name>/, 'never the first by name');
+      spaces.directory.bindInstallation(4242, 'acme');
+      assert.deepEqual(find({ installation: 4242 }), { workspace: 'acme', project: 'app' }, 'the installation decides');
+      assert.throws(() => find({ installation: 999 }), /none is bound/, 'an installation bound elsewhere decides nothing');
+      assert.deepEqual(find({ workspace: 'aaa' }), { workspace: 'aaa', project: 'app' }, 'a workspace the host names stands');
+    } finally {
+      spaces.close();
+    }
+  });
 });
 
 describe('a server checkout follows GitHub', () => {
