@@ -255,8 +255,8 @@ const stepsBy = (asker) => (!asker || asker === 'you' || asker === 'nuworq' || S
 function stepList(a) {
   const done = new Set(a.ticked ?? []);
   const q = a.question.id;
-  return `<div class="steps" data-new="step-checklist">
-    <div class="steps-head"><span class="label">Steps</span><span class="steps-count">${[...done].filter((n) => n <= a.steps.length).length} of ${a.steps.length} done</span></div>
+  return `<div class="steps">
+    <div class="steps-head"><span class="label" data-new="step-checklist">Steps</span><span class="steps-count">${[...done].filter((n) => n <= a.steps.length).length} of ${a.steps.length} done</span></div>
     ${stepsBy(a.question.asked_by)}
     <ol>${a.steps.map((s, i) => {
       const n = i + 1;
@@ -411,7 +411,7 @@ function worthKnowing(v) {
   const more = know.length > WK_SHOWN
     ? `<button class="link wk-more" data-action="toggle" data-key="${esc(allKey)}" aria-expanded="${S.open.has(allKey)}">${S.open.has(allKey) ? 'Show fewer' : `${know.length - WK_SHOWN} more`}</button>` : '';
   const all = `<button class="btn ghost small" data-action="dismiss-all" data-keys="${esc(JSON.stringify(know.map((a) => a.key)))}">Got it, all</button>`;
-  return `<section class="sec" data-new="worth-knowing-lines"><header><h2>Worth knowing</h2><span class="count">${know.length}</span><span class="hint wk-hint">agents carried on without you; glance and confirm, or redirect</span><span style="flex:1"></span>${all}</header><div class="rows">${rows}</div>${more}</section>`;
+  return `<section class="sec"><header><h2 data-new="worth-knowing-lines">Worth knowing</h2><span class="count">${know.length}</span><span class="hint wk-hint">agents carried on without you; glance and confirm, or redirect</span><span style="flex:1"></span>${all}</header><div class="rows">${rows}</div>${more}</section>`;
 }
 
 // ── 30s → 5m: what's in motion ──
@@ -548,9 +548,9 @@ function finished(v) {
 // opens them under it.
 function finishedMilestone(i) {
   const key = `fin:${i.item}`, shown = S.open.has(key);
-  return `<div class="row-item fin-ms" data-key="${esc(key)}" data-new="finished-milestones"><div class="body">
+  return `<div class="row-item fin-ms" data-key="${esc(key)}"><div class="body">
     <div class="h">✓ ${refLink(i.item)} ${esc(i.title)}</div>
-    <button class="link fin-parts" data-action="toggle" data-key="${esc(key)}" aria-expanded="${shown}">${shown ? 'Hide parts' : `${plural(i.parts.length, 'part')}`}</button>
+    <button class="link fin-parts" data-new="finished-milestones" data-action="toggle" data-key="${esc(key)}" aria-expanded="${shown}">${shown ? 'Hide parts' : `${plural(i.parts.length, 'part')}`}</button>
     ${shown ? `<ul class="fin-list">${i.parts.map((c) => `<li>${refLink(c.item)} ${esc(c.title)}${c.stage === 'done' ? '' : ` ${stagePill(c.stage, courtOf(c.stage))}`}</li>`).join('')}</ul>` : ''}</div>
     <span class="age">landed ${when(i)} ago</span></div>`;
 }

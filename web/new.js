@@ -70,31 +70,60 @@ export function markSeen(key, store) {
   try { (store ?? globalThis.localStorage).setItem(KEY, JSON.stringify([...new Set([...seenNew(store), key])])); } catch { /* not kept: the tag shows again next time */ }
 }
 
-// Tag (or untag) every [data-new] element under root. The tag is a button of its own (#314), so tapping it can
-// dismiss it: it can't sit inside the feature's button or link, so it goes right after that, and CSS anchors it
-// over the tagged element's corner.
+// A tag says "this is new" only while it's rare (#721): a screen shows at most MOST, the most recently shipped
+// first, and the rest wait until those are used, dismissed or expire. With a dialog open, the dialog is the screen.
+const MOST = 3;
+const SCREEN = '#modal:not([hidden])';
+const order = Object.keys(NEW); // listed in the order they shipped, so on one day a later key is newer
+const newness = (key) => Date.parse(NEW[key]) + order.indexOf(key);
+// A feature that isn't drawn (the phone's Menu on a desktop, the rail's foot behind a closed Menu, a closed fold)
+// takes no place, so nobody meets a tag they can't see.
+// checkVisibility sees inside a closed fold too, where the box still has rects.
+const isDrawn = (el) => el.checkVisibility ? el.checkVisibility() : !el.getClientRects || el.getClientRects().length > 0;
+export function onScreen(doc, { now = Date.now(), seen = [] } = {}) {
+  const screen = doc.querySelector?.(SCREEN) ?? doc;
+  const fresh = [...screen.querySelectorAll('[data-new]')].filter((el) => isNew(el.dataset.new, { now, seen }) && isDrawn(el));
+  const keys = new Set(), shown = [];
+  for (const el of fresh.sort((a, b) => newness(b.dataset.new) - newness(a.dataset.new))) {
+    if (keys.has(el.dataset.new) || keys.size >= MOST) continue;
+    keys.add(el.dataset.new);
+    shown.push(el);
+  }
+  return shown;
+}
+
+// Tag (or untag) the [data-new] elements on the screen root is part of: which ones get a tag depends on the whole
+// screen, not only the region just redrawn. The tag is a button of its own (#314), so tapping it can dismiss it:
+// it can't sit inside the feature's button or link, so it goes right after that, and CSS anchors it just above
+// the tagged element's corner, clear of its text.
 const INTERACTIVE = 'a, button, label, summary, select';
-// A feature that isn't drawn (the phone's Menu on a desktop, the rail's foot behind a closed Menu) hides its tag,
-// so the keyboard and screen readers never reach a tag nobody can see. Watched, since a breakpoint can change it.
+// After a summary, the tag would be inside its fold, hidden while it's closed: it goes after the whole fold.
+const hostOf = (el) => { const h = el.closest(INTERACTIVE) ?? el; return h.tagName === 'SUMMARY' ? h.closest('details') ?? h : h; };
+// Whether a feature is drawn can change with a breakpoint or a fold, and so which ones get the tags: each new
+// feature is watched, and a change picks the screen's tags again.
+const watched = new WeakSet();
 const drawn = globalThis.ResizeObserver && new ResizeObserver((entries) => {
-  for (const { target: el } of entries) if (el.newTag) el.newTag.hidden = !el.getClientRects().length;
+  for (const { target } of entries) if (!target.isConnected) { drawn.unobserve(target); watched.delete(target); }
+  markNew(document);
 });
 export function markNew(root, { now = Date.now(), store } = {}) {
-  const seen = seenNew(store);
-  for (const el of root.querySelectorAll('[data-new]')) {
-    const key = el.dataset.new, on = isNew(key, { now, seen });
+  const doc = root.ownerDocument ?? root, seen = seenNew(store), shown = onScreen(doc, { now, seen });
+  for (const el of doc.querySelectorAll('[data-new]')) {
+    const key = el.dataset.new, on = shown.includes(el);
+    if (drawn && !watched.has(el) && isNew(key, { now, seen })) { watched.add(el); drawn.observe(el); }
     el.classList.toggle('is-new', on);
-    const host = el.closest(INTERACTIVE) ?? el, next = host.nextElementSibling;
+    const host = hostOf(el), next = host.nextElementSibling;
     const tag = next?.dataset?.newTag === key ? next : null;
     if (on && !tag) host.after(newTag(el, key));
-    if (!on && tag) { tag.remove(); drawn?.unobserve(el); }
+    if (!on && tag) tag.remove();
   }
-  // A redraw leaves the tags in place (#392): one whose feature is gone, or moved away from it, goes too.
-  for (const tag of root.querySelectorAll('.new-tag')) {
+  // A redraw leaves the tags in place (#392): one whose feature is gone, moved away from it, or no longer among
+  // the screen's few goes too.
+  for (const tag of doc.querySelectorAll('.new-tag')) {
     const host = tag.previousElementSibling, key = tag.dataset?.newTag;
     if (!key) continue;
     const el = host?.dataset?.new === key ? host : host?.querySelector?.(`[data-new="${key}"]`);
-    if (!el || !isNew(key, { now, seen })) tag.remove();
+    if (!el || !shown.includes(el)) tag.remove();
   }
 }
 const anchorOf = (key) => `--new-${key.replace(/[^\w-]/g, '-')}`;
@@ -118,8 +147,6 @@ function newTag(el, key) {
   tag.dataset.newTag = key;
   tag.setAttribute('aria-label', 'Dismiss new tag');
   tag.style.setProperty('position-anchor', anchor);
-  el.newTag = tag;
-  drawn?.observe(el);
   return tag;
 }
 

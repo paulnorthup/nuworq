@@ -74,7 +74,8 @@ describe('what just shipped', () => {
     assert.ok(Object.keys(NEW).length >= 2);
     for (const [key, date] of Object.entries(NEW)) {
       assert.match(date, /^\d{4}-\d{2}-\d{2}$/, key);
-      assert.ok(app.includes(`data-new="${key}"`), `${key} marks an element`);
+      // A Settings row takes its key last and puts data-new on its name (#721).
+      assert.ok(app.includes(`data-new="${key}"`) || app.includes(`, '${key}')}`), `${key} marks an element`);
     }
   });
 
@@ -120,6 +121,52 @@ describe('what just shipped', () => {
     assert.equal(btn.nextElementSibling?.className, 'new-tag', 'day 6');
     markNew(doc, { now: at + 7 * DAY, store: memory() });
     assert.equal(btn.nextElementSibling, null, 'day 7: gone');
+  });
+
+  // #721: a tag says "new" only while it's rare.
+  test('a screen shows at most 3 tags, the most recently shipped first; the next shows once one is dismissed', () => {
+    const doc = { activeElement: null, createElement: (t) => new El(t, doc) };
+    const row = new El('div', doc);
+    // In the page's order, not the order they shipped; the same feature twice; one not drawn (a closed fold).
+    const keys = ['home', 'one-name', 'appearance', 'needs-rank', 'retire-in-menu', 'needs-rank', 'question-numbers'];
+    const els = keys.map((k) => { const s = new El('span', doc); s.dataset.new = k; row.append(s); return s; });
+    els[6].getClientRects = () => [];
+    doc.querySelectorAll = (sel) => [...row.all()].filter((el) => (sel === '.new-tag' ? el.className === 'new-tag' : el.dataset.new));
+    const tagged = () => row.children.filter((c) => c.className === 'new-tag').map((t) => t.dataset.newTag);
+    const now = Date.parse('2026-11-02T12:00:00Z'), store = memory();
+    markNew(doc, { now, store });
+    assert.deepEqual(tagged().sort(), ['appearance', 'one-name', 'retire-in-menu'], 'the newest three that are drawn; on one day, the later listed');
+    assert.ok(!els[0].classList.contains('is-new'), 'the rest wait, with no pill either');
+    dismissNew({ target: els[1].nextElementSibling, preventDefault() {}, stopPropagation() {} }, { root: doc, now, store });
+    assert.deepEqual(tagged().sort(), ['appearance', 'needs-rank', 'retire-in-menu'], 'the next one takes its place');
+    assert.equal(row.children.filter((c) => c.dataset.newTag === 'needs-rank').length, 1, 'a feature drawn twice is tagged once');
+  });
+
+  test('with a dialog open, the dialog is the screen: only its features are tagged', () => {
+    const doc = { activeElement: null, createElement: (t) => new El(t, doc) };
+    const page = new El('div', doc), dialog = new El('div', doc);
+    for (const [k, at] of [['one-name', page], ['setup-folded', dialog]]) { const s = new El('span', doc); s.dataset.new = k; at.append(s); }
+    const within = (root) => (sel) => [...root.all()].filter((el) => (sel === '.new-tag' ? el.className === 'new-tag' : el.dataset.new));
+    dialog.querySelectorAll = within(dialog);
+    doc.querySelectorAll = (sel) => [...within(page)(sel), ...within(dialog)(sel)];
+    doc.querySelector = (sel) => (sel === '#modal:not([hidden])' ? dialog : null);
+    markNew(doc, { now: Date.parse('2026-11-02T12:00:00Z'), store: memory() });
+    assert.deepEqual(dialog.children.filter((c) => c.className === 'new-tag').map((t) => t.dataset.newTag), ['setup-folded']);
+    assert.equal(page.children.filter((c) => c.className === 'new-tag').length, 0, 'nothing behind the dialog');
+  });
+
+  test('in dialogs a tag belongs to a row\'s label, never the whole row or block', () => {
+    const actions = readFileSync(new URL('../web/actions.js', import.meta.url), 'utf8');
+    const copy = readFileSync(new URL('../web/copy.js', import.meta.url), 'utf8');
+    for (const src of [actions, copy]) assert.doesNotMatch(src, /<(div|details|fieldset|label)[^>]*data-new=/, 'data-new on a row-wide element');
+    for (const key of ['security-reviews', 'releases', 'live-view']) assert.match(actions, new RegExp(`'${key}'\\)\\}`), `${key} passed to its row`);
+    assert.match(actions, /<span data-new="\$\{shipped\}">\$\{name\}<\/span>/, 'the row wraps its name');
+  });
+
+  test('the pill sits clear of its feature\'s text: just above the corner, never over the word', () => {
+    const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
+    assert.match(css, /\.new-tag \{[^}]*bottom: calc\(anchor\(top, 9999px\) \+ 1px\)/);
+    assert.match(css, /\.is-new::after \{[^}]*bottom: calc\(100% \+ 1px\)/);
   });
 
   test('the pill takes no room (absolutely positioned) and its text meets WCAG AA on its own background', () => {

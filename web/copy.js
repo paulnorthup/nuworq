@@ -17,7 +17,8 @@ export const copyBlock = (text) => (String(text ?? '').trim() ?`<div class="copy
 export function commandBlocks(where) {
   const parts = commandParts(where);
   const html = parts.map((x) => (x.cmd ? copyBlock(x.cmd) : `<p class="cmd-join">${esc(x.text)}</p>`)).join('');
-  return parts.filter((x) => x.cmd).length > 1 ? `<div class="cmds" data-new="copy-each-command">${html}</div>` : html;
+  // The "new" tag (#721) sits on the first Copy, the feature itself, not adrift at the block's far edge.
+  return parts.filter((x) => x.cmd).length > 1 ? `<div class="cmds">${html.replace('data-action="copy"', 'data-action="copy" data-new="copy-each-command"')}</div>` : html;
 }
 
 function syncCopy(text, doc) {
