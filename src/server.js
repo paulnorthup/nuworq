@@ -392,7 +392,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       hub.refreshBehind().catch((e) => console.error('checking branches against main failed', e));
       // Preconditions, in the background. A shared host lends tenants neither its credentials nor its network.
       // Release preconditions read GitHub through the app where it's installed.
-      running(hub, runChecks(hub, { shared: !!spaces, github: { api: gh.api, app } })).catch((e) => console.error('checking preconditions failed', e));
+      running(hub, runChecks(hub, { shared: !!spaces, github: { api: gh.api, app: appOf(hub) } })).catch((e) => console.error('checking preconditions failed', e));
       // Landing work's pull requests, as GitHub has them (no webhook may reach the hub): ready ones merge,
       // merged ones land, closed or conflicting ones become land jobs. At most once a minute.
       if (hub.github) running(hub, hub.mergeReady()).catch((e) => console.error('checking pull requests failed', e));
