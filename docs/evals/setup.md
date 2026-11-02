@@ -13,7 +13,7 @@ From a signed-in workspace with a project:
 | Target | Before (2026-11-01) | After: walk | After: script |
 |---|---|---|---|
 | 1 copied block | 6 commands + 2 pastes | **met**: 1 block, 1 paste (5 more blocks shown beneath it: B, folded since #644) | **met** |
-| At most 3 yes/no answers | none asked: a switch instead | **met**: plugin, staff, operator. A yes to staffing adds a cap prompt (D), and the page banner asks a 4th (A) | **met**: 3 |
+| At most 3 yes/no answers | none asked: a switch instead | **met**: plugin, staff, operator. A yes to staffing adds a cap prompt (D). The page banner no longer asks a 4th before a runner exists (A, fixed in #643) | **met**: 3 |
 | 1 browser approval | 1 | **met** | **met** |
 | 1 line typed in the Claude Code app | not said | **met**: `/nuworq-shaper` (plugin declined) | **met**: `/nuworq:shaper` (plugin installed) |
 | No settings switch | 1 hidden switch (staffing) | **met** | **met** |
@@ -58,7 +58,7 @@ Times are the hub's and the CLI's. A person's reading, switching windows and typ
 
 ## Hesitations
 
-- **A. Staffing is asked twice, the first time before anything can run it.** The project page asks "Let nuworq run staff this project?" before a machine is connected, and connect asks again. A yes on the page with no runner anywhere staffs nothing. Proposed as **#643**: which of the two asks is a product call, and the banner lives in `web/app.js`, which other items are changing.
+- **A. Staffing is asked twice, the first time before anything can run it.** The project page asks "Let nuworq run staff this project?" before a machine is connected, and connect asks again. A yes on the page with no runner anywhere staffs nothing. **Fixed in #643.** The project page offers staffing only once a runner has reported for the project: before that, a yes there starts nothing, and connect asks on the machine that would run the workers. Connect no longer asks about a project that is already staffed. It says so, with the command to add this machine (`nuworq run --install`). `node scripts/setup-walkthrough.js` still meets every target (2026-11-02: 3 yes/no, 1 block, 1 approval).
 - **B. The dialog reads like six steps.** Under the one block that's needed, "The setup that works" showed 5 more copy blocks, all of which connect already offers. **Fixed in #644.** Connect an agent's first screen has the one block, and says connect then asks about the plugin, workers and an operator. "The setup that works" and `nuworq up` sit folded beneath it under "What connect sets up, to do by hand", still copyable.
 - **C. The command names don't match the guide without the plugin.** With the plugin declined, connect rightly says `/nuworq-operator` and `/nuworq-shaper`. The dialog and the guide said only `/nuworq:operator` and `/nuworq:shaper`. Until #365 makes the repository public, everyone without access declines the plugin. **Fixed in #492.** The setup's own lines (`SETUP` in `web/connect.js`, which the guide, Get started and Connect an agent all show) and the guide's shaper and operator paragraphs now add "/nuworq-shaper" or "/nuworq-operator" "without the plugin".
 - **D. A yes to staffing asks a number next.** "Daily spending cap for its workers, in dollars [20]:" follows the staffing yes. The question says so ("up to a daily cap you set next"), and Enter takes 20. It counts here as a 4th answer on that path, not a yes/no. No change proposed: the cap is what makes the yes safe to give.

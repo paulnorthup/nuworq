@@ -533,6 +533,8 @@ function project(v) {
       ? `<div class="inline-form"><input data-draft="remote" id="remote-in" placeholder="github.com/acme/api, or any git remote URL"><button class="btn primary small" data-action="remote-add">Link</button><button class="btn ghost small" data-action="remote-cancel">Cancel</button></div>`
       : `<button class="link" data-action="remote-new" title="Link a git remote: every clone of it, on any machine, reaches this project">+ repo</button>`}</div>`;
   const empty = !(v.counts?.items ?? v.all.length) && !(v.counts?.agents ?? v.agents.length);
+  // The staffing banner only once a runner has reached this project (#643): before that a yes starts nothing, and
+  // connect asks on the machine that would run the workers.
   return `
     <div class="phead">
       <div class="titles"><h1>${esc(P.name)}${updating(P.slug)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
@@ -542,7 +544,7 @@ function project(v) {
         <button class="btn settings-btn" data-action="settings" data-new="project-settings" title="Staffing, freshness, GitHub, park or remove">Settings</button></div>` : ''}
       </div>
     </div>
-    ${!P.runner && P.staffing && !P.staffing.asked ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
+    ${!P.runner && P.staffing && !P.staffing.asked && P.runners_here ? `<div class="staff-ask"><div><b>Let <code>nuworq run</code> staff this project?</b> It starts headless workers whenever work is waiting, and they can cost money. Off until you say.</div>
       <div class="actions"><button class="btn primary" data-action="runner-on">Let run staff it</button><button class="btn ghost" data-action="staff-not-now">Not now</button></div></div>` : ''}
     ${projectBody(v, empty)}`;
 }
