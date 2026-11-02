@@ -291,8 +291,10 @@ export class Workspaces {
     for (const f of [this.file(s), `${this.file(s)}-wal`, `${this.file(s)}-shm`]) rmSync(f, { force: true });
     // And every copy of it: follow's, and the dated copy of the single hub it was adopted from (#479).
     forgetWorkspace(this.backups, s);
-    const adopted = (this._directory || existsSync(join(this.dir, 'directory.sqlite'))) && this.directory.setting(`adopted:${s}`);
-    if (adopted) { rmSync(adopted, { force: true }); this.directory.setting(`adopted:${s}`, ''); }
+    if (!this._directory && !existsSync(join(this.dir, 'directory.sqlite'))) return;
+    const adopted = this.directory.setting(`adopted:${s}`);
+    if (adopted) rmSync(adopted, { force: true });
+    this.directory.forget(s); // and its name starts clean (#728)
   }
 
   evict(slug) {
