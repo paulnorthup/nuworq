@@ -1,6 +1,6 @@
 import { test, describe, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, existsSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, existsSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -580,6 +580,50 @@ describe("a sandboxed worker's branch step writes no shared git config (#724)", 
       assert.equal(git(origin, 'rev-parse', job.branch), git(wt, 'rev-parse', 'HEAD'));
     } finally {
       chmodSync(join(home, '.git'), 0o755);
+    }
+    assert.equal(readFileSync(config, 'utf8'), before);
+  });
+
+  // `git switch <b>` for a branch only origin has (an item returned from another machine, a land job) creates it
+  // tracking origin's, writing the config too; the runner's worker git turns that off (bin/nuworq.js gitEnv).
+  test("with the worker's git environment, switching to a branch only origin has and landing it write none either", () => {
+    const { hub, origin, git, clone, op, build, push } = remote();
+    hub.humanOp('demo', 'create', { title: 'One', acceptance: 'x' });
+    const b = op('a1', 'next').branch;
+    const other = clone('pc');
+    build(other, b, 'one');
+    push(other, b); // built elsewhere: this checkout has never seen it
+    push(other, `${b}:refs/heads/nuworq/9-copy`); // the same, to show the plain switch failing on
+    const seed = clone('seed2');
+    writeFileSync(join(seed, 'two'), 'two\n');
+    git(seed, 'add', '.');
+    git(seed, 'commit', '-q', '-m', 'main moved');
+    git(seed, 'push', '-q', 'origin', 'main');
+
+    const home = clone('mac'), wt = `${home}.worktrees/claude-1a2b`;
+    git(home, 'worktree', 'add', '-q', '--detach', wt, 'main');
+    const config = join(home, '.git', 'config'), before = readFileSync(config, 'utf8');
+    const env = { ...process.env, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'branch.autoSetupMerge', GIT_CONFIG_VALUE_0: 'false' };
+    const worker = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', wt, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim();
+    // Here a folder where git puts config.lock stands in for the sandbox: only the config can't be written (a rebase
+    // also takes packed-refs.lock, which the sandbox allows), and not by root either.
+    const lock = join(home, '.git', 'config.lock');
+    mkdirSync(lock);
+    try {
+      worker('fetch', '-q', 'origin');
+      assert.throws(() => git(wt, 'switch', '-q', 'nuworq/9-copy'), /could not lock config file/, 'without it, the switch fails here');
+      // The land hint's steps: git fetch origin, then git switch <b>, then git rebase origin/main; then the push.
+      worker('switch', '-q', b);
+      assert.equal(worker('branch', '--show-current'), b);
+      worker('rebase', '-q', 'origin/main');
+      worker('push', '-q', 'origin', b, '--force-with-lease');
+      assert.equal(git(origin, 'rev-parse', b), worker('rev-parse', 'HEAD'));
+      assert.equal(git(origin, 'rev-parse', `${b}~1`), git(origin, 'rev-parse', 'main'), 'rebased onto the new main');
+      // And the claim hint's form, under the same environment.
+      worker('switch', '-q', '-c', 'nuworq/2-two', 'origin/main');
+      assert.equal(worker('branch', '--show-current'), 'nuworq/2-two');
+    } finally {
+      rmSync(lock, { recursive: true });
     }
     assert.equal(readFileSync(config, 'utf8'), before);
   });

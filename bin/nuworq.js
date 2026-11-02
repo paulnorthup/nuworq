@@ -913,7 +913,9 @@ function workerSettings(sandbox, { own = false } = {}) {
 // A worker's git, set in its environment (#472). credential.helper's empty value drops every helper set before it
 // (osxkeychain, gh, the person's own), and so do the github.com ones; then nuworq's, the only one. Pushes for
 // github.com, by HTTPS or SSH address, go to the hub's /api/git/. SSH addresses fetch over HTTPS too, and the
-// SSH agent is unset, so no SSH key of the person's is ever used.
+// SSH agent is unset, so no SSH key of the person's is ever used. No branch it makes tracks another (#724): git
+// would write that into the checkout's .git/config, which its sandbox denies (#606), for `git switch -c <b>
+// origin/main` and for `git switch <b>` when only origin has <b>. Its pushes name the branch, so it needs no upstream.
 function gitEnv({ hub, tokenAt, name, project }) {
   // Every value quoted, and the token only as the path of its 0600 file (#477).
   const helper = `!NUWORQ_URL=${sq(hub)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --project ${sq(project)} --as ${sq(name)}`;
@@ -922,6 +924,7 @@ function gitEnv({ hub, tokenAt, name, project }) {
     ['credential.helper', ''], ['credential.https://github.com.helper', ''], ['credential.helper', helper], ['credential.useHttpPath', 'true'],
     ['url.https://github.com/.insteadOf', 'git@github.com:'], ['url.https://github.com/.insteadOf', 'ssh://git@github.com/'],
     [`url.${through}.pushInsteadOf`, 'https://github.com/'], [`url.${through}.pushInsteadOf`, 'git@github.com:'], [`url.${through}.pushInsteadOf`, 'ssh://git@github.com/'],
+    ['branch.autoSetupMerge', 'false'],
   ];
   return `unset SSH_AUTH_SOCK && export GIT_CONFIG_COUNT=${config.length} ${config.map(([k, v], i) => `GIT_CONFIG_KEY_${i}=${sq(k)} GIT_CONFIG_VALUE_${i}=${sq(v)}`).join(' ')}`;
 }
