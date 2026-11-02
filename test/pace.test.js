@@ -119,7 +119,7 @@ describe('the page', () => {
     assert.doesNotMatch(app, /setInterval\([^)]*\)\s*=>\s*live\.poke\(\)/);
     assert.doesNotMatch(app, /setInterval\(\(\) => live\.poke/);
     assert.match(app, /startTicking\(\);/);
-    assert.match(app, /if \(!force && \(typing\(\) \|\| live\.busy\(\)\)\) \{ S\.pending = true; return; \}/);
+    assert.match(app, /if \(!force && \(typing\(\) \|\| live\.busy\(\)\)\) \{ setState\(\{ pending: true \}\); return; \}/);
     for (const ev of ['pointerdown', 'pointerup', 'scroll']) assert.ok(app.includes(`'${ev}'`), ev);
   });
 });
