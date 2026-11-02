@@ -120,7 +120,7 @@ export const ADVICE = ['keep', 'retire', 'decide'];
 // What memory is distilled from: the active decisions, people's live steering (about the project, not an item: that
 // retires itself; and not the hub's own notices, #550) and field notes. sig changes whenever any of them does.
 export function memoryInputs(hub, p) {
-  const rows = hub.q(`SELECT id, kind, body, gist, advice, author FROM notes WHERE project_id = ? AND active = 1
+  const rows = hub.q(`SELECT id, kind, body, gist, advice, author, always FROM notes WHERE project_id = ? AND active = 1
     AND (kind IN ('decision', 'learning') OR (kind = 'steer' AND item_id IS NULL AND target IS NULL AND notice = 0 AND (author = ? OR author LIKE '@%'))) ORDER BY id`).all(p.id, HUMAN);
   const sig = createHash('sha256').update(rows.map((n) => `${n.id}:${n.kind}:${n.body}`).join('\n')).digest('hex').slice(0, 16);
   return { rows, sig };
@@ -194,7 +194,9 @@ export function distill(hub, p, agent, review, args) {
       if (rec !== 'keep' && !why) throw new UserError(`Say why to ${rec} note ${n.id}`, { hint: rec === 'retire' ? 'Where the lesson lives now (a file, a test, the guide), or what supersedes it.' : 'Why it should bind every agent as a standing rule.' });
       if (rec === 'decide' && !draft) throw new UserError(`A decision draft for note ${n.id} is required`, { hint: 'The decision as a person would write it, for them to accept or edit.' });
       advice = JSON.stringify({ do: rec, why, ...(rec === 'decide' ? { draft } : {}) });
-      if (rec === 'retire' && p.autonomy === 'full') {
+      // Under Run with it the job retires on its own, but never a note a person pinned (#633, as retire refuses it: #611).
+      // That advice waits for a person's tap, as under lower autonomy.
+      if (rec === 'retire' && p.autonomy === 'full' && !n.always) {
         hub.q('UPDATE notes SET active = 0, gist = ?, advice = ? WHERE id = ?').run(gist, advice, n.id);
         hub.event(p, { item: review, actor: agent, type: 'retired', headline: `${agent} retired field note ${n.id}: ${gist}`, summary: `Why: ${why}`, data: { note: n.id, reason: why } });
         done.retired.push(n.id);
