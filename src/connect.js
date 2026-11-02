@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, 
 import { join, dirname, basename, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { userSkills } from './protocol.js';
-import { MARKETPLACE } from './plugin.js';
+import { MARKETPLACE, REPO, RELEASE_BRANCH } from './plugin.js';
 
 const NAME = 'nuworq';
 // How a person installs the plugin, and the `claude` arguments connect runs when they say yes (#432): the
@@ -227,6 +227,31 @@ export function pluginScopes(home) {
 }
 // The plugin covers Claude Code only when it's installed for the account.
 export const pluginInstalled = (home) => pluginScopes(home).account;
+
+// A nuworq marketplace added before #473 (#608) follows GitHub's default branch, so `claude plugin update` reads its
+// plugin entry from main, where agents land without a release. Its source as Claude Code recorded it in
+// known_marketplaces.json, when it is nuworq's repository at any branch but the release one; else null. A marketplace
+// from a folder, or another repository, is the person's own and stays.
+export function staleMarketplace(home) {
+  try {
+    const src = JSON.parse(readFileSync(join(home, '.claude', 'plugins', 'known_marketplaces.json'), 'utf8'))?.[NAME]?.source;
+    if (!src || !['github', 'git'].includes(src.source)) return null;
+    const [repo, ref = src.ref] = String(src.repo ?? src.url ?? '').replace(/\.git$/, '').split('#');
+    if (!repo.endsWith(REPO)) return null;
+    return ref === RELEASE_BRANCH ? null : src;
+  } catch { return null; } // no marketplaces file: nothing added
+}
+// What moves it onto the release branch: remove it and add it again at MARKETPLACE, then install the plugin for the
+// account again if it was (removing a marketplace can take its plugins with it).
+export const REPIN = (account) => [['plugin', 'marketplace', 'remove', NAME], PLUGIN_INSTALL[0], ...(account ? [PLUGIN_INSTALL[1]] : [])];
+// Run REPIN; null, or what went wrong in one line.
+export function repinMarketplace(account, env = process.env) {
+  for (const args of REPIN(account)) {
+    const r = run('claude', args, env);
+    if (!r.ok && !(args[2] === 'add' && /already/i.test(r.out))) return `claude ${args.join(' ')} failed: ${r.out.split('\n')[0]}`;
+  }
+  return null;
+}
 
 // What an earlier nuworq left in Claude Code beside an account-wide plugin (#496), recorded or not: skill folders
 // in ~/.claude/skills whose SKILL.md carries the generated line, and a user-scope MCP server named nuworq that
