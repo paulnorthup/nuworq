@@ -29,6 +29,7 @@ import { keepScroll } from './scroll.js';
 import { morph } from './morph.js';
 import { liveGate } from './pace.js';
 import { predict, placeholder } from './instant.js';
+import { held, viewLoader, loadProject, shell } from './switching.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
 // Wide enough for two columns (#141); crossing it re-lays the page out (keep in step with style.css).
@@ -51,6 +52,9 @@ const S = {
   feedAll: false, pending: false,
   sending: 0, // actions on their way to the hub, already shown (#393)
   prefetched: new Map(), // ref → { at, item } fetched when the pointer rested on it (#393)
+  views: new Map(), // slug → the last view seen for it this visit, drawn at once when it opens again (#503)
+  loading: null, // the project whose view is on its way: its page is marked as updating
+  listStale: true, // the project list may have changed since it was fetched: a live change says so (#503)
 };
 const z = () => Z[S.zoom];
 
@@ -226,24 +230,50 @@ async function removeProject(action, body, msg) {
 // ── data ──
 async function loadProjects() {
   S.projects = await api('/api/projects');
+  S.listStale = false;
 }
-async function refresh({ force = false } = {}) {
+// A project's view (#503): one request however many ask for it, so a hover, a focus and the click share it.
+const views = viewLoader((slug) => api(`/api/p/${encodeURIComponent(slug)}/view`));
+// Fetched ahead as the pointer rests on a project or the launcher highlights it, and kept as the view to draw at once.
+function prefetchView(slug) {
+  if (!slug || slug === S.slug) return;
+  views.load(slug).then((v) => S.views.set(slug, v), () => {});
+}
+// fresh: false lets an open use the view fetched ahead; a live change or the person's own action asks the hub again.
+// list: false (moving between pages) skips the project list unless a live change marked it stale.
+async function refresh({ force = false, fresh = true, list = true } = {}) {
   // While an action is on its way, a live update would show the screen from before it: the action's own refresh follows.
   if (S.sending && !force) return;
   try {
-    if (S.slug || S.analytics) await loadProjects();
     S.missing = null;
-    if (S.analytics) S.outcomes = await api(`/api/outcomes?period=${encodeURIComponent(S.period)}`);
-    if (S.slug && !S.projects.some((p) => p.slug === S.slug)) {
-      // A stale link, or a renamed or archived project: say so, rather than quietly showing the home (#143).
-      const archived = await api('/api/projects?archived=1').catch(() => []);
-      S.view = null;
-      S.missing = { slug: S.slug, archived: archived.find((p) => p.slug === S.slug) ?? null };
-    } else if (S.analytics) {
+    if (S.analytics) {
+      await loadProjects();
+      S.outcomes = await api(`/api/outcomes?period=${encodeURIComponent(S.period)}`);
       S.view = null;
     } else if (S.slug) {
-      S.view = await api(`/api/p/${encodeURIComponent(S.slug)}/view`);
-      if (S.itemRef) S.item = await api(`/api/p/${encodeURIComponent(S.slug)}/items/${encodeURIComponent(S.itemRef.replace('#', ''))}`).catch(() => null);
+      // The list and the view at once; the list only when a live change may have changed it.
+      const slug = S.slug, ref = S.itemRef;
+      const r = await loadProject({
+        list: list || S.listStale || !S.projects.length ? () => api('/api/projects') : null,
+        view: () => views.load(slug, { fresh }),
+        item: ref ? () => api(`/api/p/${encodeURIComponent(slug)}/items/${encodeURIComponent(ref.replace('#', ''))}`) : null,
+      });
+      if (r.projects) { S.projects = r.projects; S.listStale = false; }
+      // No view, from a list held a while: the project may have gone since, so the list decides.
+      else if (r.error) await loadProjects();
+      if (r.view) S.views.set(slug, r.view);
+      if (slug !== S.slug) return; // they moved on; this view is kept for when they come back
+      S.loading = null;
+      if (!S.projects.some((p) => p.slug === slug)) {
+        // A stale link, or a renamed or archived project: say so, rather than quietly showing the home (#143).
+        const archived = await api('/api/projects?archived=1').catch(() => []);
+        S.view = null;
+        S.missing = { slug, archived: archived.find((p) => p.slug === slug) ?? null };
+      } else {
+        if (r.error) throw r.error;
+        S.view = r.view;
+        if (ref === S.itemRef) S.item = r.item;
+      }
     } else {
       S.view = null;
       // The home: one request, which also brings the project lines the rail shows.
@@ -270,7 +300,7 @@ function render({ force = false } = {}) {
   const writing = saveFocus(document); // a forced redraw puts the person back where they were writing
   keepScroll(document, () => { // every scrolled area keeps its place, anchored to the row in view (#376)
     renderRail();
-    paint($('#main'), S.analytics ? analytics() : S.slug && S.view ? project(S.view) : S.missing ? missingProject(S.missing, { esc }) : overview());
+    paint($('#main'), mainHtml());
     renderDrawer();
   });
   for (const el of document.querySelectorAll('[data-draft]')) {
@@ -280,6 +310,22 @@ function render({ force = false } = {}) {
   }
   restoreFocus(document, writing);
   markNew(document); // what just shipped (#130), redrawn with everything else
+}
+
+function mainHtml() {
+  if (S.analytics) return analytics();
+  if (S.slug && S.view?.project.slug === S.slug) return project(S.view);
+  if (S.missing) return missingProject(S.missing, { esc });
+  // Picked a moment ago (#503): its header from what the app holds, at once; the view fills it in place.
+  if (S.slug) return projectShell(S.slug);
+  return overview();
+}
+const updating = (slug) => (S.loading === slug ? '<span class="updating" role="status">Updating</span>' : '');
+function projectShell(slug) {
+  const line = S.projects.find((p) => p.slug === slug);
+  if (!line) return placeholder(6);
+  return shell(line, { esc, stateDot, labels: STATE_LABELS, placeholder, depth: zoomControl(), updating: updating(slug),
+    columns: WIDE.matches ? (a, b) => columns(a, b, `p:${slug}`) : null });
 }
 
 // ── routing ──
@@ -292,14 +338,19 @@ function route() {
   const ref = m?.[2] ? `#${m[2]}` : null;
   // Arriving from Get started's "+ repo" opens this project's repository form, focused.
   const linking = !!slug && S.linkRepo === slug;
-  if (slug !== S.slug) { S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = linking; }
+  const moved = slug !== S.slug;
+  if (moved) {
+    S.stage = null; S.addWork = false; S.editMission = false; S.addRemote = linking;
+    // Another project (#503): the last view seen for it this visit, else nothing until the shell's view arrives.
+    S.missing = null; S.loading = slug; S.view = slug ? held(slug, S)?.view ?? null : S.view;
+  }
   S.linkRepo = null;
   S.slug = slug;
   if (ref !== S.itemRef) { S.itemRef = ref; S.item = prefetched(slug, ref); S.deep = z() >= 2; S.editItem = false; S.editPre = false; }
   if (ref) remember(slug, ref);
   // An item opens on this frame: from what was fetched as the pointer rested on it, else as a placeholder.
-  if (ref && S.view?.project.slug === slug) render({ force: true });
-  refresh({ force: true }).then(() => linking && $('#remote-in')?.focus());
+  if ((moved && slug && !S.analytics) || (ref && S.view?.project.slug === slug)) render({ force: true });
+  refresh({ force: true, fresh: !moved, list: false }).then(() => linking && $('#remote-in')?.focus());
 }
 // Opening an item (#393): fetched when the pointer rests on its link, or as a finger lands on it, so it opens
 // without a wait. Kept a few seconds; the open refreshes it from the hub all the same.
@@ -322,13 +373,21 @@ const openTarget = (e) => {
   const el = e.target.closest?.('[data-action="open"][data-item]');
   return el && { slug: el.closest('[data-project]')?.dataset.project ?? S.slug, ref: el.dataset.item };
 };
+// A link to a project (the rail's, a launcher row): its view is fetched the same way, so it opens filled in (#503).
+const projectTarget = (e) => {
+  const m = e.target.closest?.('a[href^="#/p/"]')?.getAttribute('href').match(/^#\/p\/([^/]+)$/);
+  return m ? decodeURIComponent(m[1]) : null;
+};
 let restTimer;
 document.addEventListener('pointerover', (e) => {
-  const t = openTarget(e);
+  const t = openTarget(e), p = projectTarget(e);
   clearTimeout(restTimer);
-  if (t && e.pointerType === 'mouse') restTimer = setTimeout(() => prefetch(t.slug, t.ref), 60);
+  if (e.pointerType !== 'mouse') return;
+  if (t) restTimer = setTimeout(() => prefetch(t.slug, t.ref), 60);
+  else if (p) restTimer = setTimeout(() => prefetchView(p), 60);
 });
-document.addEventListener('touchstart', (e) => { const t = openTarget(e); if (t) prefetch(t.slug, t.ref); }, { passive: true });
+document.addEventListener('touchstart', (e) => { const t = openTarget(e); if (t) prefetch(t.slug, t.ref); else prefetchView(projectTarget(e)); }, { passive: true });
+document.addEventListener('focusin', (e) => prefetchView(projectTarget(e)));
 const go = (slug, ref) => { location.hash = slug ? `#/p/${encodeURIComponent(slug)}${ref ? '/' + ref.replace('#', '') : ''}` : '#/'; };
 
 // ── rail ──
@@ -427,7 +486,7 @@ function project(v) {
   const empty = !v.all.length && !v.agents.length;
   return `
     <div class="phead">
-      <div class="titles"><h1>${esc(P.name)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
+      <div class="titles"><h1>${esc(P.name)}${updating(P.slug)}</h1>${mission}${z() >= 1 || S.addRemote ? remotes : ''}</div>
       <div class="controls">
         <div class="ctl-row"><span class="seg-label">Depth</span>${zoomSeg}</div>
         ${z() >= 1 ? `<div class="ctl-row"><span class="seg-label">Autonomy</span>${autoSeg}
@@ -1560,6 +1619,11 @@ function drawLauncher({ keep = false } = {}) {
   L.sel = Math.min(L.sel, Math.max(0, L.results.length - 1));
   list.innerHTML = resultsHtml(L.results, { sel: L.sel, stages: L.index.stages, esc });
   list.querySelector('.ln-row.on')?.scrollIntoView({ block: 'nearest' });
+  // The highlighted result starts loading (#503): a project's view, or an item and its project's.
+  const run = L.results[L.sel]?.run;
+  const to = run?.open?.slug ?? run?.go?.match(/^#\/p\/([^/]+)$/)?.[1];
+  if (to) prefetchView(run.open ? to : decodeURIComponent(to));
+  if (run?.open?.item) prefetch(run.open.slug, run.open.item);
 }
 function closeLauncher() {
   Object.assign(L, { open: false, confirming: null });
@@ -2045,7 +2109,7 @@ function listen() {
     const info = await api('/api/info').catch(() => null);
     if (info && info.commit !== S.info?.commit) { S.info = info; scheduleRefresh(); }
   };
-  es.onmessage = () => scheduleRefresh();
+  es.onmessage = () => { S.listStale = true; views.forget(); scheduleRefresh(); };
   es.onerror = () => { es.close(); offline(); setTimeout(listen, 3000); };
 }
 

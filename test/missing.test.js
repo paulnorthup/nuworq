@@ -27,7 +27,7 @@ describe('a link to a project that isn\'t here', () => {
 
   test('the page renders it whenever the address names a project the hub doesn\'t list', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
-    assert.match(app, /if \(S\.slug && !S\.projects\.some\(\(p\) => p\.slug === S\.slug\)\) \{/);
-    assert.match(app, /S\.missing \? missingProject\(S\.missing, \{ esc \}\) : overview\(\)/);
+    assert.match(app, /if \(!S\.projects\.some\(\(p\) => p\.slug === slug\)\) \{/);
+    assert.match(app, /if \(S\.missing\) return missingProject\(S\.missing, \{ esc \}\);/);
   });
 });
