@@ -72,6 +72,7 @@ export const channelOwner = (db, id) => db.prepare('SELECT person FROM channels 
 export function removeChannel(db, id) {
   const r = db.prepare('DELETE FROM channels WHERE id = ?').run(Number(id));
   if (!r.changes) throw new UserError(`no channel ${id}`, { status: 404, hint: 'See: nuworq notify list' });
+  db.prepare('DELETE FROM unsent WHERE channel_id = ?').run(Number(id));
 }
 
 // ── sending ──
@@ -238,31 +239,62 @@ export class Notifier {
       // Forget entries long gone from projects we looked at, so a situation that recurs is news again.
       const forget = db.prepare('DELETE FROM notified WHERE project_id = ? AND seen_at < ?');
       for (const id of looked) forget.run(id, t - FORGET);
-      if (this.pending.size && !this.batch) this.batch = setTimeout(() => this.flush().catch((e) => console.error('notify flush failed', e)), this.windowMs);
+      if ((this.pending.size || this.unsent().length) && !this.batch) this.batch = setTimeout(() => this.flush().catch((e) => console.error('notify flush failed', e)), this.windowMs);
     } catch (e) {
       console.error('notify scan failed', e);
     }
   }
 
-  // Close the window: whatever is still new and still needs you goes out as one message per channel.
+  // What channels failed to deliver and may still send (#744). A channel failing for a day stops retrying what
+  // it missed: those entries are dropped, and it still gets new ones.
+  unsent() {
+    const db = this.hub.db;
+    db.prepare('DELETE FROM unsent WHERE channel_id IN (SELECT id FROM channels WHERE failing_since < ?) OR channel_id NOT IN (SELECT id FROM channels)').run(this.hub.now() - DAY);
+    return db.prepare('SELECT * FROM unsent').all();
+  }
+
+  // Close the window: whatever is still new and still needs you goes out as one message per channel, with
+  // what that channel missed while it was down.
   async flush() {
     clearTimeout(this.batch);
     this.batch = null;
-    const ids = new Set([...this.pending].map((k) => Number(k.split('\t')[0])));
+    const missed = this.unsent();
+    const ids = new Set([...this.pending].map((k) => Number(k.split('\t')[0])).concat(missed.map((u) => u.project_id)));
     const now = this.current(new Set(this.hub.projects().filter((p) => ids.has(p.id)).map((p) => p.slug))).entries;
     // Resolved, dismissed or parked in the meantime: drop it. Headlines are read fresh.
     const entries = [...this.pending].map((k) => now.get(k)).filter(Boolean);
     this.pending.clear();
-    const channels = this.channels();
-    if (!entries.length || !channels.length) return [];
     const db = this.hub.db, t = this.hub.now();
+    const drop = db.prepare('DELETE FROM unsent WHERE channel_id = ? AND project_id = ? AND key = ?');
+    const retry = new Map(); // channel id → entries it missed that still need you
+    for (const u of missed) {
+      const e = now.get(`${u.project_id}\t${u.key}`);
+      if (!e) { drop.run(u.channel_id, u.project_id, u.key); continue; }
+      retry.set(u.channel_id, [...(retry.get(u.channel_id) ?? []), e]);
+    }
+    const channels = this.channels();
+    if ((!entries.length && !retry.size) || !channels.length) return [];
     const mark = db.prepare('INSERT OR REPLACE INTO notified (project_id, key, at, seen_at) VALUES (?, ?, ?, ?)');
     for (const e of entries) mark.run(e.project_id, e.entry.key, t, t);
     // A personal channel gets only the entries its person owns; a hub-wide one gets them all.
-    const sends = channels.map((c) => [c, c.person ? entries.filter((e) => (e.entry.owners ?? []).includes(c.person)) : entries]).filter(([, es]) => es.length);
+    const sends = channels.map((c) => {
+      const fresh = c.person ? entries.filter((e) => (e.entry.owners ?? []).includes(c.person)) : entries;
+      const old = (retry.get(c.id) ?? []).filter((e) => !fresh.includes(e));
+      return [c, [...old, ...fresh]];
+    }).filter(([, es]) => es.length);
     const before = new Set(channels.filter((c) => c.failing_since).map((c) => c.id));
     this.sending = (this.sending ?? 0) + 1; // holds a workspace open until it's sent (notifyWorkspaces)
-    const results = await Promise.all(sends.map(([c, es]) => deliver(db, c, compose(es, this.baseUrl), this.sendOpts))).finally(() => this.sending--);
+    const results = await Promise.all(sends.map(async ([c, es]) => {
+      const r = await deliver(db, c, compose(es, this.baseUrl), this.sendOpts);
+      // Sent: nothing left to retry. Failed: keep it for a later scan, unless the channel has been down a day.
+      const failing = r.ok ? null : db.prepare('SELECT failing_since FROM channels WHERE id = ?').get(c.id)?.failing_since;
+      const keep = db.prepare('INSERT OR IGNORE INTO unsent (channel_id, project_id, key, at) VALUES (?, ?, ?, ?)');
+      for (const e of es) {
+        if (r.ok) drop.run(c.id, e.project_id, e.entry.key);
+        else if (failing != null && failing >= this.hub.now() - DAY) keep.run(c.id, e.project_id, e.entry.key, t);
+      }
+      return r;
+    })).finally(() => this.sending--);
     // A channel started or stopped failing: the UI shows that as something worth knowing.
     if (results.some((r) => r.ok === before.has(r.id))) this.hub.changed(null, { kind: 'channel' });
     return results;
@@ -297,7 +329,8 @@ export function notifyWorkspaces(spaces, baseUrlFor, { every = 30_000, ...opts }
   spaces.onOpen((name, hub) => attach(name, hub));
   spaces.holdOpen((hub) => {
     const n = notifiers.get(hub.workspace);
-    return !!n && n.hub === hub && (n.pending.size > 0 || !!n.batch || !!n.scanTimer || n.sending > 0);
+    // A window open only to retry a down channel doesn't hold it: the retry waits in the database for its next open.
+    return !!n && n.hub === hub && (n.pending.size > 0 || !!n.scanTimer || n.sending > 0);
   });
   sweep();
   const timer = setInterval(sweep, every);

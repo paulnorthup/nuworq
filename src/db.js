@@ -209,6 +209,14 @@ CREATE TABLE IF NOT EXISTS notified (
   seen_at    INTEGER NOT NULL,                -- last time the entry was still there
   PRIMARY KEY (project_id, key)
 );
+-- Entries a channel failed to deliver: a later scan sends them while they still need the person (#744).
+CREATE TABLE IF NOT EXISTS unsent (
+  channel_id INTEGER NOT NULL,
+  project_id INTEGER NOT NULL,
+  key        TEXT NOT NULL,
+  at         INTEGER NOT NULL,
+  PRIMARY KEY (channel_id, project_id, key)
+);
 
 -- GitHub pull requests linked to items, and CI results per commit (src/github.js).
 CREATE TABLE IF NOT EXISTS prs (
