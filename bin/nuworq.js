@@ -10,7 +10,7 @@ import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneD
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
-import { sandboxSettings, filePermissions, projectCommands } from '../src/sandbox.js';
+import { sandboxSettings, filePermissions, projectCommands, sandboxHosts } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -886,6 +886,14 @@ function workerSetup(target, agent, flags, s, token = null) {
   // Names from the hub (and --as) reach shells and file names: plain names only (#477).
   checkName('project', target.slug);
   const name = checkName('worker name', flags.as || `${agent}-${randomBytes(2).toString('hex')}`);
+  // The project's extra sandbox hosts, as the hub sends them (#624): the hub checks them when a person sets them, but
+  // a runner trusts its machine, not the hub. Anything but host names (a bare *, a URL, *.com) starts nothing.
+  let hosts;
+  try { hosts = sandboxHosts(target.sandbox_hosts ?? []); } catch (e) {
+    throw new HubError(`Not starting a worker for ${target.name ?? target.slug}: the hub sent sandbox hosts the runner refuses (${e.message})`, {
+      hint: 'A person sets them in the project\'s Settings, as host names (api.example.com, *.example.com). A hub that sends anything else isn\'t trusted to widen a worker\'s network.',
+    });
+  }
   // Its agent token goes in a 0600 file the MCP server and the credential helper read; only the file's path is
   // in the commands and the environment (#477).
   const tokenAt = token ? tokenFile(dirname(HUB_FILE), name, token) : null;
@@ -986,7 +994,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     // only the name Claude Code scrubs carries it.
     if (flags.proxy !== undefined) lines.push(`export ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN"`, 'unset NUWORQ_LLM_PROXY_TOKEN');
     // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: its shell, hooks and MCP servers start without Claude Code's own credentials (#616).
-    lines.push(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts: target.sandbox_hosts ?? [], landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    lines.push(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts, landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.

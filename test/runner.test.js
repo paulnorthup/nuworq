@@ -351,6 +351,44 @@ describe('nuworq worker --browser', () => {
   });
 });
 
+// The hub checks a project's sandbox hosts when a person sets them, but a runner trusts its machine, not the hub
+// (#624): what a hostile hub sends goes through the same check before it widens a worker's network.
+describe('a runner refuses sandbox hosts that aren\'t host names', () => {
+  test('a bare *, a URL or a whole top-level domain starts nothing; host names start the worker with them', async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-hosts-')));
+    const hub = new Hub();
+    hub.tx(() => hub.project('h', { create: true }));
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    // Past the hub's own check, as a hostile hub would send them.
+    const sends = (hosts) => hub.q('UPDATE projects SET sandbox_hosts = ? WHERE slug = ?').run(JSON.stringify(hosts), 'h');
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: home };
+    const cli = () => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'h', '--agent', 'claude', '--as', 'w-1'], { env, cwd: home });
+    try {
+      for (const bad of [['*'], ['https://evil.example/x'], ['*.com'], ['api.example.com', 'evil.example;rm']]) {
+        sends(bad);
+        await assert.rejects(cli(), (e) => {
+          assert.match(e.stderr, /Not starting a worker for h: the hub sent sandbox hosts the runner refuses \(.*(isn't a host name|aren't host names)\)/, JSON.stringify(bad));
+          assert.equal(e.stdout, '', 'no command printed');
+          return true;
+        });
+      }
+      sends(['API.example.com', '*.example.org']);
+      const settings = JSON.parse((await cli()).stdout.match(/--settings '([^']*)'/)[1]);
+      assert.ok(['api.example.com', '*.example.org'].every((h) => settings.sandbox.network.allowedDomains.includes(h)), 'host names, as checked, reach the sandbox');
+    } finally {
+      server.close();
+    }
+  });
+
+  test("the hub's own check refuses a wildcard over a whole top-level domain too", async () => {
+    const { sandboxHosts } = await import('../src/sandbox.js');
+    assert.throws(() => sandboxHosts('*.com'), /\*\.com isn't a host name/);
+    assert.throws(() => sandboxHosts(['*']), /isn't a host name/);
+    assert.deepEqual(sandboxHosts('*.example.com, localhost:8080'), ['*.example.com', 'localhost:8080']);
+  });
+});
+
 // Only Claude Code's sandbox keeps a worker's shell from the machine's keys (#615): any other harness starts only
 // when the person says they know, and says in one line what it can read.
 describe('an unsandboxed harness needs its opt-in flag', () => {
