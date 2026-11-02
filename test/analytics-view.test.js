@@ -112,6 +112,6 @@ describe('analytics', () => {
     assert.match(app, /\$\{owner\(\) \? '<a class="btn an-open" href="#\/analytics" data-new="analytics">Analytics<\/a>' : ''\}/);
     assert.match(app, /const owner = \(\) => S\.person\?\.role === 'owner';/);
     assert.match(app, /analytics: location\.hash\.startsWith\('#\/analytics'\)/);
-    assert.match(app, /if \(S\.analytics\) \{\n\s*await loadProjects\(\);\n\s*setState\(\{ outcomes: await api\(`\/api\/outcomes\?period=\$\{encodeURIComponent\(S\.period\)\}`\) \}\);/);
+    assert.match(app, /if \(S\.analytics\) \{\n\s*await loadProjects\(\);\n\s*setState\(\{ outcomes: await data\.read\(`\/api\/outcomes\?period=\$\{encodeURIComponent\(S\.period\)\}`, \{ fresh \}\) \}\);/);
   });
 });

@@ -99,8 +99,8 @@ describe('a project shows the moment it is picked (#503)', () => {
     const app = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
     assert.match(app, /loading: slug, view: slug \? held\(slug, S\)\?\.view \?\? null : S\.view \}\);/, 'the last view seen, else the shell');
     assert.match(app, /if \(\(moved && slug && !S\.analytics\) \|\| [^\n]*\) render\(\{ force: true \}\);\n\s*refresh\(\{ force: true, fresh: !moved, list: false \}\)/, 'drawn before the fetch');
-    assert.match(app, /list: list \|\| S\.listStale \|\| !S\.projects\.length \? \(\) => api\('\/api\/projects'\) : null/);
-    assert.match(app, /es\.onmessage = \(\) => \{ setState\(\{ listStale: true \}\); views\.forget\(\); scheduleRefresh\(\); \};/);
+    assert.match(app, /list: list \|\| S\.listStale \|\| !S\.projects\.length \? \(\) => data\.read\('\/api\/projects', \{ fresh \}\) : null/);
+    assert.match(app, /es\.onmessage = \(m\) => \{ data\.changed\(changeOf\(m\.data\)\); setState\(\{ listStale: true \}\); scheduleRefresh\(\); \};/, 'a change drops only what it touched (#601)');
     assert.match(app, /if \(slug !== S\.slug\) return; \/\/ they moved on/, 'an answer for a project left behind never draws over the one picked');
     assert.match(app, /addEventListener\('focusin', \(e\) => prefetchView\(projectTarget\(e\)\)\)/, 'focus starts loading');
     assert.match(app, /const run = L\.results\[L\.sel\]\?\.run;[^]*?prefetchView\(/, 'so does the launcher\'s highlighted result');
