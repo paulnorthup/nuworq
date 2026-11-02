@@ -716,12 +716,12 @@ describe('a worker for a project with no checkout on this machine', () => {
       assert.match(read(), /You were started for one job: land #1\./, 'a land job is still one capped run of its own');
       assert.match(read(), /^ARG --max-budget-usd\nARG 0\.5$/m);
 
-      // Any other job: no cap, and the worker keeps going.
+      // Any other job: only the per-worker cap (#761), and the worker keeps going.
       w.hub.q("UPDATE items SET stage = 'ready' WHERE seq = 1").run();
       rmSync(logs, { recursive: true });
       await run();
       assert.match(read(), /Keep going until next says/);
-      assert.doesNotMatch(read(), /max-budget-usd/);
+      assert.match(read(), /^ARG --max-budget-usd\nARG 25$/m);
     } finally {
       server.close();
     }
@@ -901,6 +901,36 @@ describe('run: the supervising loop', () => {
     });
     w.workers.forEach((x) => x.finish(0));
     await p;
+  });
+
+  // #761: a claude worker that streams assistant messages and never exits on its own.
+  const opus = (id, input, output) => JSON.stringify({ type: 'assistant', message: { id, model: 'claude-opus-4-5', content: [{ type: 'text', text: 'working' }], usage: { input_tokens: input, output_tokens: output } } });
+
+  test('a runaway worker is stopped while it runs once its spend so far passes --worker-usd, and that spend counts toward --max-usd', async () => {
+    const { tap } = await import('../src/usage.js');
+    const w = world([[route('a', 5)]]);
+    const reports = [];
+    const p = run({ ...w.opts, workers: 1, workerUsd: 25, maxUsd: 20, report: async (s) => { reports.push(s); } });
+    await checked(w, p, async () => {
+      await until(() => w.workers.length, 'a worker');
+      const t = tap('claude');
+      w.workers[0].spent = () => t.usage()?.cost_usd ?? 0;
+      t.line(opus('m1', 1_000_000, 100_000)); // $5 + $2.50
+      t.line(opus('m1', 1_000_000, 100_000)); // the same message's next block: counted once
+      await until(() => reports.some((r) => r.spending?.[0]?.usd === 7.5), 'its spend so far reported to the hub');
+      assert.deepEqual(w.workers[0].signals, [], 'under both caps it runs on');
+      t.line(opus('m2', 2_000_000, 400_000)); // + $10 + $10: $27.50 so far
+      await until(() => w.workers[0].signals.includes('SIGTERM'), 'SIGTERM before it exits on its own');
+      assert.ok(w.lines.some((l) => /w1 spent \$27\.50, past its \$25 cap: stopping it/.test(l)));
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(w.workers.length, 1, 'no new worker once its spend so far passes --max-usd');
+      // Killed before its `result`: its usage is the estimate, marked so, not $0.
+      assert.deepEqual(t.usage(), { input_tokens: 3_000_000, output_tokens: 500_000, cost_usd: 27.5, model: 'claude-opus-4-5', estimated: true });
+    });
+    w.workers[0].finish('SIGTERM');
+    const res = await p;
+    assert.match(res.why, /reached --max-usd 20 \(\$27\.50 spent\)/);
+    assert.equal(res.spent, 27.5);
   });
 
   test('without a budget, workers that report no spend change nothing', async () => {

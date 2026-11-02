@@ -295,7 +295,7 @@ CREATE TABLE IF NOT EXISTS usage (
   input_tokens  INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd      REAL,
-  source        TEXT NOT NULL,                -- agent: reported by the agent | runner: read from its CLI | llm-proxy: measured (src/llmproxy.js)
+  source        TEXT NOT NULL,                -- agent: reported by the agent | runner: read from its CLI | estimate: priced by nuworq, the run killed before its CLI said (#761) | llm-proxy: measured (src/llmproxy.js)
   at            INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_item ON usage (item_id);

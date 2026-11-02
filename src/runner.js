@@ -266,6 +266,21 @@ export function unstaffedLine(routes, projects) {
   return `${n} item${n === 1 ? ' waits' : 's wait'} in projects nuworq run doesn't staff: ${where}. To staff one, ${STAFF_HOW}.`;
 }
 
+// The runner's caps (#761), with the defaults it uses when no flag is given: a worker stops after 90 minutes or
+// $25, whichever comes first; the runner as a whole has no budget unless --max-usd sets one. 0 turns a cap off.
+export const CAPS = { 'max-minutes': 90, 'max-usd': Infinity, 'worker-usd': 25 };
+export const CAP_ARGS = ['--max-minutes', String(CAPS['max-minutes']), '--worker-usd', String(CAPS['worker-usd'])];
+export function runCaps(flags = {}) {
+  const cap = (k) => {
+    const v = flags[k];
+    if (v === undefined || v === true) return CAPS[k];
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || String(v).trim() === '') throw Object.assign(new Error(`--${k} expects a number ≥ 0, got "${v}"`), { hint: `e.g. --${k} ${CAPS[k] === Infinity ? 10 : CAPS[k]}, or --${k} 0 for no cap` });
+    return n === 0 ? Infinity : n;
+  };
+  return { maxMinutes: cap('max-minutes'), maxUsd: cap('max-usd'), workerUsd: cap('worker-usd') };
+}
+
 // Workers in a row that fail, however long each ran (#764): an outage whose workers retry for a minute, or for
 // twenty, is as stuck as one whose workers fail at once. Those under 15 s are said to fail within seconds.
 const FAST_FAIL_MS = 15_000;
@@ -281,8 +296,8 @@ const KILL_GRACE_MS = 10_000;
 const WAIT_MAX_S = 90;
 
 // routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal),
-// exited: Promise<code>, spent?(): dollars its CLI reported, read once it has exited, cap?: the most it may spend
-// (a land job's, #752), checked each round: past it, the worker is stopped }.
+// exited: Promise<code>, spent?(): dollars so far (#761), its CLI's own figure once it has said one; null: unpriced,
+// cap?: the most it may spend (a land job's, #752), checked each round: past it, the worker is stopped }.
 // launch throws an error with skip: true when this machine can't work on the route's project (no
 // checkout of it here): that project is left to others for this round, said once, and isn't a failure.
 // With pause: true too (its checkout couldn't be updated, e.g. git can't reach origin), the project is left
@@ -291,7 +306,9 @@ const WAIT_MAX_S = 90;
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
 // submitted(worker): whether it handed something in since it started (absent: assume it didn't); one that did,
 // then exited non-zero, still worked, so it ends a failing streak rather than adding to it.
-// maxUsd: stop launching once the workers' reported spend reaches it; running workers finish.
+// maxUsd: stop launching once the workers' spend reaches it, counting what running ones have spent so far (#761);
+// running workers finish. workerUsd: a worker whose spend so far passes it is stopped (SIGTERM, then SIGKILL), as
+// one past maxMinutes is. w.spent() is read on every round: dollars so far, or null when its model is unpriced.
 // report(state): tells the hub how this runner is, once per poll and once more when it stops (#171); a
 // report that fails is let go (the hub shows the runner down until one gets through).
 // sweep(running): the weekly sweep (#444), run once sweptAt (when it last ran) is a week old; it says what it removed.
@@ -311,7 +328,7 @@ const WAIT_MAX_S = 90;
 export async function run({
   routes, launch, claimed = async () => true, submitted = async () => false, took = async () => null, log = console.log, report = async () => {}, sweep, sweptAt = 0,
   updated = () => null, supervised = false, signoff = async () => {}, machine = () => ({}), maxWorkers, unstaffed = async () => null, waitRoutes,
-  workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, pollSeconds = 30, untilIdle = false,
+  workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, workerUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
 }) {
   const running = [];
@@ -339,6 +356,9 @@ export async function run({
   const cant = new Map(); // project → why this machine can't work on it, as last said
   const resting = new Map(); // project → { until, ms }: its checkout couldn't be updated, so it waits until then
   const stop = (reason) => { if (!stopping) { stopping = true; why = reason; } wake(); };
+  // A worker's spend so far (#761), and everything spent: the exited workers' and the running ones' so far.
+  const spendOf = (w) => Number(w.spent?.()) || 0;
+  const total = () => spent + running.filter((w) => !w.gone).reduce((a, w) => a + spendOf(w), 0);
   let interrupted = false;
   onInterrupt?.(() => {
     running.forEach((w) => w.kill(interrupted ? 'SIGKILL' : 'SIGTERM'));
@@ -358,9 +378,11 @@ export async function run({
   const state = () => {
     const t = now();
     return {
-      running: running.length, workers: most, ...(auto ? { auto: true, holding } : {}), spent, poll_seconds: pollSeconds,
+      running: running.length, workers: most, ...(auto ? { auto: true, holding } : {}), spent: total(), poll_seconds: pollSeconds,
       // Its live workers by name (#540): the hub renews the leases they hold, so none has to spend a turn on it.
       live: running.map((w) => w.name),
+      // What each has spent so far (#761): the project's daily budget counts it before the worker exits.
+      spending: running.filter((w) => !w.gone && spendOf(w) > 0).map((w) => ({ name: w.name, project: w.project, usd: spendOf(w) })),
       skipping: [
         ...[...resting].filter(([, r]) => r.until > t).map(([project, r]) => ({ project, reason: cant.get(project) ?? "its checkout couldn't be updated", until: r.until })),
         ...[...cant].filter(([project]) => !(resting.get(project)?.until > t)).map(([project, reason]) => ({ project, reason })),
@@ -387,11 +409,15 @@ export async function run({
   for (;;) {
     const t = now();
     for (const w of running) {
-      if (!w.killedAt && t - w.started > maxMinutes * 60_000) {
-        log(`${w.name} ran past ${maxMinutes}m: stopping it (its lease expires and the item returns to the queue)`);
+      const usd = w.gone ? 0 : spendOf(w);
+      const over = w.killedAt ? null
+        : t - w.started > maxMinutes * 60_000 ? `ran past ${maxMinutes}m`
+          : usd >= workerUsd ? `spent $${usd.toFixed(2)}, past its $${workerUsd} cap` : null;
+      if (over) {
+        log(`${w.name} ${over}: stopping it (its lease expires and the item returns to the queue)`);
         w.kill('SIGTERM');
         w.killedAt = t;
-      } else if (!w.killedAt && w.cap && Number(w.spent?.()) > w.cap) {
+      } else if (!w.killedAt && w.cap && usd > w.cap) {
         // A land job's dollar cap (#752), for agents that report spend as they go; Claude stops itself there.
         log(`${w.name} spent past its $${w.cap} cap for a land job: stopping it (the item goes back as a land job)`);
         w.kill('SIGTERM');
@@ -399,6 +425,11 @@ export async function run({
       } else if (w.killedAt && t - w.killedAt > KILL_GRACE_MS) {
         w.kill('SIGKILL');
       }
+    }
+    // Running workers' spend counts too (#761): a long run stops new launches while it runs.
+    if (!stopping && total() >= maxUsd) {
+      const others = running.filter((w) => !w.gone).length;
+      stop(`reached --max-usd ${maxUsd} ($${total().toFixed(2)} spent)${others ? `; letting ${others} running worker(s) finish` : ''}`);
     }
 
     if (!moved && !stopping) {
@@ -487,11 +518,13 @@ export async function run({
             const ms = now() - w.started;
             const secs = Math.round(ms / 1000);
             done.push({ name: w.name, project: w.project, code, secs });
-            const usd = Number(w.spent?.()) || 0;
+            const said = w.spent?.();
+            const usd = Number(said) || 0;
             spent += usd;
-            log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s${usd ? `, spent $${usd.toFixed(2)}` : ''}`);
-            const others = running.length - 1; // this one is still in the list until the hub answers below
-            if (spent >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${spent.toFixed(2)} spent)${others ? `; letting ${others} running worker(s) finish` : ''}`);
+            w.gone = true; // its spend is in spent now; it stays in the list until the hub answers below
+            log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s${said === null ? ', cost unpriced' : usd ? `, spent $${usd.toFixed(2)}` : ''}`);
+            const others = running.filter((x) => !x.gone).length;
+            if (total() >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${total().toFixed(2)} spent)${others ? `; letting ${others} running worker(s) finish` : ''}`);
             // It counts as running until the hub answers, so no replacement starts meanwhile.
             await Promise.resolve().then(() => signoff(w)).catch(() => {});
             const failure = code !== 0 && !interrupted && !w.killedAt;

@@ -1007,7 +1007,7 @@ export class Hub extends EventEmitter {
   // start no one new now (stopped: 'paused' | 'budget' | null).
   staffing(p) {
     const day = Math.floor(this.now() / DAY) * DAY;
-    const spent = this.q('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage WHERE project_id = ? AND at >= ?').get(p.id, day).s;
+    const spent = this.q('SELECT COALESCE(SUM(cost_usd), 0) AS s FROM usage WHERE project_id = ? AND at >= ?').get(p.id, day).s + this.liveSpend(p);
     const budget = p.run_budget ?? null;
     return {
       workers: p.run_workers ?? null, paused: !!p.run_paused, budget, spent_today: Math.round(spent * 100) / 100,
@@ -1024,6 +1024,25 @@ export class Hub extends EventEmitter {
     if (s.stopped !== 'budget') return null;
     const resets = (Math.floor(this.now() / DAY) + 1) * DAY;
     return `Today's $${s.budget.toFixed(2)} budget for workers here is spent ($${s.spent_today.toFixed(2)}): it resets at 00:00 UTC, in ${dur(resets - this.now())}.`;
+  }
+
+  // What workers running in a project have spent so far (#761), as their runners last said: so a long run counts
+  // against the daily budget while it runs. A runner that is down or stopped no longer counts, and a worker whose
+  // usage is on record has exited (its record counts instead).
+  liveSpend(p) {
+    const t = this.now();
+    let usd = 0;
+    for (const r of this.q('SELECT state, scope, seen_at, poll_ms FROM runners WHERE seen_at > ?').all(t - DAY)) {
+      const s = json(r.state, {});
+      if (s.stopped || t - r.seen_at > RUNNER_DOWN_POLLS * r.poll_ms) continue;
+      if (r.scope && !r.scope.split(',').includes(p.slug)) continue; // its token doesn't reach this project
+      for (const w of s.spending ?? []) {
+        if (w.project !== p.slug) continue;
+        if (this.q('SELECT 1 FROM usage WHERE project_id = ? AND agent = ? LIMIT 1').get(p.id, w.name)) continue;
+        usd += Number(w.usd) || 0;
+      }
+    }
+    return usd;
   }
 
   // How many jobs an agent took since a moment, across the projects a token may reach: tells
@@ -1101,6 +1120,9 @@ export class Hub extends EventEmitter {
       paused: r.paused && when(r.paused.until) ? { until: when(r.paused.until), reason: clip(r.paused.reason, 200) } : null,
       spent: Math.round(num(r.spent) * 100) / 100,
       stopped: r.stopped ? clip(r.stopped, 200) : null,
+      // Its running workers' spend so far (#761), which the projects' daily budgets count until they exit.
+      spending: (Array.isArray(r.spending) ? r.spending : []).slice(0, 50).filter((w) => w?.name && w.project && num(w.usd) > 0)
+        .map((w) => ({ name: clip(w.name, 80), project: clip(w.project, 80), usd: Math.round(num(w.usd) * 10000) / 10000 })),
     };
     const pollMs = Math.min(Math.max(num(r.poll_seconds) || 30, 1), 3600) * 1000;
     const was = this.q('SELECT state, seen_at, poll_ms FROM runners WHERE name = ?').get(name);
@@ -3694,14 +3716,16 @@ const AGENT_OPS = {
   usage(p, agent, args) {
     const u = normUsage(args.usage);
     if (!u) return { ok: true, recorded: [] };
+    // A run killed before its CLI priced it is recorded from nuworq's estimate (#761), and says so.
+    const source = u.estimated ? 'estimate' : 'runner';
     const spans = this.q(`SELECT item_id, MIN(at) AS a, MAX(at) AS b FROM events
       WHERE project_id = ? AND actor = ? AND item_id IS NOT NULL GROUP BY item_id ORDER BY MIN(at)`).all(p.id, agent);
     if (!spans.length) {
-      this.recordUsage(p, null, agent, u, 'runner');
+      this.recordUsage(p, null, agent, u, source);
       return { ok: true, recorded: [] };
     }
     const parts = split(u, spans.map((s) => Math.max(s.b - s.a, MIN)));
-    spans.forEach((s, k) => this.recordUsage(p, this.itemById(s.item_id), agent, parts[k], 'runner'));
+    spans.forEach((s, k) => this.recordUsage(p, this.itemById(s.item_id), agent, parts[k], source));
     return { ok: true, recorded: spans.map((s) => `#${this.itemById(s.item_id).seq}`) };
   },
 };

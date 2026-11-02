@@ -38,14 +38,15 @@ function mapLine(n) {
     ${n.questions.map((q) => `<div class="m-q">${q.to === 'operator' ? 'To the operator' : q.blocking ? 'Asks you' : 'Assumed'}: ${esc(q.question)}</div>`).join('')}`;
 }
 
-// What an item cost, per agent and model. A local model has tokens but no price: its cost is "—".
+// What an item cost, per agent and model. A model with tokens but no price (local, or not in nuworq's table) is
+// "unpriced", never $0 (#761); a run killed before its CLI priced it is nuworq's estimate, and says so.
 function usageTable(u) {
   const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
   // Measured by llm-proxy: model time, and failed requests and cold loads when there were any.
   const secs = (ms) => (ms >= 60_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`);
   const measured = (r) => (r.duration_ms == null ? '' : ` · ${secs(r.duration_ms)} model time${r.failures ? ` · ${r.failures} failed` : ''}${r.cold_loads ? ` · ${r.cold_loads} cold loads` : ''}`);
-  const line = (r) => `${tok(r.input_tokens)} in · ${tok(r.output_tokens)} out · ${r.cost_usd == null ? '—' : `$${r.cost_usd.toFixed(2)}`}${measured(r)}`;
-  const tag = (r) => (r.source === 'llm-proxy' ? ' · measured' : r.superseded ? ' · reported, superseded' : r.source === 'agent' ? ' · reported' : '');
+  const line = (r) => `${tok(r.input_tokens)} in · ${tok(r.output_tokens)} out · ${r.cost_usd == null ? 'unpriced' : `$${r.cost_usd.toFixed(2)}`}${measured(r)}`;
+  const tag = (r) => (r.source === 'llm-proxy' ? ' · measured' : r.superseded ? ' · reported, superseded' : r.source === 'agent' ? ' · reported' : r.source === 'estimate' ? ' · estimated' : '');
   return `<div class="d-sec"><div class="label">Usage</div><dl class="kv">
     ${u.rows.map((r) => `<dt>${who(r.agent, r.model)} <span class="age">${esc(r.model || '?')}${tag(r)}</span></dt><dd>${r.superseded ? `<s>${line(r)}</s>` : line(r)}</dd>`).join('')}
     <dt><b>Total</b></dt><dd><b>${line(u.total)}</b></dd></dl></div>`;

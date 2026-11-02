@@ -47,6 +47,7 @@ const PI = [
   { type: 'agent_end', messages: [], willRetry: false },
 ].map((e) => JSON.stringify(e));
 
+const CLAUDE_INIT_SONNET = { type: 'system', subtype: 'init', model: 'claude-sonnet-4-5', session_id: 's2', tools: [] };
 const feed = (agent, lines, opts) => { const t = tap(agent, opts); const shown = lines.map((l) => t.line(l)).filter((x) => x != null); return { shown, usage: t.usage() }; };
 
 describe('usage from agent CLI output', () => {
@@ -56,10 +57,40 @@ describe('usage from agent CLI output', () => {
     assert.deepEqual(usage, { input_tokens: 44200, output_tokens: 2500, cost_usd: 0.4215, model: 'claude-opus-5-5' });
   });
 
-  test('codex: turn.completed token counts add up; no cost is reported, so cost is unknown', () => {
+  test('codex: turn.completed token counts add up, priced from the model table (#761); a model not in it is unpriced, not $0', () => {
     const { shown, usage } = feed('codex', CODEX, { model: 'gpt-5' });
     assert.deepEqual(shown, ['Working on #3.']);
-    assert.deepEqual(usage, { input_tokens: 10000, output_tokens: 1000, cost_usd: null, model: 'gpt-5' });
+    // 6000 uncached × $1.25 + 4000 cached × $0.125 + 1000 out × $10, per million.
+    assert.deepEqual({ ...usage, cost_usd: Math.round(usage.cost_usd * 1e6) / 1e6 }, { input_tokens: 10000, output_tokens: 1000, cost_usd: 0.018, model: 'gpt-5' });
+    assert.deepEqual(feed('codex', CODEX, { model: 'some-new-model' }).usage, { input_tokens: 10000, output_tokens: 1000, cost_usd: null, model: 'some-new-model' });
+    assert.equal(feed('codex', CODEX).usage.cost_usd, null, 'no model named: unpriced');
+  });
+
+  test('claude: spend so far from each assistant message while it runs; a run killed before its result keeps the estimate, marked so (#761)', () => {
+    const msg = (id, u, block = 'x') => JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-4-5', content: [{ type: 'text', text: block }], usage: u } });
+    const t = tap('claude');
+    t.line(JSON.stringify(CLAUDE_INIT_SONNET));
+    t.line(msg('m1', { input_tokens: 1000, cache_creation_input_tokens: 100_000, cache_read_input_tokens: 0, output_tokens: 2000 }));
+    t.line(msg('m1', { input_tokens: 1000, cache_creation_input_tokens: 100_000, cache_read_input_tokens: 0, output_tokens: 2000 }, 'y'));
+    t.line(msg('m2', { input_tokens: 500, cache_creation_input_tokens: 0, cache_read_input_tokens: 100_000, output_tokens: 1000 }));
+    // $3/M in, $15/M out: 1500 in + 100k written × 1.25 + 100k read × 0.1, 3000 out.
+    const want = (1500 * 3 + 100_000 * 3.75 + 100_000 * 0.3 + 3000 * 15) / 1e6;
+    assert.ok(Math.abs(t.spent() - want) < 1e-9, `${t.spent()} ≈ ${want}`);
+    const u = t.usage();
+    assert.deepEqual({ ...u, cost_usd: undefined }, { input_tokens: 201_500, output_tokens: 3000, cost_usd: undefined, model: 'claude-sonnet-4-5', estimated: true });
+    // Its result replaces the estimate with what the CLI said.
+    t.line(JSON.stringify({ type: 'result', total_cost_usd: 0.5, usage: { input_tokens: 1500, cache_creation_input_tokens: 100_000, cache_read_input_tokens: 100_000, output_tokens: 3000 } }));
+    assert.deepEqual(t.usage(), { input_tokens: 201_500, output_tokens: 3000, cost_usd: 0.5, model: 'claude-sonnet-4-5' });
+    assert.equal(t.spent(), 0.5);
+  });
+
+  test('an estimated run is recorded as an estimate, not as the CLI\'s figure (#761)', () => {
+    const hub = new Hub();
+    hub.tx(() => hub.project('p', { create: true }));
+    hub.agentOp('p', 'checkin', 'w1');
+    hub.agentOp('p', 'usage', 'w1', { usage: { input_tokens: 10, output_tokens: 5, cost_usd: 1.25, model: 'claude-opus-4-5', estimated: true } });
+    const row = hub.q('SELECT source, cost_usd FROM usage WHERE agent = ?').get('w1');
+    assert.deepEqual({ ...row }, { source: 'estimate', cost_usd: 1.25 });
   });
 
   test('opencode on a local model: tokens, and cost unknown rather than $0', () => {

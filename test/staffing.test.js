@@ -140,6 +140,27 @@ describe('staffing', () => {
     assert.equal(hub.project('r').run_budget, null, 'cleared on purpose in the same change: no budget');
   });
 
+  test("a running worker's spend so far, as its runner reports it, counts toward the daily budget before it exits (#761)", () => {
+    const { hub, clock, p, set, routed } = world();
+    set({ run_budget: 10 });
+    const report = (usd, extra = {}) => hub.reportRunner({ name: 'mac', running: 1, workers: 1, poll_seconds: 30, live: ['w1'], spending: [{ name: 'w1', project: 'p', usd }], ...extra });
+    report(4);
+    assert.deepEqual(routed(), ['p'], '$4 of $10 so far');
+    report(12);
+    assert.deepEqual(routed(), [], '$12 of $10 while it still runs: no new workers');
+    assert.equal(view(hub, 'p').project.staffing.spent_today, 12);
+    // It exits and its usage is recorded: that record counts, not its last report too.
+    hub.agentOp('p', 'checkin', 'w1');
+    hub.agentOp('p', 'usage', 'w1', { usage: { input_tokens: 1, output_tokens: 1, cost_usd: 12.5 } });
+    assert.equal(view(hub, 'p').project.staffing.spent_today, 12.5, 'counted once');
+    // A runner that went quiet no longer counts what it last said.
+    report(3, { spending: [{ name: 'w2', project: 'p', usd: 3 }] });
+    set({ run_budget: 20 });
+    assert.equal(view(hub, 'p').project.staffing.spent_today, 15.5);
+    clock.t += 5 * 30_000;
+    assert.equal(view(hub, 'p').project.staffing.spent_today, 12.5, 'down: its workers are gone');
+  });
+
   test('each change is on the record', () => {
     const { hub, set } = world();
     set({ run_workers: 3, run_budget: 12.5, run_paused: true });
