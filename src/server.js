@@ -1228,7 +1228,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         who = bearer ? authz.verifyToken(bearer) : sid ? authz.verifySession(sid) : null;
         if (who) who.via = bearer ? 'bearer' : 'cookie';
         if (req.method === 'GET' && path === '/api/me') {
-          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null, ...(who?.projects ? { projects: who.projects } : {}), ...(spaces && who?.person ? orgsHere(req, hub, ws, who.person) : {}) });
+          return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null, ...(who?.runner ? { runner: who.runner } : {}), ...(who?.projects ? { projects: who.projects } : {}), ...(spaces && who?.person ? orgsHere(req, hub, ws, who.person) : {}) });
         }
         if (!who) {
           return deny(401, bearer ? 'invalid or revoked token' : 'login required',
@@ -1241,6 +1241,18 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           if (who.via !== 'bearer') return deny(400, 'only a token can revoke itself', 'Send Authorization: Bearer <token>. To sign out of the browser, use Sign out.');
           authz.revoke(who.id);
           return send(200, { ok: true, revoked: who.name });
+        }
+        // A machine's device login mints its runner token (#656): nuworq run hands that one to its workers.
+        if (req.method === 'POST' && path === '/api/me/runner-token') {
+          if (who.via !== 'bearer' || who.role !== 'agent' || who.runner) {
+            return deny(400, who.runner ? 'this is a runner token already' : 'only an agent token can mint a runner token',
+              'Send the machine\'s connect token (nuworq connect) as Authorization: Bearer <token>.');
+          }
+          try {
+            return send(200, { ok: true, ...authz.runnerToken(who.id) });
+          } catch (e) {
+            return deny(400, e.message, 'Give the workers a token of their own: nuworq run --agent-token <token>.');
+          }
         }
         if (who.role === 'agent' && !AGENT_ROUTES.some((r) => r.test(`${req.method} ${path}`))) {
           return deny(403, 'agent tokens can only use agent operations', 'Use a human token for the UI and human actions.');

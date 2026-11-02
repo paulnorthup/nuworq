@@ -582,6 +582,28 @@ async function hubProjects(client) {
   }
 }
 
+// The workers' token on a machine connected with an agent token (#656): a runner token minted from it, kept in
+// tokens/runner.token, so the hub tells them apart from the person's own sessions and they review each other's work.
+// A hub too old to mint one: the connect token, and one line saying what that costs and how to fix it.
+async function runnerToken(client, me) {
+  const file = join(dirname(HUB_FILE), 'tokens', 'runner.token');
+  let kept = null;
+  try { kept = readFileSync(file, 'utf8').trim() || null; } catch { /* none yet */ }
+  if (kept) {
+    const who = await createClient({ url: client.settings.url, token: kept }).get('/api/me').catch(() => null);
+    if (who?.role === 'agent' && who.runner === me.name) return kept; // minted from this connect token, and live
+  }
+  try {
+    const r = await client.post('/api/me/runner-token', {});
+    tokenFile(dirname(HUB_FILE), 'runner', r.token);
+    console.log(dim(`Workers here carry the runner token ${r.name}, so they can review each other's work.`));
+    return r.token;
+  } catch (e) {
+    console.log(amber(`! Workers here share this machine's connect token, so none can review another's work (${e.message}). Update the hub and restart nuworq run, or give them a runner token: nuworq token create <name> --role agent --runner ${hostname()} on the hub host, then nuworq run --agent-token <token>.`));
+    return client.settings.token;
+  }
+}
+
 // The token a started agent gets. Never yours: a hub that requires login needs a separate agent token.
 async function agentToken(client, flags) {
   const me = await client.get('/api/me');
@@ -589,7 +611,7 @@ async function agentToken(client, flags) {
   // A machine connected with an agent token (nuworq connect) hands that one on.
   // NUWORQ_AGENT_TOKEN_FILE: how an installed runner keeps its --agent-token off its command line (#477).
   const fromFile = () => { try { return readFileSync(envVar('AGENT_TOKEN_FILE'), 'utf8').trim() || null; } catch { return null; } };
-  const t = flags['agent-token'] || envVar('AGENT_TOKEN') || (envVar('AGENT_TOKEN_FILE') && fromFile()) || (me.role === 'agent' ? client.settings.token : null);
+  const t = flags['agent-token'] || envVar('AGENT_TOKEN') || (envVar('AGENT_TOKEN_FILE') && fromFile()) || (me.role === 'agent' ? await runnerToken(client, me) : null);
   const how = 'Create one on the hub host: nuworq token create <name> --role agent --project <project>. Pass it with --agent-token or NUWORQ_AGENT_TOKEN.';
   if (!t || t === true) throw new HubError('This hub requires login, so workers need their own agent token', { hint: how });
   const who = await createClient({ url: client.settings.url, token: t }).get('/api/me');
