@@ -88,6 +88,28 @@ describe('numbered migrations', () => {
   });
 });
 
+describe('model routing on by default (#723)', () => {
+  test('the migration turns it on only where nobody turned it on or off', () => {
+    const file = fileDb();
+    const hub = new Hub({ file });
+    hub.tx(() => ['never', 'off', 'onoff', 'fresh'].forEach((s) => hub.project(s, { create: true })));
+    assert.equal(hub.q("SELECT model_routing FROM projects WHERE slug = 'fresh'").get().model_routing, 1, 'a new project routes');
+    hub.humanOp('off', 'settings', { model_routing: false });
+    hub.humanOp('onoff', 'settings', { model_routing: false });
+    hub.humanOp('onoff', 'settings', { model_routing: true });
+    hub.humanOp('onoff', 'settings', { model_routing: false });
+    // As before #723: projects started off, and the choice was only in the headline.
+    hub.db.exec("UPDATE projects SET model_routing = 0 WHERE slug != 'fresh'");
+    hub.db.exec("UPDATE events SET data = '{}' WHERE type = 'runner'");
+    hub.db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    hub.db.close();
+    const db = openDb(file);
+    const on = Object.fromEntries(db.prepare('SELECT slug, model_routing FROM projects').all().map((r) => [r.slug, r.model_routing]));
+    assert.deepEqual(on, { never: 1, off: 0, onoff: 0, fresh: 1 });
+    db.close();
+  });
+});
+
 describe('the queries find their rows by index', () => {
   test('lapsed leases by agent, events by type and actor, an item\'s children', () => {
     const db = openDb(':memory:');

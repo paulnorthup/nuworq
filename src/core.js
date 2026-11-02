@@ -17,7 +17,7 @@ import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease }
 import { builtWhatItReviews, reviewRelease } from './security.js';
 import { sandboxHosts } from './sandbox.js';
 import { BUDGET as DEFAULT_BUDGET } from './setup.js';
-import { AGENTS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, trialEligible } from './models.js';
+import { AGENTS, DEFAULT_TIERS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, tiersOf, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
 import { OPERATOR_TAGS, TAG_ALIASES, MODE_RULES } from './protocol.js';
 import { unknownField, nearestOf, missingField } from './agentargs.js';
@@ -569,7 +569,7 @@ export class Hub extends EventEmitter {
           status: 429, hint: `Check in to a project that exists, or have a person create "${s}" in the UI (+ Project).`,
         });
       }
-      this.q('INSERT INTO projects (slug, name, created_at, fresh_at, notes_at, staff_asked) VALUES (?, ?, ?, ?, ?, 0)').run(s, str(name) || s, this.now(), this.now(), this.now());
+      this.q('INSERT INTO projects (slug, name, created_at, fresh_at, notes_at, staff_asked, model_routing) VALUES (?, ?, ?, ?, ?, 0, 1)').run(s, str(name) || s, this.now(), this.now(), this.now());
       p = this.q('SELECT * FROM projects WHERE slug = ?').get(s);
       this.event(p, { actor: SYSTEM, type: 'project', headline: `Project ${p.name} created` });
       p[CREATED] = true;
@@ -940,7 +940,7 @@ export class Hub extends EventEmitter {
   // on (cheapest first, local ones only while ready), or null: routing is off, or there is nothing to choose from.
   routePlan(p, item, mode, kind, top = '') {
     if (!p.model_routing) return null;
-    const tiers = json(p.model_tiers, {});
+    const tiers = tiersOf(p.model_tiers);
     const difficulty = difficultyOf(item);
     const list = candidates(tiers[kind]?.length ? tiers[kind] : top ? [top] : [], {
       difficulty, local: (m) => providerOf(m) === 'Open-weight', ready: (m) => !!this.localReady.get(m)?.ready,
@@ -1017,7 +1017,7 @@ export class Hub extends EventEmitter {
   // while it is eligible and its agent has a cheaper tier to try. A race makes it a two-slot race.
   decideTrial(p, item, kind, top, priority) {
     if (item.trial || item.stage !== 'ready') return item;
-    if ((json(p.model_tiers, {})[kind]?.length ?? (top ? 1 : 0)) < 2) return item;
+    if ((tiersOf(p.model_tiers)[kind]?.length ?? (top ? 1 : 0)) < 2) return item;
     const overBudget = this.staffing(p).stopped === 'budget';
     if (!trialEligible(item, { priority, operatorOnly: operatorOnly(item), overBudget })) return item;
     const counts = Object.fromEntries(this.q(`SELECT trial, COUNT(*) AS n FROM items WHERE project_id = ? AND trial != '' GROUP BY trial`).all(p.id).map((r) => [r.trial, r.n]));
@@ -1053,7 +1053,7 @@ export class Hub extends EventEmitter {
     const mode = modeAt(it);
     // A land job's own failures (tierUp): this one, let go just now, already counts.
     if (mode === 'land') up = Math.max(0, this.tierUp(it, mode) - 1);
-    const tiers = json(p.model_tiers, {});
+    const tiers = tiersOf(p.model_tiers);
     const down = mode === 'work' && it.trial === 'down' ? 1 : 0;
     const next = AGENTS.filter((k) => tiers[k]?.length).map((k) => this.routePlan(p, it, mode, k)).filter(Boolean)
       .map(({ list, start }) => [modelAt(list, start, up, down), modelAt(list, start, up + 1, down)])
@@ -1073,8 +1073,15 @@ export class Hub extends EventEmitter {
       stopped: p.run_paused ? 'paused' : budget != null && spent >= budget ? 'budget' : null,
       asked: !!p.staff_asked,
       // Model routing (#347), and the shares of building jobs that try a cheaper model (#348).
-      models: { on: !!p.model_routing, tiers: json(p.model_tiers, {}), trial: p.model_trial ?? 10, race: p.model_race ?? 0, quality: p.model_quality || 'balanced', qualities: QUALITY },
+      models: { on: !!p.model_routing, ...this.tiersSaid(p), trial: p.model_trial ?? 10, race: p.model_race ?? 0, quality: p.model_quality || 'balanced', qualities: QUALITY },
     };
+  }
+
+  // The tiers Staffing shows (#723): tiers, those in use per agent; own, the ones a person set; defaults, what an
+  // agent with none of its own falls back to.
+  tiersSaid(p) {
+    const own = json(p.model_tiers, {});
+    return { tiers: tiersOf(own), own, defaults: DEFAULT_TIERS };
   }
 
   // A line saying today's budget here is spent and when it resets (#762), or null while there is budget left.
@@ -4391,13 +4398,14 @@ const HUMAN_OPS = {
         this.q('UPDATE projects SET model_tiers = ? WHERE id = ?').run(JSON.stringify(tiers), p.id);
         p.model_tiers = JSON.stringify(tiers);
         const said = Object.entries(tiers).map(([k, l]) => `${k}: ${l.join(' → ')}`).join('; ');
-        this.event(p, { actor: by, type: 'runner', headline: said ? `${You(by)} set the model tiers: ${said}` : `${You(by)} cleared the model tiers: each runner's --model is the one tier` });
+        this.event(p, { actor: by, type: 'runner', headline: said ? `${You(by)} set the model tiers: ${said}` : `${You(by)} cleared the model tiers: Claude uses the default ones (${DEFAULT_TIERS.claude.join(' → ')}), other agents their runner's --model` });
       }
     }
     if (model_routing != null && !!model_routing !== !!p.model_routing) {
       this.q('UPDATE projects SET model_routing = ? WHERE id = ?').run(model_routing ? 1 : 0, p.id);
+      // data: a person chose (#723), so the migration that turns routing on by default leaves this project alone.
       this.event(p, {
-        actor: by, type: 'runner',
+        actor: by, type: 'runner', data: { model_routing: !!model_routing },
         headline: model_routing ? `${You(by)} turned on model routing: landing and tidy jobs start on the cheapest tier and step up when an attempt fails`
           : `${You(by)} turned off model routing: every worker runs on its runner's own model`,
       });

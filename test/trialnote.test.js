@@ -15,3 +15,9 @@ test('the line is gone once two models are listed, or when nothing needs it (#72
   assert.equal(trialNote({ on: true, trial: 0, tiers: {} }), '');
   assert.equal(trialNote({ on: false, trial: 20, tiers: {} }), '');
 });
+
+test('a blank Claude field runs trials on the default tiers; one model of its own replaces them (#723)', () => {
+  const defaults = { claude: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] };
+  assert.equal(trialNote({ on: true, trial: 10, tiers: { claude: '', codex: '' }, defaults }), '');
+  assert.match(trialNote({ on: true, trial: 10, tiers: { claude: 'claude-opus-5-5' }, defaults }), /two or more models/);
+});

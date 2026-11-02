@@ -2,7 +2,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, LEASE_MS } from '../src/core.js';
 import { view } from '../src/insight.js';
-import { modelFor, parseTiers, QUALITY } from '../src/models.js';
+import { appSource } from './appsource.js';
+import { DEFAULT_TIERS, modelFor, newerClaude, parseTiers, tiersOf, QUALITY } from '../src/models.js';
 
 const TIERS = { claude: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] };
 
@@ -44,22 +45,45 @@ describe('model tiers', () => {
     assert.throws(() => parseTiers({ claude: ['has space'] }), /model id/);
     assert.throws(() => parseTiers(['claude']), /per agent/);
   });
+
+  test("Claude's tiers default to Haiku, Sonnet and Opus 5.5; the other agents have none (#723)", () => {
+    assert.deepEqual(tiersOf('{}'), { claude: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] });
+    assert.deepEqual(tiersOf({ claude: ['claude-opus-5-5'], codex: ['gpt-5-mini', 'gpt-5'] }), { claude: ['claude-opus-5-5'], codex: ['gpt-5-mini', 'gpt-5'] }, 'a project\'s own replace them');
+    assert.deepEqual(tiersOf({ codex: ['gpt-5'] }).claude, DEFAULT_TIERS.claude, 'per agent');
+  });
+
+  test('Staffing says the default tiers are in use, and its trial note counts them (#723)', () => {
+    const app = appSource();
+    assert.match(app, /trialNote\(\{ on: m\.on, trial: m\.trial \?\? 10, tiers: own, defaults \}\)/);
+    assert.match(app,/In use: \$\{esc\(defaults\.claude\.join\(' → '\)\)\}, the default\. Type your own to replace them; clear them to go back\./);
+  });
+
+  test('a newer Claude model than a default tier is noticed, per family (#723)', () => {
+    assert.deepEqual(newerClaude(['claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-5', '']), []);
+    assert.deepEqual(newerClaude(['claude-opus-5-6', 'claude-opus-6', 'claude-haiku-5-0', 'claude-sonnet-6-1-20270101', 'claude-fable-9']), [
+      { model: 'claude-sonnet-6-1-20270101', replaces: 'claude-sonnet-5-5' },
+      { model: 'claude-opus-6', replaces: 'claude-opus-5-5' },
+    ]);
+  });
 });
 
 describe('model routing', () => {
-  test('off by default: routes name no model, whatever the tiers', () => {
+  test('on by default, on the default Claude tiers (#723); off: routes name no model, whatever the tiers', () => {
     const { hub, set, route } = world();
     hub.humanOp('p', 'create', { title: 'Build', acceptance: 'x' });
-    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: false, tiers: {}, trial: 10, race: 0, quality: 'balanced', qualities: QUALITY });
-    set({ model_tiers: TIERS });
+    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: DEFAULT_TIERS, own: {}, defaults: DEFAULT_TIERS, trial: 10, race: 0, quality: 'balanced', qualities: QUALITY });
+    assert.deepEqual(DEFAULT_TIERS, TIERS);
+    assert.equal(route('claude-sonnet-5-5').model, 'claude-opus-5-5', 'building starts on the default top, whatever the runner\'s --model');
+    set({ model_routing: false, model_tiers: TIERS });
     assert.equal(route('claude-opus-5-5').model, undefined);
     assert.equal(hub.route('', {})[0].model, undefined, 'and an agent asking where work is never hears one');
   });
 
   test('on: each route names the model its job calls for', () => {
     const { hub, set, op, route, landing } = world();
+    set({ model_routing: false });
     set({ model_routing: true, model_tiers: TIERS });
-    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, trial: 10, race: 0, quality: 'balanced', qualities: QUALITY });
+    assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: TIERS, own: TIERS, defaults: DEFAULT_TIERS, trial: 10, race: 0, quality: 'balanced', qualities: QUALITY });
     assert.match(hub.q("SELECT headline FROM events WHERE type = 'runner' ORDER BY id DESC").get().headline, /turned on model routing: landing and tidy jobs start on the cheapest tier/);
     hub.humanOp('p', 'create', { title: 'Build', acceptance: 'x' });
     assert.deepEqual([route().mode, route().model], ['work', 'claude-opus-5-5']);
@@ -72,9 +96,12 @@ describe('model routing', () => {
     op('a', 'propose', { title: 'An idea' });
     hub.q("UPDATE items SET stage = 'done' WHERE seq = 1").run();
     assert.deepEqual([route().mode, route().model], ['shape', 'claude-opus-5-5']);
-    set({ model_tiers: { claude: '' } });
+    set({ model_tiers: { claude: 'claude-sonnet-5-5' } });
     hub.q("UPDATE items SET stage = 'ready', acceptance = 'x', tidy = '[]' WHERE seq = 2").run();
-    assert.deepEqual([route('claude-sonnet-5-5').mode, route('claude-sonnet-5-5').model], ['tidy', 'claude-sonnet-5-5'], "no tiers: the runner's --model");
+    assert.deepEqual([route('claude-opus-5-5').mode, route('claude-opus-5-5').model], ['tidy', 'claude-sonnet-5-5'], 'its own one tier');
+    set({ model_tiers: { claude: '' } });
+    assert.match(hub.q("SELECT headline FROM events WHERE type = 'runner' ORDER BY id DESC").get().headline, /cleared the model tiers: Claude uses the default ones \(claude-haiku-5-5 → claude-sonnet-5-5 → claude-opus-5-5\)/);
+    assert.deepEqual([route('claude-sonnet-5-5').mode, route('claude-sonnet-5-5').model], ['tidy', 'claude-haiku-5-5'], 'no tiers of its own: the default ones');
     assert.equal(hub.route('', { runner: true, kind: 'codex' })[0].model, undefined, 'a codex runner with no --model and no tiers: its own model');
   });
 

@@ -105,9 +105,11 @@ function connectStep(r) {
 function staffingModal(back) {
   const s = S.view?.project?.staffing ?? {};
   const m = s.models ?? { on: false, tiers: {} };
-  const tier = (agent, label) => `<label>${label}<input id="st-tiers-${agent}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="The runner's --model" value="${esc((m.tiers[agent] ?? []).join(', '))}"></label>`;
-  const note = trialNote({ on: m.on, trial: m.trial ?? 10, tiers: m.tiers });
-  modal(`${back ? '<button class="link back" data-action="settings">← Settings</button>' : ''}<h2 data-staffing data-back="${back ? 1 : ''}">Staffing</h2>
+  const own = m.own ?? m.tiers, defaults = m.defaults ?? {};
+  // An agent with no tiers of its own shows the default ones as its placeholder (#723), and says it uses them.
+  const tier = (agent, label) => `<label>${label}<input id="st-tiers-${agent}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(defaults[agent]?.join(', ') ?? 'The runner\'s --model')}" value="${esc((own[agent] ?? []).join(', '))}"></label>`;
+  const usesDefault = defaults.claude && !own.claude?.length;
+  const note = trialNote({ on: m.on, trial: m.trial ?? 10, tiers: own, defaults });  modal(`${back ? '<button class="link back" data-action="settings">← Settings</button>' : ''}<h2 data-staffing data-back="${back ? 1 : ''}">Staffing</h2>
     <p class="lead">What <code>nuworq run</code> does here. Runners follow it at their next poll.</p>
     <div class="form"><label>Workers at once<input id="st-workers" type="number" inputmode="numeric" min="1" max="100" placeholder="Each runner's own --workers" value="${s.workers ?? ''}"></label>
     <label>Daily budget, dollars (UTC days)<input id="st-budget" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="No budget" value="${s.budget ?? ''}"></label></div>
@@ -116,6 +118,7 @@ function staffingModal(back) {
       <div class="s">${m.on ? 'On: building starts on the top model below and landing and tidying on the cheapest, until results show a cheaper one meets the quality bar. A failed attempt steps up one. Reviews and shaping always use the top one.' :'Off: every worker runs on its runner\'s own model.'}</div></div>
       <button class="switch" role="switch" aria-checked="${m.on}" aria-labelledby="set-models" data-action="${m.on ? 'models-off' : 'models-on'}"></button></div>
     <div class="form">${tier('claude', 'Claude models, cheapest first')}
+    ${usesDefault ? `<p class="faint" data-new="default-tiers">In use: ${esc(defaults.claude.join(' → '))}, the default. Type your own to replace them; clear them to go back.</p>` : ''}
     <details><summary>Codex, opencode and pi</summary>${tier('codex', 'Codex models, cheapest first')}${tier('opencode', 'opencode models (provider/model), cheapest first')}${tier('pi', 'pi models (provider/model), cheapest first')}</details>
     <label data-new="model-trials">Building jobs that try one model down, percent<input id="st-trial" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.trial ?? 10}"></label>
     <label>Building jobs raced against the top model, percent<input id="st-race" type="number" inputmode="numeric" min="0" max="100" step="1" value="${m.race ?? 0}"></label></div>
@@ -130,7 +133,8 @@ function staffingModal(back) {
 function trialNoteDraw() {
   const el = $('#st-trial-note');
   if (!el) return;
-  const t = trialNote({ on: !!S.view?.project?.staffing?.models?.on, trial: val('st-trial'), tiers: tiersTyped() });
+  const m = S.view?.project?.staffing?.models;
+  const t = trialNote({ on: !!m?.on, trial: val('st-trial'), tiers: tiersTyped(), defaults: m?.defaults });
   el.textContent = t;
   el.hidden = !t;
 }
@@ -660,7 +664,7 @@ export const ACTIONS = {
     if (r) closeModal();
   },
   'models-on': () => {
-    if (confirm('Turn on cheaper models for rote jobs?\n\nLanding and tidy jobs start on the cheapest model you listed (or the runner\'s --model if none). When an attempt is sent back, stalls or is handed off, that item\'s next attempt steps up one model. Building, reviews and shaping stay on the top model. Each routed worker does one job, then stops.\n\nTurn it off any time from here.')) modelRouting(true);
+    if (confirm('Turn on cheaper models for rote jobs?\n\nLanding and tidy jobs start on the cheapest model listed (Claude\'s default ones if you set none, else the runner\'s --model). When an attempt is sent back, stalls or is handed off, that item\'s next attempt steps up one model. Building, reviews and shaping stay on the top model. Each routed worker does one job, then stops.\n\nTurn it off any time from here.')) modelRouting(true);
   },
   'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },

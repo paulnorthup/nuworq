@@ -443,7 +443,7 @@ const COLUMNS = [
   'ALTER TABLE items ADD COLUMN feedback INTEGER', // the hub directory's feedback id an owner approved into this proposal (#295)
   "ALTER TABLE agents ADD COLUMN session TEXT NOT NULL DEFAULT ''", // its Claude Code session's keys, from checkin (#335)
   'ALTER TABLE items ADD COLUMN gate INTEGER NOT NULL DEFAULT 0', // 1: once shaped, it waits for a person's OK whatever the autonomy (#296)
-  // Model routing (#347, src/models.js): on or off (off by default), the tiers per agent (JSON, cheapest first),
+  // Model routing (#347, src/models.js): on or off (on for new projects since #723), the tiers per agent (JSON, cheapest first),
   // and how many tiers an item's next attempt steps up after failed ones.
   'ALTER TABLE projects ADD COLUMN model_routing INTEGER NOT NULL DEFAULT 0',
   "ALTER TABLE projects ADD COLUMN model_tiers TEXT NOT NULL DEFAULT '{}'",
@@ -623,6 +623,15 @@ export const MIGRATIONS = [
       addColumn(db, 'ALTER TABLE questions ADD COLUMN issue_tries INTEGER NOT NULL DEFAULT 0');
       addColumn(db, 'ALTER TABLE questions ADD COLUMN issue_next INTEGER NOT NULL DEFAULT 0');
       addColumn(db, 'ALTER TABLE questions ADD COLUMN issue_since INTEGER NOT NULL DEFAULT 0');
+    },
+  },
+  {
+    // Cheaper models work out of the box (#723): model routing is on for new projects (Hub.project), and here for
+    // those from before where nobody turned it on or off. A person's choice is a 'runner' event saying so.
+    name: 'model routing is on unless a person turned it off',
+    up(db) {
+      db.exec(`UPDATE projects SET model_routing = 1 WHERE model_routing = 0 AND id NOT IN (SELECT project_id FROM events
+        WHERE type = 'runner' AND project_id IS NOT NULL AND (headline LIKE '% turned on model routing%' OR headline LIKE '% turned off model routing%'))`);
     },
   },
 ];
