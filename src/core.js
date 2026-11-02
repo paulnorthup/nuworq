@@ -1540,14 +1540,54 @@ export class Hub extends EventEmitter {
       .filter((i) => !(waitsForOk(p, i) && i.acceptance)); // shaped, waiting for the human's approval
   }
 
-  setDeps(p, item, refs) {
+  // fresh: the item is being created, so a refusal names it "the new item" (its number is never used).
+  setDeps(p, item, refs, { fresh = false } = {}) {
     if (!Array.isArray(refs)) return;
-    this.q('DELETE FROM deps WHERE item_id = ?').run(item.id);
-    for (const r of refs) {
-      const d = this.item(p, r);
-      if (d.id === item.id) continue;
-      this.q('INSERT OR IGNORE INTO deps (item_id, depends_on) VALUES (?, ?)').run(item.id, d.id);
+    const ds = refs.map((r) => this.item(p, r)).filter((d) => d.id !== item.id);
+    for (const d of ds) {
+      const path = this.waitPath(p, d.id, item.id);
+      if (path) {
+        throw this.loopError(item, [{ id: item.id }, ...path], fresh, `can't depend on #${d.seq}`,
+          `Drop #${d.seq} from depends_on, or remove the dependency that closes the loop first.`);
+      }
     }
+    this.q('DELETE FROM deps WHERE item_id = ?').run(item.id);
+    for (const d of ds) this.q('INSERT OR IGNORE INTO deps (item_id, depends_on) VALUES (?, ?)').run(item.id, d.id);
+  }
+
+  // How `from` comes to wait for `to` (#730): each item waits for its dependencies and its parts, whatever
+  // their stage (a finished one can reopen). The steps after `from`, ending at `to`; null when it doesn't.
+  // part: the step is a part of the one before it. Breadth first, so the loop named is the shortest.
+  waitPath(p, from, to) {
+    const next = new Map();
+    const add = (a, id, part) => { if (!next.has(a)) next.set(a, []); next.get(a).push({ id, part }); };
+    for (const d of this.q('SELECT d.item_id, d.depends_on FROM deps d JOIN items i ON i.id = d.item_id WHERE i.project_id = ?').all(p.id)) add(d.item_id, d.depends_on, false);
+    for (const i of this.q('SELECT id, parent_id FROM items WHERE project_id = ? AND parent_id IS NOT NULL').all(p.id)) add(i.parent_id, i.id, true);
+    const via = new Map([[from, null]]);
+    for (const queue = [from]; queue.length;) {
+      const a = queue.shift();
+      if (a === to) {
+        const path = [];
+        for (let x = a; x !== from; x = via.get(x).from) path.unshift({ id: x, part: via.get(x).part });
+        return [{ id: from, part: false }, ...path];
+      }
+      for (const n of next.get(a) ?? []) {
+        if (!via.has(n.id)) { via.set(n.id, { from: a, part: n.part }); queue.push(n.id); }
+      }
+    }
+    return null;
+  }
+
+  // loop: the items in order, the first again at the end. A long loop shows its ends.
+  loopError(item, loop, fresh, what, hint) {
+    const seqs = loop.map((s) => (s.id === item.id ? null : this.itemById(s.id).seq));
+    const name = (k) => (seqs[k] == null ? (fresh ? 'the new item' : `#${item.seq}`) : `#${seqs[k]}`);
+    const names = loop.map((s, k) => name(k));
+    const shown = names.length > 6 ? [...names.slice(0, 3), '…', ...names.slice(-2)] : names;
+    const groups = [...new Set(loop.flatMap((s, k) => (s.part ? [name(k - 1)] : [])))];
+    return new UserError(`${fresh ? 'The new item' : `#${item.seq}`} ${what}: that makes a loop, ${shown.join(' → ')}, and everything in a loop waits forever`, {
+      hint: `${groups.length ? `${groups.join(', ')} ${groups.length > 1 ? 'wait' : 'waits'} for ${groups.length > 1 ? 'their' : 'its'} parts. ` : ''}${hint}`,
+    });
   }
 
   openQuestions(item, { blocking } = {}) {
@@ -3848,7 +3888,7 @@ Object.assign(Hub.prototype, {
     const item = this.itemById(Number(r.lastInsertRowid));
     if (human && isPriority(args.priority)) this.patch(item, { priority_by: actor }); // a person chose it (#202)
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
-    this.setDeps(p, item, args.depends_on);
+    this.setDeps(p, item, args.depends_on, { fresh: true });
     this.event(p, {
       item, actor, type: 'created',
       headline: human ? `${You(actor)} added #${seq}: ${title}` : `${actor} proposed #${seq}: ${title}`,
@@ -3929,6 +3969,12 @@ Object.assign(Hub.prototype, {
           if (a.id === item.id) {
             throw new UserError(to.id === item.id ? `#${item.seq} can't be part of itself` : `#${to.seq} is part of #${item.seq}, so #${item.seq} can't go under it`, { hint: `Pick a parent outside #${item.seq}, or move #${to.seq} out first.` });
           }
+        }
+        // A group waits for its parts, so nothing it waits for can become one (#730).
+        const path = to && this.waitPath(p, item.id, to.id);
+        if (path) {
+          throw this.loopError(item, [{ id: to.id }, { id: item.id, part: true }, ...path.slice(1)], false, `can't go under #${to.seq}`,
+            `Pick another parent, or remove the dependency that closes the loop first.`);
         }
         if (to && ['done', 'dropped'].includes(to.stage)) {
           throw new UserError(`#${to.seq} is ${to.stage}`, { hint: `Pick an open parent for #${item.seq}, or reopen #${to.seq} first.` });
