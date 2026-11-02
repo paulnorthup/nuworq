@@ -43,6 +43,9 @@ const RUNNER_DOWN_POLLS = 3; // a runner silent for this many of its poll interv
 const TIME_FLIPS = [10 * MIN, 30 * MIN, HOUR, DAY];
 const TIME_FLIP_MS = 5_000;
 export const LEASE_MS = 20 * MIN;
+// A live process vouching for an agent renews its leases only while the agent itself is heard from (#736): a call,
+// progress or a push within this long. A worker whose CLI hangs gives its item back.
+export const VOUCH_IDLE_MS = 2 * HOUR;
 export const HANDOFF_COOLDOWN = 30 * MIN; // work you just handed off isn't offered straight back to you
 const HEADLINE_MAX = 140;
 const STEER_TTL = 3 * DAY;
@@ -1571,11 +1574,18 @@ export class Hub extends EventEmitter {
     for (const p of this.projects()) {
       if (scope && !scope.includes(p.slug)) continue;
       for (const name of list) {
-        if (identity && this.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, name)?.token_id !== identity.id) continue;
+        const a = this.q('SELECT token_id, last_seen FROM agents WHERE project_id = ? AND name = ?').get(p.id, name);
+        if (identity && a?.token_id !== identity.id) continue;
+        if (!a || this.now() - a.last_seen >= VOUCH_IDLE_MS) continue; // quiet too long: its lease runs out (#736)
         n += this.renewHeld(p, name);
       }
     }
     return n;
+  }
+
+  // The agent did something outside its calls, a push through the hub (#736): it counts as heard from.
+  heard(p, name) {
+    this.q('UPDATE agents SET last_seen = MAX(last_seen, ?) WHERE project_id = ? AND name = ?').run(this.now(), p.id, name);
   }
 
   // Renew the leases name holds in p that haven't lapsed: its items, and its race attempts still running. How many.
@@ -1912,11 +1922,12 @@ export class Hub extends EventEmitter {
     // Why a lease lapsed (#564), so a bouncing item counts only real failures: 'restart' when it ran out while the hub
     // was down (or in the minute after, before agents reconnected), 'session' when its agent's session ended (signed
     // off) or it was a runner's worker (the runner renews a running worker's lease, #540, so a lapse means the worker
-    // or the runner stopped), '' when the agent just went quiet.
+    // or the runner stopped), '' when the agent just went quiet: a runner's worker too, once it was quiet so long its
+    // runner's vouching stopped renewing it (#736).
     const cause = (p, agent, until) => {
       if (until < this.started + MIN) return 'restart';
-      const a = this.q('SELECT runner, signed_off FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
-      return a && (a.runner || a.signed_off) ? 'session' : '';
+      const a = this.q('SELECT runner, signed_off, last_seen FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
+      return a && (a.runner || a.signed_off) && until - a.last_seen < VOUCH_IDLE_MS ? 'session' : '';
     };
     this.tx(() => {
       // A lapsed race attempt frees its slot; the other racers carry on.

@@ -1690,6 +1690,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           return text(e.status || 424, e.message);
         }
         const names = (cmds) => cmds.map((c) => c.ref.replace(/^refs\/heads\//, '')).join(', ');
+        if (service === 'git-receive-pack') hub.heard(p, gitAgent); // a push is the worker at work (#736)
         return await proxyPush(req, res, {
           git: `${gh.web}/${want.slice('github.com/'.length)}.git`, service, token, branch: it.branch,
           onRefused: (cmds, reasons) => { hub.event(p, { item: it, actor: gitAgent, type: 'push_refused', headline: `The hub refused ${gitAgent}'s push of ${names(cmds)} to ${want}: ${[...new Set(reasons.filter(Boolean))].join('; ')}`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } }); hub.changed(p); },
