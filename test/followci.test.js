@@ -110,66 +110,79 @@ describe("serve --follow goes by CI's test check", () => {
   });
 });
 
-describe("checkOn reads the check's latest run from GitHub", () => {
-  // The hub's GitHub App, faked: mint gives a token, call answers check-runs and each run's workflow run (#648). A run
-  // is GitHub Actions', from CI's workflow on the asked commit, unless it says (workflow, on).
-  const app = (runs, status = 200) => {
+describe("checkOn reads CI's test job from GitHub", () => {
+  // GitHub, faked as the hub's App sees it. posted: check runs on the commit, as any app or workflow can post them
+  // through the API, into any suite on it (CI's own included). runs: workflow runs, newest first, each with the jobs
+  // its workflow made; a run is test.yml's, pushed to main on abc1234, unless it says otherwise.
+  const SHA = 'abc1234';
+  const ciRun = (test, over = {}) => ({ path: '.github/workflows/test.yml', head_sha: SHA, event: 'push', head_branch: 'main', status: test?.status === 'completed' ? 'completed' : 'in_progress',
+    jobs: [{ name: 'node (24)', status: 'completed', conclusion: 'success' }, ...(test ? [{ name: 'test', ...test }] : [])], ...over });
+  const app = (runs, { posted = [], status = 200 } = {}) => {
     const asked = [];
-    const all = runs.map((r, i) => ({ app: { slug: 'github-actions' }, check_suite: { id: i + 1 }, ...r }));
-    let sha = null;
+    const all = runs.map((r, i) => ({ id: 900 + i, ...r }));
     return {
       asked,
       mint: async (repo, permissions) => { asked.push({ repo, permissions }); return { token: 't' }; },
       call: async (method, path, body, token) => {
         asked.push({ method, path, token });
-        const suite = path.match(/check_suite_id=(\d+)$/)?.[1];
-        if (suite) {
-          const c = all[Number(suite) - 1];
-          return { status: 200, json: { workflow_runs: [{ path: c.workflow ?? '.github/workflows/test.yml', head_sha: c.on ?? sha }] } };
-        }
-        sha = path.match(/commits\/(\w+)\//)?.[1];
-        return { status, json: { check_runs: all } };
+        if (status !== 200) return { status, json: {} };
+        const w = path.match(/\/actions\/workflows\/([^/]+)\/runs\?head_sha=(\w+)/);
+        if (w) return { status: 200, json: { workflow_runs: all.filter((r) => r.path === `.github/workflows/${w[1]}` && r.head_sha === w[2]).map(({ jobs, ...r }) => r) } };
+        const j = path.match(/\/actions\/runs\/(\d+)\/jobs/);
+        if (j) return { status: 200, json: { jobs: all.find((r) => r.id === Number(j[1]))?.jobs ?? [] } };
+        if (/\/check-runs/.test(path)) return { status: 200, json: { check_runs: posted } };
+        return { status: 404, json: {} };
       },
     };
   };
   test("a test check from a workflow on another branch doesn't count as CI's (#648)", async () => {
-    // A workflow added on a worker's branch posts a passing "test" on main's commit: its run is on its branch's commit.
-    const theirs = { status: 'completed', conclusion: 'success', workflow: '.github/workflows/sneaky.yml', on: 'feedbee1' };
-    assert.deepEqual(await checkOn(app([theirs]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true });
-    // Even named test.yml there, it ran on its own branch's commit.
-    assert.deepEqual(await checkOn(app([{ ...theirs, workflow: '.github/workflows/test.yml' }]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true });
-    // CI's own run on this commit decides, wherever it comes in the list.
-    assert.deepEqual(await checkOn(app([theirs, { status: 'completed', conclusion: 'failure' }]), 'github.com/acme/api', 'abc1234'), { state: 'failed', failed: "CI's test check: failure" });
-    // Without actions:read GitHub refuses the workflow lookup: no verdict here, so the hub runs the suite itself.
-    const denied = app([{ status: 'completed', conclusion: 'success' }]);
-    const call = denied.call;
-    denied.call = async (m, p, b, t) => (/check_suite_id/.test(p) ? { status: 403, json: {} } : call(m, p, b, t));
-    await assert.rejects(checkOn(denied, 'github.com/acme/api', 'abc1234'), /GitHub answered 403 about the workflow of test/);
+    // A workflow on a worker's branch posts a passing "test" check run on main's commit with GITHUB_TOKEN. It lands
+    // in CI's own suite there, next to CI's failing test job, and is the newest "test" on the commit.
+    const forged = { name: 'test', app: { slug: 'github-actions' }, check_suite: { id: 900 }, status: 'completed', conclusion: 'success' };
+    const a = app([ciRun({ status: 'completed', conclusion: 'failure' })], { posted: [forged] });
+    assert.deepEqual(await checkOn(a, 'github.com/acme/api', SHA), { state: 'failed', failed: "CI's test check: failure" }, "CI's job decides");
+    assert.ok(!a.asked.some((x) => /check-runs/.test(x.path ?? '')), 'posted check runs are never read');
+    // Instead of CI's job: CI hasn't run here, or its run has no test job yet, so nothing has passed.
+    assert.deepEqual(await checkOn(app([], { posted: [forged] }), 'github.com/acme/api', SHA), { state: 'pending', missing: true });
+    assert.deepEqual(await checkOn(app([ciRun(null)], { posted: [forged] }), 'github.com/acme/api', SHA), { state: 'pending' });
+    assert.deepEqual(await checkOn(app([ciRun(null, { status: 'completed' })], { posted: [forged] }), 'github.com/acme/api', SHA), { state: 'pending', missing: true });
+    // Another workflow's job named test, or test.yml run on another branch or for a pull request into another branch
+    // (whose merge commit can carry that branch's test.yml), on this commit: not CI's.
+    const pass = { status: 'completed', conclusion: 'success' };
+    for (const over of [{ path: '.github/workflows/sneaky.yml' }, { head_branch: 'nuworq/1-x' }, { event: 'workflow_run' },
+      { event: 'pull_request', head_branch: 'nuworq/1-x', pull_requests: [{ base: { ref: 'nuworq/2-y' } }] }]) {
+      assert.deepEqual(await checkOn(app([ciRun(pass, over)]), 'github.com/acme/api', SHA), { state: 'pending', missing: true }, JSON.stringify(over));
+    }
+    assert.deepEqual(await checkOn(app([ciRun(pass, { event: 'pull_request', head_branch: 'nuworq/1-x', pull_requests: [{ base: { ref: 'main' } }] })]), 'github.com/acme/api', SHA), { state: 'passed' }, 'a pull request into main is CI');
+    // The newest of CI's runs decides: a rerun that's still going is pending, whatever an older one said.
+    assert.deepEqual(await checkOn(app([ciRun({ status: 'in_progress' }), ciRun(pass)]), 'github.com/acme/api', SHA), { state: 'pending' });
+    // Without actions:read GitHub refuses: no verdict here, so the hub runs the suite itself.
+    await assert.rejects(checkOn(app([ciRun(pass)], { status: 403 }), 'github.com/acme/api', SHA), /GitHub answered 403 about CI's runs/);
   });
   test("a test check from another app doesn't count as CI's (#621)", async () => {
-    const other = { app: { slug: 'mallory-checks' }, status: 'completed', conclusion: 'success' };
-    assert.deepEqual(await checkOn(app([other]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true }, 'as if CI had said nothing yet');
-    assert.deepEqual(await checkOn(app([other, { status: 'completed', conclusion: 'failure' }]), 'github.com/acme/api', 'abc1234'), { state: 'failed', failed: "CI's test check: failure" }, "GitHub Actions' run decides, whatever comes first");
-    assert.deepEqual(await checkOn(app([{ app: null, status: 'completed', conclusion: 'success' }]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true }, 'a run that names no app counts for nothing');
+    const other = { name: 'test', app: { slug: 'mallory-checks' }, status: 'completed', conclusion: 'success' };
+    assert.deepEqual(await checkOn(app([], { posted: [other] }), 'github.com/acme/api', SHA), { state: 'pending', missing: true }, 'as if CI had said nothing yet');
+    assert.deepEqual(await checkOn(app([ciRun({ status: 'completed', conclusion: 'failure' })], { posted: [other] }), 'github.com/acme/api', SHA), { state: 'failed', failed: "CI's test check: failure" }, "CI's job decides");
   });
   test('success, in progress, failure, none yet, and no verdict', async () => {
-    assert.deepEqual(await checkOn(app([{ status: 'completed', conclusion: 'success' }]), 'github.com/acme/api', 'abc1234'), { state: 'passed' });
-    assert.deepEqual(await checkOn(app([{ status: 'in_progress' }]), 'github.com/acme/api', 'abc1234'), { state: 'pending' });
-    const failed = await checkOn(app([{ status: 'completed', conclusion: 'failure', html_url: 'https://github.com/acme/api/runs/1' }]), 'github.com/acme/api', 'abc1234');
-    assert.deepEqual(failed, { state: 'failed', failed: "CI's test check: failure, https://github.com/acme/api/runs/1" });
-    assert.deepEqual(await checkOn(app([]), 'github.com/acme/api', 'abc1234'), { state: 'pending', missing: true });
-    assert.equal(await checkOn(app([{ status: 'completed', conclusion: 'skipped' }]), 'github.com/acme/api', 'abc1234'), null);
-    assert.equal(await checkOn(app([{ status: 'completed', conclusion: 'cancelled' }]), 'github.com/acme/api', 'abc1234'), null, 'cancelled is no verdict, not red main');
+    const on = async (test) => checkOn(app([ciRun(test)]), 'github.com/acme/api', SHA);
+    assert.deepEqual(await on({ status: 'completed', conclusion: 'success' }), { state: 'passed' });
+    assert.deepEqual(await on({ status: 'in_progress' }), { state: 'pending' });
+    assert.deepEqual(await on({ status: 'completed', conclusion: 'failure', html_url: 'https://github.com/acme/api/runs/1' }), { state: 'failed', failed: "CI's test check: failure, https://github.com/acme/api/runs/1" });
+    assert.deepEqual(await checkOn(app([]), 'github.com/acme/api', SHA), { state: 'pending', missing: true });
+    assert.equal(await on({ status: 'completed', conclusion: 'skipped' }), null);
+    assert.equal(await on({ status: 'completed', conclusion: 'cancelled' }), null, 'cancelled is no verdict, not red main');
   });
 
-  test('asks for the test check with a checks:read token for that repository', async () => {
-    const a = app([{ status: 'completed', conclusion: 'success' }]);
-    await checkOn(a, 'github.com/acme/api', 'abc1234');
-    assert.deepEqual(a.asked[0], { repo: 'github.com/acme/api', permissions: { checks: 'read', actions: 'read', metadata: 'read' } });
-    assert.equal(a.asked[1].path, '/repos/acme/api/commits/abc1234/check-runs?check_name=test&filter=latest');
-    assert.equal(a.asked[1].token, 't');
-    await assert.rejects(checkOn(app([], 500), 'github.com/acme/api', 'abc1234'), /GitHub answered 500/);
-    assert.equal(await checkOn(a, 'gitlab.com/acme/api', 'abc1234'), null, 'not a GitHub repository');
+  test("asks for CI's runs on that commit, then their jobs, with an actions:read token for that repository", async () => {
+    const a = app([ciRun({ status: 'completed', conclusion: 'success' })]);
+    await checkOn(a, 'github.com/acme/api', SHA);
+    assert.deepEqual(a.asked[0], { repo: 'github.com/acme/api', permissions: { actions: 'read', metadata: 'read' } });
+    assert.equal(a.asked[1].path, '/repos/acme/api/actions/workflows/test.yml/runs?head_sha=abc1234&per_page=20');
+    assert.equal(a.asked[2].path, '/repos/acme/api/actions/runs/900/jobs?per_page=100');
+    assert.ok(a.asked.slice(1).every((x) => x.token === 't'));
+    await assert.rejects(checkOn(app([], { status: 500 }), 'github.com/acme/api', SHA), /GitHub answered 500/);
+    assert.equal(await checkOn(a, 'gitlab.com/acme/api', SHA), null, 'not a GitHub repository');
   });
 });
 
@@ -178,20 +191,18 @@ describe("checkOn reads the check's latest run from GitHub", () => {
 describe("the supervisor asks GitHub through src/followhub.js", () => {
   test('passed, failed and pending come back from a child that read the app file; no app setting, no ci', async () => {
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    // As GitHub sends them: each run names the app that posted it (#621).
-    const gha = { app: { slug: 'github-actions' } };
-    const runs = { aaaaaaa1: [{ ...gha, check_suite: { id: 1 }, status: 'completed', conclusion: 'success' }], bbbbbbb2: [{ ...gha, check_suite: { id: 2 }, status: 'completed', conclusion: 'failure' }], ccccccc3: [] };
-    const suites = { 1: 'aaaaaaa1', 2: 'bbbbbbb2' }; // CI's workflow run behind each (#648)
+    // As GitHub sends them: CI's workflow run on each commit, pushed to main, and its test job (#648).
+    const runs = { aaaaaaa1: { id: 1, conclusion: 'success' }, bbbbbbb2: { id: 2, conclusion: 'failure' } };
     const asked = [];
     const gh = createServer((req, res) => {
       asked.push(`${req.method} ${req.url}`);
       const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
       if (req.url === '/repos/acme/api/installation') return json(200, { id: 42 });
       if (req.url === '/app/installations/42/access_tokens') return json(201, { token: 'ghs_t', expires_at: new Date(Date.now() + 3600_000).toISOString() });
-      const m = req.url.match(/^\/repos\/acme\/api\/commits\/(\w+)\/check-runs\?check_name=test&filter=latest$/);
-      if (m) return json(200, { check_runs: runs[m[1]] ?? [] });
-      const w = req.url.match(/^\/repos\/acme\/api\/actions\/runs\?check_suite_id=(\d+)$/);
-      if (w) return json(200, { workflow_runs: [{ path: '.github/workflows/test.yml', head_sha: suites[w[1]] }] });
+      const m = req.url.match(/^\/repos\/acme\/api\/actions\/workflows\/test\.yml\/runs\?head_sha=(\w+)&per_page=20$/);
+      if (m) return json(200, { workflow_runs: runs[m[1]] ? [{ id: runs[m[1]].id, path: '.github/workflows/test.yml', head_sha: m[1], event: 'push', head_branch: 'main', status: 'completed' }] : [] });
+      const j = req.url.match(/^\/repos\/acme\/api\/actions\/runs\/(\d+)\/jobs\?per_page=100$/);
+      if (j) return json(200, { jobs: [{ name: 'test', status: 'completed', conclusion: Object.values(runs).find((r) => r.id === Number(j[1]))?.conclusion }] });
       json(404, { message: 'Not Found' });
     });
     await new Promise((r) => gh.listen(0, '127.0.0.1', r));
@@ -206,7 +217,7 @@ describe("the supervisor asks GitHub through src/followhub.js", () => {
       assert.deepEqual(await sys.ci('aaaaaaa1'), { state: 'passed' });
       assert.equal((await sys.ci('bbbbbbb2')).state, 'failed');
       assert.deepEqual(await sys.ci('ccccccc3'), { state: 'pending', missing: true });
-      assert.ok(asked.includes('GET /repos/acme/api/commits/aaaaaaa1/check-runs?check_name=test&filter=latest'));
+      assert.ok(asked.includes('GET /repos/acme/api/actions/workflows/test.yml/runs?head_sha=aaaaaaa1&per_page=20'));
       writeFileSync(app, '{}');
       assert.equal(await sys.ci('aaaaaaa1'), null, 'an app file gone bad since: no verdict, so the suite runs here');
       assert.equal(system({ repo, dir: join(root, 'hub-src'), url: 'http://127.0.0.1:1' }).ci, null);
