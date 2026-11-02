@@ -204,7 +204,8 @@ const CARD_LABELS = {
 const cardPriority = (a) => (a.priority ? `<span class="card-prio" title="${esc(a.priority_why ?? '')}"><span class="tag ${esc(a.priority)}">${esc(a.priority)}</span>${a.priority_from ? ` from ${refLink(a.priority_from)}` : ''}</span>` : '');
 
 function card(a) {
-  const label = a.kind === 'question' && a.escalation ? 'Escalated by an operator' : CARD_LABELS[a.kind] ?? 'Needs you';
+  const label = a.kind === 'question' && a.escalation ? 'Escalated by an operator'
+    : a.kind === 'question' && a.operator ? 'For an operator' : CARD_LABELS[a.kind] ?? 'Needs you';
   const key = 'a:' + a.key;
   const open = S.open.has(key) || z() >= 2;
   const hasMore = a.why || a.detail || a.acceptance;
@@ -286,7 +287,7 @@ function cardActions(a, hasMore, open, key) {
     return `<div class="answer">
       ${q.options?.length ? `<div class="opts">${q.options.map((o) => `<button class="opt" data-action="answer" data-q="${q.id}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
       <div class="answer-row"><input data-draft="ans-${q.id}" id="ans-${q.id}" placeholder="${q.options?.length ? 'Or write your own answer…' : 'Your answer…'}"><button class="btn primary" data-action="answer-text" data-q="${q.id}">Answer</button></div>
-      <div class="actions" style="margin-top:0"><label class="check-label"><input type="checkbox" data-draft="dec-${q.id}" id="dec-${q.id}"> Make this a standing decision for all agents</label>${a.parked ? `<label class="check-label" title="Record the answer, but don't hand the work back to agents yet"><input type="checkbox" data-draft="keep-${q.id}" id="keep-${q.id}"> Keep it parked</label>` : ''}<span style="flex:1"></span>${moreBtn}</div>
+      <div class="actions" style="margin-top:0"><label class="check-label"><input type="checkbox" data-draft="dec-${q.id}" id="dec-${q.id}"> Make this a standing decision for all agents</label>${a.parked ? `<label class="check-label" title="Record the answer, but don't hand the work back to agents yet"><input type="checkbox" data-draft="keep-${q.id}" id="keep-${q.id}"> Keep it parked</label>` : ''}<span style="flex:1"></span>${a.guide ? `<a class="link" href="${esc(a.guide)}" target="_blank" rel="noopener" data-new="operator-question">How to start an operator</a>` : ''}${moreBtn}</div>
     </div>`;
   }
   if (a.kind === 'operator-missing') {

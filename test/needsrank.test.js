@@ -56,7 +56,7 @@ describe('each Needs you card carries the priority of the work it holds up', () 
     const { hub, advance } = setup();
     hub.humanOp('x', 'create', { title: 'Urgent', acceptance: 'x', priority: 'now' }); // #1
     hub.humanOp('x', 'create', { title: 'Later', acceptance: 'x', priority: 'later' }); // #2
-    hub.agentOp('x', 'ask', 'a0', { question: 'Can you open port 22?', to: 'operator' }); // no operator here: a card for the person
+    hub.agentOp('x', 'ask', 'a0', { question: 'Can you open port 22?', assumption: 'I test locally', to: 'operator' }); // no operator here: a card for the person
     advance(MIN);
     ask(hub, 'x', 'a2', '#2', 'Later?');
     ask(hub, 'x', 'a1', '#1', 'Urgent?');
