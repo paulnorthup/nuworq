@@ -19,6 +19,9 @@ export function ago(at, { left = false, fallback = '', now = Date.now() } = {}) 
   return `<span data-at="${Number(at)}"${left ? ' data-left' : ''}>${dur(left ? at - now : now - at)}</span>`;
 }
 
+// Markup with what the tick says left out: two pages that differ only in how long ago things were are alike (#682).
+export const untimed = (html) => html.replace(/(<span data-at="\d+"(?: data-left)?>)[^<]*<\/span>/g, '$1</span>');
+
 // Re-says every time under root.
 export function tick(root = document, now = Date.now()) {
   for (const el of root.querySelectorAll('[data-at]')) {
