@@ -69,6 +69,7 @@ export const COMMANDS = [
       ['--workers <n|auto>', 'workers at once; auto: one more only while the 1-minute load is under 80% of the cores and 2 GB of memory is free (at least one), and it says why when it holds', '1'],
       ['--max-workers <m>', 'with --workers auto: the most at once', 'half the cores'],
       ['--agent <name>', 'claude, codex, opencode or pi', 'claude'],
+      ['--can-read-keys', "start codex, opencode or pi workers, whose shells can read this machine's keys (only Claude's sandbox hides them)"],
       ['--model <m>', 'the model workers use; opencode and pi need <provider>/<model>'],
       ['--folder <path>', 'a folder workers may work in, added to ~/.nuworq/folders.json'],
       ['--until-idle', 'exit once no work is waiting, instead of waiting for more'],
@@ -141,6 +142,7 @@ export const COMMANDS = [
     flags: [
       ['--run', 'start it; without --run it prints the command'],
       ['--agent <name>', 'claude, codex, opencode or pi', 'claude'],
+      ['--can-read-keys', "needed for codex, opencode or pi: their shell can read this machine's keys (only Claude's sandbox hides them)"],
       ['--model <m>', 'the model; opencode and pi need <provider>/<model>, e.g. ollama/qwen3.8:27b-mtp-q4_K_M'],
       ['--project <p>', 'that project, instead of where the hub routes it'],
       ['--here', 'work in this folder, not its own worktree'],
