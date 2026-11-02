@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { launchdPlist, systemdUnit, install, uninstall, serviceEnv, serviceArgs, takeToken, stableNode, missingCheckouts, LABEL, UNIT, SIGNER } from '../src/service.js';
@@ -220,6 +220,39 @@ describe("a worker's worktree goes when it exits (#172)", () => {
     return dir;
   }
   const add = (dir, name) => { const wt = `${dir}.worktrees/${name}`; sh(dir, 'worktree', 'add', '-q', '--detach', wt, 'main'); return wt; };
+
+  test('the runner never runs git in a worktree whose pointers were changed (#640)', async () => {
+    const { worktreeTrusted, sweep } = await import('../src/runner.js');
+    const dir = repo();
+    const calls = [];
+    const spy = async (args) => { calls.push(args); return git(args); };
+    // Untouched: trusted, and cleaned as before.
+    const ok = add(dir, 'ok');
+    assert.equal(worktreeTrusted(ok, dir), true);
+    assert.deepEqual(await cleanWorktree(ok, spy), { kept: false });
+    // Another worker pointed this one's commondir elsewhere (a folder with a config of its own): no git runs there.
+    const evil = mkdtempSync(join(tmpdir(), 'nuworq-evil-'));
+    const a = add(dir, 'a');
+    writeFileSync(join(dir, '.git', 'worktrees', 'a', 'commondir'), `${evil}\n`);
+    assert.equal(worktreeTrusted(a, dir), false);
+    calls.length = 0;
+    assert.deepEqual(await cleanWorktree(a, spy), { kept: true, why: 'its worktree pointers were changed' });
+    assert.deepEqual(calls, [], 'not one git call');
+    // Its gitdir pointing at another worktree: the same.
+    const b = add(dir, 'b');
+    writeFileSync(join(dir, '.git', 'worktrees', 'b', 'gitdir'), `${join(ok, '.git')}\n`);
+    assert.equal(worktreeTrusted(b, dir), false);
+    // The weekly sweep keeps a, saying why. b's gitdir now names another worktree, so git lists b under that path
+    // and the sweep never reaches b. Neither gets a git call of the runner's.
+    calls.length = 0;
+    const r = await sweep({ home: dir, finished: new Set(), git: spy, idle: async () => 2 * 86400_000 });
+    assert.deepEqual(r.kept.filter((k) => k.why === 'its worktree pointers were changed').map((k) => k.what), [`${basename(dir)}.worktrees/a`]);
+    assert.ok(!calls.some((c) => c.includes(a) || c.includes(b)), 'no git with -C in a changed worktree');
+    // The runner checks before its exit cleanup, and says so.
+    const cli = readFileSync(new URL('../bin/nuworq.js', import.meta.url), 'utf8');
+    assert.match(cli, /const trusted = worktreeTrusted\(worktree, home\);\n\s*if \(!trusted\) console\.log\(amber\(`  \$\{name\}'s worktree pointers were changed; left as it is`\)\);/);
+    assert.match(cli, /\[\.\.\.live\]\.filter\(\(w\) => worktreeTrusted\(w\)\)/, 'and before asking a sibling for its branch');
+  });
 
   test('a clean worktree is removed', async () => {
     const dir = repo();
