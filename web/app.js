@@ -428,8 +428,8 @@ function renderRail() {
 const themeNow = () => { const t = store.get('theme', 'device'); return t === 'light' || t === 'dark' ? t : 'device'; };
 function appearance() {
   const now = themeNow();
-  return `<div class="appearance"><span class="seg-label" id="appearance-label">Appearance</span>
-    <div class="seg" role="radiogroup" aria-labelledby="appearance-label" data-new="appearance">${THEMES.map(([k, label]) =>
+  return `<div class="appearance"><span class="seg-label" id="appearance-label" data-new="appearance">Appearance</span>
+    <div class="seg" role="radiogroup" aria-labelledby="appearance-label">${THEMES.map(([k, label]) =>
       `<button role="radio" aria-checked="${k === now}" tabindex="${k === now ? 0 : -1}" class="${k === now ? 'on' : ''}" data-action="theme" data-appearance="${k}">${label}</button>`).join('')}</div></div>`;
 }
 function setTheme(t) {
