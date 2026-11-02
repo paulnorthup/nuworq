@@ -14,10 +14,13 @@ export const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many
 export const needYou = (n) => `${plural(n, 'thing')} ${n === 1 ? 'needs' : 'need'} you`;
 export const MAC = /Mac|iP(hone|ad)/.test(navigator.platform);
 
-export const inline = (t) => esc(t).replace(/`([^`\n]+)`/g, '<code>$1</code>');
+// A flag in a sentence or in inline code stays whole on a phone (#716): a line never ends in "--" or "--can-".
+const FLAG = /(^|[\s(])(--[A-Za-z][\w-]*)/g;
+export const flags = (h) => h.replace(FLAG, '$1<span class="flag">$2</span>');
+const codeOnly = (h) => h.replace(/`([^`\n]+)`|[^`]+/g, (m, code) => (code != null ? `<code>${flags(code)}</code>` : flags(m)));
+export const inline = (t) => codeOnly(esc(t));
 
-const MD_INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(^|[\s(])(https?:\/\/[^\s<)]+)/gm;
-const codeOnly = (t) => t.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+const MD_INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(^|[\s(])(https?:\/\/[^\s<)]+)|(^|[\s(])(--[A-Za-z][\w-]*)/gm;
 
 export function md(text) {
   if (!text) return '';
@@ -26,8 +29,9 @@ export function md(text) {
   // One pass: each piece of text becomes code, bold, a link or an address once, and markup made here is never
   // scanned again (a URL inside a link's address would otherwise close its href early).
   const a = (href, label) => `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
-  s = esc(s).replace(MD_INLINE, (m, code, bold, label, href, lead, url) =>
-    code != null ? `<code>${code}</code>` : bold != null ? `<strong>${codeOnly(bold)}</strong>` : label != null ? a(href, codeOnly(label)) : `${lead}${a(url, url)}`);
+  s = esc(s).replace(MD_INLINE, (m, code, bold, label, href, lead, url, flagLead, flag) =>
+    code != null ? `<code>${flags(code)}</code>` : bold != null ? `<strong>${codeOnly(bold)}</strong>` : label != null ? a(href, codeOnly(label))
+      : url != null ? `${lead}${a(url, url)}` : `${flagLead}<span class="flag">${flag}</span>`);
   return s.split(/\n{2,}/).map((par) => {
     const ls = par.split('\n');
     const bullet = /^\s*([-*•]|\d+\.)\s+/;

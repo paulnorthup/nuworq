@@ -238,8 +238,8 @@ describe('the page', () => {
   const app = appSource();
   // md() and stepsBy() as the page has them, run on their own.
   const slice = (from, to) => app.slice(app.indexOf(from), app.indexOf(to, app.indexOf(from)));
-  const src = [slice('const esc =', '\n'), slice('const MD_INLINE', 'function providerOf'), slice('const stepsBy', '\n\n')].join('\n').replace(/^export /gm, '');
-  const { md, stepsBy } = new Function(`${src}; return { md, stepsBy };`)();
+  const src = [slice('const esc =', '\n'), slice('const FLAG', 'function providerOf'), slice('const stepsBy', '\n\n')].join('\n').replace(/^export /gm, '');
+  const { md, inline, stepsBy } = new Function(`${src}; return { md, inline, stepsBy };`)();
 
   test('md() links in one pass: a URL inside a link never breaks out of its href', () => {
     const out = md('[x](https://a.test/(https://b.test/" onmouseover="alert(1))');
@@ -250,6 +250,16 @@ describe('the page', () => {
     assert.equal((label.match(/<a /g) ?? []).length, 1, "a link's label isn't linked again");
     assert.equal(md('go to https://a.test/x now'), '<p>go to <a href="https://a.test/x" target="_blank" rel="noopener">https://a.test/x</a> now</p>');
     assert.equal(md('**bold `code`** and `https://not.a.link`'), '<p><strong>bold <code>code</code></strong> and <code>https://not.a.link</code></p>');
+  });
+
+  test('a flag stays whole on a phone (#716): in a sentence and in inline code, never in a URL or a word', () => {
+    const f = (x) => `<span class="flag">${x}</span>`;
+    assert.equal(inline('Run `nuworq run --workers 1` (add --here), not a-b or x--y'),
+      `Run <code>nuworq run ${f('--workers')} 1</code> (add ${f('--here')}), not a-b or x--y`);
+    assert.equal(inline('`--here` and a lone ` tick'), `<code>${f('--here')}</code> and a lone \` tick`);
+    assert.equal(md('takes --can-read-keys, `--browser` or https://a.test/--x'),
+      `<p>takes ${f('--can-read-keys')}, <code>${f('--browser')}</code> or <a href="https://a.test/--x" target="_blank" rel="noopener">https://a.test/--x</a></p>`);
+    assert.equal(md('**`--b` --c**'), `<p><strong><code>${f('--b')}</code> ${f('--c')}</strong></p>`);
   });
 
   test("an agent's steps say who wrote them and that the hub didn't; a person's and the hub's say nothing", () => {
