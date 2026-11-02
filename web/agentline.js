@@ -5,10 +5,12 @@ export const ROLES = { operator: 'Operator', shaper: 'Shaper', worker: 'Worker',
 
 // presence: { role, where, job } (core.js presenceOf), or nothing when the hub didn't say, and then the name is
 // all there is. job: say what it is doing now (where that isn't already the line's subject). id: add its name.
+// No place (#713): the name takes its spot, "Agent newbie-1", so two such agents don't both read "Agent".
 export function agentLine(presence, { name = '', job = true, id = false } = {}) {
   if (!presence) return name;
-  const what = [ROLES[presence.role] ?? ROLES.session, presence.where].filter(Boolean).join(' · ');
-  return `${what}${job && presence.job ? ` — ${presence.job}` : ''}${id && name ? ` · ${name}` : ''}`;
+  const role = ROLES[presence.role] ?? ROLES.session;
+  const what = presence.where ? `${role} · ${presence.where}` : [role, name].filter(Boolean).join(' ');
+  return `${what}${job && presence.job ? ` — ${presence.job}` : ''}${id && name && presence.where ? ` · ${name}` : ''}`;
 }
 
 // The agents here now as counts by role (#441), for where space is tight (a project's 30s, the home):
