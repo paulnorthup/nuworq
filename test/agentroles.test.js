@@ -172,4 +172,27 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.equal((await op('ask', { token: t.mo, agent: 'mo-op', body: { question: 'Paul?', escalates: q1 } })).status, 403);
     assert.equal((await op('answer', { token: t.sam, agent: 'sam-op', body: { question: q1, answer: 'Restarted it.' } })).status, 200);
   });
+
+  test("a token can't review work it built under another name (#622)", async () => {
+    const build = async (token, agent, title) => {
+      const { item } = hub.humanOp('api', 'create', { title, acceptance: 'x' });
+      assert.equal((await op('claim', { token, agent, body: { item } })).status, 200, `${agent} claims ${item}`);
+      assert.equal((await op('submit', { token, agent, body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+      return item;
+    };
+    const review = (token, agent, item) => op('review', { token, agent, body: { item, verdict: 'accept', headline: 'looks right' } });
+    hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
+    // One token, two names: the second name can't review what the first built.
+    const mine = await build(tok.box, 'box-builder', 'Built by one name');
+    const r = await review(tok.box, 'box-reviewer', mine);
+    assert.notEqual(r.status, 200);
+    assert.match(r.json.error, /can't review your own work/);
+    assert.equal(hub.item(hub.project('api'), mine).stage, 'verifying', 'still waiting for someone else');
+    // Another token reviews it.
+    assert.equal((await review(tok.other, 'other-reviewer', mine)).status, 200);
+    // A runner's workers share its token by design: one may review another's work.
+    const runner = auth.createToken('ci-runner-2', 'agent', { runner: 'ci2' });
+    const theirs = await build(runner, 'ci-builder', 'Built by a runner worker');
+    assert.equal((await review(runner, 'ci-reviewer', theirs)).status, 200);
+  });
 });

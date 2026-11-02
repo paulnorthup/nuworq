@@ -66,9 +66,12 @@ export function builtWhatItReviews(hub, item, agent) {
   const seqs = [...new Set(releases.flatMap((r) => [...String(r.summary).matchAll(/\(#(\d+)\)/g)].map((m) => Number(m[1]))))];
   if (!seqs.length) return false;
   const marks = seqs.map(() => '?').join(',');
-  return !!hub.q(`SELECT 1 FROM items i WHERE i.project_id = ? AND i.seq IN (${marks}) AND (i.implementer = ?
-      OR EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = i.id AND a.agent = ? AND a.stage = 'submitted')) LIMIT 1`)
-    .get(item.project_id, ...seqs, agent, agent);
+  // Under any name its token acts as (#622).
+  const names = hub.namesOf(item.project_id, agent);
+  const who = names.map(() => '?').join(',');
+  return !!hub.q(`SELECT 1 FROM items i WHERE i.project_id = ? AND i.seq IN (${marks}) AND (i.implementer IN (${who})
+      OR EXISTS (SELECT 1 FROM attempts a WHERE a.item_id = i.id AND a.agent IN (${who}) AND a.stage = 'submitted')) LIMIT 1`)
+    .get(item.project_id, ...seqs, ...names, ...names);
 }
 
 // Opens the monthly area reviews that are due. Run on the hub's timer; returns the items it opened.
