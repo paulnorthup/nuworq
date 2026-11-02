@@ -69,7 +69,7 @@ describe('model tiers', () => {
 
 describe('model routing', () => {
   test('on by default, on the default Claude tiers (#723); off: routes name no model, whatever the tiers', () => {
-    const { hub, set, route } = world();
+    const { hub, set, op, route, landing } = world();
     hub.humanOp('p', 'create', { title: 'Build', acceptance: 'x' });
     assert.deepEqual(view(hub, 'p').project.staffing.models, { on: true, tiers: DEFAULT_TIERS, own: {}, defaults: DEFAULT_TIERS, trial: 10, race: 0, quality: 'balanced', qualities: QUALITY });
     assert.deepEqual(DEFAULT_TIERS, TIERS);
@@ -77,6 +77,11 @@ describe('model routing', () => {
     assert.equal(route().model, 'claude-opus-5-5', 'a runner with no --model, too');
     assert.equal(route('claude-sonnet-5-5').model, 'claude-sonnet-5-5', 'a runner on a lower default tier caps the defaults there');
     assert.equal(route('claude-opus-4-1').model, 'claude-opus-5-5', 'a --model that isn\'t a default tier leaves them whole');
+    op('a', 'checkin');
+    op('a', 'next');
+    op('a', 'submit', { item: '#1', headline: 'Done', evidence: [{ label: 'tests pass' }] });
+    landing(1);
+    assert.deepEqual([route('claude-opus-5-5').mode, route('claude-opus-5-5').model], ['land', 'claude-haiku-5-5'], 'a project that never set tiers lands on Haiku');
     set({ model_routing: false, model_tiers: TIERS });
     assert.equal(route('claude-opus-5-5').model, undefined);
     assert.equal(hub.route('', {})[0].model, undefined, 'and an agent asking where work is never hears one');
