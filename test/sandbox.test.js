@@ -1,6 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, sep } from 'node:path';
+import { mkdtempSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { sandboxSettings, filePermissions } from '../src/sandbox.js';
 
 // What a worker's sandbox lets it write (#472): never what an unsandboxed git later runs or reads its settings from.
@@ -51,6 +53,35 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree: null, landsHere: true });
     for (const p of ['hooks', 'config', 'modules', 'info']) assert.ok(filesystem.denyWrite.includes(join(home, '.git', p)), p);
+  });
+});
+
+// #606: on a project without an origin a worker may write the whole checkout, so what an unsandboxed tool later reads
+// there is denied by name: other workers' git metadata, and the agent settings an operator or the next worker starts with.
+describe("a worker can't write another worker's git metadata or the checkout's agent settings (#606)", () => {
+  const real = mkdtempSync(join(tmpdir(), 'nuworq-606-'));
+  const co = join(real, 'api'), own = join(real, 'api.worktrees', 'claude-1a2b');
+  for (const n of ['claude-1a2b', 'claude-9f9f', 'pi-77']) mkdirSync(join(co, '.git', 'worktrees', n), { recursive: true });
+  const theirs = ['claude-9f9f', 'pi-77'].flatMap((n) => ['commondir', 'gitdir', 'config.worktree', 'HEAD'].map((f) => join(co, '.git', 'worktrees', n, f)));
+  const settings = [co, own].flatMap((d) => [join(d, '.claude', 'settings.local.json'), join(d, '.claude', 'settings.json'), join(d, '.envrc'), join(d, '.vscode', 'tasks.json')]);
+
+  test('the sandbox denies them, and still lets it commit in its own worktree and land in the checkout', () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home: co, worktree: own, landsHere: true });
+    for (const p of [...theirs, ...settings]) assert.ok(inside(p, filesystem.denyWrite), p);
+    for (const f of ['commondir', 'gitdir', 'config.worktree']) assert.ok(inside(join(co, '.git', 'worktrees', 'claude-1a2b', f), filesystem.denyWrite), `its own ${f}`);
+    for (const f of ['HEAD', 'index', 'rebase-merge/done']) assert.ok(!inside(join(co, '.git', 'worktrees', 'claude-1a2b', f), filesystem.denyWrite), `its own ${f} stays writable`);
+    assert.ok(inside(join(co, 'src', 'a.js'), filesystem.allowWrite) && !inside(join(co, 'src', 'a.js'), filesystem.denyWrite), 'the checkout, to land');
+    for (const p of [...filesystem.allowWrite, ...filesystem.denyWrite]) assert.doesNotMatch(p, /[*?[]/, p);
+    // Landing through origin, the others' folders were never writable; the agent settings are denied all the same.
+    const through = sandboxSettings({ hub: 'https://hub.example', home: co, worktree: own }).filesystem;
+    for (const p of theirs) assert.ok(!inside(p, through.allowWrite), p);
+    for (const p of settings) assert.ok(inside(p, through.denyWrite), p);
+  });
+
+  test('its file tools are denied the same', () => {
+    const perms = filePermissions({ home: co, worktree: own, landsHere: true });
+    for (const p of [...theirs, ...settings]) for (const tool of ['Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
+    assert.ok(may(perms, 'Edit', join(co, 'src', 'a.js')) && may(perms, 'Edit', join(own, 'src', 'a.js')), 'its work stays editable');
   });
 });
 
