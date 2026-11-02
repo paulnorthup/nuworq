@@ -87,6 +87,30 @@ describe('landing: done means on main', () => {
     assert.equal(item(1).holder, null);
   });
 
+  test('a lander who hands off keeps it landing for the next one; the accepted review stands (#729)', () => {
+    const { hub, op, worktree, build, item, tick } = setup();
+    hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
+    for (const a of ['a1', 'a3', 'a4']) op(a, 'checkin');
+    const job = op('a1', 'next');
+    build(worktree('a1'), job.branch, 'thing');
+    op('a1', 'submit', { item: '#1', headline: 'Done' });
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    tick(LAND_GRACE);
+    assert.equal(op('a3', 'next').mode, 'land');
+    const tierUp = item(1).tier_up ?? 0;
+    op('a3', 'handoff', { item: '#1', headline: "Can't push from here", summary: 'Rebased cleanly; only the push is left.' });
+    const it = item(1);
+    assert.equal(it.stage, 'landing', 'the accepted review stands');
+    assert.equal(it.holder, null);
+    assert.equal(it.lease_until, null);
+    assert.equal(JSON.parse(it.handoff).headline, "Can't push from here");
+    assert.equal(it.tier_up ?? 0, tierUp, 'letting a land job go is not a failed attempt at the work');
+    const land = op('a4', 'next');
+    assert.equal(land.mode, 'land');
+    assert.equal(land.item, '#1');
+    assert.equal(land.last_handoff.headline, "Can't push from here");
+  });
+
   test('conflicts that change the approved work send it back for review instead of landing', () => {
     const { hub, op, worktree, build, item } = setup();
     hub.humanOp('demo', 'create', { title: 'Thing', acceptance: 'x' });
