@@ -182,8 +182,8 @@ input, textarea, select { font: inherit; color: var(--ink); background: var(--pa
 input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb, var(--ink) 30%, transparent); outline-offset: 0; border-color: var(--ink); }
 textarea { resize: vertical; min-height: 60px; }
 input[type=checkbox] { width: auto; }
-code { font-family: var(--mono); font-size: smaller; background: var(--sunken); padding: var(--sp-h) var(--sp-1); border-radius: var(--r-s); }
-pre { font-family: var(--mono); font-size: var(--fs-2); line-height: 1.5; background: var(--sunken); padding: var(--sp-3) var(--sp-3); border-radius: var(--r-m); overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: var(--sp-2) 0; }
+code { font-family: var(--mono); font-size: smaller; background: var(--sunken); padding: var(--sp-h) var(--sp-1); border-radius: var(--r-s); white-space: nowrap; } /* a flag in a sentence stays whole */
+pre { font-family: var(--mono); font-size: var(--fs-2); line-height: 1.5; background: var(--sunken); padding: var(--sp-3) var(--sp-3); border-radius: var(--r-m); overflow-x: auto; white-space: pre; margin: var(--sp-2) 0; } /* a command scrolls sideways in its block: a wrap would split a flag after its dashes */
 h1, h2, h3 { margin: 0; font-weight: 600; }
 /* Figures that are compared line up digit for digit (#391): counts, costs, durations, percentages. */
 .badge, .count, .age, .stage .n, .agent-card .stats b, .since b, .throughput, .flow .cost, .an-figs, .g-count, .funnel .n,
@@ -697,7 +697,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: var(--sp-h) var(--sp-2);
 .fb-label { display: block; font-weight: 600; margin: var(--sp-1) 0 var(--sp-2); }
 .fb-sent-with { margin-top: var(--sp-3); padding: var(--sp-3) var(--sp-3); border: var(--rule) solid var(--line); border-radius: var(--r-m); }
 .fb-sent-with ul { margin: var(--sp-2) 0 var(--sp-1); padding-left: var(--sp-5); }
-.fb-sent-with code { overflow-wrap: anywhere; }
+.fb-sent-with code { white-space: normal; overflow-wrap: anywhere; }
 .fb-sent-with p { margin: 0; }
 .fb-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .tag.fb-tag { background: var(--panel); color: var(--muted); border: var(--rule) solid var(--line); } /* a label, not a move: magenta is the person's (#336); --panel because the stage list is --sunken */
@@ -730,7 +730,7 @@ main.narrow h1 { margin-bottom: var(--sp-4); }
 main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--muted); font-size: var(--fs-2); }
 .setup > :first-child, .dialog > :first-child { margin-top: 0; }
 .btn:disabled { opacity: .45; cursor: default; }
-.dialog .lead code { overflow-wrap: anywhere; } /* a long URL in a sentence wraps instead of widening a phone's dialog */
+.dialog .lead code { white-space: normal; overflow-wrap: anywhere; } /* a long URL in a sentence wraps instead of widening a phone's dialog */
 .dialog h3 { margin: var(--sp-6) 0 var(--sp-1); padding-top: var(--sp-4); border-top: var(--rule) solid var(--line); font-size: var(--fs-5); }
 /* A project's Settings (#213): one row per setting, its name and what it does, then one control a thumb can hit. */
 .setting { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-3) 0; }
@@ -938,7 +938,7 @@ main.admin { padding-top: var(--sp-6); }
 .admin-acts { display: flex; gap: var(--sp-3); margin-top: var(--sp-3); }
 .admin-acts .btn { flex: 1; }
 .admin-link { margin-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
-.admin-link code { display: block; padding: var(--sp-2); word-break: break-all; user-select: all; }
+.admin-link code { display: block; padding: var(--sp-2); white-space: normal; word-break: break-all; user-select: all; }
 .admin-h2 { margin-top: var(--sp-7); }
 /* How far feedback goes on its own (#296): three levels, full width, thumb-sized. */
 .fb-level .seg { display: flex; width: 100%; margin: var(--sp-2) 0 var(--sp-1); }
