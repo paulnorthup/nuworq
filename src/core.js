@@ -1529,8 +1529,10 @@ export class Hub extends EventEmitter {
     if (!agent) return [];
     let rows = [];
     try {
+      // A runner's workers count as themselves alone (#658), whatever token the runner uses: `nuworq run` on a person's
+      // machine runs them on that person's device token, which also serves the operator.
       rows = this.q(`SELECT o.name FROM agents a JOIN tokens t ON t.id = a.token_id JOIN agents o ON o.project_id = a.project_id AND o.token_id = a.token_id
-        WHERE a.project_id = ? AND a.name = ? AND t.runner IS NULL`).all(projectId, agent);
+        WHERE a.project_id = ? AND a.name = ? AND t.runner IS NULL AND a.runner = '' AND o.runner = ''`).all(projectId, agent);
     } catch { /* no tokens table: a hub without logins */ }
     return [...new Set([agent, ...rows.map((r) => r.name)])];
   }
