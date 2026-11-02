@@ -30,8 +30,9 @@ import { morph } from './morph.js';
 import { radioKeys } from './radiogroup.js';
 import { liveGate } from './pace.js';
 import { predict, placeholder } from './instant.js';
-import { held, viewLoader, loadProject, shell } from './switching.js';
+import { held, loadProject, shell } from './switching.js';
 import { bootData } from './boot.js';
+import { dataCache } from './data.js';
 import { S, setState, toggleIn, addTo, putIn, removeFrom, PAGE } from './store.js';
 
 const Z = { '30s': 0, '5m': 1, '30m': 2 };
@@ -161,6 +162,7 @@ function offline() {
 }
 function online() {
   if (!S.offline) return;
+  data.clear(); // what's kept may have changed while the hub was out of reach (#601)
   setState({ offline: null });
   clearTimeout(offline.t);
   $('#offline')?.remove();
@@ -186,6 +188,9 @@ async function api(path, opts = {}) {
   if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), j);
   return j;
 }
+// The project list, home, outcomes, views and open item, each kept per URL until a change event says it may have
+// changed (#601, web/data.js): a live update asks only for what the change touched, a person's action reads fresh.
+const data = dataCache((url) => api(url));
 // On the open project, or on the home the project of the card clicked (S.actSlug); with neither, the home's own.
 // What's predictable shows on the same frame as the tap (#393, web/instant.js). If the hub refuses, the screen
 // goes back to what it was, and the toast says so and why.
@@ -229,14 +234,16 @@ async function removeProject(action, body, msg) {
 
 // ── data ──
 async function loadProjects() {
-  setState({ projects: await api('/api/projects'), listStale: false });
+  setState({ projects: await data.read('/api/projects', { fresh: true }), listStale: false });
 }
-// A project's view (#503): one request however many ask for it, so a hover, a focus and the click share it.
 // A project's view at the picked depth (#501), with the pages of All work and earlier agents the open project asked for.
-const views = viewLoader((slug) => {
+const viewUrl = (slug) => {
   const more = slug === S.slug ? ['all', 'agents'].filter((k) => S.pages[k] > PAGE[k]).map((k) => `&${k}=${S.pages[k]}`).join('') : '';
-  return api(`/api/p/${encodeURIComponent(slug)}/view?depth=${encodeURIComponent(S.zoom)}${more}`);
-});
+  return `/api/p/${encodeURIComponent(slug)}/view?depth=${encodeURIComponent(S.zoom)}${more}`;
+};
+// One request however many ask for it, so a hover, a focus and the click share it (#503); kept until a change in that
+// project (#601). forget: the views fetched at another depth.
+const views = { load: (slug, { fresh = false } = {}) => data.read(viewUrl(slug), { fresh }), forget: () => data.forget((u) => /\/view\?/.test(u)) };
 // Fetched ahead as the pointer rests on a project or the launcher highlights it, and kept as the view to draw at once.
 function prefetchView(slug) {
   if (!slug || slug === S.slug) return;
@@ -251,15 +258,15 @@ async function refresh({ force = false, fresh = true, list = true } = {}) {
     setState({ missing: null });
     if (S.analytics) {
       await loadProjects();
-      setState({ outcomes: await api(`/api/outcomes?period=${encodeURIComponent(S.period)}`) });
+      setState({ outcomes: await data.read(`/api/outcomes?period=${encodeURIComponent(S.period)}`, { fresh }) });
       setState({ view: null });
     } else if (S.slug) {
       // The list and the view at once; the list only when a live change may have changed it.
       const slug = S.slug, ref = S.itemRef;
       const r = await loadProject({
-        list: list || S.listStale || !S.projects.length ? () => api('/api/projects') : null,
+        list: list || S.listStale || !S.projects.length ? () => data.read('/api/projects', { fresh }) : null,
         view: () => views.load(slug, { fresh }),
-        item: ref ? () => api(`/api/p/${encodeURIComponent(slug)}/items/${encodeURIComponent(ref.replace('#', ''))}`) : null,
+        item: ref ? () => data.read(`/api/p/${encodeURIComponent(slug)}/items/${encodeURIComponent(ref.replace('#', ''))}`, { fresh }) : null,
       });
       if (r.projects) setState({ projects: r.projects, listStale: false });
       // No view, from a list held a while: the project may have gone since, so the list decides.
@@ -280,7 +287,7 @@ async function refresh({ force = false, fresh = true, list = true } = {}) {
       setState({ view: null });
       // The home: one request, which also brings the project lines the rail shows.
       // Boot just asked (homeFresh, #599): the first refresh uses that answer.
-      setState({ home: S.homeFresh ?? await api('/api/home') });
+      setState({ home: S.homeFresh ?? await data.read('/api/home', { fresh }) });
       setState({ homeFresh: null, projects: S.home.projects });
       // Get started: asked until it says it's gone (finished or hidden), then never again this visit.
       // Boot just asked (gsFresh, #599): the first refresh uses that answer.
@@ -2213,23 +2220,28 @@ document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('o
 
 // ── live updates ──
 // At most one a second, and none while the person scrolls or holds a pointer down: it waits, then applies (#392).
-const live = liveGate({ run: () => refresh(), hidden: () => document.hidden, idle: () => { if (S.pending && !typing()) render(); } });
+// It reads what a change left kept as it is (#601): the change event already dropped what it touched.
+const live = liveGate({ run: () => refresh({ fresh: false }), hidden: () => document.hidden, idle: () => { if (S.pending && !typing()) render(); } });
 document.addEventListener('visibilitychange', () => live.shown());
 document.addEventListener('pointerdown', () => live.press(), true);
 for (const ev of ['pointerup', 'pointercancel']) document.addEventListener(ev, () => live.release(), true);
 document.addEventListener('scroll', () => live.scrolled(), { capture: true, passive: true });
 const scheduleRefresh = () => live.poke();
 let opened = false; // the stream's first open comes right after boot asked for the version (#599)
+// A change event's { project, item }; one that can't be read counts as workspace-wide (everything asked again).
+const changeOf = (raw) => { try { const e = JSON.parse(raw); return { project: e.project ?? null, item: e.item ?? null }; } catch { return {}; } };
 function listen() {
   const es = new EventSource('api/stream');
   // A hub that moved onto a new commit restarts, so the stream reconnects: pick up the version it runs now.
   es.onopen = async () => {
     online();
     if (!opened) return void (opened = true);
+    data.clear(); // back after a break: changes may have gone by unheard (#601)
     const info = await api('/api/info').catch(() => null);
     if (info && info.commit !== S.info?.commit) { setState({ info }); scheduleRefresh(); }
   };
-  es.onmessage = () => { setState({ listStale: true }); views.forget(); scheduleRefresh(); };
+  // Each change says which project (and item) it's in (Hub.changed): only what it can affect is asked again (#601).
+  es.onmessage = (m) => { data.changed(changeOf(m.data)); setState({ listStale: true }); scheduleRefresh(); };
   es.onerror = () => { es.close(); offline(); setTimeout(listen, 3000); };
 }
 
