@@ -130,7 +130,7 @@ describe('organizations: who belongs where, and making one', () => {
     assert.equal((await create(ann, { name: 'Acme Labs', slug: 'acme-labs' })).status, 200);
     const r = await create(ann, { name: 'Third' });
     assert.equal(r.status, 429);
-    assert.match(r.json.hint, /--org-cap/);
+    assert.equal(r.json.hint, 'Ask the hub host to raise --workspace-cap, or use one you have.');
     assert.ok(!spaces.has('third'));
   });
 
