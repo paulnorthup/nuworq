@@ -41,6 +41,7 @@ export const NEW = {
   'worth-knowing-lines': '2026-11-01', // #497: Worth knowing holds only what you might act on, one line each, with Got it, all
   'show-more': '2026-11-01', // #501: at 30m, All work and earlier agents come a page at a time, with Show more for the next
   'setup-that-works': '2026-11-01', // #489: Connect an agent leads with the setup that works: workers, an operator, a shaper
+  'agents-told': '2026-11-01', // #550: an item's "Agents told each other", the operators' and the hub's steers, out of Your steering
 };
 
 const DAYS = 7;

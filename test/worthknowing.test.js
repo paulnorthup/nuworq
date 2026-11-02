@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, MIN, HOUR } from '../src/core.js';
-import { view, homeView } from '../src/insight.js';
+import { view, homeView, itemView } from '../src/insight.js';
 
 // #497: Worth knowing holds only what a person might confirm, redirect or fix. Seeded like nuworq's 2026-11-01:
 // 95 cards then, of which 3 were worth a person's attention.
@@ -60,7 +60,9 @@ describe('Worth knowing holds only what a person might act on (#497)', () => {
     later(HOUR);
     const unseen = view(hub, 'nuworq').attention.filter((a) => a.kind === 'steer-unseen');
     assert.equal(unseen.length, 1, "only the person's");
-    assert.equal(view(hub, 'nuworq').steers.find((s) => /Instead: b/.test(s.body)).by, 'op', 'the steering list says whose it is');
+    // Not in Your steering at all (#550): on its item, under what agents told each other, with whose it is.
+    assert.ok(!view(hub, 'nuworq').steers.some((s) => /Instead: b/.test(s.body)));
+    assert.equal(itemView(hub, 'nuworq', items[2]).told.find((s) => /Instead: b/.test(s.body)).author, 'op');
   });
 
   test('an operator answer marked for people shows for a day; the operator skill and guide say when', async () => {

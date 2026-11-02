@@ -1143,7 +1143,7 @@ export class Hub extends EventEmitter {
     this.tx(() => {
       this.move(item, 'dropped', agent, { holder: null, lease_until: null });
       this.event(p, { item, actor: agent, type: 'staged', headline: `${agent} dropped #${item.seq}, as ${by === HUMAN ? 'you' : by} answered: "${clip(q.answer, 80)}"`, data: { decided_by: by, question: q.id } });
-      for (const holder of others) this.addNote(p, 'steer', `#${item.seq} was dropped (${by === HUMAN ? 'the human' : by} said so); stop working on it.`, null, holder, by);
+      for (const holder of others) this.addNote(p, 'steer', `#${item.seq} was dropped (${by === HUMAN ? 'the human' : by} said so); stop working on it.`, null, holder, by, { notice: true });
     });
     return { ok: true, item: `#${item.seq}`, stage: 'dropped', decided_by: by, hint: 'Dropped. Call next.' };
   }
@@ -3764,7 +3764,7 @@ const HUMAN_OPS = {
       this.move(it, args.stage, by, { holder: null, lease_until: null });
       const verb = { ready: 'moved', proposed: 'moved', done: 'marked', dropped: 'dropped' }[args.stage];
       this.event(p, { item: it, actor: by, type: 'staged', headline: `${You(by)} ${verb} #${it.seq}${args.stage !== 'dropped' ? ` to ${args.stage}` : ''}`, summary: str(args.note) });
-      for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder, by);
+      for (const holder of holders) this.addNote(p, 'steer', `#${it.seq} was ${args.stage === 'dropped' ? 'dropped' : `moved to ${args.stage}`} by the human; stop working on it.${args.note ? ` ${args.note}` : ''}`, null, holder, by, { notice: true });
     }
   },
 
@@ -4021,7 +4021,7 @@ const HUMAN_OPS = {
     if (parked != null && !!parked !== !!p.parked) {
       this.q('UPDATE projects SET parked = ? WHERE id = ?').run(parked ? 1 : 0, p.id);
       this.event(p, { actor: by, type: 'parked', headline: parked ? `${You(by)} parked the project` : `${You(by)} unparked the project` });
-      if (parked) this.addNote(p, 'steer', 'The project is parked. Finish or hand off what you hold; start nothing new.', null, null, by);
+      if (parked) this.addNote(p, 'steer', 'The project is parked. Finish or hand off what you hold; start nothing new.', null, null, by, { notice: true });
     }
     if (name != null && str(name) && str(name) !== p.name) { this.q('UPDATE projects SET name = ? WHERE id = ?').run(str(name), p.id); changes.push('name'); }
     if (mission != null && str(mission) !== p.mission) { this.q('UPDATE projects SET mission = ? WHERE id = ?').run(str(mission), p.id); changes.push('mission'); }
@@ -4029,18 +4029,22 @@ const HUMAN_OPS = {
       if (!AUTONOMY[autonomy]) throw new UserError('autonomy must be ask, balanced or full');
       this.q('UPDATE projects SET autonomy = ? WHERE id = ?').run(autonomy, p.id);
       changes.push('autonomy');
-      this.addNote(p, 'steer', `Autonomy is now "${AUTONOMY[autonomy].label}": ${AUTONOMY[autonomy].agent}`, null, null, by);
+      this.event(p, { actor: by, type: 'autonomy', headline: `${You(by)} set autonomy to "${AUTONOMY[autonomy].label}"` });
+      this.addNote(p, 'steer', `Autonomy is now "${AUTONOMY[autonomy].label}": ${AUTONOMY[autonomy].agent}`, null, null, by, { notice: true });
     }
     if (changes.includes('mission')) this.event(p, { actor: by, type: 'mission', headline: `${You(by)} updated the mission`, summary: str(mission) });
   },
 };
 
 Object.assign(Hub.prototype, {
-  addNote(p, kind, body, item = null, target = null, author = HUMAN) {
+  // notice: a steer the hub writes itself (#550). Agents get it as any steer; the record already has the fact it
+  // follows (dropped, parked, autonomy), so it adds no "steered" event of its own.
+  addNote(p, kind, body, item = null, target = null, author = HUMAN, { notice = false } = {}) {
     const text = str(body);
     if (!text) throw new UserError(`${kind} text is required`);
-    const r = this.q('INSERT INTO notes (project_id, item_id, kind, target, author, body, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(p.id, item?.id ?? null, kind, target, author, text, this.now());
+    const r = this.q('INSERT INTO notes (project_id, item_id, kind, target, author, body, at, notice) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(p.id, item?.id ?? null, kind, target, author, text, this.now(), notice ? 1 : 0);
+    if (notice) return Number(r.lastInsertRowid);
     this.event(p, {
       item, actor: author, type: kind,
       headline: kind === 'decision' ? `Decision: ${clip(text)}` : `${You(author)} steered${item ? ` #${item.seq}` : ''}: ${clip(text)}`,

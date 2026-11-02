@@ -581,6 +581,18 @@ export const MIGRATIONS = [
     name: 'an operator can mark an answer for people',
     up(db) { addColumn(db, 'ALTER TABLE questions ADD COLUMN for_people INTEGER NOT NULL DEFAULT 0'); },
   },
+  {
+    // A steer the hub wrote itself (#550): a drop or move notice to a holder, the project parked, autonomy changed.
+    // Agents get it as any steer; people see it as a fact, not as their steering. Once, for those from before: by
+    // their words, which the hub alone writes.
+    name: "steers the hub wrote are notices, not a person's steering",
+    up(db) {
+      addColumn(db, 'ALTER TABLE notes ADD COLUMN notice INTEGER NOT NULL DEFAULT 0');
+      db.exec(`UPDATE notes SET notice = 1 WHERE kind = 'steer' AND (body GLOB '#[0-9]* was dropped (*' OR body GLOB '#[0-9]* was dropped by the human; *'
+        OR body GLOB '#[0-9]* was moved to * by the human; *' OR body = 'The project is parked. Finish or hand off what you hold; start nothing new.'
+        OR body GLOB 'Autonomy is now "*')`);
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

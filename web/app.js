@@ -1263,8 +1263,15 @@ function renderDrawer() {
         ${q.blocking ? '' : `<button class="btn" data-action="confirm" data-q="${q.id}">Confirm</button>`}</div></div>` : ''}
     </div>`).join('')}</div>` : '';
 
-  const steers = it.steers.length ? `<div class="d-sec"><div class="label">Steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
-      <div class="meta">${when(s)} ago${s.by && s.by !== 'you' && !s.by.startsWith('@') ? ` · from ${esc(s.by)}` : ''}</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
+  const steers = it.steers.length ? `<div class="d-sec"><div class="label">Your steering</div>${it.steers.map((s) => `<div class="q"><div>${esc(s.body)}</div>
+      <div class="meta">${when(s)} ago</div><div class="acks">${ackList({ acks: s.acks, key: `dacks:${s.id}`, open: S.open.has(`dacks:${s.id}`), responses: true, empty: 'not acknowledged yet' }, { esc })}</div></div>`).join('')}</div>` : '';
+  // What agents and the hub told each other about it (#550): one plain line each, who to whom, the whole text behind it.
+  const told = it.told?.length ? `<div class="d-sec"><div class="label" data-new="agents-told">Agents told each other</div><div class="rows">${it.told.map((s) => {
+    const key = `told:${s.id}`, open = S.open.has(key);
+    return `<div class="told-item" data-key="${key}"><button class="row-item" data-action="toggle" data-key="${key}" aria-expanded="${open}" title="${esc(s.author)}">
+        <span class="h"><b>${esc(s.from)}</b> to ${esc(s.to)}: ${esc(s.line)}</span><span class="age">${s.retires ? `${esc(s.retires)} · ` : ''}${when(s)} ago</span></button>
+      ${open ? `<div class="told-body">${md(s.body)}</div>` : ''}</div>`;
+  }).join('')}</div></div>` : '';
 
   const edit = S.editItem ? `<div class="d-sec"><div class="label">Edit</div><div class="add-work" style="margin:0">
       <input data-draft="ei-title" id="ei-title" value="${esc(it.title)}">
@@ -1327,6 +1334,7 @@ function renderDrawer() {
       ${pr.checks.length ? `<div class="evidence">${pr.checks.map((c) => checkChip(c, esc)).join('')}</div>` : ''}`).join('')}</div>` : ''}
     ${questions}
     ${steers}
+    ${told}
     <div class="d-sec"><div class="label">Say something about this item</div>
       <div class="inline-form"><input data-draft="ic:${it.item}" id="ic:${it.item}" placeholder="Steer whoever works on it next, or leave a note…">
       <button class="btn primary" data-action="item-steer" data-item="${it.item}" title="The agent on it must read and acknowledge">Steer</button>
