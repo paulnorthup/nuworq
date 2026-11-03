@@ -45,6 +45,9 @@ nuworq v1.0.0: audited end to end, then made usable, bug-free, reliable, secure,
 
 - A person can set a release's version, such as 1.0.0 on 0.x, and a redraft keeps it (#679)
 - The re-check's reports record that no critical or high finding or claim is left (#679, docs/audit/recheck/)
+- The first release after #815 (v0.10.0 or later) is signed by the GitHub workflow and reaches installs (#823)
+- runner.test.js's #793 four-workers test finishes in CI: no 120 s hang that fails unrelated branches (#844)
+- One person's agent tokens together hold at most a fifth of a project's day of comments (#857)
 
 **Upgrade notes**
 
