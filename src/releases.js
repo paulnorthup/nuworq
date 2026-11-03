@@ -126,9 +126,10 @@ export function draftRelease(hub, p, by = SYSTEM) {
   if (open.summary !== open.release_draft) {
     const fresh = items.filter((it) => !open.summary.includes(`(#${it.seq})`));
     summary = fresh.length ? `${open.summary}\n\nLanded since this was edited:\n\n${changelog(hub, fresh, milestones.filter((m) => fresh.includes(m)))}` : open.summary;
-    // The hub's own "why" line, still there word for word, follows the version; a person's rewrite of it stays (#868).
+    // The hub's own "why" line, still there word for word as a paragraph, follows the version; a person's
+    // rewrite of it stays, and a draft from before #863 has no such line, so its first header stays (#868).
     const was = open.release_draft?.split('\n\n')[1];
-    if (was && summary.includes(was)) summary = summary.replace(was, () => `${reason}.`);
+    if (/^\d+\.\d+\.\d+: .*\.$/.test(was ?? '') && summary.includes(`\n\n${was}\n\n`)) summary = summary.replace(`\n\n${was}\n\n`, () => `\n\n${reason}.\n\n`);
   }
   if (summary === open.summary && title === open.title) { hub.patch(open, { release_through: through }); return open; }
   hub.patch(open, { title, summary, release_draft: draft, release_through: through });

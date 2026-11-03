@@ -148,6 +148,21 @@ describe('each item says its kind of change (#863)', () => {
     assert.doesNotMatch(t, /1\.3\.0: minor, for 2 features/);
   });
 
+  test('a person edited a draft from before #863: its first section header stays on redraft (#868)', () => {
+    const w = world({ tags: [['v1.2.3', T0]] });
+    const { m, kids: [fix] } = w.milestone('Polish', [{ title: 'Fix the crash', change: 'fix' }]);
+    const [r] = w.releases();
+    const old = `What landed since v1.2.3.\n\n**Polish (${m})**\n\n- Fix the crash (${fix})`;
+    w.hub.q('UPDATE items SET summary = ?, release_draft = ? WHERE id = ?').run(old, old, r.id);
+    w.hub.humanOp('p', 'update', { item: r.id, summary: old.replace('- Fix the crash', '- Fixed the crash on start') });
+    w.done(w.add('Add export'));
+    w.hub.humanOp('p', 'release');
+    const s = w.releases()[0];
+    assert.equal(s.title, 'Release v1.3.0');
+    assert.match(s.summary, new RegExp(`^What landed since v1\\.2\\.3\\.\\n\\n\\*\\*Polish \\(${m}\\)\\*\\*\\n\\n- Fixed the crash on start`), 'the header and the edit stay');
+    assert.match(s.summary, /Landed since this was edited:\n\n\*\*In this release\*\*\n\n- Add export/);
+  });
+
   test('a person\'s higher version is kept through redrafts, and the summary says so (#679)', () => {
     const w = world({ pkg: '0.11.0' });
     w.milestone('Push', [{ title: 'Add export', change: 'feature' }]);
