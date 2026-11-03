@@ -3,6 +3,7 @@ import { ago } from './ago.js';
 import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { proposal, sentToast } from './propose.js';
 import { trialNote } from './trialnote.js';
+import { routingConfirmFor } from './routingconfirm.js';
 import { errorHtml, fieldReason } from './errors.js';
 import { toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
@@ -668,7 +669,8 @@ export const ACTIONS = {
     if (r) closeModal();
   },
   'models-on': () => {
-    if (confirm('Turn on cheaper models for rote jobs?\n\nLanding and tidy jobs start on the cheapest model listed (Claude\'s default ones if you set none, else the runner\'s --model). When an attempt is sent back, stalls or is handed off, that item\'s next attempt steps up one model. Building, reviews and shaping stay on the top model. Each routed worker does one job, then stops.\n\nTurn it off any time from here.')) modelRouting(true);
+    // The saved bar and shares: the switch saves neither, so one picked but not saved isn't what routing uses (#770).
+    if (confirm(routingConfirmFor(S.view?.project?.staffing?.models))) modelRouting(true);
   },
   'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
