@@ -1235,16 +1235,16 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, runnerGit, runCaps, stopHeadline } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, besideWorkers, runnerGit, runCaps, stopHeadline } = await import('../src/runner.js');
   // --max-minutes, --max-usd and --worker-usd, with their defaults (#761); 0 turns one off.
   let caps;
   try { caps = runCaps(flags); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
-  // The worktrees of the workers running now: each one's branch is its own to move (#618).
-  const live = new Set();
   const logs = join(dirname(HUB_FILE), 'logs');
   lockDown(dirname(HUB_FILE)); // 0700 folders and 0600 files, again on every start (#477)
   const chosen = await chooseWorkFolders(flags, await hubProjects(client), s);
   const git = runnerGit(); // each call killed after 2 minutes (#736)
+  // The workers running now: each one's branch, and each that ran beside it, is its own to move (#618, #788).
+  const running = besideWorkers(git);
   // The branches of a project's done and dropped items; merged: those whose PR merged (#455).
   const finishedOf = async (slug) => {
     const r = await client.get(`/api/finished?project=${encodeURIComponent(slug)}`);
@@ -1316,7 +1316,7 @@ async function runCmd(flags) {
     }
     // The checkout's branches and tags as the worker starts (#618), to put back whatever it moves that isn't its own.
     const refsBefore = worktree ? await refsOf(home, git).catch(() => null) : null;
-    if (worktree) live.add(worktree);
+    if (worktree) running.start(worktree, home);
     const out = createWriteStream(log, { mode: 0o600 });
     // Its own process group, so stopping it stops the agent too, not just the shell. Never the runner's tokens, and
     // of its other secrets only what the agent's harness reaches its model with (#616).
@@ -1336,13 +1336,12 @@ async function runCmd(flags) {
         // Its worktree goes with it, unless something there would be lost; and its branch, once its item is
         // done or dropped and all of it is on origin (#444).
         if (worktree) {
-          live.delete(worktree);
           // Its git runs there only while the pointers lead back where the runner made them (#640). Its branch
           // unknown then, every other ref it moved still goes back (#618).
           const trusted = worktreeTrusted(worktree, home);
           if (!trusted) console.log(amber(`  ${name}'s worktree pointers were changed; left as it is`));
-          const branch = trusted ? (await git(['-C', worktree, 'symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim() : '';
-          if (refsBefore) await guardRefs({ home, branch, name, project: target.slug, before: refsBefore });
+          const { branch, spare } = await running.exit(worktree);
+          if (refsBefore) await guardRefs({ home, branch, name, project: target.slug, before: refsBefore, spare });
           if (trusted) {
             const r = await cleanWorktree(worktree, git).catch((e) => ({ kept: true, why: `git couldn't remove it (${String(e.stderr || e.message).trim().split('\n')[0]})` }));
             if (r.kept) console.log(dim(`  kept ${name}'s worktree, ${worktree}: ${r.why}`));
@@ -1359,10 +1358,10 @@ async function runCmd(flags) {
 
   // After a worker exits (#618): origin's refs fetched by the runner itself, then every other branch or tag it moved
   // goes back, said in the runner's output and on the worker's item.
-  const guardRefs = async ({ home, branch, name, project, before }) => {
-    const siblings = await Promise.all([...live].filter((w) => worktreeTrusted(w, home)).map((w) => git(['-C', w, 'symbolic-ref', '-q', '--short', 'HEAD']).then((b) => b.trim(), () => '')));
+  // spare: the branches of the workers that ran beside it, each theirs to move (#788).
+  const guardRefs = async ({ home, branch, name, project, before, spare }) => {
     await git(['-C', home, 'fetch', '-q', '--prune', 'origin']).catch(() => {});
-    const g = await restoreRefs(home, before, git, { own: [branch], live: siblings }).catch((e) => {
+    const g = await restoreRefs(home, before, git, { own: [branch], live: spare }).catch((e) => {
       console.error(dim(`  couldn't check what ${name} did to ${home}'s branches: ${String(e.stderr || e.message).trim().split('\n')[0]}`));
       return { restored: [], kept: [] };
     });

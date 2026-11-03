@@ -130,6 +130,28 @@ export const restoredLine = (home, { ref, from, to }) => `${ref.replace(/^refs\/
 // A branch left where it is because a worktree has it checked out: what moved, to check.
 export const keptLine = ({ ref, from, to, path }) => `${ref.replace(/^refs\/heads\//, '')} (checked out in ${path}) moved from ${from.slice(0, 7)} to ${to.slice(0, 7)} while the worker ran: check it (left as it is)`;
 
+// The workers running now, and whose branches each one's exit leaves alone (#788): a sibling still running holds the
+// branch it has checked out, and one that ran beside it and exited first held the branch it exited on. Workers start
+// detached and make their branch later, so a branch is read as each one exits, never as it starts. git(args) runs git.
+export function besideWorkers(git) {
+  const ran = new Map(); // live worktree -> { home, gone: branches of same-checkout workers that exited while it ran }
+  const headOf = async (worktree, home) => (worktreeTrusted(worktree, home)
+    ? (await git(['-C', worktree, 'symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim() : '');
+  return {
+    start(worktree, home) { ran.set(worktree, { home, gone: new Set() }); },
+    // Its branch as it exits (from its own trusted worktree, else ''), and the branches its exit must spare.
+    async exit(worktree) {
+      const me = ran.get(worktree);
+      if (!me) return { branch: '', spare: [] };
+      const branch = await headOf(worktree, me.home);
+      ran.delete(worktree);
+      for (const o of ran.values()) if (branch && o.home === me.home) o.gone.add(branch);
+      const live = await Promise.all([...ran.keys()].map((w) => headOf(w, me.home)));
+      return { branch, spare: [...new Set([...live, ...me.gone])].filter(Boolean) };
+    },
+  };
+}
+
 // The commits on ref whose work would be lost with it (#455), as "<short sha> <subject>" lines: none when every
 // commit is on origin, when its item's PR merged (merged: a Set of branch names), or when main has each one's
 // changes (`git cherry` finds no "+"): a branch rebased or squashed before landing keeps commits origin never had.
