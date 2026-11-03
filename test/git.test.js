@@ -198,6 +198,39 @@ describe('sameChange', () => {
     assert.equal(sameChange(h.dir, 'main', h.reviewed, h.g('rev-parse', 'HEAD')), false, 'rename');
   });
 
+  test('a reviewed change whose hunks moved within a file goes back to review (#806)', () => {
+    const h = history();
+    const doc = Array.from({ length: 20 }, (_, i) => `line ${i}\n`).join('');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('theirs', 'mine'), { 'docs.txt': `line 20\n${doc}` })), false, 'added line moved to the top');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('mine', 'theirs'))), true, "either side of main's key at the same spot");
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', `export const NEW = {\n  mine: '2026-11-01',\n  old: '2026-11-01',\n  theirs: '2026-11-01',\n};\n`)), false, 'key moved above old');
+    // Main adds a line above the change in the same file: the change's line moves down with it, and nowhere else.
+    h.g('switch', '-q', 'main');
+    h.write({ 'doc.txt': `top\n${doc}` });
+    h.g('commit', '-qm', 'top');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('theirs', 'mine'), { 'docs.txt': `top\n${doc}line 20\n` })), true, 'shifted by main');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('theirs', 'mine'), { 'docs.txt': `top\nline 20\n${doc}` })), false, 'moved under main');
+  });
+
+  test('a removed line taken from another place with the same text is not the same change (#806)', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-same-')));
+    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const commit = (s, m) => { writeFileSync(join(dir, 'a.js'), s); g('add', '-A'); g('commit', '-qm', m); return g('rev-parse', 'HEAD'); };
+    const fn = (name, guard = true) => `function ${name}() {\n${guard ? '  check();\n' : ''}  run();\n}\n`;
+    g('init', '-q', '-b', 'main');
+    commit(fn('a') + fn('b'), 'init');
+    g('switch', '-qc', 'work');
+    const reviewed = commit(fn('a', false) + fn('b'), 'drop a guard');
+    g('switch', '-q', 'main');
+    commit(`// top\n${fn('a')}${fn('b')}`, 'main');
+    g('switch', '-q', '--detach', 'main');
+    const same = commit(`// top\n${fn('a', false)}${fn('b')}`, 'rebased');
+    g('switch', '-q', '--detach', 'main');
+    const other = commit(`// top\n${fn('a')}${fn('b', false)}`, 'the other guard');
+    assert.equal(sameChange(dir, 'main', reviewed, same), true);
+    assert.equal(sameChange(dir, 'main', reviewed, other), false);
+  });
+
   test("a merge of a main the hub's copy doesn't have yet is not", () => {
     const h = history();
     // Upstream main moved on past the copy's main.

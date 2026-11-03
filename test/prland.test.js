@@ -690,6 +690,17 @@ describe('landing merges only the reviewed head', () => {
     }
   });
 
+  test('a reviewed change whose line moved elsewhere in its file is not landed, and auto-merge goes off (#806)', async () => {
+    for (const move of [rebaseMain, mergeMain]) {
+      const w = await accepted({ beside: true });
+      // The same added line, above README's first line instead of after it.
+      move(w, `  mine: '2026-11-02',\napi\n  theirs: '2026-11-02',\n`);
+      await pass(w);
+      sentBack(w);
+      assert.equal(w.events(1, 'head_rebased').length, 0, move.name);
+    }
+  });
+
   test('a merge of main, then a commit adding a line, goes back to review (#784)', async () => {
     const w = await accepted({ beside: true });
     mergeMain(w, README('theirs', 'mine'));
