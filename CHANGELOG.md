@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.9.0 (2026-11-03)
+
+What landed since v0.8.0.
+
+**nuworq is ready to launch: newcomers get in and get going, and Paul sees which channels bring people who stay (#359)**
+
+- nuworq's repository is public and anyone can install the Claude Code plugin from it (#365)
+
+**Also in this release**
+
+- Deploys never drop work: only commits CI passed go live, after a test boot on copies of the live data, and the old hub drains first (#522)
+- A day on the live hub after #515: agent writes through the tunnel get no connection-reset 502s (#534)
+- A day of deploys after #545 measured: 502s and cut requests per deploy, against the 2026-11-01 baseline (#575)
+- Paul gets through feedback in minutes: repeats arrive as one group that says what's known and suggests a call, decided in one tap (#688)
+- One word, one meaning: release, review, note, finished and direction each mean one thing in the app, the CLI and the guide (#707)
+- Getting going uses one name per step: connect an agent, start workers, + Project, staff it, Get started, Home (#708)
+- People never see \"organization\" for a workspace: the --org-cap hint and DEPLOY.md say workspace (#709)
+- Agents that don't say where they run read by name, not all as "Agent" (#713)
+- An agent checking in to a project slug that doesn't exist is told it made a new project, and which one it may have meant (#714)
+- Every agent error names what's wrong and carries a hint: no "undefined", no hintless 404s (#715)
+- Commands on a phone wrap only at spaces: never "--" on one line and "staff nuworq" on the next (#716)
+- In dark, the chosen depth, autonomy and appearance stand out at a glance (#717)
+- An off switch in Settings reads as off: only an on switch is filled (#718)
+- The hub's field-notes review item reads cleanly: no leading blank line, no "Then…" with nothing before it, lists that render (#719)
+- Analytics' Difficulty or size counts only rated items under each rating (#720)
+- "new" tags stay rare and sit beside their feature: a few per screen, never over words or adrift in a dialog (#721)
+- Cheaper models work out of the box: routing is on by default, and Claude's tiers default to Haiku, Sonnet and Opus 5.5 (#723)
+- A runner worker creates its item's branch without a sandbox error (#724)
+- Staffing says when a model trial can't run: a trial share needs two or more models listed, or it does nothing (#725)
+- Handing off a land job keeps the item landing for another agent; the accepted review stands (#729)
+- A dependency that would make a cycle is refused, with a hint naming the loop (#730)
+- A blocking question parks only work the asker holds; the holder of other work hears about it instead (#731)
+- A workspace always keeps an owner: an unverified owner doesn't count as the second one (#732)
+- Progress sent after the lease ran out stays on the record as a comment, as the error says (#733)
+- The release drafted after one lands carries the next version, not the one that just shipped (#735)
+- A person's edits to a release draft survive every redraft (#737)
+- One background error doesn't stop the hub: notifier, workspace wake and stray rejections are caught and logged (#740)
+- The follower restarts a hub that stops answering, and a crash loop backs off and is reported (#741)
+- A GitHub blip while opening a pull request is retried before the work falls back to a land job (#742)
+- A landing PR whose CI failed is noticed even if GitHub's check webhook never arrived (#743)
+- A push that fails while a channel is down is sent once the channel is back (#744)
+- Milestones that are only waiting step out of sight until their wait ends, and Stuck means something must change before it can move (#746)
+- A form's error shows at its field: "Name it" and "A channel needs a URL" sit by the input, not in a toast across the screen (#748)
+- A live update at 30s sends what 30s shows: the view leaves out the agent list and stage lists until 5m (#750)
+- Turns per job are recorded: each run's turn count is kept beside its tokens and cost, and shown per kind of job (#751)
+- A finished tidy job counts as finished: outcomes and model routing see "tidied", not "open" for ever (#753)
+- Every stall says why: a worker's exit reason and each lapsed review or landing lease carry a cause, and outcomes breaks stalls down by it (#754)
+- The hub's start-up forget of gone workspaces keeps a copy first, so a workspace file moved aside doesn't lose its directory rows for good (#755)
+- A release precondition reads GitHub only through its own workspace's app installation (#758)
+- An item's branch can't be taken over by naming it: submit and the push proxy keep each nuworq/ branch with its own item (#759)
+- A release tag the hub can't create reaches an operator as work, not only a tag_failed event (#760)
+- A person hears about spend before it surprises them: a push at 80% of a project's daily budget and when one worker passes $50 or 60 minutes (#767)
+- Workers run only the project's checks by default, and codex can't read the person's keys (#768)
+- A person's data can be deleted as the privacy policy promises: their sign-in, sessions and early-access request go on request (#769)
+- Turning on Cheaper models says what it does: builds try cheaper models too, and a lost lease also steps up a model (#770)
+- test/service.test.js passes in a Claude Code sandbox: its "no claude in the plist" check ignores the temp folder's name (#771)
+- Connect asks how this machine pays for its models (subscription or API key) and sets worker caps to fit (#776)
+- Accepted work still lands when main is merged into it or rebased under it next to main's own edits: the hub compares only what the change… (#784)
+- A worker's exit leaves other live workers' branches alone: #618's ref guard reverts only what that worker could have moved (#788)
+- Workers are told how to run tests in the runner: the hints say `npm test -- <file>`, which the sandbox allows, not `node --test` (#789)
+- nuworq up starts fully featured workers: auto counts by CPU, so a Mac with idle cores runs several, and each gets a browser (#790)
+- No trace of the old name Trellis is left: its command, settings and every old-name fallback are gone, and a test keeps it that way (#792)
+- Workers a runner starts together each get their own job, so a restart with free slots doesn't send them all to one item (#793)
+- No default per-worker cap, as Paul decided in Q230: the caps are opt-in flags, and nuworq up writes none (#795)
+- A runner worker can delete a tracked file in its own worktree: `git rm` is allowed there, nothing else gets looser (#796)
+- The guide says plainly what an operator is and how to start one, with nuworq up first (#797)
+- A workspace's owner can delete it in the app: they type its name to confirm, and everything in it goes for good (#799)
+- A submit's hint keeps its branch notice when steering waits: "X is #N's branch, so #M keeps Y" is never replaced by "The human has steered… (#800)
+- The getting-started guide leads with the easy path in plain words: nine steps, with the shaper and nuworq up first (#801)
+
+**Upgrade notes**
+
+- Codex workers on a project with a remote no longer start: use --agent claude. Workers no longer run npm install or npm scripts other than test, lint, check, typecheck and build: add any they need under the project's Settings → Worker commands. (#768)
+- Old Trellis names stop working: the `trellis` command (use `nuworq`), TRELLIS_* variables (NUWORQ_*), .trellis.json (.nuworq.json), ~/.trellis and trellis.db (~/.nuworq/nuworq.db), trl_ tokens (make nwq_ ones with `nuworq token create`), the trellis_session cookie (sign in again), x-trellis-* headers (update old clients), "trellis:" browser prefs (set again) and trellis/<agent> branches (nuworq/<agent>). (#792)
+
 ## 0.8.0 (2026-11-03)
 
 What landed since v0.7.0.
