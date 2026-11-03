@@ -103,6 +103,21 @@ export const isSystem = (actor) => actor === SYSTEM || actor === GITHUB;
 // People act on the record as "@handle"; without accounts (local mode) the one human is "you".
 export const isHuman = (actor) => actor === HUMAN || String(actor ?? '').startsWith('@');
 const You = (by) => (by === HUMAN ? 'You' : by);
+// Whether answer, to question q, says to drop item (#207): null when no clause says drop at all. A clause must
+// start with drop ("Drop #136-#139; move #140 under #131" has one), so "Don't drop it", "Never drop #2" or
+// "dropping would lose the tests" never count. One naming items drops those; one naming none ("Drop it") drops
+// the item the question was asked on. With itself (the hub dropping on the answer alone, #819), only clauses whose drop is bare or points at the item ("drop", "drop - moved", "drop it", "drop #12"),
+// count: "Yes, drop them" to "Can the old tables be dropped?" is about the tables, not the item.
+function answerDrops(q, answer, item, { itself = false } = {}) {
+  const says = itself ? /^\s*(?:(?:yes|yep|ok|okay|sure|please)\b[\s,:!-]*)*drop(?:\s*$|\s*[-–—:!]|\s+(?:it|this|#\d)\b)/i : /^\s*(?:(?:yes|yep|ok|okay|sure|please)\b[\s,:!-]*)*drop\b/i;
+  const drops = String(answer).split(/[;.\n]|,\s+/).filter((c) => says.test(c));
+  if (!drops.length) return null;
+  const refs = drops.flatMap((c) => [...c.matchAll(/#(\d+)(?:\s*[-–]\s*#?(\d+))?/g)].map((m) => [Number(m[1]), Number(m[2] ?? m[1])]));
+  return refs.some(([a, b]) => item.seq >= a && item.seq <= b) || (q.item_id === item.id && drops.some((c) => !/#\d/.test(c)));
+}
+// An answer to an 'ask' precondition that keeps the item waiting (#819): its first clause a plain no or not yet.
+const notYet = (answer) => /^\s*(?:no|nope|not yet|not now|wait|later|hold|hold off|keep it waiting|keep waiting)\s*[!.]?\s*$/i
+  .test(String(answer).split(/[;,\n]|\s[-–—]\s/)[0]);
 // An answer as its asker reads it: an issue reporter's (answered by "github:@login") quoted as their words (#471).
 const answerFor = (q) => (String(q.answered_by).startsWith('github:') ? quotedFrom(`${q.answered_by.slice(7)} answered on GitHub`, q.answer) : q.answer);
 // Who said it, as an agent reads it (#610): only a person's words carry a person's authority, so an agent's
@@ -1461,13 +1476,8 @@ export class Hub extends EventEmitter {
     const how = 'drop takes the id of a question a person answered with "drop" about this item, as checkin or next shows it.';
     if (!q) throw new UserError(`No question ${question}`, { status: 404, hint: how });
     if (q.status !== 'answered' || !isHuman(q.answered_by)) throw new UserError(`Question ${q.id} wasn't answered by a person`, { status: 403, hint: `Only a person decides to drop work. ${how}` });
-    // The clauses that say drop ("Drop #136-#139; move #140 under #131" has one). Those that name items drop
-    // those items; one that names none ("Drop it") drops the item the question was asked on. A clause must
-    // start with drop, so "Don't drop it", "Never drop #2" or "dropping would lose the tests" never count.
-    const drops = q.answer.split(/[;.\n]|,\s+/).filter((c) => /^\s*(?:(?:yes|yep|ok|okay|sure|please)\b[\s,:!-]*)*drop\b/i.test(c));
-    if (!drops.length) throw new UserError(`The answer to question ${q.id} doesn't say to drop anything ("${clip(q.answer, 60)}")`, { status: 403, hint: how });
-    const refs = drops.flatMap((c) => [...c.matchAll(/#(\d+)(?:\s*[-–]\s*#?(\d+))?/g)].map((m) => [Number(m[1]), Number(m[2] ?? m[1])]));
-    const named = refs.some(([a, b]) => item.seq >= a && item.seq <= b) || (q.item_id === item.id && drops.some((c) => !/#\d/.test(c)));
+    const named = answerDrops(q, q.answer, item);
+    if (named == null) throw new UserError(`The answer to question ${q.id} doesn't say to drop anything ("${clip(q.answer, 60)}")`, { status: 403, hint: how });
     if (!named) throw new UserError(`The answer to question ${q.id} doesn't say to drop #${item.seq}`, { status: 403, hint: 'It must be asked on this item ("Drop it"), or name it beside the drop (e.g. "Drop #12" or "Drop #10-#14").' });
     if (['done', 'dropped'].includes(item.stage)) throw new UserError(`#${item.seq} is already ${item.stage}`, { status: 409, hint: 'Nothing to drop. Call next.' });
     const others = [item.holder, ...(this.racing(item) ? this.attemptsOf(item).filter((a) => a.stage === 'active').map((a) => a.agent) : [])].filter((h) => h && h !== agent);
@@ -1491,15 +1501,21 @@ export class Hub extends EventEmitter {
   // answering it is what passes the precondition.
   askPrecondition(item, actor) {
     const pre = this.unmetPrecondition(item);
-    const asked = json(item.last_check, {}).question;
+    const { question: asked, again } = json(item.last_check, {});
     if (pre?.kind !== 'ask' || (asked && this.q(`SELECT 1 FROM questions WHERE id = ? AND status = 'open'`).get(asked))) return;
-    const p = this.q('SELECT * FROM projects WHERE id = ?').get(item.project_id);
     const t = this.now();
+    if (again > t) return; // answered "not yet": asked again no sooner than a day later (#819)
+    const p = this.q('SELECT * FROM projects WHERE id = ?').get(item.project_id);
     const r = this.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at)
-      VALUES (?, ?, ?, ?, ?, '', '[]', 1, '', ?)`).run(p.id, item.id, actor, pre.question, `#${item.seq} waits on this before any agent starts it. Answering makes it ready.`, t);
+      VALUES (?, ?, ?, ?, ?, '', '[]', 1, '', ?)`).run(p.id, item.id, actor, pre.question, `#${item.seq} waits on this before any agent starts it. Answer go to start it, drop to drop it, or not yet to keep it waiting.`, t);
     const id = Number(r.lastInsertRowid);
     this.patch(item, { last_check: JSON.stringify({ at: t, ok: false, detail: 'asked you', question: id }) });
     this.event(p, { item, actor, type: 'question', headline: `#${item.seq} waits on you: ${pre.question}`, data: { question: id } });
+  }
+
+  // Someone looks at an item kept waiting by "not yet": once the day has passed, its question is asked again.
+  reask(item) {
+    if (item.stage === 'waiting' && json(item.last_check, {}).again <= this.now()) this.tx(() => this.askPrecondition(item, SYSTEM));
   }
 
   patch(item, fields) {
@@ -3937,7 +3953,11 @@ const AGENT_OPS = {
   },
 
   look(p, agent, args) {
-    if (args.item) return this.context(p, this.item(p, args.item), agent);
+    if (args.item) {
+      const item = this.item(p, args.item);
+      this.reask(item);
+      return this.context(p, item, agent);
+    }
     const stages = args.stage ? [str(args.stage)] : OPEN_STAGES;
     const out = {}, counts = {};
     const eff = this.effectivePriorities(p);
@@ -4325,7 +4345,6 @@ const HUMAN_OPS = {
     if (!text) throw new UserError('answer is required');
     // An outsider's held reply (#471), passed on by a person: the asker gets it as their words, quoted.
     if (q.held_reply && text === PASS_ON) text = quotedFrom(`@${q.reporter} replied on GitHub, and ${by === HUMAN ? 'a person' : by} passed it on`, q.held_reply);
-    const item = this.itemById(q.item_id);
     if (!q.blocking && text.toLowerCase() === q.assumption.trim().toLowerCase()) {
       return HUMAN_OPS.confirm.call(this, p, { question }, by);
     }
@@ -4333,6 +4352,7 @@ const HUMAN_OPS = {
     // hears it and its work unparks. That one first, so the item moves only once both are answered.
     const orig = q.escalates ? this.q(`SELECT * FROM questions WHERE id = ? AND status = 'open'`).get(q.escalates) : null;
     if (orig) HUMAN_OPS.answer.call(this, p, { question: orig.id, answer: text }, by);
+    const item = this.itemById(q.item_id); // after the escalated one: answering it may have moved the item
     this.q(`UPDATE questions SET status = 'answered', answer = ?, answered_by = ?, answered_at = ?, seen_by_asker = 0 WHERE id = ?`)
       .run(text, by, this.now(), q.id);
     const overrides = !q.blocking && q.status === 'open';
@@ -4348,11 +4368,22 @@ const HUMAN_OPS = {
     if (asker) {
       this.addNote(p, 'steer', `Change of course${item ? ` on #${item.seq}` : ''}: you assumed "${q.assumption}". Instead: ${text}`, item, q.asked_by, by);
     }
-    // The question an 'ask' precondition put: answering it is what passes the precondition.
-    if (item && json(item.last_check, {}).question === q.id) {
-      this.patch(item, { last_check: JSON.stringify({ at: this.now(), ok: true, detail: `you answered: ${clip(text, 100)}`, question: q.id }) });
+    // The question a parked item waits on (#819), answered by a person: "drop" drops it, through the same rule and
+    // record as refine with drop. An agent's answer never drops work.
+    const drops = item?.stage === 'waiting' && !!q.blocking && isHuman(by) && !!answerDrops(q, text, item, { itself: true });
+    // The question an 'ask' precondition put: answering it is what passes the precondition, unless the answer
+    // is "not yet": then it still waits, and is asked again no sooner than a day later.
+    const waitsOn = !drops && item && json(item.last_check, {}).question === q.id;
+    const later = waitsOn && notYet(text);
+    if (waitsOn) {
+      const t = this.now();
+      this.patch(item, { last_check: JSON.stringify({ at: t, ok: !later, detail: `you answered: ${clip(text, 100)}`, question: q.id, ...(later ? { again: t + DAY } : {}) }) });
     }
-    if (item && item.stage === 'waiting' && keep_parked) {
+    if (drops) {
+      this.dropAsAnswered(p, SYSTEM, item, q.id);
+    } else if (later) {
+      this.event(p, { item, actor: by, type: 'kept_parked', headline: `${You(by)} answered not yet: #${item.seq} keeps waiting, and is asked again after a day` });
+    } else if (item && item.stage === 'waiting' && keep_parked) {
       this.patch(item, { parked_by: by });
       this.event(p, { item, actor: by, type: 'kept_parked', headline: `${You(by)} kept #${item.seq} parked: agents don't get it until it's unparked` });
     } else if (item && item.stage === 'waiting' && !this.openQuestions(item, { blocking: true }).length) {

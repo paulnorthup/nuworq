@@ -1296,6 +1296,7 @@ export function itemView(hub, slug, ref) {
   const p = hub.project(slug);
   const t = hub.now();
   const it = hub.item(p, ref);
+  hub.reask(it); // kept waiting by "not yet" a day ago or more: ask again (#819)
   const trs = hub.q('SELECT * FROM transitions WHERE item_id = ? ORDER BY at, id').all(it.id);
   const lifecycle = trs.map((r, k) => {
     const end = k + 1 < trs.length ? trs[k + 1].at : ['done', 'dropped'].includes(r.stage) ? r.at : t;
