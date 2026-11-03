@@ -22,8 +22,9 @@ export function getStarted(s) {
       : (s.installUrl ? { label: 'Install the GitHub App', href: s.installUrl } : { label: 'Install the GitHub App', ui: 'connect' });
   const steps = [
     s.workspaces && { key: 'org', label: 'Create your workspace', done: !!s.org, action: { label: 'Create your workspace', href: s.root || '/' } },
-    { key: 'project', label: 'Add a project', done: !!s.project, action: { label: '+ Project', ui: 'new-project' } },
-    s.project && { key: 'repo', label: 'Link a project to its repository', done: !!s.repo, action: { label: '+ repo', ui: 'link-repo', slug: s.recent } },
+    // Done once a project has a repository (#801); one without opens + repo on the newest project (#147).
+    { key: 'project', label: 'Add a project', done: !!(s.project && s.repo),
+      action: s.project ? { label: '+ repo', ui: 'link-repo', slug: s.recent } : { label: '+ Project', ui: 'new-project' } },
     s.github !== false && { key: 'github', label: 'Connect GitHub', done: s.app === 'installed', action: github },
     { key: 'machine', label: 'Install and connect your machine', done: !!s.machine, action: { label: 'Connect an agent', ui: 'connect' } },
     // The setup that works (#489, web/connect.js's SETUP): each step shows its session's commands while it's next.

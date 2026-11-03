@@ -19,19 +19,19 @@ The last word of the second line is the release key (`release-key.pub` in this r
 nuworq connect https://nuworq.com/w/acme         # browser login, saves the token, registers Claude Code and Codex
 ```
 
-### The setup that works
+### Recommended setup
 
 Three sessions, each where it works best. It's how nuworq itself is built. Starting with just a shaper is fine. Add workers and an operator once there's work for them. The operator and the shaper are Claude Code with the nuworq plugin (below), which `connect` offers to install.
 
-1. **Start workers.** Workers on `nuworq run` (best as a service) build, review and land the work: headless agents, each in its own git worktree, on the projects you let them staff. They need no one watching. As a service they keep going after you close the terminal, and after a restart. In a clone of the project, run:
+1. **Shape work with a shaper.** A shaper is Claude Code in the Claude Code app. You tell it what you want and why; it talks it through, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you. It's the session you read and talk in, and the app is made for reading and talking. Open the project's folder in the Claude Code app's Code tab, then type `/nuworq:shaper`.
+
+2. **Start workers.** Workers build, review and land the work. They run in the background with no window, each in its own copy of your repository, so they never touch your files. They work only on the projects you let them. As a service they keep going after you close the terminal, and after a restart. In a clone of the project, run:
 
    ```bash
    nuworq run --install --workers auto
    ```
 
-2. **Start an operator.** An operator in a terminal is Claude Code acting with your access, for the work workers aren't allowed to do: it answers the questions workers send it, lands their work, and runs the steps on real systems. It asks you only for what it can't do itself. It works whenever something needs it, and in its own terminal that never interrupts your conversation with the shaper. `nuworq up` starts one for each project that doesn't have one yet. Or, in the project's folder, run `claude`, then type `/nuworq:operator` (`nuworq operator --start` does both).
-
-3. **Shape work with a shaper.** A shaper in the Claude Code app talks through what you want, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you. It's the session you read and talk in, and the app is made for reading and talking. Open the project's folder in the Claude Code app's Code tab, then type `/nuworq:shaper`.
+3. **Start an operator.** An operator is Claude Code in a terminal, acting with your access. It does the work workers aren't allowed to do. It answers the questions workers send it, lands their work, and runs the steps on real systems. It asks you only for what it can't do itself. In its own terminal, it never interrupts your conversation with the shaper. `nuworq up` starts one for each project that doesn't have one yet. Or, in the project's folder, run `claude`, then type `/nuworq:operator` (`nuworq operator --start` does both).
 
 `nuworq run --workers 3 --agent claude` keeps workers going in this terminal instead, until Ctrl-C. Or, after connecting, one command brings it all up and keeps it up: `nuworq up` makes sure one runner runs here as a service with `--workers auto` (installed if there is none, restarted if its flags differ), asks once whether to staff the projects that aren't (a no is remembered), and opens an operator (Claude Code with `/nuworq:operator`) in its own terminal for each unparked project that has none: in tmux when it is installed (`tmux attach -t nuworq`, a window per project), else a Terminal or iTerm window on a Mac, else it prints the commands. A project with no clone here is skipped, with where to clone it. Run it again any time, after a restart too: it starts only what is missing, and ends with a table of each project, its operator and the runner. `nuworq up --dry-run` prints that table and does nothing; `nuworq down` stops the operators it started and the runner service.
 
