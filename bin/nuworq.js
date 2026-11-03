@@ -199,15 +199,20 @@ function operatorHas(flags) {
   return { has, renamed };
 }
 
+// Whether a Google Chrome or Chromium is here for a browser to drive (an operator's browser tag, up's --browser).
+function chromeFound() {
+  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
+  return ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
+    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
+}
+
 // What this session can do (#494, src/operator.js): the project's repositories come from the hub, else this
 // folder's origin.
 async function detectOperator(flags) {
   const { detect, localOf } = await import('../src/operator.js');
   const { execFile } = await import('node:child_process');
   const run = (cmd, args) => new Promise((ok) => execFile(cmd, args, { encoding: 'utf8', timeout: 20_000 }, (e, out, err) => ok({ ok: !e, out: e ? `${err || e.message}` : out })));
-  const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
-  const chrome = ['/Applications/Google Chrome.app', '/Applications/Chromium.app'].some((a) => existsSync(a))
-    || ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].some(onPath);
+  const chrome = chromeFound();
   const named = resolveSettings(flags).project;
   const here = repoRemote();
   const projects = await createClient({ ...flags, retryMs: 0 }).get('/api/projects').catch(() => []);
@@ -370,6 +375,18 @@ async function upCmd(flags) {
   if (!Array.isArray(projects) || !projects.length) return console.log(dim('The hub has no projects yet: add one on the hub (+ Project), then run nuworq up again.'));
   const saved = (() => { try { return JSON.parse(readFileSync(UP_FILE, 'utf8')); } catch { return {}; } })();
   const declined = Array.isArray(saved.declined) ? saved.declined : [];
+  // Workers get a browser (#790), unless the person said --no-browser (remembered until --browser) or there is no
+  // Chrome here for it to drive.
+  const save = (next) => {
+    mkdirSync(dirname(UP_FILE), { recursive: true, mode: 0o700 });
+    writeFileSync(UP_FILE, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  };
+  const noBrowser = flags.browser ? false : flags['no-browser'] ? true : saved.browser === false;
+  if (!dryRun && noBrowser !== (saved.browser === false)) {
+    const { browser: _, ...rest } = saved;
+    save(noBrowser ? { ...rest, browser: false } : rest);
+  }
+  const browser = noBrowser ? 'off' : chromeFound() ? 'on' : 'none';
 
   const runner = await installedRunner();
 
@@ -384,7 +401,7 @@ async function upCmd(flags) {
   const local = Object.fromEntries(projects.filter((p) => runningPid(pidOf(p.slug))).map((p) => [p.slug, true]));
 
   // Staffing, asked once for every unparked project that isn't staffed; a no is remembered.
-  const first = upPlan({ projects, declined, clones, local, runner });
+  const first = upPlan({ projects, declined, clones, local, runner, browser });
   if (first.staff.length) {
     const names = first.staff.map((p) => p.name ?? p.slug).join(', ');
     const mode = flags.yes ? 'yes' : flags.no ? 'no' : process.stdin.isTTY && process.stdout.isTTY ? 'ask' : 'no';
@@ -400,13 +417,13 @@ async function upCmd(flags) {
           } catch (e) { console.log(`${amber('!')} Couldn't staff ${p.name ?? p.slug}: ${e.message}${e.hint ? ` (${e.hint})` : ''}`); }
         }
       } else if (mode === 'ask' || flags.no) {
-        mkdirSync(dirname(UP_FILE), { recursive: true, mode: 0o700 });
-        writeFileSync(UP_FILE, `${JSON.stringify({ ...saved, declined: [...new Set([...declined, ...first.staff.map((p) => p.slug)])] }, null, 2)}\n`, { mode: 0o600 });
+        const now = (() => { try { return JSON.parse(readFileSync(UP_FILE, 'utf8')); } catch { return {}; } })();
+        save({ ...now, declined: [...new Set([...declined, ...first.staff.map((p) => p.slug)])] });
         console.log(dim(`Not staffed; nuworq up won't ask again. Later: nuworq staff <project>, or its Settings on the hub.`));
       }
     }
   }
-  const plan = upPlan({ projects, declined, clones, local, runner });
+  const plan = upPlan({ projects, declined, clones, local, runner, browser });
   const onPath = (cmd) => (process.env.PATH ?? '').split(delimiter).some((d) => d && existsSync(join(d, cmd)));
   const via = launcherFor({ tmux: onPath('tmux'), platform: process.platform, iterm: existsSync('/Applications/iTerm.app') });
   const starting = plan.rows.filter((r) => r.operator.state === 'start');
@@ -1416,9 +1433,10 @@ async function runCmd(flags) {
   };
 
   // --workers auto (#533): as many as the machine has room for, up to --max-workers (half its cores by default).
-  const { autoMax } = await import('../src/runner.js');
-  const { loadavg, availableParallelism, freemem } = await import('node:os');
-  const machine = () => ({ load: loadavg()[0], cores: availableParallelism(), free: process.availableMemory?.() || freemem() });
+  const { autoMax, cpuSampler } = await import('../src/runner.js');
+  const { cpus, availableParallelism, freemem } = await import('node:os');
+  const busy = cpuSampler(cpus);
+  const machine = () => ({ busy: busy(), cores: availableParallelism(), free: process.availableMemory?.() || freemem() });
   const auto = flags.workers === 'auto';
   const workers = auto ? 'auto' : num(flags.workers, 1);
   const maxWorkers = auto ? num(flags['max-workers'], autoMax(availableParallelism())) : undefined;

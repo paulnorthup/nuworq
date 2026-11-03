@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import { Hub } from '../src/core.js';
 import { projectList, liveOperators } from '../src/insight.js';
 import { launchdPlist, systemdUnit } from '../src/service.js';
-import { upPlan, upClones, readService, autoArgs, launcherFor, launchCommands, operatorShell, appleString, upTable } from '../src/up.js';
+import { upPlan, upClones, readService, autoArgs, browserArgs, launcherFor, launchCommands, operatorShell, appleString, upTable } from '../src/up.js';
 import { runCaps } from '../src/runner.js';
 
 const NODE = '/opt/homebrew/bin/node', BIN = '/usr/local/lib/node_modules/nuworq/bin/nuworq.js';
-const auto = { supported: true, args: ['--workers', 'auto'], cwd: '/src/nuworq', up: true };
+const auto = { supported: true, args: ['--workers', 'auto', '--browser'], cwd: '/src/nuworq', up: true };
 
 // 2026-11-01 after a restart: one runner without auto, an operator only on nuworq, cancer-hub parked.
 const day = () => [
@@ -66,15 +66,41 @@ describe('the runner', () => {
   test('installed when there is none, restarted when its flags differ or it is down, else left alone', () => {
     const at = (runner) => upPlan({ projects: [], runner }).runner;
     assert.equal(at({ supported: true, args: null }).action, 'install');
-    assert.deepEqual(at({ supported: true, args: null }).args, ['--workers', 'auto'], 'no caps written (#795)');
+    assert.deepEqual(at({ supported: true, args: null }).args, ['--workers', 'auto', '--browser'], 'no caps written (#795)');
     const differ = at({ supported: true, args: ['--workers', '2'], cwd: '/src/x', up: true });
-    assert.deepEqual([differ.action, differ.args, differ.cwd], ['restart', ['--workers', 'auto'], '/src/x']);
+    assert.deepEqual([differ.action, differ.args, differ.cwd], ['restart', ['--browser', '--workers', 'auto'], '/src/x']);
     assert.match(differ.why, /--workers 2/);
     assert.deepEqual([at({ ...auto, up: false }).action, at({ ...auto, up: false }).why], ['restart', "it isn't running"]);
     assert.equal(at(auto).action, 'keep');
-    const own = ['--workers', 'auto', '--worker-usd', '0', '--max-minutes', '240'];
+    const own = ['--workers', 'auto', '--worker-usd', '0', '--max-minutes', '240', '--browser'];
     assert.deepEqual([at({ supported: true, args: own, up: true }).action, at({ supported: true, args: own, up: true }).args], ['keep', own], 'caps set with run --install stay');
     assert.equal(at({ supported: false }).action, 'none');
+  });
+
+  // #790: workers come fully featured, so a runner without --browser is restarted with it.
+  test('a browser by default: added to a runner without it, kept where it is, left out after --no-browser', () => {
+    const at = (runner, browser) => upPlan({ projects: [], runner, browser }).runner;
+    const caps = ['--workers', 'auto'];
+    const without = at({ ...auto, args: caps });
+    assert.deepEqual([without.action, without.why, without.args], ['restart', 'its workers had no browser', [...caps, '--browser']]);
+    assert.equal(at(auto).action, 'keep', 'one that has it stays');
+    assert.equal(at(auto, 'on').action, 'keep');
+    const off = at({ supported: true, args: null }, 'off');
+    assert.deepEqual([off.action, off.args], ['install', caps], 'installed without it after --no-browser');
+    assert.equal(at({ ...auto, args: caps }, 'off').action, 'keep');
+    const dropped = at(auto, 'off');
+    assert.deepEqual([dropped.action, dropped.args], ['restart', ['--workers', 'auto']]);
+    assert.deepEqual(at({ supported: true, args: null }, 'none').args, caps, 'no Chrome here: without it');
+    assert.deepEqual(browserArgs(['--browser', '--workers', 'auto']), ['--workers', 'auto', '--browser']);
+  });
+
+  test("the table says when workers have no browser, why, and how to give them one", () => {
+    const table = (browser, runner = auto) => upTable(upPlan({ projects: [], runner, browser }), { dryRun: true });
+    assert.match(table('on'), /Runner: workers auto, with a browser, running$/);
+    assert.match(table('on', { supported: true, args: null }), /Runner: would install it, with --workers auto --browser$/);
+    assert.match(table('on', { ...auto, args: ['--workers', 'auto'] }), /Runner: would restart it with --workers auto --browser \(its workers had no browser\)$/);
+    assert.match(table('none', { ...auto, args: ['--workers', 'auto'] }), /Runner: workers auto, running\n {2}no browser for workers: no Google Chrome or Chromium found here\. Install Google Chrome \(google\.com\/chrome\), then run nuworq up again$/);
+    assert.match(table('off', { ...auto, args: ['--workers', 'auto'] }), /\n {2}no browser for workers \(you said --no-browser\): nuworq up --browser gives them one$/);
   });
 });
 
@@ -156,7 +182,7 @@ describe('staffing and operators', () => {
     assert.match(t, /^cancer-hub\s+yes\s+no\s+skipped \(parked\)$/m);
     assert.match(t, /^llm-proxy\s+no\s+yes\s+would start \(\/src\/llm-proxy\)$/m);
     assert.match(t, /^nuworq\s+no\s+yes\s+running \(claude-code-9ccc on Pauls-MacBook-Pro\)$/m);
-    assert.match(t, /Runner: workers auto, running$/);
+    assert.match(t, /Runner: workers auto, with a browser, running$/);
     plan.rows[1].operator = { state: 'started', why: 'tmux window nuworq:llm-proxy' };
     assert.match(upTable(plan), /^llm-proxy\s+no\s+yes\s+started \(tmux window nuworq:llm-proxy\)$/m);
   });
