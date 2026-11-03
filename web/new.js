@@ -1,6 +1,7 @@
 // What just shipped (#130): a tiny "new" tag on a feature for 7 days after it ships, until you've used it.
 // Shipping a visible UI feature? Add its key here with today's date, and data-new="<key>" on its element.
 export const NEW = {
+  'plan-price': '2026-11-03', // #872: Workspace settings say what Pro gives and costs before Upgrade opens Checkout
   'tests-step': '2026-11-03', // #685: Get started's "Tell workers how to test", while a repository has no test a worker may run
   'rail-menus': '2026-11-03', // #824: the rail is only navigation; settings in the workspace menu (its name), help under ? Help
   'fold-sections': '2026-11-03', // #809: click a section's heading on the project page or home to fold it away

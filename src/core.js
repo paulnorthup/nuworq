@@ -880,9 +880,13 @@ export class Hub extends EventEmitter {
     this.planRefused = { agent, working: [...working], at: this.now(), project: p?.id ?? null };
     if (p && (was?.agent !== agent || was?.project !== p.id)) this.changed(p);
     const upgrade = this.upgradeUrl?.();
+    // upgradeOffer (#872): what the plans on sale give and cost, e.g. "Pro: any number of agents side by side, $19 a month".
+    const offer = upgrade && this.upgradeOffer?.();
     throw new UserError(`The Free plan runs ${limit} agent at a time, and ${[...working].join(', ')} is working now`, {
       status: 402,
-      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. To run agents side by side, the workspace's owner can upgrade it to Pro${upgrade ? `: ${upgrade}` : ''}.`,
+      hint: `Your work waits until ${[...working][0]} finishes or hands off; then call next again. ${offer
+        ? `The workspace's owner can upgrade it to ${offer}, at ${upgrade}.`
+        : `To run agents side by side, the workspace's owner can upgrade it to Pro${upgrade ? `: ${upgrade}` : ''}.`}`,
     });
   }
 

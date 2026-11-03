@@ -16,9 +16,10 @@ export function billingSection(b, { esc, done = false, last = true }) {
     ? `<p class="lead billing-done" role="status"><b>Thanks: Stripe has your payment.</b> Your plan changes to Pro within a minute, once Stripe confirms it. This updates by itself; you can close it.</p>`
     : '';
   const buy = free && !done && b.plans?.length
-    ? `<p class="lead faint">A second agent waits until the first finishes or hands off. Pro runs any number side by side.</p>
+    ? `<p class="lead faint">A second agent waits until the first finishes or hands off.</p>
+      ${b.plans.map((p) => `<p class="lead billing-offer"><span data-new="plan-price"><b>${esc(p.label)}</b>: ${esc(p.gives ?? '')}${p.price ? `, <b class="flag">${esc(p.price)}</b>` : ', price shown at Checkout'}.</span></p>`).join('')}
       <div class="actions billing-buy">${b.plans.map((p) => `<button class="btn primary" data-action="upgrade" data-plan="${esc(p.plan)}">Upgrade to ${esc(p.label)}</button>`).join('')}</div>
-      <p class="hint">Opens Stripe Checkout, where you see the price before you pay. By subscribing you agree to nuworq's <a href="${esc(b.terms)}" target="_blank" rel="noopener">Terms</a> and <a href="${esc(b.privacy)}" target="_blank" rel="noopener">Privacy Policy</a>.</p>`
+      <p class="hint">Opens Stripe Checkout to pay. By subscribing you agree to nuworq's <a href="${esc(b.terms)}" target="_blank" rel="noopener">Terms</a> and <a href="${esc(b.privacy)}" target="_blank" rel="noopener">Privacy Policy</a>.</p>`
     : '';
   return `<h4>Billing</h4>
     <p class="lead"${b.failing ? ' style="color:var(--warn)"' : ''}>${b.failing ? '⚠ ' : ''}<b>${esc(state)}</b></p>

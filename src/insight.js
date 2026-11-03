@@ -508,7 +508,7 @@ function build(hub, p, t, { light = false } = {}) {
       key: `plan-limit:${refused.agent}`, level: 'act', kind: 'plan-limit', at: refused.at, upgrade,
       headline: `${refused.agent} is waiting: the Free plan runs one agent at a time, and ${refused.working.join(', ')} is working`,
       sub: `refused ${timeIn(refused.at)} ago`,
-      why: `On Free, a second agent waits until the first finishes or hands off. Pro runs any number side by side. Upgrade opens Stripe Checkout; the plan changes within a minute once Stripe confirms the payment.`,
+      why: `On Free, a second agent waits until the first finishes or hands off. ${hub.upgradeOffer?.() || 'Pro runs any number side by side'}. Upgrade opens Stripe Checkout; the plan changes within a minute once Stripe confirms the payment.`,
       owners: hub.q("SELECT handle FROM people WHERE role = 'owner' ORDER BY handle").all().map((r) => `@${r.handle}`),
     });
   }

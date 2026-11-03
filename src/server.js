@@ -40,7 +40,7 @@ import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, own
 import { takeReleases, githubRepoOf, releaseAlarm, CHECK_EVERY as GH_RELEASE_EVERY } from './ghrelease.js';
 import { runningCommit } from './update.js';
 import { LOGO, FAVICON, withLogo } from '../web/logo.js';
-import { verifySignature, applyEvent, billingState, failing, paid, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
+import { verifySignature, applyEvent, billingState, failing, paid, paymentEntry, portalSession, pushFailed, canSell, plansOf, offers, offersNow, offerLine, checkout, TERMS, PRIVACY } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -1236,6 +1236,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (spaces && canSell(billing) && !hub.upgradeUrl) {
         const page = `${homeOf(req, ws)}/#/settings`;
         hub.upgradeUrl = () => page;
+        // What it costs (#872): read from Stripe now, so a refused claim (which can't wait) can say it.
+        hub.upgradeOffer = () => offersNow(billing).map(offerLine).join('; or ');
+        offers(billing).catch(() => {});
       }
       const cookiePath = `${base}/`;
       const tooMany = (what, n) => deny(429, `too many open ${what} for one sign-in (at most ${n})`, 'Close a tab or a session you no longer use, then try again.');
@@ -1671,7 +1674,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           if (!owner) return send(200, { on: true, owner: false, owners });
           return send(200, {
             on: true, owner, plan, state: billingState(b, hub.now()), failing: failing(b), manage: !!b?.customer,
-            plans: plan === 'free' && canSell(billing) ? plansOf(billing).map(({ plan, label }) => ({ plan, label })) : [],
+            plans: plan === 'free' && canSell(billing) ? await offers(billing) : [],
             terms: TERMS, privacy: PRIVACY,
           });
         }

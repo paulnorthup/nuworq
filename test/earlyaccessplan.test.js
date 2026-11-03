@@ -15,7 +15,8 @@ const REMY = 'remy@example.com';
 describe('early-access workspaces start on Unlimited (#355)', () => {
   test('let in: several agents at once, shown as early access, switchable by the owner, never charged; others stay Free', async () => {
     const sessions = [];
-    const stripe = http.createServer((req, res) => { sessions.push(req.url); req.resume(); res.end('{}'); });
+    // What Stripe was asked to do; reading the plan's price (#872, the same for every workspace) isn't that.
+    const stripe = http.createServer((req, res) => { if (req.method !== 'GET') sessions.push(req.url); req.resume(); res.end('{}'); });
     const api = `http://127.0.0.1:${await listen(stripe)}`;
     const spaces = new Workspaces({ dir: realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-eaplan-'))), plans: true, owners: [REMY] });
     const server = createServer(spaces, {
