@@ -172,6 +172,27 @@ describe('signing by hand (#815)', () => {
     assert.deepEqual(imports(own).filter((m) => !m.startsWith('node:')), [], 'the check itself loads only Node\'s built-ins');
   });
 
+  // #843: the recipe is run at the last signed release's tag, so it must give the release command that tag's
+  // script accepts. v0.9.0's is `release <hub> <pem> [<scp>]`; the newer form, the one this script takes.
+  test('the hand-signing recipe in DEPLOY.md matches the release command\'s usage', () => {
+    const doc = readFileSync(fileURLToPath(new URL('../docs/DEPLOY.md', import.meta.url)), 'utf8');
+    const recipe = doc.slice(doc.indexOf('**Signing by hand, the fallback.**')).split('```')[1];
+    const lines = recipe.split('\n').filter((l) => l.startsWith('node scripts/sign-release.js release ')).map((l) => l.split('#')[0].trim().split(/\s+/).slice(3));
+    const script = fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url));
+    const usage = spawnSync(process.execPath, [script], { encoding: 'utf8' }).stderr.match(/\| release ((?:<[^>]+> ?)+)/)[1].trim().split(' ');
+    const shape = { '<vX.Y.Z>': /^v\d+\.\d+\.\d+$/, '<release-key.pem>': /\.pem$/, '<hub>': /^https:\/\/[^/]+$/ };
+    assert.deepEqual(usage, ['<vX.Y.Z>', '<release-key.pem>', '<hub>'], 'the usage this test reads');
+    const current = lines.filter((args) => args.length === usage.length && usage.every((u, i) => shape[u].test(args[i])));
+    assert.equal(current.length, 1, 'one line in the newer form');
+    const r = spawnSync(process.execPath, [script, 'release', ...current[0]], { encoding: 'utf8' });
+    assert.match(r.stderr, /release needs a person at a terminal/, 'past the argument check, not the usage');
+    const older = lines.filter((args) => !current.includes(args));
+    assert.equal(older.length, 1, 'and v0.9.0\'s, while it is the last signed release');
+    assert.match(older[0][0], shape['<hub>']);
+    assert.match(older[0][1], shape['<release-key.pem>']);
+    assert.match(recipe, /^node scripts\/sign-release\.js approve v\d+\.\d+\.\d+ \S+\.pem$/m, 'v0.9.0 signs only what was approved');
+  });
+
   test('the command works when its checkout is reached through a symlink', () => {
     const link = join(dir, 'linked');
     symlinkSync(fileURLToPath(new URL('..', import.meta.url)), link);
