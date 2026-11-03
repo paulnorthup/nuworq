@@ -2,6 +2,7 @@
 // Shipping a visible UI feature? Add its key here with today's date, and data-new="<key>" on its element.
 export const NEW = {
   'tests-step': '2026-11-03', // #685: Get started's "Tell workers how to test", while a repository has no test a worker may run
+  'rail-menus': '2026-11-03', // #824: the rail is only navigation; settings in the workspace menu (its name), help under ? Help
   'fold-sections': '2026-11-03', // #809: click a section's heading on the project page or home to fold it away
   home: '2026-10-29', // #126: the home, everything that needs you across projects (the rail's Home link)
   'github-app-status': '2026-10-29', // #94: where the hub's GitHub App stands, in Connect an agent

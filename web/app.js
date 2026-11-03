@@ -10,7 +10,7 @@ import { THEMES } from './launcher.js';
 import { radioKeys } from './radiogroup.js';
 import { bootData } from './boot.js';
 import { S, setState, putIn } from './store.js';
-import { ACTIONS, KEYS, L, backFromGitHub, closeLauncher, drawLauncher, runLauncher, setTheme, workspaceSettings } from './actions.js';
+import { ACTIONS, KEYS, L, backFromGitHub, closeLauncher, closeRailMenu, drawLauncher, runLauncher, setTheme, workspaceSettings } from './actions.js';
 import { store } from './prefs.js';
 import { go, openTarget, prefetch, projectTarget, route } from './router.js';
 import { $, api, closeModal, data, live, offline, online, prefetchView, render, scheduleRefresh, typing, views } from './ui.js';
@@ -33,8 +33,9 @@ document.addEventListener('focusin', (e) => prefetchView(projectTarget(e)));
 // The arrow keys move the choice, as in any radio group; Tab reaches the chosen one.
 radioKeys(document, '.appearance [role="radio"]', (b, step) => {
   const [k] = THEMES[(THEMES.findIndex(([t]) => t === b.dataset.appearance) + step + THEMES.length) % THEMES.length];
+  const group = b.closest('.appearance').querySelector('.seg-label').id; // the workspace menu's, or Menu's on a phone
   setTheme(k);
-  $(`.appearance [data-appearance="${k}"]`)?.focus();
+  $(`#${group} + .seg [data-appearance="${k}"]`)?.focus();
 });
 
 $('#launcher').addEventListener('click', (e) => {
@@ -56,7 +57,7 @@ document.addEventListener('click', (e) => {
   // On the home, a card's actions belong to its own project.
   setState({ actSlug: el.closest('[data-project]')?.dataset.project ?? null });
   // Picking something from the phone's Menu closes it.
-  if (S.railMenu && el.closest('.rail-foot')) { setState({ railMenu: false }); render({ force: true }); }
+  if (S.railMenu && el.closest('.rail-sheet')) { setState({ railMenu: false }); render({ force: true }); }
   fn(el);
 });
 document.addEventListener('change', (e) => {
@@ -71,7 +72,7 @@ document.addEventListener('keydown', (e) => {
   const el = document.activeElement;
   const s = shortcutFor(e, {
     inField: /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName) || !!el?.isContentEditable,
-    input: el?.tagName === 'INPUT', compose: el?.id === 'compose', modal: !$('#modal').hidden, item: !!S.itemRef, launcher: L.open,
+    input: el?.tagName === 'INPUT', compose: el?.id === 'compose', modal: !$('#modal').hidden, item: !!S.itemRef, launcher: L.open, menu: !!S.railOpen,
   });
   if (s) KEYS[s.id](e);
 });
@@ -84,8 +85,14 @@ for (const type of ['click', 'focusin']) {
     if (el) { markSeen(el.dataset.new); markNew(document); }
   }, true);
 }
-// The rail is drawn from the state: the workspace menu stays as the person left it.
-document.addEventListener('toggle', (e) => { if (e.target.classList?.contains('org-switch')) setState({ orgOpen: e.target.open }); }, true);
+// The rail's menus (#824) shut on a pick, a click outside or Escape; Appearance keeps its menu open, so the change
+// shows. Its own button toggles it (ACTIONS['rail-open']).
+document.addEventListener('click', (e) => {
+  if (!S.railOpen || e.target.closest?.('[data-action="rail-open"]')) return;
+  const inside = e.target.closest?.('.rail-pop .rail-menu-list');
+  if (inside && (!e.target.closest('[data-action], a[href]') || e.target.closest('[data-action="theme"]'))) return;
+  closeRailMenu();
+}, true);
 // A row's ⋯ menu (#651) shuts once its action is chosen; the popover shuts itself on a tap elsewhere or Escape.
 document.addEventListener('click', (e) => e.target.closest?.('.row-menu:popover-open [data-action]')?.closest('.row-menu').hidePopover());
 
@@ -135,6 +142,7 @@ function listen() {
   // Feedback about nuworq (#295): only a hub that takes it shows the entry.
   setState({ feedback: b.feedback });
   if (b.projects) setState({ projects: b.projects, listStale: false });
+  setState({ archived: b.archived });
   if (home) setState({ gs: b.gs, gsFresh: true, homeFresh: b.first });
   // Relative times tick here (#530); only a change on the hub refetches, never a timer.
   startTicking();

@@ -67,7 +67,7 @@ async function removeProject(action, body, msg, field) {
   try {
     await api(`/api/p/${encodeURIComponent(S.slug)}/human/${action}`, { method: 'POST', body: JSON.stringify(body) });
     closeModal();
-    await loadProjects();
+    await Promise.all([loadProjects(), loadArchived()]);
     go('');
     toast(msg);
   } catch (e) {
@@ -82,6 +82,22 @@ export function setTheme(t) {
   if (t === 'light' || t === 'dark') root.dataset.theme = t; else delete root.dataset.theme;
   requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('theming')));
   render({ force: true, also: ['rail'] }); // the rail's Appearance shows the choice
+}
+// The rail's menus (#824): one open at a time; open, its first entry takes the focus, so arrows and Tab go on from it.
+export function openRailMenu(menu) {
+  setState({ railOpen: S.railOpen === menu ? null : menu });
+  render({ force: true, also: ['rail'] });
+  if (S.railOpen) $(`#${menu}-menu`)?.querySelector('a[href], button:not([tabindex="-1"])')?.focus();
+}
+export function closeRailMenu({ focus = false } = {}) {
+  const was = S.railOpen;
+  setState({ railOpen: null });
+  render({ force: true, also: ['rail'] });
+  if (focus) $(`[data-action="rail-open"][data-menu="${was}"]`)?.focus();
+}
+// How many projects are archived, for the rail's Archived (n): asked at the start and after a project leaves or returns.
+export async function loadArchived() {
+  try { setState({ archived: (await api('/api/projects?archived=1')).length }); } catch {}
 }
 // The same as a sentence, for the Settings dialog (#213): the limit and the budget, both always said.
 function staffWords(s) {
@@ -499,7 +515,7 @@ export function drawLauncher({ keep = false } = {}) {
   if (!L.index) { list.innerHTML = placeholder(3, { head: false }); return; }
   if (L.confirming) { list.innerHTML = confirmHtml(L.confirming, { esc }); return; }
   // Moving through the list keeps it as it is; typing (or the index arriving) ranks it again.
-  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { theme: themeNow(), current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: wsOwner(), recent: recent() });
+  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { theme: themeNow(), current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: wsOwner(), feedback: !!S.feedback?.on, signOut: S.me?.auth === 'required', recent: recent() });
   L.sel = Math.min(L.sel, Math.max(0, L.results.length - 1));
   list.innerHTML = resultsHtml(L.results, { sel: L.sel, stages: L.index.stages, esc });
   list.querySelector('.ln-row.on')?.scrollIntoView({ block: 'nearest' });
@@ -699,6 +715,7 @@ export const ACTIONS = {
     try {
       await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/delete`, { method: 'POST', body: JSON.stringify({ confirm: val('rm-archived') }) });
       toast('Deleted for good');
+      loadArchived();
       ACTIONS.archived();
     } catch (e) { if (e.status === 400) fieldError('rm-archived', fieldReason(e)); else toastError(e); }
   },
@@ -706,7 +723,7 @@ export const ACTIONS = {
     try {
       await api(`/api/p/${encodeURIComponent(el.dataset.slug)}/human/restore`, { method: 'POST', body: '{}' });
       closeModal();
-      await loadProjects();
+      await Promise.all([loadProjects(), loadArchived()]);
       go(el.dataset.slug);
       refresh({ force: true }); // restored from its own (missing) page, the address doesn't change
     } catch (e) { toastError(e); }
@@ -819,6 +836,8 @@ export const ACTIONS = {
   'connect-deep': () => { setZoom('30m'); connect(); },
   notify: () => notifySettings(),
   'rail-menu': () => { setState({ railMenu: !S.railMenu }); render({ force: true }); },
+  'rail-open': (el) => openRailMenu(el.dataset.menu),
+  guide: () => { location.href = 'guide'; },
   shortcuts: () => modal(shortcutsHtml({ mac: MAC })),
   launcher: () => (L.open ? closeLauncher() : openLauncher()),
   'workspace-settings': () => workspaceSettings(),
@@ -968,6 +987,7 @@ export const KEYS = {
   },
   'ln-run': (e) => { e.preventDefault(); runLauncher(L.confirming ?? L.results[L.sel]); },
   'ln-close': () => { if (L.confirming) { L.confirming = null; drawLauncher({ keep: true }); $('#ln-q')?.focus(); } else closeLauncher(); },
+  'menu-close': () => closeRailMenu({ focus: true }),
   help: () => { if ($('#modal .shortcuts')) closeModal(); else if ($('#modal').hidden) ACTIONS.shortcuts(); },
   close: () => closeModal(),
   // 1, 2, 3 set the depth everywhere: a project, and Home.

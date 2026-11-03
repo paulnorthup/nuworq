@@ -48,12 +48,12 @@ export const STEPS = [
       'Type a **Name** (for example Acme). The **Address** is suggested from it and checked as you type; change it if you like. Click **Create workspace**.',
       'Already in one? Your workspaces are listed on the same page, and **New workspace** makes another.',
     ],
-    check: 'You\'re in the workspace: its name is at the top of the left rail (on a phone, under **Menu**), and the page says "Step 2 of 3 · your first project".',
+    check: 'You\'re in the workspace: its name is at the top of the left rail (on a phone, at the top of the screen), and the page says "Step 2 of 3 · your first project".',
   },
   {
     key: 'project', title: 'Add a project', glance: 'A mission, and the repository agents work in.',
     hand: [
-      'In a new workspace the first project\'s form is already open. Anywhere else, click **+ Project** in Get started or in the rail (on a phone, under **Menu**).',
+      'In a new workspace the first project\'s form is already open. Anywhere else, click **+ Project** in Get started, or the **+** beside Projects in the rail (on a phone, **+ Project** under **Menu**).',
       'Give it a **Name**, a **Mission** (one or two lines on what it\'s for: the north star every agent reads first), and its repository, like github.com/acme/api. Click **Create project**.',
       'Once the GitHub App is installed, **+ Project** lists the repositories it can reach: pick one instead of typing it.',
       'Left the repository out? Open the project, click **+ repo** in its header, type the repository and save. Agents working in any clone of it, on any machine, then work on this project.',
@@ -161,7 +161,7 @@ export const ESSENTIALS = [
   {
     key: 'notifications', title: 'Notifications', glance: 'One message when something new needs you.',
     body: [
-      'Open **Notifications** in the rail (on a phone, under **Menu**). Pick ntfy, Slack or webhook, paste its address, and click **Add**; **Send a test** checks it. Messages are batched over two minutes, and healthy work sends nothing. Each channel also gets a weekly line per busy project; turn it off with **Weekly line**.',
+      'Open **Notifications** in the workspace menu: click the workspace\'s name at the top of the rail (on a phone, it\'s under **Menu**). Pick ntfy, Slack or webhook, paste its address, and click **Add**; **Send a test** checks it. Messages are batched over two minutes, and healthy work sends nothing. Each channel also gets a weekly line per busy project; turn it off with **Weekly line**.',
     ],
   },
   {
