@@ -12,8 +12,8 @@ const askFor = (s) => (s.workspaces ? 'Ask whoever runs this hub to set up its G
 
 // s: what the hub knows (see facts()). Returns { complete, steps: [{ key, label, done, action? }] };
 // every step that isn't done carries an action: a label, and an href or a ui action the page knows, or
-// note: true when it's something to ask someone else for. Once there is a project, linking one to its repository
-// is a step of its own (#147), opened on the newest project. GitHub comes after, and only while some project is
+// note: true when it's something to ask someone else for. Add a project is done once a project has its repository
+// (#801); until then it offers + repo on the newest project (#147). GitHub comes after, and only while some project is
 // on github.com (or none says where its code is yet): a project elsewhere finishes without it.
 export function getStarted(s) {
   const github = s.app === 'installed' ? null
@@ -22,11 +22,12 @@ export function getStarted(s) {
       : (s.installUrl ? { label: 'Install the GitHub App', href: s.installUrl } : { label: 'Install the GitHub App', ui: 'connect' });
   const steps = [
     s.workspaces && { key: 'org', label: 'Create your workspace', done: !!s.org, action: { label: 'Create your workspace', href: s.root || '/' } },
-    { key: 'project', label: 'Add a project', done: !!s.project, action: { label: '+ Project', ui: 'new-project' } },
-    s.project && { key: 'repo', label: 'Link a project to its repository', done: !!s.repo, action: { label: '+ repo', ui: 'link-repo', slug: s.recent } },
+    // Done once a project has a repository (#801); one without opens + repo on the newest project (#147).
+    { key: 'project', label: 'Add a project', done: !!(s.project && s.repo),
+      action: s.project ? { label: '+ repo', ui: 'link-repo', slug: s.recent } : { label: '+ Project', ui: 'new-project' } },
     s.github !== false && { key: 'github', label: 'Connect GitHub', done: s.app === 'installed', action: github },
     { key: 'machine', label: 'Install and connect your machine', done: !!s.machine, action: { label: 'Connect an agent', ui: 'connect' } },
-    // The setup that works (#489, web/connect.js's SETUP): each step shows its session's commands while it's next.
+    // The recommended setup (#489, web/connect.js's SETUP): each step shows its session's commands while it's next.
     ...SETUP.map(({ key, title }) => ({ key, label: title, done: !!s[key], action: { label: title, ui: 'connect', command: key } })),
     { key: 'landed', label: 'Watch your first item land', done: !!s.landed, action: s.board ? { label: 'Open the board', href: `#/p/${encodeURIComponent(s.board)}` } : { label: '+ Project', ui: 'new-project' } },
   ].filter(Boolean).map(({ action, ...step }) => (step.done ? step : { ...step, action }));
@@ -58,7 +59,7 @@ export function facts(hub, { viewer = 'you', workspaces = false, app = 'none', c
     GROUP BY p.id ORDER BY MAX(COALESCE(a.last_seen, 0)) DESC, p.id LIMIT 1`)?.slug ?? null;
   // Where to link a repository: the newest project.
   const recent = q(`SELECT slug FROM projects WHERE archived_at = 0 ORDER BY created_at DESC, id DESC LIMIT 1`)?.slug ?? null;
-  // The setup that works: a runner reported for one of these projects (its scope: their slugs, '' for all) within a
+  // The recommended setup: a runner reported for one of these projects (its scope: their slugs, '' for all) within a
   // week; an operator checked in within a week; a shaper ever checked in, or proposed.
   const week = hub.now() - RECENT_MS;
   const slugs = new Set(hub.q('SELECT slug FROM projects WHERE archived_at = 0').all().map((r) => r.slug));

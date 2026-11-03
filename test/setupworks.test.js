@@ -18,9 +18,11 @@ const ascending = (xs) => xs.every((x, i) => x >= 0 && (i === 0 || x > xs[i - 1]
 
 describe('the setup that works, everywhere the same (#489)', () => {
   test('three sessions: workers, an operator, a shaper, each with what to type', () => {
-    assert.deepEqual(SETUP.map((s) => s.key), ['workers', 'operator', 'shaper']);
-    assert.deepEqual(SETUP.map((s) => s.title), ['Start workers', 'Start an operator', 'Shape work with a shaper']);
-    assert.deepEqual(SETUP.map((s) => commandsIn(s.how)), [['nuworq run --install --workers auto'], ['nuworq up', 'claude', '/nuworq:operator'], ['/nuworq:shaper']]);
+    assert.deepEqual(SETUP.map((s) => s.key), ['shaper', 'workers', 'operator']);
+    assert.deepEqual(SETUP.map((s) => s.title), ['Shape work with a shaper', 'Start workers', 'Start an operator']);
+    assert.deepEqual(SETUP.map((s) => commandsIn(s.how)), [['/nuworq:shaper'], ['nuworq run --install --workers auto'], ['nuworq up', 'claude', '/nuworq:operator']]);
+    assert.equal(SETUP_TITLE, 'Recommended setup');
+    for (const s of SETUP) for (const x of s.says) assert.ok(x.length < 140 && x.endsWith('.'), `a short sentence: ${x}`);
     assert.match(SETUP_LEAD, /how nuworq itself is built/);
     assert.match(SETUP_LEAD, /Starting with just a shaper is fine/);
   });
@@ -38,22 +40,23 @@ describe('the setup that works, everywhere the same (#489)', () => {
     }
   });
 
-  test('the guide: a section right after Install and connect your machine, each session in its words, with its commands to copy', () => {
-    const i = STEPS.findIndex((s) => s.key === 'setup');
-    assert.equal(STEPS[i - 1].key, 'machine');
-    assert.equal(STEPS[i].title, SETUP_TITLE);
-    assert.equal(STEPS[i].sessions, SETUP);
+  test('the guide: the shaper in Plan the first work, workers and an operator in Start workers and an operator, each in its words, with its commands to copy', () => {
+    assert.deepEqual(STEPS.flatMap((s) => s.sessions ?? []), SETUP, 'the sessions, in order, across the two steps');
     const html = unescape(guidePage());
-    const section = html.slice(html.indexOf('<details id="setup">'), html.indexOf('</details>', html.indexOf('<details id="setup">')));
-    assert.ok(section.includes(SETUP_LEAD));
-    assert.ok(ascending(order(section, SETUP.map((s) => `<h4 id="${s.key}">`))), 'in order');
-    for (const s of SETUP) {
-      assert.ok(section.includes(setupLine(s).replace(/`([^`]+)`/g, '<code>$1</code>')), `${s.key}: what, where and why`);
-      for (const c of commandsIn(s.how)) assert.ok(section.includes(`data-copy="${c}"`), `${s.key}: ${c} to copy`);
-    }
-    for (const k of ['agent', 'plan']) {
-      const step = STEPS.find((s) => s.key === k);
-      assert.ok([...step.hand, step.auto].some((t) => t.includes(SETUP_TITLE)), `${k} points to ${SETUP_TITLE}`);
+    const body = (key) => html.slice(html.indexOf(`<details id="${key}">`), html.indexOf('</details>', html.indexOf(`<details id="${key}">`)));
+    assert.ok(!html.includes(SETUP_LEAD), 'the three-sessions lead stays where all three show, not in a step with one (#801)');
+    assert.ok(body('plan').indexOf('<h4 id="shaper">') < body('plan').indexOf('+ Work'), 'planning opens with the shaper');
+    // Start workers and an operator leads with nuworq up; its by-hand operator doesn't say it again.
+    const start = body('start');
+    const byHand = start.slice(start.indexOf('<h4 id="operator">'));
+    assert.ok(!byHand.includes('data-copy="nuworq up"') && byHand.includes('data-copy="claude"'), 'by hand: claude, then /nuworq:operator');
+    for (const [key, keys] of [['plan', ['shaper']], ['start', ['workers', 'operator']]]) {
+      const section = body(key);
+      assert.ok(ascending(order(section, keys.map((k) => `<h4 id="${k}">`))), `${key}: in order`);
+      for (const s of SETUP.filter((x) => keys.includes(x.key))) {
+        assert.ok(section.includes(setupLine(s).replace(/`([^`]+)`/g, '<code>$1</code>')), `${s.key}: what it is and why`);
+        for (const c of commandsIn(s.how)) assert.ok(section.includes(`data-copy="${c}"`), `${s.key}: ${c} to copy`);
+      }
     }
   });
 
@@ -94,7 +97,7 @@ describe('the setup that works, everywhere the same (#489)', () => {
   });
 
   test("the CLI's bare screen: Get going leads with connect, then the three, in order", () => {
-    assert.deepEqual(GET_GOING.slice(0, 4), ['connect', 'run', 'operator', '/nuworq:shaper']);
+    assert.deepEqual(GET_GOING.slice(0, 4), ['connect', '/nuworq:shaper', 'run', 'operator']);
     const screen = bare();
     const going = screen.slice(screen.indexOf('Get going'), screen.indexOf('Work with agents'));
     assert.ok(ascending(order(going, ['connect <hub>', ...SETUP.map((s) => s.title.charAt(0).toLowerCase() + s.title.slice(1))])), going);

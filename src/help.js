@@ -535,10 +535,10 @@ const styler = (style) => (line, names = []) => {
   return s;
 };
 
-// Get going leads with the setup that works (#489): connect, then its three sessions in web/connect.js's order
-// (workers on run, an operator, a shaper: no command, but a line typed in the Claude Code app), then the rest.
+// Get going leads with the recommended setup (#489, #801): connect, then its three sessions in web/connect.js's order
+// (a shaper: no command, but a line typed in the Claude Code app; workers on run; an operator), then the rest.
 const SHAPER = { name: '/nuworq:shaper', brief: 'shape work with a shaper: type it in the Claude Code app' };
-export const GET_GOING = ['connect', 'run', 'operator', SHAPER.name, 'up', 'status', 'update'];
+export const GET_GOING = ['connect', SHAPER.name, 'run', 'operator', 'up', 'status', 'update'];
 
 // A bare `nuworq`: one screen.
 export function bare({ width = 80, style = plain } = {}) {

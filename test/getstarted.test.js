@@ -43,8 +43,8 @@ function github(installations) {
 describe('get started: each step checks itself off from hub state', () => {
   test('a single hub has seven steps; a workspaces hub adds the organization first', () => {
     const { hub } = setup();
-    assert.deepEqual(getStarted(facts(hub)).steps.map((s) => s.key), ['project', 'github', 'machine', 'workers', 'operator', 'shaper', 'landed']);
-    assert.deepEqual(getStarted(facts(hub, { workspaces: true })).steps.map((s) => s.key), ['org', 'project', 'github', 'machine', 'workers', 'operator', 'shaper', 'landed']);
+    assert.deepEqual(getStarted(facts(hub)).steps.map((s) => s.key), ['project', 'github', 'machine', 'shaper', 'workers', 'operator', 'landed']);
+    assert.deepEqual(getStarted(facts(hub, { workspaces: true })).steps.map((s) => s.key), ['org', 'project', 'github', 'machine', 'shaper', 'workers', 'operator', 'landed']);
   });
 
   test('organization: done once the viewer is a person in the workspace', () => {
@@ -54,32 +54,27 @@ describe('get started: each step checks itself off from hub state', () => {
     assert.equal(step('org', { workspaces: true, viewer: '@ana' }).done, true);
   });
 
-  test('add a project: any live project ticks it, with or without a repository (#147)', () => {
+  test('add a project: done once a project has a repository (#801)', () => {
     const { hub, step } = setup();
-    assert.equal(step('project').done, false);
-    assert.equal(step('repo'), undefined, 'no project yet: nothing to link');
+    assert.deepEqual(step('project').action, { label: '+ Project', ui: 'new-project' });
     hub.tx(() => hub.project('demo', { create: true }));
-    assert.equal(step('project').done, true);
+    assert.equal(step('project').done, false, 'a project alone is not enough');
+    hub.humanOp('demo', 'settings', { path: tmpdir() });
+    assert.equal(step('project').done, true, 'a path on disk counts');
+    assert.equal(step('repo'), undefined, 'linking a repository is part of this step');
   });
 
-  test('no project has a repository: "Link a project to its repository" opens + repo on the newest project (#147)', () => {
+  test('a project without a repository: the step opens + repo on the newest project (#147)', () => {
     const { hub, step, tick } = setup();
     hub.tx(() => hub.project('llm-proxy', { create: true }));
     tick(1000);
     const p = hub.tx(() => hub.project('nuworq', { create: true }));
-    assert.deepEqual(step('repo'), { key: 'repo', label: 'Link a project to its repository', done: false,
+    assert.deepEqual(step('project'), { key: 'project', label: 'Add a project', done: false,
       action: { label: '+ repo', ui: 'link-repo', slug: 'nuworq' } });
-    assert.match(getStartedCard({ show: true, steps: [step('project'), step('repo')] }),
+    assert.match(getStartedCard({ show: true, steps: [step('project')] }),
       /<button class="btn primary small" data-action="link-repo" data-slug="nuworq">\+ repo<\/button>/);
     hub.addRemote(p, 'github.com/acme/nuworq', 'you');
-    assert.equal(step('repo').done, true);
-  });
-
-  test('link a repository: a project with a path on disk counts too', () => {
-    const { hub, step } = setup();
-    hub.tx(() => hub.project('demo', { create: true }));
-    hub.humanOp('demo', 'settings', { path: tmpdir() });
-    assert.equal(step('repo').done, true);
+    assert.equal(step('project').done, true);
   });
 
   test('connect your machine (no logins): any agent has checked in', () => {
@@ -251,7 +246,7 @@ describe('get started over HTTP: complete once, then gone for good', () => {
       let gs = await call('/api/get-started');
       assert.equal(gs.show, true);
       assert.equal(gs.complete, false);
-      assert.deepEqual(gs.steps.filter((s) => !s.done).map((s) => s.key), ['repo', 'github', 'machine', 'workers', 'operator', 'shaper', 'landed']);
+      assert.deepEqual(gs.steps.filter((s) => !s.done).map((s) => s.key), ['project', 'github', 'machine', 'shaper', 'workers', 'operator', 'landed']);
       assert.equal(gs.steps.find((s) => s.key === 'github').action.href, 'https://github.com/apps/nuworq-test/installations/new');
 
       hub.addRemote(p, 'github.com/acme/api', 'you');
