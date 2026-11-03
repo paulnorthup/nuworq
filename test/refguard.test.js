@@ -81,11 +81,27 @@ describe("a worker exiting leaves the checkout's other branches where they were"
     assert.equal(sh(home, 'rev-parse', 'main'), upstream);
   });
 
+  // #788: B committed on its own branch while A ran and has exited already; A's exit must not put it back.
+  test("a branch of a worker that ran beside it and has exited keeps its commit; a ref neither holds is still put back", async () => {
+    const { home, wt, sib, main } = setup();
+    const before = await refsOf(home, git);
+    const theirs = commit(sib, 'B work');
+    const own = commit(wt, 'A work');
+    sh(wt, 'update-ref', 'refs/heads/mine', own);
+    const r = await restoreRefs(home, before, git, { own: ['nuworq/7-thing'], live: ['nuworq/8-other'] });
+    assert.equal(sh(home, 'rev-parse', 'nuworq/8-other'), theirs);
+    assert.deepEqual(r.restored.map((x) => x.ref), ['refs/heads/mine']);
+    assert.equal(sh(home, 'rev-parse', 'mine'), main);
+    const none = await restoreRefs(home, await refsOf(home, git), git, { own: ['nuworq/7-thing'], live: ['nuworq/8-other'] });
+    assert.deepEqual(none.restored, [], 'no "was moved" line when only the two workers\' own branches moved');
+  });
+
   test('the runner snapshots refs before a worker starts and puts them back when it exits', () => {
     const cli = readFileSync(new URL('../bin/nuworq.js', import.meta.url), 'utf8');
     assert.match(cli, /const refsBefore = worktree \? await refsOf\(home, git\)/);
-    assert.match(cli, /if \(refsBefore\) await guardRefs\(\{ home, branch, name, project: target\.slug, before: refsBefore \}\);/);
-    assert.match(cli, /await git\(\['-C', home, 'fetch', '-q', '--prune', 'origin'\]\)[^\n]*\n\s*const g = await restoreRefs\(home, before, git, \{ own: \[branch\], live: siblings \}\)/, "origin's refs are fetched first, so a worker can't fake a pull");
+    assert.match(cli, /if \(refsBefore\) await guardRefs\(\{ home, branch, name, project: target\.slug, before: refsBefore, ranBeside \}\);/);
+    assert.match(cli, /beside\.set\(worktree, new Set\(\[\.\.\.startBranch\.values\(\)\]/, 'each worker remembers the branches of those running beside it, even after they exit (#788)');
+    assert.match(cli, /await git\(\['-C', home, 'fetch', '-q', '--prune', 'origin'\]\)[^\n]*\n\s*const g = await restoreRefs\(home, before, git, \{ own: \[branch\], live: \[\.\.\.siblings, \.\.\.ranBeside\] \}\)/, "origin's refs are fetched first, so a worker can't fake a pull");
     assert.match(cli, /\.call\('comment', \{/, 'and it says so on the hub');
   });
 });
