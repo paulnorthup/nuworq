@@ -45,7 +45,7 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - `withdraw`: Withdraw a question you asked: answered another way, or no longer matters.
 - `submit`: Submit an item you hold with evidence; someone else verifies it.
 - `handoff`: Hand off an item you hold unfinished, saying where you left off.
-- `propose`: Add work you noticed (don't silently expand your current item).
+- `propose`: Add work you noticed; don't grow your current item.
 - `refine`: Improve an item.
 - `review`: Peer-review an item in verifying against done_means and evidence; never your own.
 - `comment`: A note for the record on an item or the project; not for questions or status.

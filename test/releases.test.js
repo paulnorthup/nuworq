@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Hub, PERSON_CAN } from '../src/core.js';
 import { view } from '../src/insight.js';
-import { OPS } from '../src/protocol.js';
-import { nextVersion, releaseVersion, tagRelease, tagsSettled } from '../src/releases.js';
+import { OPS, MODE_RULES, guide } from '../src/protocol.js';
+import { bump, changeOf, nextVersion, releaseVersion, tagRelease, tagsSettled } from '../src/releases.js';
 import { prMerged } from '../src/github.js';
 import { appSource } from './appsource.js';
 
@@ -54,13 +54,87 @@ function world({ releases = 'milestone', ...r } = {}) {
 }
 
 describe('the version (#399)', () => {
-  test('breaking is major, or minor on 0.x; a milestone is minor; anything else a patch', () => {
-    assert.equal(nextVersion('1.4.2', { breaking: true, milestone: true }), '2.0.0');
+  test('0.x: breaking or a milestone is minor; anything else a patch', () => {
     assert.equal(nextVersion('0.2.0', { breaking: true }), '0.3.0');
-    assert.equal(nextVersion('1.4.2', { milestone: true }), '1.5.0');
     assert.equal(nextVersion('0.2.5', { milestone: true }), '0.3.0');
-    assert.equal(nextVersion('1.4.2'), '1.4.3');
+    assert.equal(nextVersion('0.2.5', { feature: true }), '0.2.6', 'on 0.x a feature alone stays a patch');
     assert.equal(nextVersion('0.0.0', { milestone: true }), '0.1.0');
+  });
+
+  test('from 1.0.0, semver (#863): breaking is major, a feature minor, fixes and internal work a patch', () => {
+    assert.equal(nextVersion('1.4.2', { breaking: true, feature: true }), '2.0.0');
+    assert.equal(nextVersion('1.4.2', { feature: true }), '1.5.0');
+    assert.equal(nextVersion('1.4.2', { milestone: true }), '1.4.3', 'a finished milestone alone no longer bumps the minor');
+    assert.equal(nextVersion('1.4.2'), '1.4.3');
+  });
+
+  test('bump reads each item\'s kind, and says why (#863)', () => {
+    const it = (seq, more = {}) => ({ id: seq, seq, change: '', fixes: null, breaking: '', ...more });
+    assert.deepEqual(bump('1.2.3', [it(1, { change: 'fix' }), it(2, { breaking: 'Move to /v2', change: 'internal' })]),
+      { version: '2.0.0', why: '2.0.0: major, for 1 breaking change (#2)' });
+    assert.deepEqual(bump('1.2.3', [it(1, { change: 'feature' }), it(2, { change: 'fix' }), it(3, { change: 'feature' })]),
+      { version: '1.3.0', why: '1.3.0: minor, for 2 features (#1, #3); no breaking change' });
+    assert.deepEqual(bump('1.2.3', [it(1, { change: 'fix' }), it(2, { change: 'internal' }), it(3, { fixes: 9 })]),
+      { version: '1.2.4', why: '1.2.4: patch, for 2 fixes, 1 internal change (#1, #2, #3); no breaking change or feature' });
+    assert.equal(bump('1.2.3', [it(1)]).version, '1.3.0', 'an item with no kind counts as a feature');
+    assert.equal(changeOf(it(1)), 'feature');
+    assert.equal(changeOf(it(1, { fixes: 4 })), 'fix', 'an item that repairs landed work is a fix');
+    assert.equal(changeOf(it(1, { fixes: 4, change: 'internal' })), 'internal', 'what it says wins');
+    // 0.x keeps the old rule, and says so.
+    assert.equal(bump('0.11.0', [it(1, { change: 'feature' })]).version, '0.11.1');
+    assert.equal(bump('0.11.0', [it(1, { breaking: 'x' })]).why, '0.12.0: minor while on 0.x, for 1 breaking change (#1)');
+    assert.equal(bump('0.11.0', [it(1), it(2)], [it(2)]).why, '0.12.0: minor, for 1 finished milestone (#2); no breaking change');
+    // A milestone counts by its parts, unless it says its own kind.
+    assert.equal(bump('1.2.3', [it(1, { change: 'fix' }), it(2)], [it(2)]).version, '1.2.4');
+    assert.equal(bump('1.2.3', [it(1, { change: 'fix' }), it(2, { change: 'feature' })], [it(2)]).version, '1.3.0');
+    const many = Array.from({ length: 12 }, (_, k) => it(k + 1));
+    assert.match(bump('1.0.0', many).why, /^1\.1\.0: minor, for 12 features \(#1, .*#10, 2 more\); no breaking change$/);
+  });
+});
+
+describe('each item says its kind of change (#863)', () => {
+  test('propose and refine set change; a wrong kind is refused with a hint; "" leaves it unsaid', () => {
+    const w = world({ tags: [['v1.0.0', T0]] });
+    w.hub.agentOp('p', 'checkin', 'a1', {});
+    w.hub.agentOp('p', 'propose', 'a1', { title: 'Add export', acceptance: 'x', change: 'feature' });
+    assert.equal(w.hub.q('SELECT change FROM items WHERE title = ?').get('Add export').change, 'feature');
+    const id = w.add('Fix the crash');
+    const change = () => w.hub.q('SELECT change FROM items WHERE title = ?').get('Fix the crash').change;
+    w.hub.agentOp('p', 'refine', 'a1', { item: id, change: 'fix' });
+    assert.equal(change(), 'fix');
+    assert.throws(() => w.hub.humanOp('p', 'update', { item: id, change: 'chore' }), (e) => /isn't a kind of change/.test(e.message) && /internal/.test(e.hint));
+    w.hub.humanOp('p', 'update', { item: id, change: '' });
+    assert.equal(change(), '');
+    assert.deepEqual(OPS.find((o) => o.name === 'propose').params.change.enum, ['feature', 'fix', 'internal']);
+    assert.ok(OPS.find((o) => o.name === 'refine').params.change, 'refine takes it too, "" included');
+    assert.match(MODE_RULES.shape, /Set change to its kind/);
+    assert.match(guide({ project: 'p' }), /Never create, move or push tags/);
+    assert.match(MODE_RULES.release, /Never create, move or push a tag yourself/);
+  });
+
+  test('after 1.0.0: features make the draft minor, fixes and internal work a patch, and the summary says why', () => {
+    const w = world({ tags: [['v1.2.3', T0]] });
+    w.milestone('Polish', [{ title: 'Fix the crash', change: 'fix' }, { title: 'Tidy tests', change: 'internal' }]);
+    const [r] = w.releases();
+    assert.equal(r.title, 'Release v1.2.4', 'a milestone of fixes and internal work is a patch');
+    assert.match(r.summary, /^What landed since v1\.2\.3\.\n\n1\.2\.4: patch, for 1 fix, 1 internal change \(#\d+, #\d+\); no breaking change or feature\.\n\n/);
+    w.done(w.add('Add export')); // no kind: a feature
+    w.hub.humanOp('p', 'release');
+    assert.equal(w.releases().length, 1);
+    assert.equal(w.releases()[0].title, 'Release v1.3.0');
+    assert.match(w.releases()[0].summary, /\n\n1\.3\.0: minor, for 1 feature \(#\d+\); no breaking change\.\n\n/);
+  });
+
+  test('a person\'s higher version is kept through redrafts, and the summary says so (#679)', () => {
+    const w = world({ pkg: '0.11.0' });
+    w.milestone('Push', [{ title: 'Add export', change: 'feature' }]);
+    const [r] = w.releases();
+    assert.equal(r.title, 'Release v0.12.0', 'on 0.x a finished milestone is minor');
+    w.hub.humanOp('p', 'update', { item: r.id, title: 'Release v1.0.0' });
+    w.milestone('More', [{ title: 'Fix the crash', change: 'fix' }]);
+    assert.equal(w.releases().length, 1);
+    assert.equal(w.releases()[0].title, 'Release v1.0.0', 'a redraft keeps the version a person set');
+    assert.match(w.releases()[0].summary, /\n\n1\.0\.0: set by a person; by what landed it would be 0\.12\.0: minor, for 2 finished milestones/);
   });
 });
 
@@ -105,7 +179,7 @@ describe('a finished milestone drafts the release (#399)', () => {
     assert.equal(w.releases()[0].title, 'Release v1.0.0', 'a redraft keeps the version a person set');
     assert.equal(releaseVersion(w.releases()[0]), '1.0.0');
     assert.equal(nextVersion('1.0.0', { breaking: true }), '2.0.0');
-    assert.equal(nextVersion('1.0.0', { milestone: true }), '1.1.0');
+    assert.equal(nextVersion('1.0.0', { feature: true }), '1.1.0');
   });
 
   test('no tag and no version file: the first release is 0.1.0, of everything done', () => {
@@ -218,7 +292,7 @@ describe('asking for a release (#399)', () => {
   test('a person asks for one at any time: a patch for a fix, the same way', () => {
     const w = world({ releases: 'off', tags: [['v1.0.0', T0]] });
     assert.throws(() => w.hub.humanOp('p', 'release'), /Nothing has landed since v1\.0\.0/);
-    w.done(w.add('Fix the crash'));
+    w.done(w.add('Fix the crash', { change: 'fix' }));
     const r = w.hub.humanOp('p', 'release');
     assert.equal(r.title, 'Release v1.0.1');
     assert.match(w.releases()[0].summary, /\*\*In this release\*\*\n\n- Fix the crash/);
@@ -229,7 +303,7 @@ describe('asking for a release (#399)', () => {
   test('an agent asks through propose with release', () => {
     const w = world({ tags: [['v1.0.0', T0]] });
     w.hub.agentOp('p', 'checkin', 'a1', {});
-    w.done(w.add('Fix the crash'));
+    w.done(w.add('Fix the crash', { change: 'fix' }));
     const r = w.hub.agentOp('p', 'propose', 'a1', { title: 'Release', release: true });
     assert.equal(r.title, 'Release v1.0.1');
     assert.equal(w.hub.agentOp('p', 'propose', 'a1', { title: 'Release', release: true }).item, r.item, 'asked again: the same item');

@@ -12,16 +12,19 @@ const capped = (maxLength, description) => ({ type: 'string', maxLength, ...(des
 // An item is "#12", "12" or "nuworq-12": claim's says so once.
 const ITEM = { type: 'string' };
 const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Paths you change, so others steer clear.' };
-const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Tags a taker must have (checkin has), e.g. ["docker"].' };
+const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Tags a taker must have, e.g. ["docker"].' };
 const SIZE = { type: 'string', enum: ['small', 'large'], description: 'large: multi-step.' };
 // How hard an item is (#348): set when shaping, with a one-line reason. Unrated counts as standard.
 const DIFFICULTY = {
-  difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'rote: a cheap model could; hard: needs the strongest.' },
+  difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'rote: a cheap model; hard: the strongest.' },
   difficulty_why: s('Why, one line.'),
 };
-const FIXES = s('The landed item this repairs (counts as an escape).');
+const FIXES = s('The landed item this repairs.');
 // Who an item breaks once it ships (#398): the release that carries it bumps by who must act. Its example is in MODE_RULES.shape.
-const BREAKING = s('Who must act when it ships, one line.');
+const BREAKING = s('Who must act when it ships.');
+// Its kind of change (#863), for the release's semver bump. How to choose, and that unset counts as a feature, is
+// in MODE_RULES.shape.
+const CHANGE = { type: 'string', enum: ['feature', 'fix', 'internal'] };
 // A runner records its workers' usage itself, so a worker isn't offered it.
 const USAGE = {
   type: 'object',
@@ -91,9 +94,9 @@ export const MODE_RULES = {
   // An operator's next, for its answer and live-step jobs.
   operator: `${OPERATOR_NEXT} Build an item yourself only when it is the step on real infrastructure: its code, docs and tests are for workers. Declare only the capabilities you really have. Never pass your powers on: workers you start get no operator tag, tokens or permissions. Keep work moving without the human: read the hub first (questions, decisions, earlier answers and waivers) and act on what they settle; make reversible calls yourself, recording what changed and how to undo it. Ask the human only for what only they can do (their accounts, keys, signing, money, a CAPTCHA, an irreversible step or product call no decision covers), as one hub question with escalates and evidence, plus steps when they must act. Your client's own permission prompts still apply.`,
   // A shaping job: rating it, and saying who a change makes act.
-  shape: 'Work that can only start after an outside event (a release tag, a date, a vendor change) gets a precondition, and work only an operator can do gets an operator tag. Rate its difficulty (rote, standard or hard) with a one-line difficulty_why. Set breaking when shipping it makes someone on the previous version act (an API route or tool removed or changed incompatibly, a CLI command or flag removed, the runtime minimum raised, a manual migration), in one line saying who must do what, e.g. "Machines on Node 24 must upgrade to 26 before `nuworq update`"; dev tools and a runtime only tested in CI break nobody. Infra work (it would need an operator tag such as infra) comes in two parts: it carries no operator tag, so any worker builds its code, docs and tests, and the step on real infrastructure is an ask to: "operator" with steps (the exact command, how to check), whose answer is the evidence; only when that live step is all there is, it is a small child item with the tag. A top-level item with parts is a milestone: its title names what is released when it is done. An item in the wrong milestone: refine it with parent ("" takes it out).',
+  shape: 'Work that can only start after an outside event (a release tag, a date, a vendor change) gets a precondition, and work only an operator can do gets an operator tag. Rate its difficulty (rote, standard or hard) with a one-line difficulty_why. Set breaking when shipping it makes someone on the previous version act (an API route or tool removed or changed incompatibly, a CLI command or flag removed, the runtime minimum raised, a manual migration), in one line saying who must do what, e.g. "Machines on Node 24 must upgrade to 26 before `nuworq update`"; dev tools and a runtime only tested in CI break nobody. Set change to its kind, which picks the release\'s semver bump: feature when people can see something new or different (a new tool, setting or screen), fix when it repairs behavior that was wrong (an item with fixes is one; e.g. a crash on an empty list), internal when nobody outside sees it (docs, tests, tooling, a refactor). Unset counts as a feature. Infra work (it would need an operator tag such as infra) comes in two parts: it carries no operator tag, so any worker builds its code, docs and tests, and the step on real infrastructure is an ask to: "operator" with steps (the exact command, how to check), whose answer is the evidence; only when that live step is all there is, it is a small child item with the tag. A top-level item with parts is a milestone: its title names what is released when it is done. An item in the wrong milestone: refine it with parent ("" takes it out).',
   // A review, whatever the item.
-  review: 'Check breaking too: set when the change makes someone act, and saying accurately who must do what; reject it when missing, wrong, or set on a change that breaks nobody. Reject any item but a release that changes the version.',
+  review: 'Check breaking too: set when the change makes someone act, and saying accurately who must do what; reject it when missing, wrong, or set on a change that breaks nobody. Check change (feature, fix or internal) fits what it does; if not, refine it. Reject any item but a release that changes the version, and any work that creates or moves a tag.',
   // A tidy job (src/tidy.js).
   tidy: 'Look for open work in no milestone, two milestones after the same outcome, a milestone whose parts are all done or dropped, a pull request no item tracks, and ready items untouched for 21 days. A stale ready item: recommend keeping, refining or dropping it, with a reason; refine it yourself if that is the fix; to drop it, ask the person on that item (no assumption) and drop it with refine drop only once they answer. Merge two milestones by moving one\'s parts into the other; propose a parent for a cluster. Give every change a one-line reason: it goes on both parents\' history. Never touch a priority a person set or a decision; if one looks wrong, say so in your submit.',
   // A field-notes tidy (src/fieldnotes.js), after the hint's own steps.
@@ -103,7 +106,7 @@ export const MODE_RULES = {
   // A security audit (src/security.js), before a release or of one area a month.
   security: 'This is a security audit: read, don\'t fix the code here (only the threat model changes on its branch). Start from the threat model (docs/SECURITY-MODEL.md) and the attackers it names; rate each finding critical, high, medium or low by who can do it and what they get, and propose each one as its own item with the fix and a regression test named for what it guards. Never put a working exploit in an item, comment or evidence: they are as public as the repository. Title a finding by what its fix guards, not by how to break it (a live view shows titles).',
   // A release item (src/releases.js), after the version and changelog steps.
-  release: 'Only a release item changes the version: reviewers reject any other that does. Land it like any work; once main has it, the hub tags that commit (when it can\'t, the land submit gives you the tag command). When the project signs releases, the key is a person\'s: after it lands, ask the person who signs (no item: name the release in the question) with steps, the sign command and how to check it.',
+  release: 'Only a release item changes the version: reviewers reject any other that does. Its title, the version file and CHANGELOG.md\'s first entry say the same version; the summary says why it is that version, and a person may raise it. Land it like any work; once main has it, the hub tags that commit vMAJOR.MINOR.PATCH (when it can\'t, it asks an operator to). Never create, move or push a tag yourself. When the project signs releases, the key is a person\'s: after it lands, ask the person who signs (no item: name the release in the question) with steps, the sign command and how to check it.',
 };
 
 const REPO = s('e.g. "github.com/acme/api"; default the project\'s first.');
@@ -225,17 +228,18 @@ export const OPS = [
   },
   {
     name: 'propose',
-    description: "Add work you noticed (don't silently expand your current item).",
+    description: "Add work you noticed; don't grow your current item.",
     params: {
       title: s('The outcome, not the activity.'),
       summary: capped(4_000, 'Why it matters, what you know.'),
       detail: LAYERS.detail,
-      acceptance: capped(4_000, 'What done means: checkable criteria.'),
+      acceptance: capped(4_000, 'Checkable criteria for done.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'], description: 'Default "soon".' },
       parent: s('The item it is part of.'),
       depends_on: { type: 'array', maxItems: 30, items: { type: 'string' }, description: 'Items to finish first.' },
       fixes: FIXES,
       breaking: BREAKING,
+      change: CHANGE,
       needs: NEEDS,
       size: SIZE,
       repo: REPO,
@@ -247,7 +251,7 @@ export const OPS = [
   {
     name: 'refine',
     // Its fields shared with propose are described there; here, once, that a value replaces the item's.
-    description: 'Improve an item. Fields as propose\'s: what you send replaces the item\'s, "" or [] clears it (parent "": top-level). Acceptance on a proposal can make it ready.',
+    description: 'Improve an item. Fields as propose\'s: what you send replaces the item\'s, "" or [] clears it (parent "": top-level). Acceptance can make a proposal ready.',
     params: {
       item: ITEM,
       title: { type: 'string' },
@@ -257,18 +261,19 @@ export const OPS = [
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', maxItems: 30, items: { type: 'string' } },
       parent: { type: 'string' },
-      pr: s('A pull request a tidy job lists, e.g. "acme/api#12".'),
-      reason: s('Why, one line (tidy jobs: always).'),
+      pr: s('A pull request a tidy job found, e.g. "acme/api#12".'),
+      reason: s('Why, in a line (tidy: always).'),
       fixes: { type: 'string' },
       breaking: { type: 'string' },
+      change: { type: 'string' },
       needs: { type: 'array', items: { type: 'string' } },
       size: { type: 'string', enum: SIZE.enum },
       ...DIFFICULTY,
       repo: { type: 'string' },
       precondition: PRECONDITION_REF,
-      duplicate_of: s('Imported issue: the item it duplicates; drops this one.'),
+      duplicate_of: s('Imported issue: the item it duplicates (drops this).'),
       stale: s('Imported issue: why it is stale.'),
-      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Hard items: how many agents may try at once.' },
+      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Hard items: how many agents may race it.' },
       drop: { type: 'integer', description: 'Drops it: the person\'s answer saying so.' },
     },
     required: ['item'],
@@ -537,12 +542,12 @@ Use \`${command}\` with \`--as <your-name>\` on every command (or NUWORQ_AGENT).
 1. ${c('checkin')} with \`has\`: what your machine can do (docker, macos, browser…), so you get only work you can finish. ${c('ack')} each steer.
 2. ${c('next')} claims one job (work, shape, review, land, tidy, answer); its hint says how to do that kind. Read done_means, history and last_handoff: don't repeat what failed.
 3. Once you know your files, ${c('progress')} with \`touching\`, then at real milestones. Your lease renews by itself while you make calls.
-4. Done? ${c('submit')} with evidence a reviewer checks fast: tests and results, branch and commit. Run the tests near your change; the whole suite only where the hint says CI doesn't check the pull request. Never mark your own work done. Evidence is as public as the repository: from a demo or local hub, never a live workspace's data.
+4. Done? ${c('submit')} with evidence a reviewer checks fast: tests and results, branch and commit. Run the tests near your change; the whole suite only where the hint says CI doesn't check the pull request. Never mark your own work done. Never create, move or push tags. Evidence is as public as the repository: from a demo or local hub, never a live workspace's data.
 5. Can't finish, or low on context? ${c('handoff')}: what's done, what's next. A person said to drop it? ${c('refine')} with \`drop\` set to that question.
 6. Other work? ${c('propose')} it with acceptance criteria; don't grow your item. If it repairs landed work, set \`fixes\` to that item. Learned something the hard way? ${c('learn')} it. nuworq got in your way? ${c('feedback')}.
 7. Leaving? ${c('signoff')}.
 
-Model traffic through llm-proxy? Label it \`x-client-name: nuworq/<project>/<your agent name>\` (Claude Code: ANTHROPIC_CUSTOM_HEADERS) so the hub can measure each item's cost; workers nuworq starts do this for you.
+Model traffic through llm-proxy? Label it \`x-client-name: nuworq/<project>/<your agent name>\` (Claude Code: ANTHROPIC_CUSTOM_HEADERS) for each item's cost; nuworq's own workers have it.
 
 ## Asking
 - A reasonable call? ${c('ask')} with an \`assumption\` and keep going.

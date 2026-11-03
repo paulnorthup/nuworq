@@ -460,6 +460,16 @@ function renamedTags(v) {
 }
 export const SIZES = ['small', 'large'];
 
+// An item's kind of change, for the release's semver bump (#863): '' leaves it unsaid. Anything else is refused.
+export const CHANGES = ['feature', 'fix', 'internal'];
+function changeKind(v) {
+  const c = str(v).toLowerCase();
+  if (c && !CHANGES.includes(c)) {
+    throw new UserError(`change "${str(v)}" isn't a kind of change`, { hint: 'Use feature (people see something new or different), fix (it repairs wrong behavior) or internal (docs, tests, tooling, refactors nobody outside sees); "" leaves it unsaid, which counts as a feature.' });
+  }
+  return c;
+}
+
 // A model whose name says it has ≤8B parameters (qwen3:8b, Llama-3.1-8B-Instruct, gemma3n:e2b).
 export function smallModel(model = '') {
   const m = String(model ?? '').toLowerCase().match(/(?:^|[^\d.])(\d+(?:\.\d+)?)b(?![a-z0-9])/);
@@ -2220,6 +2230,7 @@ export class Hub extends EventEmitter {
       precondition: preconditionOut(item),
       done_means: item.acceptance || 'No acceptance criteria yet. Write them with refine before you submit, so a reviewer knows what to check.',
       breaking: item.breaking || undefined, // who must do what once it ships (#398)
+      change: item.change || undefined, // feature, fix or internal, for the release's bump (#863)
       issue: issue?.url || undefined, // the GitHub issue it came from
       repo: this.repoOf(p, item) || undefined,
       branch: item.branch || undefined,
@@ -4196,6 +4207,7 @@ Object.assign(Hub.prototype, {
     const repo = this.checkRepo(p, args.repo);
     const human = isHuman(actor);
     const pre = normPrecondition(args.precondition);
+    const change = changeKind(args.change);
     const gate = args.gate || parent?.gate ? 1 : 0; // a gated proposal's parts wait for the same OK (#296)
     let stage = human ? (args.stage === 'proposed' ? 'proposed' : 'ready')
       : !waitsForOk(p, { gate }) && acceptance ? 'ready' : 'proposed';
@@ -4206,8 +4218,8 @@ Object.assign(Hub.prototype, {
     const needs = JSON.stringify(normTags(args.needs));
     const size = SIZES.includes(args.size) ? args.size : '';
     const fixes = this.fixesOf(p, args.fixes);
-    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at, fixes, gate, breaking)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t, fixes?.id ?? null, gate, str(args.breaking));
+    const r = this.q(`INSERT INTO items (project_id, seq, title, summary, detail, acceptance, stage, priority, parent_id, created_by, needs, size, repo, precondition, next_check, stage_since, created_at, updated_at, fixes, gate, breaking, change)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, seq, title, summary, detail, acceptance, stage, priority, parent?.id ?? null, actor, needs, size, repo, pre ? JSON.stringify(pre) : '', t, t, t, t, fixes?.id ?? null, gate, str(args.breaking), change);
     const item = this.itemById(Number(r.lastInsertRowid));
     if (human && isPriority(args.priority)) this.patch(item, { priority_by: actor }); // a person chose it (#202)
     this.q('INSERT INTO transitions (item_id, stage, actor, at) VALUES (?, ?, ?, ?)').run(item.id, stage, actor, t);
@@ -4278,6 +4290,11 @@ Object.assign(Hub.prototype, {
     if (args.breaking != null && str(args.breaking) !== item.breaking) {
       set.breaking = str(args.breaking);
       changed.push(set.breaking ? `breaking: ${set.breaking}` : 'breaks nobody');
+    }
+    // What kind of change it is, for the release's bump (#863): "" leaves it unsaid.
+    if (args.change != null && changeKind(args.change) !== item.change) {
+      set.change = changeKind(args.change);
+      changed.push(set.change ? `change: ${set.change}` : 'change unsaid');
     }
     if (args.fixes != null) {
       const fixes = this.fixesOf(p, args.fixes, item);

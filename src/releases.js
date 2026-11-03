@@ -1,8 +1,10 @@
 // Releases (#399): in a project set to release per milestone, a finished milestone makes the hub draft the
 // next release as one "Release vX.Y.Z" item, from what landed since the last one. A person can ask for one at
-// any time too (a patch for an urgent fix). The version bumps by who must act: any breaking item makes it
-// major (minor while on 0.x), any finished milestone minor, anything else a patch. The draft changelog is the
-// item's summary, which a person may edit before signing: a redraft then only adds what it doesn't mention.
+// any time too (a patch for an urgent fix). From 1.0.0 the version bumps by semver (#863): any breaking item
+// makes it major, otherwise any feature minor, otherwise (only fixes and internal work) a patch. On 0.x a
+// breaking item or a finished milestone makes it minor, anything else a patch, until a person sets 1.0.0. The
+// draft changelog is the item's summary, which a person may edit before signing: a redraft then only adds what
+// it doesn't mention, and keeps a higher version a person set.
 import { SYSTEM, UserError } from './core.js';
 import { lastRelease, shaOf, tagAt } from './git.js';
 import { reviewRelease } from './security.js';
@@ -16,12 +18,39 @@ const ACCEPTANCE = [
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
-// The next version after last, by what's in it.
-export function nextVersion(last, { breaking = false, milestone = false } = {}) {
+// The next version after last, by what's in it: semver from 1.0.0; on 0.x, breaking or a milestone is minor.
+export function nextVersion(last, { breaking = false, feature = false, milestone = false } = {}) {
   const [, a, b, c] = (SEMVER.exec(last ?? '') ?? [0, 0, 0, 0]).map(Number);
   if (breaking) return a ? `${a + 1}.0.0` : `0.${b + 1}.0`;
-  if (milestone) return `${a}.${b + 1}.0`;
+  if (a ? feature : milestone) return `${a}.${b + 1}.0`;
   return `${a}.${b}.${c + 1}`;
+}
+
+// An item's kind of change (#863): what it says, else a fix when it repairs landed work, else a feature, so an
+// unsaid kind never makes the bump too small.
+export const changeOf = (it) => it.change || (it.fixes ? 'fix' : 'feature');
+
+// The version items bring after last, and one line saying why, e.g. "1.1.0: minor, for 3 features (#870, #871,
+// #874); no breaking change".
+// A finished milestone counts by its parts, unless it says its own kind.
+export function bump(last, items, milestones = []) {
+  const parts = items.filter((it) => it.change || !milestones.some((m) => m.id === it.id));
+  const counted = parts.length ? parts : items;
+  const breaking = items.filter((it) => it.breaking), features = counted.filter((it) => changeOf(it) === 'feature');
+  const version = nextVersion(last, { breaking: breaking.length > 0, feature: features.length > 0, milestone: milestones.length > 0 });
+  const zero = !Number((SEMVER.exec(last ?? '') ?? [0, 0])[1]);
+  const n = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  const refs = (its) => { const s = its.slice(0, 10).map((it) => `#${it.seq}`); if (its.length > 10) s.push(`${its.length - 10} more`); return `(${s.join(', ')})`; };
+  let why;
+  if (breaking.length) why = `${zero ? 'minor while on 0.x' : 'major'}, for ${n(breaking.length, 'breaking change')} ${refs(breaking)}`;
+  else if (!zero && features.length) why = `minor, for ${n(features.length, 'feature')} ${refs(features)}; no breaking change`;
+  else if (zero && milestones.length) why = `minor, for ${n(milestones.length, 'finished milestone')} ${refs(milestones)}; no breaking change`;
+  else {
+    const fixes = counted.filter((it) => changeOf(it) === 'fix').length, internal = counted.length - fixes - features.length;
+    const what = [fixes && n(fixes, 'fix', 'fixes'), internal && n(internal, 'internal change'), zero && features.length && n(features.length, 'feature')].filter(Boolean).join(', ');
+    why = `patch, for ${what} ${refs(counted)}; ${zero ? 'no breaking change or finished milestone' : 'no breaking change or feature'}`;
+  }
+  return { version, why: `${version}: ${why}` };
 }
 
 // The project's open release, if any.
@@ -50,8 +79,8 @@ function contents(hub, p) {
   const since = ours ? prev : Math.max(prev, tagged.at);
   const items = hub.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'done' AND stage_since > ? AND release = 0 AND sweep = 0 AND tidy = '' AND security = '' ORDER BY seq`).all(p.id, since);
   const milestones = items.filter((it) => isMilestone(hub, it));
-  const version = nextVersion(last.version, { breaking: items.some((it) => it.breaking), milestone: milestones.length > 0 });
-  return { last, items, milestones, version };
+  const { version, why } = bump(last.version, items, milestones);
+  return { last, items, milestones, version, why };
 }
 
 // The changelog for items: each finished milestone with its parts under it, then the rest, then upgrade notes.
@@ -74,12 +103,14 @@ function changelog(hub, items, milestones) {
 export function draftRelease(hub, p, by = SYSTEM) {
   const open = openRelease(hub, p);
   if (open && !['proposed', 'ready', 'outside', 'waiting'].includes(open.stage)) return open;
-  const { last, items, milestones, version } = contents(hub, p);
+  const { last, items, milestones, version, why } = contents(hub, p);
   if (!items.length) return open ?? null;
   const since = last.tag ? `since ${last.tag}` : `since ${last.version === '0.0.0' ? 'the start' : `v${last.version}`}`;
-  const draft = `What landed ${since}.\n\n${changelog(hub, items, milestones)}`;
-  // A person may raise the version (to 1.0.0 on 0.x, say): a redraft never lowers it.
-  const title = `Release v${open && compare(releaseVersion(open), version) > 0 ? releaseVersion(open) : version}`;
+  // A person may raise the version (to 1.0.0 on 0.x, say): a redraft never lowers it (#679).
+  const raised = open && compare(releaseVersion(open), version) > 0 ? releaseVersion(open) : null;
+  const reason = raised ? `${raised}: set by a person; by what landed it would be ${why}` : why;
+  const draft = `What landed ${since}.\n\n${reason}.\n\n${changelog(hub, items, milestones)}`;
+  const title = `Release v${raised ?? version}`;
   const through = hub.now();
   if (!open) {
     const it = hub.createItem(p, by, { title, summary: draft, acceptance: ACCEPTANCE, priority: 'soon' });
