@@ -2402,21 +2402,28 @@ export class Hub extends EventEmitter {
   }
 
   // The names on a project that the agent's token is bound to (#851), the agent's own among them; null when the
-  // agent has no token (a hub without logins, or a person's browser session).
+  // agent has no token (a hub without logins, or a person's browser session). A person mints tokens freely through
+  // device login, so the names of every token the same person minted count together (#857), their machines' runner
+  // tokens among them; a token no person minted (a named runner's, an admin's) counts on its own.
   tokenNames(p, agent) {
     const a = this.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
     if (a?.token_id == null) return null;
+    try {
+      return this.q(`SELECT name FROM agents WHERE project_id = ? AND (token_id = ? OR token_id IN
+        (SELECT id FROM tokens WHERE minted_by = (SELECT minted_by FROM tokens WHERE id = ?)))`).all(p.id, a.token_id, a.token_id).map((r) => r.name);
+    } catch { /* no tokens table: a hub without logins */ }
     return this.q('SELECT name FROM agents WHERE project_id = ? AND token_id = ?').all(p.id, a.token_id).map((r) => r.name);
   }
 
-  // Refuses a token's write once its names hold their share of a project cap (#851), so other tokens' agents keep room.
+  // Refuses a person's write once their tokens' names hold their share of a project cap (#851, #857), so other
+  // people's agents keep room.
   tokenShare(p, agent, count, cap, what, hint) {
     const names = this.tokenNames(p, agent);
     if (!names) return;
     const most = Math.floor(cap * TOKEN_SHARE);
     if (count(names) < most) return;
-    throw new UserError(`This agent's token already has ${commas(most)} of ${p.name}'s ${what}, under all its names, the most one token may`, {
-      status: 429, hint: `${hint} Checking in under another name adds no room; other tokens' agents still have theirs.`,
+    throw new UserError(`This agent's tokens already have ${commas(most)} of ${p.name}'s ${what}, under all the names of the tokens one person minted, the most one person's may`, {
+      status: 429, hint: `${hint} The share is per person: checking in under another name adds no room, and connecting another machine adds no room; other people's agents still have theirs.`,
     });
   }
 

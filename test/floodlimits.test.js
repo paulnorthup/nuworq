@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, LIMITS, TOKEN_SHARE } from '../src/core.js';
+import { Auth } from '../src/auth.js';
 
 // One agent can't flood a hub (#766): a write window per agent, and caps on what a project or hub holds.
 function hub() {
@@ -138,6 +139,43 @@ test("one token can't fill a project's comment day or field notes for other agen
   assert.ok(h.agentOp('app', 'learn', 't1', { note: 'Says it better', replaces: old }, as).ok);
   h.tick(24 * 60 * 60_000 + 1);
   assert.ok(h.agentOp('app', 'comment', 't1', { headline: 'A day on' }, as).ok);
+});
+
+test("one person's tokens together can't fill a project's comment day or field notes", () => {
+  const h = hub();
+  const p = h.project('app');
+  const auth = new Auth(h.db);
+  auth.addPerson('sam', 'member');
+  auth.addPerson('kim', 'member');
+  const id = (name) => h.q('SELECT id FROM tokens WHERE name = ?').get(name).id;
+  // Sam connects two machines; Kim one; an admin's token has no minter.
+  for (const [name, mintedBy] of [['sam@laptop', 'sam'], ['sam@desktop', 'sam'], ['kim@laptop', 'kim'], ['ci', undefined]]) auth.createToken(name, 'agent', { mintedBy });
+  const sam1 = { identity: { id: id('sam@laptop') } }, sam2 = { identity: { id: id('sam@desktop') } };
+  const kim = { identity: { id: id('kim@laptop') } }, ci = { identity: { id: id('ci') } };
+  h.agentOp('app', 'checkin', 's1', {}, sam1);
+  h.agentOp('app', 'checkin', 's2', {}, sam2);
+  h.agentOp('app', 'checkin', 'k1', {}, kim);
+  h.agentOp('app', 'checkin', 'c1', {}, ci);
+  const comments = LIMITS.commentsPerDay * TOKEN_SHARE, notes = LIMITS.fieldNotes * TOKEN_SHARE;
+  // Sam's share, split over the two machines; each token alone is under it.
+  for (let i = 0; i < comments; i++) {
+    h.q(`INSERT INTO events (project_id, actor, type, headline, at) VALUES (?, ?, 'comment', ?, ?)`).run(p.id, i % 2 ? 's1' : 's2', `C${i}`, h.now() - i);
+  }
+  for (let i = 0; i < notes; i++) {
+    h.q(`INSERT INTO notes (project_id, kind, author, body, at) VALUES (?, 'learning', ?, ?, ?)`).run(p.id, i % 2 ? 's1' : 's2', `N${i}`, h.now());
+  }
+  refused(() => h.agentOp('app', 'comment', 's1', { headline: 'One more' }, sam1), 429, /per person.*another machine adds no room/);
+  refused(() => h.agentOp('app', 'comment', 's2', { headline: 'One more' }, sam2), 429, /another machine adds no room/);
+  refused(() => h.agentOp('app', 'learn', 's2', { note: 'One more' }, sam2), 429, /replaces.*per person/);
+  // A third machine of Sam's has no room of its own.
+  auth.createToken('sam@tablet', 'agent', { mintedBy: 'sam' });
+  const sam3 = { identity: { id: id('sam@tablet') } };
+  h.agentOp('app', 'checkin', 's3', {}, sam3);
+  refused(() => h.agentOp('app', 'comment', 's3', { headline: 'New machine' }, sam3), 429, /another machine adds no room/);
+  // Another person's token, and a token no person minted, still comment and learn.
+  assert.ok(h.agentOp('app', 'comment', 'k1', { headline: 'Its own share' }, kim).ok);
+  assert.ok(h.agentOp('app', 'learn', 'k1', { note: 'Its own note' }, kim).ok);
+  assert.ok(h.agentOp('app', 'comment', 'c1', { headline: 'No minter' }, ci).ok);
 });
 
 test('a project holds at most 200 open questions and 500 proposed items', () => {
