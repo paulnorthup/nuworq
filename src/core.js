@@ -1144,7 +1144,7 @@ export class Hub extends EventEmitter {
   // sent back or unparked (#734). Reviews and shaping let go don't count, nor lapsed leases (those are bounceOf's).
   handbacks(item) {
     const since = this.q(`SELECT MAX(id) AS id FROM events WHERE item_id = ? AND type IN ('submitted', 'sent_back', 'unparked')`).get(item.id).id ?? 0;
-    return this.q(`SELECT COUNT(*) AS n FROM events WHERE item_id = ? AND type = 'handoff' AND id > ? AND json_extract(data, '$.stage') = 'active'`).get(item.id, since).n;
+    return this.q(`SELECT COUNT(*) AS n FROM events WHERE item_id = ? AND type = 'handoff' AND id > ? AND json_extract(data, '$.stage') = 'active' AND json_extract(data, '$.held') IS NULL`).get(item.id, since).n;
   }
 
   // An attempt on item failed (sent back, stalled, handed off, lease lost): its next one goes up a tier (#347). With
@@ -3037,10 +3037,12 @@ const SHAPE_HINT = (item, p, repos = []) => [
 // base: the branch it lands on, in the item's repo. repo: named when the project has several.
 // --no-track (#724): cut from origin, git would write the upstream into the checkout's .git/config, which a
 // sandboxed worker may not write (#606); pushes name the branch, so it needs none.
+// Work that can't be built yet, or not by a worker, is held back in the hand-off, not handed back plain (#859).
+const HOLD_HINT = 'If it can only start after an outside event (a release tag, a date, a vendor change), handoff with a precondition; if only an operator can do it, handoff with needs ["operator"]. Neither counts as a failed hand-back, and no new worker is started for it.';
 const WORK_HINT = (item, p, remote = false, base = 'main', repo = '') => !item.branch ? ''
   : remote
-    ? `${repo ? `This is in ${repo}: work in a clone of it. ` : ''}Work on branch ${item.branch}, cut from the latest ${base} on origin: git fetch origin, then git switch --no-track -c ${item.branch} origin/${base} (or git switch ${item.branch} if it exists). Work in a git worktree or a clone of your own, not a checkout another agent is using. Commit as you go. Before you submit, push the branch (git push origin ${item.branch}) so reviewers anywhere can see it.`
-    : `${repo ? `This is in ${repo}. ` : ''}Work on branch ${item.branch}, cut from the latest ${base}: git switch -c ${item.branch} ${base} (or git switch ${item.branch} if it exists). Work in a git worktree, never in ${p.path || 'the main checkout'} itself: it stays on ${base} so work can land there. Commit as you go.`;
+    ? `${repo ? `This is in ${repo}: work in a clone of it. ` : ''}Work on branch ${item.branch}, cut from the latest ${base} on origin: git fetch origin, then git switch --no-track -c ${item.branch} origin/${base} (or git switch ${item.branch} if it exists). Work in a git worktree or a clone of your own, not a checkout another agent is using. Commit as you go. Before you submit, push the branch (git push origin ${item.branch}) so reviewers anywhere can see it. ${HOLD_HINT}`
+    :`${repo ? `This is in ${repo}. ` : ''}Work on branch ${item.branch}, cut from the latest ${base}: git switch -c ${item.branch} ${base} (or git switch ${item.branch} if it exists). Work in a git worktree, never in ${p.path || 'the main checkout'} itself: it stays on ${base} so work can land there. Commit as you go. ${HOLD_HINT}`;
 // remote: main is the one on origin (GitHub). Pushing to it succeeds only as a fast-forward, so a
 // rejected push means main moved; the branch is pushed again too, so the hub can see main contains it.
 // unseen: the hub can't see the branch on origin, so it is pushed first. One git command at a time, and
@@ -3908,6 +3910,13 @@ const AGENT_OPS = {
     const racing = this.racing(item);
     const was = item.stage;
     let park = false;
+    // Holding it back (#859): an outside event it waits on, or a tag only an operator has. Checked before anything changes.
+    const pre = args.precondition === undefined ? null : normPrecondition(args.precondition);
+    const needs = args.needs == null ? [] : normTags(args.needs);
+    const held = !!pre || needs.some((t) => OPERATOR_TAGS.includes(t));
+    if ((pre || needs.length) && (racing || item.stage !== 'active')) {
+      throw new UserError(`#${item.seq} is ${racing ? 'a race' : item.stage}; a precondition or tag can only hold work you are building`, { status: 409, hint: 'Hand it off plainly, or say in a comment what it waits for.' });
+    }
     if (racing) {
       // Giving up a race slot: it opens for someone else, and the note stays for whoever takes it.
       this.endAttempt(item, agent, 'abandoned');
@@ -3921,15 +3930,20 @@ const AGENT_OPS = {
       this.patch(item, { holder: null, lease_until: null, last_worker: agent, touching: '[]', handoff: JSON.stringify({ kind: 'handoff', by: agent, headline, summary, at: this.now() }) });
     } else {
       // The third hand-back since the last submit (or unpark) parks it for a person instead (#734).
-      park = item.stage === 'active' && this.handbacks(item) + 1 >= HANDBACKS;
+      park = item.stage === 'active' && !held && this.handbacks(item) + 1 >= HANDBACKS;
+      const hold = {};
+      if (pre) Object.assign(hold, { precondition: JSON.stringify(pre), last_check: '', check_fails: 0, next_check: this.now() });
+      if (needs.length) Object.assign(hold, { needs: JSON.stringify([...new Set([...json(item.needs, []), ...needs])]), needs_since: this.now() });
+      this.patch(item, hold); // before the move: it sends work with an unmet precondition outside
       this.move(item, park ? 'waiting' : 'ready', agent, {
         holder: null, lease_until: null, last_worker: agent, touching: '[]',
         handoff: JSON.stringify({ kind: 'handoff', by: agent, headline, summary, at: this.now() }),
         ...(park ? { parked_by: SYSTEM } : {}),
       });
+      if (pre?.kind === 'ask') this.askPrecondition(item, agent);
     }
     // Why (#754): 'handoff' when the agent handed it back itself, else what signoff says (stoppedOf, or 'signoff').
-    this.event(p, { item, actor: agent, type: 'handoff', headline: `${agent} handed off #${item.seq}: ${headline}`, summary, detail, data: { stage: was, ...(args[STALL] ?? { cause: 'handoff' }) } });
+    this.event(p, { item, actor: agent, type: 'handoff', headline: `${agent} handed off #${item.seq}: ${headline}`, summary, detail, data: { stage: was, ...(args[STALL] ?? { cause: 'handoff' }), ...(held ? { held: true } : {}), ...(pre ? { precondition: pre } : {}), ...(needs.length ? { needs } : {}) } });
     if (park) {
       this.event(p, {
         item, actor: SYSTEM, type: 'kept_parked',
@@ -3942,6 +3956,11 @@ const AGENT_OPS = {
     if (item.stage !== 'verifying' && item.stage !== 'landing') this.stepUp(p, item, 'was handed off');
     if (racing) this.settleRace(p, item, agent);
     this.setStatus(p, agent, `Handed off #${item.seq}`);
+    if (held) {
+      const now = this.itemById(item.id);
+      const why = pre ? `It waits on ${describePrecondition(pre)} and becomes ready when that holds.` : INFRA_SPLIT(now);
+      return { ok: true, stage: now.stage, hint: `Handed off; #${item.seq} is held back. ${why} Call next or signoff.` };
+    }
     return { ok: true, hint: 'Handed off; the next agent will see your note. Call next or signoff.' };
   },
 
