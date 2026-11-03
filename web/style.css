@@ -215,7 +215,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .rail-pop.help-pop { position: static; flex: 1; min-width: 0; } /* its menu spans the whole foot line, not just ? Help */
 .rail-item.help-button { color: var(--muted); }
 .rail-item.help-button:hover, .help-button[aria-expanded="true"] { color: var(--ink); background: var(--sunken); }
-.help-q { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-right: var(--sp-1); border: var(--rule) solid currentColor; border-radius: 50%; font-size: var(--fs-1); font-weight: 600; }
+.help-q { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-right: var(--sp-1); border: var(--rule) solid currentColor; border-radius: var(--r-full); font-size: var(--fs-1); font-weight: 600; }
 /* The two menus: the workspace's drops from its name, help rises from its line. Drawn from the state, hidden closed. */
 .rail-pop { position: relative; }
 .ws-pop { margin: calc(-1 * var(--sp-2)) 0 var(--sp-3); }
