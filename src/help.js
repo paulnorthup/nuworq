@@ -55,10 +55,13 @@ export const COMMANDS = [
       ['--yes', 'staff the projects that aren\'t, without asking'],
       ['--no', "don't staff them, and don't ask again"],
       ['--budget <usd>', 'with staffing: the daily cap for their workers', '20'],
+      ['--no-browser', "workers get no browser, and up remembers it"],
+      ['--browser', 'workers get a browser again, after --no-browser'],
     ],
     example: 'nuworq up',
     notes: [
-      'The runner: it installs nuworq run as a service with --workers auto, restarts one whose flags differ, and leaves one that matches alone. Unstaffed projects that aren\'t parked: it asks once whether to staff them; a no is remembered.',
+      'The runner: it installs nuworq run as a service with --workers auto --browser, restarts one whose flags differ, and leaves one that matches alone. Unstaffed projects that aren\'t parked: it asks once whether to staff them; a no is remembered.',
+      "Workers come fully featured. On: --workers auto (as many as the CPUs and memory have room for) and --browser (a headless Chrome, so they can take UI work and look at it; with no Chrome here they go without, and the table says how to add it). Off: --can-read-keys, since codex, opencode and pi workers' shells could read this machine's keys; up's workers are Claude's, whose sandbox hides them.",
       'Operators: each unparked project with no operator on the hub gets Claude Code with /nuworq:operator in its clone here: in tmux when it is installed (the nuworq session, a window per project: tmux attach -t nuworq), else a Terminal or iTerm window on a Mac, else it prints the command. A project with no clone here is skipped, with where to clone it. Parked projects get none.',
       'Run it again any time: it starts only what is missing, and ends with a table of each project and the runner. nuworq down stops what it started.',
     ],
@@ -68,7 +71,7 @@ export const COMMANDS = [
     does: 'keep up to N headless workers on waiting work in the projects you opted in',
     usage: ['run [flags]', 'run --sweep [--dry-run]', 'run --install [run flags]', 'run --uninstall'],
     flags: [
-      ['--workers <n|auto>', 'workers at once; auto: one more only while the 1-minute load is under 80% of the cores and 2 GB of memory is free (at least one), and it says why when it holds', '1'],
+      ['--workers <n|auto>', 'workers at once; auto: one more only while the CPUs are under 80% busy (measured across all cores between polls) and 2 GB of memory is available (on macOS, free plus inactive) (at least one), and it says why when it holds', '1'],
       ['--max-workers <m>', 'with --workers auto: the most at once', 'half the cores'],
       ['--agent <name>', 'claude, codex, opencode or pi', 'claude'],
       ['--can-read-keys', "start codex, opencode or pi workers, whose shells can read this machine's keys (only Claude's sandbox hides them), on projects without a remote"],

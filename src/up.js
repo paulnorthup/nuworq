@@ -63,6 +63,21 @@ export function setCaps(args = [], caps = []) {
 
 const isAuto = (args = []) => args.some((a, i) => a === '--workers=auto' || (a === '--workers' && args[i + 1] === 'auto'));
 
+// Workers get a browser (#790): --browser added when on, taken out when not (the person said --no-browser, or
+// there is no Chrome here to drive).
+const hasBrowser = (args = []) => args.includes('--browser');
+export function browserArgs(args = [], on = true) {
+  const rest = args.filter((a) => a !== '--browser');
+  return on ? [...rest, '--browser'] : rest;
+}
+
+// Why workers here have no browser, and how to give them one; null when they have one.
+export function noBrowser(browser) {
+  if (browser === 'off') return 'no browser for workers (you said --no-browser): nuworq up --browser gives them one';
+  if (browser === 'none') return 'no browser for workers: no Google Chrome or Chromium found here. Install Google Chrome (google.com/chrome), then run nuworq up again';
+  return null;
+}
+
 // Each project's folder for its operator, as upPlan's clones (#617). An operator is attended and unsandboxed, so the
 // hub's word for a folder isn't enough (a hostile hub could name any folder here): its folder counts only when the
 // person chose it for workers on this machine (chosen, as nuworq run keeps them), or it is a checkout of one of the
@@ -92,18 +107,22 @@ export function upClones(projects = [], { chosen = [], exists, inChosen, remoteO
 //   declined: slugs whose staffing the person said no to before;
 //   clones: { [slug]: { folder } } for a local clone, { [slug]: { hint } } for none (the hint says where to clone);
 //   local: { [slug]: true } for an operator this machine started that still runs (it may not have checked in yet);
-//   runner: { supported, args, cwd, tokenFile, up } from its service file (args null: none installed) and its status.
-// Returns { runner: { action: 'install' | 'restart' | 'keep' | 'none', why, args, cwd, tokenFile }, staff: [projects
-// to ask about], rows: [{ slug, name, parked, staffed, operator: { state: 'running' | 'start' | 'skip', why, folder } }] }.
-// A restart keeps the runner's tokenFile, so it keeps the --agent-token it was installed with (#582).
-export function upPlan({ projects = [], declined = [], clones = {}, local = {}, runner = {} }) {
+//   runner: { supported, args, cwd, tokenFile, up } from its service file (args null: none installed) and its status;
+//   browser: 'on' (workers get one: --browser), 'off' (the person said --no-browser) or 'none' (no Chrome here).
+// Returns { runner: { action: 'install' | 'restart' | 'keep' | 'none', why, args, cwd, tokenFile, browser }, staff:
+// [projects to ask about], rows: [{ slug, name, parked, staffed, operator: { state: 'running' | 'start' | 'skip',
+// why, folder } }] }. A restart keeps the runner's tokenFile, so it keeps the --agent-token it was installed with (#582).
+export function upPlan({ projects = [], declined = [], clones = {}, local = {}, runner = {}, browser = 'on' }) {
   let r;
   const keep = { cwd: runner.cwd, ...(runner.tokenFile ? { tokenFile: runner.tokenFile } : {}) };
-  if (runner.supported === false) r = { action: 'none', why: "this platform has no service manager nuworq knows: run `nuworq run --workers auto` under your own" };
-  else if (!runner.args) r = { action: 'install', why: 'no runner is installed here', args: ['--workers', 'auto'] };
-  else if (!isAuto(runner.args)) r = { action: 'restart', why: `its flags were ${runner.args.join(' ') || 'none'}`, args: autoArgs(runner.args), ...keep };
+  const on = browser === 'on';
+  if (runner.supported === false) r = { action: 'none', why: `this platform has no service manager nuworq knows: run \`nuworq run --workers auto${on ? ' --browser' : ''}\` under your own` };
+  else if (!runner.args) r = { action: 'install', why: 'no runner is installed here', args: browserArgs(['--workers', 'auto'], on) };
+  else if (!isAuto(runner.args)) r = { action: 'restart', why: `its flags were ${runner.args.join(' ') || 'none'}`, args: autoArgs(browserArgs(runner.args, on)), ...keep };
+  else if (hasBrowser(runner.args) !== on) r = { action: 'restart', why: on ? 'its workers had no browser' : 'its workers had a browser', args: browserArgs(runner.args, on), ...keep };
   else if (!runner.up) r = { action: 'restart', why: "it isn't running", args: runner.args, ...keep };
   else r = { action: 'keep', why: 'it runs with --workers auto', args: runner.args };
+  r.browser = browser;
   const staff = projects.filter((p) => !p.parked && !p.runner && !declined.includes(p.slug));
   const rows = projects.map((p) => {
     // A hub older than #559 doesn't list operators: none listed isn't none running, so start none (#582).
@@ -165,12 +184,14 @@ export function upTable(plan, { dryRun = false } = {}) {
     `${OP_WORDS[r.operator.state] ?? r.operator.state}${r.operator.why ? ` (${r.operator.why})` : r.operator.folder ? ` (${r.operator.folder})` : ''}`]);
   const w = head.map((h, i) => Math.max(h.length, ...body.map((b) => b[i].length)));
   const line = (cells) => cells.map((c, i) => (i === cells.length - 1 ? c : c.padEnd(w[i]))).join('  ');
+  const browser = plan.runner.browser === 'on' && plan.runner.action !== 'none' ? ', with a browser' : '';
   const runner = {
-    install: dryRun ? 'would install it, with --workers auto' : 'installed, workers auto',
+    install: dryRun ? `would install it, with --workers auto${browser ? ' --browser' : ''}` : `installed, workers auto${browser}`,
     restart: dryRun ? `would restart it with ${plan.runner.args.join(' ')} (${plan.runner.why})` : `restarted with ${plan.runner.args.join(' ')} (${plan.runner.why})`,
-    keep: 'workers auto, running',
+    keep: `workers auto${browser}, running`,
     none: `not set up (${plan.runner.why})`,
     failed: `not up (${plan.runner.why})`,
   }[plan.runner.action];
-  return [line(head), ...body.map(line), '', `Runner: ${runner}`].join('\n');
+  const why = plan.runner.action !== 'none' && noBrowser(plan.runner.browser);
+  return [line(head), ...body.map(line), '', `Runner: ${runner}`, ...(why ? [`  ${why}`] : [])].join('\n');
 }

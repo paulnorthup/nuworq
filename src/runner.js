@@ -49,19 +49,61 @@ export function plan(routes, running, { workers = 1, maxRuns = Infinity, launche
 }
 
 // --workers auto (#533): how many workers this machine takes now, from how busy it is. running: how many run;
-// machine: { load (the 1-minute load average), cores, free (bytes of memory available) }; max: --max-workers;
-// sinceStart: ms since this runner last started one. One more only while the load is under 80% of the cores and
-// 2 GB is free, and only once the load average has had a minute to count the last one. At least one, always,
-// so waiting work never stalls. holding: why it adds none now, or null.
+// machine: { busy (the share of CPU time spent busy across all cores since the last sample, 0 to 1, null before
+// there is one: cpuSampler), cores, free (bytes of memory available) }; max: --max-workers; sinceStart: ms since
+// this runner last started one. One more only while the CPUs are under 80% busy and 2 GB is available, and only once
+// the last one has had a minute to show in them. At least one, always, so waiting work never stalls. holding: why
+// it adds none now, or null. CPU time, not the load average (#790): macOS's stays above the core count while its
+// CPUs sit mostly idle, which held a 10-core Mac at one worker.
 export const autoMax = (cores) => Math.max(1, Math.floor(cores / 2));
-const LOAD_SHARE = 0.8, MIN_FREE = 2 * 1024 ** 3, SETTLE_MS = 60_000;
-export function capacity(running, { load = 0, cores = 1, free = Infinity } = {}, { max = autoMax(cores), sinceStart = Infinity } = {}) {
+const BUSY_SHARE = 0.8, MIN_FREE = 2 * 1024 ** 3, SETTLE_MS = 60_000;
+export function capacity(running, { busy = 0, cores = 1, free = Infinity } = {}, { max = autoMax(cores), sinceStart = Infinity } = {}) {
   if (running >= max) return { workers: max, holding: `--max-workers ${max}` };
   if (running < 1) return { workers: 1, holding: null };
-  if (sinceStart < SETTLE_MS) return { workers: running, holding: null }; // the last one isn't in the load yet
-  if (load >= cores * LOAD_SHARE) return { workers: running, holding: `load ${load.toFixed(1)} on ${cores} cores` };
+  if (sinceStart < SETTLE_MS || busy == null) return { workers: running, holding: null }; // the last one isn't in the CPU yet
+  if (busy >= BUSY_SHARE) return { workers: running, holding: `CPU ${Math.round(busy * 100)}% busy on ${cores} cores` };
   if (free < MIN_FREE) return { workers: running, holding: `${(free / 1024 ** 3).toFixed(1)} GB memory free` };
   return { workers: running + 1, holding: null };
+}
+
+// The share of CPU time spent busy between two os.cpus() snapshots, across all cores: everything but idle, over
+// everything. A core whose counters didn't move adds nothing; null when none moved.
+export function cpuBusy(before = [], after = []) {
+  let busy = 0, total = 0;
+  after.forEach((c, i) => {
+    const was = before[i]?.times;
+    if (!was) return;
+    for (const [k, v] of Object.entries(c.times)) {
+      const d = Math.max(0, v - (was[k] ?? 0));
+      total += d;
+      if (k !== 'idle') busy += d;
+    }
+  });
+  return total > 0 ? busy / total : null;
+}
+
+// machine()'s busy: each call measures since the sample before, taken at least minMs earlier (the runner may ask
+// twice in a round), so over about the runner's poll interval. read: os.cpus. null until there is a measure.
+export function cpuSampler(read, { now = () => Date.now(), minMs = 5_000 } = {}) {
+  let base = read(), at = now(), last = null;
+  return () => {
+    if (now() - at < minMs) return last;
+    const cur = read();
+    last = cpuBusy(base, cur) ?? last;
+    base = cur;
+    at = now();
+    return last;
+  };
+}
+
+// machine()'s free on macOS (#790): the bytes `vm_stat` counts free, inactive or speculative. macOS keeps free pages
+// near zero and parks reclaimable memory as inactive, so os.freemem() read 1 GB on a 64 GB Mac with 28 GB to spare,
+// which held it at one worker. null when the text isn't vm_stat's.
+export function vmAvailable(text = '') {
+  const size = Number(text.match(/page size of (\d+) bytes/)?.[1]);
+  const pages = (name) => Number(text.match(new RegExp(`^Pages ${name}:\\s+(\\d+)`, 'm'))?.[1]);
+  const n = pages('free') + pages('inactive') + (pages('speculative') || 0);
+  return size > 0 && Number.isFinite(n) ? n * size : null;
 }
 
 // Whether the runner's own git may read a worker's worktree (#640): its .git file names a folder in

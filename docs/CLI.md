@@ -71,13 +71,22 @@ Flags
   --yes           staff the projects that aren't, without asking
   --no            don't staff them, and don't ask again
   --budget <usd>  with staffing: the daily cap for their workers (default: 20)
+  --no-browser    workers get no browser, and up remembers it
+  --browser       workers get a browser again, after --no-browser
 
 Example
   nuworq up
 
-The runner: it installs nuworq run as a service with --workers auto, restarts
-one whose flags differ, and leaves one that matches alone. Unstaffed projects
-that aren't parked: it asks once whether to staff them; a no is remembered.
+The runner: it installs nuworq run as a service with --workers auto --browser,
+restarts one whose flags differ, and leaves one that matches alone. Unstaffed
+projects that aren't parked: it asks once whether to staff them; a no is
+remembered.
+
+Workers come fully featured. On: --workers auto (as many as the CPUs and memory
+have room for) and --browser (a headless Chrome, so they can take UI work and
+look at it; with no Chrome here they go without, and the table says how to add
+it). Off: --can-read-keys, since codex, opencode and pi workers' shells could
+read this machine's keys; up's workers are Claude's, whose sandbox hides them.
 
 Operators: each unparked project with no operator on the hub gets Claude Code
 with /nuworq:operator in its clone here: in tmux when it is installed (the
@@ -102,9 +111,11 @@ Usage
   nuworq run --uninstall
 
 Flags
-  --workers <n|auto>  workers at once; auto: one more only while the 1-minute
-                      load is under 80% of the cores and 2 GB of memory is free
-                      (at least one), and it says why when it holds (default: 1)
+  --workers <n|auto>  workers at once; auto: one more only while the CPUs are
+                      under 80% busy (measured across all cores between polls)
+                      and 2 GB of memory is available (on macOS, free plus
+                      inactive) (at least one), and it says why when it holds
+                      (default: 1)
   --max-workers <m>   with --workers auto: the most at once (default: half the
                       cores)
   --agent <name>      claude, codex, opencode or pi (default: claude)
