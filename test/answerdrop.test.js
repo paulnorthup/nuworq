@@ -33,11 +33,11 @@ describe('answering the question a parked item waits on', () => {
   test('"drop - signing moved" on an ask precondition drops the item, attributed to the person', () => {
     const { hub, item, gated, answer } = world();
     const { question } = gated();
-    answer(question, 'drop - signing moved to github', '@paul');
+    answer(question, 'drop - signing moved to github', '@ada');
     assert.equal(item(1).stage, 'dropped');
     const e = lastStaged(hub);
-    assert.match(e.headline, /dropped #1, as @paul answered: "drop - signing moved to github"/);
-    assert.deepEqual(JSON.parse(e.data), { decided_by: '@paul', question });
+    assert.match(e.headline, /dropped #1, as @ada answered: "drop - signing moved to github"/);
+    assert.deepEqual(JSON.parse(e.data), { decided_by: '@ada', question });
     assert.equal(hub.q('SELECT status FROM questions WHERE id = ?').get(question).status, 'answered');
   });
 
