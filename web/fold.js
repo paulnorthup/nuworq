@@ -16,6 +16,6 @@ export function foldable(html, folded) {
   if (!key) return html;
   const shut = folded.has(key);
   return `<section class="sec${cls} foldable${shut ? ' folded' : ''}" data-fold="${key}"><header><h2${attrs}>`
-    + `<button type="button" class="fold" data-action="fold" data-fold="${key}" aria-expanded="${!shut}"><span class="chev" aria-hidden="true"></span>${name}</button></h2>${rest}</header>`
+    + `<button type="button" class="fold" data-action="fold" data-fold="${key}" aria-expanded="${!shut}"><svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5l3 3 3-3"/></svg>${name}</button></h2>${rest}</header>`
     + `<div class="fold-body"${shut ? ' inert' : ''}><div class="fold-in">${body}</div></div></section>`;
 }
