@@ -34,12 +34,13 @@ describe('the Claude Code plugin', () => {
   });
 
   // #473: "./plugin" followed main, so every commit there reached people's machines with no release and no person.
-  test('installs from the release branch the signer moves, never from main', async () => {
+  test('installs from the release branch the release workflow moves, never from main', async () => {
     const market = JSON.parse(read(ROOT, '.claude-plugin', 'marketplace.json'));
     assert.deepEqual(market.plugins.map((p) => [p.name, p.source]), [['nuworq', { source: 'git-subdir', url: 'paulnorthup/nuworq', path: 'plugin', ref: 'release' }]],
       'even a marketplace added at main takes the plugin from the release branch');
-    const { RELEASE_BRANCH } = await import('../scripts/signer.js');
-    assert.equal(RELEASE_BRANCH, 'release', 'the branch the signer moves to each signed release');
+    const { RELEASE_BRANCH } = await import('../src/plugin.js');
+    assert.equal(RELEASE_BRANCH, 'release', 'the branch moved to each signed release');
+    assert.match(read(ROOT, '.github', 'workflows', 'release.yml'), new RegExp(`"\\$COMMIT:refs/heads/${RELEASE_BRANCH}"`), 'the workflow moves that branch');
     const { PLUGIN_INSTALL } = await import('../src/connect.js');
     const { connectCommands } = await import('../web/connect.js');
     assert.deepEqual(PLUGIN_INSTALL[0], ['plugin', 'marketplace', 'add', 'paulnorthup/nuworq#release'], 'connect adds the marketplace at the release branch');

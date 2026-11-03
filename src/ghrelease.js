@@ -1,6 +1,6 @@
 // Signatures from GitHub Releases (#813): the release workflow (.github/workflows/release.yml) signs each release
 // the maintainer approves and publishes it as the tag's GitHub Release, with nuworq-<commit>.tgz and its .sig as assets. The
-// hub takes the .sig from there and serves the release as it served a .sig the Mac signer copied beside its package
+// hub takes the .sig from there and serves the release as it serves any .sig beside its package
 // (src/package.js newestSigned): only when it verifies, against the release-key.pub the hub's own checkout pins,
 // over the hub's own package of that commit. GitHub's runner may gzip the same archive differently from the hub's
 // git; then the hub takes GitHub's package instead of its own, but only when its tar is the hub's byte for byte.

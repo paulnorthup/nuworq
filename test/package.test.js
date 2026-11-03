@@ -2,7 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -13,7 +13,7 @@ import { fileInTarball, releaseOf, update, describeUpdate } from '../src/update.
 import { Workspaces } from '../src/workspaces.js';
 import { LISTENER } from '../src/protocol.js';
 import { connectCommands, VERIFY } from '../web/connect.js';
-import { writeApproval } from '../scripts/signer.js';
+import { archive } from '../src/package.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
@@ -147,7 +147,7 @@ describe('/nuworq.tgz', () => {
   });
 
   // #434: main moved past a release commit before the hub ran it, so no package of it was built and the
-  // signer had nothing to sign. Asked for, a tagged commit on the history the hub runs is built; nothing else is.
+  // signature had no package to go beside. Asked for, a tagged commit on the history the hub runs is built; nothing else is.
   test('a release the hub never ran is built when asked for, and signed it is the release', async () => {
     const d = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-pkg-skip-')));
     const repo = join(d, 'src'), cache = join(d, 'cache');
@@ -270,39 +270,14 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
     assert.deepEqual(asked, ['/api/package'], 'asked at the root, not under /w/acme, and fetched no package');
   });
 
-  test("release refuses a key the package doesn't pin", async () => {
+  test('GitHub\'s build of the release, signed with the key and put beside the hub\'s package, is what installs take', async () => {
+    // As the release workflow signs it, and signing by hand (#815): git archive of the commit, never the hub's file.
     const out = mkdtempSync(join(tmpdir(), 'nuworq-rel-out-'));
-    await assert.rejects(run(process.execPath, [SIGN, 'release', url, join(dir, 'other', 'release-key.pem')], { cwd: out }),
-      (e) => /doesn't carry this key's release-key\.pub, so installs would refuse it/.test(e.stderr));
-    assert.ok(!existsSync(join(out, `nuworq-${commit}.tgz.sig`)), 'nothing signed');
-  });
-
-  test('release refuses a version that has no tag on the commit the hub serves (#400)', async () => {
-    const key = join(dir, 'key', 'release-key.pem');
-    const v = version.replace(/\./g, '\\.');
-    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`not signed: origin has no v${v} tag`));
-    execFileSync('git', ['-C', clone, 'tag', `v${version}`, `${commit}~1`]);
-    execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `v${version}`]);
-    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`v${v} is [0-9a-f]{7} on origin, not ${commit.slice(0, 7)} as the hub serves`));
-    execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `:refs/tags/v${version}`]);
-    execFileSync('git', ['-C', clone, 'tag', '-d', `v${version}`]);
-    assert.ok(!existsSync(join(clone, `nuworq-${commit}.tgz.sig`)), 'nothing signed');
-  });
-
-  test('release signs what the hub serves; put beside it, installs take it', async () => {
-    const out = clone; // a checkout of nuworq, whose origin has the release's tag
-    execFileSync('git', ['-C', clone, 'tag', `v${version}`, commit]);
-    execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `v${version}`]);
-    const home = mkdtempSync(join(tmpdir(), 'nuworq-rel-home-'));
-    // Approved where the key is (#473), as release checks (#603).
-    writeApproval(join(home, '.nuworq', 'release-approvals'), createPrivateKey(readFileSync(join(dir, 'key', 'release-key.pem'))), { tag: `v${version}`, commit });
-    const { stdout } = await run(process.execPath, [SIGN, 'release', `${url}/w/acme`, join(dir, 'key', 'release-key.pem')], { cwd: out, env: { ...process.env, HOME: home } });
+    const file = join(out, `nuworq-${commit}.tgz`);
+    await archive(clone, commit, file);
+    await run(process.execPath, [SIGN, 'sign', file, join(dir, 'key', 'release-key.pem')]);
     const sig = `nuworq-${commit}.tgz.sig`;
-    const wrote = join(home, '.nuworq', 'signatures', sig); // its own folder, never the checkout (#475)
-    assert.match(stdout, new RegExp(`Signed ${version.replace(/\./g, '\\.')} \\(${commit.slice(0, 7)}, made \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\): wrote ${wrote}`));
-    assert.match(stdout, new RegExp(`scp ${wrote} <hub host>:/var/lib/nuworq/package/`));
-    assert.ok(!existsSync(join(out, sig)), 'nothing written into the checkout');
-    copyFileSync(wrote, join(dir, 'cache', sig));
+    copyFileSync(join(out, sig), join(dir, 'cache', sig));
     const named = (await (await fetch(`${url}/api/package`)).json()).package;
     assert.equal(named.signed, true);
     assert.equal(named.release?.commit, commit, 'and it is the release installs follow (#254), whatever the hub runs later');

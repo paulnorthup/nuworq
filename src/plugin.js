@@ -20,8 +20,8 @@ export const MONITORS = [{
 
 const WHAT = 'The nuworq MCP server, the /nuworq:shaper and /nuworq:operator commands, the skill workers load on their own, and the operator\'s listener.';
 
-// Where the plugin installs from (#473): the release branch, which the release signer (scripts/signer.js) moves to
-// each release a person approved and it signed. Never main: a commit there alone changes nothing on anyone's machine.
+// Where the plugin installs from (#473): the release branch, which the release workflow (.github/workflows/release.yml)
+// moves to each release the maintainer approved and it signed. Never main: a commit there alone changes nothing on anyone's machine.
 // The marketplace is added at that branch too, so the entry below is read from a release as well.
 export const REPO = 'paulnorthup/nuworq';
 export const RELEASE_BRANCH = 'release';

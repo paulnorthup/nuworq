@@ -1,4 +1,4 @@
-// Releases signed on GitHub Actions (#813): the rules both signers share, the workflow's build and signature
+// Releases signed on GitHub Actions (#813): the rules the workflow and signing by hand share, the workflow's build and signature
 // (scripts/release.js), and the hub taking a release's .sig from its GitHub Release (src/ghrelease.js).
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,14 +12,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { archive, newestSigned } from '../src/package.js';
-import { releaseRefusal, latest } from '../scripts/release.js';
+import { releaseRefusal, latest, newer, handCheck } from '../scripts/release.js';
 import { takeReleases, githubRepoOf, releaseAlarm } from '../src/ghrelease.js';
 import { Hub } from '../src/core.js';
 import { createServer as createHubServer } from '../src/server.js';
 
 const RELEASE = fileURLToPath(new URL('../scripts/release.js', import.meta.url));
 const WORKFLOW = '.github/workflows/release.yml';
-const YAML = readFileSync(fileURLToPath(new URL('../scripts/release-workflow.yml', import.meta.url)), 'utf8');
+const YAML = readFileSync(fileURLToPath(new URL(`../${WORKFLOW}`, import.meta.url)), 'utf8');
 const jobOf = (name) => YAML.split(/\n  (?=\w+:\n)/).find((j) => j.startsWith(`${name}:\n`));
 // The shell a step runs, as the runner gets it: its `run: |` block, unindented.
 const stepRun = (name) => {
@@ -102,13 +102,46 @@ describe('the rules every signer shares (#813)', () => {
     assert.equal(latest(a, b), b);
     assert.equal(latest(null, a), a);
     assert.equal(latest(a, null), a);
+    assert.ok(newer('0.10.0', '0.9.0') && !newer('0.9.0', '0.10.0') && !newer('1.0.0', '1.0.0'), 'versions compare as numbers');
+  });
+});
+
+// Signing by hand, the fallback to the workflow (#815): origin's tag by the workflow's rules, against the hub's
+// signed release, never the hub's package.
+describe('signing by hand (#815)', () => {
+  const hubAt = (release) => async (url) => ({ ok: true, json: async () => ({ package: { release } }), url });
+
+  test('a release tag on origin\'s main may be signed, with its commit and changelog to show', async () => {
+    const c = release('1.0.0', { changelog: '## 1.0.0\n\n- signed by hand\n' });
+    git(repo, 'tag', '-d', 'v1.0.0'); // the checkout's own tags don't count: origin's is fetched
+    const r = await handCheck(repo, { tag: 'v1.0.0', pub: ours.pub, hub: 'https://hub.test', get: hubAt(null) });
+    assert.deepEqual({ ...r, subject: undefined }, { commit: c, subject: undefined, changes: '- signed by hand', refusal: '' });
+    assert.match(r.subject, /^Release v1\.0\.0 \(\d{4}-\d\d-\d\d\)$/);
+    assert.equal(git(repo, 'tag', '-l', 'v1.0.0'), '', 'the checkout\'s tags stay as they are');
+  });
+
+  test('refuses what the workflow refuses: no such tag, off main, another key, older than the hub\'s release', async () => {
+    const at = (tag, more = {}) => handCheck(repo, { tag, pub: ours.pub, hub: 'https://hub.test', get: hubAt(null), ...more }).then((r) => r.refusal);
+    assert.match(await at('v9.9.9'), /couldn't fetch origin's main and v9\.9\.9/);
+    assert.match(await at('9.9.9'), /isn't a release tag/);
+    release('1.0.0', { branch: 'side' });
+    assert.match(await at('v1.0.0'), /isn't on origin's main/);
+    const c = release('1.1.0');
+    assert.match(await at('v1.1.0', { pub: keypair().pub }), /release-key\.pub isn't this key's public half/);
+    const later = release('1.2.0');
+    assert.match(await at('v1.1.0', { get: hubAt({ commit: later }) }), /older than the hub's signed release v1\.2\.0/);
+    assert.equal(await at('v1.2.0', { get: hubAt({ commit: c }) }), '');
+  });
+
+  test('the command runs only for a person at a terminal', async () => {
+    const r = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url)), 'release', 'v1.0.0', join(dir, 'none.pem'), 'https://hub.test'], { cwd: repo }).then(() => null, (e) => e);
+    assert.ok(r, 'it refused');
+    assert.match(r.stderr, /release needs a person at a terminal/);
   });
 });
 
 describe('the release workflow (#813)', () => {
-  test('the workflow a person installs is the one reviewed, and signs only after the release environment\'s approval', () => {
-    const installed = fileURLToPath(new URL(`../${WORKFLOW}`, import.meta.url));
-    if (existsSync(installed)) assert.equal(readFileSync(installed, 'utf8'), YAML, `${WORKFLOW} differs from scripts/release-workflow.yml`);
+  test('the workflow signs only after the release environment\'s approval', () => {
     const check = jobOf('check'), changes = jobOf('changes'), signJob = jobOf('sign');
     assert.match(YAML, /\npermissions: \{\}\n/, 'nothing by default');
     for (const job of [check, changes]) {

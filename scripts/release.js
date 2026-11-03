@@ -31,8 +31,8 @@ export const newer = (a, b) => {
   return false;
 };
 
-// Why tag at commit mustn't be signed: '' when it may. The one set of rules for every signer: the Mac signer
-// (scripts/signer.js) and the release workflow. main: a ref naming origin's main. pub: the release key's public
+// Why tag at commit mustn't be signed: '' when it may. The one set of rules for every signer: the release workflow
+// and signing by hand (handCheck, below). main: a ref naming origin's main. pub: the release key's public
 // half (PEM). last: the newest signed release, { version, commit, time, where } or null; where names it in a refusal.
 export async function releaseRefusal(repo, { tag, commit, main, pub, last = null }) {
   const m = TAG.exec(tag ?? '');
@@ -82,6 +82,26 @@ export async function lastOnHub(repo, hub, get = fetch) {
 
 // The newer of two signed releases (either may be null).
 export const latest = (a, b) => (!a ? b : !b ? a : (b.version && a.version ? newer(b.version, a.version) : b.time > a.time) ? b : a);
+
+// Signing by hand (sign-release.js release), the fallback to the workflow: origin's tag and main, fetched under a
+// namespace of its own so the checkout's branches and tags stay as they are, then the workflow's own rules against
+// the hub's signed release. Never the hub's package: the caller builds GitHub's. Resolves { commit, subject,
+// changes, refusal }; refusal is '' when tag may be signed. pub: the release key's public half (PEM).
+export async function handCheck(repo, { tag, pub, hub, get = fetch }) {
+  if (!TAG.test(tag ?? '')) return { refusal: `${tag} isn't a release tag (vX.Y.Z)` };
+  const main = 'refs/hand-release/main';
+  try {
+    await git(repo, ['fetch', '-q', '--no-tags', 'origin', `+refs/heads/main:${main}`, `+refs/tags/${tag}:refs/hand-release/tags/${tag}`]);
+  } catch (e) {
+    return { refusal: `couldn't fetch origin's main and ${tag} (${e.message.split('\n')[0]}): sign a release only once the hub tagged it, in a checkout of nuworq whose origin is GitHub` };
+  }
+  const commit = (await git(repo, ['rev-parse', `refs/hand-release/tags/${tag}^{commit}`])).trim();
+  const last = await lastOnHub(repo, hub, get);
+  const refusal = await releaseRefusal(repo, { tag, commit, main, pub, last });
+  const subject = (await git(repo, ['log', '-1', '--format=%s (%cd)', '--date=short', commit])).trim();
+  const changes = changelogEntry(await show(repo, commit, 'CHANGELOG.md'), TAG.exec(tag)[1], { first: true }) ?? '';
+  return { commit, subject, changes: changes.trim(), refusal };
+}
 
 // The check job's summary: what the repository's code says of the release.
 export function summary({ tag, commit, sha256, changes, last, refusal }) {

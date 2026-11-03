@@ -1174,7 +1174,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
       // A package by its full commit, and its signature: only the packages this hub built and kept, so an
       // install can fetch the release /api/info names after the hub has moved on to newer commits. A release
-      // the hub skipped is built when asked for, so the signer can sign it (#434).
+      // the hub skipped is built when asked for, so its signature has a package to go beside (#434).
       let pm;
       if (req.method === 'GET' && (pm = path.slice(1).replace(/\.sig$/, '').match(PACKAGE_NAME))) {
         await pkg;

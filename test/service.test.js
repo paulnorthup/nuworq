@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { launchdPlist, systemdUnit, install, uninstall, serviceEnv, serviceArgs, takeToken, stableNode, missingCheckouts, LABEL, UNIT, SIGNER } from '../src/service.js';
+import { launchdPlist, systemdUnit, install, uninstall, serviceEnv, serviceArgs, takeToken, stableNode, missingCheckouts, LABEL, UNIT } from '../src/service.js';
 import { cleanWorktree } from '../src/runner.js';
 
 const command = ['/usr/local/bin/node', '/opt/nuworq/bin/nuworq.js', 'run', '--workers', '3', '--agent', 'claude', '--model', 'opus & "friends" 100%$'];
@@ -31,28 +31,6 @@ describe('nuworq run --install (#172)', () => {
     assert.match(u, /^Environment="NUWORQ_URL=https:\/\/hub\.example\.com"$/m);
     assert.match(u, /^StandardOutput=append:\/home\/ann\/\.nuworq\/logs\/run\.log$/m);
     assert.match(u, /^WantedBy=default\.target$/m);
-  });
-
-  test('the release signer is a service of its own beside the runner (#430)', async () => {
-    for (const platform of ['darwin', 'linux']) {
-      const home = mkdtempSync(join(tmpdir(), 'nuworq-svc-'));
-      const ran = [];
-      const exec = async (cmd, args) => { ran.push([cmd, ...args]); return { stdout: 'state = running\n\tpid = 7\nactive\n' }; };
-      const signer = ['/usr/local/bin/node', '/Users/ann/nuworq/scripts/sign-release.js', 'watch', 'https://nuworq.com', '/Users/ann/.nuworq-release/release-key.pem', 'vm:/var/lib/nuworq/package/'];
-      const r = await install({ platform, home, uid: 501, command: signer, env, log: join(home, 'signer.log'), exec, sleep: async () => {}, ...SIGNER });
-      const text = readFileSync(r.file, 'utf8');
-      if (platform === 'darwin') {
-        assert.equal(r.file, join(home, 'Library', 'LaunchAgents', 'com.nuworq.signer.plist'));
-        assert.match(text, /<key>Label<\/key>\s*<string>com\.nuworq\.signer<\/string>/);
-      } else {
-        assert.equal(r.file, join(home, '.config', 'systemd', 'user', 'nuworq-signer.service'));
-        assert.match(text, /^Description=nuworq release signer/m);
-      }
-      assert.ok(!ran.flat().some((x) => String(x).includes(LABEL) || String(x).includes(UNIT)), 'never touches the runner');
-      const gone = await uninstall({ platform, home, uid: 501, exec, ...SIGNER });
-      assert.equal(gone.removed, true);
-      assert.equal(existsSync(r.file), false);
-    }
   });
 
   test('install writes the definition (0600) and loads it, replacing one already there; uninstall stops and removes it', async () => {

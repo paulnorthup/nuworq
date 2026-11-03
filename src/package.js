@@ -81,8 +81,8 @@ export function newestSigned(dir, key, seen = new Map()) {
   return best;
 }
 
-// Write the package of commit in root's repository to file: what the hub serves, and what the release signer
-// (scripts/signer.js) builds from GitHub's copy to sign, so both get the same bytes. Rejects when git fails.
+// Write the package of commit in root's repository to file: what the hub serves, and what the release workflow and
+// signing by hand (scripts/release.js) build from GitHub's copy to sign, so all get the same bytes. Rejects when git fails.
 export async function archive(root, commit, file) {
   const listed = new Set((await run(['-C', root, 'ls-tree', '--name-only', commit])).split('\n'));
   const tmp = `${file}.${process.pid}`;
@@ -92,7 +92,7 @@ export async function archive(root, commit, file) {
 }
 
 // The package of a release the hub never ran (#434): main can move past a release commit before the hub runs it
-// (its tests failed there, or main moved twice between checks), and the signer can sign only what the hub serves.
+// (its tests failed there, or main moved twice between checks), and the hub serves a release's signature only beside its own package of it.
 // So a commit with a vX.Y.Z tag in root's repository, on the history root runs, is built when asked for, with
 // archive() as the running commit's is. Resolves { file, commit, sha256 }, or null when commit is no such release.
 const building = new Map();
@@ -117,8 +117,8 @@ export async function releasePackage(root, dir, commit) {
 }
 
 // Packages pile up, one per commit the hub ran, and /api/info reads every signed one (#525). Keep the running
-// commit's, the newest `releases` signed ones, and anything from the last `graceMs` (a release the signer may still
-// be signing); remove the rest, with their signatures. Returns the names removed.
+// commit's, the newest `releases` signed ones, and anything from the last `graceMs` (a release that may still
+// be waiting for its signature); remove the rest, with their signatures. Returns the names removed.
 export function prunePackages(dir, current, { releases = 3, graceMs = 24 * 3600_000, now = Date.now() } = {}) {
   let names;
   try { names = readdirSync(dir); } catch { return []; }
