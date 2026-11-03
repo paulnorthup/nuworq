@@ -78,9 +78,9 @@ Example
   nuworq up
 
 The runner: it installs nuworq run as a service with --workers auto --browser,
-restarts one whose flags differ, and leaves one that matches alone. Unstaffed
-projects that aren't parked: it asks once whether to staff them; a no is
-remembered.
+restarts one that isn't running, lacks --workers auto or has the wrong browser
+setting, and leaves one that matches alone. Unstaffed projects that aren't
+parked: it asks once whether to staff them; a no is remembered.
 
 Workers come fully featured. On: --workers auto (as many as the CPUs and memory
 have room for) and --browser (a headless Chrome, so they can take UI work and
