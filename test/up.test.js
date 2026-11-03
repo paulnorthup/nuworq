@@ -6,6 +6,10 @@ import { projectList, liveOperators } from '../src/insight.js';
 import { launchdPlist, systemdUnit } from '../src/service.js';
 import { upPlan, upClones, readService, autoArgs, browserArgs, launcherFor, launchCommands, operatorShell, appleString, upTable } from '../src/up.js';
 import { runCaps } from '../src/runner.js';
+import { rules, writeSettings } from '../src/operator.js';
+import { mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const NODE = '/opt/homebrew/bin/node', BIN = '/usr/local/lib/node_modules/nuworq/bin/nuworq.js';
 const auto = { supported: true, args: ['--workers', 'auto', '--browser'], cwd: '/src/nuworq', up: true };
@@ -189,10 +193,31 @@ describe('staffing and operators', () => {
 });
 
 describe('opening terminals', () => {
-  const shell = operatorShell({ folder: "/src/it's", pidFile: '/h/.nuworq/operators/x.pid', settings: '{"a":1}', line: '/nuworq:operator' });
+  const shell = operatorShell({ folder: "/src/it's", pidFile: '/h/.nuworq/operators/x.pid', settings: '/h/.nuworq/operator-settings.json', line: '/nuworq:operator' });
 
-  test('one operator: in its folder, its pid written, claude exec’d with its settings and the line', () => {
-    assert.equal(shell, `cd '/src/it'\\''s' && echo $$ > '/h/.nuworq/operators/x.pid' && exec claude --settings '{"a":1}' '/nuworq:operator'`);
+  test('one operator: in its folder, its pid written, claude exec’d with its settings file and the line', () => {
+    assert.equal(shell, `cd '/src/it'\\''s' && echo $$ > '/h/.nuworq/operators/x.pid' && exec claude --settings '/h/.nuworq/operator-settings.json' '/nuworq:operator'`);
+  });
+
+  test('the rules go in a 0600 settings file, so every command that opens an operator stays short (#869)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-up-'));
+    try {
+      const file = join(dir, 'h', 'operator-settings.json');
+      const today = rules({ host: 'root@hub' });
+      const ten = { allow: Array(10).fill(today.allow).flat(), deny: Array(10).fill(today.deny).flat() };
+      assert.ok(JSON.stringify(today).length > 16_000, "inline, today's rules alone pass tmux's limit");
+      for (const r of [today, ten]) {
+        assert.equal(writeSettings(file, r), file);
+        assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { permissions: r });
+        assert.equal(statSync(file).mode & 0o777, 0o600);
+        const folder = '/Users/someone/Projects/llm-proxy';
+        const sh = operatorShell({ folder, pidFile: '/Users/someone/.nuworq/operators/llm-proxy.pid', settings: file, line: '/nuworq:operator' });
+        const ws = [{ name: 'llm-proxy', folder, shell: sh }, { name: 'nuworq-site', folder, shell: sh }];
+        for (const via of ['tmux', 'iterm', 'terminal']) {
+          for (const argv of launchCommands(via, ws)) assert.ok(argv.join(' ').length < 1000, `${via}: ${argv.join(' ').length} characters`);
+        }
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   test('tmux when installed, else iTerm or Terminal on a Mac, else print', () => {
