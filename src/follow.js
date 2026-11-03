@@ -21,6 +21,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encodi
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STOP_GRACE_MS = 12_000; // past the hub's own 10 s drain (#545), so it's never cut short
 const HEALTHY_MS = 15_000;
+const MAX_HELD = 2000; // connections the front holds at once, as the hub's MAX_CONNECTIONS (#261); past it, new ones are dropped
 const TEST_TIMEOUT_MS = 10 * 60_000;
 const CI_WAIT_MS = 30 * 60_000; // a commit whose CI check never shows up is tested here after this (#543)
 const SMOKE_MS = 60_000; // a smoke boot's migrations run on copies of all the live data
@@ -274,6 +275,8 @@ export function system({ repo, dir, next = `${dir}-next`, alt = `${dir}-alt`, ar
       sock.once('close', () => waiting.delete(sock));
       setTimeout(() => sock.destroy(), HEALTHY_MS * 2).unref();
     });
+    // Connections held while no hub is ready count against a cap of their own: the hub's (#261) isn't imported here.
+    s.maxConnections = MAX_HELD;
     await new Promise((resolve, reject) => { s.once('error', reject); s.listen(listen.port, listen.host, resolve); })
       .catch((e) => { throw new Error(`can't hold ${listen.host}:${listen.port} (${e.message}): something else is using it`); });
     front = {

@@ -70,6 +70,26 @@ describe('the background loops run in one hub at a time (#523)', () => {
     await server.drain();
     front.close();
   });
+
+  test('passed-in connections keep the connection cap (#261): past it, one is dropped', async (t) => {
+    const h = new Hub();
+    h.tx(() => h.project('o', { create: true }));
+    const server = createServer(h, { standby: true, maxConnections: 1 });
+    const front = net.createServer({ pauseOnConnect: true }, (sock) => server.adopt(sock));
+    await new Promise((r) => front.listen(0, '127.0.0.1', r));
+    t.after(async () => { front.close(); await finish(server); });
+    const { port } = front.address();
+    const connect = () => new Promise((resolve) => { const c = net.connect(port, '127.0.0.1', () => resolve(c)); });
+    const closed = (c) => new Promise((resolve) => { c.on('error', () => {}); c.once('close', () => resolve(true)); });
+    const first = await connect();
+    await sleep(50);
+    const second = await connect();
+    assert.equal(await Promise.race([closed(second), sleep(1000).then(() => false)]), true, 'the second is dropped');
+    // The first is still served.
+    first.write('GET /api/health HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n');
+    const reply = await new Promise((resolve) => { let b = ''; first.on('data', (d) => { b += d; }); first.on('end', () => resolve(b)); });
+    assert.match(reply, /^HTTP\/1.1 200/);
+  });
 });
 
 describe('the follower swaps beside the running hub (#523)', () => {

@@ -2083,8 +2083,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   server.quiet = quiet;
   server.leading = () => !!sweeper;
   // A connection the supervisor accepted and passed on (#523): served like one this server accepted, and drain waits for it.
+  // net checks maxConnections only for sockets it accepts itself, so the cap (#261) is applied here too: past it, dropped.
   const adopted = new Set();
   server.adopt = (socket) => {
+    if (adopted.size >= server.maxConnections) return socket.destroy();
     adopted.add(socket);
     socket.once('close', () => adopted.delete(socket));
     server.emit('connection', socket);
