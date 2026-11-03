@@ -3,8 +3,9 @@
 // Stripe's billing page once paid, and nothing else. Stripe Checkout takes the payment; only its webhook changes
 // the plan, so the way back says when to expect it rather than claiming it, and offers no second Upgrade meanwhile.
 
-// b: GET /api/billing. done: just back from Checkout (?checkout=done).
-export function billingSection(b, { esc, done = false }) {
+// b: GET /api/billing. done: just back from Checkout (?checkout=done). last: false when a section follows it (Delete
+// workspace, #799), which ends the dialog: its buttons stay, without Done.
+export function billingSection(b, { esc, done = false, last = true }) {
   if (!b.owner) {
     return `<h4>Billing</h4><p class="lead">Only the workspace's owner manages its plan: ask ${esc(b.owners?.join(' or ') || 'an owner')}.</p>
       <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`;
@@ -23,5 +24,6 @@ export function billingSection(b, { esc, done = false }) {
     <p class="lead"${b.failing ? ' style="color:var(--warn)"' : ''}>${b.failing ? '⚠ ' : ''}<b>${esc(state)}</b></p>
     ${back}${buy}
     ${b.manage ? `<p class="lead faint">Stripe's billing page: change the card, see and download invoices, or cancel. Cancelling keeps the paid plan until the period ends; then the workspace goes back to Free.</p>` : ''}
-    <div class="foot">${b.manage ? `<button class="btn${b.failing ? ' primary' : ''}" data-action="billing-portal">Manage billing</button>` : ''}<button class="btn${b.failing || buy ? '' : ' primary'}" data-action="close-modal">Done</button></div>`;
+    ${last ? `<div class="foot">${b.manage ? `<button class="btn${b.failing ? ' primary' : ''}" data-action="billing-portal">Manage billing</button>` : ''}<button class="btn${b.failing || buy ? '' : ' primary'}" data-action="close-modal">Done</button></div>`
+    : b.manage ? `<div class="actions"><button class="btn${b.failing ? ' primary' : ''}" data-action="billing-portal">Manage billing</button></div>` : ''}`;
 }

@@ -316,7 +316,7 @@ describe('one server, two workspaces', () => {
     const t = new Auth(ctx.spaces.get('tempco').db).createToken('boss', 'human');
     assert.equal((await call('GET', '/w/tempco/api/projects', { headers: bearer(t) })).status, 200);
     ctx.spaces.remove('tempco');
-    assert.equal((await call('GET', '/w/tempco/api/projects', { headers: bearer(t) })).status, 404);
+    assert.equal((await call('GET', '/w/tempco/api/projects', { headers: bearer(t) })).status, 410, 'deleted, says so (#799)');
     assert.ok(!existsSync(join(ctx.dir, 'tempco.db')));
   });
 });

@@ -1468,6 +1468,9 @@ async function runCmd(flags) {
   });
   // Exit 0 and the service (KeepAlive, Restart=always) starts it again, on the new code.
   if (r.restart) process.exit(0);
+  // Its workspace was deleted (#799): a service would only start it again into the same answer, so it waits here
+  // without asking the hub, until the service is stopped.
+  if (r.deleted && supervised()) setInterval(() => {}, 2 ** 30);
 }
 
 // One line from stdin, for a secret: not echoed when typed at a terminal.

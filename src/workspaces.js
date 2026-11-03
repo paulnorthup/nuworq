@@ -321,10 +321,22 @@ export class Workspaces {
     for (const f of [this.file(s), `${this.file(s)}-wal`, `${this.file(s)}-shm`]) rmSync(f, { force: true });
     // And every copy of it: follow's, and the dated copy of the single hub it was adopted from (#479).
     forgetWorkspace(this.backups, s);
-    if (!this._directory && !existsSync(join(this.dir, 'directory.sqlite'))) return;
+    if (!this._directory && !existsSync(join(this.dir, 'directory.sqlite'))) return; // nothing to forget, nobody to tell
     const adopted = this.directory.setting(`adopted:${s}`);
     if (adopted) rmSync(adopted, { force: true });
     this.directory.forget(s); // and its name starts clean (#728)
+    // Only that it was deleted, and when (#799): its members and agents are told so, not "no workspace", until
+    // someone takes the name again (create forgets it with the rest).
+    this.directory.setting(`deleted:${s}`, String(this.now()));
+  }
+
+  // When a workspace of that name was deleted (ms) and the name not taken since, else null.
+  deleted(slug) {
+    let s;
+    try { s = Workspaces.check(slug); } catch { return null; }
+    if (existsSync(this.file(s)) || (!this._directory && !existsSync(join(this.dir, 'directory.sqlite')))) return null;
+    const at = this.directory.setting(`deleted:${s}`);
+    return at ? Number(at) : null;
   }
 
   // A person's data on request (#769), across the hub: the directory's rows (Directory.forgetPerson), and in every
