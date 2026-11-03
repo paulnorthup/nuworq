@@ -25,6 +25,10 @@ export function getStarted(s) {
     // Done once a project has a repository (#801); one without opens + repo on the newest project (#147).
     { key: 'project', label: 'Add a project', done: !!(s.project && s.repo),
       action: s.project ? { label: '+ repo', ui: 'link-repo', slug: s.recent } : { label: '+ Project', ui: 'new-project' } },
+    // Only while a project's repository has no test a worker may run (#685): without one, its first build has to ask
+    // for the tests to be run. Worker commands, or a package.json, pyproject.toml, Cargo.toml or go.mod, settle it.
+    s.untested && { key: 'worker-commands', label: 'Tell workers how to test', done: false,
+      action: { label: 'Worker commands', ui: 'worker-commands-for', slug: s.untested } },
     s.github !== false && { key: 'github', label: 'Connect GitHub', done: s.app === 'installed', action: github },
     { key: 'machine', label: 'Install and connect your machine', done: !!s.machine, action: { label: 'Connect an agent', ui: 'connect' } },
     // The recommended setup (#489, web/connect.js's SETUP): each step shows its session's commands while it's next.
@@ -59,6 +63,9 @@ export function facts(hub, { viewer = 'you', workspaces = false, app = 'none', c
     GROUP BY p.id ORDER BY MAX(COALESCE(a.last_seen, 0)) DESC, p.id LIMIT 1`)?.slug ?? null;
   // Where to link a repository: the newest project.
   const recent = q(`SELECT slug FROM projects WHERE archived_at = 0 ORDER BY created_at DESC, id DESC LIMIT 1`)?.slug ?? null;
+  // A project whose repository the hub reads and finds no test a worker may run in (Hub.testable), newest first.
+  const untested = repo ? hub.q(`SELECT * FROM projects WHERE archived_at = 0 ORDER BY created_at DESC, id DESC`).all()
+    .find((p) => hub.testable?.(p) === false)?.slug ?? null : null;
   // The recommended setup: a runner reported for one of these projects (its scope: their slugs, '' for all) within a
   // week; an operator checked in within a week; a shaper ever checked in, or proposed.
   const week = hub.now() - RECENT_MS;
@@ -66,7 +73,7 @@ export function facts(hub, { viewer = 'you', workspaces = false, app = 'none', c
   const workers = hub.q('SELECT scope FROM runners WHERE seen_at >= ?').all(week).some((r) => !r.scope || r.scope.split(',').some((x) => slugs.has(x)));
   return {
     workspaces, org: workspaces && !!person, root, app, canCreateApp, installUrl, github, owners,
-    project, repo, recent, machine, workers,
+    project, repo, recent, untested, machine, workers,
     operator: !!q(`SELECT 1 FROM agents WHERE role = 'operator' AND last_seen >= ? AND project_id IN (${live})`, week),
     shaper: !!q(`SELECT 1 FROM agents a WHERE role = 'shaper' AND project_id IN (${live})
       AND (last_checkin > 0 OR EXISTS (SELECT 1 FROM items i WHERE i.project_id = a.project_id AND i.created_by = a.name))`),

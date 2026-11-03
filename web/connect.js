@@ -78,7 +78,7 @@ export const SETUP = [
     says: ['Workers build, review and land the work.',
       'They run in the background with no window, each in its own copy of your repository, so they never touch your files.',
       'They work only on the projects you let them.',
-      'As a service they keep going after you close the terminal, and after a restart.'],
+      'As a service they keep going after you close the terminal, and start again when you log in after a restart.'],
     how: 'In a clone of the project, run `nuworq run --install --workers auto`',
   },
   {

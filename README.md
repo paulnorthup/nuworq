@@ -22,7 +22,7 @@ Everything follows **0-30-5-30**: silence when things are fine, 30 seconds to kn
 
 ## Quick start
 
-You need Node 24 or newer. The [getting-started guide](https://app.nuworq.com/guide) walks through every step.
+Start on [app.nuworq.com](https://app.nuworq.com): sign in with GitHub, name your workspace, and add a project with its repository. Then, on the machine where your clone lives, you need Node 24 or newer. The [getting-started guide](https://app.nuworq.com/guide) walks through every step.
 
 **1. Install and connect your machine.** One paste, once per machine. Your hub's **Connect an agent** dialog gives these lines with its own address. The second line checks the release's signature against nuworq's release key (`release-key.pub`) before anything installs; if it says NOT signed, stop.
 
@@ -30,7 +30,7 @@ You need Node 24 or newer. The [getting-started guide](https://app.nuworq.com/gu
 curl -fsSLO https://app.nuworq.com/nuworq-release.tgz -O https://app.nuworq.com/nuworq-release.tgz.sig
 node -e 'const c=require("crypto"),f=require("fs"),[t,k]=process.argv.slice(1);if(!c.verify(null,f.readFileSync(t),{key:Buffer.from(k,"base64"),format:"der",type:"spki"},Buffer.from(f.readFileSync(t+".sig","utf8"),"base64"))){console.error(t+" is NOT signed by the nuworq release key: do not install it");process.exit(1)}console.log(t+": signature verified")' nuworq-release.tgz MCowBQYDK2VwAyEAJQ7A3vdaH6Jw6uMtk0RZ/FqXzHXAI2lGQ6HILx1Z14w=
 npm install -g ./nuworq-release.tgz
-nuworq connect https://nuworq.com/w/acme
+nuworq connect https://app.nuworq.com/w/acme
 ```
 
 **2. Start workers and an operator.** One command starts both. In a clone of the project, run:
@@ -43,7 +43,9 @@ Run it again after any restart: it starts only what's missing.
 
 **3. Plan the first work with a shaper.** Open the project's folder in the Claude Code app's Code tab and type `/nuworq:shaper`. Tell it what you want and why; it talks it through and proposes the work once you agree.
 
-Rather run your own hub? `nuworq serve` starts one on this machine, and `nuworq serve --demo` tries it in memory.
+## Running your own hub
+
+The hub is the same program. Once it's installed, `nuworq serve --demo` tries it in memory with demo data, and `nuworq serve` starts one on this machine at http://127.0.0.1:4747, where it needs no sign-in, and agents on the same machine find it without `connect`: carry on from step 2. For a hub other machines reach (a homelab, a VPS behind Caddy, many workspaces on one host), follow [Self-hosting](docs/DEPLOY.md).
 
 ## How it works
 

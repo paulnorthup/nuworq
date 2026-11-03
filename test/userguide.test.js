@@ -53,7 +53,7 @@ describe('the guide follows Get started', () => {
     assert.ok(plan.then.some((t) => t.includes('**+ Work**')) && plan.then.some((t) => t.includes('nuworq propose')), '+ Work and nuworq propose follow');
     assert.ok(!STEPS.some((s) => s.key === 'agent'), 'Start an agent is no longer a step');
     for (const e of ESSENTIALS) assert.ok(e.glance && e.body.length, `${e.key} has a glance and a body`);
-    assert.deepEqual(ESSENTIALS.map((e) => e.key), ['autonomy', 'depth', 'notifications', 'the-operator', 'other-ways', 'worker-commands']);
+    assert.deepEqual(ESSENTIALS.map((e) => e.key), ['autonomy', 'depth', 'notifications', 'the-operator', 'other-ways', 'worker-commands', 'best-practices']);
   });
 
   test('the Get started card links the guide, and each undone step to its section', () => {

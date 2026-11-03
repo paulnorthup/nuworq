@@ -141,6 +141,31 @@ describe('get started: each step checks itself off from hub state', () => {
     }
   });
 
+  test('a repository with no test a worker may run asks for Worker commands, until it has one (#685)', () => {
+    const { hub, step } = setup();
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-gs-')));
+    const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', repo, ...a], { stdio: ['ignore', 'pipe', 'ignore'] });
+    git('init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'README'), 'hi\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'init');
+    hub.tx(() => hub.project('demo', { create: true }));
+    assert.equal(step('worker-commands'), undefined, 'no repository yet: nothing to say');
+    hub.humanOp('demo', 'settings', { path: repo });
+    assert.deepEqual(step('worker-commands'), { key: 'worker-commands', label: 'Tell workers how to test', done: false,
+      action: { label: 'Worker commands', ui: 'worker-commands-for', slug: 'demo' } });
+    assert.deepEqual(getStarted(facts(hub)).steps.map((s) => s.key).slice(0, 2), ['project', 'worker-commands'], 'before the first build');
+    assert.match(getStartedCard({ show: true, steps: [step('worker-commands')] }),
+      /<span class="label" data-new="tests-step">Tell workers how to test<\/span><button class="btn primary small" data-action="worker-commands-for" data-slug="demo">Worker commands<\/button><a class="link how" href="guide#worker-commands">/);
+    hub.humanOp('demo', 'settings', { worker_commands: 'make test' });
+    assert.equal(step('worker-commands'), undefined, 'a worker command settles it');
+    hub.humanOp('demo', 'settings', { worker_commands: '' });
+    writeFileSync(join(repo, 'package.json'), '{}\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'npm');
+    assert.equal(step('worker-commands'), undefined, 'so does a kind of project workers know how to test');
+  });
+
   test('first item landed: an item built, accepted and landed on main', () => {
     const { hub, step } = setup();
     const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-gs-')));

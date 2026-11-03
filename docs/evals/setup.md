@@ -56,6 +56,44 @@ Total **7.5 s**: 1 copied block, 1 paste, 1 command typed, 3 yes/no answers, 1 b
 
 Times are the hub's and the CLI's. A person's reading, switching windows and typing come on top: in the walk, 62 s from paste to done.
 
+## On to a first item landed (#685)
+
+Rerun for v1.0.0 on 2026-11-03, on the docs branch of #685. `node scripts/setup-walkthrough.js` met every scripted target again: 7.3 s, 1 copied block, 1 paste, 3 yes/no, 1 browser approval, 1 line in the Claude Code app.
+
+Then a first item, on a throwaway hub whose project links a bare origin as **+ Project** does, with nothing but the hub's own words to go on. Each step did what the hint before it said, command for command:
+
+| # | Step | Who | What the hub said |
+|---|------|-----|-------------------|
+| 1 | **+ Work**: "Add a greeting", done means "GREETING exists and says hello" | the person | |
+| 2 | `checkin`, `next` | a worker | a work job on `nuworq/1-add-a-greeting`: clone the origin, `git fetch origin`, `git switch --no-track -c nuworq/1-add-a-greeting origin/main`, push the branch before submitting. No test command is allowed yet, so ask the operator to run one |
+| 3 | Commit, push the branch, `submit` with evidence | the worker | "#1 is verifying. The human will verify it." |
+| 4 | A second agent's `next` | another agent | idle: at the default autonomy (Balanced) the person verifies, not a peer |
+| 5 | Accept | the person | "lands on main next: an agent rebases it, runs the checks and fast-forwards main" |
+| 6 | `next` | the worker | a land job: fetch, rebase onto `origin/main`, run the checks, `git push origin nuworq/1-add-a-greeting:main`, push the branch with `--force-with-lease`, submit |
+| 7 | `submit` | the worker | "#1 is on main and done", with the command to delete the branch. Origin's main has GREETING |
+
+No step got stuck. Two things a newcomer meets here, both said where they meet them: the first build has no test command to run until one is added under **Worker commands** ([the guide](/guide#worker-commands)), and peers review only under **Run with it** ([Autonomy](/guide#autonomy)).
+
+**The first build's tests: fixed in #685.** Step 2 told the worker to ask the operator to run the tests, because the repository had no file workers know how to test (package.json, pyproject.toml, Cargo.toml or go.mod) and no worker commands. A stranger's first build would wait on that. Get started now asks first. While a project's repository has no test a worker may run, a **Tell workers how to test** step follows **Add a project**, and its **Worker commands** button opens that project's Worker commands. Adding one, or a file workers know, settles it. `node scripts/first-item-walkthrough.js` walks it, and `test/firstitem.test.js` runs it, so the walk stays true:
+
+```
+ 1. the person: + Project, linked to its repository; Get started next
+    hub: Tell workers how to test → Worker commands
+ 2. the person: Worker commands: make test
+ 3. the person: + Work: "Add a greeting"
+ 4. a worker: checkin, next
+    hub: a work job on nuworq/1-add-a-greeting. Run tests with `make test`: the runner's sandbox allows it.
+ 5. the worker: commit, push the branch, submit
+    hub: #1 is verifying. The human will verify it. Call next for more work.
+ 6. the person: Accept
+ 7. the worker: next
+    hub: Land #1: put nuworq/1-add-a-greeting on main on origin. 1. In your worktree or clone: git fetch origin, …
+ 8. the worker: land: rebase, push to main, submit
+    hub: #1 is on main and done. Delete the branch: git push origin --delete nuworq/1-add-a-greeting. Call next.
+
+No step got stuck: 8 steps, the first item is on origin's main.
+```
+
 ## Hesitations
 
 - **A. Staffing is asked twice, the first time before anything can run it.** The project page asks "Let nuworq run staff this project?" before a machine is connected, and connect asks again. A yes on the page with no runner anywhere staffs nothing. **Fixed in #643.** The project page offers staffing only once a runner has reported for the project: before that, a yes there starts nothing, and connect asks on the machine that would run the workers. Connect no longer asks about a project that is already staffed. It says so, with the command to add this machine (`nuworq run --install`). `node scripts/setup-walkthrough.js` still meets every target (2026-11-02: 3 yes/no, 1 block, 1 approval).
@@ -64,7 +102,11 @@ Times are the hub's and the CLI's. A person's reading, switching windows and typ
 - **D. A yes to staffing asks a number next.** "Daily spending cap for its workers, in dollars [20]:" follows the staffing yes. The question says so ("up to a daily cap you set next"), and Enter takes 20. It counts here as a 4th answer on that path, not a yes/no. No change proposed: the cap is what makes the yes safe to give.
 - **E. A yes to staffing asks how the machine pays for Claude (#776).** "How does this machine pay for Claude: a subscription (Pro/Max) or an API key?" comes first, Enter taking what connect detected (ANTHROPIC_API_KEY, or `claude auth status`), shown in the prompt. On an API key, D's daily cap and a per-worker cap follow ([10]), written into the runner as `--max-usd` and `--worker-usd`. On a subscription no dollar question follows: the runner gets `--max-minutes 60`, the hub keeps no daily budget for the project (connecting again clears one), and connect says why (usage windows, not dollars). It counts toward the yes/no budget: the staffing path is now plugin, staff, pays, operator, a 4th answer, plus two numbers on an API key and none on a subscription. A no to staffing still asks 3. `--yes` takes the detected answer with the suggested values and says so. Kept: a runaway worker on an API key cost $402–593 on 2026-11-01 and 11-02, and the right cap differs by how the machine pays.
 
+**A live walk: waived for v1.0.0.** A fresh Claude agent given only README and /guide, in a fresh HOME, on a throwaway workspace of app.nuworq.com, was asked of the maintainer (Q270, Q273). The answer, on 2026-11-03: "Waive the live walk for v1.0.0: the scripted walk plus the docs tests are enough". The scripted walks above and `test/docsfresh.test.js`, `test/guidefresh.test.js` and `test/firstitem.test.js` stand in for it. It stays on the list below.
+
 ## Not walked, to rerun
+
+- **A fresh agent from the docs alone.** Waived for v1.0.0 (above). Rerun on a throwaway workspace of app.nuworq.com, with screenshots at phone and desktop widths, once the repository is public.
 
 - **The plugin from GitHub.** It needs a Claude account with access to the private repository. Rerun from an account without access once #365 makes it public. The script installs it through the stand-in `claude`.
 - **The staffing service.** A yes installs a real LaunchAgent (or systemd unit) and spends on a Claude account. Rerun on a spare machine or VM. The script answers no.
