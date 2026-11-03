@@ -209,7 +209,7 @@ describe('a live update redraws only the sections whose markup changed (#682)', 
   });
 
   test('the project page marks its sections, and the page region paints with a memory of them', () => {
-    assert.match(readFileSync(new URL('../web/views/main.js', import.meta.url), 'utf8'), /<!--sec:\$\{k\}-->\$\{s\[k\]\}<!--\/sec:\$\{k\}-->/);
+    assert.match(readFileSync(new URL('../web/views/main.js', import.meta.url), 'utf8'), /<!--sec:\$\{k\}-->\$\{foldable\(s\[k\], S\.folded\)\}<!--\/sec:\$\{k\}-->/);
     assert.match(appSource(), /paint\(el, mainHtml\(\), mainSections\)/);
   });
 });

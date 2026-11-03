@@ -3,6 +3,8 @@
 // (rail, main, drawer): a setter marks them, and the next render draws only the regions marked (#602). A view that
 // reads a field must be among its regions (test/regions.test.js checks web/views/). Read S freely.
 
+import { foldedNow } from './fold.js';
+
 export const PAGE = { all: 100, agents: 50 }; // a page of All work and of earlier agents (src/insight.js PAGE)
 
 const R = 'rail', M = 'main', D = 'drawer';
@@ -46,6 +48,7 @@ export const FIELDS = {
   prefetched: [() => new Map(), []], // ref → { at, item } fetched when the pointer rested on it (#393)
   // what the person has open, picked or typed
   open: [() => new Set(), [M, D]],
+  folded: [() => foldedNow(), [M]], // the sections folded shut (#809), kept in this browser
   reveal: [() => new Set(), [M, D]],
   drafts: [() => ({}), [M, D]],
   composeKind: ['steer', [M]],

@@ -17,6 +17,7 @@ import { roleCounts } from '../agentline.js';
 import { placeholder } from '../instant.js';
 import { shell } from '../switching.js';
 import { S } from '../store.js';
+import { foldable } from '../fold.js';
 import { KEYBOARD, WIDE, Z, commits, esc, inline, md, plural, qref, refLink, repoTag, stepWhere, when, zero } from './html.js';
 import { attemptsGrid, courtOf, named, stagePill, who, z } from './parts.js';
 
@@ -65,7 +66,7 @@ function overview() {
   return `<div class="phead"><div class="titles"><h1>Home</h1></div>
       <div class="controls"><div class="ctl-row"><span class="seg-label">Depth</span>${zoomControl()}
       ${owner() ? '<a class="btn an-open" href="#/analytics" data-new="analytics">Analytics</a>' : ''}</div></div></div>
-    ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, gs: getStarted(), fb: feedbackWaiting(S.feedback?.waiting, esc) })}`;}
+    ${homePage(S.home, { z: z(), pulse, card, esc, plural, who, wide: WIDE.matches, fold: (x) => foldable(x, S.folded), gs: getStarted(), fb: feedbackWaiting(S.feedback?.waiting, esc) })}`;}
 
 // ── project ──
 function project(v) {
@@ -118,7 +119,7 @@ function projectBody(v, empty) {
     steering: z() >= 1 ? steering(v) : '', agents: z() >= 1 ? agents(v) : '', runners: z() >= 1 ? runners(v) : '', activity: z() >= 2 ? activity(v) : '', all: z() >= 2 ? allWork(v) : '', more,
   };
   // Each marked as a section (web/morph.js), so a live update redraws only the sections whose markup changed (#682).
-  const order = (keys) => keys.map((k) => (s[k] ? `<!--sec:${k}-->${s[k]}<!--/sec:${k}-->` : '')).join('');
+  const order = (keys) => keys.map((k) => (s[k] ? `<!--sec:${k}-->${foldable(s[k], S.folded)}<!--/sec:${k}-->` : '')).join('');
   if (WIDE.matches && !empty) return columns(order(['composer', 'needs', 'groups', 'motion', 'worth', 'next', 'finished', 'steering', 'activity', 'all', 'more']), order(['pulse', 'flow', 'agents', 'runners']), `p:${S.slug}`);
   // On a phone (#711) the first card that needs you comes right after the pulse, on the first screen; the composer follows the cards.
   return order(['pulse', 'needs', 'groups', 'composer', 'empty', 'motion', 'worth', 'flow', 'next', 'finished', 'steering', 'agents', 'runners', 'activity', 'all', 'more']);
@@ -191,7 +192,7 @@ function needsYou(v) {
   const body = act.length
     ? `<div class="cards">${each(act, card)}</div>`
     : `<div class="zero"><span class="check good">✓</span><div><b>Nothing needs you.</b> ${v.pulse.active ? 'Agents are working; you\'ll see things here when they need a decision, an answer or a verification.' : 'When agents need a decision, an answer or a verification, it shows up here.'}</div></div>`;
-  return `<section class="sec"><header><h2>Needs you</h2>${act.length ? `<span class="count">${act.length}</span>` : ''}
+  return `<section class="sec"><header><h2 data-new="fold-sections">Needs you</h2>${act.length ? `<span class="count">${act.length}</span>` : ''}
     ${act.length ? '<span class="hint" data-new="needs-rank">most important first; each one moves work to its next stage</span>' : ''}</header>${body}</section>`;
 }
 
