@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Releases are signed on GitHub Actions (#813): .github/workflows/release.yml runs this on each pushed vX.Y.Z tag.
 //   node scripts/release.js check <vX.Y.Z> <out dir>
-//       the `check` job, unprivileged: refuses a tag that isn't a release (releaseRefusal, below), builds its package
-//       exactly as the hub does (src/package.js archive) into <out dir>, and shows on the job summary its version,
-//       commit, sha256 and changelog entry. It reads the last signed release from this repository's GitHub Releases
-//       (GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN) and, when NUWORQ_HUB names one, the hub's: a release must be
-//       newer than either.
+//       the `check` job, unprivileged: refuses a tag that isn't a release (releaseRefusal, in src/package.js), builds
+//       its package exactly as the hub does (src/package.js archive) into <out dir>, and shows on the job summary its
+//       version, commit, sha256 and changelog entry. It reads the last signed release from this repository's GitHub
+//       Releases (GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN) and, when NUWORQ_HUB names one, the hub's: a
+//       release must be newer than either.
 // Agents can change this file, so nothing the approval rests on comes only from it: the workflow's `changes` job
 // checks the tag again and says whether this code changed, and `sign` runs none of the repository's code.
 import { execFile } from 'node:child_process';
@@ -13,45 +13,18 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { archive } from '../src/package.js';
-import { versionOf, changelogEntry } from '../src/update.js';
+import { archive, TAG, newer, releaseRefusal, lastOnHub, latest } from '../src/package.js';
+import { changelogEntry } from '../src/update.js';
 
-export const TAG = /^v(\d+\.\d+\.\d+)$/;
+// The rules every signer shares live in the package (src/package.js), so signing by hand (`nuworq release sign`)
+// runs them from a signed release.
+export { TAG, newer, releaseRefusal, lastOnHub, latest, handCheck } from '../src/package.js';
 
 const git = (repo, args) => new Promise((resolve, reject) => {
   execFile('git', ['-C', repo, ...args], { timeout: 120_000, maxBuffer: 16 << 20 }, (e, out, err) => (e ? reject(new Error(String(err || e.message).trim())) : resolve(out)));
 });
 const show = (repo, commit, path) => git(repo, ['show', `${commit}:${path}`]).catch(() => null);
 const timeOf = async (repo, commit) => Number((await git(repo, ['log', '-1', '--format=%ct', commit])).trim());
-
-// a > b, as X.Y.Z versions.
-export const newer = (a, b) => {
-  const [x, y] = [a, b].map((v) => v.split('.').map(Number));
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
-  return false;
-};
-
-// Why tag at commit mustn't be signed: '' when it may. The one set of rules for every signer: the release workflow
-// and signing by hand (handCheck, below). main: a ref naming origin's main. pub: the release key's public
-// half (PEM). last: the newest signed release, { version, commit, time, where } or null; where names it in a refusal.
-export async function releaseRefusal(repo, { tag, commit, main, pub, last = null }) {
-  const m = TAG.exec(tag ?? '');
-  if (!m) return `${tag} isn't a release tag (vX.Y.Z)`;
-  const version = m[1];
-  const short = commit.slice(0, 7);
-  if (last) {
-    const time = await timeOf(repo, commit);
-    if (time <= last.time || (last.version && !newer(version, last.version))) {
-      return `older than ${last.where ?? 'the last signed release'}${last.version ? ` v${last.version}` : ''} (${last.commit.slice(0, 7)}), and signing it would roll installs back`;
-    }
-  }
-  if (!(await git(repo, ['merge-base', '--is-ancestor', commit, main]).then(() => true, () => false))) return `${short} isn't on origin's main`;
-  const said = versionOf(await show(repo, commit, 'package.json'));
-  if (said !== version) return `its package.json says ${said ?? 'no version'}, not ${version}`;
-  if (changelogEntry(await show(repo, commit, 'CHANGELOG.md'), version, { first: true }) == null) return `its CHANGELOG.md doesn't begin with ${version} (a "## ${version}" heading first)`;
-  if ((await show(repo, commit, 'release-key.pub'))?.trim() !== String(pub ?? '').trim()) return 'its release-key.pub isn\'t this key\'s public half, so installs pinning it would refuse the signature';
-  return '';
-}
 
 // The newest signed release on GitHub: of the repository's published releases with a nuworq-<commit>.tgz.sig asset,
 // the newest version, other than skip (the tag being released). { tag, version, commit, time, where } or null.
@@ -68,39 +41,6 @@ export async function lastOnGitHub(repo, { api, slug, token, skip, get = fetch }
     if (commit) best = { tag: rel.tag_name, version: m[1], commit, where: 'the last release signed on GitHub' };
   }
   return best && { ...best, time: await timeOf(repo, best.commit) };
-}
-
-// The hub's signed release, as /api/package names it: { version, commit, time, where } or null.
-export async function lastOnHub(repo, hub, get = fetch) {
-  const r = await get(`${new URL(hub).origin}/api/package`, { signal: AbortSignal.timeout(30_000) });
-  if (!r.ok) throw new Error(`${hub} answered ${r.status}`);
-  const rel = (await r.json()).package?.release;
-  if (!rel?.commit) return null;
-  await git(repo, ['cat-file', '-e', `${rel.commit}^{commit}`]).catch(() => { throw new Error(`the hub's signed release ${rel.commit.slice(0, 7)} isn't in this repository`); });
-  return { version: versionOf(await show(repo, rel.commit, 'package.json')), commit: rel.commit, time: rel.time ?? await timeOf(repo, rel.commit), where: 'the hub\'s signed release' };
-}
-
-// The newer of two signed releases (either may be null).
-export const latest = (a, b) => (!a ? b : !b ? a : (b.version && a.version ? newer(b.version, a.version) : b.time > a.time) ? b : a);
-
-// Signing by hand (sign-release.js release), the fallback to the workflow: origin's tag and main, fetched under a
-// namespace of its own so the checkout's branches and tags stay as they are, then the workflow's own rules against
-// the hub's signed release. Never the hub's package: the caller builds GitHub's. Resolves { commit, subject,
-// changes, refusal }; refusal is '' when tag may be signed. pub: the release key's public half (PEM).
-export async function handCheck(repo, { tag, pub, hub, get = fetch }) {
-  if (!TAG.test(tag ?? '')) return { refusal: `${tag} isn't a release tag (vX.Y.Z)` };
-  const main = 'refs/hand-release/main';
-  try {
-    await git(repo, ['fetch', '-q', '--no-tags', 'origin', `+refs/heads/main:${main}`, `+refs/tags/${tag}:refs/hand-release/tags/${tag}`]);
-  } catch (e) {
-    return { refusal: `couldn't fetch origin's main and ${tag} (${e.message.split('\n')[0]}): sign a release only once the hub tagged it, in a checkout of nuworq whose origin is GitHub` };
-  }
-  const commit = (await git(repo, ['rev-parse', `refs/hand-release/tags/${tag}^{commit}`])).trim();
-  const last = await lastOnHub(repo, hub, get);
-  const refusal = await releaseRefusal(repo, { tag, commit, main, pub, last });
-  const subject = (await git(repo, ['log', '-1', '--format=%s (%cd)', '--date=short', commit])).trim();
-  const changes = changelogEntry(await show(repo, commit, 'CHANGELOG.md'), TAG.exec(tag)[1], { first: true }) ?? '';
-  return { commit, subject, changes: changes.trim(), refusal };
 }
 
 // The check job's summary: what the repository's code says of the release.

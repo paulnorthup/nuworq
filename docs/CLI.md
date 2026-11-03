@@ -1125,6 +1125,25 @@ Example
   nuworq changes
 ```
 
+### nuworq release
+
+```text
+nuworq release: sign a release by hand, the fallback to the release workflow
+
+Usage
+  nuworq release sign <vX.Y.Z> <release-key.pem> <hub>
+
+Example
+  nuworq release sign v1.0.0 ~/keys/release-key.pem https://app.nuworq.com
+
+Run it in a checkout of nuworq whose origin is GitHub, with nuworq installed
+from a signed release. From a git checkout it refuses before it reads the key: a
+checkout runs whatever landed on main.
+
+It signs only what the workflow would, shows the tag's commit and changelog, and
+signs once you type the tag. See docs/DEPLOY.md, "Signing by hand".
+```
+
 ### nuworq init
 
 ```text
