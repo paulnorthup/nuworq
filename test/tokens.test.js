@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { FOLD, isFold } from './foldmotion.js';
 
 // One strict set of tokens (#391): every size, space, radius, shadow and border in the web app comes from :root.
 const read = (f) => readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8');
@@ -13,10 +14,8 @@ const names = (re) => Object.keys(tokens).filter((k) => re.test(k));
 const decls = (src) => [...src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/:root \{[^}]*\}/, '').matchAll(/([^{}]*)\{([^{}]*)\}/g)]
   .flatMap((b) => [...b[2].matchAll(/(?:^|[;"])\s*([a-z-]+)\s*:\s*([^;{}"]+)/g)].map((m) => ({ sel: b[1].trim(), prop: m[1], value: m[2].trim() })));
 
-// The one transition allowed past 100ms (#809, Paul: "a touch of animation, not long and slow, but just enough to feel
-// premium"): a section folding eases its height, its header's gap and its chevron over 150ms. Only these selectors.
-const FOLD = { ms: 150, sel: new Set(['.sec .fold .chev', '.sec.foldable > header', '.sec.foldable > .fold-body', '.sec.folded > .fold-body']) };
-const capOf = (sel) => (sel.split(',').every((s) => FOLD.sel.has(s.trim())) ? FOLD.ms : 100);
+// The one transition allowed past 100ms is a section folding (#809): see test/foldmotion.js.
+const capOf = (sel) => (isFold(sel) ? FOLD.ms : 100);
 
 // What a value may be once its tokens are taken out: nothing numeric but 0 (and %, vh, vw for layout).
 const bare = (v) => v.replace(/calc\(-1 \* var\(--[\w-]+\)\)/g, '').replace(/var\(--[\w-]+\)/g, '');
