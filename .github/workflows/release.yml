@@ -7,7 +7,8 @@
 #          hub does, and shows its version, commit, sha256 and changelog. A failed check stops here: no one is asked.
 # changes: unprivileged, and runs none of the repository's code: what the maintainer's approval rests on comes from this file.
 #          Checks again that the tag is on main at its version and newer than the last signed release, and says
-#          whether the code `check` ran changed since that release, with a link to the diff.
+#          whether the code `check` ran changed since that release, with a link to the diff. It compares with the hub's
+#          signed release only when the hub's .sig for it verifies against the tag's release-key.pub.
 # sign:    waits in the `release` environment (the maintainer is its required reviewer; only v* tags may deploy to it), and
 #          runs none of the repository's code. Builds the package again with git alone, which must be the sha256
 #          `check` showed, signs it with the environment's RELEASE_KEY in node:crypto inline below, verifies it
@@ -73,18 +74,45 @@ jobs:
           said=$(git show "$commit:package.json" | node --input-type=commonjs -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
           [ "$said" = "$version" ] || fail "its package.json says $said, not $version"
           # The last signed release: the newest GitHub Release with a .sig, or the hub's (NUWORQ_HUB) if it's newer.
-          last='' where=''
+          # floor is what the tag must be newer than; last is what the summary compares with. The hub's commit is the
+          # floor whenever it is newer (that only refuses more), but the base only when its .sig verifies (#837).
+          last='' where='' unverified=''
           tag=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft | not) | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | select(any(.assets[]; .name | test("^nuworq-[0-9a-f]{40}\\.tgz\\.sig$"))) | .tag_name' | { grep -vxF "$GITHUB_REF_NAME" || true; } | sort -V | tail -n 1)
           if [ -n "$tag" ]; then last=$(git rev-parse "$tag^{commit}"); where=$tag; fi
+          floor=$last below=$where
           if [ -n "${NUWORQ_HUB:-}" ]; then
             hub=$(curl -fsS --max-time 30 "${NUWORQ_HUB%/}/api/package" | node --input-type=commonjs -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).package?.release?.commit ?? ""')
             if [ -n "$hub" ]; then
               git cat-file -e "$hub^{commit}" || fail "the hub's signed release $hub isn't in this repository"
-              if [ -z "$last" ] || git merge-base --is-ancestor "$last" "$hub"; then last=$hub where="the hub's signed release"; fi
+              if [ -z "$floor" ] || git merge-base --is-ancestor "$floor" "$hub"; then
+                floor=$hub below="the hub's signed release"
+                # The hub's word isn't enough: its .sig must verify over the package sign would build of that commit,
+                # with the files src/package.js's RUNS lists (test/releasesign.test.js keeps the lists the same).
+                hubdir="$RUNNER_TEMP/hub-release"
+                mkdir -p "$hubdir"
+                paths=()
+                for f in bin src web package.json README.md CHANGELOG.md LICENSE release-key.pub; do
+                  if git cat-file -e "$hub:$f" 2>/dev/null; then paths+=("$f"); fi
+                done
+                git archive --format=tar.gz --prefix=package/ -o "$hubdir/nuworq-$hub.tgz" "$hub" -- "${paths[@]}"
+                git show "$commit:release-key.pub" > "$hubdir/release-key.pub"
+                curl -fsS --max-time 30 -o "$hubdir/nuworq-$hub.tgz.sig" "${NUWORQ_HUB%/}/nuworq-$hub.tgz.sig" || : > "$hubdir/nuworq-$hub.tgz.sig"
+                export HUBDIR=$hubdir HUB=$hub
+                verified=$(node --input-type=commonjs - 2>/dev/null <<'JS' || true
+          const { createPublicKey, verify } = require('node:crypto');
+          const { readFileSync } = require('node:fs');
+          const { HUBDIR, HUB } = process.env;
+          const pkg = readFileSync(`${HUBDIR}/nuworq-${HUB}.tgz`);
+          const sig = Buffer.from(readFileSync(`${HUBDIR}/nuworq-${HUB}.tgz.sig`, 'utf8').trim(), 'base64');
+          if (sig.length && verify(null, pkg, createPublicKey(readFileSync(`${HUBDIR}/release-key.pub`)), sig)) console.log('verified');
+          JS
+                )
+                if [ "$verified" = verified ]; then last=$hub where=$below; else unverified=$hub; fi
+              fi
             fi
           fi
-          if [ -n "$last" ] && { [ "$last" = "$commit" ] || ! git merge-base --is-ancestor "$last" "$commit"; }; then
-            fail "it isn't newer than $where (${last:0:7}), and signing it would roll installs back"
+          if [ -n "$floor" ] && { [ "$floor" = "$commit" ] || ! git merge-base --is-ancestor "$floor" "$commit"; }; then
+            fail "it isn't newer than $below (${floor:0:7}), and signing it would roll installs back"
           fi
           # What check ran: scripts/release.js and the modules it imports. A new import changes one of these.
           ran=(scripts/release.js src/package.js src/update.js)
@@ -93,6 +121,10 @@ jobs:
             echo
             echo "This summary comes from the release workflow alone, which agents can't change. The \`check\` job's summary (version, sha256, changelog) comes from the repository's code at this tag."
             echo
+            if [ -n "$unverified" ]; then
+              echo "**The hub's claim didn't verify:** it names \`${unverified:0:7}\` as its signed release, but its signature for that commit doesn't verify against this tag's release-key.pub. It still counts against a rollback, but what follows compares with GitHub's last signed release, not with it."
+              echo
+            fi
             if [ -z "$last" ]; then
               echo "**No signed release to compare with:** read \`${ran[*]}\` at $GITHUB_REF_NAME before you trust the \`check\` summary."
             else
