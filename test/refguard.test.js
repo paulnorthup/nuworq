@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { refsOf, restoreRefs, restoredLine, keptLine } from '../src/runner.js';
+import { refsOf, restoreRefs, restoredLine, keptLine, besideWorkers } from '../src/runner.js';
 
 const sh = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8' }).trim();
 const git = async (args) => (await promisify(execFile)('git', args)).stdout;
@@ -81,27 +81,88 @@ describe("a worker exiting leaves the checkout's other branches where they were"
     assert.equal(sh(home, 'rev-parse', 'main'), upstream);
   });
 
-  // #788: B committed on its own branch while A ran and has exited already; A's exit must not put it back.
-  test("a branch of a worker that ran beside it and has exited keeps its commit; a ref neither holds is still put back", async () => {
-    const { home, wt, sib, main } = setup();
-    const before = await refsOf(home, git);
-    const theirs = commit(sib, 'B work');
-    const own = commit(wt, 'A work');
-    sh(wt, 'update-ref', 'refs/heads/mine', own);
-    const r = await restoreRefs(home, before, git, { own: ['nuworq/7-thing'], live: ['nuworq/8-other'] });
-    assert.equal(sh(home, 'rev-parse', 'nuworq/8-other'), theirs);
-    assert.deepEqual(r.restored.map((x) => x.ref), ['refs/heads/mine']);
-    assert.equal(sh(home, 'rev-parse', 'mine'), main);
-    const none = await restoreRefs(home, await refsOf(home, git), git, { own: ['nuworq/7-thing'], live: ['nuworq/8-other'] });
-    assert.deepEqual(none.restored, [], 'no "was moved" line when only the two workers\' own branches moved');
-  });
-
   test('the runner snapshots refs before a worker starts and puts them back when it exits', () => {
     const cli = readFileSync(new URL('../bin/nuworq.js', import.meta.url), 'utf8');
-    assert.match(cli, /const refsBefore = worktree \? await refsOf\(home, git\)/);
-    assert.match(cli, /if \(refsBefore\) await guardRefs\(\{ home, branch, name, project: target\.slug, before: refsBefore, ranBeside \}\);/);
-    assert.match(cli, /beside\.set\(worktree, new Set\(\[\.\.\.startBranch\.values\(\)\]/, 'each worker remembers the branches of those running beside it, even after they exit (#788)');
-    assert.match(cli, /await git\(\['-C', home, 'fetch', '-q', '--prune', 'origin'\]\)[^\n]*\n\s*const g = await restoreRefs\(home, before, git, \{ own: \[branch\], live: \[\.\.\.siblings, \.\.\.ranBeside\] \}\)/, "origin's refs are fetched first, so a worker can't fake a pull");
+    assert.match(cli, /const refsBefore = worktree \? await refsOf\(home, git\)[^\n]*\n\s*if \(worktree\) running\.start\(worktree, home\);/);
+    assert.match(cli, /const \{ branch, spare \} = await running\.exit\(worktree\);\n\s*if \(refsBefore\) await guardRefs\(\{ home, branch, name, project: target\.slug, before: refsBefore, spare \}\);/);
+    assert.match(cli, /await git\(\['-C', home, 'fetch', '-q', '--prune', 'origin'\]\)[^\n]*\n\s*const g = await restoreRefs\(home, before, git, \{ own: \[branch\], live: spare \}\)/, "origin's refs are fetched first, so a worker can't fake a pull");
     assert.match(cli, /\.call\('comment', \{/, 'and it says so on the hub');
+  });
+});
+
+// #788: run.log flipped nuworq/716 and nuworq/721 back and forth on every exit, each worker's guard putting back what
+// a sibling did on its own branch. Two workers in one checkout, started detached as the runner starts them.
+describe("a worker's exit leaves the branches of workers that ran beside it alone", () => {
+  function two() {
+    const origin = mkdtempSync(join(tmpdir(), 'nuworq-origin-'));
+    sh(origin, 'init', '-q', '-b', 'main');
+    commit(origin, 'one');
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-home-'));
+    execFileSync('git', ['clone', '-q', origin, home]);
+    sh(home, 'branch', 'mine');
+    sh(home, 'branch', 'nuworq/7-thing'); // both items attempted before: their branches are already here
+    sh(home, 'branch', 'nuworq/8-other');
+    const a = `${home}.worktrees/a`, b = `${home}.worktrees/b`;
+    return { home, a, b, main: sh(home, 'rev-parse', 'main') };
+  }
+  const startIn = (home, wt) => sh(home, 'worktree', 'add', '-q', '--detach', wt, 'main');
+  // What the runner does as one exits: its guard, then its worktree goes (its branch stays).
+  async function exit(workers, home, wt, before) {
+    const { branch, spare } = await workers.exit(wt);
+    const r = await restoreRefs(home, before, git, { own: [branch], live: spare });
+    sh(home, 'worktree', 'remove', '--force', wt);
+    return { branch, ...r };
+  }
+
+  test('B commits on its branch and exits first; A exits and B keeps its commit, a ref A moved goes back', async () => {
+    const { home, a, b, main } = two();
+    const workers = besideWorkers(git);
+    startIn(home, a); const beforeA = await refsOf(home, git); workers.start(a, home);
+    startIn(home, b); const beforeB = await refsOf(home, git); workers.start(b, home);
+    sh(b, 'switch', '-q', 'nuworq/8-other');
+    const theirs = commit(b, 'B work');
+    const rb = await exit(workers, home, b, beforeB);
+    assert.equal(rb.branch, 'nuworq/8-other');
+    assert.deepEqual([rb.restored, rb.kept], [[], []], "B's exit puts nothing back");
+
+    sh(a, 'switch', '-q', 'nuworq/7-thing');
+    const own = commit(a, 'A work');
+    sh(a, 'update-ref', 'refs/heads/mine', own);
+    const ra = await exit(workers, home, a, beforeA);
+    assert.equal(sh(home, 'rev-parse', 'nuworq/8-other'), theirs, "B's branch keeps B's commit");
+    assert.equal(sh(home, 'rev-parse', 'nuworq/7-thing'), own, "A's own branch keeps A's");
+    assert.deepEqual(ra.restored.map((x) => x.ref), ['refs/heads/mine'], 'only the ref neither holds goes back: one "was moved" line');
+    assert.equal(sh(home, 'rev-parse', 'mine'), main);
+  });
+
+  test('B still running on its branch when A exits: left alone, not even reported as moved', async () => {
+    const { home, a, b } = two();
+    const workers = besideWorkers(git);
+    startIn(home, a); const beforeA = await refsOf(home, git); workers.start(a, home);
+    startIn(home, b); workers.start(b, home);
+    sh(b, 'switch', '-q', 'nuworq/8-other');
+    const theirs = commit(b, 'B work');
+    const ra = await exit(workers, home, a, beforeA);
+    assert.deepEqual([ra.restored, ra.kept], [[], []]);
+    assert.equal(sh(home, 'rev-parse', 'nuworq/8-other'), theirs);
+  });
+
+  test("a worker that exited before A started, or one in another checkout, spares nothing for A", async () => {
+    const { home, a, b, main } = two();
+    const other = two();
+    const workers = besideWorkers(git);
+    startIn(home, b); workers.start(b, home);
+    sh(b, 'switch', '-q', 'nuworq/8-other');
+    await exit(workers, home, b, await refsOf(home, git));
+    startIn(home, a); const beforeA = await refsOf(home, git); workers.start(a, home);
+    startIn(other.home, other.b); workers.start(other.b, other.home);
+    sh(other.b, 'switch', '-q', 'nuworq/7-thing');
+    await exit(workers, other.home, other.b, await refsOf(other.home, git));
+    const sha = commit(a, 'A work, detached');
+    sh(a, 'update-ref', 'refs/heads/nuworq/8-other', sha);
+    sh(a, 'update-ref', 'refs/heads/nuworq/7-thing', sha);
+    const ra = await exit(workers, home, a, beforeA);
+    assert.deepEqual(ra.restored.map((x) => x.ref).sort(), ['refs/heads/nuworq/7-thing', 'refs/heads/nuworq/8-other']);
+    assert.equal(sh(home, 'rev-parse', 'nuworq/8-other'), main);
   });
 });
