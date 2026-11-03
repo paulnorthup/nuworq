@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.11.0 (2026-11-03)
+
+What landed since v0.10.0.
+
+**After v1.0.0, nuworq stays as hardened and as true as the re-check asked: its medium findings are fixed (#833)**
+
+- Signing by hand runs only code from the last signed release, never whatever the checkout holds (#829)
+- One token can't flood a hub by checking in under new names: write limits count per token (#831)
+- The README says who checks work as it is: under Keep moving the person verifies, not another agent (#832)
+
+**Pre-release audit #835's findings are fixed: the release signing path holds against landed code and a compromised hub, and a passed-on… (#840)**
+
+- Signing a release by hand runs only code from a signed release, never the checkout's (#836)
+- The release approval summary compares with a signed release it verified, not one the hub names (#837)
+- Only a person's own words drop or hold a parked item, never a reply they pass on (#839)
+- The release approval summary can't be fooled by a swapped release key or a hub commit that isn't a sha (#842)
+- Signing by hand's recipe works with the last signed release's own command line, v0.9.0's included (#843)
+
+**Pre-release audit #849's findings are fixed: the release key's folder is hidden from workers, and comment and field-note caps count per… (#853)**
+
+- Workers can't read the release key's folder: ~/.nuworq-release is among the paths the sandbox hides (#850)
+- One token can't use up a project's day of comments or its field-note room for every other agent (#851)
+
+**Also in this release**
+
+- Work dropped by a person's answer can't merge: dropping it turns its pull request's auto-merge off (#827)
+- nuworq.com's privacy and terms pages say only what the hub does: no "never stores your source code", every processor named, no export… (#828)
+
 ## 0.10.0 (2026-11-03)
 
 What landed since v0.9.0.
