@@ -895,6 +895,12 @@ export const ACTIONS = {
     setState({ linkRepo: el.dataset.slug });
     go(el.dataset.slug);
   },
+  // Get started's "Tell workers how to test" (#685): that project, with its Worker commands open.
+  'worker-commands-for': (el) => {
+    if (el.dataset.slug === S.slug) return workerCommandsModal();
+    setState({ onArrive: { slug: el.dataset.slug, run: workerCommandsModal } });
+    go(el.dataset.slug);
+  },
   'get-started-hide': async () => {
     try { setState({ gs: await api('/api/get-started/hide', { method: 'POST' }) }); render({ force: true }); } catch (e) { toastError(e); }
   },

@@ -89,7 +89,7 @@ describe('the app state store (#600)', () => {
       notifyPerson: '', offline: '',
       itemRef: 'drawer', item: 'drawer', deep: 'drawer', editItem: 'drawer', editPre: 'drawer', prefetched: '',
       open: 'main drawer', folded: 'main', reveal: 'main drawer', drafts: 'main drawer', composeKind: 'main', stage: 'main', addWork: 'main',
-      addMore: 'main', addRemote: 'main', linkRepo: '', editMission: 'main', feedAll: 'main', onlyFeedback: 'main',
+      addMore: 'main', addRemote: 'main', linkRepo: '', onArrive: '', editMission: 'main', feedAll: 'main', onlyFeedback: 'main',
       railMenu: 'rail', orgOpen: 'rail', actSlug: '', pending: '', sending: '',
     });
   });

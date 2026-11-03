@@ -20,7 +20,7 @@ export function getStartedCard(gs, { commands = {} } = {}) {
     return `<button class="${cls}" data-action="${esc(a.ui)}"${a.slug ? ` data-slug="${esc(a.slug)}"` : ''}>${esc(a.label)}</button>`;
   };
   const rows = gs.steps.map((s) => `<li class="${s.done ? 'done' : s.key === next ? 'next' : ''}" data-step="${esc(s.key)}">
-      <span class="tick">${s.done ? '✓' : ''}</span><span class="label">${esc(s.label)}</span>${s.done ? '' : `${action(s)}<a class="link how" href="guide#${esc(s.key)}">How?</a>`}
+      <span class="tick">${s.done ? '✓' : ''}</span><span class="label"${s.key === 'worker-commands' ? ' data-new="tests-step"' : ''}>${esc(s.label)}</span>${s.done ? '' : `${action(s)}<a class="link how" href="guide#${esc(s.key)}">How?</a>`}
       ${!s.done && s.key === next && commands[s.action?.command] ? commandBlocks(commands[s.action.command]) : ''}</li>`).join('');
   return `<section class="get-started"><div class="gs-head"><h3>Get started</h3><span class="faint">${done} of ${gs.steps.length} done</span>
       <a class="link gs-guide" href="guide"><span data-new="guide-gs">Guide</span></a><button class="link" data-action="get-started-hide" title="Hide this for good">Hide</button></div>

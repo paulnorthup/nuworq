@@ -74,6 +74,26 @@ Then a first item, on a throwaway hub whose project links a bare origin as **+ P
 
 No step got stuck. Two things a newcomer meets here, both said where they meet them: the first build has no test command to run until one is added under **Worker commands** ([the guide](/guide#worker-commands)), and peers review only under **Run with it** ([Autonomy](/guide#autonomy)).
 
+**The first build's tests: fixed in #685.** Step 2 told the worker to ask the operator to run the tests, because the repository had no file workers know how to test (package.json, pyproject.toml, Cargo.toml or go.mod) and no worker commands. A stranger's first build would wait on that. Get started now asks first. While a project's repository has no test a worker may run, a **Tell workers how to test** step follows **Add a project**, and its **Worker commands** button opens that project's Worker commands. Adding one, or a file workers know, settles it. `node scripts/first-item-walkthrough.js` walks it, and `test/firstitem.test.js` runs it, so the walk stays true:
+
+```
+ 1. the person: + Project, linked to its repository; Get started next
+    hub: Tell workers how to test → Worker commands
+ 2. the person: Worker commands: make test
+ 3. the person: + Work: "Add a greeting"
+ 4. a worker: checkin, next
+    hub: a work job on nuworq/1-add-a-greeting. Run tests with `make test`: the runner's sandbox allows it.
+ 5. the worker: commit, push the branch, submit
+    hub: #1 is verifying. The human will verify it. Call next for more work.
+ 6. the person: Accept
+ 7. the worker: next
+    hub: Land #1: put nuworq/1-add-a-greeting on main on origin. 1. In your worktree or clone: git fetch origin, …
+ 8. the worker: land: rebase, push to main, submit
+    hub: #1 is on main and done. Delete the branch: git push origin --delete nuworq/1-add-a-greeting. Call next.
+
+No step got stuck: 8 steps, the first item is on origin's main.
+```
+
 ## Hesitations
 
 - **A. Staffing is asked twice, the first time before anything can run it.** The project page asks "Let nuworq run staff this project?" before a machine is connected, and connect asks again. A yes on the page with no runner anywhere staffs nothing. **Fixed in #643.** The project page offers staffing only once a runner has reported for the project: before that, a yes there starts nothing, and connect asks on the machine that would run the workers. Connect no longer asks about a project that is already staffed. It says so, with the command to add this machine (`nuworq run --install`). `node scripts/setup-walkthrough.js` still meets every target (2026-11-02: 3 yes/no, 1 block, 1 approval).

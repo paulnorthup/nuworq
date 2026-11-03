@@ -14,13 +14,14 @@ export function route() {
   const ref = m?.[2] ? `#${m[2]}` : null;
   // Arriving from Get started's "+ repo" opens this project's repository form, focused.
   const linking = !!slug && S.linkRepo === slug;
+  const arrive = slug && S.onArrive?.slug === slug ? S.onArrive.run : null;
   const moved = slug !== S.slug;
   if (moved) {
     setState({ stage: null, addWork: false, editMission: false, addRemote: linking, pages: { all: PAGE.all, agents: PAGE.agents } });
     // Another project (#503): the last view seen for it this visit, else nothing until the shell's view arrives.
     setState({ missing: null, loading: slug, view: slug ? held(slug, S)?.view ?? null : S.view });
   }
-  setState({ linkRepo: null, slug });
+  setState({ linkRepo: null, onArrive: null, slug });
   if (ref !== S.itemRef) setState({ itemRef: ref, item: prefetched(slug, ref), deep: z() >= 2, editItem: false, editPre: false });
   if (ref) remember(slug, ref);
   // An item opens on this frame: from what was fetched as the pointer rested on it, else as a placeholder.
@@ -36,7 +37,7 @@ export function route() {
       if (S.slug === slug) render({ force: true });
     });
   } else if (ref && S.view?.project.slug === slug) render({ force: true });
-  refresh({ force: true, fresh: !moved, list: false }).then(() => linking && $('#remote-in')?.focus());
+  refresh({ force: true, fresh: !moved, list: false }).then(() => { if (linking) $('#remote-in')?.focus(); arrive?.(); });
 }
 // Opening an item (#393): fetched when the pointer rests on its link, or as a finger lands on it, so it opens
 // without a wait. Kept a few seconds; the open refreshes it from the hub all the same.

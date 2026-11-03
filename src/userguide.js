@@ -193,6 +193,7 @@ export const ESSENTIALS = [
       'Workers run git, and the project\'s checks, without asking: `npm test`, `npm ci` and the package.json scripts named test, lint, check, typecheck or build (`test:unit` too), `pytest`, and `cargo` and `go` test and build.',
       'They never run `npm install`, a deploy, release or publish script, or an interpreter like `node` on its own: each could run anything.',
       'To add a command, e.g. `npm run e2e` or `make test`: open the project\'s **Settings**, find **Worker commands**, and type one per line. Workers started from then on may run it, with any arguments.',
+      'A repository with none of those files and no worker command has no test a worker may run, so its first build would have to ask for them: **Get started** asks first, with **Tell workers how to test**.',
     ],
   },
   {

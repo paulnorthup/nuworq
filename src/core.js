@@ -15,7 +15,7 @@ import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease, settleTags } from './releases.js';
 import { builtWhatItReviews, reviewRelease } from './security.js';
-import { sandboxHosts, workerCommands, testsLine } from './sandbox.js';
+import { sandboxHosts, workerCommands, testsLine, kindsOf } from './sandbox.js';
 import { BUDGET as DEFAULT_BUDGET } from './setup.js';
 import { AGENTS, DEFAULT_TIERS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, tiersOf, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
@@ -917,6 +917,15 @@ export class Hub extends EventEmitter {
     const repo = this.repoFor(p, item);
     const base = repo && baseOf(repo.path);
     return base ? testsLine((f) => hasFile(repo.path, base, f), json(p.worker_commands, [])) : '';
+  }
+  // Whether a worker may run any test here without approval: false when the hub reads the repository and finds no
+  // kind of project it knows and no worker commands, so the first build would have to ask for its tests (#685).
+  // null when it can't read the repository.
+  testable(p) {
+    if (json(p.worker_commands, []).length) return true;
+    const repo = this.repoFor(p);
+    const base = repo && baseOf(repo.path);
+    return base ? kindsOf((f) => hasFile(repo.path, base, f)).length > 0 : null;
   }
 
   addRemote(p, remote, actor) {

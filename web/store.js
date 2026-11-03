@@ -57,6 +57,7 @@ export const FIELDS = {
   addMore: [false, [M]],
   addRemote: [false, [M]],
   linkRepo: [null, []], // a project whose repository form opens on arrival (Get started's "+ repo")
+  onArrive: [null, []], // { slug, run }: what opens once that project's page has loaded (Get started's Worker commands)
   editMission: [false, [M]],
   feedAll: [false, [M]],
   onlyFeedback: [false, [M]],
