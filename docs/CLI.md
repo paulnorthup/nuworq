@@ -790,6 +790,8 @@ Flags
   --depends-on <a,b>          items to finish first
   --fixes <fixes>             the landed item this repairs (counts as an escape)
   --breaking <breaking>       who must act when it ships, one line
+  --change <feature|fix|internal>
+                              unset counts as a feature
   --needs <a,b>               tags a taker must have (checkin has), e.g.
                               ["docker"]
   --size <small|large>        large: multi-step
@@ -834,6 +836,7 @@ Flags
   --reason <reason>           why, one line (tidy jobs: always)
   --fixes <fixes>             the landed item this repairs; "" clears it
   --breaking <breaking>       who must act when it ships; "" clears it
+  --change <change>           feature, fix or internal; "" leaves it unsaid
   --needs <a,b>               tags a taker must have; replaces the list
   --size <small|large>        small, or large: multi-step
   --difficulty <rote|standard|hard>

@@ -147,7 +147,7 @@ describe("the hub's own entries", () => {
     hub.db.exec(`INSERT INTO transitions (item_id, stage, actor, at) VALUES (1, 'ready', '${OLD}', 0)`);
     hub.db.close();
     const d = new DatabaseSync(file);
-    d.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    d.exec(`PRAGMA user_version = ${MIGRATIONS.findIndex((m) => m.name === "the hub's own entries carry its name")}`); // just before it
     d.close();
 
     const db = openDb(file);

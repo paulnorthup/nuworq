@@ -678,6 +678,12 @@ export const MIGRATIONS = [
       }
     },
   },
+  {
+    // What kind of change an item is (#863): feature, fix or internal, for the release's semver bump. '': not
+    // said, which counts as a fix when the item has fixes, otherwise as a feature (src/releases.js changeOf).
+    name: "an item's kind of change",
+    up(db) { addColumn(db, "ALTER TABLE items ADD COLUMN change TEXT NOT NULL DEFAULT ''"); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
