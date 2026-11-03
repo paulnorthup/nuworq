@@ -1,8 +1,8 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join, extname, dirname } from 'node:path';
+import { join, extname, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_AGENT_CAN, STAGES, normRemote, slugify, refuseSecrets, requireFields, providerOf, MIN, HOUR, DAY } from './core.js';
 import { checkLocalModels } from './llmproxy.js';
@@ -43,7 +43,9 @@ import { LOGO, FAVICON, withLogo } from '../web/logo.js';
 import { verifySignature, applyEvent, billingState, failing, paid, paymentEntry, portalSession, pushFailed, canSell, plansOf, offers, offersNow, offerLine, checkout, TERMS, PRIVACY } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8',
+  // An admin console's own files (#877) may be more than the app's.
+  '.json': 'application/json; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 
 // A response body, gzipped when the client accepts it (#528): JSON and text only, and only when big enough that
 // it pays. Vary tells caches the body depends on the header. Streams (the SSE one) never come through here.
@@ -151,7 +153,22 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // is off, and POST /api/stripe/webhook answers 404.
 // feedbackProject (workspaces mode, with an admin host): "<workspace>/<project>", where feedback about nuworq that
 // the owners approve becomes a proposal (#295). '': feedback is off. feedbackBatchMs: how long its push waits for more.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, githubReleases = false, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false } = {}) {
+// The admin host's routes besides its pages and sign-in (/auth/<provider>/start|callback), as "METHOD /path".
+// docs/ADMIN-API.md documents each one; test/adminapi.test.js keeps the two in step.
+export const ADMIN_ROUTES = ['GET /api/health', 'GET /api/oauth', 'GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'GET /api/early-access/sources', 'POST /api/early-access/decide', 'GET /api/feedback/list', 'POST /api/feedback/decide', 'POST /api/feedback/autonomy', 'GET /api/feedback/groups', 'POST /api/feedback/groups/decide', 'POST /api/feedback/groups/undo', 'GET /api/workspaces', 'POST /api/workspaces/plan', 'GET /api/github/app/wiring'];
+// An owner's own console (#877): a directory the hub host installs, served on the admin host in place of
+// web/admin.html. Returns its real path; refuses one without an admin host or without an index.html.
+export function adminConsoleDir(dir, adminHost) {
+  if (!adminHost) throw new UserError('an admin console needs an admin host', { hint: 'Start the hub with --admin-host <host> (NUWORQ_ADMIN_HOST) too: the console is served there only.' });
+  let root;
+  try { root = realpathSync(resolve(String(dir))); } catch { throw new UserError(`the admin console directory ${dir} doesn't exist`, { hint: 'Check the console out there first, or point --admin-console (NUWORQ_ADMIN_CONSOLE) at where it is.' }); }
+  let page = false;
+  try { page = statSync(join(root, 'index.html')).isFile(); } catch {}
+  if (!page) throw new UserError(`the admin console directory ${root} has no index.html`, { hint: "Point --admin-console (NUWORQ_ADMIN_CONSOLE) at the directory that holds the console's index.html." });
+  return root;
+}
+
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, githubReleases = false, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false, adminConsole = '' } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
@@ -160,6 +177,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // The links it hands out (an approved request's grant) go to the app, so it must know the app's address.
   if (adminHost && !publicUrl) throw new Error('an admin host needs the public URL the app lives at (--public-url)');
   if (adminHost && new URL(publicUrl).hostname === hostname(adminHost)) throw new Error('the admin host must be a host of its own, not the app\'s');
+  const consoleDir = adminConsole ? adminConsoleDir(adminConsole, adminHost) : '';
   // The marketing site (nuworq.com, served from the nuworq-site repo) is the app's parent domain, over https:
   // app.nuworq.com's is https://nuworq.com. Its early-access form calls the form's two APIs cross-origin (#245).
   const siteOrigin = siteOf(publicUrl);
@@ -862,6 +880,20 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   }
   const toAdmin = (req, res) => { res.writeHead(308, { location: `${adminOrigin(req)}/`, 'cache-control': 'no-store' }); res.end(); };
 
+  // A file of the admin console: only what lies inside its directory, symlinks resolved, so nothing outside it.
+  // Dot-files and dot-directories are never served: a git checkout's .git (remote URL, history) or an .env stays private.
+  async function consoleFile(path, { send, deny }) {
+    const missing = () => deny(404, 'the admin console has no such file', 'GET / is its page.');
+    let rel;
+    try { rel = path === '/' ? 'index.html' : decodeURIComponent(path.slice(1)); } catch { return missing(); }
+    if (rel.split(/[/\\]/).some((s) => s.startsWith('.')) || rel.includes('\0')) return missing();
+    try {
+      const file = realpathSync(join(consoleDir, rel));
+      if (!file.startsWith(consoleDir + sep) || !statSync(file).isFile()) return missing();
+      return send(200, await readFile(file), TYPES[extname(file)] ?? 'application/octet-stream');
+    } catch { return missing(); }
+  }
+
   // The admin host: the dashboard, its sign-in, and the admin APIs, nothing else. Only an admin session
   // (signed in here) counts, and only the hub's owners get past it.
   async function adminRoot(req, res, url, path, { send, deny }) {
@@ -869,9 +901,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     if (req.method === 'GET' && (am = path.match(/^\/auth\/([a-z]+)\/(start|callback)$/))) return signIn(req, res, url, am[1], am[2], { send, deny });
     if (path === '/api/health') return send(200, { ok: true, name: 'nuworq', admin: true });
     if (req.method === 'GET' && path === '/api/oauth') return send(200, { providers: sso.list().map((p) => ({ ...p, start: `/auth/${p.name}/start` })) });
+    // An owner's own console, when the host installed one: its files in place of the open dashboard's.
+    if (consoleDir && req.method === 'GET' && !path.startsWith('/api/')) return consoleFile(path, { send, deny });
     const page = path === '/' ? '/admin.html' : path;
-    if (req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/instant.js', '/style.css', '/theme.js'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
-    if (!['GET /api/me', 'POST /api/logout', 'GET /api/early-access', 'GET /api/early-access/sources', 'POST /api/early-access/decide', 'GET /api/feedback/list', 'POST /api/feedback/decide', 'POST /api/feedback/autonomy', 'GET /api/feedback/groups', 'POST /api/feedback/groups/decide', 'POST /api/feedback/groups/undo', 'GET /api/workspaces', 'POST /api/workspaces/plan', 'GET /api/github/app/wiring'].includes(`${req.method} ${path}`)) {
+    if (!consoleDir && req.method === 'GET' && ['/admin.html', '/admin.js', '/new.js', '/instant.js', '/style.css', '/theme.js'].includes(page)) return send(200, withLogo(readFileSync(join(WEB, page.slice(1)), 'utf8')), TYPES[extname(page)]);
+    if (!ADMIN_ROUTES.includes(`${req.method} ${path}`)) {
       return deny(404, 'the admin host serves only the admin dashboard', `Workspaces live at ${publicUrl || 'the hub\'s own address'}.`);
     }
     const dir = spaces.directory;

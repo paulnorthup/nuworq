@@ -59,5 +59,5 @@ The hub is the same program. Once it's installed, `nuworq serve --demo` tries it
 - [Getting-started guide](https://app.nuworq.com/guide): from sign-in to your first landed item.
 - [Using nuworq](docs/USAGE.md): setup in full, workers, operators, notifications and the lifecycle.
 - [How nuworq is built](docs/ARCHITECTURE.md): architecture, the agent protocol, the API.
-- [Self-hosting](docs/DEPLOY.md) and the [published API](docs/API.md).
+- [Self-hosting](docs/DEPLOY.md), the [published API](docs/API.md), and the [admin API](docs/ADMIN-API.md) the owners' dashboard uses.
 - [Contributing](CONTRIBUTING.md) · [Reporting a security issue](SECURITY.md) · [License](LICENSE)

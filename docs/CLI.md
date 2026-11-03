@@ -352,6 +352,8 @@ Flags
   --owners <emails>           the hub's owners, who decide early-access requests
   --admin-host <host>         with --public-url: the owners' dashboard, where
                               requests are decided
+  --admin-console <dir>       with --admin-host: the owners' own console, from
+                              <dir>, instead of the open dashboard
   --feedback-project <ws>/<p>
                               with --admin-host: approved feedback about nuworq
                               is proposed there
@@ -365,6 +367,7 @@ Environment
   NUWORQ_BASE_DOMAIN          instead of --base-domain
   NUWORQ_WORKSPACE_CAP        instead of --workspace-cap
   NUWORQ_ADMIN_HOST           instead of --admin-host
+  NUWORQ_ADMIN_CONSOLE        instead of --admin-console
   NUWORQ_FEEDBACK_PROJECT     instead of --feedback-project
   NUWORQ_PLANS                1: instead of --plans
   NUWORQ_TURNSTILE_SITEKEY    the early-access form's spam check
