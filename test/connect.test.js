@@ -284,7 +284,7 @@ describe('nuworq connect', () => {
     }
   });
 
-  // #496: Paul's Mac on 2026-11-01. The plugin installed for one checkout and its worktrees only, the skills of
+  // #496: the maintainer's Mac on 2026-11-01. The plugin installed for one checkout and its worktrees only, the skills of
   // earlier connects (two recorded, nuworq-operator not), and a user-scope MCP server connect never recorded.
   test('an install for some folders only gets the account-wide offer; beside one for the account, nuworq\'s leftovers go, recorded or not', async () => {
     const hub = new Hub();
@@ -474,7 +474,7 @@ describe('the nuworq skill is generated from the protocol', () => {
     assert.ok(text.split('\n').length <= 60, `${text.split('\n').length} lines`);
   });
 
-  // Paul's words for the role, and the lessons from the 2026-10-31 shaping session (#432).
+  // The maintainer's words for the role, and the lessons from the 2026-10-31 shaping session (#432).
   test('the shaper skill says what a shaper does, asks before proposing, and carries the lessons', () => {
     const text = shaperSkill();
     assert.match(text, /interview the person, ask questions, hone the idea, and build milestones with their parts to submit to the hub/);

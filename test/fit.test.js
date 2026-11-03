@@ -120,7 +120,7 @@ describe('fit hints: what items need and what agents have', () => {
     assert.equal(op('admin', 'next', { claim: false }).mode, 'review');
   });
 
-  test('work only an operator can do waits quietly for one; Paul is asked to start an agent only for work anyone can do (#137)', () => {
+  test('work only an operator can do waits quietly for one; a person is asked to start an agent only for work anyone can do (#137)', () => {
     const { hub, create } = world();
     const att = () => view(hub, 'p').attention;
     const noAgents = () => att().find((a) => a.kind === 'no-agents');

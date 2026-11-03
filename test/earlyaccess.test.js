@@ -10,12 +10,12 @@ import { Auth } from '../src/auth.js';
 import { addChannel, composeRequest } from '../src/notify.js';
 import http from 'node:http';
 
-// A workspaces hub in early access: paul owns it, "good" is the only Turnstile token that passes.
+// A workspaces hub in early access: remy owns it, "good" is the only Turnstile token that passes.
 async function hub({ gate = true } = {}) {
   const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
   const checked = [];
   const verify = async (token, ip) => { checked.push({ token, ip }); return token === 'good'; };
-  const server = createServer(spaces, { earlyAccess: { owners: ['paul@example.com'], verify, gate, sitekey: '0xSITEKEY' } });
+  const server = createServer(spaces, { earlyAccess: { owners: ['remy@example.com'], verify, gate, sitekey: '0xSITEKEY' } });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const dir = spaces.directory;
@@ -55,14 +55,14 @@ describe('early access', () => {
     try {
       await h.call('POST', '/api/early-access', { email: 'ann@example.com', turnstile: 'good' });
       await h.call('POST', '/api/early-access', { email: 'cy@example.com', turnstile: 'good' });
-      const paul = h.as('paul@example.com'), ann = h.as('ann@example.com');
+      const remy = h.as('remy@example.com'), ann = h.as('ann@example.com');
       assert.equal((await h.call('GET', '/api/early-access', null, ann)).status, 403);
-      const list = (await h.call('GET', '/api/early-access?state=new', null, paul)).json.requests;
+      const list = (await h.call('GET', '/api/early-access?state=new', null, remy)).json.requests;
       assert.deepEqual(list.map((r) => r.email).sort(), ['ann@example.com', 'cy@example.com']);
       const annId = list.find((r) => r.email === 'ann@example.com').id;
-      const yes = await h.call('POST', '/api/early-access/decide', { id: annId, approve: true }, paul);
+      const yes = await h.call('POST', '/api/early-access/decide', { id: annId, approve: true }, remy);
       assert.match(yes.json.link, /\/\?grant=[\w-]{20,}$/);
-      const no = await h.call('POST', '/api/early-access/decide', { id: list.find((r) => r.email === 'cy@example.com').id, approve: false }, paul);
+      const no = await h.call('POST', '/api/early-access/decide', { id: list.find((r) => r.email === 'cy@example.com').id, approve: false }, remy);
       assert.deepEqual(no.json, { ok: true, state: 'declined' });
       assert.equal(h.dir.db.prepare('SELECT COUNT(*) AS n FROM org_grants').get().n, 1, 'decline minted nothing');
       assert.equal((await h.call('POST', '/api/early-access/decide', { id: annId, approve: true }, ann)).status, 403);
@@ -73,17 +73,17 @@ describe('early access', () => {
     const h = await hub();
     try {
       await h.call('POST', '/api/early-access', { email: 'ann@example.com', turnstile: 'good' });
-      const paul = h.as('paul@example.com'), ann = h.as('ann@example.com');
+      const remy = h.as('remy@example.com'), ann = h.as('ann@example.com');
       const refused = await h.call('POST', '/api/orgs', { slug: 'annco' }, ann);
       assert.equal(refused.status, 403);
       assert.match(refused.json.hint, /Request access/);
       const id = h.dir.requests()[0].id;
-      const grant = new URL((await h.call('POST', '/api/early-access/decide', { id, approve: true }, paul)).json.link).searchParams.get('grant');
+      const grant = new URL((await h.call('POST', '/api/early-access/decide', { id, approve: true }, remy)).json.link).searchParams.get('grant');
       const made = await h.call('POST', '/api/orgs', { slug: 'annco', grant }, ann);
       assert.equal(made.status, 200, JSON.stringify(made.json));
       assert.equal(made.json.role, 'owner');
       assert.equal((await h.call('POST', '/api/orgs', { slug: 'annco2', grant }, ann)).status, 403, 'a grant works once');
-      assert.equal((await h.call('POST', '/api/orgs', { slug: 'paulco' }, paul)).status, 200, "the hub's owners need no grant");
+      assert.equal((await h.call('POST', '/api/orgs', { slug: 'remyco' }, remy)).status, 200, "the hub's owners need no grant");
       const page = await fetch(`${h.base}/?grant=${grant}`);
       assert.equal(page.status, 200);
       assert.match(await page.text(), /Welcome to nuworq/, 'the link lands on the join page');
@@ -125,7 +125,7 @@ describe('early access', () => {
     // The site is the app's parent domain (#164): no flag names it.
     const server = createServer(spaces, {
       publicUrl: 'https://app.nuworq.com',
-      earlyAccess: { owners: ['paul@example.com'], verify: async (t) => t === 'good', gate: true, sitekey: '0xSITEKEY' },
+      earlyAccess: { owners: ['remy@example.com'], verify: async (t) => t === 'good', gate: true, sitekey: '0xSITEKEY' },
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -188,10 +188,10 @@ describe('early access', () => {
     const h = await hub();
     try {
       await h.call('POST', '/api/early-access', { email: 'ann@example.com', turnstile: 'good' });
-      const paul = h.as('paul@example.com');
+      const remy = h.as('remy@example.com');
       const id = h.dir.requests()[0].id;
-      assert.equal((await h.call('POST', '/api/early-access/decide', { id, approve: true }, paul)).status, 200);
-      const again = await h.call('POST', '/api/early-access/decide', { id, approve: false }, paul);
+      assert.equal((await h.call('POST', '/api/early-access/decide', { id, approve: true }, remy)).status, 200);
+      const again = await h.call('POST', '/api/early-access/decide', { id, approve: false }, remy);
       assert.equal(again.status, 409);
       assert.match(again.json.error, /already approved/);
       assert.equal(h.dir.requests()[0].state, 'approved');
@@ -211,9 +211,9 @@ describe('early access', () => {
     const to = (path) => `http://127.0.0.1:${sink.address().port}${path}`;
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-') ) });
     const dir = spaces.directory;
-    // paul and quinn own the hub, each a person in a workspace with a channel of their own. The workspace's
+    // remy and quinn own the hub, each a person in a workspace with a channel of their own. The workspace's
     // hub-wide channel, and a member's, hear nothing.
-    for (const [ws, handle, email] of [['acme', 'paul', 'paul@example.com'], ['globex', 'quinn', 'quinn@example.com']]) {
+    for (const [ws, handle, email] of [['acme', 'remy', 'remy@example.com'], ['globex', 'quinn', 'quinn@example.com']]) {
       spaces.create(ws);
       const db = spaces.get(ws).db;
       new Auth(db).addPerson(handle, 'owner', { email, verified: true });
@@ -226,7 +226,7 @@ describe('early access', () => {
     }
     const server = createServer(spaces, {
       publicUrl: 'http://app.example.test', adminHost: 'admin.example.test',
-      earlyAccess: { owners: ['paul@example.com', 'quinn@example.com'], verify: async (t) => t === 'good', gate: true },
+      earlyAccess: { owners: ['remy@example.com', 'quinn@example.com'], verify: async (t) => t === 'good', gate: true },
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const post = (b) => fetch(`http://127.0.0.1:${server.address().port}/api/early-access`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ turnstile: 'good', ...b }) });
@@ -235,7 +235,7 @@ describe('early access', () => {
       const building = `an agent fleet for our monorepo ${'x'.repeat(300)}`;
       assert.equal((await post({ email: 'Ann@Example.com', github: '@ann', building })).status, 200);
       await settle(2);
-      assert.deepEqual(got.map((g) => g.path).sort(), ['/paul', '/quinn'], 'each owner once; no hub-wide or member channel');
+      assert.deepEqual(got.map((g) => g.path).sort(), ['/quinn', '/remy'], 'each owner once; no hub-wide or member channel');
       const id = dir.requests()[0].id;
       for (const { msg } of got) {
         assert.equal(msg.url, `http://admin.example.test/?request=${id}`);
@@ -259,20 +259,20 @@ describe('early access', () => {
     const to = (path) => `http://127.0.0.1:${sink.address().port}${path}`;
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
     const dir = spaces.directory;
-    // paul is the only person in each workspace. hooli's only channel is hub-wide; acme's hub-wide channel has
+    // remy is the only person in each workspace. hooli's only channel is hub-wide; acme's hub-wide channel has
     // the same URL as his personal one in globex.
     for (const ws of ['hooli', 'acme', 'globex']) {
       spaces.create(ws);
-      new Auth(spaces.get(ws).db).addPerson('paul', 'owner', { email: 'paul@example.com', verified: true });
+      new Auth(spaces.get(ws).db).addPerson('remy', 'owner', { email: 'remy@example.com', verified: true });
     }
-    dir.identify('paul@example.com', 'github');
-    for (const ws of ['hooli', 'acme', 'globex']) dir.join('paul@example.com', ws);
+    dir.identify('remy@example.com', 'github');
+    for (const ws of ['hooli', 'acme', 'globex']) dir.join('remy@example.com', ws);
     addChannel(spaces.get('hooli').db, 'webhook', to('/hooli-everyone'), Date.now());
     addChannel(spaces.get('acme').db, 'webhook', to('/shared'), Date.now());
-    addChannel(spaces.get('globex').db, 'webhook', to('/shared'), Date.now(), { person: '@paul' });
+    addChannel(spaces.get('globex').db, 'webhook', to('/shared'), Date.now(), { person: '@remy' });
     const auth = new Auth(spaces.get('hooli').db);
-    const token = auth.createToken('paul-web', 'human', { person: 'paul' });
-    const server = createServer(spaces, { earlyAccess: { owners: ['paul@example.com'], verify: async () => true } });
+    const token = auth.createToken('remy-web', 'human', { person: 'remy' });
+    const server = createServer(spaces, { earlyAccess: { owners: ['remy@example.com'], verify: async () => true } });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
     const post = (email) => fetch(`${base}/api/early-access`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, turnstile: 't' }) });
@@ -296,7 +296,7 @@ describe('early access', () => {
   });
 
   test('with no owners, or owners without a channel, a request is still stored and answered', async () => {
-    for (const owners of [[], ['paul@example.com']]) {
+    for (const owners of [[], ['remy@example.com']]) {
       const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
       const server = createServer(spaces, { earlyAccess: { owners, verify: async () => true } });
       await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -314,11 +314,11 @@ describe('early access', () => {
     await new Promise((r) => sink.listen(0, '127.0.0.1', r));
     const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-ea-')) });
     spaces.create('acme');
-    new Auth(spaces.get('acme').db).addPerson('paul', 'owner', { email: 'paul@example.com', verified: true });
-    spaces.directory.identify('paul@example.com', 'github');
-    spaces.directory.join('paul@example.com', 'acme');
-    addChannel(spaces.get('acme').db, 'webhook', `http://127.0.0.1:${sink.address().port}/`, Date.now(), { person: '@paul' });
-    const server = createServer(spaces, { publicUrl: 'https://app.example.test', earlyAccess: { owners: ['paul@example.com'], verify: async () => true } });
+    new Auth(spaces.get('acme').db).addPerson('remy', 'owner', { email: 'remy@example.com', verified: true });
+    spaces.directory.identify('remy@example.com', 'github');
+    spaces.directory.join('remy@example.com', 'acme');
+    addChannel(spaces.get('acme').db, 'webhook', `http://127.0.0.1:${sink.address().port}/`, Date.now(), { person: '@remy' });
+    const server = createServer(spaces, { publicUrl: 'https://app.example.test', earlyAccess: { owners: ['remy@example.com'], verify: async () => true } });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
       await fetch(`http://127.0.0.1:${server.address().port}/api/early-access`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'ann@example.com', building: 'line one\nline two', turnstile: 't' }) });

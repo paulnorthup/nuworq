@@ -1,14 +1,14 @@
-# Releases are signed here once Paul approves them (#813; docs/DEPLOY.md, "Signed releases").
+# Releases are signed here once the maintainer approves them (#813; docs/DEPLOY.md, "Signed releases").
 # It runs from .github/workflows/release.yml. The hub's GitHub App has no `workflows` permission, so agents can't
 # add or change that file: this copy is how it came for review, and a person copies it there with their own
 # credentials (test/releasesign.test.js keeps the two the same while both exist).
 # Agents can change the repository's code, so only `check` runs it, and `check` holds no secret.
 # check:   unprivileged. Refuses a tag that isn't a release (scripts/release.js), builds the package exactly as the
 #          hub does, and shows its version, commit, sha256 and changelog. A failed check stops here: no one is asked.
-# changes: unprivileged, and runs none of the repository's code: what Paul's approval rests on comes from this file.
+# changes: unprivileged, and runs none of the repository's code: what the maintainer's approval rests on comes from this file.
 #          Checks again that the tag is on main at its version and newer than the last signed release, and says
 #          whether the code `check` ran changed since that release, with a link to the diff.
-# sign:    waits in the `release` environment (Paul is its required reviewer; only v* tags may deploy to it), and
+# sign:    waits in the `release` environment (the maintainer is its required reviewer; only v* tags may deploy to it), and
 #          runs none of the repository's code. Builds the package again with git alone, which must be the sha256
 #          `check` showed, signs it with the environment's RELEASE_KEY in node:crypto inline below, verifies it
 #          against the tag's release-key.pub, publishes the tag's GitHub Release with the package and its .sig, then

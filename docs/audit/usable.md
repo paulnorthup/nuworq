@@ -31,7 +31,7 @@ Ranked by severity. Each finding gives where it happens, what it costs, and a on
   - But no Needs you card (`web/views/main.js`), no row in the item drawer (`web/views/drawer.js:105-111`) and no launcher result shows the number. `data-q="1"` is in the markup but never on screen.
   - The launcher's number match (`web/launcher.js:170`) only finds items: "question 1" offers "Propose 'question 1'" and "Tell nuworq's agents 'question 1'".
   - An operator-routed question with no item has no page at all: it shows only as the grey line under "1 question waits for an operator".
-- **Cost:** Paul couldn't find "question 207" on 2026-11-02. When an agent says "see question 207", he has to search by guessed words, or ask the agent which item it was on.
+- **Cost:** The maintainer couldn't find "question 207" on 2026-11-02. When an agent says "see question 207", a person has to search by guessed words, or ask the agent which item it was on.
 - **Fix:** Show "Q207" quietly beside the item ref on every question card and drawer row. Have ⌘K open a question from "q207", "Q207" or "question 207", whatever its status.
 
 ### 2. High: on a phone, the 30-second view has nothing to act on in the first screen (#711)
@@ -40,7 +40,7 @@ Ranked by severity. Each finding gives where it happens, what it costs, and a on
   - Project page at 375×812, 30s: the first Needs you card's title is at y=872. Above it come the mission (5 lines), Depth, the Needs you summary card, the steer box and + Work. The summary says "3 things need you" but doesn't link to them.
   - Home at 375px: Needs you starts at y=1248, after the eight-step Get started list.
   - Code: `web/views/main.js` (layout order) and `web/style.css` (narrow layout).
-- **Cost:** The standing decision is phone-first 0-30-5-30. On a phone, Paul scrolls past a screen and a half before the first thing he can act on.
+- **Cost:** The standing decision is phone-first 0-30-5-30. On a phone, a person scrolls past a screen and a half before the first thing they can act on.
 - **Fix:** At narrow widths, put the Needs you cards right under the summary line. Clamp the mission to one line and move the steer box below the cards. On home, put Get started after Needs you.
 
 ### 3. High: an operator-routed question leaves a person with no operator stuck (#712)
@@ -58,7 +58,7 @@ Ranked by severity. Each finding gives where it happens, what it costs, and a on
   - `web/agentline.js:8-11`: with no `where` and no job, the line is just the role, and a session's role reads "Agent".
   - Two such agents show as "Agent idle · Agent idle" under Agents.
   - Cards say "· Agent asked 1m ago" and "· Agent finished it", while Worth knowing on the same page says "newbie-1 assumed…".
-- **Cost:** Paul can't tell which agent asked, finished or is idle. He can't match the page to what an agent tells him in a terminal.
+- **Cost:** A person can't tell which agent asked, finished or is idle. They can't match the page to what an agent tells them in a terminal.
 - **Fix:** When the hub reports no `where`, add the agent's name, e.g. "Agent newbie-1". Repairs #240.
 
 ### 5. Medium: a typo in the project slug quietly creates a project (#714)
@@ -67,7 +67,7 @@ Ranked by severity. Each finding gives where it happens, what it costs, and a on
   - `checkin` on `/api/p/nope/agent/checkin` answers 200 with "No mission written yet…" and "Nothing is ready".
   - It doesn't say that a new project called "nope" now exists, and "nope" appears in every person's sidebar.
   - Code: `src/core.js` (checkin, around line 2187).
-- **Cost:** A misconfigured agent works in an empty project. It proposes into it, or signs off thinking nothing is ready, and Paul gets a stray project to archive.
+- **Cost:** A misconfigured agent works in an empty project. It proposes into it, or signs off thinking nothing is ready, and the owner gets a stray project to archive.
 - **Fix:** When checkin creates a project, say so in `next`, e.g. "nope is a new project here; did you mean nuworq?", naming the closest existing slug.
 
 ### 6. Medium: some agent errors carry no hint, or say "undefined" (#715)

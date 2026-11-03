@@ -9,8 +9,8 @@ Nothing here contains a working exploit or a secret value. Nothing was run again
 - **What ran.** `node scripts/scan-history.js` needs approval in this runner, so it wasn't run. Instead, git's own pickaxe search over every commit on every local ref: `git log --all -m -E -G'<pattern>' --name-only`. That covers 1076 commits (`git rev-list --all --count`): main, every pushed `nuworq/*` branch, `release` and tags. It doesn't cover GitHub's `refs/pull/*`, which only GitHub holds; #475's scan covered those on 2026-11-01.
 - **Secret shapes searched.** Private keys, `ghp_`/`gho_`/`github_pat_`, `sk-ant-`, `sk_live_`, `whsec_`, `AKIA`, Slack `xox?-`, `GOCSPX-` and `AIza`. Every hit is a test fixture (test/secrets, feedback, billing, billing-portal, runtrust, runner, clientlabel) or the scanner's own patterns. The billing fixtures are `whsec_test`, `whsec_other` and `whsec_wrong`. **No secret was found; nothing needs rotating.**
 - **Private data.** Searched for home paths, `*.local`, VM names, `ssh user@` and non-loopback IPv4.
-  - Author and committer emails: paul@paulnorthup.com (1384), noreply@github.com, the nuworq[bot] noreply and paulnorthup's noreply. Paul's own address goes public with the history. **Low: Paul's call** (keep it, or rewrite authors before #365).
-  - `.test-550.txt` and `.test-550b.txt`, full-suite test logs committed on 2026-11-01 (3f8c536, a7a373f) and removed by f922f3c. They're still in history. They hold test names and the local path `/Users/paul/Projects` (5 times), no tokens. **Low.**
+  - Author and committer emails: the maintainer's own address (1384), noreply@github.com, the nuworq[bot] noreply and paulnorthup's noreply. The maintainer's own address goes public with the history. **Low: the maintainer's call** (keep it, or rewrite authors before #365).
+  - `.test-550.txt` and `.test-550b.txt`, full-suite test logs committed on 2026-11-01 (3f8c536, a7a373f) and removed by f922f3c. They're still in history. They hold test names and the maintainer's local home path (5 times), no tokens. **Low.**
   - The IPv4 hits are loopback, documentation ranges and src/outbound.js's blocklist. The home-path hits are test fixtures.
 
 ## Findings
@@ -33,8 +33,8 @@ Most severe first.
 | 12 | low | src/gitproxy.js:20 `parseInt` on pkt-line lengths; 67-80 and 111: no upstream timeout, no cap on draining a refused push | Looser than git (GitHub rejects what git wouldn't send, so no bypass). An authenticated worker can hold connections. The timeout is #738. | Require `^[0-9a-f]{4}$`; cap the drain. |
 | 13 | low | web/connect.js:20, src/server.js:171: the Connect dialog shows the hub's own `release-key.pub` | A compromised hub can show its own key beside its own package; the README pins the real one. | Have the dialog say to compare the key with the README's. |
 | 14 | low | bin/nuworq.js:1736: `serve` prints `npm install -g <hub>/nuworq.tgz` | The unverified install line, where the Connect dialog gives the verified one. | Print the verified install. |
-| 15 | low | docs/DEPLOY.md:167-185 | The live hub's paths, flags, unit names and OAuth hosts. Not secret, but a map. | Placeholders, if Paul prefers. |
-| 16 | Paul's call | src/live.js:36,49,67 | The public live view shows agent names, models and cost per landed change. That's deliberate (live.js's header, test/live.test.js), but worth a yes before #365. | Drop `agent`, `model` and `cost_per_landed` if not. |
+| 15 | low | docs/DEPLOY.md:167-185 | The live hub's paths, flags, unit names and OAuth hosts. Not secret, but a map. | Placeholders, if the maintainer prefers. |
+| 16 | the maintainer's call | src/live.js:36,49,67 | The public live view shows agent names, models and cost per landed change. That's deliberate (live.js's header, test/live.test.js), but worth a yes before #365. | Drop `agent`, `model` and `cost_per_landed` if not. |
 
 ## Checked and sound
 

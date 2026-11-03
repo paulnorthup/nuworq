@@ -4,7 +4,7 @@
 
 What landed since v0.8.0.
 
-**nuworq is ready to launch: newcomers get in and get going, and Paul sees which channels bring people who stay (#359)**
+**nuworq is ready to launch: newcomers get in and get going, and the maintainer sees which channels bring people who stay (#359)**
 
 - nuworq's repository is public and anyone can install the Claude Code plugin from it (#365)
 
@@ -13,7 +13,7 @@ What landed since v0.8.0.
 - Deploys never drop work: only commits CI passed go live, after a test boot on copies of the live data, and the old hub drains first (#522)
 - A day on the live hub after #515: agent writes through the tunnel get no connection-reset 502s (#534)
 - A day of deploys after #545 measured: 502s and cut requests per deploy, against the 2026-11-01 baseline (#575)
-- Paul gets through feedback in minutes: repeats arrive as one group that says what's known and suggests a call, decided in one tap (#688)
+- The maintainer gets through feedback in minutes: repeats arrive as one group that says what's known and suggests a call, decided in one tap (#688)
 - One word, one meaning: release, review, note, finished and direction each mean one thing in the app, the CLI and the guide (#707)
 - Getting going uses one name per step: connect an agent, start workers, + Project, staff it, Get started, Home (#708)
 - People never see \"organization\" for a workspace: the --org-cap hint and DEPLOY.md say workspace (#709)
@@ -63,7 +63,7 @@ What landed since v0.8.0.
 - nuworq up starts fully featured workers: auto counts by CPU, so a Mac with idle cores runs several, and each gets a browser (#790)
 - No trace of the old name Trellis is left: its command, settings and every old-name fallback are gone, and a test keeps it that way (#792)
 - Workers a runner starts together each get their own job, so a restart with free slots doesn't send them all to one item (#793)
-- No default per-worker cap, as Paul decided in Q230: the caps are opt-in flags, and nuworq up writes none (#795)
+- No default per-worker cap, as decided in Q230: the caps are opt-in flags, and nuworq up writes none (#795)
 - A runner worker can delete a tracked file in its own worktree: `git rm` is allowed there, nothing else gets looser (#796)
 - The guide says plainly what an operator is and how to start one, with nuworq up first (#797)
 - A workspace's owner can delete it in the app: they type its name to confirm, and everything in it goes for good (#799)
@@ -81,7 +81,7 @@ What landed since v0.7.0.
 
 **Workers keep the machine responsive: CI runs the full suite, and nuworq run adds workers only while there's CPU to spare (#531)**
 
-- An hour of Paul's runner on --workers auto: workers and load over time, then back to Paul's setting (#548)
+- An hour of the maintainer's runner on --workers auto: workers and load over time, then back to its own setting (#548)
 
 **Also in this release**
 
@@ -97,12 +97,12 @@ What landed since v0.7.0.
 - Needs you's "finished it 3m ago" ticks in the page, so a minute passing doesn't redraw all its cards (#689)
 - The follower's CI fallback clock runs from the first commit it waited on, so a busy main still deploys within 30 minutes (#690)
 - A question that asks a person to do steps stays in Needs you after its item lands, until the steps are done (#692)
-- Audit: usable. A newcomer and Paul get going, steer, answer and land on phone and desktop; agents' hints carry them (#694)
+- Audit: usable. A newcomer and the maintainer get going, steer, answer and land on phone and desktop; agents' hints carry them (#694)
 - Audit: bug-free. The item lifecycle, leases, landing, releases, sign-in and the runner hold up at their edge cases (#695)
 - Audit: consistent. One name for each thing and one way to do it across the app, CLI, guide, tool descriptions, docs and nuworq.com (#696)
 - Audit: reliable and stable. nuworq keeps working for days with nobody watching, through restarts, deploys, outages and loops (#697)
 - Audit: polished. Wording, empty and error states, loading, alignment, light and dark are right everywhere a person looks (#698)
-- Audit: effective. Measured from the hub's history: what lands without Paul, first-time accepts, bounces, waits, cost (#699)
+- Audit: effective. Measured from the hub's history: what lands without the maintainer, first-time accepts, bounces, waits, cost (#699)
 - Audit: efficient. Tokens, turns and dollars per job, a worker's first load, hub cost per request, browser payload: measured (#700)
 - Audit: secure. Changes since #468's re-review, plus what open source adds: forks, outside PRs, CI, releases, plugins, history (#701)
 - Audit: hardened. Limits and timeouts on every input, queue and loop; cheap outages; pinned deps; safe defaults (#702)
@@ -182,7 +182,7 @@ What landed since v0.6.0.
 **Also in this release**
 
 - Workers stay inside their job: a sandboxed shell, exact commands, pushes only to their own branch, and landing on main done by the hub (#472)
-- Code reaches people's machines only with Paul's approval: he approves each release before it's signed, and the plugin installs from releases (#473)
+- Code reaches people's machines only with the maintainer's approval: they approve each release before it's signed, and the plugin installs from releases (#473)
 - Security stays checked: a threat model in the repository, and a fresh review before every release that holds it on a serious finding (#480)
 - The release signer runs #473's code: it signs only approved releases, and origin's `release` branch exists (#486)
 - A headless claude with #472's worker sandbox settings is refused writes outside its worktree, ~/.ssh reads and off-allowlist network (#487)
@@ -224,7 +224,7 @@ What landed since v0.6.0.
 - The app's state lives in a store module: every field declared up front, changed only through setters (#600)
 - The app keeps each answer per URL until a change event says it changed (#601)
 - An update redraws only the region whose data changed: rail, main and drawer each a pure view module (#602)
-- A release signed by hand is GitHub's own build of a tag Paul approved, on main (#603)
+- A release signed by hand is GitHub's own build of a tag the maintainer approved, on main (#603)
 - Workers push only their held item's branch, and landing merges only the head that was reviewed (#605)
 - A worker on a project without an origin can't write what unsandboxed git or agents later read (#606)
 - The operator's commands that run without a prompt never run a program or write files the person didn't ask for (#607)
@@ -275,7 +275,7 @@ What landed since v0.5.0.
 - Field notes stay few and relevant: checkin gives the ten that fit your work, and notes whose lesson is now built in are retired (#443)
 - No leftovers on disk or GitHub: workers remove their worktrees, landed branches are deleted, and a weekly sweep clears the rest (#444)
 - The home's "Here now" counts wrap cleanly in the narrow side column, with no stray indent or tall gap (#445)
-- The first leftovers sweep has run on Paul's Mac, with worktree and branch counts before and after (#447)
+- The first leftovers sweep has run on the maintainer's Mac, with worktree and branch counts before and after (#447)
 - The leftovers sweep can read finished branches: agent tokens may GET /api/finished (#448)
 - A field-notes review doesn't open another review just for the notes it wrote (#451)
 - Deleting a project never fails on a mirror that a fetch is still writing into (ENOTEMPTY seen on Node 24 CI) (#453)
@@ -318,10 +318,10 @@ What landed since v0.4.0.
 
 **Each finished milestone becomes a versioned, signed release with a changelog and upgrade notes, in any project (#397)**
 
-- Releases sign themselves on Paul's Mac: a signer service signs each vX.Y.Z tag on main, built from GitHub, and puts the signature on the hub (#430)
-- The release signer runs on Paul's Mac, and v0.3.0 is signed by it, not by hand (#431)
+- Releases sign themselves on the maintainer's Mac: a signer service signs each vX.Y.Z tag on main, built from GitHub, and puts the signature on the hub (#430)
+- The release signer runs on the maintainer's Mac, and v0.3.0 is signed by it, not by hand (#431)
 - A release tag gets signed even when the hub never ran its commit: v0.4.0 (e596c95) is stuck unsigned (#434)
-- v0.4.0 is signed by the signer and installs on Paul's Mac with its changelog, once the hub runs #434 (#435)
+- v0.4.0 is signed by the signer and installs on the maintainer's Mac with its changelog, once the hub runs #434 (#435)
 - After nuworq updates itself in the background, the next command says once what changed: the version and its changelog lines (#436)
 
 **Also in this release**
@@ -419,7 +419,7 @@ What landed since v0.2.0.
 - The package updates itself from the hub only when the new version is signed by the release key pinned at install; otherwise it keeps… (#107)
 - Self-update never moves to an older signed release, and its by-hand fallback installs only the verified file (#128)
 
-**Early access works end to end: a request reaches Paul, he lets people in from admin.nuworq.com, and they start at app.nuworq.com (#109)**
+**Early access works end to end: a request reaches the hub's owner, who lets people in from admin.nuworq.com, and they start at app.nuworq.com (#109)**
 
 - The app runs at app.nuworq.com and nuworq.com is free for the landing page; old app links redirect (#110)
 - nuworq.com landing page: a static site/ with the promise, how it works, why it's different, planned pricing, FAQ, and an early-access… (#111)
@@ -429,7 +429,7 @@ What landed since v0.2.0.
 - app.nuworq.com is live: tunnel route, DNS, the hub's --public-url and --site-host, and the GitHub App's URLs (#120)
 - The early-access button opens a form that sends the request to the hub, with Cloudflare Turnstile (#121)
 - A running single hub moves into workspaces mode without losing anything: its projects, tokens and history become one workspace, and… (#204)
-- Signups are live: the live hub runs with workspaces and early access on, the form's spam check has real keys, and Paul is its owner (#205)
+- Signups are live: the live hub runs with workspaces and early access on, the form's spam check has real keys, and the maintainer is its owner (#205)
 - nuworq.com's early-access form reaches the hub: app.nuworq.com allows https://nuworq.com on the early-access API (CORS) (#245)
 - An early-access request reaches the hub owner as a push even when their only channel is their own one-person workspace's (#251)
 - DEPLOY.md says each sign-in host needs its own callback on the GitHub OAuth App (#278)
@@ -487,22 +487,22 @@ What landed since v0.2.0.
 - Every empty screen in the dashboard says why it's empty and offers one next action (#118)
 - Get started can finish for a project that isn't on GitHub, and a non-owner is told who sets up GitHub (#129)
 
-**The home page is the 50,000-foot view: everything that needs Paul across all projects, then a one-line pulse per project (#124)**
+**The home page is the 50,000-foot view: everything that needs you across all projects, then a one-line pulse per project (#124)**
 
 - GET /api/home answers "does anything need me?" across every project in one request (#125)
 - The signed-in home (#/) shows everything that needs you across projects, with actions working in place (#126)
 - The new home is verified on screen: 375px and desktop, light and dark, with screenshots (#127)
 
-**An operator lane: run/infra/admin work and questions go to an attended operator session, and Paul sees only decisions and escalations (#131)**
+**An operator lane: run/infra/admin work and questions go to an attended operator session, and the human sees only decisions and escalations (#131)**
 
-- Questions an agent can't settle alone go to: "operator" and are answered by an operator session, not Paul (#133)
-- An operator escalates to Paul with one precise question and its evidence, and Paul's answer reaches the original asker (#134)
+- Questions an agent can't settle alone go to: "operator" and are answered by an operator session, not the human (#133)
+- An operator escalates to the human with one precise question and its evidence, and the human's answer reaches the original asker (#134)
 - The guide and README explain the operator role, its capability tags, and the /loop prompt that keeps an operator session running (#135)
 
 **The operator lane, finished: default routing, quiet waiting, a one-command operator session, and an end-to-end proof (#136)**
 
-- An operator session gets operator work before anything else, and work only an operator can do never asks Paul to start an agent (#137)
-- When an agent omits `to`, the hub sends run/permission/infra questions to the operator and decisions to Paul (#138)
+- An operator session gets operator work before anything else, and work only an operator can do never asks the human to start an agent (#137)
+- When an agent omits `to`, the hub sends run/permission/infra questions to the operator and decisions to the human (#138)
 - `nuworq operator` prints the capabilities to declare and the /loop prompt, and the nuworq skill knows the operator role (#140)
 
 **Anything that needs a person comes with numbered steps, and Needs you shows them as a checklist (#160)**
@@ -510,26 +510,26 @@ What landed since v0.2.0.
 - ask carries numbered steps, and the hub refuses a do-this question to a person without them (#161)
 - Needs you shows a question's steps as a checklist the person ticks, and the last tick reports back (#162)
 
-**admin.nuworq.com: Paul runs the hub from an admin dashboard only he can open: early-access approvals, workspaces and plans (#165)**
+**admin.nuworq.com: the hub's owner runs the hub from an admin dashboard only they can open: early-access approvals, workspaces and plans (#165)**
 
 - The hub serves an admin dashboard on its admin host, only hub owners get in, and early-access requests are decided there (#166)
 - A new early-access request reaches the hub's owners as a notification that opens it on the admin dashboard (#167)
 - admin.nuworq.com is live: tunnel route, DNS, the hub's --admin-host, and sign-in callbacks (#168)
-- The admin dashboard lists every workspace with its plan, and Paul switches a workspace between Free and Unlimited there (#169)
+- The admin dashboard lists every workspace with its plan, and the hub's owner switches a workspace between Free and Unlimited there (#169)
 
 **Projects on nuworq stay nu: known vulnerabilities get fixed and dependencies stay current without anyone asking (#179)**
 
 - Each Dependabot alert on a project's repository becomes a ready nuworq item, ranked by severity, and closes when GitHub marks it fixed (#180)
 - Every project gets a weekly freshness sweep: an agent lands safe updates in one batch and proposes each breaking upgrade with a migration… (#181)
 
-**Paul sees the work as a few groups and steers by setting a group's priority; agents keep the groups true without him (#197)**
+**A person sees the work as a few groups and steers by setting a group's priority; agents keep the groups true without them (#197)**
 
 - A group's priority reaches everything in it and everything it waits on (#198)
 - An item can be moved to another group, or out of one (#199)
-- The project page shows its groups at a glance, each opens as a map, and Paul sets a group's priority there in one tap (#200)
+- The project page shows its groups at a glance, each opens as a map, and a person sets a group's priority there in one tap (#200)
 - A "now" group stalled on work no available agent can take reaches Needs you with the one fix (#201)
 - Agents keep the groups true: the hub hands out a tidy job when work is ungrouped, groups overlap, or a PR belongs to nothing (#202)
-- When Paul answers "Drop it" on an item's question, the item is dropped and next stops offering it (#207)
+- When a person answers "Drop it" on an item's question, the item is dropped and next stops offering it (#207)
 - Tidy jobs stop re-flagging groups that are waiting on review or a person, and files every group shares like docs/DEPLOY.md (#243)
 
 **The live hub hears GitHub: every App event reaches the right workspace, and owners are told with steps when it can't (#229)**
@@ -581,7 +581,7 @@ What landed since v0.2.0.
 - Every screen is built from one strict set of tokens: a short type scale, a spacing grid, three radii, two shadows, tabular figures (#391)
 - Live updates change only what changed, in place: nothing blinks, jumps or shifts, and there's no animation (#392)
 - Every control answers instantly and solidly: clear pressed, hover and focus states, and actions that show their result at once (#393)
-- A precision pass over every screen, measured against the token system and Paul's benchmarks, with every flaw filed and fixed (#394)
+- A precision pass over every screen, measured against the token system and the maintainer's benchmarks, with every flaw filed and fixed (#394)
 - + Work's extra controls are thumb-sized, and Propose with Waits on says it's a proposal (#403)
 - The home and project headers keep their buttons on their control's row, beside the title (#409)
 - Get started reads cleanly at every width: title on one line, each step's actions under its label (#410)
@@ -671,7 +671,7 @@ What landed since v0.2.0.
 - An agent who resolved a land job's conflicts isn't offered that item's re-review (#264)
 - A review of operator-only work is offered to any agent that may review: it checks the code and the recorded live output, and asks the… (#271)
 - Infra work is shaped in two parts: workers build it, and the operator runs only the live step, asked for with exact commands (#272)
-- The live hub serves nuworq's first signed release, and an install on Paul's Mac updates from it (#276)
+- The live hub serves nuworq's first signed release, and an install on the maintainer's Mac updates from it (#276)
 - An accepted group with no code of its own is done at once, not sent to landing for a branch that doesn't exist (#280)
 - An operator can wait on the hub: GET /api/wait returns the moment operator work, an operator question, an answer or steering is there for it (#283)
 - An idle operator Claude Code session starts a turn on its own when `nuworq wait --operator` reports something: no /loop (#284)

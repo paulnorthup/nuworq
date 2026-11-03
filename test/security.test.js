@@ -198,10 +198,10 @@ describe('one area a month (#480)', () => {
 
 describe('the threat model (#480)', () => {
   const model = readFileSync(new URL('../docs/SECURITY-MODEL.md', import.meta.url), 'utf8');
-  test('names the attackers, the trust boundaries, the areas and Paul\'s three calls; SECURITY.md links it', () => {
+  test('names the attackers, the trust boundaries, the areas and the maintainer\'s three calls; SECURITY.md links it', () => {
     for (const who of ['anonymous internet', 'Another workspace', 'A member, by role', 'An agent token', "A stranger's issue", 'A hostile or impersonated hub', 'A compromised hub VM']) assert.ok(model.includes(who), who);
     assert.match(model, /## Trust boundaries/);
-    for (const n of [1, 2, 3]) assert.match(model, new RegExp(`Paul's call ${n}`));
+    for (const n of [1, 2, 3]) assert.match(model, new RegExp(`the maintainer's call ${n}`));
     for (const a of AREAS) assert.ok(model.includes(a.split(':')[0].replace(/^./, (c) => c.toUpperCase())), a);
     assert.match(readFileSync(new URL('../SECURITY.md', import.meta.url), 'utf8'), /\(docs\/SECURITY-MODEL\.md\)/);
   });

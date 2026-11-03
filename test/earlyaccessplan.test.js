@@ -9,7 +9,7 @@ import { createServer } from '../src/server.js';
 import { Auth } from '../src/auth.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
-const PAUL = 'paul@example.com';
+const REMY = 'remy@example.com';
 
 // #355: a workspace made with an approved early-access grant starts on Unlimited, and is never sent to Checkout.
 describe('early-access workspaces start on Unlimited (#355)', () => {
@@ -17,9 +17,9 @@ describe('early-access workspaces start on Unlimited (#355)', () => {
     const sessions = [];
     const stripe = http.createServer((req, res) => { sessions.push(req.url); req.resume(); res.end('{}'); });
     const api = `http://127.0.0.1:${await listen(stripe)}`;
-    const spaces = new Workspaces({ dir: realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-eaplan-'))), plans: true, owners: [PAUL] });
+    const spaces = new Workspaces({ dir: realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-eaplan-'))), plans: true, owners: [REMY] });
     const server = createServer(spaces, {
-      earlyAccess: { owners: [PAUL], verify: async () => true, gate: true },
+      earlyAccess: { owners: [REMY], verify: async () => true, gate: true },
       billing: { webhookSecret: 'whsec', secretKey: 'sk_test_x', prices: { price_pro: 'pro' }, api },
     });
     const base = `http://127.0.0.1:${await listen(server)}`;
@@ -36,9 +36,9 @@ describe('early-access workspaces start on Unlimited (#355)', () => {
       return (agent, name, args = {}) => hub.agentOp('app', name, agent, args);
     };
     try {
-      // Ann asks, Paul lets her in, and her link makes her workspace.
+      // Ann asks, Remy lets her in, and her link makes her workspace.
       await call('POST', '/api/early-access', { email: 'ann@example.com', turnstile: 't' });
-      const link = (await call('POST', '/api/early-access/decide', { id: dir.requests()[0].id, approve: true }, { cookie: as(PAUL) })).json.link;
+      const link = (await call('POST', '/api/early-access/decide', { id: dir.requests()[0].id, approve: true }, { cookie: as(REMY) })).json.link;
       const made = await call('POST', '/api/orgs', { slug: 'annco', grant: new URL(link).searchParams.get('grant') }, { cookie: as('ann@example.com') });
       assert.equal(made.status, 200, JSON.stringify(made.json));
 
@@ -57,10 +57,10 @@ describe('early-access workspaces start on Unlimited (#355)', () => {
       assert.equal((await call('POST', '/w/annco/api/billing/checkout', { plan: 'pro' }, { authorization: `Bearer ${ann}` })).status, 409);
       assert.deepEqual(sessions, [], 'Stripe never heard of it');
 
-      // Paul can still switch it to Free and back, as for any workspace.
-      spaces.setPlan('annco', 'free', 'paul');
+      // Remy can still switch it to Free and back, as for any workspace.
+      spaces.setPlan('annco', 'free', 'remy');
       assert.deepEqual([spaces.planInfo('annco').plan, spaces.planInfo('annco').source], ['free', 'set']);
-      spaces.setPlan('annco', 'unlimited', 'paul');
+      spaces.setPlan('annco', 'unlimited', 'remy');
       assert.equal(spaces.planOf('annco'), 'unlimited');
 
       // A workspace someone signed up for any other way is still Free: the second claim is refused with the upgrade hint.
@@ -83,7 +83,7 @@ describe('early-access workspaces start on Unlimited (#355)', () => {
     const dir = spaces.directory;
     try {
       dir.request({ email: 'ann@example.com' });
-      const { code } = dir.decide(dir.requests()[0].id, true, 'paul');
+      const { code } = dir.decide(dir.requests()[0].id, true, 'remy');
       const ann = dir.identify('ann@example.com', 'github');
       assert.equal(dir.useGrant(code, ann, 'annco'), true);
       assert.equal(dir.madeByGrant('annco'), true);

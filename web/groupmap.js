@@ -1,4 +1,4 @@
-// A group's map (#215): Paul opens it to see what's left and what it waits on, so the parts still open come
+// A group's map (#215): a person opens it to see what's left and what it waits on, so the parts still open come
 // first, in the order `next` offers them (landing, then verifying, ready and proposed, each by priority, then
 // number), then the open parts no one is offered (being worked on, waiting, outside). The done ones are
 // reference: one line folds them. Dropped ones leave the map (#442): only "Show dropped" at 30m brings them back.

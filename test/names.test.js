@@ -98,7 +98,7 @@ describe('what the hub accepts', () => {
   });
 
   test('only the nuworq_session cookie signs in', async () => {
-    const human = ctx.server.auth.createToken('paul', 'human');
+    const human = ctx.server.auth.createToken('remy', 'human');
     const login = await request(ctx.port, 'POST', '/api/login', { body: { token: human } });
     assert.equal(login.status, 200, login.text);
     const sid = login.headers['set-cookie'][0].match(/^nuworq_session=([\w-]+);/)[1];

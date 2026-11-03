@@ -30,8 +30,8 @@ git(work, 'add', '.'); git(work, 'commit', '-qm', 'start'); git(work, 'push', '-
 // The hub, as its owner runs it: login required, one owner who sends an invite.
 const hub = new Hub({ file: join(dir, 'hub.db'), repos: join(dir, 'mirrors') });
 const auth = new Auth(hub.db);
-auth.addPerson('paul', 'owner');
-const ownerToken = auth.createToken('paul-cli', 'human', { person: 'paul' });
+auth.addPerson('remy', 'owner');
+const ownerToken = auth.createToken('remy-cli', 'human', { person: 'remy' });
 const server = createServer(hub, { auth: 'required', sweepMs: 1_000 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const url = `http://127.0.0.1:${server.address().port}`;

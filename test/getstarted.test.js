@@ -190,14 +190,14 @@ describe('get started: each step checks itself off from hub state', () => {
   test("with no app, someone who can't create it is told whom to ask, not sent to the create flow (#129)", () => {
     const { hub, step } = setup();
     const auth = new Auth(hub.db);
-    auth.addPerson('paul', 'owner');
+    auth.addPerson('remy', 'owner');
     auth.addPerson('sam', 'steward');
     const ask = step('github', { app: 'none', viewer: '@sam' }).action;
-    assert.deepEqual(ask, { label: 'Ask an owner (@paul) to set up GitHub', note: true });
+    assert.deepEqual(ask, { label: 'Ask an owner (@remy) to set up GitHub', note: true });
     assert.deepEqual(step('github', { app: 'none', workspaces: true }).action, { label: 'Ask whoever runs this hub to set up its GitHub App', note: true });
     assert.equal(step('github', { app: 'none', canCreateApp: true }).action.href, 'api/github/app/new', 'an owner still creates it');
     assert.match(getStartedCard({ show: true, steps: [{ key: 'github', label: 'Connect GitHub', done: false, action: ask }] }),
-      /<span class="faint">Ask an owner \(@paul\) to set up GitHub<\/span>/);
+      /<span class="faint">Ask an owner \(@remy\) to set up GitHub<\/span>/);
   });
 
   test('connect GitHub: no app, an app installed nowhere, an app installed', () => {

@@ -7,7 +7,7 @@ import { defaultAudience } from '../src/audience.js';
 import { guidePage } from '../src/userguide.js';
 import { appSource } from './appsource.js';
 
-// #133: questions an agent can't settle alone (running things, permissions, real infra) go to an operator session, not Paul.
+// #133: questions an agent can't settle alone (running things, permissions, real infra) go to an operator session, not the maintainer.
 function setup() {
   let now = Date.UTC(2026, 9, 29, 9);
   const hub = new Hub({ clock: () => now });

@@ -45,7 +45,7 @@ describe('a bouncing item says why, and asks a person only when they can help (#
 
   test('like #473: rebased after a conflict, its lapses from restarts, an open question to you: Needs you, "answer question N", inline', () => {
     const { hub, add, sendBack, lapse, cards } = world();
-    const k = add('Releases need Paul');
+    const k = add('Releases need Remy');
     hub.agentOp('p', 'claim', 'claude-w', { item: k });
     const { question } = hub.agentOp('p', 'ask', 'claude-w', { item: k, question: 'Is the second ruleset already there?', assumption: 'it already exists' });
     sendBack(k, 'github', 'it conflicts with main');

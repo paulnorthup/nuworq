@@ -558,6 +558,7 @@ Model traffic through llm-proxy? Label it \`x-client-name: nuworq/<project>/<you
 ## Write in layers (0-30-5-30)
 - headline: one line, outcome first ("Retries added; 2 flaky tests remain"). Past 140 characters, the rest moves into the summary and counts toward its limit.
 - summary: the 5-minute version (at most 4,000 characters). detail: the 30-minute version (32,000). Long logs go in the repo.
+- Name roles, not people, in titles, commits, code and docs.
 Say nothing when nothing is worth saying. Responses are small: ${c('look')} for more.
 `;
 }

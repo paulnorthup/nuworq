@@ -128,10 +128,10 @@ describe('existing human tokens', () => {
     const db = openDb(':memory:');
     db.exec(`CREATE TABLE tokens (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, role TEXT NOT NULL, hash BLOB NOT NULL, prefix TEXT NOT NULL,
       created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER)`);
-    db.prepare(`INSERT INTO tokens (name, role, hash, prefix, created_at) VALUES ('Paul', 'human', x'00', 'trl_xxxx', 0), ('ci', 'agent', x'00', 'trl_yyyy', 0)`).run();
+    db.prepare(`INSERT INTO tokens (name, role, hash, prefix, created_at) VALUES ('Remy', 'human', x'00', 'trl_xxxx', 0), ('ci', 'agent', x'00', 'trl_yyyy', 0)`).run();
     const auth = new Auth(db);
-    assert.deepEqual(auth.listPeople().map((p) => [p.handle, p.role]), [['paul', 'owner']]);
-    assert.deepEqual(auth.listTokens().map((t) => [t.name, t.person]), [['Paul', 'paul'], ['ci', null]]);
+    assert.deepEqual(auth.listPeople().map((p) => [p.handle, p.role]), [['remy', 'owner']]);
+    assert.deepEqual(auth.listTokens().map((t) => [t.name, t.person]), [['Remy', 'remy'], ['ci', null]]);
   });
 });
 

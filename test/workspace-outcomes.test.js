@@ -33,7 +33,7 @@ describe('GET /api/outcomes', () => {
     for (let k = 0; k < 3; k++) land('api', 'gpt-a', 'gpt-5', 4, { input_tokens: 10, output_tokens: 1, cost_usd: 3 });
     server = createServer(hub, { auth: 'required' });
     url = `http://127.0.0.1:${await listen(server)}`;
-    tokens = { human: server.auth.createToken('paul', 'human'), api: server.auth.createToken('dash', 'agent', { projects: ['api'] }) };
+    tokens = { human: server.auth.createToken('remy', 'human'), api: server.auth.createToken('dash', 'agent', { projects: ['api'] }) };
   });
   after(() => { server.close(); server.closeAllConnections(); });
   const get = async (path, token = tokens.human) => {

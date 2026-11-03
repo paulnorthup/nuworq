@@ -77,7 +77,7 @@ function github() {
     let c;
     if (req.method === 'POST' && (c = req.url.match(/^\/app-manifests\/([^/]+)\/conversions$/))) {
       return c[1] === 'good'
-        ? json(201, { id: 999, slug: 'nuworq-hub', pem: PEM, webhook_secret: 'whs', client_id: 'cid', client_secret: 'csec', owner: { login: 'paul' } })
+        ? json(201, { id: 999, slug: 'nuworq-hub', pem: PEM, webhook_secret: 'whs', client_id: 'cid', client_secret: 'csec', owner: { login: 'remy' } })
         : json(404, { message: 'Not Found' });
     }
     const jwt = String(req.headers.authorization ?? '').replace('Bearer ', '');
@@ -305,7 +305,7 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       assert.match(made, /class="login-card flow-card".*GitHub App created.*<b>nuworq-hub<\/b>.*GitHub asks where to install it.*\+ Project<\/b> open/s);
       assert.ok(made.includes(`href="${INSTALL}"`), 'with a button, if the browser doesn\'t follow');
       assert.equal((statSync(appFile).mode & 0o777).toString(8), '600');
-      assert.deepEqual(JSON.parse(readFileSync(appFile, 'utf8')), { id: '999', slug: 'nuworq-hub', key: PEM, webhook_secret: 'whs', client_id: 'cid', client_secret: 'csec', owner: 'paul' });
+      assert.deepEqual(JSON.parse(readFileSync(appFile, 'utf8')), { id: '999', slug: 'nuworq-hub', key: PEM, webhook_secret: 'whs', client_id: 'cid', client_secret: 'csec', owner: 'remy' });
       assert.equal((await get(`/api/github/app/callback?code=good&state=${state}`)).status, 400, 'a state works once');
       assert.deepEqual(await (await get('/api/github/app')).json(), { configured: true, slug: 'nuworq-hub', can_create: true, state: 'created', repositories: null, install_url: INSTALL });
       gh.state.installed = new Set([...installed, 'acme/web']); // the person installs it on GitHub and comes back

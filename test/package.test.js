@@ -78,7 +78,7 @@ describe('/nuworq.tgz', () => {
     assert.match(execFileSync(bin, ['help'], { encoding: 'utf8', env: { ...process.env, NUWORQ_URL: 'http://127.0.0.1:9' } }), /connect/);
   });
 
-  // #254: Paul signs the package of the commit the hub runs; main then moves on twice before an install checks.
+  // #254: the maintainer signs the package of the commit the hub runs; main then moves on twice before an install checks.
   test('a release signed an hour ago reaches an install after main has moved on twice', async () => {
     const d = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-pkg-rel-')));
     const repo = join(d, 'src'), cache = join(d, 'cache');
@@ -92,7 +92,7 @@ describe('/nuworq.tgz', () => {
       execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qa', '--allow-empty', '-m', msg], { env });
       return execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     };
-    // The hub runs a commit, Paul signs its package, then main moves on and the hub follows: a restart each time.
+    // The hub runs a commit, the maintainer signs its package, then main moves on and the hub follows: a restart each time.
     const serve = async () => {
       const s = createServer(new Hub(), { source: repo, packageDir: cache });
       const port = await listen(s);

@@ -1,4 +1,4 @@
-// A group's line at the 30-second view (#200, #270): Paul scans the list to see which are close, which are stuck
+// A group's line at the 30-second view (#200, #270): a person scans the list to see which are close, which are stuck
 // and which barely started. So every card reads the same way whatever its title's length: a first row of the
 // state word, a bar and the count, then the title on its own line, then the reason. The state word has a fixed
 // width and the bar a fixed one, so the bars start at the same x down the list and compare by length. Color

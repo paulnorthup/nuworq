@@ -47,11 +47,11 @@ describe("the hub checks its GitHub App's events and permissions (#220)", () => 
     assert.ok(how.includes('Under "Organization permissions", set Members to "Read-only"'), how.join('\n'));
 
     assert.equal(appSettingsUrl({ slug: 'nuworq', owner: { login: 'acme', type: 'Organization' } }), 'https://github.com/organizations/acme/settings/apps/nuworq/permissions');
-    assert.equal(appSettingsUrl({ slug: 'nuworq', owner: { login: 'paul', type: 'User' } }), 'https://github.com/settings/apps/nuworq/permissions');
+    assert.equal(appSettingsUrl({ slug: 'nuworq', owner: { login: 'remy', type: 'User' } }), 'https://github.com/settings/apps/nuworq/permissions');
   });
 
   test('the owners see one Needs you entry with the steps; it clears once GitHub reports them, and a GitHub that doesn\'t answer says nothing', async () => {
-    const said = { status: 200, body: { id: 1234, slug: 'nuworq', owner: { login: 'paul', type: 'User' }, permissions: ALL.permissions, events: [] } };
+    const said = { status: 200, body: { id: 1234, slug: 'nuworq', owner: { login: 'remy', type: 'User' }, permissions: ALL.permissions, events: [] } };
     let asked = 0;
     const gh = http.createServer((req, res) => {
       if (req.url === '/app') asked++;

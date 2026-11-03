@@ -169,7 +169,7 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     hub.db.prepare("UPDATE agents SET role = 'operator' WHERE name = 'mo-op'").run();
     const q1 = ask();
     assert.equal((await op('answer', { token: t.mo, agent: 'mo-op', body: { question: q1, answer: 'done' } })).status, 403);
-    assert.equal((await op('ask', { token: t.mo, agent: 'mo-op', body: { question: 'Paul?', escalates: q1 } })).status, 403);
+    assert.equal((await op('ask', { token: t.mo, agent: 'mo-op', body: { question: 'Remy?', escalates: q1 } })).status, 403);
     assert.equal((await op('answer', { token: t.sam, agent: 'sam-op', body: { question: q1, answer: 'Restarted it.' } })).status, 200);
   });
 
@@ -342,7 +342,7 @@ describe('agent operations are for agents, and each agent acts only as itself', 
 
   test("an operator on a person's device token reviews that machine's runner workers, and next never offers what review refuses (#663)", async () => {
     hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
-    // Feedback #2: the operator and the runner's workers all used Paul's device login, and every next answered
+    // Feedback #2: the operator and the runner's workers all used the maintainer's device login, and every next answered
     // "You can't review your own work" for an item a worker built.
     const device = auth.createToken('olivia-studio', 'agent', { mintedBy: 'olivia' });
     assert.equal((await op('checkin', { token: device, agent: 'studio-op', body: { has: ['operator', 'macos'] } })).status, 200);

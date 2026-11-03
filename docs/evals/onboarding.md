@@ -1,6 +1,6 @@
 # Eval: invite link to a landed item (#116)
 
-A stand-in for an observed onboarding, approved by Paul for #116: an agent (claude-opus-5-5) ran
+A stand-in for an observed onboarding, approved by the maintainer for #116: an agent (claude-opus-5-5) ran
 `node scripts/onboarding-walkthrough.js` on 2026-10-29. The script stands up a throwaway hub with login
 required, and an owner sends a steward invite. The invited person, @sam, acts through the same HTTP calls
 the web pages make. Their machine acts through the real CLI (`connect`, `checkin`, `next`, `submit`), with
@@ -12,7 +12,7 @@ The times are the hub's and the CLI's, not a person's. Reading and clicking add 
 
 | # | Step | Time | What the person saw / got |
 |---|------|------|---------------------------|
-| 1 | Open the invite link | 0.0s | "You're invited to join as steward, by @paul" |
+| 1 | Open the invite link | 0.0s | "You're invited to join as steward, by @remy" |
 | 2 | Pick a handle and join | 0.0s | Signed in as @sam (steward), session cookie set |
 | 3 | Land on All projects: Get started | 0.0s | Five steps open; first: **Connect GitHub** (opens the Connect dialog) |
 | 4 | + Project (name and repository) | 0.0s | Project `demo`, remote linked |

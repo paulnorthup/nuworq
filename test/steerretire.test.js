@@ -53,7 +53,7 @@ describe('steering about an item retires with the item (#551)', () => {
     hub.humanOp('p', 'steer', { body: 'Prefer small pull requests.' });
     hub.humanOp('p', 'steer', { item: open, body: 'Start with the tests.' });
     const p = hub.project('p');
-    hub.addNote(p, 'steer', 'Ship it today.', hub.item(p, closed), 'w1', '@paul'); // to w1, so its checkin shows it
+    hub.addNote(p, 'steer', 'Ship it today.', hub.item(p, closed), 'w1', '@remy'); // to w1, so its checkin shows it
     later(20 * MIN); // the unseen card waits 15 minutes
     const unseen = () => view(hub, 'p').attention.filter((a) => a.kind === 'steer-unseen').map((a) => a.sub).join(' ');
     const told = (agent) => (hub.agentOp('p', 'checkin', agent, {}).steers ?? []).map((s) => s.body);

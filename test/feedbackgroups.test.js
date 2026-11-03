@@ -31,9 +31,9 @@ function request(port, method, path, { host = APP, headers = {}, body } = {}) {
 }
 
 // 2026-11-02 as the hub saw it: #640 waits for review, and #654, the fix for next offering a review that review
-// refuses, is in review itself. paul owns the hub; agents work in acme on one shared token.
+// refuses, is in review itself. remy owns the hub; agents work in acme on one shared token.
 async function hub() {
-  const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-fbg-')), owners: ['paul@example.com'] });
+  const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-fbg-')), owners: ['remy@example.com'] });
   spaces.create('nuworq');
   const nw = spaces.get('nuworq');
   const p = nw.project('nuworq', { create: true });
@@ -48,17 +48,17 @@ async function hub() {
   nw.move(fix, 'verifying', SYSTEM);
   spaces.create('acme');
   const acme = new Auth(spaces.get('acme').db);
-  acme.addPerson('paul', 'owner', { email: 'paul@example.com' });
-  spaces.get('acme').q('UPDATE people SET verified_at = 1 WHERE handle = ?').run('paul');
-  const paulApp = `nuworq_session=${acme.signInByEmail('paul@example.com', 'github').sid}`;
+  acme.addPerson('remy', 'owner', { email: 'remy@example.com' });
+  spaces.get('acme').q('UPDATE people SET verified_at = 1 WHERE handle = ?').run('remy');
+  const remyApp = `nuworq_session=${acme.signInByEmail('remy@example.com', 'github').sid}`;
   const agentToken = acme.createToken('bot', 'agent');
   const server = createServer(spaces, {
     publicUrl: `http://${APP}`, adminHost: ADMIN, feedbackProject: 'nuworq/nuworq', feedbackBatchMs: 20,
-    earlyAccess: { owners: ['paul@example.com'], verify: null, gate: false },
+    earlyAccess: { owners: ['remy@example.com'], verify: null, gate: false },
   });
   const port = await new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
   const dir = spaces.directory;
-  const paul = `nuworq_admin=${dir.createSession(dir.identify('paul@example.com', 'github').id, 'admin')}`;
+  const remy = `nuworq_admin=${dir.createSession(dir.identify('remy@example.com', 'github').id, 'admin')}`;
   const call = (method, path, body, opts = {}) => request(port, method, path, { body, ...opts });
   const asAgent = async (name, path, body) => call('POST', `/w/acme${path}`, body, { headers: { authorization: `Bearer ${agentToken}`, 'x-nuworq-agent': name } });
   const send = async (name, text, item) => {
@@ -67,9 +67,9 @@ async function hub() {
     assert.equal(r.status, 200, JSON.stringify(r.json));
     return r.json;
   };
-  const asPaul = (method, path, body) => call(method, path, body, { host: ADMIN, headers: { cookie: paul } });
+  const asRemy = (method, path, body) => call(method, path, body, { host: ADMIN, headers: { cookie: remy } });
   const items = () => nw.q('SELECT seq, title, stage FROM items WHERE project_id = ? ORDER BY seq').all(p.id);
-  return { spaces, nw, p, fix, dir, call, send, asAgent, asPaul, paulApp, items, close: () => server.close() };
+  return { spaces, nw, p, fix, dir, call, send, asAgent, asRemy, remyApp, items, close: () => server.close() };
 }
 
 // The day's 18 pieces: 17 agents (16 workers and the operator) hit the same loop, in their own words; one other.
@@ -91,7 +91,7 @@ const LOOP = [
   ['claude-a05f', '`next` → #640 review → refused as my own work. Signing off since nothing else is offered.', '#640'],
   ['claude-b160', 'Refused: "You can\'t review your own work (#640)". next shouldn\'t offer what review refuses.'],
   ['claude-c271', 'next offered the review of #640 three times in a row; each time review refused it as my own work.'],
-  ['claude-d382', 'We share Paul\'s connect token, so review thinks #640 is my own work, but next still offers it. "You can\'t review your own work (#640)"'],
+  ['claude-d382', 'We share Remy\'s connect token, so review thinks #640 is my own work, but next still offers it. "You can\'t review your own work (#640)"'],
   ['claude-e493', 'Same as others probably: next → review #640 → "You can\'t review your own work (#640)".'],
   ['claude-f5a4', 'The next call offers me #640 to review; review refuses with "You can\'t review your own work (#640)".', '#640'],
   ['claude-code-adf2', 'Operator here: every worker on this machine loops on `next` offering #640\'s review and `review` refusing it ("You can\'t review your own work (#640)").'],
@@ -132,7 +132,7 @@ describe('feedback arrives in groups (#688)', () => {
       assert.equal(answers[16].others, 16);
       assert.match(answers[16].hint, /16 others sent the same/);
 
-      const { json } = await h.asPaul('GET', '/api/feedback/groups?state=new');
+      const { json } = await h.asRemy('GET', '/api/feedback/groups?state=new');
       assert.equal(json.groups.length, 2, 'two groups, not eighteen pieces');
       const loop = json.groups.find((g) => g.count === 17);
       assert.ok(loop, '17 reports of the loop are one group');
@@ -146,7 +146,7 @@ describe('feedback arrives in groups (#688)', () => {
 
       // One decision for both: take the suggestions.
       let decisions = 0;
-      const r = await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [loop.id, other.id], action: 'suggested' });
+      const r = await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [loop.id, other.id], action: 'suggested' });
       decisions++;
       assert.equal(r.status, 200, JSON.stringify(r.json));
       assert.ok(decisions <= 3);
@@ -154,7 +154,7 @@ describe('feedback arrives in groups (#688)', () => {
       assert.equal(l.state, 'linked');
       assert.equal(l.decision.ref, '#654');
       assert.equal(o.state, 'approved');
-      assert.equal((await h.asPaul('GET', '/api/feedback/groups?state=new')).json.groups.length, 0, 'nothing waits');
+      assert.equal((await h.asRemy('GET', '/api/feedback/groups?state=new')).json.groups.length, 0, 'nothing waits');
 
       // Linking made nothing; the other report made one proposal. No item about #640's loop besides #654.
       const after = h.items();
@@ -185,25 +185,25 @@ describe('feedback arrives in groups (#688)', () => {
     try {
       await h.send(...OTHER);
       await h.send(...LOOP[0]);
-      const { groups } = (await h.asPaul('GET', '/api/feedback/groups')).json;
+      const { groups } = (await h.asRemy('GET', '/api/feedback/groups')).json;
       const loop = groups.find((g) => g.known), other = groups.find((g) => !g.known);
-      await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [loop.id], action: 'link', ref: '#654' });
-      const undone = await h.asPaul('POST', '/api/feedback/groups/undo', { groups: [loop.id] });
+      await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [loop.id], action: 'link', ref: '#654' });
+      const undone = await h.asRemy('POST', '/api/feedback/groups/undo', { groups: [loop.id] });
       assert.equal(undone.json.groups[0].state, 'new');
       assert.equal(undone.json.groups[0].suggest.action, 'link');
 
-      const made = (await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [other.id], action: 'approve' })).json.groups[0];
+      const made = (await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [other.id], action: 'approve' })).json.groups[0];
       const seq = Number(made.decision.proposal.split('#')[1]);
       assert.equal(h.nw.item(h.p, seq).stage, 'proposed');
-      await h.asPaul('POST', '/api/feedback/groups/undo', { groups: [other.id] });
+      await h.asRemy('POST', '/api/feedback/groups/undo', { groups: [other.id] });
       assert.equal(h.nw.item(h.p, seq).stage, 'dropped', 'the proposal it made is dropped');
 
       // Decline with a note, no dialog: the note is the request's.
-      const d = (await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [other.id], action: 'decline', note: 'Working as meant.' })).json.groups[0];
+      const d = (await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [other.id], action: 'decline', note: 'Working as meant.' })).json.groups[0];
       assert.equal(d.state, 'declined');
       assert.equal(d.decision.note, 'Working as meant.');
-      assert.equal((await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [other.id], action: 'decline' })).status, 409, 'decided once until undone');
-      assert.equal((await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [loop.id], action: 'link', ref: '#999' })).status, 400);
+      assert.equal((await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [other.id], action: 'decline' })).status, 409, 'decided once until undone');
+      assert.equal((await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [loop.id], action: 'link', ref: '#999' })).status, 400);
       assert.equal((await h.call('GET', '/api/feedback/groups')).status, 403, 'only on the admin host');
     } finally { h.close(); }
   });
@@ -214,19 +214,19 @@ describe('feedback arrives in groups (#688)', () => {
       await h.send(...LOOP[0]);
       await h.send(...OTHER);
       await h.send('claude-0b0b', 'The board scrolls back to the top every time an item moves stage, so I lose my place.');
-      const { groups } = (await h.asPaul('GET', '/api/feedback/groups')).json;
+      const { groups } = (await h.asRemy('GET', '/api/feedback/groups')).json;
       const [a, b, c] = groups.map((g) => g.id);
-      await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [b], action: 'decline', note: 'Known.' });
+      await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [b], action: 'decline', note: 'Known.' });
       const before = h.items().length;
       // b is decided already: the whole request is refused, and a and c stay as they were.
-      const r = await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [a, b, c], action: 'approve' });
+      const r = await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [a, b, c], action: 'approve' });
       assert.equal(r.status, 409);
       assert.match(r.json.error, new RegExp(`group ${b} was already declined`));
-      const now = (await h.asPaul('GET', '/api/feedback/groups?state=new')).json.groups.map((g) => g.id).sort();
+      const now = (await h.asRemy('GET', '/api/feedback/groups?state=new')).json.groups.map((g) => g.id).sort();
       assert.deepEqual(now, [a, c].sort(), 'a and c still wait');
       assert.equal(h.items().length, before, 'no proposal made');
       // The same group twice is decided once: one proposal.
-      const twice = await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [c, c], action: 'approve' });
+      const twice = await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [c, c], action: 'approve' });
       assert.equal(twice.json.groups.length, 1);
       assert.equal(h.items().length, before + 1);
     } finally { h.close(); }
@@ -236,8 +236,8 @@ describe('feedback arrives in groups (#688)', () => {
     const h = await hub();
     try {
       await h.send(...LOOP[0]);
-      const loop = (await h.asPaul('GET', '/api/feedback/groups')).json.groups[0];
-      await h.asPaul('POST', '/api/feedback/groups/decide', { groups: [loop.id], action: 'link', ref: '#654' });
+      const loop = (await h.asRemy('GET', '/api/feedback/groups')).json.groups[0];
+      await h.asRemy('POST', '/api/feedback/groups/decide', { groups: [loop.id], action: 'link', ref: '#654' });
       // Names #640 and next, so it matches loosely; but it's another report and doesn't quote the error.
       const other = await h.send('claude-0c0c', '`next` offered #640 to build but its branch was missing on origin.', '#640');
       const f = h.dir.feedbackById(other.feedback);
@@ -253,7 +253,7 @@ describe('feedback arrives in groups (#688)', () => {
   test('the app tells a hub owner what waits, with its count and where it opens', async () => {
     const h = await hub();
     try {
-      const seen = async () => (await h.call('GET', '/w/acme/api/feedback', undefined, { headers: { cookie: h.paulApp } })).json;
+      const seen = async () => (await h.call('GET', '/w/acme/api/feedback', undefined, { headers: { cookie: h.remyApp } })).json;
       assert.equal((await seen()).waiting, undefined, 'nothing waits');
       for (const [name, text, item] of LOOP.slice(0, 3)) await h.send(name, text, item);
       await h.send(...OTHER);

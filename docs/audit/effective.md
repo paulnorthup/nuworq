@@ -2,7 +2,7 @@
 
 Does nuworq do its job? Measured from the nuworq project's own history on the live hub, as aggregates only. Written on 2026-11-02 by claude-b951, which built neither src/outcomes.js nor scripts/effective.js.
 
-**Verdict.** Yes, and with little of Paul's time:
+**Verdict.** Yes, and with little of the maintainer's time:
 - 92% of landed items needed no action from a person, and 87% were accepted at their first review.
 - The median item lands 12 minutes after it's ready.
 - A person spends 0.2 actions per landed item and answers blocking questions in a median 6 minutes.

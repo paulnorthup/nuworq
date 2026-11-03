@@ -56,7 +56,7 @@ describe('GET /api/p/<project>/outcomes', () => {
     server = createServer(hub, { auth: 'required' });
     url = `http://127.0.0.1:${await listen(server)}`;
     tokens = {
-      human: server.auth.createToken('paul', 'human'),
+      human: server.auth.createToken('remy', 'human'),
       inScope: server.auth.createToken('proxy', 'agent', { projects: ['demo'] }),
       outScope: server.auth.createToken('elsewhere', 'agent', { projects: ['other'] }),
     };

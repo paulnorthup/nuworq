@@ -9,12 +9,12 @@ import { sourceOf } from '../src/directory.js';
 import { composeRequest } from '../src/notify.js';
 
 const DAY = 24 * 60 * 60 * 1000;
-const PAUL = 'paul@example.com';
+const REMY = 'remy@example.com';
 
 async function hub() {
   let now = Date.UTC(2026, 9, 31);
   const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-src-')), clock: () => now });
-  const server = createServer(spaces, { earlyAccess: { owners: [PAUL], verify: async () => true, gate: true } });
+  const server = createServer(spaces, { earlyAccess: { owners: [REMY], verify: async () => true, gate: true } });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const dir = spaces.directory;
@@ -68,7 +68,7 @@ describe('early-access sources (#356)', () => {
     };
     const approve = async (email) => {
       const id = h.dir.requests().find((r) => r.email === email).id;
-      assert.equal((await h.call('POST', '/api/early-access/decide', { id, approve: true }, h.as(PAUL))).status, 200);
+      assert.equal((await h.call('POST', '/api/early-access/decide', { id, approve: true }, h.as(REMY))).status, 200);
     };
     try {
       // 20 days ago: ann came from hn, was let in, and landed an item.
@@ -87,7 +87,7 @@ describe('early-access sources (#356)', () => {
       await approve('eve@example.com');
       workspace('eve@example.com', 'eveco');
 
-      const r = await h.call('GET', '/api/early-access/sources', null, h.as(PAUL));
+      const r = await h.call('GET', '/api/early-access/sources', null, h.as(REMY));
       assert.equal(r.status, 200);
       assert.equal(r.json.days, 14);
       const c = (s) => ({ requests: s[0], let_in: s[1], connected: s[2], landed: s[3] });

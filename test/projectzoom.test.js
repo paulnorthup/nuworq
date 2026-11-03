@@ -10,7 +10,7 @@ const start = app.indexOf('function projectBody(');
 const body = app.slice(start, app.indexOf('\n}\n', start));
 const at = (section) => body.match(new RegExp(`\\b\\w+: (?:z\\(\\) >= (\\d) \\? )?${section}\\(v\\)`))?.[1] ?? '0';
 
-// Flow is at every depth by Paul's standing decision (2026-10-29): the lifecycle belongs in the glance.
+// Flow is at every depth by the maintainer's standing decision (2026-10-29): the lifecycle belongs in the glance.
 test('at 30s a project shows the pulse, composer, Needs you, In motion and Flow', () => {
   for (const s of ['pulse', 'composer', 'needsYou', 'motion', 'flow']) assert.equal(at(s), '0', `${s} at 30s`);
   for (const s of ['worthKnowing', 'upNext', 'finished', 'steering', 'agents']) assert.equal(at(s), '1', `${s} from 5m`);

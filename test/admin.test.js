@@ -71,7 +71,7 @@ describe('the admin host', () => {
     server = createServer(spaces, {
       publicUrl: `http://${APP}`, adminHost: ADMIN,
       oauth: { github: { id: 'gh', secret: 'shh', authorize: `${stub}/authorize`, token: `${stub}/token`, api: stub } },
-      earlyAccess: { owners: ['paul@example.com'], verify: async (t) => t === 'good', gate: true },
+      earlyAccess: { owners: ['remy@example.com'], verify: async (t) => t === 'good', gate: true },
     });
     port = await listen(server);
   });
@@ -89,7 +89,7 @@ describe('the admin host', () => {
 
   test('an owner signs in on the admin host, lists requests and approves one; a grant link to the app comes back', async () => {
     await ask('ann@example.com');
-    const cb = await signIn('paul@example.com');
+    const cb = await signIn('remy@example.com');
     assert.equal(cb.status, 302);
     assert.equal(cb.headers.location, '/');
     const set = cb.headers['set-cookie'].find((c) => c.startsWith('nuworq_admin='));
@@ -99,7 +99,7 @@ describe('the admin host', () => {
     assert.match(set, /SameSite=Strict/);
     const jar = cookies(cb);
     const me = await request(port, 'GET', '/api/me', { host: ADMIN, headers: { cookie: jar } });
-    assert.deepEqual(me.json, { email: 'paul@example.com', owner: true });
+    assert.deepEqual(me.json, { email: 'remy@example.com', owner: true });
     const list = await request(port, 'GET', '/api/early-access?state=new', { host: ADMIN, headers: { cookie: jar } });
     assert.equal(list.status, 200);
     const ann = list.json.requests.find((r) => r.email === 'ann@example.com');
@@ -150,7 +150,7 @@ describe('the admin host', () => {
 
   test("an app session doesn't open the admin host, and an admin session doesn't open the app", async () => {
     const dir = spaces.directory;
-    const id = dir.identify('paul@example.com', 'github').id;
+    const id = dir.identify('remy@example.com', 'github').id;
     const appSid = dir.createSession(id);
     assert.equal((await request(port, 'GET', '/api/me', { headers: { cookie: `nuworq_id=${appSid}` } })).status, 200, 'it works on the app');
     for (const cookie of [`nuworq_admin=${appSid}`, `nuworq_id=${appSid}`]) {
@@ -163,7 +163,7 @@ describe('the admin host', () => {
     }
     // A sign-in started on the app can't finish on the admin host's callback.
     const s = await request(port, 'GET', '/auth/github/start');
-    const a = p.approve(s.headers.location, 'paul@example.com');
+    const a = p.approve(s.headers.location, 'remy@example.com');
     const cb = await request(port, 'GET', `/auth/github/callback?code=${a.code}&state=${encodeURIComponent(a.state)}`, { host: ADMIN, headers: { cookie: cookies(s) } });
     assert.equal(cb.status, 400);
     assert.equal(cb.headers['set-cookie']?.some((c) => c.startsWith('nuworq_admin=') && !c.startsWith('nuworq_admin=;')) ?? false, false);
@@ -175,7 +175,7 @@ describe('the admin host', () => {
       assert.equal(r.status, 308, path);
       assert.equal(r.headers.location, `http://${ADMIN}/`, path);
     }
-    const owner = `nuworq_id=${spaces.directory.createSession(spaces.directory.identify('paul@example.com', 'github').id)}`;
+    const owner = `nuworq_id=${spaces.directory.createSession(spaces.directory.identify('remy@example.com', 'github').id)}`;
     for (const cookie of [owner, '']) {
       const list = await request(port, 'GET', '/api/early-access', { headers: cookie ? { cookie } : {} });
       assert.equal(list.status, 403);

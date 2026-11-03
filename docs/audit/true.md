@@ -75,7 +75,7 @@ Lines at 0fcaec3.
 | A46 | 67 | Only an account-wide install counts; leftovers removed (`--yes`) | true | src/connect.js:213-305; test/connect.test.js:289, 351 |
 | A47 | 67 | Without the plugin, skills are written only on decline / `--skills` / no terminal | true | bin/nuworq.js:1553-1562; test/connect.test.js:375 |
 | A48 | 67 | `plugin/` is generated; a test fails on drift | true | bin/nuworq.js:2187-2197; test/plugin.test.js:73-79 |
-| A49 | 69 | Only the release signer moves `release`, to approved, signed releases | true | scripts/signer.js; test/signer.test.js:279, 294. GitHub rulesets let only Paul move `release`, checked live 2026-11-02 (docs/SECURITY-MODEL.md:70, #757) |
+| A49 | 69 | Only the release signer moves `release`, to approved, signed releases | true | scripts/signer.js; test/signer.test.js:279, 294. GitHub rulesets let only the maintainer move `release`, checked live 2026-11-02 (docs/SECURITY-MODEL.md:70, #757) |
 | A50 | 69 | The marketplace entry is `git-subdir` ref `release` | true | .claude-plugin/marketplace.json; test/plugin.test.js:37-40 |
 | A51 | 69 | The plugin has no version, so each release is new | true | src/plugin.js:31-33; test/plugin.test.js:26, 33 |
 | A52 | 78 | Approve a code in the browser; the token is `<you>@<machine>` | true | src/device.js:14-93; test/device.test.js:51, 92 |
@@ -280,7 +280,7 @@ Lines at 0fcaec3.
 | W19 | #workers 30m | Handoff notes; send-backs with reasons | true | src/core.js:3825-3833 |
 | W20 | #workers 30m | Done only when git shows main contains it | reworded → site #34 | As S28 |
 | W21 | #operator | An attended session with your permissions; answers permission questions; runs live steps | true | plugin/skills/operator/SKILL.md; src/operator.js:63-67 |
-| W22 | #operator | "It signs releases" | reworded → site #35 | Only after Paul approves at the key's machine; no session reads the key (docs/DEPLOY.md:268-280) |
+| W22 | #operator | "It signs releases" | reworded → site #35 | Only after the maintainer approves at the key's machine; no session reads the key (docs/DEPLOY.md:268-280) |
 | W23 | #operator | Administers GitHub, uses a browser, can review and land | true | src/operator.js:47-59; test/roles.test.js:85-108 |
 | W24 | #operator 30m | Idle until the listener wakes it; asks you one question with steps | true | plugin/monitors/monitors.json; src/protocol.js:85, 544 |
 | W25 | #cheaper | Off until you turn it on | true | src/db.js:448; test/models.test.js:50 (#723 would turn it on: change with it) |

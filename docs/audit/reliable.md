@@ -52,7 +52,7 @@ counts that as a failure:
 So a worker that dies a minute in, every time (context overflow, an API error, out of memory), is replaced by one
 that takes the same item, on and on.
 
-- **Cost:** spend with no cap (`--max-usd` defaults to none), and Paul never hears.
+- **Cost:** spend with no cap (`--max-usd` defaults to none), and the owner never hears.
 - **Reproduced** on `serve --demo --port 0`, from the browser. Six agents in turn each called `next` and then
   `signoff` ("worker exited 1"). All six got #18, attempts 1 to 6. Afterwards #18 was `ready` with `stalls: 0`, its
   history read six `handoff` events, and `/api/p/nuworq/view` had `attention: []`.

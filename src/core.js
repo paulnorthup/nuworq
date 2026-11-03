@@ -1731,7 +1731,7 @@ export class Hub extends EventEmitter {
   }
 
   // An operator: a trusted, attended session that declared "operator" at checkin (has). It answers the
-  // questions agents put to: "operator" (running things, permissions, verifying on real infra), not Paul.
+  // questions agents put to: "operator" (running things, permissions, verifying on real infra), not the human.
   isOperator(p, agent) {
     return this.roleOf(p, agent) === 'operator';
   }
@@ -3435,7 +3435,7 @@ function tidyWhere(step, n, tidied) {
 }
 const tidiedHint = (tidied) => (tidied.length ? ` Tidied your steps: ${tidied.join('; ')}. Next time give each where as a URL or one command, with no backticks.` : '');
 
-// A question that asks a person to act must say exactly how (Paul, 2026-10-30).
+// A question that asks a person to act must say exactly how (the decision of 2026-10-30).
 function requireSteps(question, steps) {
   if (!steps.length && needsSteps({ question: question.headline, context: `${question.summary}\n${question.detail}` })) {
     throw new UserError('This asks a person to do something, so it needs steps', { hint: STEPS_HINT });
@@ -3776,7 +3776,7 @@ const AGENT_OPS = {
     }
     if (q.status !== 'open') throw new UserError(`Question ${q.id} is already ${q.status}`, { status: 409, hint: 'Only an open question can be withdrawn.' });
     const reason = clip(args.reason, 200);
-    if (!reason) throw new UserError('reason is required', { hint: 'One line, e.g. "Paul answered in a planning session: he is the only admin."' });
+    if (!reason) throw new UserError('reason is required', { hint: 'One line, e.g. "The owner answered in a planning session: they are the only admin."' });
     this.q(`UPDATE questions SET status = 'withdrawn', closed_reason = ? WHERE id = ?`).run(reason, q.id);
     this.q(`UPDATE questions SET status = 'withdrawn', closed_reason = ? WHERE escalates = ? AND status = 'open'`).run(reason, q.id);
     const item = this.itemById(q.item_id);

@@ -14,7 +14,7 @@ const auto = { supported: true, args: ['--workers', 'auto', '--browser'], cwd: '
 const day = () => [
   { slug: 'cancer-hub', name: 'cancer-hub', parked: true, runner: false, operators: [] },
   { slug: 'llm-proxy', name: 'llm-proxy', parked: false, runner: true, operators: [] },
-  { slug: 'nuworq', name: 'nuworq', parked: false, runner: true, operators: [{ name: 'claude-code-9ccc', machine: 'Pauls-MacBook-Pro' }] },
+  { slug: 'nuworq', name: 'nuworq', parked: false, runner: true, operators: [{ name: 'claude-code-9ccc', machine: 'Remys-MacBook-Pro' }] },
   { slug: 'nuworq-site', name: 'nuworq-site', parked: false, runner: false, operators: [] },
 ];
 const clones = { 'cancer-hub': { folder: '/src/cancer-hub' }, 'llm-proxy': { folder: '/src/llm-proxy' }, nuworq: { folder: '/src/nuworq' }, 'nuworq-site': { folder: '/src/nuworq-site' } };
@@ -111,7 +111,7 @@ describe('staffing and operators', () => {
     assert.deepEqual(op['cancer-hub'], { state: 'skip', why: 'parked' });
     assert.deepEqual(op['llm-proxy'], { state: 'start', folder: '/src/llm-proxy' });
     assert.deepEqual(op['nuworq-site'], { state: 'start', folder: '/src/nuworq-site' });
-    assert.deepEqual(op.nuworq, { state: 'running', why: 'claude-code-9ccc on Pauls-MacBook-Pro' });
+    assert.deepEqual(op.nuworq, { state: 'running', why: 'claude-code-9ccc on Remys-MacBook-Pro' });
     assert.deepEqual(plan.staff.map((p) => p.slug), ['nuworq-site'], 'only unparked, unstaffed projects are asked about');
     assert.equal(plan.runner.action, 'restart');
   });
@@ -181,7 +181,7 @@ describe('staffing and operators', () => {
     assert.match(t, /^Project\s+Parked\s+Staffed\s+Operator$/m);
     assert.match(t, /^cancer-hub\s+yes\s+no\s+skipped \(parked\)$/m);
     assert.match(t, /^llm-proxy\s+no\s+yes\s+would start \(\/src\/llm-proxy\)$/m);
-    assert.match(t, /^nuworq\s+no\s+yes\s+running \(claude-code-9ccc on Pauls-MacBook-Pro\)$/m);
+    assert.match(t, /^nuworq\s+no\s+yes\s+running \(claude-code-9ccc on Remys-MacBook-Pro\)$/m);
     assert.match(t, /Runner: workers auto, with a browser, running$/);
     plan.rows[1].operator = { state: 'started', why: 'tmux window nuworq:llm-proxy' };
     assert.match(upTable(plan), /^llm-proxy\s+no\s+yes\s+started \(tmux window nuworq:llm-proxy\)$/m);
