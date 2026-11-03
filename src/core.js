@@ -44,10 +44,14 @@ const USAGE_OPS = ['progress', 'submit', 'handoff']; // the agent ops that take 
 // One agent can't flood a hub (#766): its writes per minute, and what a project or hub holds at most.
 const WRITE_OPS = ['propose', 'ask', 'comment', 'learn', 'usage'];
 const WRITES_PER_MIN = 60;
+// One token can't flood it under many names (#831): a runner's workers share its token, so the token's window is
+// a few agents wide, and the new names it may check in under each hour are capped.
+const TOKEN_WRITES_PER_MIN = 240;
+const NEW_NAMES_PER_HOUR = 100;
 // The most an agent's (or a person's) text may hold (#765), in characters, or entries for lists. Past one, the write
 // is refused with a hint, never cut silently: every open page and many agents read these back on each change.
 export const LIMITS = {
-  projects: 100, openQuestions: 200, proposed: 500,
+  projects: 100, openQuestions: 200, proposed: 500, fieldNotes: 500, commentsPerDay: 1_000,
   summary: 4_000, detail: 32_000, acceptance: 4_000, context: 2_000, assumption: 2_000, question: 2_000, step: 500, option: 200,
   evidence: 20, evidence_label: 300, evidence_url: 2_000, depends_on: 30,
 };
@@ -2362,20 +2366,36 @@ export class Hub extends EventEmitter {
   // ── agent operations ────────────────────────────────────────────────────
 
   // One agent's writes on a project, at most WRITES_PER_MIN in any minute (#766): reads and progress without a
-  // headline (a heartbeat) aren't counted, nor is a write this refuses. Each agent has its own window.
-  throttleWrite(p, agent, op, args) {
+  // headline (a heartbeat) aren't counted, nor is a write this refuses. Each agent has its own window, and so has
+  // the token behind it (#831), on every project at once: new names don't open new room.
+  throttleWrite(p, agent, op, args, identity) {
     if (!WRITE_OPS.includes(op) && !(op === 'progress' && str(args.headline))) return;
-    const key = `${p.id}:${agent}`, now = this.now();
-    const recent = (this._writes.get(key) ?? []).filter((t) => t > now - MIN);
-    if (recent.length >= WRITES_PER_MIN) {
+    const now = this.now();
+    const windows = [[`${p.id}:${agent}`, WRITES_PER_MIN, `${agent} made ${WRITES_PER_MIN} writes in the last minute, the most one agent may`]];
+    if (identity?.id != null) windows.push([`token:${identity.id}`, TOKEN_WRITES_PER_MIN, `This agent's token made ${TOKEN_WRITES_PER_MIN} writes in the last minute, under all its names, the most one token may`]);
+    const recents = windows.map(([key]) => (this._writes.get(key) ?? []).filter((t) => t > now - MIN));
+    windows.forEach(([key, most, message], i) => {
+      const recent = recents[i];
       this._writes.set(key, recent);
+      if (recent.length < most) return;
       const wait = Math.max(1, Math.ceil((recent[0] + MIN - now) / 1000));
-      throw new UserError(`${agent} made ${WRITES_PER_MIN} writes in the last minute, the most one agent may`, {
-        status: 429, hint: `Try again in ${wait} second${wait === 1 ? '' : 's'}. Reads and progress without a headline aren't limited.`,
+      throw new UserError(message, {
+        status: 429, hint: `Try again in ${wait} second${wait === 1 ? '' : 's'}. Reads and progress without a headline aren't limited${i ? '; checking in under another name adds no room' : ''}.`,
       });
-    }
-    recent.push(now);
-    this._writes.set(key, recent);
+    });
+    for (const recent of recents) recent.push(now);
+  }
+
+  // The new names one token may bring to the hub in an hour (#831), counted from the agents it first called as.
+  // A name it already has here isn't new; a person's browser session doesn't bring names.
+  throttleNames(p, agent, identity) {
+    if (!identity || identity.session) return;
+    if (this.q('SELECT 1 FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)) return;
+    const n = this.q('SELECT COUNT(*) AS n FROM agents WHERE token_id = ? AND first_seen > ?').get(identity.id, this.now() - HOUR).n;
+    if (n < NEW_NAMES_PER_HOUR) return;
+    throw new UserError(`This agent's token checked in under ${NEW_NAMES_PER_HOUR} new names in the last hour, the most one token may`, {
+      status: 429, hint: 'Check in again under a name this token already has, or try a new one within the hour.',
+    });
   }
 
   // slug may be empty: then the agent's folder (root) picks the project, or the hub routes it to work.
@@ -2421,7 +2441,7 @@ export class Hub extends EventEmitter {
         p = this.project(routed.project);
       }
     }
-    this.throttleWrite(p, agent, op, args ?? {});
+    this.throttleWrite(p, agent, op, args ?? {}, identity);
     // After the write limit, so one agent can't run the check more often than it may write; still before
     // anything from args is stored (the project and agent above come from the call, not its fields).
     refuseSecrets(args);
@@ -2449,6 +2469,7 @@ export class Hub extends EventEmitter {
         const a = this.q('SELECT signed_off FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
         if ((!a || a.signed_off) && !this.heldBy(p, agent).length) return { ok: true, handed_off: [] };
       }
+      if (op !== 'usage') this.throttleNames(p, agent, identity);
       // The runner posts a worker's usage after it exited: that's bookkeeping, not the agent being here.
       const presence = op === 'usage' ? null : this.touchAgent(p, agent, op === 'checkin' ? args : { model: args.model, client: args.client });
       // Arriving, or coming back, shows on the page; being seen again a minute later doesn't.
@@ -3944,6 +3965,12 @@ const AGENT_OPS = {
   },
 
   comment(p, agent, args) {
+    // History is kept for good, so the cap is on a day's agent comments (#831), not on all of them.
+    if (this.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'comment' AND at > ?`).get(p.id, this.now() - DAY).n >= LIMITS.commentsPerDay) {
+      throw new UserError(`${p.name} already has ${commas(LIMITS.commentsPerDay)} comments from the last day, the most a project takes`, {
+        status: 429, hint: 'Report on work you hold with progress instead, or comment again later: older comments stop counting after a day.',
+      });
+    }
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
     const item = args.item ? this.item(p, args.item) : null;
     this.event(p, { item, actor: agent, type: 'comment', headline, summary, detail });
@@ -4008,6 +4035,12 @@ const AGENT_OPS = {
       // in a project below "Run with it", never at all.
       if (replaced) notRetirable(p, replaced);
       if (replaced) this.q('UPDATE notes SET active = 0 WHERE id = ?').run(replaced.id);
+    }
+    // Counted after a replacement turns its note off, so replacing fits even at the cap (#831).
+    if (this.q(`SELECT COUNT(*) AS n FROM notes WHERE project_id = ? AND kind = 'learning' AND active = 1`).get(p.id).n >= LIMITS.fieldNotes) {
+      throw new UserError(`${p.name} already has ${LIMITS.fieldNotes} field notes, the most a project holds`, {
+        status: 429, hint: 'Replace one that says the same thing (learn with replaces), or have the ones whose lesson is built in retired: where a person retires notes, ask them one question listing which and why.',
+      });
     }
     const r = this.q(`INSERT INTO notes (project_id, item_id, kind, author, body, at) VALUES (?, ?, 'learning', ?, ?, ?)`)
       .run(p.id, item?.id ?? null, agent, text, this.now());
