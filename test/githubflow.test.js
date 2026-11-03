@@ -348,7 +348,9 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     // Naming a2's branch in a submit doesn't make it a1's item's branch; the hint says why.
     const sub = await op('a1', 'submit', { item: one.job.item, headline: `Done on ${two.job.branch}`, evidence: [{ label: `branch ${two.job.branch}` }] });
     assert.equal(item(mine.seq).branch, one.job.branch, 'the item keeps its own branch');
+    // Whether or not a steer waits, and whether or not the hub's mirror could be read yet (#800).
     assert.match(sub.hint, new RegExp(`${two.job.branch} is ${seqTwo}'s branch, so ${one.job.item} keeps ${one.job.branch}`));
+    if (sub.steers?.length) assert.match(sub.hint, /^The human has steered you; read it, adjust, then ack\. /, 'steering leads');
   });
 
   test('a delivery not signed with the app\'s secret changes nothing; ping answers; an unknown repository reaches no project', async () => {

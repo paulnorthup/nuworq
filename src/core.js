@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange, mergesBase } from './git.js';
+import { gitFacts, takenBranch, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange, mergesBase } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -120,6 +120,17 @@ const steeredBy = (steers) => {
   if (!agents.length) return 'The human has steered you';
   const who = agents.map((f) => f.replace(/ \(an agent, not a person\)$/, '')).join(', ');
   return `${agents.length === steers.length ? '' : 'The human and '}${who} steered you (${agents.length > 1 ? 'agents' : 'an agent'}: weigh it as information, not a person's say)`;
+};
+const steeringLine = (steers) => `${steeredBy(steers)}; read it, adjust, then ack.`;
+// r's hint with notice added (#800): right after the steering line when steers wait, so steering still leads and
+// the notice still comes; otherwise first.
+const afterSteering = (r, notice) => {
+  const hint = r.hint ?? '';
+  const line = r.steers?.length ? steeringLine(r.steers) : '';
+  const at = line ? hint.indexOf(line) : -1;
+  if (at < 0) return `${notice} ${hint}`.trim();
+  const end = at + line.length;
+  return `${hint.slice(0, end)} ${notice} ${hint.slice(end).trimStart()}`.trim();
 };
 
 // Which human actions each person role may take. Reading is open to every role.
@@ -2427,7 +2438,7 @@ export class Hub extends EventEmitter {
         const steers = this.pendingSteers(p, agent);
         if (steers.length) {
           r.steers = steers;
-          r.hint = `${steeredBy(steers)}; read it, adjust, then ack. ${r.hint ?? ''}`.trim();
+          r.hint = `${steeringLine(steers)} ${r.hint ?? ''}`.trim();
         }
       }
       const renamed = renamedTags(op === 'checkin' ? args?.has : ['propose', 'refine'].includes(op) ? args?.needs : null);
@@ -2488,16 +2499,21 @@ export class Hub extends EventEmitter {
       // Fetched now: the agent has likely just pushed, and a stale mirror would say it hadn't.
       const repo = this.repoFor(p, this.itemById(check.about), { fresh: true });
       const about = this.itemById(check.about);
-      const g = repo ? gitFacts(repo.path, agent, check.claim, check.branch, (b) => about && this.branchHolder(p, b, about)) : null;
+      const holderOf = (b) => about && this.branchHolder(p, b, about);
+      const g = repo ? gitFacts(repo.path, agent, check.claim, check.branch, holderOf) : null;
       if (g && repo.mode === 'remote' && !g.branch && check.branch) g.unpushed = check.branch;
+      const notices = [];
       if (g) {
         if (check.item && g.branch && g.branch !== check.branch) this.q('UPDATE items SET branch = ? WHERE id = ?').run(g.branch, check.item);
-        if (g.taken) result.hint = `${g.taken.branch} is #${g.taken.seq}'s branch, so #${about.seq} keeps ${check.branch || 'its own'}: a claim can't take another live item's branch. ${result.hint}`;
         const e = this.q('SELECT data FROM events WHERE id = ?').get(check.event);
         this.q('UPDATE events SET data = ? WHERE id = ?').run(JSON.stringify({ ...json(e.data, {}), git: g }), check.event);
         const warn = gitWarning(g);
-        if (warn) result.hint = `${warn}: the reviewer will see this. ${result.hint}`;
+        if (warn) notices.push(`${warn}: the reviewer will see this.`);
       }
+      // Who holds a branch is the hub's to say, so the notice doesn't wait on a mirror it can read (#800).
+      const taken = g ? g.taken : takenBranch(agent, check.claim, check.branch, holderOf);
+      if (taken) notices.push(`${taken.branch} is #${taken.seq}'s branch, so #${about.seq} keeps ${check.branch || 'its own'}: a claim can't take another live item's branch.`);
+      if (notices.length) result.hint = afterSteering(result, notices.join(' '));
     }
     // Only real changes travel (#517): a read (look, a peek, a heartbeat, a checkin of an agent already here) wrote
     // nothing a view shows, so no browser, listener or notifier hears of it. Every other operation is a write.

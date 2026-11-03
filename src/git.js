@@ -128,6 +128,16 @@ export function itemBranch(item) {
   return `nuworq/${item.seq}-${short || 'work'}`;
 }
 
+// The branch a claim names that another live item holds (#759), as { branch, seq } of the item that kept it, or
+// null. It needs no repository (#800): who holds a branch is the hub's to say, so the notice survives a mirror the
+// hub can't read yet. own, holderOf: as for gitFacts.
+export function takenBranch(agent, claim, own = '', holderOf = () => null) {
+  const text = [claim.headline, claim.summary, ...(claim.evidence ?? []).map((e) => e.label)].join(' ');
+  const named = text.match(/\bnuworq\/[\w.@-]+/)?.[0];
+  const holder = named && ![own, `nuworq/${agent}`].includes(named) ? holderOf(named) : null;
+  return holder ? { branch: named, seq: holder.seq } : null;
+}
+
 // repo: the project's main checkout. agent: the submitter. own: the item's branch, if it has one. holderOf(branch):
 // the other live item that holds a branch, if any (#759): a branch named only in the claim is taken only when it is
 // no other item's, and `taken` says which item kept it. Returns null when there is no repo to ask.
@@ -138,15 +148,15 @@ export function gitFacts(repo, agent, claim, own = '', holderOf = () => null) {
   // The item's own branch first; then worker branches, nuworq/<agent>.
   const mine = [own, `nuworq/${agent}`];
   const named = text.match(/\bnuworq\/[\w.@-]+/)?.[0];
-  const holder = named && !mine.includes(named) ? holderOf(named) : null;
-  const branch = [...mine, holder ? null : named].find((b) => b && exists(repo, b)) ?? null;
+  const taken = takenBranch(agent, claim, own, holderOf);
+  const branch = [...mine, taken ? null : named].find((b) => b && exists(repo, b)) ?? null;
   const commits = branch && base
     ? (git(repo, 'log', '--format=%h%x09%s', '-n', String(MAX_COMMITS), `${base}..${branch}`) ?? '')
       .split('\n').filter(Boolean).map((l) => { const [hash, ...s] = l.split('\t'); return { hash, subject: s.join('\t') }; })
     : [];
   const behind = branch && base ? count(repo, `${branch}..${base}`) : 0;
   const missing = claimedHashes(claim).filter((h) => !exists(repo, h));
-  return { branch, base, commits, behind, missing, ...(holder ? { taken: { branch: named, seq: holder.seq } } : {}) };
+  return { branch, base, commits, behind, missing, ...(taken ? { taken } : {}) };
 }
 
 // One line for the human, or null when git has nothing to worry about.
