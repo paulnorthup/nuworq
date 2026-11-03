@@ -40,7 +40,7 @@ const dollars = (v) => { const x = Number(String(v ?? '').trim().replace(/^\$/, 
 
 // The one question (#776): how this machine pays, Enter taking what was detected (else an API key, the cautious
 // answer). Then, for an API key, the daily cap (budgetOf's question) and a per-worker cap. Returns { pays, usd,
-// args, lines }: usd for the hub's daily budget, args the run flags to install the runner with (--pays says where
+// args, lines }: usd for the hub's daily budget (null for none), args the run flags to install the runner with (--pays says where
 // its caps came from), lines what to tell the person. given: --pays and --budget, which answer their questions.
 export async function paysOf(mode, ask, detected, { pays: named, budget } = {}) {
   const guess = detected?.pays ?? 'api';
@@ -59,8 +59,10 @@ export async function paysOf(mode, ask, detected, { pays: named, budget } = {}) 
     lines.push(`Took ${PAID[pays]}${detected ? ` (${detected.why})` : ' (nothing said otherwise)'} with the suggested caps; connect again at a terminal to change them.`);
   }
   if (pays === 'subscription') {
-    const usd = dollars(budget) ?? BUDGET;
-    lines.push(`On a subscription, Claude's usage windows are the limit, not dollars: each worker stops after ${SUB_MINUTES} minutes, with no dollar cap (--max-minutes ${SUB_MINUTES}).`);
+    // No hub budget either (usd null), unless --budget asks for one: claude reports an API-equivalent cost even on a
+    // subscription, and a hub budget would stop the runner on dollars nobody pays.
+    const usd = dollars(budget);
+    lines.push(`On a subscription, Claude's usage windows are the limit, not dollars: each worker stops after ${SUB_MINUTES} minutes, ${usd ? `and the hub stops starting them after $${usd} a day (--budget)` : 'with no dollar cap and no daily budget on the hub'} (--max-minutes ${SUB_MINUTES}).`);
     return { pays, usd, args: ['--pays', pays, '--max-minutes', String(SUB_MINUTES), '--worker-usd', '0'], lines };
   }
   const usd = await budgetOf(mode, ask, budget);
@@ -121,7 +123,7 @@ export async function chooseProject({ projects, named, remote, root, mode, ask, 
 
 // The questions, in order. project: { slug, name, runner } (runner: already staffed); folder: its clone here, or null with clone: the command that
 // makes it. plugin: whether Claude Code has the nuworq plugin (its commands are /nuworq:…, else /nuworq-…).
-// actions: staff(project, budget) and installRunner(args, runner) return lines to print (args: the run flags with
+// actions: staff(project, budget) (budget null: none) and installRunner(args, runner) return lines to print (args: the run flags with
 // its caps; runner: the one installed here, to keep its other flags); installed() is that runner ({ args, cwd,
 // tokenFile }) or null; startOperator() hands the terminal to Claude Code (last, as it returns only when the session
 // ends). detected: detectPays's answer; pays: --pays. Returns what was done: { staffed, operator }.
@@ -140,6 +142,9 @@ export async function finishSetup({ mode, ask, say, project, folder, clone, plug
       say(`${name} is already staffed, and this machine's runner starts its workers.`);
       const caps = await paysOf(mode, ask, detected, { pays, budget });
       try {
+        // The hub's daily budget follows the answer too: cleared for a subscription, the daily cap for an API key.
+        // Unknown (a hub that doesn't list it): staffed again, so what the person is told holds.
+        if (project.run_budget === undefined || project.run_budget !== caps.usd) for (const l of await actions.staff(project, caps.usd)) say(l);
         for (const l of await actions.installRunner(caps.args, installed)) say(l);
         for (const l of caps.lines) say(l);
       } catch (e) { say(`Couldn't change the runner's caps: ${e.message}${e.hint ? ` (${e.hint})` : ''}`); }
@@ -153,7 +158,7 @@ export async function finishSetup({ mode, ask, say, project, folder, clone, plug
       out.staffed = true;
     } catch (e) {
       say(`Couldn't staff ${name}: ${e.message}${e.hint ? ` (${e.hint})` : ''}`);
-      say(`Later: nuworq staff ${project.slug} --budget ${caps.usd}`);
+      say(`Later: nuworq staff ${project.slug} ${caps.usd ? `--budget ${caps.usd}` : '--pays subscription'}`);
     }
   } else {
     say(`Later: nuworq staff ${project.slug}   (in ${folder ?? 'its clone'})`);

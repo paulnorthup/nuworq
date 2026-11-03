@@ -1421,8 +1421,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const b = await body(req);
         const p = hub.project(String(b.project ?? ''));
         if (caller.scope && !caller.scope.includes(p.slug)) return deny(403, `this token can't reach ${p.slug}`, 'Connect with a token for that project.');
-        const budget = Math.round(Number(b.budget) * 100) / 100;
-        if (!(budget > 0)) throw new UserError('budget is dollars per day, more than 0', { hint: 'e.g. 20.' });
+        // budget: null staffs it with no daily budget (#776): a machine on a Claude subscription, whose usage windows limit it.
+        const budget = b.budget === null ? null : Math.round(Number(b.budget) * 100) / 100;
+        if (budget !== null && !(budget > 0)) throw new UserError('budget is dollars per day, more than 0, or null for none', { hint: 'e.g. 20.' });
         // No logins, or a person whose role may change settings: done.
         if (who.role !== 'agent') {
           if (!PERSON_CAN[personRole]?.includes('settings')) return deny(403, `a ${personRole} can't staff projects`, 'Ask an owner of this workspace.');
@@ -1572,7 +1573,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Agents get only what a worker needs to find its checkout, for the projects their token may reach.
       if (req.method === 'GET' && path === '/api/projects' && who.role === 'agent') {
         return send(200, hub.projects().filter((p) => !caller.scope || caller.scope.includes(p.slug))
-          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner, sandbox_hosts: JSON.parse(p.sandbox_hosts || '[]'), worker_commands: JSON.parse(p.worker_commands || '[]'), operators: liveOperators(hub, p) })));
+          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner, run_budget: p.run_budget ?? null, sandbox_hosts: JSON.parse(p.sandbox_hosts || '[]'), worker_commands: JSON.parse(p.worker_commands || '[]'), operators: liveOperators(hub, p) })));
       }
       if (req.method === 'GET' && path === '/api/projects' && url.searchParams.get('archived')) {
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));

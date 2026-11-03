@@ -170,7 +170,11 @@ describe('connect asks how this machine pays for Claude, and sets the caps to fi
     assert.equal(p.asked.length, 2, 'an unclear answer is asked again once; then no dollar questions');
     assert.deepEqual(r.args, ['--pays', 'subscription', '--max-minutes', String(SUB_MINUTES), '--worker-usd', '0']);
     assert.ok(!r.args.includes('--max-usd'));
-    assert.match(r.lines.join('\n'), /usage windows are the limit, not dollars: each worker stops after 60 minutes, with no dollar cap/);
+    assert.match(r.lines.join('\n'), /usage windows are the limit, not dollars: each worker stops after 60 minutes, with no dollar cap and no daily budget on the hub/);
+    assert.equal(r.usd, null, 'no hub budget either: claude reports a cost even on a subscription');
+    const kept = await paysOf('yes', null, null, { pays: 'subscription', budget: '40' });
+    assert.equal(kept.usd, 40, '--budget still asks for one');
+    assert.match(kept.lines.join('\n'), /the hub stops starting them after \$40 a day/, 'and says so');
     const sub = await paysOf('ask', person('').ask, { pays: 'subscription', why: 'claude is signed in to Claude Pro' });
     assert.equal(sub.pays, 'subscription', 'Enter takes the detected subscription');
   });
@@ -189,9 +193,12 @@ describe('connect asks how this machine pays for Claude, and sets the caps to fi
   test('connecting again to a staffed project with a runner here asks only how it pays, and replaces its caps', async () => {
     const m = machine({ installed: { args: ['--workers', 'auto', '--max-minutes', '90', '--worker-usd', '25'], cwd: '/src' } });
     const p = person('s', 'n');
-    await finishSetup({ mode: 'ask', ask: p.ask, say: m.say, project: { ...app, runner: true }, folder: '/src/app', actions: m.actions });
+    await finishSetup({ mode: 'ask', ask: p.ask, say: m.say, project: { ...app, runner: true, run_budget: 20 }, folder: '/src/app', actions: m.actions });
     assert.match(p.asked[0], Q);
-    assert.deepEqual(ran(m.log), ['reinstall runner --pays subscription --max-minutes 60 --worker-usd 0']);
+    assert.deepEqual(ran(m.log), ['staff app null', 'reinstall runner --pays subscription --max-minutes 60 --worker-usd 0'], "the hub's daily budget is cleared too");
+    const same = machine({ installed: { args: [] } });
+    await finishSetup({ mode: 'ask', ask: person('a', '', '', 'n').ask, say: same.say, project: { ...app, runner: true, run_budget: 20 }, folder: '/src/app', actions: same.actions });
+    assert.deepEqual(ran(same.log), ['reinstall runner --pays api --max-minutes 90 --worker-usd 10 --max-usd 20'], 'a hub budget that already fits is left alone');
     assert.match(said(m.log), /^App is already staffed, and this machine's runner starts its workers\.$/m);
     const off = machine({ installed: { args: [] } });
     await finishSetup({ mode: 'no', ask: null, say: off.say, project: { ...app, runner: true }, folder: '/src/app', actions: off.actions });
@@ -209,7 +216,7 @@ describe('connect asks how this machine pays for Claude, and sets the caps to fi
   });
 });
 
-function request(port, method, path,{ headers = {}, body } = {}) {
+function request(port, method, path, { headers = {}, body } = {}) {
   const data = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, method, path, headers: { ...(data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {}), ...headers } }, (res) => {
@@ -272,6 +279,10 @@ describe('a machine asks to staff a project (POST /api/staff, #490)', () => {
     assert.equal((await call('POST', '/api/staff', 'bea', { project: 'other', budget: 5 })).status, 403);
     assert.deepEqual((await call('POST', '/api/staff', 'own', { project: 'other', budget: 5 })).json, { ok: true, staffed: true });
     assert.deepEqual([ctx.hub.project('other').runner, ctx.hub.project('other').run_budget], [1, 5]);
+    // A subscription (#776): budget null staffs it with no daily budget, also clearing one already set.
+    assert.deepEqual((await call('POST', '/api/staff', 'own', { project: 'other', budget: null })).json, { ok: true, staffed: true });
+    assert.deepEqual([ctx.hub.project('other').runner, ctx.hub.project('other').run_budget], [1, null]);
+    assert.deepEqual(ctx.hub.staffing(ctx.hub.project('other')).budget, null, 'no budget for runners to stop on');
   });
 });
 

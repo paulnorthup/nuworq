@@ -43,7 +43,7 @@ export const COMMANDS = [
       'You approve a code in the browser, and the hub is saved in ~/.nuworq/connect.json, which only you can read. The CLI, the MCP server and nuworq run use it from then on; NUWORQ_URL and NUWORQ_TOKEN still win.',
       'Claude Code without the nuworq plugin for your account: connect offers to install it first. With it, connect offers to remove what an earlier nuworq left beside it (old skills, a second server). Undo all of it with nuworq disconnect.',
       "Then, one at a time: staff the project this folder is a clone of with workers here (nuworq staff), and start an operator (operator --start). --yes or --no answers each without asking; with no terminal, it's no.",
-      "Staffing asks how this machine pays for Claude, Enter taking what it detects (ANTHROPIC_API_KEY, or claude auth status). An API key: a cap per worker and a daily cap (--worker-usd, --max-usd). A subscription: minutes, not dollars (--max-minutes 60), since its usage windows are the limit. --yes takes the detected answer with these values. Connect again to change them: nuworq run's start line names the caps and where they came from.",
+      "Staffing asks how this machine pays for Claude, Enter taking what it detects (ANTHROPIC_API_KEY, or claude auth status). An API key: a cap per worker and a daily cap (--worker-usd, --max-usd). A subscription: minutes, not dollars (--max-minutes 60), and no daily budget on the hub, since its usage windows are the limit. --yes takes the detected answer with these values. Connect again to change them: nuworq run's start line names the caps and where they came from.",
     ],
   },
   {

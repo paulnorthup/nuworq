@@ -52,9 +52,9 @@ answers each without asking; with no terminal, it's no.
 Staffing asks how this machine pays for Claude, Enter taking what it detects
 (ANTHROPIC_API_KEY, or claude auth status). An API key: a cap per worker and a
 daily cap (--worker-usd, --max-usd). A subscription: minutes, not dollars
-(--max-minutes 60), since its usage windows are the limit. --yes takes the
-detected answer with these values. Connect again to change them: nuworq run's
-start line names the caps and where they came from.
+(--max-minutes 60), and no daily budget on the hub, since its usage windows are
+the limit. --yes takes the detected answer with these values. Connect again to
+change them: nuworq run's start line names the caps and where they came from.
 ```
 
 ### nuworq up

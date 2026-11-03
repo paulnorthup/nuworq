@@ -61,7 +61,7 @@ export function setCaps(args = [], caps = []) {
   return [...out, ...caps];
 }
 
-const isAuto =(args = []) => args.some((a, i) => a === '--workers=auto' || (a === '--workers' && args[i + 1] === 'auto'));
+const isAuto = (args = []) => args.some((a, i) => a === '--workers=auto' || (a === '--workers' && args[i + 1] === 'auto'));
 
 // Each project's folder for its operator, as upPlan's clones (#617). An operator is attended and unsandboxed, so the
 // hub's word for a folder isn't enough (a hostile hub could name any folder here): its folder counts only when the

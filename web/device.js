@@ -33,8 +33,9 @@ async function check() {
   code.readOnly = true;
   staff = j.staff ?? null;
   // A staffing request (#490): the machine is connected already, and asks to start workers on one project.
+  // No budget (#776): the machine pays by Claude subscription, whose usage windows are the limit.
   lead.textContent = staff
-    ? `"${j.machine}" asks to staff ${staff.name ?? staff.project} with its workers, spending up to $${staff.budget} a day. Approving turns on staffing for ${staff.name ?? staff.project} with that daily budget. Only approve it if you just asked for this on that machine.`
+    ? `"${j.machine}" asks to staff ${staff.name ?? staff.project} with its workers, ${staff.budget != null ? `spending up to $${staff.budget} a day. Approving turns on staffing for ${staff.name ?? staff.project} with that daily budget.` : `on a Claude subscription, so with no daily dollar budget. Approving turns on staffing for ${staff.name ?? staff.project} and clears its daily budget.`} Only approve it if you just asked for this on that machine.`
     : `"${j.machine}" asks for an agent token in your name. ${canDo(j.role)} You answer for them. Only approve it if you just started this on that machine.`;
   go.textContent = staff ? `Staff ${staff.name ?? staff.project}` : `Approve ${j.machine}`;
   deny.hidden = false;
@@ -45,7 +46,7 @@ async function decide(approve) {
   try {
     const { ok, j } = await post('api/device/approve', { user_code: checked, approve });
     if (!ok) return show([j.error, j.hint].filter(Boolean).join('. '));
-    if (staff) done(approve ? `Approved. ${staff.name ?? staff.project} is staffed, up to $${staff.budget} a day; ${j.machine} installs its runner now. You can close this page.` : `Denied. ${staff.name ?? staff.project} isn't staffed.`);
+    if (staff) done(approve ? `Approved. ${staff.name ?? staff.project} is staffed, ${staff.budget != null ? `up to $${staff.budget} a day` : 'with no daily dollar budget'}; ${j.machine} installs its runner now. You can close this page.` : `Denied. ${staff.name ?? staff.project} isn't staffed.`);
     else done(approve ? `Approved. ${j.machine} is connected as ${j.token_name}; you can close this page.` : `Denied. ${j.machine} gets no token.`);
   } catch {
     show("Can't reach the hub.");

@@ -271,11 +271,21 @@ async function operatorLaunch(has = null) {
 
 // Staff a project with workers on this machine, up to a daily budget (#490): the hub turns staffing on, at once
 // on a hub without logins, else once an owner approves it in the browser. Returns the lines to print.
+// budget null (#776, a subscription): no daily budget; a hub too old for that keeps $20 a day, and says so.
 async function staffProject(project, budget, flags) {
   const client = createClient(flags);
-  const r = await client.post('/api/staff', { project: project.slug, budget, machine: hostname().split('.')[0] });
   const name = project.name ?? project.slug;
-  const done = `${green('●')} Staffed ${bold(name)}: its workers may spend up to $${budget} a day (change it in ${name}'s Settings).`;
+  const ask = (usd) => client.post('/api/staff', { project: project.slug, budget: usd, machine: hostname().split('.')[0] });
+  let r;
+  let done = budget == null
+    ? `${green('●')} Staffed ${bold(name)} with no daily dollar budget: Claude's usage windows limit its workers (set one in ${name}'s Settings).`
+    : `${green('●')} Staffed ${bold(name)}: its workers may spend up to $${budget} a day (change it in ${name}'s Settings).`;
+  try { r = await ask(budget); } catch (e) {
+    if (budget != null || !/budget is dollars per day/.test(e.message)) throw e;
+    const { BUDGET } = await import('../src/setup.js');
+    r = await ask(BUDGET);
+    done = `${green('●')} Staffed ${bold(name)}, but this hub is too old to staff it with no daily budget: it stops starting workers after $${BUDGET} a day of what claude reports. To clear it: on the hub, ${name}'s Settings, Staffing, empty "Daily budget", Save.`;
+  }
   if (r.staffed) return [done];
   console.log(`To staff ${name}, an owner approves it at ${bold(r.verify_url_complete)} (the code ${bold(r.user_code)}). It expires in ${Math.round(r.expires_in / 60)} minutes.`);
   if (process.stdout.isTTY && !flags['no-browser']) {
