@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.0.0 (2026-11-03)
+
+nuworq v1.0.0: audited end to end, then made usable, bug-free, reliable, secure, efficient and polished, true to its claims, and open source (#675). The audit's ten reports are in docs/audit/, and their re-check in docs/audit/recheck/. Nearly all of the push shipped in 0.8.0 through 0.11.0; this entry sums it up by area, then says what is new since v0.11.0.
+
+**Usable and polished**
+
+- One word, one meaning, and one name per step of getting going; the app never says "organization" for a workspace (#707, #708, #709)
+- Phones: Needs you's first card is on the first screen, commands wrap only at spaces, and widening the window keeps the project page whole (#711, #716, #747)
+- Dark and light: the chosen settings stand out, off switches read as off, and form errors sit at their field (#717, #718, #748)
+- Questions are easy to find by number, and a question waiting for an operator shows its steps (#710, #712)
+- Feedback arrives grouped, with a suggested call (#688)
+
+**Bug-free and reliable**
+
+- Lifecycle: Done means landed; only an item's own branch merging marks it done; cycles in dependencies are refused (#706, #727, #730)
+- Landing: sending back or dropping stops auto-merge; a handed-off land job keeps the accepted review; PR opening and CI failures are retried and noticed (#726, #729, #742, #743, #827)
+- A background error no longer stops the hub; GitHub calls back off; a hung GitHub fails a push in seconds; the follower restarts a stuck hub (#738, #739, #740, #741)
+- A stuck worker gives its item back, and work that keeps killing its worker reaches a person (#734, #736)
+- A release redraft keeps a person's edits and the version they set, and the next draft carries the next version (#735, #737)
+
+**Secure and hardened**
+
+- Workspaces always keep an owner, and a removed name starts clean (#728, #732, #749)
+- A branch can't be taken over by naming it; releases read GitHub only through their own workspace's installation (#758, #759)
+- Limits on agents' text fields and write rates, counted per token; a runaway worker's spend counts while it runs; daily budgets stop claims (#761, #762, #765, #766, #831, #851)
+- Workers run only the project's checks by default, and can't read the release key's folder (#768, #850)
+- A person's data can be deleted as the privacy policy promises (#769)
+- Releases are signed by the GitHub workflow once the maintainer approves them, and the Mac signer retires; signing by hand runs only code from a signed release (#473, #815, #836)
+
+**Efficient**
+
+- Workers load only the tools they use; live updates at 30s send only what 30s shows (#678, #750)
+- Turns per job are recorded, and landing costs cents (#751, #752)
+
+**Open source**
+
+- The repository's release branch, tags and outside contributors' workflows are guarded on GitHub (#757)
+- The README is a front page for people, and the docs describe v1.0.0 as shipped (#808, #685)
+- Nothing in the repository names its maintainer (#817)
+- nuworq.com's privacy and terms pages say only what the hub does (#828)
+
+**New since v0.11.0**
+
+- A person can set a release's version, such as 1.0.0 on 0.x, and a redraft keeps it (#679)
+- The re-check's reports record that no critical or high finding or claim is left (#679, docs/audit/recheck/)
+
+**Upgrade notes**
+
+- From 0.9.0 or earlier: the Mac release signer and its service are gone (#815, shipped in 0.10.0). Approve each release on GitHub (the release workflow's `release` environment). If a Mac still runs the signer service, remove it as docs/DEPLOY.md says (`launchctl bootout gui/$(id -u)/com.nuworq.signer`, then delete its plist).
+- Agents get a hint instead of a write when a text field is over its limit or they write too fast (#765, #766, shipped in 0.9.0); since 0.11.0 the write limits count per token, not per agent name (#831, #851). Shorten long fields or slow down.
+- Workers run only test, lint, check, typecheck and build by default (#768, shipped in 0.9.0): add others under the project's Settings → Worker commands.
+
 ## 0.11.0 (2026-11-03)
 
 What landed since v0.10.0.
