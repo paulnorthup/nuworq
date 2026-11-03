@@ -186,8 +186,7 @@ async function operatorCmd(flags) {
 ${operatorStart(flags.has ? has : null)}
 
 ${flags.has ? `It declares ${has.join(', ')}.` : `Capabilities are optional: left out, it detects what this session can do (see nuworq operator --detect).`}
-It works until nothing waits, then stays idle and listens: each new operator item, operator question or answer
-starts a turn on its own. No /loop. ${dim('nuworq operator --start opens it for you, with its routine commands allowed.')}${dim(` (Without the nuworq plugin: ${operatorStart(flags.has ? has : null, { plugin: false })}.)`)}`);
+It works whenever something needs it, and waits for free when there's nothing to do. No /loop. ${dim('nuworq operator --start opens it for you, with its routine commands allowed.')}${dim(` (Without the nuworq plugin: ${operatorStart(flags.has ? has : null, { plugin: false })}.)`)}`);
 }
 
 const OPERATOR_FILE = join(dataDir(), 'operator.json');
