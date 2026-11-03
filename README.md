@@ -29,7 +29,7 @@ Three sessions, each where it works best. It's how nuworq itself is built. Start
    nuworq run --install --workers auto
    ```
 
-2. **Start an operator.** An operator in a terminal manages the workers and keeps things moving: it answers their questions, lands work, and does what workers can't. It asks you only what only you can do. Its listener starts a turn each time something waits for it. In a terminal of its own, those turns never interrupt the conversation you're having with the shaper. In the project's folder, run `claude`, then type `/nuworq:operator` (`nuworq operator --start` does both).
+2. **Start an operator.** An operator in a terminal is Claude Code acting with your access, for the work workers aren't allowed to do: it answers the questions workers send it, lands their work, and runs the steps on real systems. It asks you only for what it can't do itself. It works whenever something needs it, and in its own terminal that never interrupts your conversation with the shaper. `nuworq up` starts one for each project that doesn't have one yet. Or, in the project's folder, run `claude`, then type `/nuworq:operator` (`nuworq operator --start` does both).
 
 3. **Shape work with a shaper.** A shaper in the Claude Code app talks through what you want, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you. It's the session you read and talk in, and the app is made for reading and talking. Open the project's folder in the Claude Code app's Code tab, then type `/nuworq:shaper`.
 
@@ -175,7 +175,7 @@ You can also set channels up in the UI, under **Notifications** in the left rail
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.
 
 ### Operators (so "Needs you" is only decisions)
-Much of what used to reach you needed a capable session, not a decision: running `claude`, the project's live infrastructure, GitHub admin, a real browser. An **operator** does that: an attended Claude Code session in the project folder, running with your permissions and safety checks.
+Much of what used to reach you needed a capable session, not a decision: running `claude`, the project's live infrastructure, GitHub admin, a real browser. An **operator** does that: a Claude Code session you keep open in the project folder, acting with your access and safety checks.
 - It checks in with `has: ["operator", …]` plus the capabilities it really has: `claude-cli`, `infra`, `github-admin`, `browser`. `infra` is the live infrastructure of the project the session checked in to: servers and VMs, DNS, cloud accounts and deploys. Items whose `needs` include `operator`, `claude-cli`, `infra` or `github-admin` are offered only to it. (`nuworq-infra` and `homelab-vm`, the old names, are still accepted and stored as `infra`.)
 - Agents ask questions about running things, permissions or verifying on real infrastructure with `to: "operator"`; the operator answers them instead of you.
 - It escalates to you only when its own safety check needs your approval (risky or irreversible actions, product judgment): one precise question, with the evidence attached.

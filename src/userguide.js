@@ -171,10 +171,10 @@ export const ESSENTIALS = [
   },
   {
     // Not "operator": that id is The setup that works' Start an operator, which Get started's How? opens (#592).
-    key: 'the-operator', title: 'The operator', glance: 'An attended agent with your permissions, for what workers can\'t do.',
+    key: 'the-operator', title: 'The operator', glance: 'A Claude Code session you keep open, for the work workers aren\'t allowed to do.',
     body: [
-      'Workers can\'t touch live infrastructure, sign releases or administer GitHub. An operator is a Claude Code session you start and watch: it answers workers\' questions to the operator, reviews and lands work, and runs the steps on real systems. It asks you only what only you can do.',
-      'Start it as in The setup that works: Claude Code in a terminal of its own. `nuworq operator --project <project>` prints the `/nuworq:operator` line ("/nuworq-operator" without the plugin) to paste into Claude Code in the project\'s folder; it runs nothing itself.',
+      'Workers run on their own, so they can\'t change live servers, sign releases or change GitHub settings. The operator can: it\'s Claude Code in a terminal you can see, acting with your access. It answers the questions workers send it, lands their work, and runs the steps on real systems. It asks you only for what it can\'t do itself, like approving a release.',
+      '`nuworq up` starts one for each of your projects that doesn\'t have one yet. To start one yourself, open a terminal in the project\'s folder, run `claude`, then type `/nuworq:operator` (`/nuworq-operator` if you didn\'t install the plugin).',
     ],
   },
 ];

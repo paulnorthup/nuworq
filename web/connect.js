@@ -73,10 +73,11 @@ export const SETUP = [
   },
   {
     key: 'operator', title: 'Start an operator', name: 'An operator', where: 'in a terminal',
-    does: 'manages the workers and keeps things moving: it answers their questions, lands work, and does what workers can\'t. It asks you only what only you can do.',
-    why: 'Its listener starts a turn each time something waits for it. In a terminal of its own, those turns never interrupt the conversation you\'re having with the shaper.',
-    // Without the plugin (declined, or no access to the repository yet), connect writes it as /nuworq-operator (#492).
-    how: 'In the project\'s folder, run `claude`, then type `/nuworq:operator` (or "/nuworq-operator" without the plugin)',
+    does: 'is Claude Code acting with your access, for the work workers aren\'t allowed to do: it answers the questions workers send it, lands their work, and runs the steps on real systems. It asks you only for what it can\'t do itself.',
+    why: 'It works whenever something needs it, and in its own terminal that never interrupts your conversation with the shaper.',
+    // nuworq up first (#797), then by hand. Without the plugin (declined, or no access to the repository yet), connect
+    // writes it as /nuworq-operator (#492).
+    how: '`nuworq up` starts one for each project that doesn\'t have one yet. Or, in the project\'s folder, run `claude`, then type `/nuworq:operator` (or "/nuworq-operator" without the plugin)',
   },
   {
     key: 'shaper', title: 'Shape work with a shaper', name: 'A shaper', where: 'in the Claude Code app',

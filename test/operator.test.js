@@ -107,7 +107,11 @@ describe('questions to an operator', () => {
     assert.deepEqual(lines.map((a) => a.kind).sort(), ['operator-missing', 'question']);
     const line = lines.find((a) => a.kind === 'operator-missing');
     assert.equal(line.headline, '1 question waits for an operator; none connected');
-    assert.match(line.why, /operator session/);
+    // #797: plain words, and how to start one, nuworq up first.
+    assert.match(line.why, /a Claude Code session someone keeps open, acting with their access/);
+    assert.ok(line.why.indexOf('`nuworq up`') < line.why.indexOf('`claude`') && line.why.indexOf('`claude`') < line.why.indexOf('`/nuworq:operator`'));
+    const card = lines.find((a) => a.kind === 'question');
+    for (const t of [line.why, card.why]) assert.doesNotMatch(t, /attended|says how/, t);
     assert.equal(line.guide, 'guide#operator', "the guide's Start an operator, not the agents' protocol");
     assert.equal(homeView(hub).needs.length, 2);
 

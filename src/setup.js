@@ -167,7 +167,7 @@ export async function finishSetup({ mode, ask, say, project, folder, clone, plug
   const op = plugin ? '/nuworq:operator' : '/nuworq-operator';
   if (!folder) {
     say(`Once it's cloned: cd into it and run nuworq operator --start, to start an operator.`);
-  } else if (await yes(`Start an operator now? It opens Claude Code in ${folder} with ${op}: an attended session with your permissions that answers agents' questions, reviews and lands work. It uses your Claude account while there's work, and waits for free when there's none.`)) {
+  } else if (await yes(`Start an operator now? It opens Claude Code in ${folder} with ${op}: a session you keep open, acting with your access, that answers the questions workers send it and lands their work. It uses your Claude account while there's work, and waits for free when there's none.`)) {
     out.operator = true;
   } else {
     say(`Later: nuworq operator --start   (in ${folder})`);

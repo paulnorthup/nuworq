@@ -45,7 +45,7 @@ describe('nuworq operator', () => {
     const d = await run('--detect');
     assert.match(d.stdout, /^Declare: operator,/);
     assert.match(d.stdout, /✗ claude-cli: claude doesn't run here/, 'PATH holds no claude');
-    assert.match(d.stdout, /✓ infra: a person started this attended operator here/);
+    assert.match(d.stdout, /✓ infra: a person started this operator here, in a terminal they can see/);
     assert.match(d.stdout.trim().split('\n').at(-1), /^Operator: /);
     // Set as a person's confirmed change saves it (the command itself needs a terminal: below).
     const file = join(home, '.nuworq', 'operator.json');

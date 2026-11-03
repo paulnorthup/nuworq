@@ -173,7 +173,7 @@ async function operatorCmd(flags) {
     }
     console.log(now.without_infra ? `This machine declares no ${bold('infra')}: it can't reach ${project}'s live systems. Undo: nuworq operator --with infra`
       : now.infra_check ? `${bold('infra')} is declared only while ${bold(now.infra_check)} passes. Clear it: nuworq operator --infra-check ""`
-      : `${bold('infra')} is declared: a person starts this attended operator here.`);
+      : `${bold('infra')} is declared: a person starts this operator here, in a terminal they can see.`);
     return;
   }
   if (flags.detect) return detectCmd(flags);
@@ -186,8 +186,7 @@ async function operatorCmd(flags) {
 ${operatorStart(flags.has ? has : null)}
 
 ${flags.has ? `It declares ${has.join(', ')}.` : `Capabilities are optional: left out, it detects what this session can do (see nuworq operator --detect).`}
-It works until nothing waits, then stays idle and listens: each new operator item, operator question or answer
-starts a turn on its own. No /loop. ${dim('nuworq operator --start opens it for you, with its routine commands allowed.')}${dim(` (Without the nuworq plugin: ${operatorStart(flags.has ? has : null, { plugin: false })}.)`)}`);
+It works whenever something needs it, and waits for free when there's nothing to do. No /loop. ${dim('nuworq operator --start opens it for you, with its routine commands allowed.')}${dim(` (Without the nuworq plugin: ${operatorStart(flags.has ? has : null, { plugin: false })}.)`)}`);
 }
 
 const OPERATOR_FILE = join(dataDir(), 'operator.json');
