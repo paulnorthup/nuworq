@@ -73,6 +73,6 @@ describe('moving an item to another group, or out of one (#199)', () => {
     assert.match(app, /Part of <input data-draft="ei-parent"/);
     assert.match(app, /parent: val\('ei-parent'\)/);
     assert.match(MODE_RULES.shape, /refine it with parent \("" takes it out\)/);
-    assert.match(tools().find((t) => t.name === 'refine').inputSchema.properties.parent.description, /"" makes it top-level/);
+    assert.match(tools().find((t) => t.name === 'refine').description, /parent "": top-level/);
   });
 });

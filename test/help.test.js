@@ -74,9 +74,9 @@ describe('the CLI help comes from one table (#481)', () => {
       const first = op.description.match(/^.*?\.(?=\s|$)/)[0].replace(/\.$/, '');
       assert.equal(command(op.name).does, first.charAt(0).toLowerCase() + first.slice(1), op.name);
     }
-    // A flag reads its param: e.g. ask --assumption is the first sentence of assumption's description.
-    const assumption = OPS.find((o) => o.name === 'ask').params.assumption.description;
-    assert.equal(command('ask').flags.find(([f]) => f.startsWith('--assumption '))[1], assumption.charAt(0).toLowerCase() + assumption.slice(1).replace(/\.$/, ''));
+    // A flag reads its param: e.g. ask --assumption is the first sentence of assumption's description, and its limit.
+    const { description, maxLength } = OPS.find((o) => o.name === 'ask').params.assumption;
+    assert.equal(command('ask').flags.find(([f]) => f.startsWith('--assumption '))[1], `${description.charAt(0).toLowerCase() + description.slice(1).replace(/\.$/, '')}, at most ${maxLength.toLocaleString('en-US')} characters`);
   });
 
   test('help all is the full reference, and docs/CLI.md is generated from it', async () => {

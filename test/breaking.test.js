@@ -42,7 +42,8 @@ describe('the breaking flag (#398)', () => {
 
   test('propose and refine offer it in their schemas', () => {
     for (const name of ['propose', 'refine']) assert.ok(OPS.find((t) => t.name === name).params.breaking, name);
-    assert.match(OPS.find((t) => t.name === 'refine').params.breaking.description, /"" clears it/);
+    // refine says once, for every field, that "" clears it (#678).
+    assert.match(OPS.find((t) => t.name === 'refine').description, /"" or \[\] clears it/);
   });
 
   test('the drawer shows who must act when it ships', () => {

@@ -345,9 +345,9 @@ describe('date preconditions: work that waits for a day', () => {
     const pre = { kind: 'date', after: '2026-11-08' };
     assert.deepEqual(await check(pre, { now: Date.UTC(2026, 10, 7, 23, 59) }), { ok: false, detail: 'not 2026-11-08 yet' });
     assert.deepEqual(await check(pre, { now: Date.UTC(2026, 10, 8) }), { ok: true, detail: "it's 2026-11-08 or later" });
-    // Defined once (#529): propose carries the schema, refine refers to it.
-    const propose = tools('mcp').find((t) => t.name === 'propose').inputSchema.properties.precondition.properties;
-    assert.ok(propose.kind.enum.includes('date') && propose.after);
+    // The forms aren't in the tool definition (#678): a wrong one gets them back, the date form among them.
+    assert.match(tools('mcp').find((t) => t.name === 'propose').inputSchema.properties.precondition.description, /a wrong one gets the forms back/);
+    assert.throws(() => normPrecondition({ kind: 'someday' }), (e) => /kind: "date", after:/.test(e.hint));
   });
 
   test('a date: outside, asking no one and nothing, until the day; then ready on the sweep', async () => {

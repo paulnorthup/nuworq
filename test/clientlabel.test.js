@@ -101,7 +101,12 @@ describe('workers route through llm-proxy: opencode with --model proxy/<model>, 
     assert.equal(stdout, 't:gone', 'the shell hands Claude Code the token, under the one name it scrubs');
     const fromEnv = await workerCmd('claude', { home: freshHome(), vars: { NUWORQ_LLM_PROXY_URL: 'http://studio.local:4100/v1' }, extra: ['--proxy'] });
     assert.match(fromEnv, /ANTHROPIC_BASE_URL='http:\/\/studio\.local:4100\/anthropic'/, '--proxy alone takes NUWORQ_LLM_PROXY_URL');
-    assert.doesNotMatch(await workerCmd('claude', { home: freshHome(), vars }), /ANTHROPIC_BASE_URL/, 'without --proxy nothing changes');
+    const direct = await workerCmd('claude', { home: freshHome(), vars });
+    assert.doesNotMatch(direct, /ANTHROPIC_BASE_URL/, 'without --proxy nothing changes');
+    // #678: tool definitions load when first used, as said on the line (a runner started with it set keeps its value);
+    // through llm-proxy Claude Code's own default (off) stands.
+    assert.match(direct, /ENABLE_TOOL_SEARCH="\$\{ENABLE_TOOL_SEARCH:-true\}" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1/);
+    assert.doesNotMatch(out, /ENABLE_TOOL_SEARCH/);
   });
 
   test("codex: --proxy gives Codex a provider at llm-proxy's OpenAI route (Responses), keyed by the owner token", async () => {

@@ -1120,7 +1120,12 @@ function workerSetup(target, agent, flags, s, token = null) {
     // only the name Claude Code scrubs carries it.
     if (flags.proxy !== undefined) lines.push(`export ANTHROPIC_BASE_URL=${sq(`${proxyUrl(flags)}/anthropic`)} ANTHROPIC_AUTH_TOKEN="$NUWORQ_LLM_PROXY_TOKEN"`, 'unset NUWORQ_LLM_PROXY_TOKEN');
     // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: its shell, hooks and MCP servers start without Claude Code's own credentials (#616).
-    lines.push(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${budget}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts, landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
+    // ENABLE_TOOL_SEARCH (#678): nuworq's tool definitions load when first used, not all up front. Said here, so it
+    // holds whatever Claude Code's default; a runner started with it set keeps its value. Not through --proxy:
+    // there Claude Code keeps it off (the base URL isn't Anthropic's), and llm-proxy passing tool search on is
+    // unchecked, so those workers get the shorter definitions only.
+    const search = flags.proxy === undefined ? 'ENABLE_TOOL_SEARCH="${ENABLE_TOOL_SEARCH:-true}" ' : '';
+    lines.push(`${search}CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_CUSTOM_HEADERS=${headers} \\\n  claude -p ${sq(task)}${json}${budget}${model ? ` --model ${sq(model)}` : ''} \\\n  --mcp-config ${sq(mcp)} --strict-mcp-config \\\n  --settings ${sq(workerSettings({ hub: s.url, home, worktree, hosts, landsHere: !origin, tokenFile: tokenAt }, { own: !!flags.allow }))} --disable-slash-commands \\\n  --allowedTools ${sq(allow)}${browser ? ` \\\n  --disallowedTools ${sq(BROWSER_DENY)}` : ''}`);
   } else if (agent === 'opencode') {
     // Config goes in the environment, not an opencode.json the agent might commit. opencode takes its
     // folder from $PWD (cd keeps it right) and waits on a non-TTY stdin, hence < /dev/null.

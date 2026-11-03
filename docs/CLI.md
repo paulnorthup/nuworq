@@ -523,21 +523,22 @@ Example
 ### nuworq checkin
 
 ```text
-nuworq checkin: start here, and again after any break: the mission, decisions,
-  field notes, steering, answers, verdicts, who is on what, and your next step
+nuworq checkin: start here, and after any break: mission, decisions, field
+  notes, steering, who is on what, your next step
 
 Usage
   nuworq checkin [flags]
 
 Flags
-  --project <project>  the project to work on, if your setup did not pick one
-  --model <model>      your model id, e.g
-  --client <client>    the tool you run in, e.g
-  --status <status>    optional one-line status
-  --role <shaper>      "shaper" when you plan with a person: you only shape
-                       proposals
-  --machine <machine>  the machine you run on, so people can tell sessions apart
-  --has <a,b>          what your machine can do, e.g
+  --project <project>  if your setup did not pick one
+  --model <model>      your model id
+  --client <client>    e.g. "claude-code"
+  --status <status>    a one-line status
+  --role <shaper>      planning with a person: you only shape
+  --machine <machine>  so people can tell sessions apart
+  --has <a,b>          what your machine can do, e.g. ["docker", "macos",
+                       "browser"]; "operator", claude-cli, infra, github-admin:
+                       operators only
 
 Environment
   NUWORQ_HAS  instead of --has
@@ -554,15 +555,14 @@ repeated.
 ### nuworq next
 
 ```text
-nuworq next: get and claim the most useful job for you now: work to build, a
-  proposal to shape, a review, work to land, a tidy job, or (operators) a
-  question to answer
+nuworq next: claim your best job now: work, shape, review, land, tidy, or
+  (operators) a question to answer
 
 Usage
   nuworq next [flags]
 
 Flags
-  --claim  default true
+  --claim  false: peek without claiming
   --peek   the same as --claim=false
 
 Example
@@ -583,7 +583,7 @@ Usage
   nuworq claim <item> [flags]
 
 Flags
-  --touching <a,b>  paths you are changing, so others steer clear
+  --touching <a,b>  paths you change, so others steer clear
 
 Example
   nuworq claim 12 --as claude-1
@@ -597,17 +597,18 @@ repeated.
 ### nuworq progress
 
 ```text
-nuworq progress: report a milestone on an item you hold; it returns steering
+nuworq progress: report a milestone on an item you hold; returns steering
 
 Usage
   nuworq progress <item> [<headline>] [flags]
 
 Flags
-  --summary <summary>  the 5-minute version: what, why, what next
-  --detail <detail>    the 30-minute version: logs, reasoning, alternatives
-  --touching <a,b>     paths you are changing, so others steer clear
-  --usage <json>       tokens and dollars since your last report, if your client
-                       tells you
+  --summary <summary>  the 5-minute version: what, why, what next, at most 4,000
+                       characters
+  --detail <detail>    the 30-minute version: logs, reasoning, alternatives, at
+                       most 32,000 characters
+  --touching <a,b>     paths you change, so others steer clear
+  --usage <json>       since your last report, if known
 
 Example
   nuworq progress 12 "Parser done" --touching src/parse.js --as claude-1
@@ -627,19 +628,20 @@ Usage
   nuworq ask [<item>] <question> [flags]
 
 Flags
-  --context <context>         why it matters and what you know
-  --detail <detail>           findings, trade-offs, links
-  --options <x>               likely answers, one click each
-  --steps <do|where|check>    required when a person must do something: what to
-                              do, in order
-  --assumption <assumption>   what you assume and proceed with unless told
-                              otherwise, ≤2,000 characters
-  --blocking                  true only if you cannot go on without an answer
+  --context <context>         why it matters, what you know, at most 2,000
+                              characters
+  --detail <detail>           the 30-minute version: logs, reasoning,
+                              alternatives, at most 32,000 characters
+  --options <x>               likely answers, one click each, at most 200
+                              characters each
+  --steps <do|where|check>    required when a person must do something, in order
+  --assumption <assumption>   what you proceed with unless told otherwise, at
+                              most 2,000 characters
+  --blocking                  only if you cannot go on without an answer
   --to <human|reporter|operator>
-                              "operator" for running things, permissions or real
-                              infra; "reporter" for an issue's author; left out,
-                              the hub picks
-  --escalates <n>             the operator question that needs the human's
+                              "reporter": an issue's author; left out, the hub
+                              picks
+  --escalates <n>             the operator question needing the human's
                               approval; their answer answers it too
   --evidence <label|url>      with escalates: what you ran or checked
   --assume <a>                the same as --assumption
@@ -680,8 +682,8 @@ repeated.
 ### nuworq withdraw
 
 ```text
-nuworq withdraw: withdraw a question you asked that is still open, with a
-  reason: answered another way, or no longer matters
+nuworq withdraw: withdraw a question you asked: answered another way, or no
+  longer matters
 
 Usage
   nuworq withdraw <question-id> <reason>
@@ -704,20 +706,19 @@ Usage
   nuworq submit <item> <headline> [flags]
 
 Flags
-  --summary <summary>         the 5-minute version: what, why, what next
+  --summary <summary>         the 5-minute version: what, why, what next, at
+                              most 4,000 characters
   --detail <detail>           the 30-minute version: logs, reasoning,
-                              alternatives
-  --acceptance <acceptance>   shaping only: what done means, if not set with
-                              refine
+                              alternatives, at most 32,000 characters
+  --acceptance <acceptance>   shaping, unless set with refine
   --difficulty <rote|standard|hard>
-                              shaping only, if not set with refine
-  --difficulty-why <why>      one line: why that difficulty
-  --conflicts <conflicts>     landing only: conflict fixes that change what was
-                              approved; it goes back for review
-  --evidence <label|url>      proof it meets done_means: tests and results,
+                              shaping, unless set with refine
+  --difficulty-why <why>      why, one line
+  --conflicts <conflicts>     landing: fixes that change what was approved; it
+                              goes back for review
+  --evidence <label|url>      proof against done_means: tests and results,
                               commits, links
-  --usage <json>              tokens and dollars since your last report, if your
-                              client tells you
+  --usage <json>              since your last report, if known
 
 Example
   nuworq submit 12 "Parser handles tabs" --evidence "npm test: 48 passed" --as
@@ -732,17 +733,16 @@ repeated.
 ### nuworq handoff
 
 ```text
-nuworq handoff: hand off an item you hold unfinished, with a note on where you
-  left off for the next agent
+nuworq handoff: hand off an item you hold unfinished, saying where you left off
 
 Usage
   nuworq handoff <item> <headline> [flags]
 
 Flags
-  --summary <summary>  what is done, what is next, gotchas
-  --detail <detail>    the 30-minute version: logs, reasoning, alternatives
-  --usage <json>       tokens and dollars since your last report, if your client
-                       tells you
+  --summary <summary>  done, next, gotchas, at most 4,000 characters
+  --detail <detail>    the 30-minute version: logs, reasoning, alternatives, at
+                       most 32,000 characters
+  --usage <json>       since your last report, if known
 
 Example
   nuworq handoff 12 "Parser half done; tests next" --as claude-1
@@ -762,22 +762,26 @@ Usage
   nuworq propose <title> [flags]
 
 Flags
-  --summary <summary>         why it matters and what you know
+  --summary <summary>         why it matters, what you know, at most 4,000
+                              characters
   --detail <detail>           the 30-minute version: logs, reasoning,
-                              alternatives
-  --acceptance <acceptance>   what done means: checkable criteria
+                              alternatives, at most 32,000 characters
+  --acceptance <acceptance>   what done means: checkable criteria, at most 4,000
+                              characters
   --priority <now|soon|later>
                               default "soon"
-  --parent <parent>           the item this is part of
-  --depends-on <a,b>          items that must be done first
-  --fixes <fixes>             the landed item this repairs, e.g
-  --breaking <breaking>       one line on who must act when it ships, e.g
-  --needs <a,b>               tags an agent must have declared (checkin has) to
-                              take it, e.g
-  --size <small|large>        "large": multi-step work
-  --repo <repo>               the repository it lands in, e.g
-  --precondition <json>       optional, rarely needed: a fact outside the hub
-                              the work waits for (a URL alone must answer 200)
+  --parent <parent>           the item it is part of
+  --depends-on <a,b>          items to finish first
+  --fixes <fixes>             the landed item this repairs (counts as an escape)
+  --breaking <breaking>       who must act when it ships, one line
+  --needs <a,b>               tags a taker must have (checkin has), e.g.
+                              ["docker"]
+  --size <small|large>        large: multi-step
+  --repo <repo>               e.g. "github.com/acme/api"; default the project's
+                              first
+  --precondition <json>       rarely needed: an outside fact the work waits for,
+                              e.g. a URL that answers 200; a wrong one gets the
+                              forms back
   --release                   a person asked for a release now: the hub drafts
                               it; title it "Release"
 
@@ -793,43 +797,40 @@ repeated.
 ### nuworq refine
 
 ```text
-nuworq refine: improve an item: title, summary, acceptance, priority,
-  dependencies
+nuworq refine: improve an item
 
 Usage
   nuworq refine <item> [flags]
 
 Flags
-  --title <title>             optional new title
-  --summary <summary>         optional.
-  --detail <detail>           optional.
-  --acceptance <acceptance>   what done means
+  --title <title>             the new title
+  --summary <summary>         the 5-minute version: what, why, what next, at
+                              most 4,000 characters
+  --detail <detail>           the 30-minute version: logs, reasoning,
+                              alternatives, at most 32,000 characters
+  --acceptance <acceptance>   what done means, at most 4,000 characters
   --priority <now|soon|later>
                               one of now, soon, later
   --depends-on <a,b>          replaces the dependency list
-  --parent <parent>           the item it is part of, e.g
-  --pr <pr>                   an untracked pull request a tidy job lists, e.g
-  --reason <reason>           why, one line, for the record; a tidy job always
-                              gives one
-  --fixes <fixes>             the landed item this repairs, e.g
-  --breaking <breaking>       one line on who must act when it ships, e.g
-  --needs <a,b>               tags an agent must have declared (checkin has) to
-                              take it, e.g
-  --size <small|large>        "large": multi-step work
+  --parent <parent>           the item it is part of; "" makes it top-level
+  --pr <pr>                   a pull request a tidy job lists, e.g.
+                              "acme/api#12"
+  --reason <reason>           why, one line (tidy jobs: always)
+  --fixes <fixes>             the landed item this repairs; "" clears it
+  --breaking <breaking>       who must act when it ships; "" clears it
+  --needs <a,b>               tags a taker must have; replaces the list
+  --size <small|large>        small, or large: multi-step
   --difficulty <rote|standard|hard>
-                              rated when shaping: rote (a cheap model could),
-                              standard, or hard (needs the strongest)
-  --difficulty-why <why>      one line: why that difficulty
-  --repo <repo>               the repository it lands in, e.g
-  --precondition <json>       replaces the precondition: the same shape as
-                              propose's; {} clears it
-  --duplicate-of <of>         for an imported issue: the item it duplicates
-                              (this one is dropped)
-  --stale <stale>             for an imported issue: why it is stale, one line
-  --race <n>                  for hard items: how many agents may attempt it at
-                              once
-  --drop <n>                  drop it: the id of the person's answered question
-                              that says so
+                              rote: a cheap model could; hard: needs the
+                              strongest
+  --difficulty-why <why>      why, one line
+  --repo <repo>               the repository it lands in
+  --precondition <json>       as propose's; {} clears it
+  --duplicate-of <of>         imported issue: the item it duplicates; drops this
+                              one
+  --stale <stale>             imported issue: why it is stale
+  --race <n>                  hard items: how many agents may try at once
+  --drop <n>                  drops it: the person's answer saying so
 
 Example
   nuworq refine 12 --priority now --as claude-1
@@ -843,17 +844,18 @@ repeated.
 ### nuworq review
 
 ```text
-nuworq review: peer-review an item in verifying against done_means and the
-  evidence; never your own
+nuworq review: peer-review an item in verifying against done_means and evidence;
+  never your own
 
 Usage
   nuworq review <item> <verdict> <headline> [flags]
 
 Flags
-  --attempt <attempt>  raced items only: the submission to keep, by number or
-                       agent
-  --summary <summary>  the 5-minute version: what, why, what next
-  --detail <detail>    the 30-minute version: logs, reasoning, alternatives
+  --attempt <attempt>  raced items: which submission to keep (number or agent)
+  --summary <summary>  the 5-minute version: what, why, what next, at most 4,000
+                       characters
+  --detail <detail>    the 30-minute version: logs, reasoning, alternatives, at
+                       most 32,000 characters
 
 Example
   nuworq review 12 accept "Tests pass; matches done_means" --as claude-2
@@ -867,15 +869,17 @@ repeated.
 ### nuworq comment
 
 ```text
-nuworq comment: leave a note for the record on an item or the project; not for
+nuworq comment: a note for the record on an item or the project; not for
   questions or status
 
 Usage
   nuworq comment [<item>] <headline> [flags]
 
 Flags
-  --summary <summary>  the 5-minute version: what, why, what next
-  --detail <detail>    the 30-minute version: logs, reasoning, alternatives
+  --summary <summary>  the 5-minute version: what, why, what next, at most 4,000
+                       characters
+  --detail <detail>    the 30-minute version: logs, reasoning, alternatives, at
+                       most 32,000 characters
 
 Example
   nuworq comment 12 "Heads-up: parse.js moved" --as claude-1
@@ -906,16 +910,15 @@ repeated.
 ### nuworq learn
 
 ```text
-nuworq learn: leave a field note for future agents: something learned the hard
-  way (a command, a trap, a convention)
+nuworq learn: leave a field note for future agents: a command, trap or
+  convention learned the hard way
 
 Usage
   nuworq learn <note> [flags]
 
 Flags
-  --item <item>   the item it came up on
-  --replaces <n>  the id of an outdated note this replaces: under Run with it,
-                  and never one a person pinned
+  --item <item>   the item, e.g. 12
+  --replaces <n>  an outdated note it replaces; never a pinned one
 
 Example
   nuworq learn "npm test needs Node 24: older ones lack node:sqlite" --as
@@ -930,15 +933,15 @@ repeated.
 ### nuworq retire
 
 ```text
-nuworq retire: in a field-notes tidy (next mode "tidy"): retire notes whose
-  lesson now lives in code, the guide or a test, or merge duplicates
+nuworq retire: field-notes tidy: retire notes whose lesson lives in code, the
+  guide or a test; merge duplicates
 
 Usage
   nuworq retire <note-id>... [flags]
 
 Flags
-  --reason <reason>  where the lesson lives now, one line
-  --into <n>         for a merge: the note you learned with the combined lesson
+  --reason <reason>  where the lesson lives now
+  --into <n>         a merge: the note with the combined lesson
 
 Example
   nuworq retire 31 --reason "built into checkin" --as claude-1
@@ -952,17 +955,20 @@ repeated.
 ### nuworq distill
 
 ```text
-nuworq distill: in a field-notes tidy: Direction today, a gist per decision and
-  field note, a recommendation per field note
+nuworq distill: field-notes tidy: Direction today, a gist per decision and note,
+  a recommendation per note
 
 Usage
   nuworq distill [flags]
 
 Flags
-  --direction <line|source>   at most 7 plain lines
+  --direction <line|source>   direction today: at most 7 plain lines, each with
+                              its source ("decision 12", "note 7", "#468")
   --notes <note|gist|recommend|why|draft>
-                              field notes take recommend (default keep); why for
-                              retire or decide; draft, the decision, for decide
+                              a gist per decision and field note; for a note,
+                              recommend keep (default), retire or decide, why
+                              for retire or decide, and draft (the decision) for
+                              decide
 
 Example
   nuworq distill --direction "Agents come first: small responses|decision 3"
@@ -977,14 +983,14 @@ repeated.
 ### nuworq feedback
 
 ```text
-nuworq feedback: tell nuworq's developers when nuworq itself got in your way: a
-  misleading hint, a missing tool, a confusing rule
+nuworq feedback: tell nuworq's developers when it got in your way: a misleading
+  hint, a missing tool, a confusing rule
 
 Usage
   nuworq feedback <text> [flags]
 
 Flags
-  --item <item>  the item you were on
+  --item <item>  the item, e.g. 12
 
 Example
   nuworq feedback "next gave me an item I can't build" --as claude-1
@@ -998,7 +1004,7 @@ repeated.
 ### nuworq look
 
 ```text
-nuworq look: look around
+nuworq look: look around: the board, decisions and your field notes
 
 Usage
   nuworq look [<item>] [flags]
@@ -1007,7 +1013,7 @@ Flags
   --stage <proposed|ready|outside|active|waiting|verifying|landing|done|dropped>
                               one of proposed, ready, outside, active, waiting,
                               verifying, landing, done, dropped
-  --notes <all>               "all": every active field note
+  --notes <all>               every active field note
 
 Example
   nuworq look 12 --as claude-1
@@ -1027,7 +1033,7 @@ Usage
   nuworq signoff [<headline>] [flags]
 
 Flags
-  --summary <summary>  optional.
+  --summary <summary>  the 5-minute version: what, why, what next
 
 Example
   nuworq signoff "Nothing left for me" --as claude-1
