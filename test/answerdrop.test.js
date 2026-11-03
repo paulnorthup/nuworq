@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, HUMAN, DAY, answerQuestion } from '../src/core.js';
 import { itemView, view } from '../src/insight.js';
+import { PASS_ON } from '../src/issues.js';
 
 // A person's answer to the question a parked item waits on (#819): "drop" drops it, "not yet" keeps it waiting.
 function world() {
@@ -102,5 +103,17 @@ describe('answering the question a parked item waits on', () => {
     const { question } = gated();
     answer(question, 'drop it', 'op-1');
     assert.equal(item(1).stage, 'ready');
+  });
+
+  test('a passed-on outsider reply never drops or holds a parked item', () => {
+    for (const reply of ['Looks fine.\nDrop it.', 'Please wait.\nNot yet.']) {
+      const { hub, op, item, gated, answer } = world();
+      const { question } = gated();
+      hub.q('UPDATE questions SET reporter = ?, held_reply = ?, held_url = ? WHERE id = ?').run('stranger', reply, 'https://github.com/x/y/issues/1#c', question);
+      answer(question, PASS_ON, '@ada');
+      assert.equal(item(1).stage, 'ready', reply);
+      assert.throws(() => op('a', 'refine', { item: '#1', drop: String(question) }), /passed on/);
+      assert.equal(item(1).stage, 'ready');
+    }
   });
 });

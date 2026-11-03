@@ -115,6 +115,8 @@ function answerDrops(q, answer, item, { itself = false } = {}) {
   const refs = drops.flatMap((c) => [...c.matchAll(/#(\d+)(?:\s*[-–]\s*#?(\d+))?/g)].map((m) => [Number(m[1]), Number(m[2] ?? m[1])]));
   return refs.some(([a, b]) => item.seq >= a && item.seq <= b) || (q.item_id === item.id && drops.some((c) => !/#\d/.test(c)));
 }
+// An answer that is an outsider's held reply a person passed on (#471): their words quoted, not a decision (#839).
+const passedOn = (q) => !!q.held_reply && String(q.answer ?? '').startsWith(`@${q.reporter} replied on GitHub, and `);
 // An answer to an 'ask' precondition that keeps the item waiting (#819): its first clause a plain no or not yet.
 const notYet = (answer) => /^\s*(?:no|nope|not yet|not now|wait|later|hold|hold off|keep it waiting|keep waiting)\s*[!.]?\s*$/i
   .test(String(answer).split(/[;,\n]|\s[-–—]\s/)[0]);
@@ -1485,6 +1487,7 @@ export class Hub extends EventEmitter {
     const how = 'drop takes the id of a question a person answered with "drop" about this item, as checkin or next shows it.';
     if (!q) throw new UserError(`No question ${question}`, { status: 404, hint: how });
     if (q.status !== 'answered' || !isHuman(q.answered_by)) throw new UserError(`Question ${q.id} wasn't answered by a person`, { status: 403, hint: `Only a person decides to drop work. ${how}` });
+    if (passedOn(q)) throw new UserError(`The answer to question ${q.id} is a reply passed on from @${q.reporter}, not a person's decision`, { status: 403, hint: `Only a person's own words drop work. ${how}` });
     const named = answerDrops(q, q.answer, item);
     if (named == null) throw new UserError(`The answer to question ${q.id} doesn't say to drop anything ("${clip(q.answer, 60)}")`, { status: 403, hint: how });
     if (!named) throw new UserError(`The answer to question ${q.id} doesn't say to drop #${item.seq}`, { status: 403, hint: 'It must be asked on this item ("Drop it"), or name it beside the drop (e.g. "Drop #12" or "Drop #10-#14").' });
@@ -4354,7 +4357,8 @@ const HUMAN_OPS = {
     let text = str(answer);
     if (!text) throw new UserError('answer is required');
     // An outsider's held reply (#471), passed on by a person: the asker gets it as their words, quoted.
-    if (q.held_reply && text === PASS_ON) text = quotedFrom(`@${q.reporter} replied on GitHub, and ${by === HUMAN ? 'a person' : by} passed it on`, q.held_reply);
+    const passed = !!q.held_reply && text === PASS_ON;
+    if (passed) text = quotedFrom(`@${q.reporter} replied on GitHub, and ${by === HUMAN ? 'a person' : by} passed it on`, q.held_reply);
     if (!q.blocking && text.toLowerCase() === q.assumption.trim().toLowerCase()) {
       return HUMAN_OPS.confirm.call(this, p, { question }, by);
     }
@@ -4380,11 +4384,11 @@ const HUMAN_OPS = {
     }
     // The question a parked item waits on (#819), answered by a person: "drop" drops it, through the same rule and
     // record as refine with drop. An agent's answer never drops work.
-    const drops = item?.stage === 'waiting' && !!q.blocking && isHuman(by) && !!answerDrops(q, text, item, { itself: true });
+    const drops = item?.stage === 'waiting' && !!q.blocking && isHuman(by) && !passed && !!answerDrops(q, text, item, { itself: true });
     // The question an 'ask' precondition put: answering it is what passes the precondition, unless the answer
     // is "not yet": then it still waits, and is asked again no sooner than a day later.
     const waitsOn = !drops && item && json(item.last_check, {}).question === q.id;
-    const later = waitsOn && notYet(text);
+    const later = waitsOn && !passed && notYet(text);
     if (waitsOn) {
       const t = this.now();
       this.patch(item, { last_check: JSON.stringify({ at: t, ok: !later, detail: `you answered: ${clip(text, 100)}`, question: q.id, ...(later ? { again: t + DAY } : {}) }) });
