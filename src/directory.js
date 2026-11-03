@@ -230,6 +230,11 @@ export class Directory {
     return this.db.prepare('SELECT workspace FROM installations WHERE id = ?').get(Number(id))?.workspace ?? null;
   }
 
+  // The GitHub App installations bound to an organization: [id].
+  installationsOf(workspace) {
+    return this.db.prepare('SELECT id FROM installations WHERE workspace = ? ORDER BY id').all(workspace).map((r) => r.id);
+  }
+
   // Bind an installation to an organization. The first binding stands: an installation already bound to
   // another organization stays there (returns false).
   bindInstallation(id, workspace) {
@@ -293,7 +298,7 @@ export class Directory {
       this.db.prepare('UPDATE org_grants SET workspace = NULL WHERE workspace = ?').run(workspace);
       this.db.prepare('UPDATE billing SET workspace = NULL WHERE workspace = ?').run(workspace);
       this.db.prepare(`UPDATE feedback SET workspace = workspace || ' (removed)' WHERE workspace = ?`).run(workspace);
-      this.db.prepare('DELETE FROM settings WHERE key = ?').run(`adopted:${workspace}`);
+      for (const key of ['adopted', 'deleted']) this.db.prepare('DELETE FROM settings WHERE key = ?').run(`${key}:${workspace}`);
       this.db.exec('COMMIT');
     } catch (e) { this.db.exec('ROLLBACK'); throw e; }
   }

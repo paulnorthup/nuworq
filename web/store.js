@@ -29,7 +29,7 @@ export const FIELDS = {
   outcomes: [null, [M]],
   // who is looking, and the hub
   me: [null, [R, M, D]],
-  person: [null, [M]],
+  person: [null, [R, M]], // R: Workspace settings, for a workspace's owners (#799)
   info: [null, [R, D]],
   billing: [null, [R]],
   checkoutDone: [false, []], // just back from Stripe Checkout

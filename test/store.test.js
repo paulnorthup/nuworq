@@ -85,7 +85,7 @@ describe('the app state store (#600)', () => {
       projects: 'rail main', slug: 'rail main drawer', view: 'main drawer', views: '', loading: 'main', shellOnly: 'main', missing: 'main', listStale: '',
       pages: 'main', zoom: 'main drawer', home: 'main', homeFresh: '', gs: 'main', gsFresh: '',
       analytics: 'rail main', period: 'main', outcomes: 'main',
-      me: 'rail main drawer', person: 'main', info: 'rail drawer', billing: 'rail', checkoutDone: '', feedback: 'rail main', feedbackCtx: '',
+      me: 'rail main drawer', person: 'rail main', info: 'rail drawer', billing: 'rail', checkoutDone: '', feedback: 'rail main', feedbackCtx: '',
       notifyPerson: '', offline: '',
       itemRef: 'drawer', item: 'drawer', deep: 'drawer', editItem: 'drawer', editPre: 'drawer', prefetched: '',
       open: 'main drawer', reveal: 'main drawer', drafts: 'main drawer', composeKind: 'main', stage: 'main', addWork: 'main',

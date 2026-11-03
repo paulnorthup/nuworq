@@ -29,12 +29,15 @@ export function railHtml() {
       <a class="rail-item" href="guide"><span data-new="guide">Guide</span></a>
       <button class="rail-item kbd-hint" data-action="shortcuts"><span data-new="shortcuts"><kbd>?</kbd> Shortcuts</span></button>
       ${S.feedback?.on ? `<button class="rail-item" data-action="feedback"><span data-new="feedback">Feedback</span>${S.feedback.waiting ? `<span class="badge" title="${S.feedback.waiting.pieces} waiting for you: the home's line opens them">${S.feedback.waiting.pieces}</span>` : ''}</button>` : ''}
-      ${S.billing?.owner ? `<button class="rail-item" data-action="workspace-settings"><span class="name">Workspace settings</span>${S.billing.plans?.length ? '<span class="tag now">Upgrade</span>' : ''}</button>` : ''}
+      ${wsOwner() ? `<button class="rail-item" data-action="workspace-settings"><span class="name">Workspace settings</span>${S.billing?.plans?.length ? '<span class="tag now">Upgrade</span>' : ''}</button>` : ''}
       ${S.me?.auth === 'required' ? `<button class="rail-item" data-action="logout" title="Signed in as ${esc(S.me.name ?? '')}">Sign out</button>` : ''}
       ${appearance()}
       ${versionLine()}
     </div>`;
 }
+
+// Workspace settings are for a workspace's owners (#799), on any hub with workspaces, payments or not.
+export const wsOwner = () => !!S.billing?.owner || (!!S.me?.org && S.person?.role === 'owner');
 
 // Appearance (#485): Match device unless this browser chose Light or Dark (web/prefs.js themeNow).
 function appearance() {

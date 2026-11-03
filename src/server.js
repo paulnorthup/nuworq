@@ -19,7 +19,7 @@ import { securityUp } from './security.js';
 import { sweepMirrors } from './git.js';
 import { walkthrough } from './walkthrough.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
-import { syncAlerts, accessOf } from './alerts.js';
+import { syncAlerts, accessOf, installationUrl } from './alerts.js';
 import { checkWiring, wiringEntry } from './appwiring.js';
 import { OAuth, FLOW_COOKIE } from './oauth.js';
 import { ORG_CAP, ADMIN_SESSION_MS, GROUP_MS } from './directory.js';
@@ -39,7 +39,7 @@ import { gzipSync } from 'node:zlib';
 import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, ownCheckout, PACKAGE_NAME } from './package.js';
 import { runningCommit } from './update.js';
 import { LOGO, FAVICON, withLogo } from '../web/logo.js';
-import { verifySignature, applyEvent, billingState, failing, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
+import { verifySignature, applyEvent, billingState, failing, paid, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' };
@@ -1168,6 +1168,20 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (slug == null && /^bearer\s/i.test(req.headers.authorization ?? '')) slug = spaces.directory.rootWorkspace();
         if (slug == null) return await hubRoot(req, res, url, path, { send, deny });
         hub = spaces.get(slug);
+        // Deleted by its owner (#799): members who open it are told so, and its machines get one clear error to stop on.
+        if (!hub && spaces.deleted(slug)) {
+          const name = Workspaces.check(slug), inner = pre ? pre[2] ?? '/' : path;
+          if (req.method === 'GET' && !inner.startsWith('/api/')) {
+            // The page's own styles and script still load from there.
+            if (extname(inner) && extname(inner) !== '.html' && !inner.includes('..')) {
+              try { return sendFile(await readFile(join(WEB, inner.slice(1))), TYPES[extname(inner)] ?? 'application/octet-stream'); } catch { return send(404, 'not found', 'text/plain'); }
+            }
+            return send(410, flowPage(pre ? `/w/${pre[1]}` : '', 'Workspace deleted', `
+<p class="lead">The workspace <b>${name}</b> was deleted by its owner, with everything in it.</p>
+<a class="btn primary" href="${authOrigin(req)}/">Your workspaces</a>`), 'text/html; charset=utf-8');
+          }
+          return deny(410, `Workspace ${name} was deleted`, 'Run nuworq disconnect to forget it here.');
+        }
         if (!hub) return deny(404, `no workspace "${slug}"`, 'Workspaces are created on the hub host: nuworq workspace create <name>.');
         ws = slug.toLowerCase();
         if (pre) {
@@ -1645,6 +1659,36 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         try {
           return send(200, { ok: true, url: await portalSession(billing, b.customer, `${homeOf(req, ws)}/#/settings`) });
         } catch (e) { return deny(502, e.message, 'Try again in a minute. If it keeps failing, check the Stripe dashboard\'s customer portal settings.'); }
+      }
+      // Deleting the workspace (#799), for its owners on any hub that runs workspaces: what Workspace settings needs to
+      // say what stays (its GitHub App installations, to uninstall them there), and whether a plan that would renew
+      // blocks it. Deleting is what `nuworq workspace remove` does, checked here, not by the dialog: an owner, the
+      // name typed exactly, and no plan that renews.
+      if (path === '/api/workspace' || path === '/api/workspace/delete') {
+        if (!spaces) return deny(404, 'this hub runs no workspaces', 'Only a hub started with --workspaces has workspaces to delete.');
+        const owners = hub.db.prepare("SELECT handle FROM people WHERE role = 'owner' ORDER BY id").all().map((p) => `@${p.handle}`);
+        const owner = who.role !== 'agent' && personRole === 'owner';
+        const b = spaces.directory.billingOf(ws);
+        const renewing = paid(b, hub.now()) && !b.cancel_at_period_end;
+        if (req.method === 'GET' && path === '/api/workspace') {
+          if (!owner) return send(200, { name: ws, owner: false, owners });
+          const github = await Promise.all(spaces.directory.installationsOf(ws).map(async (id) => {
+            const inst = app ? await app.call('GET', `/app/installations/${id}`).catch(() => null) : null;
+            return { id, url: installationUrl(gh.web, inst?.status === 200 ? inst.json : { id }) };
+          }));
+          return send(200, { name: ws, owner: true, renewing, portal: !!(b?.customer && billing?.secretKey), github });
+        }
+        if (req.method !== 'POST' || path === '/api/workspace') return deny(405, path === '/api/workspace' ? 'use GET' : 'use POST');
+        if (!owner) return deny(403, "only the workspace's owners can delete it", `Ask ${owners.join(' or ') || 'an owner'}.`);
+        const typed = String((await body(req)).name ?? '');
+        if (typed !== ws) return deny(400, `"${typed}" isn't this workspace's name, so nothing was deleted`, `Type its name exactly: ${ws}`);
+        if (renewing) return deny(409, `${ws} has a plan that renews, so nothing was deleted`, 'Cancel the plan first in Manage billing (Workspace settings → Billing); once it is set to end, delete the workspace.');
+        const email = who.person ? hub.q('SELECT email FROM people WHERE handle = ?').get(who.person.handle)?.email : null;
+        const at = new Date(hub.now()).toISOString();
+        spaces.remove(ws);
+        console.log(`Workspace ${ws} deleted by ${by}${email ? ` (${email})` : ''} at ${at}`);
+        answered = null; // its database, where a retry's answer would be kept, is gone
+        return send(200, { ok: true, deleted: ws, home: `${authOrigin(req)}/` });
       }
       // Feedback about nuworq itself (#295): whether this hub takes it (and the version a piece carries), and a
       // person sending one. Only the page, the version and the browser come with it. Agents use the feedback tool.
