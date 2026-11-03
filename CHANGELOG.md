@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.0 (2026-11-03)
+
+What landed since v0.9.0.
+
+**In this release**
+
+- Updates go live with no gap: a stable front hands connections from the old hub to the new one, and only the newest runs background loops (#523)
+- Workers load only the nuworq tools they use: definitions load when first called, and the longest tool descriptions are cut (#678)
+- Someone new can start and keep going from the docs alone: the guide, README, docs/, CLI help and nuworq.com describe v1.0.0 as shipped (#685)
+- Live: a 10 Hz probe through two deploys after #523 sees no refused request (#787)
+- Accepted work lands without a new review only when it is the reviewed change in the same place: a rebase or merge of main can't move its… (#806)
+- The README is a front page for people: the logo and name on top, what nuworq is, a short quick start, and where to go next (#808)
+- Sections of the project page fold away: click a heading to fold it, and it stays folded until you open it (#809)
+- CI tests on Node 24 only, the minimum nuworq declares, in one job named test (#811)
+- Releases are signed on GitHub Actions once the maintainer approves them with one tap, and the signer service on their Mac retires (#813)
+- The first release is signed by the GitHub workflow after the maintainer's approval, and the Mac signer retires (#815)
+- Nothing in the repository names its maintainer: docs, help, screens and code say the maintainer, the owner or you, and a test keeps it so (#817)
+- Answering "drop" to the question a parked item waits on drops it, and "not yet" keeps it waiting, instead of either one releasing it (#819)
+- The rail is only navigation: projects and Connect an agent stay, while settings and help move into a workspace menu and a help menu (#824)
+
 ## 0.9.0 (2026-11-03)
 
 What landed since v0.8.0.
