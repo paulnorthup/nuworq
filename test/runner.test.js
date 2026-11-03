@@ -33,6 +33,38 @@ describe('plan: which workers to start', () => {
     assert.equal(plan([route('a', 9)], [], { workers: 5, maxRuns: 3, launched: 2 }).length, 1);
     assert.equal(plan([route('a', 9)], [], { workers: 5, maxRuns: 3, launched: 3 }).length, 0);
   });
+
+  // A project's entry listing its claimable items (#793), each with its own model.
+  const listed = (project, jobs, holders = []) => ({
+    ...route(project, jobs.reduce((n, j) => n + (j.slots ?? 1), 0), holders), model: jobs[0].model, ...jobs[0], jobs,
+  });
+  const job = (n, extra = {}) => ({ item: `#${n}`, title: `t${n}`, mode: 'work', model: `m${n}`, ...extra });
+
+  test('workers started together each get a different item, with its own model (#793)', () => {
+    const r = listed('a', [job(1), job(2), job(3), job(4)]);
+    assert.deepEqual(plan([r], [], { workers: 4 }).map((w) => [w.item, w.title, w.model]), [['#1', 't1', 'm1'], ['#2', 't2', 'm2'], ['#3', 't3', 'm3'], ['#4', 't4', 'm4']]);
+    assert.ok(plan([r], [], { workers: 4 }).every((w) => !w.jobs), 'each is one job, not the list');
+    assert.deepEqual(plan([r], [], { workers: 2 }).map((w) => w.item), ['#1', '#2'], 'most useful first');
+  });
+
+  test('two claimable items and four free slots start two (#793)', () => {
+    assert.deepEqual(plan([listed('a', [job(1), job(2)])], [], { workers: 4 }).map((w) => w.item), ['#1', '#2']);
+  });
+
+  test('a raced item with two open slots still gets two, one per model (#793)', () => {
+    const r = listed('a', [job(1, { slots: 2, model: 'top', models: ['top', 'down'] }), job(2)]);
+    assert.deepEqual(plan([r], [], { workers: 4 }).map((w) => [w.item, w.model]), [['#1', 'top'], ['#1', 'down'], ['#2', 'm2']]);
+    assert.deepEqual(plan([r], [{ name: 'w1', project: 'a', item: '#1' }], { workers: 4 }).map((w) => [w.item, w.model]), [['#1', 'down'], ['#2', 'm2']], 'the open slot left');
+  });
+
+  test('a worker started for an item it has not claimed yet keeps others off it; the next poll fills the rest (#793)', () => {
+    const r = listed('a', [job(1), job(2), job(3)]);
+    assert.deepEqual(plan([r], [{ name: 'w1', project: 'a', item: '#1' }], { workers: 4 }).map((w) => w.item), ['#2', '#3']);
+    // Once w1 holds #1 it leaves the list; the hub lists what is still claimable.
+    assert.deepEqual(plan([listed('a', [job(2), job(3)], ['w1'])], [{ name: 'w1', project: 'a', item: '#1' }], { workers: 4 }).map((w) => w.item), ['#2', '#3']);
+    // A project's limit (#174) still caps it, and slots it can't use go to the next project.
+    assert.deepEqual(plan([{ ...r, limit: 1 }, listed('b', [job(9)])], [], { workers: 4 }).map((w) => [w.project, w.item]), [['a', '#1'], ['b', '#9']]);
+  });
 });
 
 describe('the hub routes the runner only to opted-in, unparked projects', () => {
@@ -57,6 +89,26 @@ describe('the hub routes the runner only to opted-in, unparked projects', () => 
 
     hub.humanOp('on', 'settings', { runner: false });
     assert.deepEqual(hub.route('', { runner: true }), []);
+  });
+
+  test('a runner asking for jobs hears up to that many claimable items per project, each with its model (#793)', () => {
+    const hub = new Hub({ clock: () => Date.UTC(2026, 10, 2, 16) });
+    hub.tx(() => hub.project('p', { create: true }));
+    hub.humanOp('p', 'settings', { runner: true });
+    for (const t of ['One', 'Two', 'Three', 'Four']) hub.humanOp('p', 'create', { title: t, acceptance: 'x' });
+    assert.equal(hub.route('', { runner: true, kind: 'claude' })[0].jobs, undefined, 'an older runner asks for none');
+    const [r] = hub.route('', { runner: true, kind: 'claude', jobs: 4 });
+    assert.deepEqual(r.jobs.map((j) => [j.item, j.title, j.mode, j.model]), [
+      ['#1', 'One', 'work', 'claude-opus-5-5'], ['#2', 'Two', 'work', 'claude-opus-5-5'], ['#3', 'Three', 'work', 'claude-opus-5-5'], ['#4', 'Four', 'work', 'claude-opus-5-5'],
+    ]);
+    assert.deepEqual(plan([r], [], { workers: 4 }).map((w) => w.item), ['#1', '#2', '#3', '#4'], 'four workers, four items');
+    assert.deepEqual(hub.route('', { runner: true, kind: 'claude', jobs: 2 })[0].jobs.map((j) => j.item), ['#1', '#2']);
+    hub.agentOp('p', 'claim', 'w1', { item: '#1' });
+    assert.deepEqual(hub.route('', { runner: true, kind: 'claude', jobs: 4 })[0].jobs.map((j) => j.item), ['#2', '#3', '#4'], 'a claimed item leaves the list');
+    assert.equal(hub.takenBy('p', '#1', 'w2', 0), 'w1', 'who took it, for a worker that lost the race');
+    assert.equal(hub.takenBy('p', '#1', 'w1', 0), null, 'not the worker itself');
+    assert.equal(hub.takenBy('p', '#2', 'w2', 0), null);
+    assert.equal(hub.takenBy('p', '#1', 'w2', 0, { scope: ['other'] }), null, 'only projects its token reaches');
   });
 });
 
@@ -771,6 +823,33 @@ describe('a worker for a project with no checkout on this machine', () => {
     }
   });
 
+  test('run --workers 4 starts four workers on four different items, each claims its own, and nothing pauses (#793)', async () => {
+    const w = far();
+    for (const t of ['Two', 'Three', 'Four', 'Five']) w.hub.humanOp('far', 'create', { title: t, acceptance: 'done' });
+    // A Claude that claims the one job it was started for, as its MCP server would, then exits.
+    writeFileSync(join(w.dir, 'bin', 'claude'), `#!${process.execPath}
+const a = process.argv.slice(2);
+const mcp = JSON.parse(a[a.indexOf('--mcp-config') + 1]).mcpServers.nuworq.env;
+const item = a[a.indexOf('-p') + 1].match(/claim (#\\d+)/)[1];
+const r = await fetch(mcp.NUWORQ_URL + '/api/p/far/agent/claim', { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': mcp.NUWORQ_AGENT }, body: JSON.stringify({ item }) });
+console.log('CLAIMED', item, r.status);
+`, { mode: 0o755 });
+    const server = createServer(w.hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--workers', '4', '--max-runs', '4', '--poll', '1'], { env: w.env, cwd: w.home });
+      const started = [...stdout.matchAll(/▶ \S+ → far: (#\d+) /g)].map((m) => m[1]);
+      assert.deepEqual(started, ['#1', '#2', '#3', '#4'], stdout);
+      assert.doesNotMatch(stdout, /Paused|found nothing|was taken by/, stdout);
+      const claims = w.hub.q("SELECT e.actor, i.seq FROM events e JOIN items i ON i.id = e.item_id WHERE e.type = 'claimed' ORDER BY i.seq").all();
+      assert.deepEqual(claims.map((c) => c.seq), [1, 2, 3, 4], 'each claimed its own');
+      assert.equal(new Set(claims.map((c) => c.actor)).size, 4, 'four workers');
+    } finally {
+      server.close();
+    }
+  });
+
   test("run leaves a project whose checkout can't be updated for later, and never starts its agent", async () => {
     const w = far();
     execFileSync('git', ['clone', '-q', w.origin, join(w.repos, 'api')]);
@@ -1170,6 +1249,19 @@ describe('run: the supervising loop', () => {
     const w = empty([[route('a', 5)]], (x) => x.name === 'w3');
     await run({ ...w.opts, workers: 1, maxRuns: 5 });
     assert.ok(!w.lines.some((l) => /^Paused/.test(l)), 'w1 w2 empty, w3 claimed, w4 w5 empty: never 3 in a row');
+  });
+
+  test('a worker whose one job someone else claimed first lost a race: said, and not counted as finding nothing (#793)', async () => {
+    const w = empty([[{ ...route('a', 5), model: 'm' }]]);
+    w.opts.taken = async (x) => (x.name === 'w3' ? null : 'claude-fc66');
+    await run({ ...w.opts, workers: 1, maxRuns: 5 });
+    assert.ok(w.lines.includes('w1: #1 was taken by claude-fc66'), w.lines.join('\n'));
+    assert.ok(!w.lines.some((l) => /^Paused/.test(l)), 'four lost races and one empty: never 3 empty in a row');
+    // A worker started for no one job (no routed model) isn't asked.
+    const plain = empty([[route('a', 5)]]);
+    plain.opts.taken = async () => 'claude-fc66';
+    await run({ ...plain.opts, workers: 1, maxRuns: 3 });
+    assert.ok(plain.lines.some((l) => /^Paused 5m: 3 workers in a row found nothing/.test(l)));
   });
 
   test('with --until-idle, the streak stops run instead', async () => {

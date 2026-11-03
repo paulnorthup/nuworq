@@ -1959,6 +1959,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           runner: !!url.searchParams.get('runner'), scope: caller.scope, powers: who.role === 'agent' ? who.powers : null,
           has: url.searchParams.has('has') ? url.searchParams.get('has').split(',').filter(Boolean) : undefined,
           kind: url.searchParams.get('agent') ?? '', model: url.searchParams.get('model') ?? '', // the runner's, for model routing (#347)
+          jobs: Math.min(Number(url.searchParams.get('jobs')) || 0, 32), // how many workers it could start at once (#793)
         });
         // A runner with nothing to start waits here (#542): ?wait= seconds, answered the moment work appears in a
         // project outside ?skip= (those it can't work on), else when the wait ends or the hub shuts down (#545).
@@ -1991,6 +1992,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, {
           claims: hub.claimsSince(who, since, { scope: caller.scope }), first: hub.firstClaim(who, since, { scope: caller.scope }),
           submitted: hub.submitsSince(who, since, { scope: caller.scope }),
+          // With project and item (#793): who else took the item a worker was started for, so a lost race isn't empty.
+          ...(url.searchParams.get('item') ? { taken_by: hub.takenBy(url.searchParams.get('project') ?? '', url.searchParams.get('item'), who, since, { scope: caller.scope }) } : {}),
         });
       }
       if (req.method === 'GET' && path === '/api/finished') {

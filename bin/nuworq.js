@@ -1427,15 +1427,16 @@ async function runCmd(flags) {
   // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
   const startedOn = installed(ROOT);
   const { supervised } = await import('../src/service.js');
-  const routePath = () => `/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}`;
+  // jobs: how many workers it could start at once, so each gets an item of its own (#793).
+  const routePath = (jobs) => `/api/route?runner=1&has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}${typeof flags.model === 'string' ? `&model=${encodeURIComponent(flags.model)}` : ''}${jobs ? `&jobs=${jobs}` : ''}`;
   const r = await run({
     updated: () => { const now = installed(ROOT); return differs(startedOn, now) ? `${startedOn.label} → ${now.label}` : null; },
     supervised: supervised(),
     // Only work this machine can do (its fit tags), so no worker is started for work it can't take.
     // Its agent and --model too: a project that routes models (#347) says which model each job calls for.
-    routes: () => client.get(routePath()),
+    routes: ({ jobs } = {}) => client.get(routePath(jobs)),
     // Nothing to start: the hub holds the answer until work appears (#542), a little past which the call gives up.
-    waitRoutes: ({ skip, seconds, signal }) => client.get(`${routePath()}&wait=${seconds}&skip=${encodeURIComponent(skip.join(','))}`, { signal, deadline: (seconds + 15) * 1000 }),
+    waitRoutes: ({ skip, seconds, signal, jobs }) => client.get(`${routePath(jobs)}&wait=${seconds}&skip=${encodeURIComponent(skip.join(','))}`, { signal, deadline: (seconds + 15) * 1000 }),
     // Work waiting where it doesn't staff (#491): every project's routes, not only the opted-in ones.
     unstaffed: async () => unstaffedLine(await client.get(`/api/route?has=${encodeURIComponent(detectHas(flags).join(','))}&agent=${agent}`), await hubProjects(client)),
     launch, workers, maxWorkers, machine, sweep: (running) => sweepAll(running), sweptAt,
@@ -1446,6 +1447,8 @@ async function runCmd(flags) {
     // Asked of the hub, not the routes: a quick worker can claim and exit between two polls. A minute
     // of slack covers clocks that differ.
     claimed: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).claims > 0,
+    // Who took the one job it was started for (#793); an older hub doesn't say, so it counts as finding nothing.
+    taken: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}&project=${encodeURIComponent(w.project)}&item=${encodeURIComponent(w.job)}`)).taken_by ?? null,
     took: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).first ?? null,
     // A failed worker that handed something in still worked (#764); an older hub doesn't say, so it counts as failed.
     submitted: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).submitted > 0,

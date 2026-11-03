@@ -946,7 +946,9 @@ export class Hub extends EventEmitter {
   // now (else what it declared last).
   // kind and model: the runner's agent (claude, codex, opencode) and its --model, so a project that routes
   // models (#347) says which one each job calls for.
-  route(agent = '', { runner = false, scope = null, powers = null, has, kind = '', model = '' } = {}) {
+  // jobs: with runner, how many workers it could start at once (#793): each project's entry lists up to that many of
+  // its claimable items, each with its own model, so workers started together each get their own.
+  route(agent = '', { runner = false, scope = null, powers = null, has, kind = '', model = '', jobs = 0 } = {}) {
     this.sweep();
     const options = [];
     for (const p of this.projects()) {
@@ -960,9 +962,10 @@ export class Hub extends EventEmitter {
       }
       const all = this.claimable(p, agent, { powers, has });
       // A building trial (#348) is decided before the count: a raced one takes two workers.
-      if (runner && kind && p.model_routing && all[0]?.mode === 'work') this.decideTrial(p, all[0].item, kind, model, all[0].priority);
+      const listed = runner ? all.slice(0, Math.max(1, Math.floor(jobs) || 1)) : all.slice(0, 1);
+      for (const o of listed) if (runner && kind && p.model_routing && o.mode === 'work') this.decideTrial(p, o.item, kind, model, o.priority);
       // A race with open slots can take that many workers at once.
-      if (all.length) options.push({ p, ...all[0], claimable: all.reduce((n, o) => n + (this.racing(o.item) ? this.openSlots(o.item) : 1), 0) });
+      if (all.length) options.push({ p, ...all[0], listed: jobs > 0 ? listed : null, claimable: all.reduce((n, o) => n + (this.racing(o.item) ? this.openSlots(o.item) : 1), 0) });
     }
     options.sort((a, b) =>
       PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
@@ -979,6 +982,11 @@ export class Hub extends EventEmitter {
           UNION SELECT a.agent FROM attempts a JOIN items i ON i.id = a.item_id WHERE i.project_id = ? AND a.stage = 'active' AND a.closed = 0`)
         .all(o.p.id, o.p.id).map((h) => h.holder), limit: o.p.run_workers ?? null } : {}),
       ...(runner && kind ? this.jobModels(o.p, o.item, o.mode, kind, model) : {}),
+      ...(runner && o.listed ? { jobs: o.listed.map((j) => ({
+        item: `#${j.item.seq}`, title: j.item.title, mode: j.mode, priority: j.priority, repo: this.repoOf(o.p, j.item) || null,
+        slots: this.racing(j.item) ? this.openSlots(j.item) : undefined,
+        ...(kind ? this.jobModels(o.p, j.item, j.mode, kind, model) : {}),
+      })) } : {}),
     }));
   }
 
@@ -1234,6 +1242,16 @@ export class Hub extends EventEmitter {
       if (e && (!first || e.at < first.at)) first = e;
     }
     return first ? `#${first.seq} ${first.title} (${MODE[first.type]})` : null;
+  }
+
+  // Who other than agent first took item ("#12") in project since then (#793), or null: a worker started for that one
+  // job that found it taken lost a race, which `nuworq run` doesn't count as finding nothing.
+  takenBy(slug, item, agent, since, { scope = null } = {}) {
+    if (scope && !scope.includes(slug)) return null;
+    const e = this.q(`SELECT e.actor FROM events e JOIN items i ON i.id = e.item_id JOIN projects p ON p.id = i.project_id
+        WHERE p.slug = ? AND i.seq = ? AND e.actor != ? AND e.at >= ? AND e.type IN (${CLAIM_TYPES.map(() => '?').join(',')}) ORDER BY e.at LIMIT 1`)
+      .get(slug, Number(String(item).replace(/^#/, '')), agent, since, ...CLAIM_TYPES);
+    return e?.actor ?? null;
   }
 
   // The branches of a project's finished work (done or dropped), for `nuworq run`'s sweep (#444): its local

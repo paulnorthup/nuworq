@@ -17,17 +17,32 @@ export const runnerGit = ({ timeout = GIT_MS, file = 'git' } = {}) => (args) => 
 // A worker that hasn't claimed anything yet still counts against its project's claimable work,
 // so one waiting item never draws a herd. r.limit: the most agents working in that project at once, set on
 // the hub (#174): everyone holding work there, and this runner's workers that haven't claimed yet, count.
+// r.jobs (#793): its claimable items, most useful first, each with its own model; each worker started takes one no
+// worker of this runner was started for yet (w.item), so workers started together don't all go to the top item.
 export function plan(routes, running, { workers = 1, maxRuns = Infinity, launched = 0 } = {}) {
   let slots = Math.min(workers - running.length, maxRuns - launched);
   const out = [];
   for (const r of routes) {
     if (slots <= 0) break;
     const held = new Set(r.holders ?? []);
-    const idle = running.filter((w) => w.project === r.project && !held.has(w.name)).length;
-    const room = r.limit == null ? Infinity : r.limit - held.size - idle;
-    const n = Math.min(slots, (r.claimable ?? 1) - idle, room);
+    const idle = running.filter((w) => w.project === r.project && !held.has(w.name));
+    const room = r.limit == null ? Infinity : r.limit - held.size - idle.length;
+    let n = Math.min(slots, (r.claimable ?? 1) - idle.length, room);
+    if (r.jobs?.length) {
+      const { jobs, models, why, ...entry } = r; // the top item's own: each job says its own
+      for (const j of jobs) {
+        if (n <= 0) break;
+        // A raced trial (#348) has a slot per model: two workers on it, one per slot, each on the next model.
+        const on = idle.filter((w) => w.item === j.item).length;
+        const k = Math.min(n, (j.slots ?? 1) - on);
+        for (let i = 0; i < k; i++) out.push({ ...entry, slots: undefined, ...j, model: j.models?.[on + i] ?? j.model });
+        n -= Math.max(k, 0);
+        slots -= Math.max(k, 0);
+      }
+      continue;
+    }
     // A raced trial (#348) names a model per open slot: each worker started takes the next one.
-    for (let i = 0; i < n; i++) out.push(r.models?.[idle + i] ? { ...r, model: r.models[idle + i] } : r);
+    for (let i = 0; i < n; i++) out.push(r.models?.[idle.length + i] ? { ...r, model: r.models[idle.length + i] } : r);
     slots -= Math.max(n, 0);
   }
   return out;
@@ -343,7 +358,7 @@ const KILL_GRACE_MS = 10_000;
 // The most a runner asks the hub to hold its wait for work (#542): under the 100 s Cloudflare gives an answer.
 const WAIT_MAX_S = 90;
 
-// routes(): the hub's runner routes. launch(route): starts a worker, returns { name, project, where, kill(signal),
+// routes({ jobs }): the hub's runner routes, each project's listing up to jobs of its items (#793). launch(route): starts a worker, returns { name, project, where, kill(signal),
 // exited: Promise<code>, spent?(): dollars so far (#761), its CLI's own figure once it has said one; null: unpriced,
 // cap?: the most it may spend (a land job's, #752), checked each round: past it, the worker is stopped }.
 // launch throws an error with skip: true when this machine can't work on the route's project (no
@@ -351,6 +366,8 @@ const WAIT_MAX_S = 90;
 // With pause: true too (its checkout couldn't be updated, e.g. git can't reach origin), the project is left
 // alone for 5 minutes, then 10, up to 30, and said each time; the others go on.
 // claimed(worker): whether the hub saw it take a job since it started (absent: assume it did).
+// taken(worker): for one started for one job (worker.job, "#12") that claimed nothing, who took that item first, or
+// null (#793). It lost a race: said, and not counted as finding nothing.
 // onInterrupt(fn): register fn for Ctrl-C. The first stops launching and asks workers to stop; the next kills them.
 // submitted(worker): whether it handed something in since it started (absent: assume it didn't); one that did,
 // then exited non-zero, still worked, so it ends a failing streak rather than adding to it.
@@ -375,7 +392,7 @@ const WAIT_MAX_S = 90;
 // the runner waits on it instead of sleeping, so a worker starts about a second after work appears. A hub that
 // answers early with nothing new is an older one that ignores the wait: from then on the runner sleeps instead.
 export async function run({
-  routes, launch, claimed = async () => true, submitted = async () => false, took = async () => null, log = console.log, report = async () => {}, sweep, sweptAt = 0,
+  routes, launch, claimed = async () => true, taken = async () => null, submitted = async () => false, took = async () => null, log = console.log, report = async () => {}, sweep, sweptAt = 0,
   updated = () => null, supervised = false, signoff = async () => {}, machine = () => ({}), maxWorkers, unstaffed = async () => null, waitRoutes,
   workers = 1, maxRuns = Infinity, maxMinutes = Infinity, maxUsd = Infinity, workerUsd = Infinity, pollSeconds = 30, untilIdle = false,
   now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onInterrupt,
@@ -522,7 +539,7 @@ export async function run({
     quiet = false;
     if (!stopping && t >= pausedUntil) {
       try {
-        list = next ?? await routes();
+        list = next ?? await routes({ jobs: most });
         if (hubDown) log('The hub is back.');
         hubDown = false;
       } catch (e) {
@@ -576,6 +593,10 @@ export async function run({
           // The job only when it was started for that one (a routed model, #347): otherwise it takes what next
           // gives it, which a later line says (#533).
           w.told = !!r.model;
+          // The item it was started for (#793): plan() starts no other worker on it. A routed model or a land job
+          // (#752) makes it that worker's one job.
+          w.item ??= r.item;
+          w.job ??= r.model || r.mode === 'land' ? r.item : null;
           log(`▶ ${w.name} → ${r.name ?? r.project}${r.model ? `: ${r.item} ${r.title} (${r.mode} on ${r.model})` : ''}${w.where ? `  ${w.where}` : ''}`);
           w.exited.then(async (code) => {
             const ms = now() - w.started;
@@ -597,7 +618,10 @@ export async function run({
             else if (code === 0 || worked) failing = [];
             if (worked) pauseMs = PAUSE_MS; // it handed something in: the next streak pauses 5m again
             const empty = code === 0 && !interrupted && !w.killedAt && ms < EMPTY_MS && !(await claimed(w).catch(() => true));
-            if (empty) foundNothing(w);
+            // Its one job taken first by another agent (#793): a lost race, not a project with nothing it can take.
+            const by = empty && w.job ? await Promise.resolve().then(() => taken(w)).catch(() => null) : null;
+            if (by) log(`${w.name}: ${w.job} was taken by ${by}`);
+            else if (empty) foundNothing(w);
             else if (code === 0) { empties = []; pauseMs = PAUSE_MS; } // it worked: the next streak pauses 5m again
             running.splice(running.indexOf(w), 1);
             wake();
@@ -636,7 +660,7 @@ export async function run({
       const gone = new AbortController();
       const skip = list.filter((x) => cant.has(x.project) || resting.get(x.project)?.until > t0).map((x) => x.project);
       const seconds = Math.min(pollSeconds, WAIT_MAX_S);
-      const asked = Promise.resolve().then(() => waitRoutes({ skip, seconds, signal: gone.signal })).then((l) => {
+      const asked = Promise.resolve().then(() => waitRoutes({ skip, seconds, signal: gone.signal, jobs: most })).then((l) => {
         if (gone.signal.aborted) return;
         next = l;
         // Back early with nothing it can start: a hub that ignores the wait. Sleep out the poll as before.
