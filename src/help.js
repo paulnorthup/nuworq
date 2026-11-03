@@ -60,7 +60,7 @@ export const COMMANDS = [
     ],
     example: 'nuworq up',
     notes: [
-      'The runner: it installs nuworq run as a service with --workers auto --browser, restarts one whose flags differ, and leaves one that matches alone. Unstaffed projects that aren\'t parked: it asks once whether to staff them; a no is remembered.',
+      'The runner: it installs nuworq run as a service with --workers auto --browser, restarts one that isn\'t running, lacks --workers auto or has the wrong browser setting, and leaves one that matches alone. Unstaffed projects that aren\'t parked: it asks once whether to staff them; a no is remembered.',
       "Workers come fully featured. On: --workers auto (as many as the CPUs and memory have room for) and --browser (a headless Chrome, so they can take UI work and look at it; with no Chrome here they go without, and the table says how to add it). Off: --can-read-keys, since codex, opencode and pi workers' shells could read this machine's keys; up's workers are Claude's, whose sandbox hides them.",
       'Operators: each unparked project with no operator on the hub gets Claude Code with /nuworq:operator in its clone here: in tmux when it is installed (the nuworq session, a window per project: tmux attach -t nuworq), else a Terminal or iTerm window on a Mac, else it prints the command. A project with no clone here is skipped, with where to clone it. Parked projects get none.',
       'Run it again any time: it starts only what is missing, and ends with a table of each project and the runner. nuworq down stops what it started.',

@@ -6,7 +6,7 @@
   <img alt="nuworq" src="docs/logo-light.svg" width="186" height="48">
 </picture>
 
-**A hub where AI agents find, do and check the work, and you decide.**
+**A hub where AI agents find and do the work, and you decide.**
 
 [nuworq.com](https://nuworq.com) · [Getting started](https://app.nuworq.com/guide) · [Docs](docs/)
 
@@ -16,7 +16,7 @@
 
 ## What nuworq is
 
-nuworq is for people who build software with AI agents (Claude, OpenAI or open-weight models) and would rather steer than dispatch. You say what matters. Agents shape it into work, claim it, build it, review each other's work and land it on main. You see only what needs you: a decision, a question, finished work to accept.
+nuworq is for people who build software with AI agents (Claude, OpenAI or open-weight models) and would rather steer than dispatch. You say what matters. Agents shape it into work, claim it, build it and land it on main, checked by you or, if you let them run with it, by another agent. You see only what needs you: a decision, a question, finished work to accept.
 
 Everything follows **0-30-5-30**: silence when things are fine, 30 seconds to know what needs you, 5 minutes to understand it, 30 minutes for the whole story.
 
@@ -49,10 +49,10 @@ The hub is the same program. Once it's installed, `nuworq serve --demo` tries it
 
 ## How it works
 
-- **Workers** build, review and land the work. They run in the background, each in its own copy of your repository, and the hub sends each to the most valuable waiting work.
+- **Workers** build and land the work, and under Run with it review each other's. They run in the background, each in its own copy of your repository, and the hub sends each to the most valuable waiting work.
 - **An operator** is a Claude Code session acting with your access. It answers workers' questions, lands their work and runs the steps on real systems.
 - **A shaper** plans with you: it turns what you want into work with a clear "done".
-- **You decide.** Steer, answer, accept or send back. Agents never mark their own work done: someone else checks the evidence.
+- **You decide.** Steer, answer, accept or send back. Agents never mark their own work done: someone else checks the evidence. Under Check with me and Keep moving (the default) that's you; under Run with it, another agent, never the one who built it.
 
 ## Where to go next
 
