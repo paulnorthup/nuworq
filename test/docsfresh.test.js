@@ -2,6 +2,7 @@ import { test, describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { COMMANDS } from '../src/help.js';
+import { OPS } from '../src/protocol.js';
 import { cliContract, stale } from './stale.js';
 
 // README, CONTRIBUTING, SECURITY and docs/*.md name only commands and flags nuworq has (#685), as the guide does
@@ -39,6 +40,17 @@ describe('README and docs/ name only commands and flags nuworq has (#685)', () =
 
   test('every command and flag they name is in the help', () => {
     assert.deepEqual(DOCS.flatMap((f) => stale({ commands: docCommands(read(f)) }, { cli }).map((o) => `${f}: ${o}`)), []);
+  });
+
+  test('ARCHITECTURE.md names every source file, every operation and every Needs you signal', () => {
+    const doc = read('docs/ARCHITECTURE.md');
+    const files = readdirSync(new URL('../src/', import.meta.url)).filter((f) => f.endsWith('.js'));
+    assert.deepEqual(files.filter((f) => !doc.includes(`src/${f}`)), [], 'src files missing from the architecture');
+    assert.match(doc, new RegExp(`## The agent protocol \\(${OPS.length} operations\\)`));
+    assert.deepEqual(OPS.map((o) => o.name).filter((n) => !doc.includes(`\`${n}\``)), [], 'operations missing');
+    const kinds = [...new Set([...read('src/insight.js').matchAll(/level: [^,]+, kind: '([a-z-]+)'/g)].map((m) => m[1]))];
+    assert.ok(kinds.includes('direction') && kinds.includes('notify-failing'), 'it reads the kinds');
+    assert.deepEqual(kinds.filter((k) => !doc.includes(`\`${k}\``)), [], 'Needs you signals missing from the attention table');
   });
 
   test('a flag the help lacks fails, naming the file', () => {

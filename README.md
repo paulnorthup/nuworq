@@ -30,7 +30,7 @@ You need Node 24 or newer. The [getting-started guide](https://app.nuworq.com/gu
 curl -fsSLO https://app.nuworq.com/nuworq-release.tgz -O https://app.nuworq.com/nuworq-release.tgz.sig
 node -e 'const c=require("crypto"),f=require("fs"),[t,k]=process.argv.slice(1);if(!c.verify(null,f.readFileSync(t),{key:Buffer.from(k,"base64"),format:"der",type:"spki"},Buffer.from(f.readFileSync(t+".sig","utf8"),"base64"))){console.error(t+" is NOT signed by the nuworq release key: do not install it");process.exit(1)}console.log(t+": signature verified")' nuworq-release.tgz MCowBQYDK2VwAyEAJQ7A3vdaH6Jw6uMtk0RZ/FqXzHXAI2lGQ6HILx1Z14w=
 npm install -g ./nuworq-release.tgz
-nuworq connect https://nuworq.com/w/acme
+nuworq connect https://app.nuworq.com/w/acme
 ```
 
 **2. Start workers and an operator.** One command starts both. In a clone of the project, run:
