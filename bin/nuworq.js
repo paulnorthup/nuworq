@@ -1811,7 +1811,7 @@ async function serve(flags) {
   ignoreSiteHost(flags);
   const { handedOver, handoff } = await import('../src/handoff.js');
   const handed = handedOver() && !flags.smoke; // under serve --follow: the supervisor owns the port (#523)
-  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, ...(flags.smoke ? SMOKE : {}) });
+  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -1952,7 +1952,7 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const { billingFromEnv } = await import('../src/billing.js');
   const { handedOver, handoff } = await import('../src/handoff.js');
   const handed = handedOver() && !flags.smoke; // under serve --follow: the supervisor owns the port (#523)
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject, standby: handed, ...(flags.smoke ? SMOKE : {}) });
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject, standby: handed, githubReleases: !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
   const urlOf = (p) => `http://${host.includes(':') ? `[${host}]` : host}:${p}`;
   const pushUp = (url) => { pushes = notifyWorkspaces(spaces, (name) => workspaceUrl(name, { baseDomain, publicUrl, url })); };
   const onUp = () => {
