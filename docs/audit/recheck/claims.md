@@ -6,7 +6,9 @@
 
 **Sources.** README.md (64 lines now), docs/USAGE.md, docs/CLI.md, docs/ARCHITECTURE.md, docs/SECURITY-MODEL.md, the source, and these test runs (`npm test -- test/<file>.test.js`): forgetperson 5/5, routingconfirm 6/6; up, package, update, connect, connectmodal, staffing, usage, notify, models, routing, releasesign, plugin, device, service, leaserenew 200/200; sweep, protocol, earlyaccess, landing, auth, runner 123/126. The 3 failures are in test/landing.test.js:528, 559 and 589 (an ssh-key capture comes back empty, and two expected "could not lock config file" errors don't happen). They look like this sandbox, not the product, but that wasn't proven here. None of the claims below rests on them.
 
-**nuworq.com was not re-read.** It can't be reached from here. Its claims use the text as true.md quotes it (nuworq-site at ab4abc1). Where the code still contradicts that text, the verdict is "doesn't hold as quoted". If nuworq-site #33-#36 have changed the pages since, those rows may already hold.
+**Update after #827 and #828 landed.** The privacy and terms pages were re-read live on 2026-11-03 by #828 (docs/audit/recheck/site-pages.md): P4, P6, P8 and T6 now hold, and their rows below say so. The three high claims are closed, so no critical or high claim is left. R1 is fixed on main by #832: the README says workers review each other's work only under Run with it (README.md:52).
+
+**nuworq.com was otherwise not re-read.** It can't be reached from here. Its claims use the text as true.md quotes it (nuworq-site at ab4abc1). Where the code still contradicts that text, the verdict is "doesn't hold as quoted". If nuworq-site #33-#36 have changed the pages since, those rows may already hold.
 
 **Couldn't run.** `node bin/nuworq.js --help` (and `serve --demo`) needed approval, so no CLI output is quoted. Demo-screenshot claims S9 and S10 rest on true.md's check at 75f477c. Policy claims (P9, P12, T2, T4, T5, T7) and live figures (S5, S32, S59) weren't checked: they need the live hub or aren't code.
 
@@ -79,12 +81,12 @@
 | W38 | workflow #you | doesn't hold as quoted | only once a channel is added; channels also get a weekly line |
 | W39 | workflow #you | doesn't hold as quoted | a steer is re-sent until acknowledged, for 3 days (src/core.js:85) |
 | P1 | privacy | doesn't hold as quoted | identities hold only email and provider (src/directory.js:55-61) |
-| P4 | privacy | doesn't hold as quoted | also a keyed hash of the address (src/directory.js:93, 319) |
-| P6 | privacy | doesn't hold as quoted | the hub keeps a bare mirror of each repository on disk (src/git.js:231-238) |
-| P8 | privacy | doesn't hold as quoted | Google sign-in (src/oauth.js:20-24) and the person's notification services aren't named |
+| P4 | privacy | holds (live, 2026-11-03) | "a keyed hash of your IP address, never the address itself" (docs/audit/recheck/site-pages.md) |
+| P6 | privacy | holds (live, 2026-11-03) | "keeps a read-only copy (a git mirror) on its server … deleted with the project" (site-pages.md) |
+| P8 | privacy | holds for sign-in; host unnamed, reworded by nuworq-site #39 (live, 2026-11-03) | notification services named; Google is off on the live hub, as the pages say; Hetzner not yet named (site-pages.md) |
 | P10 | privacy | doesn't hold as quoted | several sign-in cookies, one a 10-minute sign-in check (src/server.js:540, 567, 923) |
 | T1 | terms | doesn't hold as quoted | GitHub or Google (src/oauth.js:13-24) |
-| T6 | terms | doesn't hold as quoted | no data export exists (no export route in src/server.js or bin/nuworq.js) |
+| T6 | terms | holds (live, 2026-11-03) | no export promised: "a copy of your workspace's data" at shutdown (site-pages.md) |
 | **Spot-checked "true" claims** | | | |
 | A3 | install | holds | web/connect.js:16-21; test/connectmodal "checks it against the key before npm runs" |
 | A5 | update | holds | test/update.test.js "tampered bytes with a matching sha256…", "signed by another key", "an older release… is refused" |
@@ -115,7 +117,7 @@
 | W32 | 10% trials | holds | src/models.js:119; web/routingconfirm.js:7 |
 | W35 | step up | holds | test/models.test.js "the next attempt steps up" |
 | **README claims the list lacked** | | | |
-| R1 | README:9, 19, 52 | doesn't hold | "agents… check the work", "review each other's work", "Workers build, review and land": by default (Keep moving) agents don't review; the person verifies (src/core.js:193-197, 2678, 3930) |
+| R1 | README:9, 19, 52 | holds since #832 (README.md:52: "under Run with it review each other's"); at the re-check it didn't | "agents… check the work", "review each other's work", "Workers build, review and land": by default (Keep moving) agents don't review; the person verifies (src/core.js:193-197, 2678, 3930) |
 | R2 | README:19 | holds | Claude, OpenAI (Codex) and open-weight models work through MCP (USAGE.md:168). Headless non-Claude workers run only on projects with no remote (bin/nuworq.js:1019) |
 | R3 | README:19 | holds | you see a decision, a question, finished work (ARCHITECTURE.md:104-126) |
 | R4 | README:21 | holds | 0-30-5-30: test/notify.test.js "healthy activity sends nothing"; src/insight.js depths |
@@ -136,7 +138,7 @@
 
 Severity is high if a person relying on the claim would be misled about safety, data or cost.
 
-**High**
+**High** (all three closed by #828: the live pages were reworded by nuworq-site #36 and hold; see site-pages.md)
 - P6 (privacy). "Never stores your source code": the hub keeps a mirror of each repository on its disk. Fix: reword the site (site #36): "The hub keeps a read-only mirror of each linked repository to check landings; nuworq's database holds no code."
 - P8 (privacy). Processors leave out Google (sign-in) and the notification services a person adds. Fix: name them (site #36).
 - T6 (terms). "A way to export your data" on shutdown: there is no export. Fix: build an export of a workspace's SQLite file, or reword to "the host can hand you your workspace's database" (site #36).
@@ -165,6 +167,6 @@ Severity is high if a person relying on the claim would be misled about safety, 
 - W38, W39 (site). They leave out the channel needed and the 3-day limit. Fix: site #35.
 - P1, P10, T1 (site). Less is stored than said, the cookies are miscounted, and Google sign-in is left out. Fix: site #36.
 
-Not a claim, but seen: package.json still says 0.9.0 while CHANGELOG.md leads with 1.0.0. The release checks refuse a version mismatch, so the release step has to bump it.
+Not a claim, but seen: package.json still says 0.11.0 (0.9.0 at the re-check) while CHANGELOG.md leads with 1.0.0. The release checks refuse a version mismatch, so the release step has to bump it.
 
-Claims checked: 112. Hold: 71. Don't hold: 41 (critical 0, high 3).
+Claims checked: 112. At the re-check: hold 71, don't hold 41 (critical 0, high 3). After #828 and #832: hold 76, don't hold 36 (critical 0, high 0).

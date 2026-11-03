@@ -48,3 +48,5 @@ No other new critical or high issue was found in the sweep (leases and vouching,
 drafting and tagging, sign-in owner guards, workspace forget, follower restarts, notifier retries).
 
 Critical: 0. High: 1.
+
+Update: N1 is fixed on main by #827 (73949caf). `dropAsAnswered` now turns the open PR's auto-merge off, and test/prblocked.test.js covers both ways in. Critical: 0. High: 0.

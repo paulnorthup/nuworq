@@ -44,3 +44,5 @@ Checked and sound in this sweep (no new issue):
 - **Plugin.** It runs the installed `nuworq mcp` and `nuworq wait`, comes from the `release` ref, has no hooks and fetches nothing at runtime.
 
 Critical: 0. High: 0.
+
+Update: both mediums have since landed on main. N1: signing by hand runs only code from a signed release, never the checkout's (#836, 601b96b6; with #829, #843). N2: write limits count per token, comments and field notes included (#831, 6cf8b875; #851, 25f04d60). The pre-release security audit (#848, 24187de8) only changed docs/SECURITY-MODEL.md.
