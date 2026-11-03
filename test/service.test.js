@@ -266,7 +266,8 @@ describe("a worker's worktree goes when it exits (#172)", () => {
     // The runner checks before its exit cleanup, and says so.
     const cli = readFileSync(new URL('../bin/nuworq.js', import.meta.url), 'utf8');
     assert.match(cli, /const trusted = worktreeTrusted\(worktree, home\);\n\s*if \(!trusted\) console\.log\(amber\(`  \$\{name\}'s worktree pointers were changed; left as it is`\)\);/);
-    assert.match(cli, /\[\.\.\.live\]\.filter\(\(w\) => worktreeTrusted\(w, home\)\)/, 'and before asking a sibling for its branch, against the checkout');
+    const runner = readFileSync(new URL('../src/runner.js', import.meta.url), 'utf8');
+    assert.match(runner, /const headOf = async \(worktree, home\) => \(worktreeTrusted\(worktree, home\)\n\s*\? \(await git\(\['-C', worktree, 'symbolic-ref'/, 'and before asking a worker or a sibling for its branch, against the checkout (#788)');
   });
 
   test('a clean worktree is removed', async () => {
