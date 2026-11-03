@@ -251,6 +251,14 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
     await server.package;
   });
   after(() => { server.close(); server.closeAllConnections(); });
+  // release runs only code a person approved with the key (#756): the clone's own copy, at the commit the hub
+  // serves, with a home whose approval of that commit is signed with the key it is given.
+  const signer = () => join(clone, 'scripts', 'sign-release.js');
+  const approvedHome = (k) => {
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-rel-home-'));
+    writeApproval(join(home, '.nuworq', 'release-approvals'), createPrivateKey(readFileSync(join(dir, k, 'release-key.pem'))), { tag: `v${version}`, commit });
+    return home;
+  };
 
   test('/api/info needs a workspace and a sign-in; /api/package needs neither', async () => {
     assert.equal((await fetch(`${url}/api/info`)).status, 404);
@@ -272,7 +280,7 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
 
   test("release refuses a key the package doesn't pin", async () => {
     const out = mkdtempSync(join(tmpdir(), 'nuworq-rel-out-'));
-    await assert.rejects(run(process.execPath, [SIGN, 'release', url, join(dir, 'other', 'release-key.pem')], { cwd: out }),
+    await assert.rejects(run(process.execPath, [signer(), 'release', url, join(dir, 'other', 'release-key.pem')], { cwd: out, env: { ...process.env, HOME: approvedHome('other') } }),
       (e) => /doesn't carry this key's release-key\.pub, so installs would refuse it/.test(e.stderr));
     assert.ok(!existsSync(join(out, `nuworq-${commit}.tgz.sig`)), 'nothing signed');
   });
@@ -280,10 +288,11 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
   test('release refuses a version that has no tag on the commit the hub serves (#400)', async () => {
     const key = join(dir, 'key', 'release-key.pem');
     const v = version.replace(/\./g, '\\.');
-    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`not signed: origin has no v${v} tag`));
+    const env = { ...process.env, HOME: approvedHome('key') };
+    await assert.rejects(run(process.execPath, [signer(), 'release', `${url}/w/acme`, key], { cwd: clone, env }), new RegExp(`not signed: origin has no v${v} tag`));
     execFileSync('git', ['-C', clone, 'tag', `v${version}`, `${commit}~1`]);
     execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `v${version}`]);
-    await assert.rejects(run(process.execPath, [SIGN, 'release', `${url}/w/acme`, key], { cwd: clone }), new RegExp(`v${v} is [0-9a-f]{7} on origin, not ${commit.slice(0, 7)} as the hub serves`));
+    await assert.rejects(run(process.execPath, [signer(), 'release', `${url}/w/acme`, key], { cwd: clone, env }), new RegExp(`v${v} is [0-9a-f]{7} on origin, not ${commit.slice(0, 7)} as the hub serves`));
     execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `:refs/tags/v${version}`]);
     execFileSync('git', ['-C', clone, 'tag', '-d', `v${version}`]);
     assert.ok(!existsSync(join(clone, `nuworq-${commit}.tgz.sig`)), 'nothing signed');
@@ -293,10 +302,8 @@ for (const tagged of [false, true]) describe(`a signed release reaches installs 
     const out = clone; // a checkout of nuworq, whose origin has the release's tag
     execFileSync('git', ['-C', clone, 'tag', `v${version}`, commit]);
     execFileSync('git', ['-C', clone, 'push', '-q', 'origin', `v${version}`]);
-    const home = mkdtempSync(join(tmpdir(), 'nuworq-rel-home-'));
-    // Approved where the key is (#473), as release checks (#603).
-    writeApproval(join(home, '.nuworq', 'release-approvals'), createPrivateKey(readFileSync(join(dir, 'key', 'release-key.pem'))), { tag: `v${version}`, commit });
-    const { stdout } = await run(process.execPath, [SIGN, 'release', `${url}/w/acme`, join(dir, 'key', 'release-key.pem')], { cwd: out, env: { ...process.env, HOME: home } });
+    const home = approvedHome('key'); // approved where the key is (#473), as release checks (#603)
+    const { stdout } = await run(process.execPath, [signer(), 'release', `${url}/w/acme`, join(dir, 'key', 'release-key.pem')], { cwd: out, env: { ...process.env, HOME: home } });
     const sig = `nuworq-${commit}.tgz.sig`;
     const wrote = join(home, '.nuworq', 'signatures', sig); // its own folder, never the checkout (#475)
     assert.match(stdout, new RegExp(`Signed ${version.replace(/\./g, '\\.')} \\(${commit.slice(0, 7)}, made \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\): wrote ${wrote}`));
