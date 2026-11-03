@@ -56,6 +56,7 @@ export const NEW = {
   'worker-commands': '2026-11-02', // #768: Settings' Worker commands: workers run the project's checks, and the commands a person adds
   'stall-causes': '2026-11-02', // #754: analytics' Why work stalled, stalled jobs by cause (exited, timeout, budget, went quiet…)
   'spend-alerts': '2026-11-02', // #767: Needs you at 80% of the daily budget (Raise budget, Pause runners) and for a worker past $50 or an hour (Stop it)
+  'workspace-delete': '2026-11-02', // #799: Workspace settings → Delete workspace, for its owners
 };
 
 const DAYS = 7;

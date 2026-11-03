@@ -37,7 +37,7 @@ function fakeHub(port = 0) {
 
 // `nuworq mcp` over stdio: send requests, collect every message it writes.
 function mcp(port) {
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))), NUWORQ_URL: `http://127.0.0.1:${port}` };
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), NUWORQ_URL: `http://127.0.0.1:${port}` };
   const child = spawn(process.execPath, [BIN, 'mcp'], { env });
   const seen = [];
   let buf = '';

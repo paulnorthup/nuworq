@@ -19,21 +19,21 @@ The last word of the second line is the release key (`release-key.pub` in this r
 nuworq connect https://nuworq.com/w/acme         # browser login, saves the token, registers Claude Code and Codex
 ```
 
-### The setup that works
+### Recommended setup
 
 Three sessions, each where it works best. It's how nuworq itself is built. Starting with just a shaper is fine. Add workers and an operator once there's work for them. The operator and the shaper are Claude Code with the nuworq plugin (below), which `connect` offers to install.
 
-1. **Start workers.** Workers on `nuworq run` (best as a service) build, review and land the work: headless agents, each in its own git worktree, on the projects you let them staff. They need no one watching. As a service they keep going after you close the terminal, and after a restart. In a clone of the project, run:
+1. **Shape work with a shaper.** A shaper is Claude Code in the Claude Code app. You tell it what you want and why; it talks it through, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you. It's the session you read and talk in, and the app is made for reading and talking. Open the project's folder in the Claude Code app's Code tab, then type `/nuworq:shaper`.
+
+2. **Start workers.** Workers build, review and land the work. They run in the background with no window, each in its own copy of your repository, so they never touch your files. They work only on the projects you let them. As a service they keep going after you close the terminal, and after a restart. In a clone of the project, run:
 
    ```bash
    nuworq run --install --workers auto
    ```
 
-2. **Start an operator.** An operator in a terminal manages the workers and keeps things moving: it answers their questions, lands work, and does what workers can't. It asks you only what only you can do. Its listener starts a turn each time something waits for it. In a terminal of its own, those turns never interrupt the conversation you're having with the shaper. In the project's folder, run `claude`, then type `/nuworq:operator` (`nuworq operator --start` does both).
+3. **Start an operator.** An operator is Claude Code in a terminal, acting with your access. It does the work workers aren't allowed to do. It answers the questions workers send it, lands their work, and runs the steps on real systems. It asks you only for what it can't do itself. In its own terminal, it never interrupts your conversation with the shaper. `nuworq up` starts one for each project that doesn't have one yet. Or, in the project's folder, run `claude`, then type `/nuworq:operator` (`nuworq operator --start` does both).
 
-3. **Shape work with a shaper.** A shaper in the Claude Code app talks through what you want, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you. It's the session you read and talk in, and the app is made for reading and talking. Open the project's folder in the Claude Code app's Code tab, then type `/nuworq:shaper`.
-
-`nuworq run --workers 3 --agent claude` keeps workers going in this terminal instead, until Ctrl-C. Or, after connecting, one command brings it all up and keeps it up: `nuworq up` makes sure one runner runs here as a service with `--workers auto` (installed if there is none, restarted if its flags differ), asks once whether to staff the projects that aren't (a no is remembered), and opens an operator (Claude Code with `/nuworq:operator`) in its own terminal for each unparked project that has none: in tmux when it is installed (`tmux attach -t nuworq`, a window per project), else a Terminal or iTerm window on a Mac, else it prints the commands. A project with no clone here is skipped, with where to clone it. Run it again any time, after a restart too: it starts only what is missing, and ends with a table of each project, its operator and the runner. `nuworq up --dry-run` prints that table and does nothing; `nuworq down` stops the operators it started and the runner service.
+`nuworq run --workers 3 --agent claude` keeps workers going in this terminal instead, until Ctrl-C. Or, after connecting, one command brings it all up and keeps it up: `nuworq up` makes sure one runner runs here as a service with `--workers auto` (installed if there is none, restarted if its flags differ), asks once whether workers may take the work of each project they aren't on yet (a no is remembered), and opens an operator (Claude Code with `/nuworq:operator`) in its own terminal for each project that isn't parked (paused in its Settings) and has none: in tmux, a terminal that keeps running after you close its window, when it is installed (`tmux attach -t nuworq`, a window per project), else a Terminal or iTerm window on a Mac, else it prints the commands. A project with no clone here is skipped, with where to clone it. Run it again any time, after a restart too: it starts only what is missing, and ends with a table of each project, its operator and the runner. `nuworq up --dry-run` prints that table and does nothing; `nuworq down` stops the operators it started and the runner service.
 
 `run` keeps workers on the projects you let it staff ("Staff it with nuworq run" in the UI, or `nuworq staff <project>`), one per waiting item. Add `--browser` for workers that check UI work. Each worker gets its own git worktree (each item it takes gets its own branch, cut from the latest main). `nuworq worker --agent claude --run` starts a single one, and goes wherever work is waiting across projects; `--agent codex`, `--agent opencode --model ollama/qwen3.8:27b-mtp-q4_K_M` and `--agent pi --model ollama/qwen3.8:27b-mtp-q4_K_M` (a local open-weight model) work the same way, with `--can-read-keys`: only Claude workers are kept from your machine's keys. Codex's sandbox limits writes and network, not reads, and opencode and pi have no sandbox, so their workers also run only on projects without a remote. Workers run git and the project's checks (`npm test`, `npm ci`, its test, lint and build scripts, `pytest`, `cargo test`, `go test`); add other commands in the project's Settings, under Worker commands. A pi worker gets a config folder of its own (`~/.nuworq/pi/<worker>`), so none of your pi extensions, skills, MCP servers or sign-ins follow it in: give its provider key in the environment.
 
@@ -106,7 +106,6 @@ default_tools_approval_mode = "approve"
 ```
 
 Working on nuworq itself? See [CONTRIBUTING.md](CONTRIBUTING.md).
-nuworq used to be called Trellis. Setups from then keep working: the `trellis` command (`bin/trellis.js`), `TRELLIS_*` variables, `.trellis.json`, `~/.trellis` and `trl_` tokens are still read wherever the new names are.
 
 ---
 
@@ -176,7 +175,7 @@ You can also set channels up in the UI, under **Notifications** in the left rail
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.
 
 ### Operators (so "Needs you" is only decisions)
-Much of what used to reach you needed a capable session, not a decision: running `claude`, the project's live infrastructure, GitHub admin, a real browser. An **operator** does that: an attended Claude Code session in the project folder, running with your permissions and safety checks.
+Much of what used to reach you needed a capable session, not a decision: running `claude`, the project's live infrastructure, GitHub admin, a real browser. An **operator** does that: a Claude Code session you keep open in the project folder, acting with your access and safety checks.
 - It checks in with `has: ["operator", …]` plus the capabilities it really has: `claude-cli`, `infra`, `github-admin`, `browser`. `infra` is the live infrastructure of the project the session checked in to: servers and VMs, DNS, cloud accounts and deploys. Items whose `needs` include `operator`, `claude-cli`, `infra` or `github-admin` are offered only to it. (`nuworq-infra` and `homelab-vm`, the old names, are still accepted and stored as `infra`.)
 - Agents ask questions about running things, permissions or verifying on real infrastructure with `to: "operator"`; the operator answers them instead of you.
 - It escalates to you only when its own safety check needs your approval (risky or irreversible actions, product judgment): one precise question, with the evidence attached.
@@ -210,7 +209,7 @@ src/notify.js      push channels (ntfy, Slack, webhook): new act-level entries, 
 src/github.js      signed GitHub webhook: PRs link to items, CI results per head commit
 src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
-src/names.js       the new names, and the old Trellis ones still read (env, config file, data folder)
+src/names.js       where nuworq's names are read: NUWORQ_* env, .nuworq.json, ~/.nuworq
 src/runner.js      nuworq run: which workers to start (pure plan) and the supervising loop
 src/usage.js       tokens and cost: reading them from agent CLIs' JSON output, splitting a run across items
 src/llmproxy.js    measured usage from llm-proxy (NUWORQ_LLM_PROXY_URL/_KEY) for each agent's lease windows; supersedes reported

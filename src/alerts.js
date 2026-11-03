@@ -140,7 +140,7 @@ export function accessSteps(repo, problem, url) {
 }
 
 // Where the app's installation on a repository is managed: a person's own settings, or their GitHub organization's.
-const installationUrl = (web, inst) => (!inst.account?.login || inst.account.type === 'User'
+export const installationUrl = (web, inst) => (!inst.account?.login || inst.account.type === 'User'
   ? `${web}/settings/installations/${inst.id}`
   : `${web}/organizations/${inst.account.login}/settings/installations/${inst.id}`);
 

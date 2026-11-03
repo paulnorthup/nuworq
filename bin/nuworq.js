@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
-import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
+import { envVar, dataDir, defaultDb, CONFIG_FILE } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
 import { sandboxSettings, filePermissions, projectCommands, sandboxHosts, testsLine, workerCommands, workerGitDenies } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
@@ -173,7 +173,7 @@ async function operatorCmd(flags) {
     }
     console.log(now.without_infra ? `This machine declares no ${bold('infra')}: it can't reach ${project}'s live systems. Undo: nuworq operator --with infra`
       : now.infra_check ? `${bold('infra')} is declared only while ${bold(now.infra_check)} passes. Clear it: nuworq operator --infra-check ""`
-      : `${bold('infra')} is declared: a person starts this attended operator here.`);
+      : `${bold('infra')} is declared: a person starts this operator here, in a terminal they can see.`);
     return;
   }
   if (flags.detect) return detectCmd(flags);
@@ -186,8 +186,7 @@ async function operatorCmd(flags) {
 ${operatorStart(flags.has ? has : null)}
 
 ${flags.has ? `It declares ${has.join(', ')}.` : `Capabilities are optional: left out, it detects what this session can do (see nuworq operator --detect).`}
-It works until nothing waits, then stays idle and listens: each new operator item, operator question or answer
-starts a turn on its own. No /loop. ${dim('nuworq operator --start opens it for you, with its routine commands allowed.')}${dim(` (Without the nuworq plugin: ${operatorStart(flags.has ? has : null, { plugin: false })}.)`)}`);
+It works whenever something needs it, and waits for free when there's nothing to do. No /loop. ${dim('nuworq operator --start opens it for you, with its routine commands allowed.')}${dim(` (Without the nuworq plugin: ${operatorStart(flags.has ? has : null, { plugin: false })}.)`)}`);
 }
 
 const OPERATOR_FILE = join(dataDir(), 'operator.json');
@@ -1046,7 +1045,9 @@ function workerSetup(target, agent, flags, s, token = null) {
     projectCommands(home, commands),
     // nuworq itself: the demo hub its UI work is looked at with.
     browser && has('bin/nuworq.js') && ['Bash(node bin/nuworq.js serve --demo --port 0)'],
-    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)', 'Bash(git rebase:*)'],
+    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)', 'Bash(git rebase:*)',
+      // Deleting a tracked file the change replaces (#796); workerGitDenies keeps its paths in the worktree.
+      'Bash(git rm:*)'],
     // Landing without an origin: fast-forward main in this one checkout. Nothing else with -C.
     isRepo && !origin && [`Bash(git -C ${home} merge --ff-only:*)`],
     // Through origin: fetch, and push the item's branch. Every push goes through the hub, which passes on only
@@ -1193,14 +1194,14 @@ async function runService(flags, { argv = process.argv.slice(3), cwd = process.c
   if (!r.up) process.exitCode = 1;
   console.log(`${r.up ? `${green('●')} Installed ${bold('nuworq run')} as a ${r.kind}, and the runner is up: it runs now, after every reboot, and again if it stops.`
     : `${amber('!')} Installed ${bold('nuworq run')} as a ${r.kind}, but the runner isn't up after 10 seconds. Check on it with: ${r.status}\n  and read the log below for why it stopped.`}
-  Runs in: ${cwd}  ${dim(`(checkouts: ${env.NUWORQ_REPOS ?? env.TRELLIS_REPOS})`)}
+  Runs in: ${cwd}  ${dim(`(checkouts: ${env.NUWORQ_REPOS})`)}
   Wrote:   ${r.file}
   Log:     ${r.log}
   Remove:  ${r.uninstall}${process.platform === 'linux' ? `\n  ${dim('To keep it running while you are logged out: loginctl enable-linger')}` : ''}`);
   // Opted-in projects it couldn't work on from there: say so now, with the fix, not later in the log.
   const projects = await createClient(flags).get('/api/projects').catch(() => null);
   if (!projects) return console.log(dim(`  Couldn't reach the hub to check this machine has checkouts of its projects.`));
-  const roots = env.NUWORQ_REPOS ?? env.TRELLIS_REPOS ?? '';
+  const roots = env.NUWORQ_REPOS ?? '';
   const missing = svc.missingCheckouts(projects, (remotes) => checkoutOf(remotes, { cwd, roots }));
   if (!missing.length) return;
   console.log(`\n${amber('!')} No checkout here of ${missing.length === 1 ? 'an opted-in project' : `${missing.length} opted-in projects`}. The runner clones ${missing.length === 1 ? 'it' : 'them'} when the hub's GitHub App can, and otherwise skips ${missing.length === 1 ? 'it' : 'them'}. To clone yourself:`);
@@ -1470,6 +1471,9 @@ async function runCmd(flags) {
   });
   // Exit 0 and the service (KeepAlive, Restart=always) starts it again, on the new code.
   if (r.restart) process.exit(0);
+  // Its workspace was deleted (#799): a service would only start it again into the same answer, so it waits here
+  // without asking the hub, until the service is stopped.
+  if (r.deleted && supervised()) setInterval(() => {}, 2 ** 30);
 }
 
 // One line from stdin, for a secret: not echoed when typed at a terminal.
@@ -1672,13 +1676,11 @@ function init(flags) {
   const s = resolveSettings(flags);
   // Optional: pin this folder to a project. Usually unnecessary: the hub learns where projects live.
   if (flags.project) {
-    // An older .trellis.json here counts as existing config too (a new .nuworq.json would replace it).
-    const existing = CONFIG_FILES.find((f) => existsSync(join(process.cwd(), f)));
-    if (existing && !flags.force) {
-      console.log(dim(`${existing} already exists (use --force to overwrite)`));
+    if (existsSync(join(process.cwd(), CONFIG_FILE)) && !flags.force) {
+      console.log(dim(`${CONFIG_FILE} already exists (use --force to overwrite)`));
     } else {
-      writeFileSync(join(process.cwd(), CONFIG_FILES[0]), JSON.stringify({ project: s.project, url: s.url }, null, 2) + '\n');
-      console.log(green(`Wrote ${CONFIG_FILES[0]} → project "${s.project}", hub ${s.url}`));
+      writeFileSync(join(process.cwd(), CONFIG_FILE), JSON.stringify({ project: s.project, url: s.url }, null, 2) + '\n');
+      console.log(green(`Wrote ${CONFIG_FILE} → project "${s.project}", hub ${s.url}`));
     }
   }
   const q = JSON.stringify(BIN);
@@ -1739,8 +1741,7 @@ async function seedCmd(flags) {
   const { seed } = await import('../src/seed.js');
   const db = dbPath(flags);
   const hub = new Hub({ file: db });
-  // A hub seeded before the rename has it as "trellis".
-  const have = hub.projects().find((p) => p.slug === 'nuworq' || p.slug === 'trellis');
+  const have = hub.projects().find((p) => p.slug === 'nuworq');
   if (have) {
     throw new HubError(`${db} already has a "${have.slug}" project`, { hint: 'Nothing to do. Delete that project first if you want a fresh copy.' });
   }

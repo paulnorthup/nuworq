@@ -8,9 +8,9 @@ const app = appSource();
 const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
 
 test('Workspace settings: the label whole, Upgrade a tag beside it, no separator', () => {
-  const line = app.split('\n').find((l) => l.includes('data-action="workspace-settings"'));
+  const line = app.split('\n').find((l) => l.includes('class="rail-item" data-action="workspace-settings"'));
   assert.ok(line, 'the rail entry');
-  assert.match(line, /<span class="name">Workspace settings<\/span>\$\{S\.billing\.plans\?\.length \? '<span class="tag now">Upgrade<\/span>' : ''\}/);
+  assert.match(line, /<span class="name">Workspace settings<\/span>\$\{S\.billing\?\.plans\?\.length \? '<span class="tag now">Upgrade<\/span>' : ''\}/);
   assert.ok(!line.includes('·'), 'no separator to wrap');
   assert.match(css, /\.rail-foot \.tag \{[^}]*text-transform: none/, 'a narrow tag, so the label fits the desktop rail');
 });

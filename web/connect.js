@@ -60,37 +60,46 @@ export function connectCommands(info, page = null, slug = 'my-project') {
   };
 }
 
-// The setup that works (#489): how nuworq itself is built, and what every place that says how to get going offers
+// The recommended setup (#489, #801): how nuworq itself is built, and what every place that says how to get going offers
 // first, in this order and these words: the guide, Get started, Connect an agent, the README and the CLI's bare
-// screen (test/setup.test.js holds them together). name, where and does make one sentence (setupLine); how is
+// screen (test/setup.test.js holds them together). says is what it is, in short sentences (setupLine); how is
 // what to type, with each command to copy in backticks.
 export const SETUP = [
   {
-    key: 'workers', title: 'Start workers', name: 'Workers', where: 'on `nuworq run` (best as a service)',
-    does: 'build, review and land the work: headless agents, each in its own git worktree, on the projects you let them staff.',
-    why: 'They need no one watching. As a service they keep going after you close the terminal, and after a restart.',
+    key: 'shaper', title: 'Shape work with a shaper',
+    says: ['A shaper is Claude Code in the Claude Code app.',
+      'You tell it what you want and why; it talks it through, recommends milestones and their parts, and proposes them once you agree.',
+      'You decide; it never decides for you.',
+      'It\'s the session you read and talk in, and the app is made for reading and talking.'],
+    how: 'Open the project\'s folder in the Claude Code app\'s Code tab, then type `/nuworq:shaper` (or "/nuworq-shaper" without the plugin)',
+  },
+  {
+    key: 'workers', title: 'Start workers',
+    says: ['Workers build, review and land the work.',
+      'They run in the background with no window, each in its own copy of your repository, so they never touch your files.',
+      'They work only on the projects you let them.',
+      'As a service they keep going after you close the terminal, and after a restart.'],
     how: 'In a clone of the project, run `nuworq run --install --workers auto`',
   },
   {
-    key: 'operator', title: 'Start an operator', name: 'An operator', where: 'in a terminal',
-    does: 'manages the workers and keeps things moving: it answers their questions, lands work, and does what workers can\'t. It asks you only what only you can do.',
-    why: 'Its listener starts a turn each time something waits for it. In a terminal of its own, those turns never interrupt the conversation you\'re having with the shaper.',
-    // Without the plugin (declined, or no access to the repository yet), connect writes it as /nuworq-operator (#492).
-    how: 'In the project\'s folder, run `claude`, then type `/nuworq:operator` (or "/nuworq-operator" without the plugin)',
-  },
-  {
-    key: 'shaper', title: 'Shape work with a shaper', name: 'A shaper', where: 'in the Claude Code app',
-    does: 'talks through what you want, recommends milestones and their parts, and proposes them once you agree. You decide; it never decides for you.',
-    why: 'It\'s the session you read and talk in, and the app is made for reading and talking.',
-    how: 'Open the project\'s folder in the Claude Code app\'s Code tab, then type `/nuworq:shaper` (or "/nuworq-shaper" without the plugin)',
+    key: 'operator', title: 'Start an operator',
+    says: ['An operator is Claude Code in a terminal, acting with your access.',
+      'It does the work workers aren\'t allowed to do.',
+      'It answers the questions workers send it, lands their work, and runs the steps on real systems.',
+      'It asks you only for what it can\'t do itself.',
+      'In its own terminal, it never interrupts your conversation with the shaper.'],
+    // nuworq up first (#797), then by hand. Without the plugin (declined, or no access to the repository yet), connect
+    // writes it as /nuworq-operator (#492). byHand: the guide's by-hand part, which follows its own nuworq up (#801).
+    how: '`nuworq up` starts one for each project that doesn\'t have one yet. Or, in the project\'s folder, run `claude`, then type `/nuworq:operator` (or "/nuworq-operator" without the plugin)',
+    byHand: 'In the project\'s folder, run `claude`, then type `/nuworq:operator` (or "/nuworq-operator" without the plugin)',
   },
 ];
-// One session in a sentence, in backtick marks: "Workers on `nuworq run` (best as a service) build, …".
-export const setupLine = (s) => `${s.name} ${s.where} ${s.does} ${s.why}`;
+// One session in short sentences, in backtick marks.
+export const setupLine = (s) => s.says.join(' ');
 export const SETUP_LEAD = 'Three sessions, each where it works best. It\'s how nuworq itself is built. Starting with just a shaper is fine.';
 
 // The sessions as Connect an agent shows them, each with what to type and a Copy per command.
-export const setupSection = () => `<section><h3><span data-new="setup-that-works">The setup that works</span></h3>
+export const setupSection = () => `<section><h3><span data-new="setup-that-works">Recommended setup</span></h3>
   <p class="lead">${esc(SETUP_LEAD)}</p>
   ${SETUP.map((s, k) => `<h4>${k + 1}. ${esc(s.title)}</h4><p class="lead">${esc(setupLine(s)).replace(/`([^`]+)`/g, '<code>$1</code>')}</p>${commandBlocks(s.how)}`).join('')}</section>`;
 

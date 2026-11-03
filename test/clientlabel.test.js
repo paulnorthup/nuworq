@@ -21,7 +21,7 @@ async function workerCmd(agent, { home, extra = [], vars = {} }) {
   const server = createServer(hub);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_|^ANTHROPIC_CUSTOM_HEADERS$/.test(k))), HOME: home, ...vars };
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_|^ANTHROPIC_CUSTOM_HEADERS$/.test(k))), HOME: home, ...vars };
     const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'lab', '--agent', agent, '--as', 'w-1', ...(agent === 'claude' ? [] : ['--can-read-keys']), ...extra], { env, cwd: home });
     return stdout;
   } finally { server.close(); }

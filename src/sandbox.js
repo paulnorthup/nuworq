@@ -5,7 +5,7 @@
 // would run anything. Setting names: https://code.claude.com/docs/en/sandboxing (checked 2026-11-01).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { flag, GIT_RUNS, rebaseRuns } from './gitrules.js';
+import { flag, GIT_RUNS, rebaseRuns, rmOutside } from './gitrules.js';
 
 export const HOSTS_HINT = 'Give host names only, e.g. api.stripe.com or *.example.com, separated by commas.';
 
@@ -138,10 +138,10 @@ export function filePermissions({ home, worktree, cwd = worktree ?? home, landsH
 // (#625): the transport's, a diff or textconv driver, --output, and rebase's exec, editor and strategy. The sandbox
 // would still bound such a program, but "exact commands, never an interpreter" means none starts. Deny wins over the
 // allowlist. home: the checkout, whose `git -C <home> merge --ff-only` a worker landing there may run.
-export const WORKER_GIT = ['git status', 'git diff', 'git log', 'git add', 'git commit', 'git switch', 'git rebase', 'git fetch', 'git push origin'];
+export const WORKER_GIT = ['git status', 'git diff', 'git log', 'git add', 'git commit', 'git switch', 'git rebase', 'git fetch', 'git push origin', 'git rm'];
 export function workerGitDenies({ home = null } = {}) {
   const cmds = [...WORKER_GIT, ...(home ? [`git -C ${home} merge --ff-only`] : [])];
-  return [...cmds.flatMap((c) => flag(c, ...GIT_RUNS)), ...rebaseRuns(), ...(home ? flag(`git -C ${home} merge --ff-only`, '--strategy', '-s') : [])];
+  return [...cmds.flatMap((c) => flag(c, ...GIT_RUNS)), ...rebaseRuns(), ...rmOutside(), ...(home ? flag(`git -C ${home} merge --ff-only`, '--strategy', '-s') : [])];
 }
 
 // The npm scripts a worker runs by default (#768): the project's checks (test, lint, check, typecheck, build, and

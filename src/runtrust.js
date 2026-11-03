@@ -72,7 +72,7 @@ export const dropTokenFile = (file) => { try { if (file) rmSync(file, { force: t
 // any variable holding one, e.g. a credential helper an older runner exported).
 // Git's GIT_CONFIG_COUNT/KEY_n/VALUE_n go together: when one goes, they all do, or git refuses to start.
 export function withoutTokens(env = process.env) {
-  const out = Object.entries(env).filter(([k]) => !/^(NUWORQ|TRELLIS)_(AGENT_)?TOKEN$/.test(k));
+  const out = Object.entries(env).filter(([k]) => !/^NUWORQ_(AGENT_)?TOKEN$/.test(k));
   const holds = ([, v]) => new RegExp(TOKENS.source).test(String(v));
   const gitConfig = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
   const dropGit = out.some((e) => gitConfig.test(e[0]) && holds(e));

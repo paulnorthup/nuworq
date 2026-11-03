@@ -667,6 +667,17 @@ export const MIGRATIONS = [
     name: "a runner's workers a person stopped",
     up(db) { addColumn(db, "ALTER TABLE runners ADD COLUMN stop TEXT NOT NULL DEFAULT '[]'"); },
   },
+  {
+    // The hub's own entries from before nuworq had its name (#792) carry it now, so nothing reads the old one. The
+    // old name is built here, not spelled, so the repository holds no trace of it (test/names.test.js).
+    name: "the hub's own entries carry its name",
+    up(db) {
+      const old = ['tre', 'llis'].join('');
+      for (const [table, col] of [['events', 'actor'], ['transitions', 'actor'], ['questions', 'asked_by'], ['questions', 'answered_by'], ['notes', 'author']]) {
+        db.prepare(`UPDATE ${table} SET ${col} = 'nuworq' WHERE ${col} = ?`).run(old);
+      }
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

@@ -18,6 +18,7 @@ import { markNew } from './new.js';
 import { $, api, closeModal, loadProjects, modal, fieldError, prefetchView, refresh, render, scheduleRefresh, toast, toastError, views } from './ui.js';
 import { MAC, Z, esc, inline, plural, stepWhere } from './views/html.js';
 import { z } from './views/parts.js';
+import { wsOwner } from './views/rail.js';
 
 // What the person does (#602): ACTIONS, by the data-action of what they click; KEYS, the shortcuts; and the dialogs
 // and the quick launcher they open. Each changes the state through web/store.js and calls render, which draws only
@@ -315,18 +316,43 @@ async function notifySettings() {
   help();
 }
 
-// The workspace's settings (#231), for its owners while the hub takes payments: billing in one plain line,
+// The workspace's settings (#231), for its owners: while the hub takes payments, billing in one plain line,
 // Upgrade while Free (#228), and Stripe's own page to change the card, see invoices or cancel. A failed payment
-// leads, in warning color. Stripe sends the owner back to #/settings, which opens this again.
+// leads, in warning color. Stripe sends the owner back to #/settings, which opens this again. Last, on any hub with
+// workspaces, Delete workspace (#799).
+let wsInfo = null; // GET /api/workspace, for the delete dialog
 export async function workspaceSettings({ again = false } = {}) {
   if (again && !$('#ws-settings')) return; // closed meanwhile
   let b;
-  try { b = await api('/api/billing'); } catch (e) { return again || toastError(e); }
-  setState({ billing: b });
-  modal(`<h2 id="ws-settings">Workspace settings</h2>${billingSection(b, { esc, done: S.checkoutDone })}`);
+  try { [b, wsInfo] = await Promise.all([S.billing ? api('/api/billing') : null, api('/api/workspace')]); } catch (e) { return again || toastError(e); }
+  if (b) setState({ billing: b });
+  modal(`<h2 id="ws-settings">Workspace settings</h2>${b ? billingSection(b, { esc, done: S.checkoutDone, last: !wsInfo.owner }) : ''}${wsInfo.owner ? deleteSection(wsInfo) : ''}`);
   // Back from Checkout: look again soon, until the webhook has made it paid.
   if (S.checkoutDone && b.plan === 'free') setTimeout(() => workspaceSettings({ again: true }), 5000);
   else setState({ checkoutDone: false });
+}
+
+// Delete workspace (#799): the settings' last section, and the dialog it opens. Deleting is immediate and for good,
+// backups too, so the dialog says what goes and what stays, and Delete waits for the name typed exactly. A plan that
+// renews is cancelled first; the server checks all of it again.
+const deleteSection = (w) => `<h4><span data-new="workspace-delete">Delete workspace</span></h4>
+  <p class="lead faint">Deletes <b>${esc(w.name)}</b> and everything in it, for good. There is no undo.</p>
+  <div class="foot"><button class="btn ghost" data-action="workspace-delete">Delete workspace…</button><button class="btn primary" data-action="close-modal">Done</button></div>`;
+
+function deleteDialog(w) {
+  const name = esc(w.name);
+  const github = w.github.length
+    ? `The GitHub App stays installed on GitHub: ${w.github.map((g, i) => `<a href="${esc(g.url)}" target="_blank" rel="noopener">uninstall it there${w.github.length > 1 ? ` (${i + 1})` : ''}</a>`).join(', ')}.`
+    : 'If you installed the GitHub App for it, it stays installed on GitHub: uninstall it in <a href="https://github.com/settings/installations" target="_blank" rel="noopener">your GitHub settings</a>.';
+  modal(`<h2>Delete ${name}</h2>
+    <p class="lead">Deleting it removes at once, for good, with its backups:</p>
+    <ul class="lead"><li>every project, item and its history</li><li>every member's access</li><li>every agent token: connected agents and runners stop</li></ul>
+    <p class="lead faint">What stays: ${github} Stripe keeps the billing records the law requires.</p>
+    ${w.renewing ? `<p class="lead" style="color:var(--warn)"><b>Its plan renews, so it can't be deleted yet.</b> Cancel the plan first in Manage billing; once it is set to end, come back here.</p>` : ''}
+    <p class="lead" id="wsd-label">Type <code>${name}</code> to delete it.</p>
+    <div class="form"><input id="wsd-name" aria-labelledby="wsd-label" placeholder="${name}" autocomplete="off" autocapitalize="off" spellcheck="false"${w.renewing ? ' disabled' : ''}></div>
+    <div class="foot"><button class="btn ghost" data-action="workspace-settings">Back</button>${w.renewing && w.portal ? '<button class="btn primary" data-action="billing-portal">Manage billing</button>' : ''}<button class="btn" id="wsd-go" data-action="workspace-delete-now" disabled>Delete workspace</button></div>`);
+  $('#wsd-name').addEventListener('input', (e) => { $('#wsd-go').disabled = w.renewing || e.target.value !== w.name; });
 }
 
 // Where the hub's GitHub App stands (/api/github/app), one line and its next step, so a person who closed a
@@ -472,7 +498,7 @@ export function drawLauncher({ keep = false } = {}) {
   if (!L.index) { list.innerHTML = placeholder(3, { head: false }); return; }
   if (L.confirming) { list.innerHTML = confirmHtml(L.confirming, { esc }); return; }
   // Moving through the list keeps it as it is; typing (or the index arriving) ranks it again.
-  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { theme: themeNow(), current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: !!S.billing?.owner, recent: recent() });
+  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { theme: themeNow(), current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: wsOwner(), recent: recent() });
   L.sel = Math.min(L.sel, Math.max(0, L.results.length - 1));
   list.innerHTML = resultsHtml(L.results, { sel: L.sel, stages: L.index.stages, esc });
   list.querySelector('.ln-row.on')?.scrollIntoView({ block: 'nearest' });
@@ -794,6 +820,15 @@ export const ACTIONS = {
   shortcuts: () => modal(shortcutsHtml({ mac: MAC })),
   launcher: () => (L.open ? closeLauncher() : openLauncher()),
   'workspace-settings': () => workspaceSettings(),
+  'workspace-delete': () => wsInfo && deleteDialog(wsInfo),
+  // Gone: the person lands on their list of workspaces.
+  'workspace-delete-now': async (el) => {
+    el.disabled = true;
+    try { location.href = (await api('/api/workspace/delete', { method: 'POST', body: JSON.stringify({ name: val('wsd-name') }) })).home; } catch (e) {
+      el.disabled = false;
+      if (e.status === 400) fieldError('wsd-name', fieldReason(e)); else toastError(e);
+    }
+  },
   feedback: (_el, { mine = false } = {}) => {
     setState({ feedbackCtx: attached({ href: location.href, version: S.feedback?.version, ua: navigator.userAgent }) });
     modal(feedbackForm(S.feedbackCtx, esc));

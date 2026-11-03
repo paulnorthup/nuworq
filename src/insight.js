@@ -391,7 +391,7 @@ function build(hub, p, t, { light = false } = {}) {
         it?.stage === 'waiting' && 'work is parked until you answer', landedSteps(q) && `${ref(it)} landed; ${orig ? 'its' : 'these'} steps are still to do`].filter(Boolean).join(' · '),
       why: [held && `@${q.reporter} replied on GitHub (${q.held_url}):\n\n${q.held_reply.split('\n').map((l) => `> ${l}`).join('\n')}`,
         orig && `${orig.asked_by} asked an operator: "${orig.question}"`,
-        forOperator && `${q.asked_by} asked an operator: a trusted, attended session that runs things, grants permissions or checks real infrastructure. None has checked in here in the last day, so it's yours: do the steps and answer, and ${q.asked_by} gets your answer as an operator's. Or start an operator and leave it to them.`,
+        forOperator && `${q.asked_by} asked an operator: a Claude Code session someone keeps open, acting with their access, for the work workers aren't allowed to do. None has checked in here in the last day, so it's yours: do the steps and answer, and ${q.asked_by} gets your answer as an operator's. Or start an operator and leave it to them.`,
         q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       ...(forOperator ? { operator: true, guide: OPERATOR_GUIDE } : {}),
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
@@ -429,7 +429,7 @@ function build(hub, p, t, { light = false } = {}) {
       headline: `${plural(forOperator.length, 'question')} ${forOperator.length === 1 ? 'waits' : 'wait'} for an operator; none connected`,
       sub: forOperator.map((q) => `Q${q.id}: ${q.question}`).slice(0, 3).join(' · '),
       questions: forOperator.map((q) => q.id), // by number (#710): ⌘K's "q207" lands on this card
-      why: 'Agents asked an operator: a trusted, attended session that checks in with has: ["operator"] to run things, grant permissions or verify on real infra. None has checked in here in the last day. Start an operator session: the guide\'s Start an operator says how.',
+      why: 'Agents asked an operator: a Claude Code session someone keeps open, acting with their access, for the work workers aren\'t allowed to do. None has checked in here in the last day. `nuworq up` starts one for each project that doesn\'t have one yet. To start one yourself, open a terminal in the project\'s folder, run `claude`, then type `/nuworq:operator`.',
       guide: OPERATOR_GUIDE,
     });
   }

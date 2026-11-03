@@ -64,7 +64,7 @@ export async function detect({ platform = process.platform, run, chrome = false,
     const c = await run('/bin/sh', ['-c', local.infra_check]);
     found.push(c.ok ? { tag: 'infra', ok: true, why: `its check passed (${local.infra_check})` } : { tag: 'infra', ok: false, why: `its check failed (${local.infra_check})` });
   } else {
-    found.push({ tag: 'infra', ok: true, why: 'a person started this attended operator here' });
+    found.push({ tag: 'infra', ok: true, why: 'a person started this operator here, in a terminal they can see' });
   }
   return { has: ['operator', ...found.filter((f) => f.ok).map((f) => f.tag)], found };
 }

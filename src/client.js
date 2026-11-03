@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { slugify, normRemote } from './text.js';
 import { mirrorSource } from './git.js';
-import { envVar, dataDir, CONFIG_FILES } from './names.js';
+import { envVar, dataDir, CONFIG_FILE } from './names.js';
 
 export const DEFAULT_URL = 'http://127.0.0.1:4747';
 // `nuworq serve` writes where it is listening, so clients find the hub without configuration.
@@ -13,12 +13,12 @@ export const HUB_FILE = join(dataDir(), 'hub.json');
 // `nuworq connect <url>` writes the hub this machine works with, and its token (readable only by you).
 export const CONNECT_FILE = join(dataDir(), 'connect.json');
 
-// The nearest .nuworq.json (or older .trellis.json) walking up from dir, or null.
+// The nearest .nuworq.json walking up from dir, or null.
 export function findConfig(dir = process.cwd()) {
   let d = resolve(dir);
   for (;;) {
-    const f = CONFIG_FILES.map((name) => join(d, name)).find((file) => existsSync(file));
-    if (f) {
+    const f = join(d, CONFIG_FILE);
+    if (existsSync(f)) {
       try { return { file: f, ...JSON.parse(readFileSync(f, 'utf8')) }; } catch { return { file: f }; }
     }
     const up = dirname(d);
@@ -154,8 +154,7 @@ export function createClient(opts = {}) {
   // What the saved connection said when last read: `nuworq connect` may change it while this client lives.
   const saved = (s) => `${s.url} ${s.token}`;
   let seen = saved(settings);
-  // Each x-nuworq-* header goes out under its old x-trellis-* name too, so hubs not yet updated still understand.
-  const named = (h) => Object.fromEntries(Object.entries(h).flatMap(([k, v]) => [[`x-nuworq-${k}`, v], [`x-trellis-${k}`, v]]));
+  const named = (h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [`x-nuworq-${k}`, v]));
   // The cursor of the last reply this session got (#539): the hub counts as sent only what it names.
   let cursor = '';
   const headers = (extra = {}) => ({

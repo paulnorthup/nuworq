@@ -413,6 +413,7 @@ export async function run({
   let why = '';
   let wake = () => {};
   let hubDown = false;
+  let deleted = false; // its workspace was deleted (#799)
   let idle = false;
   let toldUnstaffed = false;
   let moved = null; // "<from> → <to>": the installed package changed under this runner
@@ -543,7 +544,12 @@ export async function run({
         if (hubDown) log('The hub is back.');
         hubDown = false;
       } catch (e) {
-        if (!hubDown) log(`Can't reach the hub (${e.message}); retrying every ${pollSeconds}s.`);
+        // Its workspace was deleted (#799): nothing to come back to, so it stops rather than retry.
+        if (e?.status === 410) {
+          log(`${e.message}. ${e.hint ?? ''}`.trim());
+          deleted = true;
+          stop(e.message);
+        } else if (!hubDown) log(`Can't reach the hub (${e.message}); retrying every ${pollSeconds}s.`);
         hubDown = true;
       }
     }
@@ -681,5 +687,5 @@ export async function run({
   log(`Done: ${why}. ${launched} launched, ${done.length - failed} exited cleanly, ${failed} failed${each ? ` (${each})` : ''}${spent || maxUsd !== Infinity ? `; $${spent.toFixed(2)} spent` : ''}.`);
   const restart = !!(supervised && moved && !interrupted);
   if (restart) log(`nuworq updated ${moved}: restarting onto it`);
-  return { launched, done, why, spent, restart };
+  return { launched, done, why, spent, restart, deleted };
 }

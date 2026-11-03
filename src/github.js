@@ -31,7 +31,7 @@ function itemFor(hub, p, pr) {
   };
   const ref = String(pr.head?.ref ?? '');
   const own = () => ref && hub.q('SELECT * FROM items WHERE project_id = ? AND branch = ? ORDER BY updated_at DESC LIMIT 1').get(p.id, ref);
-  const agent = ref.match(/^(?:nuworq|trellis)\/(.+)$/)?.[1]; // trellis/: from before the rename
+  const agent = ref.match(/^nuworq\/(.+)$/)?.[1];
   const byBranch = () => agent && hub.q(`SELECT * FROM items WHERE project_id = ? AND (holder = ? OR implementer = ? OR last_worker = ?)
       ORDER BY (holder = ?) DESC, (stage IN ('active', 'verifying')) DESC, updated_at DESC LIMIT 1`).get(p.id, agent, agent, agent, agent);
   return bySeq(pr.title) || own() || byBranch() || bySeq(pr.body);

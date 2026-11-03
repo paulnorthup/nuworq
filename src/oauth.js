@@ -32,8 +32,8 @@ export const FLOW_COOKIE = 'nuworq_oauth';
 const b64 = (buf) => Buffer.from(buf).toString('base64url');
 const same = (a, b) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
-// Which providers this hub offers: NUWORQ_GITHUB_CLIENT_ID/_SECRET, NUWORQ_GOOGLE_CLIENT_ID/_SECRET
-// (or TRELLIS_…). Endpoints can be overridden (tests point them at a local stub).
+// Which providers this hub offers: NUWORQ_GITHUB_CLIENT_ID/_SECRET, NUWORQ_GOOGLE_CLIENT_ID/_SECRET.
+// Endpoints can be overridden (tests point them at a local stub).
 export function oauthFromEnv(env = process.env) {
   const out = {};
   for (const name of Object.keys(PROVIDERS)) {

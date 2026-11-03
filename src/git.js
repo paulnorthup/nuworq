@@ -58,18 +58,25 @@ export const contains = (repo, into, ref) => git(repo, 'merge-base', '--is-ances
 const count = (repo, range) => Number(git(repo, 'rev-list', '--count', range) ?? 0);
 // The full commit a ref points at; null when there is none.
 export const shaOf = (repo, ref) => git(repo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
-// Whether commit b is commit a's change, rebased (#605): the diff each makes against base, from where it branched, is
-// the same but for its blob ids and hunks' line numbers (as git patch-id compares them). A conflict resolved, a commit
-// added or anything else that changes what lands says false, and so does git not being able to say (a commit it
-// doesn't have, a diff too big to read).
+// Whether commit b is commit a's change, rebased or with base merged into it (#605, #784): the diff each makes against
+// base, from where it branched, removes and adds the same lines in the same order in each file (renames, modes and
+// binary changes too). Context isn't compared, nor blob ids, line numbers or similarity, so base's own edits beside
+// the change don't count. A conflict resolved differently, a commit or file added or anything else that changes what
+// lands says false, and so does git not being able to say (a commit it doesn't have, a diff too big to read). A merge
+// of a newer base than the hub's copy has is diffed from the older one, so base's newer commits count as change: false.
 export function sameChange(repo, base, a, b) {
   const change = (c) => {
     const from = git(repo, 'merge-base', base, c);
-    const diff = from && git(repo, 'diff', '--no-color', '--no-ext-diff', '--binary', from, c);
-    return diff ? diff.split('\n').filter((l) => !l.startsWith('index ')).map((l) => l.replace(/^@@ -\d+(,\d+)? \+\d+(,\d+)? @@/, '@@')).join('\n') : null;
+    const diff = from && git(repo, 'diff', '--no-color', '--no-ext-diff', '--binary', '-U0', from, c);
+    return diff ? diff.split('\n').filter((l) => !/^(index|similarity index|dissimilarity index) /.test(l)).map((l) => (l.startsWith('@@ ') ? '@@' : l)).join('\n') : null;
   };
   const x = change(a);
   return !!x && x === change(b);
+}
+// Whether commit c merges base in (#784): a merge whose other parents base already contains.
+export function mergesBase(repo, base, c) {
+  const parents = (git(repo, 'rev-list', '--parents', '-n', '1', c) ?? '').split(' ').slice(2);
+  return parents.length > 0 && parents.every((x) => contains(repo, base, x));
 }
 // Whether base already has commit c's change (#686): c is in it, or merging c into it changes nothing (the change
 // came in some other way, such as a squash holding more). A conflict, or git not being able to say, is false.
@@ -121,6 +128,16 @@ export function itemBranch(item) {
   return `nuworq/${item.seq}-${short || 'work'}`;
 }
 
+// The branch a claim names that another live item holds (#759), as { branch, seq } of the item that kept it, or
+// null. It needs no repository (#800): who holds a branch is the hub's to say, so the notice survives a mirror the
+// hub can't read yet. own, holderOf: as for gitFacts.
+export function takenBranch(agent, claim, own = '', holderOf = () => null) {
+  const text = [claim.headline, claim.summary, ...(claim.evidence ?? []).map((e) => e.label)].join(' ');
+  const named = text.match(/\bnuworq\/[\w.@-]+/)?.[0];
+  const holder = named && ![own, `nuworq/${agent}`].includes(named) ? holderOf(named) : null;
+  return holder ? { branch: named, seq: holder.seq } : null;
+}
+
 // repo: the project's main checkout. agent: the submitter. own: the item's branch, if it has one. holderOf(branch):
 // the other live item that holds a branch, if any (#759): a branch named only in the claim is taken only when it is
 // no other item's, and `taken` says which item kept it. Returns null when there is no repo to ask.
@@ -128,18 +145,18 @@ export function gitFacts(repo, agent, claim, own = '', holderOf = () => null) {
   if (!isRepo(repo)) return null;
   const base = baseOf(repo);
   const text = [claim.headline, claim.summary, ...(claim.evidence ?? []).map((e) => e.label)].join(' ');
-  // The item's own branch first; then worker branches, nuworq/<agent> (or trellis/<agent> from before the rename).
-  const mine = [own, `nuworq/${agent}`, `trellis/${agent}`];
-  const named = text.match(/\b(?:nuworq|trellis)\/[\w.@-]+/)?.[0];
-  const holder = named && !mine.includes(named) ? holderOf(named) : null;
-  const branch = [...mine, holder ? null : named].find((b) => b && exists(repo, b)) ?? null;
+  // The item's own branch first; then worker branches, nuworq/<agent>.
+  const mine = [own, `nuworq/${agent}`];
+  const named = text.match(/\bnuworq\/[\w.@-]+/)?.[0];
+  const taken = takenBranch(agent, claim, own, holderOf);
+  const branch = [...mine, taken ? null : named].find((b) => b && exists(repo, b)) ?? null;
   const commits = branch && base
     ? (git(repo, 'log', '--format=%h%x09%s', '-n', String(MAX_COMMITS), `${base}..${branch}`) ?? '')
       .split('\n').filter(Boolean).map((l) => { const [hash, ...s] = l.split('\t'); return { hash, subject: s.join('\t') }; })
     : [];
   const behind = branch && base ? count(repo, `${branch}..${base}`) : 0;
   const missing = claimedHashes(claim).filter((h) => !exists(repo, h));
-  return { branch, base, commits, behind, missing, ...(holder ? { taken: { branch: named, seq: holder.seq } } : {}) };
+  return { branch, base, commits, behind, missing, ...(taken ? { taken } : {}) };
 }
 
 // One line for the human, or null when git has nothing to worry about.

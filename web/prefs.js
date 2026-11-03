@@ -1,8 +1,8 @@
 
 
-// Per-browser preferences. Ones saved before the rename (under "trellis:") are still read.
+// Per-browser preferences.
 export const store = {
-  get: (k, d) => { try { return localStorage.getItem('nuworq:' + k) ?? localStorage.getItem('trellis:' + k) ?? d; } catch { return d; } },
+  get: (k, d) => { try { return localStorage.getItem('nuworq:' + k) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem('nuworq:' + k, v); } catch {} },
 };
 // Appearance (#485): Match device unless this browser chose Light or Dark. A setting, set once and kept in this

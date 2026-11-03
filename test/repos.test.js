@@ -232,7 +232,7 @@ describe('each item names its repo', () => {
     const home = join(root, 'home');
     mkdirSync(home);
     const env = {
-      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))),
+      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))),
       HOME: home, NUWORQ_URL: `http://127.0.0.1:${server.address().port}`,
     };
     const worker = (args, cwd) => promisify(execFile)(process.execPath, [BIN, 'worker', '--agent', 'claude', '--project', 'demo', ...args], { env, cwd });

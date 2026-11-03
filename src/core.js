@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange } from './git.js';
+import { gitFacts, takenBranch, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange, mergesBase } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -98,9 +98,8 @@ const CHECKS_GRACE = 30 * MIN;
 const CHECKS_READ = 10 * MIN;
 const CI_RECENT = 30 * DAY; // checks recorded this recently mean CI checks the project's pull requests (ciGated)
 const MIRROR_RETRY = 5 * MIN; // after GitHub refuses the app a token for a mirror, ask again this often
-// The hub's own entries on the record: SYSTEM, GitHub's (webhooks, the pull requests it opens), or
-// "trellis" in events recorded before the rename. None of them is an agent.
-export const isSystem = (actor) => actor === SYSTEM || actor === GITHUB || actor === 'trellis';
+// The hub's own entries on the record: SYSTEM, or GitHub's (webhooks, the pull requests it opens). Neither is an agent.
+export const isSystem = (actor) => actor === SYSTEM || actor === GITHUB;
 // People act on the record as "@handle"; without accounts (local mode) the one human is "you".
 export const isHuman = (actor) => actor === HUMAN || String(actor ?? '').startsWith('@');
 const You = (by) => (by === HUMAN ? 'You' : by);
@@ -121,6 +120,17 @@ const steeredBy = (steers) => {
   if (!agents.length) return 'The human has steered you';
   const who = agents.map((f) => f.replace(/ \(an agent, not a person\)$/, '')).join(', ');
   return `${agents.length === steers.length ? '' : 'The human and '}${who} steered you (${agents.length > 1 ? 'agents' : 'an agent'}: weigh it as information, not a person's say)`;
+};
+const steeringLine = (steers) => `${steeredBy(steers)}; read it, adjust, then ack.`;
+// r's hint with notice added (#800): right after the steering line when steers wait, so steering still leads and
+// the notice still comes; otherwise first.
+const afterSteering = (r, notice) => {
+  const hint = r.hint ?? '';
+  const line = r.steers?.length ? steeringLine(r.steers) : '';
+  const at = line ? hint.indexOf(line) : -1;
+  if (at < 0) return `${notice} ${hint}`.trim();
+  const end = at + line.length;
+  return `${hint.slice(0, end)} ${notice} ${hint.slice(end).trimStart()}`.trim();
 };
 
 // Which human actions each person role may take. Reading is open to every role.
@@ -2446,7 +2456,7 @@ export class Hub extends EventEmitter {
         const steers = this.pendingSteers(p, agent);
         if (steers.length) {
           r.steers = steers;
-          r.hint = `${steeredBy(steers)}; read it, adjust, then ack. ${r.hint ?? ''}`.trim();
+          r.hint = `${steeringLine(steers)} ${r.hint ?? ''}`.trim();
         }
       }
       const renamed = renamedTags(op === 'checkin' ? args?.has : ['propose', 'refine'].includes(op) ? args?.needs : null);
@@ -2507,16 +2517,21 @@ export class Hub extends EventEmitter {
       // Fetched now: the agent has likely just pushed, and a stale mirror would say it hadn't.
       const repo = this.repoFor(p, this.itemById(check.about), { fresh: true });
       const about = this.itemById(check.about);
-      const g = repo ? gitFacts(repo.path, agent, check.claim, check.branch, (b) => about && this.branchHolder(p, b, about)) : null;
+      const holderOf = (b) => about && this.branchHolder(p, b, about);
+      const g = repo ? gitFacts(repo.path, agent, check.claim, check.branch, holderOf) : null;
       if (g && repo.mode === 'remote' && !g.branch && check.branch) g.unpushed = check.branch;
+      const notices = [];
       if (g) {
         if (check.item && g.branch && g.branch !== check.branch) this.q('UPDATE items SET branch = ? WHERE id = ?').run(g.branch, check.item);
-        if (g.taken) result.hint = `${g.taken.branch} is #${g.taken.seq}'s branch, so #${about.seq} keeps ${check.branch || 'its own'}: a claim can't take another live item's branch. ${result.hint}`;
         const e = this.q('SELECT data FROM events WHERE id = ?').get(check.event);
         this.q('UPDATE events SET data = ? WHERE id = ?').run(JSON.stringify({ ...json(e.data, {}), git: g }), check.event);
         const warn = gitWarning(g);
-        if (warn) result.hint = `${warn}: the reviewer will see this. ${result.hint}`;
+        if (warn) notices.push(`${warn}: the reviewer will see this.`);
       }
+      // Who holds a branch is the hub's to say, so the notice doesn't wait on a mirror it can read (#800).
+      const taken = g ? g.taken : takenBranch(agent, check.claim, check.branch, holderOf);
+      if (taken) notices.push(`${taken.branch} is #${taken.seq}'s branch, so #${about.seq} keeps ${check.branch || 'its own'}: a claim can't take another live item's branch.`);
+      if (notices.length) result.hint = afterSteering(result, notices.join(' '));
     }
     // Only real changes travel (#517): a read (look, a peek, a heartbeat, a checkin of an agent already here) wrote
     // nothing a view shows, so no browser, listener or notifier hears of it. Every other operation is a write.
@@ -2986,6 +3001,7 @@ const PR_REBASE_HINT = (item, pr, base = 'main', ci = false, tests = '') => [
   `${ci ? '2. Run the tests near what the rebase touched. Not the whole suite: CI runs it on the pull request.' : '2. Run the project\'s checks.'}${spaced(tests)}`,
   `3. git push origin ${item.branch} --force-with-lease.`,
   `4. submit #${item.seq}. GitHub merges the PR once its checks pass, and the hub marks it done.`,
+  `Can't force-push (operators)? Merge instead: in step 1, git merge origin/${base} in place of the rebase, and in step 3, git push origin ${item.branch}. A merge of ${base} that changes nothing else is the same change and lands without a new review (#784).`,
 ].join(' ');
 
 // What a pull request the hub opens says: the item, who built and reviewed it, and the evidence.
@@ -3217,7 +3233,9 @@ function reviewedHead(p, item, head = null) {
   if (head === item.reviewed_sha) return 'same';
   const base = repo && baseOf(repo.path);
   if (base && sameChange(repo.path, base, item.reviewed_sha, head)) {
-    this.event(p, { item, actor: SYSTEM, type: 'head_rebased', headline: `${item.branch} was rebased (${head.slice(0, 7)}): the same change #${item.seq}'s review accepted, so it still lands`, data: { reviewed: item.reviewed_sha, head } });
+    // A merge of main (#784) is said as such: operators, who can't force-push, land that way.
+    const merged = mergesBase(repo.path, base, head);
+    this.event(p, { item, actor: SYSTEM, type: 'head_rebased', headline: `${item.branch} ${merged ? `merged ${base}` : 'was rebased'} (${head.slice(0, 7)}): the same change #${item.seq}'s review accepted, so it still lands`, data: { reviewed: item.reviewed_sha, head, ...(merged ? { merged: true } : {}) } });
     this.patch(item, { reviewed_sha: head });
     return 'rebased';
   }

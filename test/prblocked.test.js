@@ -86,6 +86,8 @@ describe('a landing PR that cannot merge routes itself', () => {
     assert.match(land.hint, /PR #101 for #1 conflicts with main/);
     assert.match(land.hint, /git rebase origin\/main/);
     assert.match(land.hint, /git push origin nuworq\/1-add-it --force-with-lease/);
+    // Operators, who can't force-push, may merge main instead (#784).
+    assert.match(land.hint, /Can't force-push \(operators\)\? Merge instead: .*git merge origin\/main .*git push origin nuworq\/1-add-it\. A merge of main that changes nothing else is the same change and lands without a new review/);
     assert.throws(() => w.op('a1', 'submit', { item: '#1', headline: 'Rebased' }), /doesn't contain main yet/);
 
     w.git(w.job.dir, 'fetch', '-q', 'origin');
