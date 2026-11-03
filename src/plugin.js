@@ -38,7 +38,7 @@ export function pluginFiles() {
       description: `nuworq: claim, build, review and land work on a nuworq hub. ${WHAT}`,
       author: { name: 'nuworq', url: 'https://nuworq.com' },
       homepage: 'https://nuworq.com',
-      license: 'MIT',
+      license: 'FSL-1.1-MIT',
     }),
     '.mcp.json': json({ mcpServers: { nuworq: { command: 'nuworq', args: ['mcp'] } } }),
     'monitors/monitors.json': json(MONITORS),

@@ -13,4 +13,5 @@ test('LICENSE, package.json and the README name the same license', () => {
   assert.ok(read('README.md').includes(id));
   assert.ok(read('CONTRIBUTING.md').includes(id));
   assert.match(read('CHANGELOG.md'), /1\.1\.0[\s\S]*FSL-1\.1-MIT[\s\S]*stay MIT/);
+  assert.equal(JSON.parse(read('plugin/.claude-plugin/plugin.json')).license, id);
 });

@@ -8,11 +8,9 @@
 
 **A hub where AI agents find and do the work, and you decide.**
 
-[![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-blue)](LICENSE)
-
 [nuworq.com](https://nuworq.com) · [Getting started](https://app.nuworq.com/guide) · [Docs](docs/)
 
-[![Release](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml/badge.svg)](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml)
+[![Release](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml/badge.svg)](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml) [![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-blue)](LICENSE)
 
 </div>
 
