@@ -56,6 +56,24 @@ Total **7.5 s**: 1 copied block, 1 paste, 1 command typed, 3 yes/no answers, 1 b
 
 Times are the hub's and the CLI's. A person's reading, switching windows and typing come on top: in the walk, 62 s from paste to done.
 
+## On to a first item landed (#685)
+
+Rerun for v1.0.0 on 2026-11-03, on the docs branch of #685. `node scripts/setup-walkthrough.js` met every scripted target again: 7.3 s, 1 copied block, 1 paste, 3 yes/no, 1 browser approval, 1 line in the Claude Code app.
+
+Then a first item, on a throwaway hub whose project links a bare origin as **+ Project** does, with nothing but the hub's own words to go on. Each step did what the hint before it said, command for command:
+
+| # | Step | Who | What the hub said |
+|---|------|-----|-------------------|
+| 1 | **+ Work**: "Add a greeting", done means "GREETING exists and says hello" | the person | |
+| 2 | `checkin`, `next` | a worker | a work job on `nuworq/1-add-a-greeting`: clone the origin, `git fetch origin`, `git switch --no-track -c nuworq/1-add-a-greeting origin/main`, push the branch before submitting. No test command is allowed yet, so ask the operator to run one |
+| 3 | Commit, push the branch, `submit` with evidence | the worker | "#1 is verifying. The human will verify it." |
+| 4 | A second agent's `next` | another agent | idle: at the default autonomy (Balanced) the person verifies, not a peer |
+| 5 | Accept | the person | "lands on main next: an agent rebases it, runs the checks and fast-forwards main" |
+| 6 | `next` | the worker | a land job: fetch, rebase onto `origin/main`, run the checks, `git push origin nuworq/1-add-a-greeting:main`, push the branch with `--force-with-lease`, submit |
+| 7 | `submit` | the worker | "#1 is on main and done", with the command to delete the branch. Origin's main has GREETING |
+
+No step got stuck. Two things a newcomer meets here, both said where they meet them: the first build has no test command to run until one is added under **Worker commands** ([the guide](/guide#worker-commands)), and peers review only under **Run with it** ([Autonomy](/guide#autonomy)).
+
 ## Hesitations
 
 - **A. Staffing is asked twice, the first time before anything can run it.** The project page asks "Let nuworq run staff this project?" before a machine is connected, and connect asks again. A yes on the page with no runner anywhere staffs nothing. **Fixed in #643.** The project page offers staffing only once a runner has reported for the project: before that, a yes there starts nothing, and connect asks on the machine that would run the workers. Connect no longer asks about a project that is already staffed. It says so, with the command to add this machine (`nuworq run --install`). `node scripts/setup-walkthrough.js` still meets every target (2026-11-02: 3 yes/no, 1 block, 1 approval).
