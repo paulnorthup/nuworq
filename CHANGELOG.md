@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+nuworq is licensed under FSL-1.1-MIT from this version: use, change and self-host it freely, including at a company, but no competing hosted or paid service, and each release becomes MIT two years after it ships. Versions before 1.1.0, including 1.0.0, stay MIT (#875).
+
 ## 1.0.0 (2026-11-03)
 
 nuworq v1.0.0: audited end to end, then made usable, bug-free, reliable, secure, efficient and polished, true to its claims, and open source (#675). The audit's ten reports are in docs/audit/, and their re-check in docs/audit/recheck/. Nearly all of the push shipped in 0.8.0 through 0.11.0; this entry sums it up by area, then says what is new since v0.11.0.
