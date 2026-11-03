@@ -14,3 +14,11 @@ export const GIT_RUNS = ['--upload-pack', '--receive-pack', '--exec', '--output'
 // What rebase runs besides: its exec (-x), the interactive editor (-i, --edit-todo) and a merge strategy (a
 // git-merge-* on PATH).
 export const rebaseRuns = () => [...flag('git rebase', '--interactive', '--strategy', '--edit-todo'), ...short('git rebase', 'CfikmnqrsvxX', 'x', 'i', 's')];
+// `git rm` (#796) stays inside the worktree: no path that starts at the root or the home folder or is built by the
+// shell, none that climbs out with `..`, and not --pathspec-from-file, which reads a list from any file. Quoted
+// too: `"/etc/hosts"` starts at the root just the same.
+export const rmOutside = () => [
+  ...['/', '~', '..', '$', '`', '"/', "'/", '"~', "'~"].flatMap((p) => [`Bash(git rm ${p}*)`, `Bash(git rm * ${p}*)`]),
+  ...['..', '$', '`'].map((p) => `Bash(git rm *${p}*)`),
+  ...flag('git rm', '--pathspec-from-file'),
+];
