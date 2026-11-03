@@ -757,11 +757,14 @@ describe('a worker for a project with no checkout on this machine', () => {
       assert.match(read(), /You were started for one job: land #1\./, 'a land job is still one capped run of its own');
       assert.match(read(), /^ARG --max-budget-usd\nARG 0\.5$/m);
 
-      // Any other job: only the per-worker cap (#761), and the worker keeps going.
+      // Any other job: only the per-worker cap (#761), none unless --worker-usd sets one (#795), and the worker keeps going.
       w.hub.q("UPDATE items SET stage = 'ready' WHERE seq = 1").run();
       rmSync(logs, { recursive: true });
       await run();
       assert.match(read(), /Keep going until next says/);
+      assert.doesNotMatch(read(), /ARG --max-budget-usd/, 'no default per-worker cap (#795)');
+      rmSync(logs, { recursive: true });
+      await run('--worker-usd', '25');
       assert.match(read(), /^ARG --max-budget-usd\nARG 25$/m);
     } finally {
       server.close();

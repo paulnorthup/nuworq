@@ -4,7 +4,6 @@
 // and the commands that open terminals are built here too, so tests check both without running anything.
 import { sq } from './runtrust.js';
 import { normRemote } from './text.js';
-import { CAP_ARGS } from './runner.js';
 
 export const SESSION = 'nuworq'; // the tmux session operators open in, one window per project
 
@@ -47,18 +46,7 @@ export function autoArgs(args = []) {
     if (args[i].startsWith('--workers=')) continue;
     out.push(args[i]);
   }
-  return withCaps([...out, '--workers', 'auto']);
-}
-
-// The runner's default caps (#761) written out, so its service file says what it runs with: each one the flags
-// don't already set.
-export function withCaps(args = []) {
-  const caps = [];
-  for (let k = 0; k < CAP_ARGS.length; k += 2) {
-    const flag = CAP_ARGS[k];
-    if (!args.some((a) => a === flag || a.startsWith(`${flag}=`))) caps.push(flag, CAP_ARGS[k + 1]);
-  }
-  return [...args, ...caps];
+  return [...out, '--workers', 'auto'];
 }
 
 const isAuto = (args = []) => args.some((a, i) => a === '--workers=auto' || (a === '--workers' && args[i + 1] === 'auto'));
@@ -100,7 +88,7 @@ export function upPlan({ projects = [], declined = [], clones = {}, local = {}, 
   let r;
   const keep = { cwd: runner.cwd, ...(runner.tokenFile ? { tokenFile: runner.tokenFile } : {}) };
   if (runner.supported === false) r = { action: 'none', why: "this platform has no service manager nuworq knows: run `nuworq run --workers auto` under your own" };
-  else if (!runner.args) r = { action: 'install', why: 'no runner is installed here', args: withCaps(['--workers', 'auto']) };
+  else if (!runner.args) r = { action: 'install', why: 'no runner is installed here', args: ['--workers', 'auto'] };
   else if (!isAuto(runner.args)) r = { action: 'restart', why: `its flags were ${runner.args.join(' ') || 'none'}`, args: autoArgs(runner.args), ...keep };
   else if (!runner.up) r = { action: 'restart', why: "it isn't running", args: runner.args, ...keep };
   else r = { action: 'keep', why: 'it runs with --workers auto', args: runner.args };

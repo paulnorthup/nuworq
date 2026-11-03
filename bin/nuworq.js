@@ -1146,8 +1146,8 @@ async function runService(flags, { argv = process.argv.slice(3), cwd = process.c
   await chooseWorkFolders(flags, await createClient(flags).get('/api/projects').catch(() => []), resolveSettings(flags));
   // --agent-token never goes on the service's command line, where ps shows it: a 0600 file it reads instead.
   const taken = svc.takeToken(args);
-  // Its default caps written out (#761), so the service file says what a runaway worker is stopped at.
-  args = (await import('../src/up.js')).withCaps(taken.args);
+  // Only caps the person typed go into the service: there are no default ones (#795).
+  args = taken.args;
   const agentTokenFile = taken.token ? tokenFile(dirname(HUB_FILE), 'run-agent', taken.token) : kept;
   const log = join(dirname(HUB_FILE), 'logs', 'run.log');
   // It starts where it was installed and looks for checkouts beside this one, as `nuworq run` typed here does (#225).
@@ -1236,7 +1236,7 @@ async function runCmd(flags) {
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
   const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, besideWorkers, runnerGit, runCaps, stopHeadline } = await import('../src/runner.js');
-  // --max-minutes, --max-usd and --worker-usd, with their defaults (#761); 0 turns one off.
+  // --max-minutes, --max-usd and --worker-usd (#761), each off unless set (#795); 0 turns one off.
   let caps;
   try { caps = runCaps(flags); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
   const logs = join(dirname(HUB_FILE), 'logs');
