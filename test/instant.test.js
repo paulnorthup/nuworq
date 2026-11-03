@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { Hub } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { predict, placeholder } from '../web/instant.js';
+import { isFold } from './foldmotion.js';
 
 // #393: a tap shows its result at once; the hub's answer then agrees with it, or the old view comes back.
 function setup() {
@@ -97,6 +98,8 @@ describe('controls and loading', () => {
     const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
     for (const state of ['.btn:hover', '.btn:active', '.btn.primary:active', '.btn.ghost:active', '.seg button:active', ':focus-visible', '.btn:disabled'])
       assert.ok(css.includes(state), state);
-    assert.doesNotMatch(css, /transition:\s*(?!none)|@keyframes|animation:/);
+    assert.doesNotMatch(css, /@keyframes|animation:/);
+    // No transitions, but a section folding (#809): only its named rules may ease.
+    assert.doesNotMatch(css.replace(/([^{}]*)\{[^{}]*\}/g, (rule, sel) => (isFold(sel.trim()) ? '' : rule)), /transition:\s*(?!none)/);
   });
 });

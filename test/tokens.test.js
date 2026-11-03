@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { FOLD, isFold } from './foldmotion.js';
 
 // One strict set of tokens (#391): every size, space, radius, shadow and border in the web app comes from :root.
 const read = (f) => readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8');
@@ -9,9 +10,12 @@ const rootBody = css.match(/:root \{([^}]*)\}/)[1];
 const tokens = Object.fromEntries([...rootBody.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
 const names = (re) => Object.keys(tokens).filter((k) => re.test(k));
 
-// The declarations of a stylesheet (or an inline style), outside :root, comments dropped.
-const decls = (src) => [...src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/:root \{[^}]*\}/, '')
-  .matchAll(/(?:^|[{;"])\s*([a-z-]+)\s*:\s*([^;{}"]+)/g)].map((m) => ({ prop: m[1], value: m[2].trim() }));
+// The declarations of a stylesheet (or an inline style), outside :root, comments dropped, each with its rule's selector.
+const decls = (src) => [...src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/:root \{[^}]*\}/, '').matchAll(/([^{}]*)\{([^{}]*)\}/g)]
+  .flatMap((b) => [...b[2].matchAll(/(?:^|[;"])\s*([a-z-]+)\s*:\s*([^;{}"]+)/g)].map((m) => ({ sel: b[1].trim(), prop: m[1], value: m[2].trim() })));
+
+// The one transition allowed past 100ms is a section folding (#809): see test/foldmotion.js.
+const capOf = (sel) => (isFold(sel) ? FOLD.ms : 100);
 
 // What a value may be once its tokens are taken out: nothing numeric but 0 (and %, vh, vw for layout).
 const bare = (v) => v.replace(/calc\(-1 \* var\(--[\w-]+\)\)/g, '').replace(/var\(--[\w-]+\)/g, '');
@@ -20,7 +24,7 @@ const raw = (v) => [...bare(v).matchAll(new RegExp(RAW, 'g'))].map((m) => m[0].t
 
 export function problems(src) {
   const out = [];
-  for (const { prop, value } of decls(src)) {
+  for (const { sel, prop, value } of decls(src)) {
     const bad = (why) => out.push(`${prop}: ${value} (${why})`);
     if (prop === 'font-size') {
       if (!/^(var\(--fs-[1-6]\)|inherit|smaller)$/.test(value)) bad('a --fs-* token');
@@ -36,7 +40,8 @@ export function problems(src) {
     } else if (/^border(-(top|right|bottom|left))?(-width)?$/.test(prop)) {
       if (raw(value).length) bad('--rule (or --accent for a state stripe)');
     } else if (prop === 'transition') {
-      for (const [, n, unit] of value.matchAll(/(\d*\.?\d+)(ms|s)\b/g)) if (Number(n) * (unit === 's' ? 1000 : 1) > 100) bad('100ms at most');
+      const cap = capOf(sel);
+      for (const [, n, unit] of value.matchAll(/(\d*\.?\d+)(ms|s)\b/g)) if (Number(n) * (unit === 's' ? 1000 : 1) > cap) bad(`${cap}ms at most`);
     } else if (/^animation/.test(prop)) bad('no animation');
     if (/gradient\(/.test(value)) bad('no gradients but --hatch');
   }
@@ -91,6 +96,11 @@ describe('one strict set of tokens (#391)', () => {
     assert.deepEqual(problems('.a { background: linear-gradient(red, blue); }').length, 1);
     assert.deepEqual(problems('.a { transition: opacity .2s; }').length, 1);
     assert.deepEqual(problems('.a { transition: opacity .1s; }'), []);
+    // A section folding (#809) may take 150ms, and only it.
+    assert.deepEqual(problems('.sec.foldable > .fold-body, .sec.folded > .fold-body { transition: grid-template-rows 150ms ease-out; }'), []);
+    assert.deepEqual(problems('.sec.foldable > .fold-body { transition: grid-template-rows 200ms; }').length, 1);
+    assert.deepEqual(problems('.sec.foldable > .fold-body, .a { transition: opacity 150ms; }').length, 1);
+    assert.deepEqual(problems('@media (x) { .a { transition: opacity 150ms; } }').length, 1);
     assert.deepEqual(problems('.a { animation: spin 1s; } @keyframes spin {}').length, 2);
   });
 

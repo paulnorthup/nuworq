@@ -10,7 +10,7 @@ const short = (s) => String(s ?? '').replace(/^(Nothing needs you\.|\d+ things? 
 
 // wide: lay it out in two columns; gs: the Get started card, if any; fb: the line of feedback waiting for a hub
 // owner (#688), if any, above the projects.
-export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(name), wide = false, gs = '', fb = '' }) {
+export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(name), wide = false, gs = '', fb = '', fold = (s) => s }) {
   const tag = (p) => `<a class="proj-tag" href="#/p/${encodeURIComponent(p.slug)}">${esc(p.name)}</a>`;
   // One card that fails to render is left out and logged, and the rest draws (#781).
   const homeCard = (a) => {
@@ -45,13 +45,14 @@ export function homePage(h, { z, pulse, card, esc, plural, who = (name) => esc(n
       ${h.motion.map((m) => `<div class="ov-line" data-project="${esc(m.project.slug)}" data-action="open" data-item="${esc(m.item)}"><div class="body"><b>${who(m.agent, null, { presence: m.presence })}</b> <span class="s">${esc(m.item)} ${esc(m.title)}</span></div>${tag(m.project)}</div>`).join('')}
     </div></section>` : '';
 
+  const [needsF, projectsF, worthF, motionF] = [needs, projects, worth, motion].map(fold);
   const head = pulse({ pulse: h.pulse, since: h.pulse.since, project: { parked: false }, home: true, agents: h.agents });
   // Wide (#141): the work in the main column, the 30-second answer (pulse, Get started, projects) beside it.
   // The same sections either way; with nothing to act on, one column, so no empty band.
   // Feedback waiting for an owner (#688) leads the work, so it's seen first.
-  if (wide && (feedback || needs || worth || motion)) return columns(`${feedback}${needs}${worth}${motion}`, `${head}${gs}${projects}`);
+  if (wide && (feedback || needs || worth || motion)) return columns(`${feedback}${needsF}${worthF}${motionF}`, `${head}${gs}${projectsF}`);
   // One column: with something to act on, its first card follows the pulse on a phone's first screen (#711), Get started after it.
-  return `${needs || feedback ? `${head}${feedback}${needs}${gs}` : `${gs}${head}`}${projects}${worth}${motion}`;
+  return `${needs || feedback ? `${head}${feedback}${needsF}${gs}` : `${gs}${head}`}${projectsF}${worthF}${motionF}`;
 }
 
 // A project's state dot (#195): its color never speaks alone, so it carries the state as its name and title.

@@ -28,7 +28,7 @@
      --r-s      small parts (pills, tags, code, bars) · --r-m  cards, buttons, inputs, dialogs · --r-full  dots, chips
      --e-1      raised (cards, the pulse, an on segment) · --e-2  over the page (dialog, drawer, launcher, toast)
      --rule     every border and divider · --accent  a card's or group's state stripe, nothing else
-   No decoration: no gradients but --hatch (it means Outside), no glows, no animation, transitions 100ms at most.
+   No decoration: no gradients but --hatch (it means Outside), no glows, no animation, transitions 100ms at most (one named exception: a section folding, #809, takes 150ms).
    test/tokens.test.js fails on any raw size, space, radius, shadow or border width outside these. */
 :root {
   --bg: #f2f3f5;
@@ -306,6 +306,24 @@ html.theming *, html.theming *::before, html.theming *::after { transition-prope
 .sec > header .count { color: var(--muted); font-weight: 500; white-space: nowrap; }
 .sec > header .hint { color: var(--muted); font-size: var(--fs-2); }
 .sec > header .right { margin-left: auto; }
+/* Folding sections (#809): the heading is the button; folded, the body's height and the header's gap close in 150ms
+   with a firm ease-out, no fade. The only transitions over 100ms: test/tokens.test.js names these selectors. */
+.sec .fold { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: var(--sp-2); border-radius: var(--r-s); }
+.sec .fold:focus-visible { outline: var(--rule) solid var(--ink); outline-offset: var(--sp-h); }
+.sec .fold:hover { color: var(--ink); }
+.sec .fold .chev { width: .9em; height: .9em; align-self: center; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 150ms cubic-bezier(.2, .8, .2, 1); }
+.sec.folded .fold .chev { transform: rotate(-90deg); }
+.sec.foldable > header { transition: margin-bottom 150ms cubic-bezier(.2, .8, .2, 1); }
+.sec.folded > header { margin-bottom: 0; }
+.sec.foldable > .fold-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 150ms cubic-bezier(.2, .8, .2, 1), visibility 0s; }
+.sec.folded > .fold-body { grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows 150ms cubic-bezier(.2, .8, .2, 1), visibility 0s 150ms; }
+/* The body clips, not the inner box: mid-transition the grid's track is smaller than the body, and an inner box held
+   to the track would leave a blank band below it. The clip margin keeps a card's shadow and focus ring. */
+.sec.foldable > .fold-body { overflow: clip; overflow-clip-margin: var(--sp-1); }
+.sec.foldable > .fold-body > .fold-in { min-height: 0; min-width: 0; align-self: start; }
+@media (prefers-reduced-motion: reduce) {
+  .sec .fold .chev, .sec.foldable > header, .sec.foldable > .fold-body, .sec.folded > .fold-body { transition: none; }
+}
 .zero { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4) var(--sp-5); border: var(--rule) dashed var(--line-strong); border-radius: var(--r-m); color: var(--muted); }
 /* An empty state's mark (#191): a nudge (→) is neutral; only good news (✓, .good) is green. */
 .zero .check { width: 26px; height: 26px; border-radius: var(--r-full); background: var(--sunken); color: var(--muted); display: grid; place-items: center; font-weight: 700; flex: none; }

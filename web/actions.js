@@ -14,6 +14,7 @@ import { predict, placeholder } from './instant.js';
 import { S, setState, toggleIn, addTo, putIn, removeFrom, PAGE } from './store.js';
 import { recent, store, themeNow } from './prefs.js';
 import { go, prefetch } from './router.js';
+import { keep } from './fold.js';
 import { markNew } from './new.js';
 import { $, api, closeModal, loadProjects, modal, fieldError, prefetchView, refresh, render, scheduleRefresh, toast, toastError, views } from './ui.js';
 import { MAC, Z, esc, inline, plural, stepWhere } from './views/html.js';
@@ -812,6 +813,7 @@ export const ACTIONS = {
     render({ force: true });
     $(`#main [data-key="note:${el.dataset.note}"]`)?.scrollIntoView({ block: 'center' });
   },
+  fold: (el) => { toggleIn('folded', el.dataset.fold); keep(S.folded); render({ force: true }); },
   'feed-all': () => { setState({ feedAll: !S.feedAll }); render({ force: true }); },
   connect: () => connect(),
   'connect-deep': () => { setZoom('30m'); connect(); },
