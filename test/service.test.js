@@ -91,7 +91,8 @@ describe('nuworq run --install (#172)', () => {
         ? [text.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)[1], text.match(/<key>PATH<\/key>\s*<string>(.*)<\/string>/)[1]]
         : [text.match(/^ExecStart=.*$/m)[0], text.match(/^Environment="PATH=.*$/m)[0]];
       assert.match(runs[0], /--workers/, platform);
-      for (const s of runs) assert.doesNotMatch(s, /claude/, platform);      ran.length = 0;
+      for (const s of runs) assert.doesNotMatch(s, /claude/, platform);
+      ran.length = 0;
       const gone = await uninstall({ platform, home, uid: 501, exec });
       assert.equal(gone.removed, true);
       assert.equal(existsSync(r.file), false);
