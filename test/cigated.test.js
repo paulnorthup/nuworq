@@ -85,7 +85,7 @@ describe('the whole suite is CI\'s where CI checks the pull request (#532)', () 
     assert.match(ci, /2\. Run the tests near what the rebase touched\. Not the whole suite: CI runs it on the pull request\./);
     assert.doesNotMatch(ci, /Run the project's checks/);
     const own = landHint(world());
-    assert.match(own, /2\. Run the project's checks \(e\.g\. npm test\)\./);
+    assert.match(own, /2\. Run the project's checks\./);
     assert.doesNotMatch(own, /tests near what the rebase touched/);
   });
 

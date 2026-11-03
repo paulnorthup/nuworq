@@ -10,7 +10,7 @@ import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneD
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILES } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
-import { sandboxSettings, filePermissions, projectCommands, sandboxHosts, workerCommands, workerGitDenies } from '../src/sandbox.js';
+import { sandboxSettings, filePermissions, projectCommands, sandboxHosts, testsLine, workerCommands, workerGitDenies } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
 const BIN = fileURLToPath(import.meta.url);
@@ -1000,6 +1000,8 @@ function workerSetup(target, agent, flags, s, token = null) {
     browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide (browser_resize), in light and in dark: the app follows the device, so to check dark set document.documentElement.dataset.theme = "dark" with browser_evaluate. Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
     landing ? 'Follow the steps the claim gives you, and nothing more: no reading around, no other changes.'
       : 'While you work, run only the tests that cover what you change. For the whole suite, follow the hint `next` gives: where CI checks the pull request, CI runs it; otherwise run it once, just before you submit.',
+    // The test commands its allowlist below has (#789): agents reach for node --test by habit, and it stalls.
+    testsLine(has, commands),
     // Routed (#347), it was started on the model this one job calls for, so it takes that job and no other. So is a land job.
     flags.job ? `You were started${model ? ` on ${model}` : ''} for one job: ${flags.job.mode} ${flags.job.item}. After checkin, claim ${flags.job.item}, do that job, then sign off. If you can't claim it, sign off; don't take other work.`
       : 'Keep going until next says there is nothing left for you, then sign off.',

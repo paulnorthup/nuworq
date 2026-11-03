@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -15,7 +15,7 @@ import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease, settleTags } from './releases.js';
 import { builtWhatItReviews, reviewRelease } from './security.js';
-import { sandboxHosts, workerCommands } from './sandbox.js';
+import { sandboxHosts, workerCommands, testsLine } from './sandbox.js';
 import { BUDGET as DEFAULT_BUDGET } from './setup.js';
 import { AGENTS, DEFAULT_TIERS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, tiersOf, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
@@ -899,6 +899,14 @@ export class Hub extends EventEmitter {
   baseFor(p, item = null) {
     const repo = this.repoFor(p, item);
     return (repo && baseOf(repo.path)) ?? 'main';
+  }
+
+  // The test commands a worker may run on this project, as one line for its hints (#789, sandbox.js testsLine):
+  // read from the files on its base. '' when the hub can't read the repository, so can't say.
+  testsHint(p, item = null) {
+    const repo = this.repoFor(p, item);
+    const base = repo && baseOf(repo.path);
+    return base ? testsLine((f) => hasFile(repo.path, base, f), json(p.worker_commands, [])) : '';
   }
 
   addRemote(p, remote, actor) {
@@ -2809,19 +2817,20 @@ export class Hub extends EventEmitter {
     const base = (repo && baseOf(repo.path)) ?? 'main';
     const unseen = remote && !!item.branch && !(repo && branchExists(repo.path, item.branch));
     const where = this.remotesOf(p).length > 1 ? `This is in ${this.repoOf(p, item)}. ` : '';
+    const tests = this.testsHint(p, item);
     if (this.prMode(p, item)) {
       const pr = this.conflictedPr(item);
-      if (pr) return where + PR_REBASE_HINT(item, pr, base, this.ciGated(p, item));
+      if (pr) return where + PR_REBASE_HINT(item, pr, base, this.ciGated(p, item), tests);
       if (unseen) return where + PR_LAND_HINT(item);
-      if (this.prFailed(item)) return `${where}The hub couldn't open a pull request for it (see its history), so land it by hand. ${LAND_HINT(item, p, base, remote)}`;
+      if (this.prFailed(item)) return `${where}The hub couldn't open a pull request for it (see its history), so land it by hand. ${LAND_HINT(item, p, base, remote, false, tests)}`;
       const open = this.q(`SELECT number FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
       if (open) return `${where}PR #${open.number} is open with auto-merge on: GitHub merges it once its checks pass, and that marks #${item.seq} done. Nothing to push.`;
       // On origin with no pull request yet (the hub stopped while opening it): submit, and the hub opens it.
       return where + PR_OPEN_HINT(item);
     }
     const trouble = this.appTrouble(p, item);
-    if (trouble) return `${where}It lands by hand: the hub can't open a pull request because ${trouble.error.replace(/^The /, 'the ')}. ${LAND_HINT(item, p, base, remote, unseen)}`;
-    return where + LAND_HINT(item, p, base, remote, unseen);
+    if (trouble) return `${where}It lands by hand: the hub can't open a pull request because ${trouble.error.replace(/^The /, 'the ')}. ${LAND_HINT(item, p, base, remote, unseen, tests)}`;
+    return where + LAND_HINT(item, p, base, remote, unseen, tests);
   }
 
   // The work job's hint: where to cut the branch, in the item's repo and from its base.
@@ -2841,7 +2850,7 @@ export class Hub extends EventEmitter {
     // Operator-only work (only an operator builds it): it builds only its live step.
     const live = operatorOnly(item) ? ` ${MODE_RULES.operator}` : '';
     // Tests (#532): where CI checks the pull request, the whole suite is CI's; elsewhere it's the builder's.
-    const tests = item.branch ? ` ${this.ciGated(p, item) ? CI_TESTS : OWN_TESTS}` : '';
+    const tests = item.branch ? ` ${this.ciGated(p, item) ? CI_TESTS : OWN_TESTS}${spaced(this.testsHint(p, item))}` : '';
     return clone + WORK_HINT(item, p, remote, this.baseFor(p, item), repo) + tests + release + sweep + security + live;
   }
 
@@ -2859,7 +2868,8 @@ export class Hub extends EventEmitter {
 
   // A reviewer's hint, led by anything git found wrong with the submission. For operator-only work, the
   // reviewer reads the live output its builder recorded, and asks an operator for anything to recheck (#271).
-  reviewHint(item, hint) {
+  reviewHint(p, item, hint) {
+    hint += spaced(this.testsHint(p, item)); // to rerun the builder's tests (#789)
     const warn = item.race > 1 ? null : gitWarning(this.submittedGit(item));
     const live = json(item.needs, []).filter((t) => OPERATOR_TAGS.includes(t));
     if (live.length) hint += ` Its ${live.join(', ')} part was verified live by its builder or an operator: check the code, and the live output in the submission's evidence. If you need something checked on real infrastructure, ask to: "operator" with the exact command and how to check it, and don't accept until it's answered.`;
@@ -2923,11 +2933,12 @@ const WORK_HINT = (item, p, remote = false, base = 'main', repo = '') => !item.b
 // rejected push means main moved; the branch is pushed again too, so the hub can see main contains it.
 // unseen: the hub can't see the branch on origin, so it is pushed first. One git command at a time, and
 // pushes as plain "git push origin …": headless workers may run only that prefix.
-const LAND_HINT = (item, p, base = 'main', remote = false, unseen = false) => remote ? [
+// tests: the project's test commands (testsHint), so the checks step names one the worker may run.
+const LAND_HINT = (item, p, base = 'main', remote = false, unseen = false, tests = '') => remote ? [
   unseen ? `Push it first: git push origin ${item.branch} (the hub can't see ${item.branch} on origin yet).` : '',
   `${unseen ? 'Then land' : 'Land'} #${item.seq}: put ${item.branch} on ${base} on origin.`,
   `1. In your worktree or clone: git fetch origin, then git switch ${item.branch}, then git rebase origin/${base} (commit or stash anything uncommitted first). Conflicts: resolve them keeping both intents. If resolving changed what the reviewer approved, don't land: submit with conflicts (what you changed and why), and it goes back for review.`,
-  `2. Run the project's checks (e.g. npm test) and fix anything the rebase broke.`,
+  `2. Run the project's checks and fix anything the rebase broke.${spaced(tests)}`,
   `3. git push origin ${item.branch}:${base}. If it is rejected as non-fast-forward, ${base} moved: go back to step 1.`,
   `4. git push origin ${item.branch} --force-with-lease (the rebase rewrote the branch; this updates it on origin).`,
   `5. submit #${item.seq}. The hub fetches, checks that ${base} contains the branch, and marks it done.`,
@@ -2935,11 +2946,12 @@ const LAND_HINT = (item, p, base = 'main', remote = false, unseen = false) => re
   `Land #${item.seq}: put ${item.branch} on ${base}.`,
   `1. In your worktree: git switch ${item.branch} (commit or stash anything uncommitted first).`,
   `2. git rebase ${base}. Conflicts: resolve them keeping both intents. If resolving changed what the reviewer approved, don't land: submit with conflicts (what you changed and why), and it goes back for review.`,
-  `3. Run the project's checks (e.g. npm test) and fix anything the rebase broke.`,
+  `3. Run the project's checks and fix anything the rebase broke.${spaced(tests)}`,
   `4. git -C ${p.path} merge --ff-only ${item.branch}. If it can't fast-forward, ${base} moved: go back to step 2.`,
   `5. submit #${item.seq}. The hub checks that ${base} contains the branch and marks it done.`,
 ].join(' ');
 
+const spaced = (s) => (s ? ` ${s}` : '');
 // The testing rule a work job's hint carries (#532): CI's suite where it checks the pull request, else the builder's.
 const CI_TESTS = 'Tests: run the ones near your change. Not the whole suite: CI runs it on the pull request, and a failing check sends the work back naming it.';
 const OWN_TESTS = 'Tests: run the ones near your change as you work, and the whole suite once, just before you submit.';
@@ -2950,10 +2962,10 @@ const PR_OPEN_HINT = (item) => `${item.branch} is on origin but has no pull requ
 
 // Its pull request conflicts with main: rebase the branch and push it again; the PR and its auto-merge stay.
 // ci: CI checks the PR (ciGated), so the lander runs only the tests near what the rebase touched.
-const PR_REBASE_HINT = (item, pr, base = 'main', ci = false) => [
+const PR_REBASE_HINT = (item, pr, base = 'main', ci = false, tests = '') => [
   `PR #${pr.number} for #${item.seq} conflicts with ${base} (${pr.url}). Rebase it; the pull request and its auto-merge stay as they are.`,
   `1. git fetch origin, then git switch ${item.branch}, then git rebase origin/${base}. Resolve conflicts keeping both intents. If resolving changed what the reviewer approved, submit with conflicts (what you changed and why) instead, and it goes back for review.`,
-  ci ? '2. Run the tests near what the rebase touched. Not the whole suite: CI runs it on the pull request.' : `2. Run the project's checks (e.g. npm test).`,
+  `${ci ? '2. Run the tests near what the rebase touched. Not the whole suite: CI runs it on the pull request.' : '2. Run the project\'s checks.'}${spaced(tests)}`,
   `3. git push origin ${item.branch} --force-with-lease.`,
   `4. submit #${item.seq}. GitHub merges the PR once its checks pass, and the hub marks it done.`,
 ].join(' ');
@@ -3278,7 +3290,7 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   if (conflicted) {
     const repo = this.repoFor(p, item);
     if (!contains(repo.path, item.branch, land.base)) {
-      throw new UserError(`${item.branch} on origin doesn't contain ${land.base} yet`, { status: 409, hint: PR_REBASE_HINT(item, conflicted, land.base) });
+      throw new UserError(`${item.branch} on origin doesn't contain ${land.base} yet`, { status: 409, hint: PR_REBASE_HINT(item, conflicted, land.base, this.ciGated(p, item), this.testsHint(p, item)) });
     }
     // Auto-merge carries on only for the change its review accepted, rebased (#605); anything more is reviewed first.
     if (reviewedHead.call(this, p, item) === 'moved') return movedHint.call(this, p, agent, item);
@@ -3298,7 +3310,7 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
     return { ok: true, hint: `${item.branch} is on origin. The hub opens a pull request with auto-merge on; GitHub's merge marks #${item.seq} done. Call next.` };
   }
   if (land.pending) {
-    throw new UserError(`${land.base} doesn't contain ${item.branch} yet`, { status: 409, hint: LAND_HINT(item, p, land.base, remote) });
+    throw new UserError(`${land.base} doesn't contain ${item.branch} yet`, { status: 409, hint: LAND_HINT(item, p, land.base, remote, false, this.testsHint(p, item)) });
   }
   this.move(item, 'done', agent, { holder: null, lease_until: null, touching: '[]' });
   this.event(p, {
@@ -3557,7 +3569,7 @@ const AGENT_OPS = {
       ...this.context(p, pick.item, agent),
       ...(budget && !capped ? { budget: `${budget} Runner workers take no new work until then; you may.` } : {}),
       hint: pick.mode === 'review'
-        ? this.reviewHint(pick.item, `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.${pick.item.race > 1 ? ' It was raced: compare race.submissions and accept with attempt set to the one to keep.' : ''}`)
+        ? this.reviewHint(p, pick.item, `Review #${pick.item.seq} against done_means and the evidence, then call review with accept or reject.${pick.item.race > 1 ? ' It was raced: compare race.submissions and accept with attempt set to the one to keep.' : ''}`)
         : pick.mode === 'land' && args.claim !== false
           ? this.landHint(p, this.itemById(pick.item.id))
         : pick.mode === 'shape' && args.claim !== false
@@ -3579,7 +3591,7 @@ const AGENT_OPS = {
     return {
       ...this.context(p, item, agent),
       hint: item.stage === 'verifying'
-        ? this.reviewHint(item, `Review #${item.seq} against done_means and the evidence, then call review.`)
+        ? this.reviewHint(p, item, `Review #${item.seq} against done_means and the evidence, then call review.`)
         : item.stage === 'proposed'
           ? SHAPE_HINT(item, p, this.remotesOf(p))
           : item.stage === 'landing'
