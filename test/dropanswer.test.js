@@ -16,8 +16,10 @@ describe('dropping on a person\'s answer', () => {
   test('a question on the item answered "Drop it": the agent drops it, the person is recorded as deciding, and next never offers it', () => {
     const { hub, op, stage } = world();
     op('w1', 'claim', { item: '#1' });
-    const { question } = op('w1', 'ask', { item: '#1', question: 'This duplicates #2. Drop it?', blocking: true });
+    // Not blocking: the item stays w1's, so the agent carries the drop out (a parked one the hub drops: #819).
+    const { question } = op('w1', 'ask', { item: '#1', question: 'This duplicates #2. Drop it?', assumption: 'Keep building it' });
     hub.humanOp('p', 'answer', { question, answer: 'Drop it' });
+    assert.equal(stage('#1'), 'active');
     const r = op('w1', 'refine', { item: '#1', drop: question });
     assert.deepEqual([r.stage, r.decided_by], ['dropped', HUMAN]);
     assert.equal(stage('#1'), 'dropped');
@@ -70,7 +72,9 @@ describe('dropping on a person\'s answer', () => {
     assert.equal(stage('#2'), 'ready');
     const { question } = op('w1', 'ask', { item: '#2', question: 'Drop it?', blocking: true });
     hub.humanOp('p', 'answer', { question, answer: 'Yes, drop it' });
-    assert.equal(op('w1', 'refine', { item: '#2', drop: question }).stage, 'dropped');
+    // The question parked it, so the person's answer dropped it (#819); refine has nothing left to do.
+    assert.equal(stage('#2'), 'dropped');
+    assert.throws(() => op('w1', 'refine', { item: '#2', drop: question }), (e) => e.status === 409);
   });
 
   test('another agent reads the question id from look and next, and drops with it the first time (#366)', () => {
@@ -79,7 +83,8 @@ describe('dropping on a person\'s answer', () => {
     hub.humanOp('p', 'create', { title: 'One', acceptance: 'x' });
     const op = (agent, name, args = {}) => hub.agentOp('p', name, agent, args);
     op('w1', 'claim', { item: '#1' });
-    const { question } = op('w1', 'ask', { item: '#1', question: 'This duplicates #2. Drop it?', blocking: true });
+    const { question } = op('w1', 'ask', { item: '#1', question: 'This duplicates #2. Drop it?', assumption: 'Keep building it' });
+    op('w1', 'handoff', { item: '#1', headline: 'Out of context' });
     hub.humanOp('p', 'answer', { question, answer: 'Drop it' });
     const fromLook = op('w2', 'look', { item: '#1' }).questions.find((q) => q.answer === 'Drop it');
     assert.equal(fromLook.question_id, question);
