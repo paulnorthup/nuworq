@@ -235,14 +235,27 @@ nuworq operator: print the tags an operator session declares and the line that
 Usage
   nuworq operator [--project p] [--has tags]
   nuworq operator --start [--has tags]
+  nuworq operator --detect
+  nuworq operator --allow [--off]
+  nuworq operator --without infra | --with infra | --infra-check <command>
   nuworq operator --check <level>
 
 Flags
-  --project <p>    the project, instead of this folder's
-  --has <tags>     what the session can really do, instead of what was detected
-  --check <level>  only the line saying this nuworq is too old for the operator
-                   listener (exit 1), or nothing
-  --start          open Claude Code here with that line already sent
+  --project <p>      the project, instead of this folder's
+  --has <tags>       what the session can really do, instead of what was
+                     detected
+  --start            open Claude Code here with that line already sent
+  --detect           prove each tag on this machine and say what to declare, and
+                     why
+  --allow            let the operator's routine commands run without prompts, in
+                     this project's .claude/settings.local.json, after a yes;
+                     with --off, take those rules out
+  --without infra    this machine can't reach the project's live systems; --with
+                     infra undoes it
+  --infra-check <c>  declare infra only while this command passes ("" clears
+                     it); only a person at a terminal changes it
+  --check <level>    only the line saying this nuworq is too old for the
+                     operator listener (exit 1), or nothing
 
 Example
   nuworq operator --has macos,browser,claude-cli,infra
@@ -426,6 +439,7 @@ Flags
   --name <n>          their name
   --workspace <name>  that workspace's people
   --db <file>         the database
+  --data-dir <d>      forget: the hub's data folder
 
 Example
   nuworq person add bea --role steward --email bea@example.com
