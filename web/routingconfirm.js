@@ -18,3 +18,8 @@ export function routingConfirm({ quality, trial = 10, race = 0 } = {}) {
     + 'When an attempt is sent back, stalls, is handed off or loses its lease, that item\'s next attempt steps up one model. Each routed worker does one job, then stops.\n\n'
     + 'Turn it off any time from here.';
 }
+
+// From the saved settings (the view's staffing.models) only: the switch saves none of the dialog's unsaved choices.
+export function routingConfirmFor(m) {
+  return routingConfirm({ quality: m?.qualities?.[m?.quality || 'balanced'], trial: m?.trial ?? 10, race: m?.race ?? 0 });
+}

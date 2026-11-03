@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { routingConfirm, MIN_ATTEMPTS as SAID } from '../web/routingconfirm.js';
+import { routingConfirm, routingConfirmFor, MIN_ATTEMPTS as SAID } from '../web/routingconfirm.js';
 import { MIN_ATTEMPTS, QUALITY, pickModel } from '../src/models.js';
 
 // #770: the confirm said building stays on the top model and named only some failures; src/models.js does otherwise.
@@ -36,6 +36,17 @@ test('every failure that steps up is named, a lost lease included', () => {
 
 test('Settings → Staffing → Cheaper models shows this confirm', () => {
   const src = readFileSync(new URL('../web/actions.js', import.meta.url), 'utf8');
-  assert.match(src, /'models-on': \(\) => \{[\s\S]*?confirm\(routingConfirm\(/);
+  assert.match(src, /'models-on': \(\) => \{[\s\S]*?confirm\(routingConfirmFor\(S\.view\?\.project\?\.staffing\?\.models\)\)/);
   assert.doesNotMatch(src, /Building, reviews and shaping stay on the top model/);
+});
+
+test('the confirm names what is saved, not a bar or share picked but not yet saved', () => {
+  // The switch saves only routing and tiers; the bar and shares wait for Save, so the confirm reads the saved ones.
+  const saved = { quality: 'best', trial: 25, race: 5, qualities: QUALITY };
+  assert.match(routingConfirmFor(saved), /Best quality: only a model that does as well as the best/);
+  assert.match(routingConfirmFor(saved), /25% of builds try one model down, and 5% race/);
+  assert.match(routingConfirmFor({ qualities: QUALITY }), /Balanced: a cheaper model within 5 points of the best[\s\S]*10% of builds try one model down/);
+  const src = readFileSync(new URL('../web/actions.js', import.meta.url), 'utf8');
+  const on = src.match(/'models-on': \(\) => \{[\s\S]*?\n  \},/)[0];
+  assert.doesNotMatch(on, /st-quality|st-trial|st-race|val\(/, 'nothing unsaved from the dialog');
 });

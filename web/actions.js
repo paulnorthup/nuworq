@@ -3,7 +3,7 @@ import { ago } from './ago.js';
 import { copyBlock, commandBlocks, copyText } from './copy.js';
 import { proposal, sentToast } from './propose.js';
 import { trialNote } from './trialnote.js';
-import { routingConfirm } from './routingconfirm.js';
+import { routingConfirmFor } from './routingconfirm.js';
 import { errorHtml, fieldReason } from './errors.js';
 import { toPrecondition } from './precondition.js';
 import { billingSection } from './billing.js';
@@ -669,10 +669,8 @@ export const ACTIONS = {
     if (r) closeModal();
   },
   'models-on': () => {
-    // The bar and shares as shown in the dialog, typed or not yet saved (#770).
-    const m = S.view?.project?.staffing?.models ?? {};
-    const quality = m.qualities?.[$('#modal input[name="st-quality"]:checked')?.value ?? m.quality ?? 'balanced'];
-    if (confirm(routingConfirm({ quality, trial: val('st-trial') || m.trial, race: val('st-race') || m.race }))) modelRouting(true);
+    // The saved bar and shares: the switch saves neither, so one picked but not saved isn't what routing uses (#770).
+    if (confirm(routingConfirmFor(S.view?.project?.staffing?.models))) modelRouting(true);
   },
   'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
