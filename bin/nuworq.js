@@ -1946,13 +1946,19 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   // The admin host (e.g. admin.nuworq.com): the owners' dashboard, signed in on its own address.
   const adminHost = String(flags['admin-host'] || envVar('ADMIN_HOST') || '');
   if (adminHost && !owners.length) console.warn(amber(`--admin-host ${adminHost} has no owners, so nobody can get in: set --owners or NUWORQ_HUB_OWNERS.`));
+  // An owner's own console on the admin host (#877), from a directory installed on this host: checked before the hub starts.
+  let adminConsole = String(flags['admin-console'] || envVar('ADMIN_CONSOLE') || '');
+  if (adminConsole) {
+    const { adminConsoleDir } = await import('../src/server.js');
+    try { adminConsole = adminConsoleDir(adminConsole, adminHost); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
+  }
   // Feedback about nuworq (#295): where the owners' approved feedback becomes a proposal; off without one.
   const feedbackProject = String(flags['feedback-project'] || envVar('FEEDBACK_PROJECT') || '');
   // Billing (#227): Stripe, from the environment only; off unless NUWORQ_STRIPE_WEBHOOK_SECRET is set.
   const { billingFromEnv } = await import('../src/billing.js');
   const { handedOver, handoff } = await import('../src/handoff.js');
   const handed = handedOver() && !flags.smoke; // under serve --follow: the supervisor owns the port (#523)
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject, standby: handed, githubReleases: !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, adminConsole, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject, standby: handed, githubReleases: !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
   const urlOf = (p) => `http://${host.includes(':') ? `[${host}]` : host}:${p}`;
   const pushUp = (url) => { pushes = notifyWorkspaces(spaces, (name) => workspaceUrl(name, { baseDomain, publicUrl, url })); };
   const onUp = () => {
