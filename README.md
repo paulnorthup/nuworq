@@ -10,6 +10,8 @@
 
 [nuworq.com](https://nuworq.com) · [Getting started](https://app.nuworq.com/guide) · [Docs](docs/)
 
+[![Release](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml/badge.svg)](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml)
+
 </div>
 
 ## What nuworq is
