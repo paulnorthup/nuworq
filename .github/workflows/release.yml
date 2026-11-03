@@ -8,7 +8,8 @@
 # changes: unprivileged, and runs none of the repository's code: what the maintainer's approval rests on comes from this file.
 #          Checks again that the tag is on main at its version and newer than the last signed release, and says
 #          whether the code `check` ran changed since that release, with a link to the diff. It compares with the hub's
-#          signed release only when the hub's .sig for it verifies against the tag's release-key.pub.
+#          signed release only when the hub's .sig for it verifies against the release-key.pub of GitHub's last signed
+#          release (the tag's when there is none), and says when the tag's release-key.pub differs from its base's.
 # sign:    waits in the `release` environment (the maintainer is its required reviewer; only v* tags may deploy to it), and
 #          runs none of the repository's code. Builds the package again with git alone, which must be the sha256
 #          `check` showed, signs it with the environment's RELEASE_KEY in node:crypto inline below, verifies it
@@ -83,6 +84,8 @@ jobs:
           if [ -n "${NUWORQ_HUB:-}" ]; then
             hub=$(curl -fsS --max-time 30 "${NUWORQ_HUB%/}/api/package" | node --input-type=commonjs -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).package?.release?.commit ?? ""')
             if [ -n "$hub" ]; then
+              # Only a full sha reaches git, file names, the .sig URL and the summary: not a tag name, HEAD~1 or Markdown.
+              [[ "$hub" =~ ^[0-9a-f]{40}$ ]] || fail "the hub at $NUWORQ_HUB names its signed release by something other than a 40-character commit sha"
               git cat-file -e "$hub^{commit}" || fail "the hub's signed release $hub isn't in this repository"
               if [ -z "$floor" ] || git merge-base --is-ancestor "$floor" "$hub"; then
                 floor=$hub below="the hub's signed release"
@@ -95,7 +98,12 @@ jobs:
                   if git cat-file -e "$hub:$f" 2>/dev/null; then paths+=("$f"); fi
                 done
                 git archive --format=tar.gz --prefix=package/ -o "$hubdir/nuworq-$hub.tgz" "$hub" -- "${paths[@]}"
-                git show "$commit:release-key.pub" > "$hubdir/release-key.pub"
+                # With the key of GitHub's last signed release, not the tag's: landed code that swaps release-key.pub
+                # can't make a .sig from a compromised hub verify (#842). With no such release, the tag's key, and
+                # the summary says when the tag's key differs from its base's.
+                keyfrom=$commit keywhere="this tag"
+                if [ -n "$last" ] && git cat-file -e "$last:release-key.pub" 2>/dev/null; then keyfrom=$last keywhere=$where; fi
+                git show "$keyfrom:release-key.pub" > "$hubdir/release-key.pub"
                 curl -fsS --max-time 30 -o "$hubdir/nuworq-$hub.tgz.sig" "${NUWORQ_HUB%/}/nuworq-$hub.tgz.sig" || : > "$hubdir/nuworq-$hub.tgz.sig"
                 export HUBDIR=$hubdir HUB=$hub
                 verified=$(node --input-type=commonjs - 2>/dev/null <<'JS' || true
@@ -122,7 +130,7 @@ jobs:
             echo "This summary comes from the release workflow alone, which agents can't change. The \`check\` job's summary (version, sha256, changelog) comes from the repository's code at this tag."
             echo
             if [ -n "$unverified" ]; then
-              echo "**The hub's claim didn't verify:** it names \`${unverified:0:7}\` as its signed release, but its signature for that commit doesn't verify against this tag's release-key.pub. It still counts against a rollback, but what follows compares with GitHub's last signed release, not with it."
+              echo "**The hub's claim didn't verify:** it names \`${unverified:0:7}\` as its signed release, but its signature for that commit doesn't verify against the release-key.pub of $keywhere. It still counts against a rollback, but what follows compares with GitHub's last signed release, not with it."
               echo
             fi
             if [ -z "$last" ]; then
@@ -134,6 +142,10 @@ jobs:
                 echo "**The code \`check\` ran is unchanged** since $where (\`${last:0:7}\`)."
               else
                 echo "**The code \`check\` ran changed** since $where (\`${last:0:7}\`): $changed. [Read the diff]($compare) before you trust the \`check\` summary."
+              fi
+              if ! git diff --quiet "$last" "$commit" -- release-key.pub; then
+                echo
+                echo "**The release key changed** since $where (\`${last:0:7}\`): \`release-key.pub\` at $GITHUB_REF_NAME isn't the key that release pins, and \`sign\` verifies against the tag's. Approve only a key change you made yourself. [Read the diff]($compare)."
               fi
             fi
             echo
