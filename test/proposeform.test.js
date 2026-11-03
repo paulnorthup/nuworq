@@ -44,7 +44,7 @@ describe('propose from the board', () => {
 
   test('the getting-started guide\'s "Plan the first work" step names it', () => {
     const plan = STEPS.find((s) => s.key === 'plan');
-    const text = plan.hand.join(' ');
+    const text = [...plan.hand, ...(plan.then || [])].join(' ');
     for (const label of ['+ Work', 'Propose', 'Add to Ready']) assert.ok(text.includes(`**${label}**`), label);
     assert.ok(!plan.none, 'it no longer says the board has no way');
   });
