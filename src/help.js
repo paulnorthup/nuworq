@@ -35,6 +35,7 @@ export const COMMANDS = [
       ['--yes', 'answer yes to each follow-up (install the plugin, remove old leftovers, staff this project, start an operator) without asking'],
       ['--no', 'answer no to each follow-up without asking'],
       ['--budget <usd>', 'with staffing: the daily cap for its workers', '20'],
+      ['--pays <how>', "with staffing: how this machine pays for Claude, api or subscription, instead of asking; it sets the runner's caps"],
     ],
     env: [['NUWORQ_TOKEN', 'a token to use instead of signing in']],
     example: 'nuworq connect https://app.nuworq.com/w/acme',
@@ -42,6 +43,7 @@ export const COMMANDS = [
       'You approve a code in the browser, and the hub is saved in ~/.nuworq/connect.json, which only you can read. The CLI, the MCP server and nuworq run use it from then on; NUWORQ_URL and NUWORQ_TOKEN still win.',
       'Claude Code without the nuworq plugin for your account: connect offers to install it first. With it, connect offers to remove what an earlier nuworq left beside it (old skills, a second server). Undo all of it with nuworq disconnect.',
       "Then, one at a time: staff the project this folder is a clone of with workers here (nuworq staff), and start an operator (operator --start). --yes or --no answers each without asking; with no terminal, it's no.",
+      "Staffing asks how this machine pays for Claude, Enter taking what it detects (ANTHROPIC_API_KEY, or claude auth status). An API key: a cap per worker and a daily cap (--worker-usd, --max-usd). A subscription: minutes, not dollars (--max-minutes 60), since its usage windows are the limit. --yes takes the detected answer with these values. Connect again to change them: nuworq run's start line names the caps and where they came from.",
     ],
   },
   {
@@ -78,6 +80,7 @@ export const COMMANDS = [
       ['--max-minutes <t>', 'stop a worker that runs past t minutes; 0: no limit'],
       ['--worker-usd <x>', 'stop a worker once it has spent $x so far (claude also gets --max-budget-usd x); 0: no cap'],
       ['--max-usd <x>', "stop starting workers once they've spent $x in all, running ones' spend so far included; 0: no cap (local models and unpriced codex models count nothing)"],
+      ['--pays <how>', 'api or subscription: what connect set the caps for; the start line names it'],
       ['--land-usd <x>', 'the most one land job may spend; its worker is stopped there (0: no cap)', '2'],
       ['--poll <s>', 'the most seconds between looks; new work is heard at once', '30'],
       ['--has <tags>', 'what else this machine can do, e.g. browser,linux-vm'],
@@ -299,6 +302,7 @@ export const COMMANDS = [
     flags: [
       ['--project <p>', "the project, instead of this folder's"],
       ['--budget <usd>', 'the daily cap for its workers', '20'],
+      ['--pays <how>', "how this machine pays for Claude, api or subscription, instead of asking; it sets the runner's caps"],
       ['--yes', "don't ask: take the defaults"],
       ['--no-browser', 'print the approval link instead of opening the browser'],
     ],

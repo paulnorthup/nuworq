@@ -296,15 +296,18 @@ async function staffProject(project, budget, flags) {
 // nuworq staff [<project>] [--budget usd]: connect's staffing question on its own (#490). The project is the
 // one this folder is a clone of, unless named; the runner is installed from here.
 async function staffCmd(pos, flags) {
-  const { chooseProject, budgetOf } = await import('../src/setup.js');
+  const { chooseProject, paysOf } = await import('../src/setup.js');
   const mode = flags.yes ? 'yes' : process.stdin.isTTY && process.stdout.isTTY ? 'ask' : 'yes';
   const ask = askLine;
   const projects = await hubProjects(createClient(flags));
   const at = await chooseProject({ projects, named: pos[0] ?? flags.project, remote: repoRemote(), root: repoRoot(), mode, ask, say: console.log });
   if (at.none) throw new HubError(at.none, { hint: 'nuworq staff <project> [--budget 20]' });
-  const usd = await budgetOf(mode, ask, flags.budget);
-  for (const l of await staffProject(at.project, usd, flags)) console.log(l);
-  await runService({ ...flags, folder: besideOf(process.cwd()) }, { argv: [] });
+  // How this machine pays sets the caps (#776); a runner already here keeps its other flags.
+  const caps = await paysOf(mode, ask, await detectedPays(), { pays: flags.pays, budget: flags.budget });
+  for (const l of await staffProject(at.project, caps.usd, flags)) console.log(l);
+  const installed = await installedRunner();
+  await installCapped({ ...flags, folder: besideOf(process.cwd()) }, caps.args, installed.args ? installed : null);
+  for (const l of caps.lines) console.log(l);
 }
 
 // nuworq up (#559, src/up.js): the runner with --workers auto, staffing for unstaffed projects (asked once), and an
@@ -322,10 +325,36 @@ function runningPid(file) {
   try { return /claude/.test(execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })) ? pid : null; } catch { return null; }
 }
 
-async function upCmd(flags) {
-  const { upPlan, upClones, readService, launcherFor, launchCommands, operatorShell, upTable, SESSION } = await import('../src/up.js');
+// The runner installed here: its service file, read back, and whether it's up. args null: none installed.
+async function installedRunner() {
+  const { readService } = await import('../src/up.js');
   const svc = await import('../src/service.js');
   const { userInfo } = await import('node:os');
+  const s = svc.serviceFor({ platform: process.platform, home: homedir(), uid: userInfo().uid });
+  const read = s && existsSync(s.file) ? readService(readFileSync(s.file, 'utf8'), process.platform) : null;
+  let up = false;
+  if (read) { try { up = s.up(execFileSync(s.status[0], s.status.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })); } catch {} }
+  return { supported: !!s, args: read?.args ?? null, cwd: read?.cwd && existsSync(read.cwd) ? read.cwd : null, tokenFile: read?.tokenFile && existsSync(read.tokenFile) ? read.tokenFile : null, up };
+}
+
+// How this machine seems to pay for Claude (#776): ANTHROPIC_API_KEY, else what `claude auth status` says.
+async function detectedPays() {
+  const { detectPays } = await import('../src/setup.js');
+  let auth = null;
+  if (!process.env.ANTHROPIC_API_KEY) { try { auth = execFileSync('claude', ['auth', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }); } catch (e) { auth = e.stdout || null; } }
+  return detectPays({ env: process.env, auth });
+}
+
+// The runner installed with connect's caps (#776): a new one with args, or the one here with its caps replaced.
+async function installCapped(flags, args, installed = null) {
+  const { setCaps } = await import('../src/up.js');
+  if (installed) await runService(flags, { argv: setCaps(installed.args, args), cwd: installed.cwd ?? process.cwd(), agentTokenFile: installed.tokenFile });
+  else await runService(flags, { argv: args });
+  return [];
+}
+
+async function upCmd(flags) {
+  const { upPlan, upClones, launcherFor, launchCommands, operatorShell, upTable, SESSION } = await import('../src/up.js');
   const dryRun = !!flags['dry-run'];
   const client = createClient(flags);
   const projects = await hubProjects(client);
@@ -333,12 +362,7 @@ async function upCmd(flags) {
   const saved = (() => { try { return JSON.parse(readFileSync(UP_FILE, 'utf8')); } catch { return {}; } })();
   const declined = Array.isArray(saved.declined) ? saved.declined : [];
 
-  // The runner: its service file, read back, and whether it's up.
-  const s = svc.serviceFor({ platform: process.platform, home: homedir(), uid: userInfo().uid });
-  const read = s && existsSync(s.file) ? readService(readFileSync(s.file, 'utf8'), process.platform) : null;
-  let up = false;
-  if (read) { try { up = s.up(execFileSync(s.status[0], s.status.slice(1), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })); } catch {} }
-  const runner = { supported: !!s, args: read?.args ?? null, cwd: read?.cwd && existsSync(read.cwd) ? read.cwd : null, tokenFile: read?.tokenFile && existsSync(read.tokenFile) ? read.tokenFile : null, up };
+  const runner = await installedRunner();
 
   // Each project's clone here, found as the runner finds them: from where it runs, beside it, and NUWORQ_REPOS.
   // The hub's folder for a project only when the person chose it, or it's a checkout of the project's repo (#617).
@@ -1235,7 +1259,7 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, besideWorkers, runnerGit, runCaps, stopHeadline } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, besideWorkers, runnerGit, runCaps, capsLine, stopHeadline } = await import('../src/runner.js');
   // --max-minutes, --max-usd and --worker-usd (#761), each off unless set (#795); 0 turns one off.
   let caps;
   try { caps = runCaps(flags); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
@@ -1389,8 +1413,7 @@ async function runCmd(flags) {
   const maxWorkers = auto ? num(flags['max-workers'], autoMax(availableParallelism())) : undefined;
   const reporter = createClient({ url: s.url, token: token ?? s.token });
   const howMany = auto ? `as many ${agent} workers as this machine has room for (up to ${maxWorkers})` : `up to ${workers} ${agent} worker${workers > 1 ? 's' : ''}`;
-  const limits = [caps.maxMinutes < Infinity && `${caps.maxMinutes}m`, caps.workerUsd < Infinity && `$${caps.workerUsd}`].filter(Boolean);
-  console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`${howMany} on opted-in projects at ${s.url}${limits.length ? `; each stops at ${limits.join(' or ')}` : ''}${caps.maxUsd < Infinity ? `; $${caps.maxUsd} in all` : ''}; Ctrl-C stops`)}`);
+  console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`${howMany} on opted-in projects at ${s.url}; ${capsLine(caps)}; Ctrl-C stops`)}`);
   // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
   const startedOn = installed(ROOT);
   const { supervised } = await import('../src/service.js');
@@ -1557,11 +1580,13 @@ async function setUp(flags, mode) {
   const clone = at.folder || !remote ? null : `git clone ${mirrorSource(remote) ?? remote} ${cloneDir(remote)}`;
   const has = flags.has ? operatorHas(flags).has : null; // none typed: the operator detects them (#494)
   await finishSetup({
-    mode, ask: askLine, say, project: at.project, folder: at.folder, clone, budget: flags.budget,
+    mode, ask: askLine, say, project: at.project, folder: at.folder, clone, budget: flags.budget, pays: flags.pays,
+    detected: mode === 'no' ? null : await detectedPays(),
     plugin: pluginInstalled(homedir()),
     actions: {
       staff: (p, usd) => staffProject(p, usd, flags),
-      installRunner: async () => { await runService({ ...flags, folder: besideOf(at.folder ?? process.cwd()) }, { argv: [] }); return []; },
+      installed: async () => { const r = await installedRunner(); return r.args ? r : null; },
+      installRunner: (args, installed) => installCapped({ ...flags, folder: besideOf(at.folder ?? process.cwd()) }, args, installed),
       startOperator: () => startOperator(at.folder, has),
     },
   });

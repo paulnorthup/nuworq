@@ -298,7 +298,23 @@ export function runCaps(flags = {}) {
     if (!Number.isFinite(n) || n < 0 || String(v).trim() === '') throw Object.assign(new Error(`--${k} expects a number ≥ 0, got "${v}"`), { hint: `e.g. --${k} ${k === 'max-minutes' ? 90 : 25}, or --${k} 0 for no cap` });
     return n === 0 ? Infinity : n;
   };
-  return { maxMinutes: cap('max-minutes'), maxUsd: cap('max-usd'), workerUsd: cap('worker-usd') };
+  if (flags.pays !== undefined && !PAYS[flags.pays]) throw Object.assign(new Error(`--pays expects api or subscription, got "${flags.pays}"`), { hint: 'nuworq connect writes it with the caps it chose; leave it out otherwise' });
+  return { maxMinutes: cap('max-minutes'), maxUsd: cap('max-usd'), workerUsd: cap('worker-usd'), from: capsFrom(flags) };
+}
+
+// Where the caps came from (#776), for the runner's start line: connect's question (it writes --pays with them),
+// flags typed, or the defaults.
+const PAYS = { api: 'an API key', subscription: 'a subscription' };
+export function capsFrom(flags = {}) {
+  if (PAYS[flags.pays]) return `set by connect for ${PAYS[flags.pays]}`;
+  return Object.keys(CAPS).some((k) => flags[k] !== undefined) ? 'from its flags' : 'the defaults';
+}
+
+// The caps in force, in words: "each stops at 90m or $25; $20 in all (caps: the defaults)".
+export function capsLine({ maxMinutes, maxUsd, workerUsd, from }) {
+  const limits = [maxMinutes < Infinity && `${maxMinutes}m`, workerUsd < Infinity && `$${workerUsd}`].filter(Boolean);
+  const each = limits.length ? `each stops at ${limits.join(' or ')}` : 'no worker cap';
+  return `${each}${workerUsd === Infinity ? ', no dollar cap' : ''}${maxUsd < Infinity ? `; $${maxUsd} in all` : ''} (caps: ${from})`;
 }
 
 // Why a worker stopped (#754), sent with the signoff the runner makes for it, so the hand-back of what it held names
