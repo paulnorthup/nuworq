@@ -337,7 +337,7 @@ describe('the release workflow (#813)', () => {
         assert.equal(failed, null, failed?.stderr);
         assert.match(said, new RegExp(`changed\\*\\* since the hub's signed release \\(\`${b.slice(0, 7)}\`\\): \`scripts/release\\.js\``));
         assert.ok(!said.includes(a.slice(0, 7)));
-        assert.doesNotMatch(said, /didn't verify/);
+        assert.doesNotMatch(said, /didn't verify|release key changed/);
       } finally { hub.close(); }
     });
 
@@ -369,7 +369,40 @@ describe('the release workflow (#813)', () => {
       const step = stepRun('What the approval rests on');
       assert.ok(step.indexOf('verify(null, pkg') < step.indexOf('last=$hub'));
       assert.match(step, /curl [^\n]*"\$\{NUWORQ_HUB%\/\}\/nuworq-\$hub\.tgz\.sig"/);
-      assert.match(step, /git show "\$commit:release-key\.pub"/);
+      assert.match(step, /git show "\$keyfrom:release-key\.pub"/);
+    });
+
+    test('a release key the tag swapped in can\'t make the hub\'s .sig verify, and the summary says the key changed (#842)', async () => {
+      const a = release('1.0.0');
+      fakeGh(['v1.0.0']);
+      // Landed code swaps release-key.pub and changes the code check runs; a compromised hub signs it with the new key.
+      const theirs = keypair();
+      const parent = commit({ 'release-key.pub': theirs.pub, 'src/update.js': '// changed by landed code\n' }, 'x');
+      git(work, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin');
+      const c = release('1.1.0', { pub: theirs.pub });
+      const hub = await fakeHub(parent, await signed(parent, theirs.key));
+      try {
+        const { failed, said } = await changes('v1.1.0', c, { NUWORQ_HUB: hub.at });
+        assert.equal(failed, null, failed?.stderr);
+        assert.match(said, new RegExp(`The hub's claim didn't verify:\\*\\* it names \`${parent.slice(0, 7)}\`.*release-key\\.pub of v1\\.0\\.0`));
+        assert.match(said, new RegExp(`The code \`check\` ran changed\\*\\* since v1\\.0\\.0 \\(\`${a.slice(0, 7)}\`\\): \`src/update\\.js\``));
+        assert.match(said, new RegExp(`The release key changed\\*\\* since v1\\.0\\.0 \\(\`${a.slice(0, 7)}\`\\)`));
+      } finally { hub.close(); }
+    });
+
+    test('a hub naming its signed release by anything but a full sha fails, naming the hub (#842)', async () => {
+      const a = release('1.0.0');
+      fakeGh(['v1.0.0']);
+      const c = release('1.1.0');
+      for (const name of ['v1.0.0', 'HEAD~1', a.slice(0, 7), a.toUpperCase(), `${a} `]) {
+        const hub = await fakeHub(name, null);
+        try {
+          const { failed, said } = await changes('v1.1.0', c, { NUWORQ_HUB: hub.at });
+          assert.ok(failed, `${JSON.stringify(name)} passed`);
+          assert.match(said, new RegExp(`the hub at ${hub.at.replace(/\./g, '\\.')} names its signed release by something other than a 40-character commit sha`));
+          assert.doesNotMatch(said, /HEAD~1|rests on/);
+        } finally { hub.close(); }
+      }
     });
 
     test('refuses, before anyone is asked, a tag off main, at another version, or a rollback', async () => {
