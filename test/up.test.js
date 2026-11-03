@@ -57,9 +57,9 @@ describe('the runner', () => {
   });
 
   test('a runner started with no cap flags has no per-worker cap and no time limit; set ones still work (#795)', () => {
-    assert.deepEqual(runCaps({}), { maxMinutes: Infinity, maxUsd: Infinity, workerUsd: Infinity });
-    assert.deepEqual(runCaps({ 'max-minutes': '90', 'worker-usd': '25', 'max-usd': '100' }), { maxMinutes: 90, maxUsd: 100, workerUsd: 25 });
-    assert.deepEqual(runCaps({ 'max-minutes': '0', 'worker-usd': '0' }), { maxMinutes: Infinity, maxUsd: Infinity, workerUsd: Infinity }, '0 turns one off');
+    assert.deepEqual(runCaps({}), { maxMinutes: Infinity, maxUsd: Infinity, workerUsd: Infinity, from: 'none set' });
+    assert.deepEqual(runCaps({ 'max-minutes': '90', 'worker-usd': '25', 'max-usd': '100' }), { maxMinutes: 90, maxUsd: 100, workerUsd: 25, from: 'from its flags' });
+    assert.deepEqual(runCaps({ 'max-minutes': '0', 'worker-usd': '0' }), { maxMinutes: Infinity, maxUsd: Infinity, workerUsd: Infinity, from: 'from its flags' }, '0 turns one off');
     assert.throws(() => runCaps({ 'worker-usd': 'lots' }), /expects a number/);
   });
 

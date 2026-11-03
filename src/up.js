@@ -49,6 +49,18 @@ export function autoArgs(args = []) {
   return [...out, '--workers', 'auto'];
 }
 
+// An installed runner's flags with connect's caps in place of its own (#776): its other flags stay.
+const CAP_FLAGS = ['--pays', '--max-minutes', '--worker-usd', '--max-usd'];
+export function setCaps(args = [], caps = []) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (CAP_FLAGS.includes(args[i])) { i++; continue; }
+    if (CAP_FLAGS.some((f) => args[i].startsWith(`${f}=`))) continue;
+    out.push(args[i]);
+  }
+  return [...out, ...caps];
+}
+
 const isAuto = (args = []) => args.some((a, i) => a === '--workers=auto' || (a === '--workers' && args[i + 1] === 'auto'));
 
 // Each project's folder for its operator, as upPlan's clones (#617). An operator is attended and unsandboxed, so the

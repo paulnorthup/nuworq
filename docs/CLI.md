@@ -28,6 +28,8 @@ Flags
                   asking
   --no            answer no to each follow-up without asking
   --budget <usd>  with staffing: the daily cap for its workers (default: 20)
+  --pays <how>    with staffing: how this machine pays for Claude, api or
+                  subscription, instead of asking; it sets the runner's caps
 
 Environment
   NUWORQ_TOKEN  a token to use instead of signing in
@@ -46,6 +48,13 @@ beside it (old skills, a second server). Undo all of it with nuworq disconnect.
 Then, one at a time: staff the project this folder is a clone of with workers
 here (nuworq staff), and start an operator (operator --start). --yes or --no
 answers each without asking; with no terminal, it's no.
+
+Staffing asks how this machine pays for Claude, Enter taking what it detects
+(ANTHROPIC_API_KEY, or claude auth status). An API key: a cap per worker and a
+daily cap (--worker-usd, --max-usd). A subscription: minutes, not dollars
+(--max-minutes 60), and no daily budget on the hub, since its usage windows are
+the limit. --yes takes the detected answer with these values. Connect again to
+change them: nuworq run's start line names the caps and where they came from.
 ```
 
 ### nuworq up
@@ -117,6 +126,8 @@ Flags
   --max-usd <x>       stop starting workers once they've spent $x in all,
                       running ones' spend so far included; 0: no cap (local
                       models and unpriced codex models count nothing)
+  --pays <how>        api or subscription: what connect set the caps for; the
+                      start line names it
   --land-usd <x>      the most one land job may spend; its worker is stopped
                       there (0: no cap) (default: 2)
   --poll <s>          the most seconds between looks; new work is heard at once
@@ -1030,6 +1041,8 @@ Usage
 Flags
   --project <p>   the project, instead of this folder's
   --budget <usd>  the daily cap for its workers (default: 20)
+  --pays <how>    how this machine pays for Claude, api or subscription, instead
+                  of asking; it sets the runner's caps
   --yes           don't ask: take the defaults
   --no-browser    print the approval link instead of opening the browser
 

@@ -6,6 +6,80 @@
 
 export const BUDGET = 20; // dollars a day: the cap a person accepts or types over
 
+// How this machine pays for Claude (#776), and the runner caps that fit. On an API key every run spends real money,
+// so each worker and the day get a dollar cap. On a subscription (Pro or Max) dollars aren't the limit, its usage
+// windows are: a worker gets fewer minutes and no dollar cap.
+export const WORKER_USD = 10; // dollars one worker may spend on an API key
+export const SUB_MINUTES = 60; // minutes one worker may run on a subscription
+export const API_MINUTES = 90; // minutes one worker may run on an API key, besides its dollar cap
+const PAID = { api: 'an API key', subscription: 'a subscription' };
+
+// What this machine seems to pay with: an API key when ANTHROPIC_API_KEY is set, else what `claude auth status`
+// said (auth: its output, JSON or text, or null). Returns { pays: 'api' | 'subscription', why } or null.
+export function detectPays({ env = {}, auth = null } = {}) {
+  if (env.ANTHROPIC_API_KEY) return { pays: 'api', why: 'ANTHROPIC_API_KEY is set' };
+  if (!auth) return null;
+  let s = null;
+  try { s = JSON.parse(auth); } catch {}
+  if (s && typeof s === 'object') {
+    if (s.loggedIn === false) return null;
+    const how = `${s.authMethod ?? ''} ${s.apiKeySource ?? ''} ${s.apiProvider ?? ''}`;
+    if (s.subscriptionType) return { pays: 'subscription', why: `claude is signed in to Claude ${String(s.subscriptionType).replace(/^./, (c) => c.toUpperCase())}` };
+    if (/api|console/i.test(how)) return { pays: 'api', why: 'claude uses an API key' };
+    if (/claude\.ai|oauth|subscription/i.test(how)) return { pays: 'subscription', why: 'claude is signed in to a Claude account' };
+    return null;
+  }
+  if (/api[ _-]?key/i.test(auth)) return { pays: 'api', why: 'claude uses an API key' };
+  if (/claude\.ai|subscription|\b(pro|max)\b/i.test(auth)) return { pays: 'subscription', why: 'claude is signed in to a Claude account' };
+  return null;
+}
+
+// A number of dollars typed, or null.
+const dollars = (v) => { const x = Number(String(v ?? '').trim().replace(/^\$/, '')); return x > 0 ? Math.round(x * 100) / 100 : null; };
+
+// The one question (#776): how this machine pays, Enter taking what was detected (else an API key, the cautious
+// answer). Then, for an API key, the daily cap (budgetOf's question) and a per-worker cap. Returns { pays, usd,
+// args, lines }: usd for the hub's daily budget (null for none), args the run flags to install the runner with (--pays says where
+// its caps came from), lines what to tell the person. given: --pays and --budget, which answer their questions.
+export async function paysOf(mode, ask, detected, { pays: named, budget } = {}) {
+  const guess = detected?.pays ?? 'api';
+  const found = detected ? ` (${detected.why})` : '';
+  let pays = PAID[named] ? named : null;
+  if (!pays && mode === 'ask') {
+    for (let i = 0; i < 2 && !pays; i++) {
+      const said = String(await ask(`How does this machine pay for Claude: a subscription (Pro/Max) or an API key? [s/a, Enter: ${guess === 'api' ? 'API key' : 'subscription'}${found}] `) ?? '').trim();
+      pays = !said ? guess : /^s/i.test(said) ? 'subscription' : /^a/i.test(said) ? 'api' : null;
+    }
+    pays ??= guess;
+  }
+  const lines = [];
+  if (!pays) {
+    pays = guess;
+    lines.push(`Took ${PAID[pays]}${detected ? ` (${detected.why})` : ' (nothing said otherwise)'} with the suggested caps; connect again at a terminal to change them.`);
+  }
+  if (pays === 'subscription') {
+    // No hub budget either (usd null), unless --budget asks for one: claude reports an API-equivalent cost even on a
+    // subscription, and a hub budget would stop the runner on dollars nobody pays.
+    const usd = dollars(budget);
+    lines.push(`On a subscription, Claude's usage windows are the limit, not dollars: each worker stops after ${SUB_MINUTES} minutes, ${usd ? `and the hub stops starting them after $${usd} a day (--budget)` : 'with no dollar cap and no daily budget on the hub'} (--max-minutes ${SUB_MINUTES}).`);
+    return { pays, usd, args: ['--pays', pays, '--max-minutes', String(SUB_MINUTES), '--worker-usd', '0'], lines };
+  }
+  const usd = await budgetOf(mode, ask, budget);
+  const worker = mode === 'ask' ? await dollarsAsked(ask, `Cap for each worker, in dollars [${WORKER_USD}]: `, WORKER_USD) : WORKER_USD;
+  lines.push(`On an API key every run spends money: each worker stops at $${worker} or ${API_MINUTES} minutes, and the runner at $${usd} in all (--worker-usd ${worker} --max-usd ${usd}).`);
+  return { pays, usd, args: ['--pays', pays, '--max-minutes', String(API_MINUTES), '--worker-usd', String(worker), '--max-usd', String(usd)], lines };
+}
+
+// A dollar amount asked for: what is typed, def on Enter, asked again once when it isn't one.
+async function dollarsAsked(ask, question, def) {
+  for (let i = 0; i < 2; i++) {
+    const said = String(await ask(question) ?? '').trim();
+    if (!said) return def;
+    if (dollars(said)) return dollars(said);
+  }
+  return def;
+}
+
 // A yes/no question, or the mode's answer. def: what Enter means.
 export function answerer(mode, ask) {
   return async (question, { def = false } = {}) => {
@@ -17,15 +91,9 @@ export function answerer(mode, ask) {
 
 // The daily cap: typed, or the default on Enter. Asked again once when it isn't a number of dollars.
 export async function budgetOf(mode, ask, given) {
-  const n = (v) => { const x = Number(String(v ?? '').trim().replace(/^\$/, '')); return x > 0 ? Math.round(x * 100) / 100 : null; };
-  if (given !== undefined && given !== true) return n(given) ?? BUDGET;
+  if (given !== undefined && given !== true) return dollars(given) ?? BUDGET;
   if (mode !== 'ask') return BUDGET;
-  for (let i = 0; i < 2; i++) {
-    const said = String(await ask(`Daily spending cap for its workers, in dollars [${BUDGET}]: `) ?? '').trim();
-    if (!said) return BUDGET;
-    if (n(said)) return n(said);
-  }
-  return BUDGET;
+  return dollarsAsked(ask, `Daily spending cap for its workers, in dollars [${BUDGET}]: `, BUDGET);
 }
 
 // The project this setup is for: --project, else the one whose repository this folder is a clone of, else
@@ -54,26 +122,42 @@ export async function chooseProject({ projects, named, remote, root, mode, ask, 
 
 // The questions, in order. project: { slug, name, runner } (runner: already staffed); folder: its clone here, or null with clone: the command that
 // makes it. plugin: whether Claude Code has the nuworq plugin (its commands are /nuworq:…, else /nuworq-…).
-// actions: staff(project, budget) and installRunner() return lines to print; startOperator() hands the terminal
-// to Claude Code (last, as it returns only when the session ends). Returns what was done: { staffed, operator }.
-export async function finishSetup({ mode, ask, say, project, folder, clone, plugin, budget, actions }) {
+// actions: staff(project, budget) (budget null: none) and installRunner(args, runner) return lines to print (args: the run flags with
+// its caps; runner: the one installed here, to keep its other flags); installed() is that runner ({ args, cwd,
+// tokenFile }) or null; startOperator() hands the terminal to Claude Code (last, as it returns only when the session
+// ends). detected: detectPays's answer; pays: --pays. Returns what was done: { staffed, operator }.
+export async function finishSetup({ mode, ask, say, project, folder, clone, plugin, budget, pays, detected = null, actions }) {
   const yes = answerer(mode, ask);
   const name = project.name ?? project.slug;
   const out = { staffed: false, operator: false };
   if (!folder && clone) say(`${name} isn't cloned on this machine. Clone it with: ${clone}`);
 
   // 2. Workers on this machine. Already staffed (#643): said, not asked again; this machine's runner is one command.
+  // A runner already installed here is asked only how the machine pays, so connecting again can change its caps.
   if (project.runner) {
-    say(`${name} is already staffed: nuworq run starts its workers. To run them on this machine too: nuworq run --install   (in ${folder ?? 'its clone'})`);
-  } else if (await yes(`Staff ${name} with workers on this machine? It turns on staffing for ${name} and installs nuworq run as a background service, which starts Claude Code workers on waiting work, also after a reboot. They spend on your Claude account, up to a daily cap you set next.`)) {
-    const usd = await budgetOf(mode, ask, budget);
+    const installed = mode === 'no' ? null : (await actions.installed?.()) ?? null;
+    if (!installed) say(`${name} is already staffed: nuworq run starts its workers. To run them on this machine too: nuworq run --install   (in ${folder ?? 'its clone'})`);
+    else {
+      say(`${name} is already staffed, and this machine's runner starts its workers.`);
+      const caps = await paysOf(mode, ask, detected, { pays, budget });
+      try {
+        // The hub's daily budget follows the answer too: cleared for a subscription, the daily cap for an API key.
+        // Unknown (a hub that doesn't list it): staffed again, so what the person is told holds.
+        if (project.run_budget === undefined || project.run_budget !== caps.usd) for (const l of await actions.staff(project, caps.usd)) say(l);
+        for (const l of await actions.installRunner(caps.args, installed)) say(l);
+        for (const l of caps.lines) say(l);
+      } catch (e) { say(`Couldn't change the runner's caps: ${e.message}${e.hint ? ` (${e.hint})` : ''}`); }
+    }
+  } else if (await yes(`Staff ${name} with workers on this machine? It turns on staffing for ${name} and installs nuworq run as a background service, which starts Claude Code workers on waiting work, also after a reboot. They spend on your Claude account, up to the caps you set next.`)) {
+    const caps = await paysOf(mode, ask, detected, { pays, budget });
     try {
-      for (const l of await actions.staff(project, usd)) say(l);
-      for (const l of await actions.installRunner()) say(l);
+      for (const l of await actions.staff(project, caps.usd)) say(l);
+      for (const l of await actions.installRunner(caps.args, (await actions.installed?.()) ?? null)) say(l);
+      for (const l of caps.lines) say(l);
       out.staffed = true;
     } catch (e) {
       say(`Couldn't staff ${name}: ${e.message}${e.hint ? ` (${e.hint})` : ''}`);
-      say(`Later: nuworq staff ${project.slug} --budget ${usd}`);
+      say(`Later: nuworq staff ${project.slug} ${caps.usd ? `--budget ${caps.usd}` : '--pays subscription'}`);
     }
   } else {
     say(`Later: nuworq staff ${project.slug}   (in ${folder ?? 'its clone'})`);
