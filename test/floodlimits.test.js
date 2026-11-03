@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Hub, LIMITS } from '../src/core.js';
+import { Hub, LIMITS, TOKEN_SHARE } from '../src/core.js';
 
 // One agent can't flood a hub (#766): a write window per agent, and caps on what a project or hub holds.
 function hub() {
@@ -48,10 +48,14 @@ test("an agent's 61st write within a minute is refused with when to retry; reads
 test('one token checking in under new names shares one write window: past 240 a minute it is refused (#831)', () => {
   const h = hub();
   const as = { identity: { id: 7 } };
-  // Four names, 60 writes each: each name is under its own limit, the token reaches its own.
+  // Four names, 60 writes each: each name is under its own limit, the token reaches its own. Comments and
+  // proposals, so the token stays under its share of the project's comments and field notes (#851).
   for (let n = 0; n < 4; n++) {
     h.agentOp('app', 'checkin', `t${n}`, {}, as);
-    for (let i = 0; i < 60; i++) h.agentOp('app', 'learn', `t${n}`, { note: `Note ${n}.${i}` }, as);
+    for (let i = 0; i < 60; i++) {
+      if (i % 2) h.agentOp('app', 'comment', `t${n}`, { headline: `Comment ${n}.${i}` }, as);
+      else h.agentOp('app', 'propose', `t${n}`, { title: `Proposal ${n}.${i}` }, as);
+    }
   }
   h.agentOp('app', 'checkin', 'fresh', {}, as);
   refused(() => h.agentOp('app', 'learn', 'fresh', { note: 'Under a new name' }, as), 429, /another name adds no room/);
@@ -101,6 +105,39 @@ test('a project takes at most 1,000 comments a day and holds at most 500 field n
   const old = h.q(`SELECT id FROM notes WHERE project_id = ? AND kind = 'learning' AND active = 1 LIMIT 1`).get(p.id).id;
   assert.ok(h.agentOp('app', 'learn', 'a1', { note: 'Says it better', replaces: old }).ok);
   assert.equal(active(), LIMITS.fieldNotes);
+});
+
+test("one token can't fill a project's comment day or field notes for other agents", () => {
+  const h = hub();
+  const p = h.project('app');
+  const as = { identity: { id: 7 } };
+  h.agentOp('app', 'checkin', 't1', {}, as);
+  h.agentOp('app', 'checkin', 't2', {}, as);
+  h.agentOp('app', 'checkin', 'u1', {}, { identity: { id: 8 } });
+  const comments = LIMITS.commentsPerDay * TOKEN_SHARE, notes = LIMITS.fieldNotes * TOKEN_SHARE;
+  // The token's share, split over its two names; each name alone is under it.
+  for (let i = 0; i < comments; i++) {
+    h.q(`INSERT INTO events (project_id, actor, type, headline, at) VALUES (?, ?, 'comment', ?, ?)`).run(p.id, i % 2 ? 't1' : 't2', `C${i}`, h.now() - i);
+  }
+  for (let i = 0; i < notes; i++) {
+    h.q(`INSERT INTO notes (project_id, kind, author, body, at) VALUES (?, 'learning', ?, ?, ?)`).run(p.id, i % 2 ? 't1' : 't2', `N${i}`, h.now());
+  }
+  refused(() => h.agentOp('app', 'comment', 't1', { headline: 'One more' }, as), 429, /progress instead.*another name adds no room/);
+  refused(() => h.agentOp('app', 'learn', 't2', { note: 'One more' }, as), 429, /replaces.*another name adds no room/);
+  // A new name under the same token has no room of its own.
+  h.agentOp('app', 'checkin', 't3', {}, as);
+  refused(() => h.agentOp('app', 'comment', 't3', { headline: 'Fresh name' }, as), 429, /another name adds no room/);
+  // Far below the project's caps, other tokens' agents and agents without a token comment and learn.
+  assert.ok(h.agentOp('app', 'comment', 'u1', { headline: 'Its own share' }, { identity: { id: 8 } }).ok);
+  assert.ok(h.agentOp('app', 'learn', 'u1', { note: 'Its own note' }, { identity: { id: 8 } }).ok);
+  assert.ok(h.agentOp('app', 'comment', 'a1', { headline: 'No token' }).ok);
+  assert.ok(h.agentOp('app', 'learn', 'a1', { note: 'No token' }).ok);
+  // Replacing one of its own notes fits at its share; a day on, its comments have room again.
+  h.humanOp('app', 'settings', { autonomy: 'full' });
+  const old = h.q(`SELECT id FROM notes WHERE project_id = ? AND author = 't1' AND active = 1 LIMIT 1`).get(p.id).id;
+  assert.ok(h.agentOp('app', 'learn', 't1', { note: 'Says it better', replaces: old }, as).ok);
+  h.tick(24 * 60 * 60_000 + 1);
+  assert.ok(h.agentOp('app', 'comment', 't1', { headline: 'A day on' }, as).ok);
 });
 
 test('a project holds at most 200 open questions and 500 proposed items', () => {

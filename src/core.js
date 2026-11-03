@@ -48,6 +48,9 @@ const WRITES_PER_MIN = 60;
 // a few agents wide, and the new names it may check in under each hour are capped.
 const TOKEN_WRITES_PER_MIN = 240;
 const NEW_NAMES_PER_HOUR = 100;
+// Nor can it fill a project's day of comments or its field notes for everyone else (#851): under all its names
+// there, it may hold at most this part of each.
+export const TOKEN_SHARE = 1 / 5;
 // The most an agent's (or a person's) text may hold (#765), in characters, or entries for lists. Past one, the write
 // is refused with a hint, never cut silently: every open page and many agents read these back on each change.
 export const LIMITS = {
@@ -2398,6 +2401,25 @@ export class Hub extends EventEmitter {
     });
   }
 
+  // The names on a project that the agent's token is bound to (#851), the agent's own among them; null when the
+  // agent has no token (a hub without logins, or a person's browser session).
+  tokenNames(p, agent) {
+    const a = this.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
+    if (a?.token_id == null) return null;
+    return this.q('SELECT name FROM agents WHERE project_id = ? AND token_id = ?').all(p.id, a.token_id).map((r) => r.name);
+  }
+
+  // Refuses a token's write once its names hold their share of a project cap (#851), so other tokens' agents keep room.
+  tokenShare(p, agent, count, cap, what, hint) {
+    const names = this.tokenNames(p, agent);
+    if (!names) return;
+    const most = Math.floor(cap * TOKEN_SHARE);
+    if (count(names) < most) return;
+    throw new UserError(`This agent's token already has ${commas(most)} of ${p.name}'s ${what}, under all its names, the most one token may`, {
+      status: 429, hint: `${hint} Checking in under another name adds no room; other tokens' agents still have theirs.`,
+    });
+  }
+
   // slug may be empty: then the agent's folder (root) picks the project, or the hub routes it to work.
   // scope: the project slugs the caller's token may reach (null: all).
   // token: the calling token's identity (required mode): its name is recorded on the agent; an agent
@@ -3971,6 +3993,10 @@ const AGENT_OPS = {
         status: 429, hint: 'Report on work you hold with progress instead, or comment again later: older comments stop counting after a day.',
       });
     }
+    const since = this.now() - DAY;
+    this.tokenShare(p, agent, (names) => this.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'comment' AND at > ?
+      AND actor IN (${names.map(() => '?').join(',')})`).get(p.id, since, ...names).n,
+    LIMITS.commentsPerDay, 'comments from the last day', 'Report on work you hold with progress instead, or comment again later: older comments stop counting after a day.');
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
     const item = args.item ? this.item(p, args.item) : null;
     this.event(p, { item, actor: agent, type: 'comment', headline, summary, detail });
@@ -4042,7 +4068,10 @@ const AGENT_OPS = {
         status: 429, hint: 'Replace one that says the same thing (learn with replaces), or have the ones whose lesson is built in retired: where a person retires notes, ask them one question listing which and why.',
       });
     }
-    const r = this.q(`INSERT INTO notes (project_id, item_id, kind, author, body, at) VALUES (?, ?, 'learning', ?, ?, ?)`)
+    this.tokenShare(p, agent, (names) => this.q(`SELECT COUNT(*) AS n FROM notes WHERE project_id = ? AND kind = 'learning' AND active = 1
+      AND author IN (${names.map(() => '?').join(',')})`).get(p.id, ...names).n,
+    LIMITS.fieldNotes, 'active field notes', 'Replace one of its notes that says the same thing (learn with replaces), or have the ones whose lesson is built in retired.');
+    const r =this.q(`INSERT INTO notes (project_id, item_id, kind, author, body, at) VALUES (?, ?, 'learning', ?, ?, ?)`)
       .run(p.id, item?.id ?? null, agent, text, this.now());
     this.event(p, {
       item, actor: agent, type: 'learned',
