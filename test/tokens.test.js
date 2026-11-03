@@ -126,7 +126,7 @@ describe('one strict set of tokens (#391)', () => {
     try {
       const url = `http://127.0.0.1:${server.address().port}`;
       for (const path of ['/styleguide', '/styleguide.html']) assert.equal((await fetch(`${url}${path}`)).status, 401, `${path} signed out`);
-      const res = await fetch(`${url}/styleguide`, { headers: { authorization: `Bearer ${server.auth.createToken('paul', 'human')}` } });
+      const res = await fetch(`${url}/styleguide`, { headers: { authorization: `Bearer ${server.auth.createToken('remy', 'human')}` } });
       const html = await res.text();
       assert.equal(res.status, 200);
       assert.match(res.headers.get('content-type'), /text\/html/);

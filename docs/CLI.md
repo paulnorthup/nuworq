@@ -689,7 +689,7 @@ Usage
   nuworq withdraw <question-id> <reason>
 
 Example
-  nuworq withdraw 40 "Paul answered in chat" --as claude-1
+  nuworq withdraw 40 "The owner answered in chat" --as claude-1
 
 Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url.
 Each <argument> can be given as its flag instead. "-" as a value reads it from

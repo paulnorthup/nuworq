@@ -3,7 +3,7 @@
 Setup is measured, not assumed. It starts from a signed-in workspace with a project. It ends with workers staffed, an operator running and a shaper started (the setup that works, #489). For each step this records the time, commands typed, pastes, questions asked, places visited and anything a newcomer would hesitate over.
 
 Two measurements:
-- **The walk.** A person's walk in a real browser and terminal, on a throwaway hub, by the operator claude-code-9ccc on 2026-11-02, as Paul chose (Q197).
+- **The walk.** A person's walk in a real browser and terminal, on a throwaway hub, by the operator claude-code-9ccc on 2026-11-02, as the maintainer chose (Q197).
 - **The script.** `node scripts/setup-walkthrough.js`, which repeats what can run unattended. The weekly guide walk-through (#386, `src/walkthrough.js`) reruns it whenever setup changes.
 
 ## Targets
@@ -24,14 +24,14 @@ From a signed-in workspace with a project:
 
 ## The walk (after)
 
-A local hub on main 877fc22, with login required, owner @paul, and project Demo backed by a local bare repository. The newcomer joined through an owner's invite as @newcomer. The machine had a fresh HOME and npm's global prefix in a scratch folder. The browser was Chrome, and `connect` ran under `script` (a real pty). It started signed in, on Demo's page.
+A local hub on main 877fc22, with login required, owner @remy, and project Demo backed by a local bare repository. The newcomer joined through an owner's invite as @newcomer. The machine had a fresh HOME and npm's global prefix in a scratch folder. The browser was Chrome, and `connect` ran under `script` (a real pty). It started signed in, on Demo's page.
 
 | # | Step | Place | Counts | What the person saw |
 |---|------|-------|--------|---------------------|
 | 1 | Project page | hub page | 1 yes/no offered (A) | Banner: "Let nuworq run staff this project? It starts headless workers whenever work is waiting, and they can cost money. Off until you say." with **Let run staff it** and **Not now** |
 | 2 | Click **Connect an agent** | hub page | 1 click | A 471-word dialog with 6 copy blocks: the connect line, then under "The setup that works": `nuworq run --install --workers auto`, `claude`, `/nuworq:operator`, `/nuworq:shaper`, `nuworq up` (B) |
 | 3 | Copy and paste the first block | terminal | 1 copied block, 1 paste, 1 command | `npm install -g <hub>/nuworq.tgz && nuworq connect <hub>`, in the project's clone; the install took under 1 s |
-| 4 | Approve the device | browser (device page) | 1 approval, ~25 s | "Pauls-MacBook-Pro asks for an agent token in your name… Approve / Deny" (connect opened the browser itself) |
+| 4 | Approve the device | browser (device page) | 1 approval, ~25 s | "MacBook-Pro asks for an agent token in your name… Approve / Deny" (connect opened the browser itself) |
 | 5 | Question 1: the plugin | terminal | 1 yes/no | "Install the nuworq plugin for Claude Code, for every project? … costs nothing. [Y/n]". Answered n: the repository is private (#365) |
 | 6 | Connected | terminal | | "Connected … as newcomer@…", the MCP server added, and the nuworq, nuworq-shaper and nuworq-operator skills written (the plugin was declined) |
 | 7 | Question 2: staffing | terminal | 1 yes/no (+1 number on yes: D) | "Staff Demo with workers on this machine? … up to a daily cap you set next. [y/N]". Answered n |
@@ -68,5 +68,5 @@ Times are the hub's and the CLI's. A person's reading, switching windows and typ
 
 - **The plugin from GitHub.** It needs a Claude account with access to the private repository. Rerun from an account without access once #365 makes it public. The script installs it through the stand-in `claude`.
 - **The staffing service.** A yes installs a real LaunchAgent (or systemd unit) and spends on a Claude account. Rerun on a spare machine or VM. The script answers no.
-- **A real operator and shaper.** Claude Code can't sign in from a fresh HOME, and the shaper runs in the Claude Code app on Paul's account. The script checks that connect starts `claude` with `/nuworq:operator` and names `/nuworq:shaper`.
+- **A real operator and shaper.** Claude Code can't sign in from a fresh HOME, and the shaper runs in the Claude Code app on the maintainer's account. The script checks that connect starts `claude` with `/nuworq:operator` and names `/nuworq:shaper`.
 - **The live hub.** The walk ran on a local hub; rerun on a throwaway workspace of the live one once #365 is done.

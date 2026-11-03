@@ -56,7 +56,7 @@ describe('how many workers the machine has room for', () => {
     assert.equal(busy(), 0.1);
   });
 
-  // Paul's 64 GB Mac (Q253): os.freemem() read 1 GB while vm_stat held 28 GB inactive.
+  // The maintainer's 64 GB Mac (Q253): os.freemem() read 1 GB while vm_stat held 28 GB inactive.
   const vmStat = (free, inactive, speculative = 0) => `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                               ${free}.
 Pages active:                           1500000.

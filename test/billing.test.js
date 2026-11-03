@@ -141,7 +141,7 @@ describe("Stripe's signed webhook puts a workspace on a paid plan (#227)", () =>
     await deliver(checkout('gamma', 'sub_g'));
     await deliver(sub('sub_g', { customer: 'cus_g' }));
     assert.equal(plan('gamma').source, 'billing');
-    spaces.setPlan('gamma', 'free', 'paul@example.com');
+    spaces.setPlan('gamma', 'free', 'remy@example.com');
     assert.equal(plan('gamma').plan, 'free');
     assert.equal(plan('gamma').source, 'set');
     assert.equal(plan('gamma').billing.status, 'active', 'its billing still shows');

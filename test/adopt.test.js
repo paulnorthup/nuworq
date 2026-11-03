@@ -21,9 +21,9 @@ const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 function singleHub(file) {
   const hub = new Hub({ file });
   const auth = new Auth(hub.db);
-  auth.addPerson('paul', 'owner', { email: 'paul@example.com' });
+  auth.addPerson('remy', 'owner', { email: 'remy@example.com' });
   const tokens = {
-    human: auth.createToken('paul-laptop', 'human', { person: 'paul' }),
+    human: auth.createToken('remy-laptop', 'human', { person: 'remy' }),
     agent: auth.createToken('site-agent', 'agent', { projects: ['site'] }),
     runner: auth.createToken('mini-runner', 'agent', { runner: 'mini' }),
   };
@@ -100,8 +100,8 @@ describe('a single hub moves into workspaces mode (#204)', () => {
     assert.equal((await call('GET', '/api/projects')).status, 404, 'no workspace named, no token: the hub\'s own address');
     const spaces = new Workspaces({ dir: join(dataDir, 'workspaces') });
     const dir = spaces.directory;
-    const me = dir.identity('paul@example.com');
-    assert.deepEqual(dir.orgsOf(me, spaces).map((o) => [o.workspace, o.handle, o.role]), [['main', 'paul', 'owner']]);
+    const me = dir.identity('remy@example.com');
+    assert.deepEqual(dir.orgsOf(me, spaces).map((o) => [o.workspace, o.handle, o.role]), [['main', 'remy', 'owner']]);
     const sid = dir.createSession(me.id);
     const enter = await call('POST', '/api/orgs/main/enter', null, {}, { cookie: `nuworq_id=${sid}`, origin: base });
     assert.equal(enter.status, 200);
@@ -136,7 +136,7 @@ describe("adopting a hub with a GitHub App keeps the app's webhooks reaching it 
   const github = createHttpServer((req, res) => {
     asked.push(`${req.method} ${req.url}`);
     const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
-    if (req.url.startsWith('/app/installations?') && /^Bearer ey/.test(req.headers.authorization ?? '')) return json(200, [{ id: 41, account: { login: 'paul' } }, { id: 42, account: { login: 'acme' } }]);
+    if (req.url.startsWith('/app/installations?') && /^Bearer ey/.test(req.headers.authorization ?? '')) return json(200, [{ id: 41, account: { login: 'remy' } }, { id: 42, account: { login: 'acme' } }]);
     json(404, { message: 'Not Found' });
   });
   let api, spaces, server;
@@ -146,7 +146,7 @@ describe("adopting a hub with a GitHub App keeps the app's webhooks reaching it 
     api = `http://127.0.0.1:${github.address().port}`;
     const hub = new Hub({ file: db });
     hub.tx(() => hub.project('nuworq', { create: true }));
-    hub.addRemote(hub.project('nuworq'), 'github.com/paul/nuworq', 'you');
+    hub.addRemote(hub.project('nuworq'), 'github.com/remy/nuworq', 'you');
     hub.db.close();
     // Installation 42 was already installed for another workspace on this hub: it stays there.
     const before = new Workspaces({ dir: join(dataDir, 'workspaces') });
@@ -171,7 +171,7 @@ describe("adopting a hub with a GitHub App keeps the app's webhooks reaching it 
   test("a delivery for the adopted hub's installation reaches the workspace as a proposal", async () => {
     server = createServer(spaces, { githubApp: { id: '7', key: PEM, webhook_secret: WHS, api }, sweepMs: 3600_000 });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    const raw = JSON.stringify({ action: 'opened', installation: { id: 41 }, issue: { number: 121, title: 'Webhook check', state: 'open', author_association: 'OWNER', html_url: 'https://github.com/paul/nuworq/issues/121' }, repository: { full_name: 'paul/nuworq' } });
+    const raw = JSON.stringify({ action: 'opened', installation: { id: 41 }, issue: { number: 121, title: 'Webhook check', state: 'open', author_association: 'OWNER', html_url: 'https://github.com/remy/nuworq/issues/121' }, repository: { full_name: 'remy/nuworq' } });
     const r = await fetch(`http://127.0.0.1:${server.address().port}/api/hooks/github-app`, {
       method: 'POST', body: raw,
       headers: { 'content-type': 'application/json', 'x-github-event': 'issues', 'x-hub-signature-256': 'sha256=' + createHmac('sha256', WHS).update(raw).digest('hex') },

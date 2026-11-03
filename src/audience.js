@@ -22,8 +22,8 @@ const OPERATOR = [
   [/\b(verify|check|confirm|test|reproduce)\b.{0,40}\b(real|live|actual)\b/, 'verifying on a real system'],
 ];
 
-// A question that asks the person to do something (not just decide) must come with numbered steps (Paul,
-// 2026-10-30). Deterministic like the routing above: a request aimed at the person, near a verb that is an action.
+// A question that asks the person to do something (not just decide) must come with numbered steps (the
+// decision of 2026-10-30). Deterministic like the routing above: a request aimed at the person, near a verb that is an action.
 // A decision verb in between ("could you decide whether to add…") makes it a decision, not a request to act.
 const ACT = String.raw`(create|add|install|set ?up|configure|enable|disable|turn (on|off)|click|tap|sign (in|up)|log ?in|run|paste|copy|grant|invite|connect|rotate|upload|merge|register|generate|go to|visit|authori[sz]e|restart)`;
 const DECIDE = String.raw`\b(decide|choose|pick|confirm|approve|prefer|agree|ok|okay)\b`;

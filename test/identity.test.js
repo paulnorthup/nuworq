@@ -12,26 +12,26 @@ import { openDb } from '../src/db.js';
 import { addChannel, ownerChannels } from '../src/notify.js';
 import { Hub } from '../src/core.js';
 
-const PAUL = 'paul@example.com';
+const REMY = 'remy@example.com';
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 
 describe('a typed email makes no membership', () => {
-  // Paul owns the hub and signed in to his own workspace. Mallory signed up for hers, then types Paul's email.
+  // Remy owns the hub and signed in to his own workspace. Mallory signed up for hers, then types Remy's email.
   async function setup() {
-    const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-id-')), plans: true, owners: [PAUL] });
+    const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-id-')), plans: true, owners: [REMY] });
     const dir = spaces.directory;
-    spaces.create('pauls');
-    new Auth(spaces.get('pauls').db).addPerson('paul', 'owner', { email: PAUL, verified: true });
-    dir.identify(PAUL, 'github');
-    dir.join(PAUL, 'pauls');
-    addChannel(spaces.get('pauls').db, 'webhook', 'http://127.0.0.1:1/paul', Date.now(), { person: '@paul' });
+    spaces.create('remys');
+    new Auth(spaces.get('remys').db).addPerson('remy', 'owner', { email: REMY, verified: true });
+    dir.identify(REMY, 'github');
+    dir.join(REMY, 'remys');
+    addChannel(spaces.get('remys').db, 'webhook', 'http://127.0.0.1:1/remy', Date.now(), { person: '@remy' });
     spaces.create('evil');
     const evil = new Auth(spaces.get('evil').db);
     evil.addPerson('mallory', 'owner', { email: 'mallory@evil.test', verified: true });
     dir.identify('mallory@evil.test', 'github');
     dir.join('mallory@evil.test', 'evil', { created: true });
     const token = evil.createToken('mallory-web', 'human', { person: 'mallory' });
-    const server = createServer(spaces, { earlyAccess: { owners: [PAUL], verify: async () => true } });
+    const server = createServer(spaces, { earlyAccess: { owners: [REMY], verify: async () => true } });
     const base = `http://127.0.0.1:${await listen(server)}/w/evil`;
     const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     return { spaces, dir, evil, server, post };
@@ -41,33 +41,33 @@ describe('a typed email makes no membership', () => {
     const { spaces, dir, server, post } = await setup();
     try {
       assert.equal(spaces.planOf('evil'), 'free');
-      assert.equal((await post('/api/people', { handle: 'boss', role: 'owner', email: PAUL })).status, 200);
+      assert.equal((await post('/api/people', { handle: 'boss', role: 'owner', email: REMY })).status, 200);
       assert.equal((await post('/api/notify', { kind: 'webhook', url: 'https://sink.example.com/boss', person: '@boss' })).status, 200);
-      assert.equal(spaces.planOf('evil'), 'free', 'the plan still follows only Paul\'s own sign-ins');
-      assert.deepEqual(dir.orgsOf(dir.identity(PAUL), spaces).map((m) => m.workspace), ['pauls']);
-      assert.deepEqual(ownerChannels(spaces, [PAUL]).map(({ c }) => c.url), ['http://127.0.0.1:1/paul'], 'applicants\' details reach only Paul\'s channel');
+      assert.equal(spaces.planOf('evil'), 'free', 'the plan still follows only Remy\'s own sign-ins');
+      assert.deepEqual(dir.orgsOf(dir.identity(REMY), spaces).map((m) => m.workspace), ['remys']);
+      assert.deepEqual(ownerChannels(spaces, [REMY]).map(({ c }) => c.url), ['http://127.0.0.1:1/remy'], 'applicants\' details reach only Remy\'s channel');
     } finally { server.close(); spaces.close(); }
   });
 
   test('accepting an invite link to that email makes no membership either', async () => {
     const { spaces, dir, evil, server } = await setup();
     try {
-      const inv = evil.createInvite('owner', { email: PAUL, by: '@mallory' });
+      const inv = evil.createInvite('owner', { email: REMY, by: '@mallory' });
       const port = server.address().port;
       const r = await fetch(`http://127.0.0.1:${port}/w/evil/api/invite/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: inv.token, handle: 'boss' }) });
       assert.equal(r.status, 200);
       assert.equal(spaces.planOf('evil'), 'free');
-      assert.deepEqual(dir.orgsOf(dir.identity(PAUL), spaces).map((m) => m.workspace), ['pauls']);
+      assert.deepEqual(dir.orgsOf(dir.identity(REMY), spaces).map((m) => m.workspace), ['remys']);
     } finally { server.close(); spaces.close(); }
   });
 
   test('a stale membership left after typing counts only with a person who signed in there', async () => {
     const { spaces, dir, evil, server } = await setup();
     try {
-      evil.addPerson('boss', 'owner', { email: PAUL });
-      dir.join(PAUL, 'evil'); // as the hub did before #470
+      evil.addPerson('boss', 'owner', { email: REMY });
+      dir.join(REMY, 'evil'); // as the hub did before #470
       assert.equal(spaces.planOf('evil'), 'free');
-      assert.deepEqual(ownerChannels(spaces, [PAUL]).map(({ c }) => c.url), ['http://127.0.0.1:1/paul']);
+      assert.deepEqual(ownerChannels(spaces, [REMY]).map(({ c }) => c.url), ['http://127.0.0.1:1/remy']);
     } finally { server.close(); spaces.close(); }
   });
 });

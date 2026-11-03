@@ -433,7 +433,7 @@ const AGENT = {
     example: 'nuworq ask 12 "Keep the old flag?" --assumption "yes, as an alias" --as claude-1',
   },
   answer: { example: 'nuworq answer 40 "Done: it is installed" --as operator-1' },
-  withdraw: { example: 'nuworq withdraw 40 "Paul answered in chat" --as claude-1' },
+  withdraw: { example: 'nuworq withdraw 40 "The owner answered in chat" --as claude-1' },
   submit: { example: 'nuworq submit 12 "Parser handles tabs" --evidence "npm test: 48 passed" --as claude-1' },
   handoff: { example: 'nuworq handoff 12 "Parser half done; tests next" --as claude-1' },
   propose: { example: 'nuworq propose "Parse tabs in headers" --priority soon --as claude-1' },

@@ -10,9 +10,9 @@ import { appSource } from './appsource.js';
 describe('agentLine', () => {
   test('each role, with a job and without', () => {
     const cases = [
-      [{ role: 'operator', where: "Paul's Mac", job: 'landing #120' }, "Operator · Paul's Mac — landing #120", "Operator · Paul's Mac"],
+      [{ role: 'operator', where: "Remy's Mac", job: 'landing #120' }, "Operator · Remy's Mac — landing #120", "Operator · Remy's Mac"],
       [{ role: 'worker', where: 'mac-mini runner', job: 'building #170' }, 'Worker · mac-mini runner — building #170', 'Worker · mac-mini runner'],
-      [{ role: 'shaper', where: "Paul's Mac", job: 'shaping #219' }, "Shaper · Paul's Mac — shaping #219", "Shaper · Paul's Mac"],
+      [{ role: 'shaper', where: "Remy's Mac", job: 'shaping #219' }, "Shaper · Remy's Mac — shaping #219", "Shaper · Remy's Mac"],
       [{ role: 'session', where: 'devbox', job: 'reviewing #12' }, 'Agent · devbox — reviewing #12', 'Agent · devbox'],
     ];
     for (const [p, withJob, without] of cases) {

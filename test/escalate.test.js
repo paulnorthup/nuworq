@@ -4,7 +4,7 @@ import { Hub, DAY, HOUR } from '../src/core.js';
 import { view, itemView } from '../src/insight.js';
 import { tools } from '../src/protocol.js';
 
-// #134: an operator escalates what it may not settle alone to Paul, with evidence; Paul's answer reaches the asker.
+// #134: an operator escalates what it may not settle alone to the maintainer, with evidence; the maintainer's answer reaches the asker.
 function setup() {
   let now = Date.UTC(2026, 9, 29, 9);
   const hub = new Hub({ clock: () => now });

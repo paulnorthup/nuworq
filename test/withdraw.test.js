@@ -22,7 +22,7 @@ describe('an agent withdraws its own open question (#184)', () => {
     assert.equal(asks(hub).length, 2);
     assert.equal(hub.item(hub.project('p'), '#1').stage, 'waiting', 'the blocking one parked it');
 
-    const r = hub.agentOp('p', 'withdraw', 'w1', { question: a.question, reason: 'Paul answered in a planning session: he is the only admin.' });
+    const r = hub.agentOp('p', 'withdraw', 'w1', { question: a.question, reason: 'Remy answered in a planning session: he is the only admin.' });
     assert.equal(r.ok, true);
     hub.agentOp('p', 'withdraw', 'w1', { question: b.question, reason: 'No longer matters: billing moved to #9' });
     assert.equal(asks(hub).length, 0);
@@ -30,13 +30,13 @@ describe('an agent withdraws its own open question (#184)', () => {
 
     const it = itemView(hub, 'p', 1);
     assert.deepEqual(it.questions.map((q) => [q.status, q.closed_reason]), [
-      ['withdrawn', 'Paul answered in a planning session: he is the only admin.'],
+      ['withdrawn', 'Remy answered in a planning session: he is the only admin.'],
       ['withdrawn', 'No longer matters: billing moved to #9'],
     ]);
     const ev = hub.q("SELECT headline, summary FROM events WHERE type = 'question_withdrawn' ORDER BY id").all();
     assert.equal(ev.length, 2);
     assert.match(ev[0].headline, /w1 withdrew its question: Who are the admins\?/);
-    assert.equal(ev[0].summary, 'Why: Paul answered in a planning session: he is the only admin.');
+    assert.equal(ev[0].summary, 'Why: Remy answered in a planning session: he is the only admin.');
     // A person can't answer it any more either.
     assert.throws(() => hub.humanOp('p', 'answer', { question: a.question, answer: 'x' }), /already withdrawn/);
   });

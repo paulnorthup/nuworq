@@ -436,7 +436,7 @@ button.row-item:hover, button.row-item:focus-visible { background: var(--hover);
 .age { color: var(--muted); font-size: var(--fs-2); white-space: nowrap; flex: none; }
 
 /* ── agents ── */
-/* An agent reads as a line ("Worker · Pauls-MacBook-Pro.local runner · claude-80e7", #240), longer than a phone row
+/* An agent reads as a line ("Worker · Remys-MacBook-Pro.local runner · claude-80e7", #240), longer than a phone row
    leaves beside an age: it wraps under its marker rather than running under what sits next to it. */
 .agent { display: inline-flex; align-items: center; gap: var(--sp-1); font-weight: 550; font-size: var(--fs-3); min-width: 0; overflow-wrap: anywhere; }
 .agent i { flex: none; width: 7px; height: 7px; border-radius: var(--r-s); background: var(--muted); transform: rotate(45deg); } /* unknown provider: no state color (#187) */

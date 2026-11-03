@@ -52,7 +52,7 @@ describe('reviews waiting on a question (#259)', () => {
     first('checkin');
     first('next');
     const asked = first('ask', { item: '#1', to: 'human', question: 'Is 22 still the floor?', assumption: 'Yes' });
-    first('handoff', { item: '#1', headline: 'Waiting on Paul' });
+    first('handoff', { item: '#1', headline: 'Waiting on Remy' });
     const op = agent('op');
     op('checkin', { has: ['operator'] });
     assert.equal(op('next', { claim: false }).mode, 'idle');

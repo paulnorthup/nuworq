@@ -71,7 +71,7 @@ describe('required mode', () => {
   const H = () => ({ authorization: `Bearer ${human}` });
   before(async () => {
     ctx = await start({ auth: 'required' });
-    human = ctx.server.auth.createToken('paul', 'human');
+    human = ctx.server.auth.createToken('remy', 'human');
     agent = ctx.server.auth.createToken('claude-box', 'agent');
     assert.match(human, /^nwq_[\w-]{40,}$/);
   });
@@ -134,7 +134,7 @@ describe('required mode', () => {
     const v = await request(ctx.port, 'GET', '/api/p/demo/view', { headers: { cookie } });
     assert.equal(v.status, 200);
     const me = await request(ctx.port, 'GET', '/api/me', { headers: { cookie } });
-    assert.deepEqual(me.json, { auth: 'required', role: 'human', name: 'paul' });
+    assert.deepEqual(me.json, { auth: 'required', role: 'human', name: 'remy' });
 
     // CSRF: cookie-authenticated writes must prove they came from this site
     const noOrigin = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'x' }, headers: { cookie } });

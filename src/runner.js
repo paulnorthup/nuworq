@@ -345,7 +345,7 @@ export function unstaffedLine(routes, projects) {
   return `${n} item${n === 1 ? ' waits' : 's wait'} in projects nuworq run doesn't staff: ${where}. To staff one, ${STAFF_HOW}.`;
 }
 
-// The runner's caps (#761): each is off unless its flag sets it (#795, Paul in Q230: a subscription and an API key
+// The runner's caps (#761): each is off unless its flag sets it (#795, Q230: a subscription and an API key
 // need different caps, so nuworq picks none). 0 turns a cap off.
 export function runCaps(flags = {}) {
   const cap = (k) => {

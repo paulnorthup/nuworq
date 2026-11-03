@@ -15,7 +15,7 @@ describe('who built and verified a finished item', () => {
     assert.equal(credit({ implementer: '', accepted: undefined }, who), '');
     assert.equal(credit({ implementer: 'claude-a1', accepted: null }, who), 'built by <b>claude-a1</b>');
     assert.equal(credit({ implementer: null, accepted: 'you' }, who), 'verified by <b>you</b>');
-    assert.equal(credit({ implementer: 'codex-b2', accepted: '@paul' }, who), 'built by <b>codex-b2</b> · verified by <b>@paul</b>');
+    assert.equal(credit({ implementer: 'codex-b2', accepted: '@remy' }, who), 'built by <b>codex-b2</b> · verified by <b>@remy</b>');
   });
 
   test('a person moving an item straight to done (no agent) gets no empty "built by" in the view', () => {

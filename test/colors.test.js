@@ -174,7 +174,7 @@ describe('the color map keeps meanings apart (#188)', () => {
     const { FAVICON } = await import('../web/logo.js');
     // With an admin host it serves the dashboard; without one, the hub's own address serves the request list.
     for (const [adminHost, pages] of [['admin.example.test', [['admin.example.test', '/'], ['app.example.test', '/join.html']]], ['', [['app.example.test', '/requests.html']]]]) {
-      const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-logo-')), owners: ['paul@example.com'] });
+      const spaces = new Workspaces({ dir: mkdtempSync(join(tmpdir(), 'nuworq-logo-')), owners: ['remy@example.com'] });
       const server = createServer(spaces, { publicUrl: 'http://app.example.test', adminHost });
       await new Promise((r) => server.listen(0, '127.0.0.1', r));
       const get = (host, path) => new Promise((resolve, reject) => {

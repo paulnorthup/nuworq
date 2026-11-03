@@ -276,7 +276,7 @@ describe('the page', () => {
   test("an agent's steps say who wrote them and that the hub didn't; a person's and the hub's say nothing", () => {
     assert.match(stepsBy('claude-1234'), /Written by claude-1234, an agent, not by nuworq/);
     assert.match(stepsBy('<b>x</b>'), /&lt;b&gt;/);
-    for (const by of ['you', '@paul', 'nuworq', '', undefined]) assert.equal(stepsBy(by), '', String(by));
+    for (const by of ['you', '@remy', 'nuworq', '', undefined]) assert.equal(stepsBy(by), '', String(by));
     assert.match(app, /\$\{stepsBy\(a\.question\.asked_by\)\}/, 'the Needs you checklist shows it');
   });
 });

@@ -77,7 +77,7 @@ describe('an operator waits on the hub', () => {
     assert.equal(own.held_by, undefined, 'the holder hears it plainly');
   });
 
-  // #281: Paul's answer to an operator's escalation reached its idle terminal only ~114 s later.
+  // #281: the maintainer's answer to an operator's escalation reached its idle terminal only ~114 s later.
   test("the human's answer to an operator's escalation wakes that operator at once", async () => {
     const { hub, tick } = setup();
     const orig = hub.agentOp('o', 'ask', 'w1', { question: 'Will you sign the release?', to: 'operator' });

@@ -207,7 +207,7 @@ describe('claims, usage and presence carry the role', () => {
 
   test('checkin, look and the project view say each agent\'s role, where it runs and its job', () => {
     const { a, hub } = setup();
-    a('op', 'checkin', { has: ['operator', 'infra'], machine: "Paul's Mac" });
+    a('op', 'checkin', { has: ['operator', 'infra'], machine: "Remy's Mac" });
     a('op', 'claim', { item: '#2' });
     a('w', 'checkin', {}, RUNNER);
     a('w', 'claim', { item: '#1' }, RUNNER);
@@ -216,7 +216,7 @@ describe('claims, usage and presence carry the role', () => {
     const want = [
       { agent: 'sh', role: 'shaper', where: null, job: 'shaping #3' },
       { agent: 'w', role: 'worker', where: 'mac-mini runner', job: 'building #1' },
-      { agent: 'op', role: 'operator', where: "Paul's Mac", job: 'building #2' },
+      { agent: 'op', role: 'operator', where: "Remy's Mac", job: 'building #2' },
     ];
     const sorted = (list) => [...list].sort((x, y) => x.agent.localeCompare(y.agent));
     const c = a('sh', 'checkin', {});

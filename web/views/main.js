@@ -108,7 +108,7 @@ function staffLine(s) {
   return [s.workers ? `up to ${s.workers} at once` : 'runners decide how many', s.budget != null ? `$${s.budget.toFixed(2)}/day` : ''].filter(Boolean).join(' · ');
 }
 // The project's sections: one column on a phone; wide (#141), the work in the main column and the pulse,
-// flow and agents beside it, the same sections either way. Each starts at its own depth; Flow at every depth (Paul's decision).
+// flow and agents beside it, the same sections either way. Each starts at its own depth; Flow at every depth (the decision of 2026-10-29).
 function projectBody(v, empty) {
   const more = z() < 2 && !empty ? `<div class="zoom-more">${z() === 0
     ? `That's the 30-second view. <button data-action="zoom" data-zoom="5m">Go to 5m</button> for what's worth knowing, what's next, what landed, and how agents are doing.`

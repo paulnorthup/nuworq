@@ -116,7 +116,7 @@ describe('steps a person still has to do outlive the work that landed (#692)', (
     const hub = setup();
     askAll(hub);
     hub.humanOp('p', 'update', { item: '#1', stage: 'done' });
-    hub.agentOp('p', 'withdraw', 'w1', { question: 1, reason: 'Paul granted it in a planning session' });
+    hub.agentOp('p', 'withdraw', 'w1', { question: 1, reason: 'Remy granted it in a planning session' });
     assert.equal(qs(hub)[0].status, 'withdrawn');
     assert.equal(card(hub), undefined);
   });

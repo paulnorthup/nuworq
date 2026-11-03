@@ -13,7 +13,7 @@ Tokens, turns and dollars per kind of job; what a worker loads before its first 
   - statements run, by wrapping `hub.q` to count get/all/run;
   - response size (`JSON.stringify(...).length`) and its gzip size (`zlib.gzipSync`).
 
-  Ran with `npm test -- test/_measure700.test.js` on Paul's Mac, under the load of four other workers. The script is in the appendix.
+  Ran with `npm test -- test/_measure700.test.js` on the maintainer's Mac, under the load of four other workers. The script is in the appendix.
 - **Live cost per job.** This needs the live hub's usage table, which workers can't reach. It was asked of the operator as Q224, with the exact read-only query (appendix). Only aggregates are reported.
 
 ## Numbers

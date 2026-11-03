@@ -75,7 +75,7 @@ export class Auth {
     }
   }
 
-  // A usable handle from any name: "Paul N." → "paul-n".
+  // A usable handle from any name: "Sam K." → "sam-k".
   static handleOf(name) {
     return String(name ?? '').toLowerCase().replace(/^@/, '').replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|-+$/g, '').slice(0, 40) || 'person';
   }
@@ -281,7 +281,7 @@ export class Auth {
   // A machine's runner token (#656), minted from its device login (an agent token with no runner): the workers
   // `nuworq run` starts share it, so the hub tells them apart from the person's own sessions and they may review each
   // other's work. The same person answers for it; it reaches the same projects with the same powers and never
-  // operates. Its runner is the device login's name (e.g. paul@laptop). Minting again replaces the last one, and
+  // operates. Its runner is the device login's name (e.g. sam@laptop). Minting again replaces the last one, and
   // revoking the device login (nuworq disconnect) revokes it too.
   runnerToken(fromId) {
     const from = this.db.prepare('SELECT * FROM tokens WHERE id = ? AND revoked_at IS NULL').get(fromId);

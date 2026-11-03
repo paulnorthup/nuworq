@@ -8,8 +8,8 @@ import { createServer } from '../src/server.js';
 import { Auth } from '../src/auth.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
-const PAUL = 'paul@example.com';
-const fresh = (opts = {}) => new Workspaces({ dir: realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-plans-'))), plans: true, owners: [PAUL], ...opts });
+const REMY = 'remy@example.com';
+const fresh = (opts = {}) => new Workspaces({ dir: realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-plans-'))), plans: true, owners: [REMY], ...opts });
 
 // A workspace hub with one project and n ready items, made by someone who signed up (so Free), or by
 // the host on the command line (by: null).
@@ -64,12 +64,12 @@ describe('plan limits', () => {
       spaces.setPlan('made-by-host', 'free');
       assert.equal(spaces.planOf('made-by-host'), 'free', 'unless the owner says otherwise');
 
-      // Paul's organization: free by default, but he belongs to it, so it is never limited.
-      const { op: pop } = org(spaces, 'pauls');
-      new Auth(spaces.get('pauls').db).addPerson('paul', 'owner', { email: PAUL, verified: true });
-      spaces.directory.identify(PAUL, 'github');
-      spaces.directory.join(PAUL, 'pauls', { created: true });
-      assert.equal(spaces.planOf('pauls'), 'unlimited');
+      // Remy's organization: free by default, but he belongs to it, so it is never limited.
+      const { op: pop } = org(spaces, 'remys');
+      new Auth(spaces.get('remys').db).addPerson('remy', 'owner', { email: REMY, verified: true });
+      spaces.directory.identify(REMY, 'github');
+      spaces.directory.join(REMY, 'remys', { created: true });
+      assert.equal(spaces.planOf('remys'), 'unlimited');
       for (const a of ['b1', 'b2']) { pop(a, 'checkin'); assert.equal(pop(a, 'next').mode, 'work'); }
     } finally { spaces.close(); }
   });
@@ -116,9 +116,9 @@ describe('plan limits', () => {
       assert.match((await second.json()).error, /already have a free workspace \(bobs\)/);
       spaces.setPlan('bobs', 'unlimited');
       assert.equal((await create(bob, 'bobs-two')).status, 200, 'with the first one upgraded, one free one is allowed again');
-      const paul = signIn(PAUL);
-      assert.equal((await create(paul, 'p-one')).status, 200);
-      assert.equal((await create(paul, 'p-two')).status, 200, "the owner's organizations are never free, so never counted");
+      const remy = signIn(REMY);
+      assert.equal((await create(remy, 'p-one')).status, 200);
+      assert.equal((await create(remy, 'p-two')).status, 200, "the owner's organizations are never free, so never counted");
     } finally {
       server.close();
       spaces.close();

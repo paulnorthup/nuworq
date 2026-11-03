@@ -14,7 +14,7 @@ import { manifest } from '../src/ghapp.js';
 
 const ADMIN = 'admin.example.test', APP = 'app.example.test';
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
-const PAUL = 'paul@example.com';
+const REMY = 'remy@example.com';
 const PEM = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
 
 function request(port, method, path, { host = APP, headers = {}, body } = {}) {
@@ -73,7 +73,7 @@ function provider() {
 describe('the admin host lists workspaces and sets their plans', () => {
   let p, spaces, server, port, data, owner;
   const op = (ws, agent, name, args = {}) => spaces.get(ws).agentOp('app', name, agent, args);
-  const cli = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--data-dir', data, '--owners', PAUL], { env: { ...process.env, HOME: data, NO_COLOR: '1' } });
+  const cli = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--data-dir', data, '--owners', REMY], { env: { ...process.env, HOME: data, NO_COLOR: '1' } });
   const get = (cookie) => request(port, 'GET', '/api/workspaces', { host: ADMIN, headers: { cookie } });
   const setPlan = (cookie, workspace, plan) => request(port, 'POST', '/api/workspaces/plan', { host: ADMIN, headers: { cookie }, body: { workspace, plan } });
 
@@ -81,7 +81,7 @@ describe('the admin host lists workspaces and sets their plans', () => {
     p = provider();
     const stub = `http://127.0.0.1:${await listen(p.server)}`;
     data = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-adminspaces-')));
-    spaces = new Workspaces({ dir: join(data, 'workspaces'), plans: true, owners: [PAUL] });
+    spaces = new Workspaces({ dir: join(data, 'workspaces'), plans: true, owners: [REMY] });
     // acme: Ann signed up for it (so Free), with a project, two items, two people.
     const dir = spaces.directory;
     dir.request({ email: 'ann@acme.test', github: 'ann-gh', building: 'things' });
@@ -97,11 +97,11 @@ describe('the admin host lists workspaces and sets their plans', () => {
     server = createServer(spaces, {
       publicUrl: `http://${APP}`, adminHost: ADMIN,
       oauth: { github: { id: 'gh', secret: 'shh', authorize: `${stub}/authorize`, token: `${stub}/token`, api: stub } },
-      earlyAccess: { owners: [PAUL], verify: async () => true, gate: true },
+      earlyAccess: { owners: [REMY], verify: async () => true, gate: true },
       githubApp: { id: 1, key: PEM, webhook_secret: 's', api: stub },
     });
     port = await listen(server);
-    owner = await signIn(PAUL);
+    owner = await signIn(REMY);
   });
 
   test('what the hub\'s GitHub App is missing shows on the dashboard, and in Needs you only for the hub\'s owners (#220)', async () => {
@@ -114,15 +114,15 @@ describe('the admin host lists workspaces and sets their plans', () => {
     assert.match(r.json.missing.headline, /missing 7 events/);
     assert.equal(r.json.missing.how[0].where, 'https://github.com/organizations/nuworq/settings/apps/nuworq/permissions');
     assert.equal((await request(port, 'GET', '/api/github/app/wiring', { host: ADMIN, headers: { cookie: await signIn('zed@example.com') } })).status, 403);
-    // In a workspace: Ann owns acme but not the hub, so it isn't hers to fix; Paul, a hub owner, sees it there.
+    // In a workspace: Ann owns acme but not the hub, so it isn't hers to fix; Remy, a hub owner, sees it there.
     await request(port, 'GET', '/w/acme/api/health');
     const acme = spaces.get('acme');
     assert.equal(acme.appWiring('@ann'), null);
-    acme.db.prepare("INSERT INTO people (handle, email, role, created_at) VALUES ('paul', ?, 'member', 0)").run(PAUL);
-    assert.equal(acme.appWiring('@paul'), null, 'not by an email someone typed for him (#470)');
-    acme.db.prepare("UPDATE people SET verified_at = 1 WHERE handle = 'paul'").run();
-    assert.ok(acme.appWiring('@paul')?.gaps.events.length, 'by the email he signed in with');
-    acme.db.prepare("DELETE FROM people WHERE handle = 'paul'").run();
+    acme.db.prepare("INSERT INTO people (handle, email, role, created_at) VALUES ('remy', ?, 'member', 0)").run(REMY);
+    assert.equal(acme.appWiring('@remy'), null, 'not by an email someone typed for him (#470)');
+    acme.db.prepare("UPDATE people SET verified_at = 1 WHERE handle = 'remy'").run();
+    assert.ok(acme.appWiring('@remy')?.gaps.events.length, 'by the email he signed in with');
+    acme.db.prepare("DELETE FROM people WHERE handle = 'remy'").run();
   });
   after(() => { for (const s of [server, p.server]) { s.close(); s.closeAllConnections(); } spaces.close(); });
 
@@ -156,7 +156,7 @@ describe('the admin host lists workspaces and sets their plans', () => {
       assert.equal(r.json.workspaces, undefined);
     }
     assert.equal((await get('')).status, 401);
-    const appOwner = `nuworq_id=${spaces.directory.createSession(spaces.directory.identify(PAUL, 'github').id)}`;
+    const appOwner = `nuworq_id=${spaces.directory.createSession(spaces.directory.identify(REMY, 'github').id)}`;
     for (const [method, path] of [['GET', '/api/workspaces'], ['POST', '/api/workspaces/plan']]) {
       const r = await request(port, method, path, { headers: { cookie: appOwner }, ...(method === 'POST' ? { body: { workspace: 'acme', plan: 'unlimited' } } : {}) });
       assert.equal(r.status, 403, path);
@@ -172,13 +172,13 @@ describe('the admin host lists workspaces and sets their plans', () => {
     assert.equal(up.status, 200, up.text);
     assert.equal(up.json.workspace.plan, 'unlimited');
     assert.equal(up.json.workspace.source, 'set');
-    assert.equal(up.json.workspace.set_by, PAUL);
+    assert.equal(up.json.workspace.set_by, REMY);
     assert.equal(typeof up.json.workspace.set_at, 'number');
     assert.equal(op('acme', 'a2', 'next').mode, 'work', 'unlimited: a2 works beside a1');
     op('acme', 'a2', 'handoff', { item: '#2', headline: 'Out' });
     const down = await setPlan(owner, 'acme', 'free');
     assert.equal(down.json.workspace.plan, 'free');
-    assert.equal(spaces.directory.planSet('acme').set_by, PAUL);
+    assert.equal(spaces.directory.planSet('acme').set_by, REMY);
     assert.throws(() => op('acme', 'a2', 'next'), (e) => e.status === 402 && /upgrade/i.test(e.hint), 'free again: refused while a1 works');
   });
 
@@ -200,7 +200,7 @@ describe('the admin host lists workspaces and sets their plans', () => {
     assert.deepEqual([q.plan, q.source, q.set_by], ['free', 'set', 'host'], 'set on the command line, seen on the dashboard');
     await setPlan(owner, 'quiet', 'unlimited');
     const list = (await cli('workspace', 'list')).stdout;
-    assert.match(list, new RegExp(`^quiet  unlimited \\(set by ${PAUL.replace('.', '\\.')} \\d{4}-\\d\\d-\\d\\d\\)$`, 'm'), 'set on the dashboard, seen on the command line');
+    assert.match(list, new RegExp(`^quiet  unlimited \\(set by ${REMY.replace('.', '\\.')} \\d{4}-\\d\\d-\\d\\d\\)$`, 'm'), 'set on the dashboard, seen on the command line');
     assert.match(list, /^acme  free \(set by /m);
   });
 

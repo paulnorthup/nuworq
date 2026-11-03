@@ -25,7 +25,7 @@ describe('projects are found by git remote', () => {
 
   test('a named checkin from a clone teaches the project its remote; any clone anywhere then finds it', () => {
     const { hub, op } = setup();
-    op('api', 'checkin', 'a', {}, { root: '/home/paul/api', remote: 'git@github.com:acme/api.git' });
+    op('api', 'checkin', 'a', {}, { root: '/home/remy/api', remote: 'git@github.com:acme/api.git' });
     assert.deepEqual(hub.remotesOf(hub.project('api')), ['github.com/acme/api']);
     assert.match(view(hub, 'api').activity.find((e) => e.type === 'remote').headline, /api is the repository github\.com\/acme\/api/);
     hub.humanOp('api', 'create', { title: 'Do it', acceptance: 'x' });

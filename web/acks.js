@@ -1,6 +1,6 @@
 // Who acknowledged a steer (#211). A broadcast steer collects an ack from every one-off worker, so past a
 // handful it reads as one line: the count, the latest few, and the rest behind a tap. Active agents who
-// haven't acknowledged are what Paul might act on: always listed in full, before the count.
+// haven't acknowledged are what the human might act on: always listed in full, before the count.
 // Pure, so the page and the tests share it.
 export const ACKS_INLINE = 5;
 const LATEST = 3;

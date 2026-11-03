@@ -7,7 +7,7 @@ import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 
 const SECRET = 'another-long-shared-secret';
-const repository = { id: 1, full_name: 'paul/nuworq' };
+const repository = { id: 1, full_name: 'remy/nuworq' };
 const BRANCH = 'nuworq/1-ship-it';
 
 let hub, server, base;
@@ -20,8 +20,8 @@ const deliver = async (event, payload, delivery) => {
 const pr = (number, { title = `Ship it #1`, ref = BRANCH, sha = String(number).repeat(40).slice(0, 40), state = 'open', fork = null } = {}) => ({
   action: state === 'open' ? 'opened' : 'closed', number, repository,
   pull_request: {
-    number, title, state, merged: false, html_url: `https://github.com/paul/nuworq/pull/${number}`, body: '',
-    head: { ref, sha, repo: { full_name: fork ?? 'paul/nuworq' } }, base: { ref: 'main', repo: { full_name: 'paul/nuworq' } },
+    number, title, state, merged: false, html_url: `https://github.com/remy/nuworq/pull/${number}`, body: '',
+    head: { ref, sha, repo: { full_name: fork ?? 'remy/nuworq' } }, base: { ref: 'main', repo: { full_name: 'remy/nuworq' } },
   },
 });
 const failed = (sha) => ({ action: 'completed', repository, check_run: { name: 'test', head_sha: sha, status: 'completed', conclusion: 'failure' } });
