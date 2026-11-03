@@ -340,6 +340,16 @@ export const COMMANDS = [
     example: 'nuworq changes',
   },
   {
+    name: 'release', group: 'more',
+    does: 'sign a release by hand, the fallback to the release workflow',
+    usage: ['release sign <vX.Y.Z> <release-key.pem> <hub>'],
+    example: 'nuworq release sign v1.0.0 ~/keys/release-key.pem https://app.nuworq.com',
+    notes: [
+      'Run it in a checkout of nuworq whose origin is GitHub (for its git objects), with nuworq itself installed from a signed release. If the nuworq running it is a git checkout, it refuses before it reads the key: a checkout runs whatever landed on main.',
+      "It signs only what the workflow would, shows the tag's commit and changelog, and signs once you type the tag. See docs/DEPLOY.md, \"Signing by hand\".",
+    ],
+  },
+  {
     name: 'init', group: 'more',
     does: 'print the MCP setup for Claude Code, Codex, opencode, pi and other agents; --project pins this folder',
     usage: ['init [--project p] [--force]'],

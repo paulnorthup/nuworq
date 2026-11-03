@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { archive, newestSigned } from '../src/package.js';
 import { releaseRefusal, latest, newer, handCheck } from '../scripts/release.js';
-import { checkoutRefusal } from '../scripts/checkout.js';
+import { signByHand, installRefusal } from '../src/releasesign.js';
 import { takeReleases, githubRepoOf, releaseAlarm } from '../src/ghrelease.js';
 import { Hub } from '../src/core.js';
 import { createServer as createHubServer } from '../src/server.js';
@@ -134,62 +134,83 @@ describe('signing by hand (#815)', () => {
     assert.equal(await at('v1.2.0', { get: hubAt({ commit: c }) }), '');
   });
 
-  test('the command runs only for a person at a terminal', async () => {
-    const r = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url)), 'release', 'v1.0.0', join(dir, 'none.pem'), 'https://hub.test'], { cwd: repo }).then(() => null, (e) => e);
-    assert.ok(r, 'it refused');
-    assert.match(r.stderr, /release needs a person at a terminal/);
+  // An installed package: no .git, and src/commit.txt names its commit, as git archive writes it.
+  const install = (pub = ours.pub) => {
+    const root = join(dir, 'install');
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'commit.txt'), `${'a'.repeat(40)} ${stamp}\n`);
+    writeFileSync(join(root, 'release-key.pub'), pub);
+    return root;
+  };
+  const pemFile = () => { const f = join(dir, 'release-key.pem'); writeFileSync(f, ours.pem); return f; };
+  const said = [];
+  const hand = (more) => signByHand({ repo, tag: 'v1.0.0', hub: 'https://hub.test', tty: true, get: hubAt(null), out: join(dir, 'signatures'), say: (s) => said.push(s), ...more });
+
+  test('signing by hand never runs a checkout\'s code with the key', async () => {
+    // A pem that throws if read: a directory.
+    const pem = join(dir, 'unreadable.pem');
+    mkdirSync(pem);
+    const root = install();
+    mkdirSync(join(root, '.git'));
+    await assert.rejects(hand({ root, pem, ask: async () => 'v1.0.0' }), /runs from a git checkout.*never touches the release key/);
+    assert.match(installRefusal(repo), /runs from a git checkout/, 'a clone is a checkout');
+    // This repository's own CLI, from its checkout, refuses before the terminal check and before the key.
+    const cli = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../bin/nuworq.js', import.meta.url)), 'release', 'sign', 'v1.0.0', pem, 'https://hub.test'],
+      { cwd: repo, env: { ...process.env, HOME: dir, NUWORQ_NO_UPDATE: '1' } }).then(() => null, (e) => e);
+    assert.ok(cli, 'it refused');
+    assert.match(cli.stderr, /runs from a git checkout/);
+    assert.doesNotMatch(cli.stderr, /EISDIR/, 'it never opened the key');
+    // The script it replaces only says where it went.
+    const old = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url)), 'release', 'v1.0.0', pem, 'https://hub.test'], { cwd: repo }).then(() => null, (e) => e);
+    assert.match(old.stderr, /nuworq release sign/);
+    assert.doesNotMatch(old.stderr, /EISDIR/);
   });
 
-  // #829: release loads its checkout's modules, so only the last signed release's code may run with the key.
-  test('runs only from a checkout at the last signed release\'s tag, with nothing changed', async () => {
-    const at = (release, get = hubAt(release)) => checkoutRefusal(repo, 'https://hub.test', get);
-    assert.match(await at(null), /https:\/\/hub\.test has no signed release yet.*release workflow/);
-    assert.match(await at(undefined, async () => { throw new Error('offline'); }), /couldn't ask https:\/\/hub\.test for its signed release \(offline\)/);
-    assert.match(await checkoutRefusal(dir, 'https://hub.test', hubAt(null)), /isn't a checkout of nuworq/);
-    const signed = release('1.0.0');
-    git(work, 'tag', '-a', '-m', 'v1.1.0', 'v1.1.0', release('1.0.1')); // annotated: origin peels it with ^{}
-    git(work, 'tag', '-d', 'v1.0.1'); git(work, 'push', '-q', 'origin', ':refs/tags/v1.0.1', 'v1.1.0');
-    const untagged = commit({ 'src/update.js': '// landed by an agent\n' }, 'landed');
-    git(work, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin'); git(repo, 'merge', '-q', '--ff-only', 'origin/main');
-    assert.match(await at({ commit: untagged }), /signed release [0-9a-f]{7} has no vX\.Y\.Z tag on origin/);
-    assert.match(await at({ commit: signed }), new RegExp(`this checkout is at ${untagged.slice(0, 7)}, not the last signed release v1\\.0\\.0 \\(${signed.slice(0, 7)}\\).*git fetch origin tag v1\\.0\\.0 && git switch --detach v1\\.0\\.0$`));
-    git(repo, 'switch', '-q', '--detach', 'v1.0.0');
-    assert.equal(await at({ commit: signed }), '');
-    writeFileSync(join(repo, 'src/update.js'), '// changed here\n');
-    assert.match(await at({ commit: signed }), /this checkout changes v1\.0\.0's files.*git restore \./);
-    git(repo, 'restore', '.'); git(repo, 'switch', '-q', '--detach', 'v1.1.0');
-    assert.equal(await at({ commit: git(repo, 'rev-parse', 'HEAD') }), '', 'an annotated tag counts by its commit');
+  test('a package that doesn\'t name its commit, or pins another key, isn\'t a signed release', async () => {
+    const root = install(keypair().pub);
+    await assert.rejects(hand({ root, pem: pemFile(), ask: async () => 'v1.0.0' }), /pins another release key/);
+    writeFileSync(join(root, 'src', 'commit.txt'), '$Format:%H %ct$\n');
+    assert.match(installRefusal(root), /doesn't say which commit/);
   });
 
-  test('release checks its checkout before it loads any repository module or reads the key', () => {
-    const src = readFileSync(fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url)), 'utf8');
-    const body = src.slice(src.indexOf('async function releaseCmd'));
-    const check = body.indexOf('await checkoutRefusal(');
-    assert.ok(check > 0 && check < body.indexOf('import(') && check < body.indexOf('readFileSync(pem)'));
-    const imports = (text) => [...text.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
-    assert.deepEqual(imports(src).filter((m) => !m.startsWith('node:')), ['./checkout.js'], 'no other repository module at the top');
-    const own = readFileSync(fileURLToPath(new URL('../scripts/checkout.js', import.meta.url)), 'utf8');
-    assert.deepEqual(imports(own).filter((m) => !m.startsWith('node:')), [], 'the check itself loads only Node\'s built-ins');
+  test('from a signed install, at a terminal, it signs GitHub\'s build of the tag once the tag is typed', async () => {
+    const c = release('1.0.0');
+    const root = install();
+    await assert.rejects(hand({ root, pem: pemFile(), tty: false, ask: async () => 'v1.0.0' }), /needs a person at a terminal/);
+    await hand({ root, pem: pemFile(), ask: async () => 'no' });
+    assert.ok(!existsSync(join(dir, 'signatures', `nuworq-${c}.tgz`)), 'not typed: nothing written');
+    await hand({ root, pem: pemFile(), ask: async () => 'v1.0.0' });
+    const file = join(dir, 'signatures', `nuworq-${c}.tgz`);
+    const sig = Buffer.from(readFileSync(`${file}.sig`, 'utf8').trim(), 'base64');
+    assert.ok(verify(null, readFileSync(file), createPublicKey(ours.pub), sig), 'the .sig verifies over the package');
+    assert.match(said.at(-1), /gh release create v1\.0\.0/);
   });
 
-  // #843: the recipe is run at the last signed release's tag, so it must give the release command that tag's
-  // script accepts. v0.9.0's is `release <hub> <pem> [<scp>]`; the newer form, the one this script takes.
+  // #843: until a signed release ships `nuworq release sign`, the recipe is run at the last signed release's tag,
+  // so it must give the command that tag's script accepts: v0.9.0's `release <hub> <pem> [<scp>]`, v0.10.0's
+  // `release <vX.Y.Z> <pem> <hub>`. From then on, this package's own command, in the form its usage says.
   test('the hand-signing recipe in DEPLOY.md matches the release command\'s usage', () => {
     const doc = readFileSync(fileURLToPath(new URL('../docs/DEPLOY.md', import.meta.url)), 'utf8');
     const recipe = doc.slice(doc.indexOf('**Signing by hand, the fallback.**')).split('```')[1];
-    const lines = recipe.split('\n').filter((l) => l.startsWith('node scripts/sign-release.js release ')).map((l) => l.split('#')[0].trim().split(/\s+/).slice(3));
-    const script = fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url));
-    const usage = spawnSync(process.execPath, [script], { encoding: 'utf8' }).stderr.match(/\| release ((?:<[^>]+> ?)+)/)[1].trim().split(' ');
+    const args = (prefix) => recipe.split('\n').filter((l) => l.startsWith(prefix)).map((l) => l.split('#')[0].trim().split(/\s+/).slice(prefix.split(' ').length - 1));
     const shape = { '<vX.Y.Z>': /^v\d+\.\d+\.\d+$/, '<release-key.pem>': /\.pem$/, '<hub>': /^https:\/\/[^/]+$/ };
+    const fits = (line, usage) => line.length === usage.length && usage.every((u, i) => shape[u].test(line[i]));
+    const cli = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
+    const env = { ...process.env, HOME: dir, NUWORQ_NO_UPDATE: '1' };
+    const usage = spawnSync(process.execPath, [cli, 'release'], { encoding: 'utf8', env }).stderr.match(/nuworq release sign ((?:<[^>]+> ?)+)/)[1].trim().split(' ');
     assert.deepEqual(usage, ['<vX.Y.Z>', '<release-key.pem>', '<hub>'], 'the usage this test reads');
-    const current = lines.filter((args) => args.length === usage.length && usage.every((u, i) => shape[u].test(args[i])));
-    assert.equal(current.length, 1, 'one line in the newer form');
-    const r = spawnSync(process.execPath, [script, 'release', ...current[0]], { encoding: 'utf8' });
-    assert.match(r.stderr, /release needs a person at a terminal/, 'past the argument check, not the usage');
-    const older = lines.filter((args) => !current.includes(args));
-    assert.equal(older.length, 1, 'and v0.9.0\'s, while it is the last signed release');
-    assert.match(older[0][0], shape['<hub>']);
-    assert.match(older[0][1], shape['<release-key.pem>']);
+    const current = args('nuworq release sign ');
+    assert.equal(current.length, 1, 'one line for this package\'s command');
+    assert.ok(fits(current[0], usage), 'in the form its usage says');
+    const r = spawnSync(process.execPath, [cli, 'release', 'sign', ...current[0]], { encoding: 'utf8', env, cwd: repo });
+    assert.match(r.stderr, /runs from a git checkout/, 'past the argument check, not the usage');
+    const older = args('node scripts/sign-release.js release ');
+    const v010 = older.filter((line) => fits(line, usage));
+    assert.equal(v010.length, 1, 'v0.10.0\'s, while it is the last signed release');
+    const v09 = older.filter((line) => !v010.includes(line));
+    assert.equal(v09.length, 1, 'and v0.9.0\'s');
+    assert.match(v09[0][0], shape['<hub>']);
+    assert.match(v09[0][1], shape['<release-key.pem>']);
     assert.match(recipe, /^node scripts\/sign-release\.js approve v\d+\.\d+\.\d+ \S+\.pem$/m, 'v0.9.0 signs only what was approved');
   });
 

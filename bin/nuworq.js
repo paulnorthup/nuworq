@@ -2304,6 +2304,18 @@ async function main() {
     if (!version) return console.log('This nuworq has no version, so no changelog entry to show.');
     return console.log(changes?.length ? `nuworq ${version}:\n${changes.map((l) => `  ${l}`).join('\n')}` : `nuworq ${version} has no changelog entry.`);
   }
+  // Signing a release by hand (#815, #836): before any update, so the package that reads the key is the one it started as.
+  if (cmd === 'release') {
+    const [sub, tag, pem, hub] = pos;
+    if (sub !== 'sign' || !tag || !pem || !hub) throw new HubError('usage: nuworq release sign <vX.Y.Z> <release-key.pem> <hub>', { hint: 'See: nuworq help release' });
+    const { signByHand } = await import('../src/releasesign.js');
+    const { createInterface } = await import('node:readline/promises');
+    const ask = async (q) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try { return await rl.question(q); } finally { rl.close(); }
+    };
+    return signByHand({ root: ROOT, repo: repoRoot(process.cwd()), tag, pem, hub, tty: !!(process.stdin.isTTY && process.stdout.isTTY), ask });
+  }
   // What a background update installed since the last command, said once (#436). An MCP server, the operator's
   // listener and git's credential helper say nothing: no person reads them, so the news waits for one who does.
   const quiet = ['mcp', 'wait', 'git-credential'].includes(cmd);
