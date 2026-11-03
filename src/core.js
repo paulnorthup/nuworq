@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange } from './git.js';
+import { gitFacts, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange, mergesBase } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -2967,6 +2967,7 @@ const PR_REBASE_HINT = (item, pr, base = 'main', ci = false, tests = '') => [
   `${ci ? '2. Run the tests near what the rebase touched. Not the whole suite: CI runs it on the pull request.' : '2. Run the project\'s checks.'}${spaced(tests)}`,
   `3. git push origin ${item.branch} --force-with-lease.`,
   `4. submit #${item.seq}. GitHub merges the PR once its checks pass, and the hub marks it done.`,
+  `Can't force-push (operators)? Merge instead: in step 1, git merge origin/${base} in place of the rebase, and in step 3, git push origin ${item.branch}. A merge of ${base} that changes nothing else is the same change and lands without a new review (#784).`,
 ].join(' ');
 
 // What a pull request the hub opens says: the item, who built and reviewed it, and the evidence.
@@ -3198,7 +3199,9 @@ function reviewedHead(p, item, head = null) {
   if (head === item.reviewed_sha) return 'same';
   const base = repo && baseOf(repo.path);
   if (base && sameChange(repo.path, base, item.reviewed_sha, head)) {
-    this.event(p, { item, actor: SYSTEM, type: 'head_rebased', headline: `${item.branch} was rebased (${head.slice(0, 7)}): the same change #${item.seq}'s review accepted, so it still lands`, data: { reviewed: item.reviewed_sha, head } });
+    // A merge of main (#784) is said as such: operators, who can't force-push, land that way.
+    const merged = mergesBase(repo.path, base, head);
+    this.event(p, { item, actor: SYSTEM, type: 'head_rebased', headline: `${item.branch} ${merged ? `merged ${base}` : 'was rebased'} (${head.slice(0, 7)}): the same change #${item.seq}'s review accepted, so it still lands`, data: { reviewed: item.reviewed_sha, head, ...(merged ? { merged: true } : {}) } });
     this.patch(item, { reviewed_sha: head });
     return 'rebased';
   }
