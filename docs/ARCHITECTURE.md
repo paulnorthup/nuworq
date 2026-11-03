@@ -77,6 +77,7 @@ src/session.js       which Claude Code session a process belongs to
 src/plugin.js        the Claude Code plugin: MCP server, skills and the operator's listener
 src/package.js       nuworq as an npm package of the commit the hub runs
 src/update.js        the package updates itself, only to a release signed by the release key
+src/releasesign.js   signing a release by hand, only from a signed install, never a checkout
 src/browser/         the pinned Playwright MCP server workers check UI work with
 
 scripts/             releases, signing, and live runs of open-weight models against a throwaway hub
