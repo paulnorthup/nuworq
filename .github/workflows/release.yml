@@ -1,0 +1,92 @@
+# Releases are signed here once Paul approves them (#813; docs/DEPLOY.md, "Signed releases").
+# check: unprivileged. Refuses a tag that isn't a release, builds the package exactly as the hub does, and shows on
+#        its summary what Paul approves: version, commit, changelog, and whether this workflow or the code it runs
+#        changed since the last signed release. A failed check stops here: no one is asked.
+# sign:  waits in the `release` environment (Paul is its required reviewer; only v* tags may deploy to it). Builds
+#        the same bytes, signs them with the environment's RELEASE_KEY, verifies the signature against release-key.pub,
+#        publishes the tag's GitHub Release with the package and its .sig, then moves the `release` branch to it with
+#        the environment's deploy key, which the branch's ruleset lets through. The hub takes the .sig from the
+#        GitHub Release (src/ghrelease.js); installs check it against the release-key.pub they pinned.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      commit: ${{ steps.check.outputs.commit }}
+      sha256: ${{ steps.check.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - id: check
+        run: node scripts/release.js check "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NUWORQ_HUB: ${{ vars.NUWORQ_HUB }}
+
+  sign:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Sign the package check built
+        run: node scripts/release.js sign "$GITHUB_REF_NAME" "$RUNNER_TEMP/release" "$SHA256"
+        env:
+          SHA256: ${{ needs.check.outputs.sha256 }}
+          RELEASE_KEY: ${{ secrets.RELEASE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          NUWORQ_HUB: ${{ vars.NUWORQ_HUB }}
+      - name: Publish the GitHub Release
+        run: |
+          out="$RUNNER_TEMP/release"
+          pkg="$out/nuworq-$COMMIT.tgz"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$pkg" "$pkg.sig" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$pkg" "$pkg.sig" --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$out/notes.md"
+          fi
+        env:
+          COMMIT: ${{ needs.check.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+      - name: Move the release branch
+        run: |
+          key="$RUNNER_TEMP/push-key"
+          ( umask 077; printf '%s\n' "$PUSH_KEY" > "$key"; echo "$GITHUB_HOST_KEY" > "$RUNNER_TEMP/known_hosts" )
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes" \
+            git push "git@github.com:$GITHUB_REPOSITORY.git" "$COMMIT:refs/heads/release"
+          rm -f "$key"
+        env:
+          COMMIT: ${{ needs.check.outputs.commit }}
+          PUSH_KEY: ${{ secrets.RELEASE_PUSH_KEY }}
+          # GitHub's published ed25519 host key (docs.github.com, "GitHub's SSH key fingerprints").
+          GITHUB_HOST_KEY: github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl

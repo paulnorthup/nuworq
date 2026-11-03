@@ -37,6 +37,7 @@ import { parseKeys } from './session.js';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
 import { buildPackage, releasePackage, signatureOf, packageAt, newestSigned, ownCheckout, PACKAGE_NAME } from './package.js';
+import { takeReleases, githubRepoOf, releaseAlarm, CHECK_EVERY as GH_RELEASE_EVERY } from './ghrelease.js';
 import { runningCommit } from './update.js';
 import { LOGO, FAVICON, withLogo } from '../web/logo.js';
 import { verifySignature, applyEvent, billingState, failing, paid, paymentEntry, portalSession, pushFailed, canSell, plansOf, checkout, TERMS, PRIVACY } from './billing.js';
@@ -139,6 +140,7 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // github: GitHub's addresses ({ web, api }; tests point them at a stub).
 // packageDir: where the package of the running commit is built and kept (/nuworq.tgz; see src/package.js).
 // source: the checkout it is built from (tests point it at a clone).
+// githubReleases: take release signatures from the GitHub Releases of source's origin (#813; src/ghrelease.js).
 // earlyAccess (workspaces mode): { owners: [emails], verify: async (token, ip) => bool, gate: bool }. owners
 // decide requests; verify checks the form's Turnstile token (src/directory.js turnstile); gate: making an
 // organization takes an approved request's grant. null: no early access.
@@ -149,7 +151,7 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // is off, and POST /api/stripe/webhook answers 404.
 // feedbackProject (workspaces mode, with an admin host): "<workspace>/<project>", where feedback about nuworq that
 // the owners approve becomes a proposal (#295). '': feedback is off. feedbackBatchMs: how long its push waits for more.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, githubReleases = false, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
@@ -170,6 +172,31 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const releases = new Map();
   const releaseKey = () => { try { return readFileSync(join(source, 'release-key.pub'), 'utf8').trim() || null; } catch { return null; } };
   const release = () => newestSigned(packageDir, releaseKey(), releases);
+  // Releases signed on GitHub Actions (#813): their .sig comes from the tag's GitHub Release, at most every 10
+  // minutes. One that doesn't verify over the hub's package is ignored, logged, and put to the operator once.
+  const ghRepo = githubReleases ? githubRepoOf(source) : null;
+  const ghSeen = new Map(), ghTold = new Set();
+  let ghAt = 0;
+  const takeSigned = () => {
+    if (!ghRepo || Date.now() - ghAt < GH_RELEASE_EVERY) return;
+    ghAt = Date.now();
+    pkg.then(() => takeReleases({ root: source, dir: packageDir, key: releaseKey(), repo: ghRepo, api: gh.api, web: gh.web, seen: ghSeen })).then((rs) => {
+      for (const r of rs) {
+        if (r.outcome === 'taken') {
+          console.log(`nuworq: serving ${r.tag} (${r.commit.slice(0, 7)}) as a signed release: ${r.reason}`);
+          // GitHub's package may have replaced the running commit's own (another gzip of the same files).
+          if (built?.commit === r.commit) built = packageAt(packageDir, r.commit) ?? built;
+        }
+        if (r.outcome !== 'refused' || ghTold.has(`${r.commit} ${r.reason}`)) continue;
+        ghTold.add(`${r.commit} ${r.reason}`);
+        console.error(`nuworq: ALARM: the GitHub Release ${r.tag} (${r.commit.slice(0, 7)}) isn't served: ${r.reason}`);
+        for (const hub of hubs()) {
+          const p = hub.projectByRemote(`github.com/${ghRepo}`);
+          if (p) try { hub.agentOp(p.slug, 'ask', 'nuworq-hub', releaseAlarm(ghRepo, r, gh.web)); } catch (e) { console.error('asking the operator about a release failed', e); }
+        }
+      }
+    }).catch((e) => console.error(`nuworq: checking GitHub's releases failed (${e.message}); trying again in 10 minutes`));
+  };
   // /api/info's package: the running commit's, and release: the newest signed one, which installs update to.
   // key: release-key.pub's base64 line, for the first install's signature check (web/connect.js, #473).
   const packageInfo = (at) => {
@@ -378,6 +405,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // time (#523): a standby hub, started beside the one serving, runs them from lead() and stops at quiet().
   const sweep = () => {
     checkApp();
+    takeSigned();
     sweepMirrors(); // mirrors are the process's, not one hub's
     // Workspaces nobody uses close; one closed workspace a tick opens for its sweep (and closes again later).
     if (spaces) {
@@ -414,6 +442,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     checkApp();
     // Drift that built up while the hub was down becomes its tidy job now, not a sweep later (#536).
     for (const hub of hubs()) try { hub.tidyAll(); } catch (e) { console.error('checking milestones and field notes failed', e); }
+    takeSigned();
     sweeper = setInterval(sweep, sweepMs);
   };
   const quiet = () => { clearInterval(sweeper); sweeper = null; };

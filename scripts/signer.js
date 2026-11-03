@@ -21,9 +21,9 @@ import { gunzipSync } from 'node:zlib';
 import { archive } from '../src/package.js';
 import { versionOf, changelogEntry } from '../src/update.js';
 import { RELEASE_BRANCH } from '../src/plugin.js';
+import { TAG, newer, releaseRefusal } from './release.js';
 
 export const EVERY = 5 * 60_000;
-const TAG = /^v(\d+\.\d+\.\d+)$/;
 // Origin's main and tags, fetched under a namespace of the signer's own, so the checkout's own tags and
 // origin/main are never touched (it may be someone's working checkout).
 const MAIN = 'refs/signer/main';
@@ -34,12 +34,7 @@ const git = (repo, args) => new Promise((resolve, reject) => {
 });
 const show = (repo, commit, path) => git(repo, ['show', `${commit}:${path}`]).catch(() => null);
 
-// a > b, as X.Y.Z versions.
-export const newer = (a, b) => {
-  const [x, y] = [a, b].map((v) => v.split('.').map(Number));
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
-  return false;
-};
+export { newer };
 
 // The branch the plugin installs from (src/plugin.js): the newest signed release, moved only by the signer.
 export { RELEASE_BRANCH };
@@ -197,23 +192,11 @@ export async function round({ repo, hub, key, dest, scp, approvals, fetch: get =
       say('done', `the hub serves it as its signed release${why ? `, but the plugin's ${RELEASE_BRANCH} branch stays where it is: ${why}` : await publish(t)}`);
       continue;
     }
-    const time = Number((await git(repo, ['log', '-1', '--format=%ct', t.commit])).trim());
-    if (release && (time <= release.time || (current && !newer(t.version, current)))) {
-      say('refused', `older than the hub's signed release${current ? ` v${current}` : ''} (${release.commit.slice(0, 7)}), and signing it would roll installs back`);
-      continue;
-    }
+    // The release workflow's own rules (scripts/release.js, #813): one function, so the two signers never differ.
+    const last = release && { version: current, commit: release.commit, time: release.time, where: 'the hub\'s signed release' };
+    const refusal = await releaseRefusal(repo, { tag: t.tag, commit: t.commit, main: MAIN, pub, last });
+    if (refusal) { say('refused', refusal); continue; }
     if (state.alarms?.[t.commit]) { say('alarm', `not tried again: ${state.alarms[t.commit]}`); continue; }
-    if (!(await git(repo, ['merge-base', '--is-ancestor', t.commit, MAIN]).then(() => true, () => false))) {
-      say('refused', `${short} isn't on origin's main`); continue;
-    }
-    const said = versionOf(await show(repo, t.commit, 'package.json'));
-    if (said !== t.version) { say('refused', `its package.json says ${said ?? 'no version'}, not ${t.version}`); continue; }
-    if (changelogEntry(await show(repo, t.commit, 'CHANGELOG.md'), t.version, { first: true }) == null) {
-      say('refused', `its CHANGELOG.md doesn't begin with ${t.version} (a "## ${t.version}" heading first)`); continue;
-    }
-    if ((await show(repo, t.commit, 'release-key.pub'))?.trim() !== pub) {
-      say('refused', `its release-key.pub isn't this key's public half, so installs pinning it would refuse the signature`); continue;
-    }
     const file = `nuworq-${t.commit}.tgz`;
     // Signed by hand already: whoever did that holds the key, and approved it then.
     if ((await head(get, `${base}/${file}.sig`)).status === 200) { say('done', 'the hub already has a signature for it'); continue; }
