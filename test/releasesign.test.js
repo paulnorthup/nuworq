@@ -92,6 +92,21 @@ describe('the rules every signer shares (#813)', () => {
 });
 
 describe('the release workflow (#813)', () => {
+  test('the workflow a person installs is the one reviewed, and signs only after the release environment\'s approval', () => {
+    const staged = readFileSync(fileURLToPath(new URL('../scripts/release-workflow.yml', import.meta.url)), 'utf8');
+    const installed = fileURLToPath(new URL(`../${WORKFLOW}`, import.meta.url));
+    if (existsSync(installed)) assert.equal(readFileSync(installed, 'utf8'), staged, `${WORKFLOW} differs from scripts/release-workflow.yml`);
+    const jobs = staged.split(/\n  (?=check:|sign:)/);
+    const check = jobs.find((j) => j.startsWith('check:')), signJob = jobs.find((j) => j.startsWith('sign:'));
+    assert.match(staged, /\npermissions: \{\}\n/, 'nothing by default');
+    assert.match(check, /contents: read/);
+    assert.doesNotMatch(check, /secrets\.|environment:/, 'check holds no secret');
+    assert.match(signJob, /needs: check\n\s+runs-on: ubuntu-latest\n\s+timeout-minutes: \d+\n\s+environment: release\n/);
+    assert.match(signJob, /RELEASE_KEY: \$\{\{ secrets\.RELEASE_KEY \}\}/);
+    assert.doesNotMatch(staged, /upload-artifact|echo "\$RELEASE_KEY"|set -x/, 'no artifact, and the key never echoed');
+    assert.match(staged, /^on:\n  push:\n    tags: \['v\*'\]\n/m);
+  });
+
   const run = (args, env = {}) => promisify(execFile)(process.execPath, [RELEASE, ...args], { cwd: repo, env: { PATH: process.env.PATH, HOME: dir, ...env } });
 
   test('check builds the package byte for byte as the hub does, and says what Paul approves', async () => {

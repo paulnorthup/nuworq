@@ -1,4 +1,7 @@
 # Releases are signed here once Paul approves them (#813; docs/DEPLOY.md, "Signed releases").
+# It runs from .github/workflows/release.yml. The hub's GitHub App has no `workflows` permission, so agents can't
+# add or change that file: this copy is how it came for review, and a person copies it there with their own
+# credentials (test/releasesign.test.js keeps the two the same while both exist).
 # check: unprivileged. Refuses a tag that isn't a release, builds the package exactly as the hub does, and shows on
 #        its summary what Paul approves: version, commit, changelog, and whether this workflow or the code it runs
 #        changed since the last signed release. A failed check stops here: no one is asked.
