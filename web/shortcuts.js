@@ -9,6 +9,7 @@ export const SHORTCUTS = [
   { id: 'ln-move', where: 'The quick launcher', keys: ['↑', '↓'], does: 'Move through the results', match: (e, c) => (e.key === 'ArrowUp' || e.key === 'ArrowDown') && c.launcher },
   { id: 'ln-run', where: 'The quick launcher', keys: ['Enter'], does: 'Open it, or run it; a change asks for a second Enter', match: (e, c) => e.key === 'Enter' && c.launcher },
   { id: 'ln-close', where: 'The quick launcher', keys: ['Esc'], does: 'Back out of a change, or close the launcher', match: (e, c) => e.key === 'Escape' && c.launcher },
+  { id: 'menu-close', where: 'Everywhere', keys: ['Esc'], does: 'Close the open menu', match: (e, c) => e.key === 'Escape' && c.menu },
   { id: 'help', where: 'Everywhere', keys: ['?'], does: 'Show these shortcuts', match: (e, c) => e.key === '?' && plain(e) && !c.inField },
   { id: 'close', where: 'Everywhere', keys: ['Esc'], does: 'Close the open dialog', match: (e, c) => e.key === 'Escape' && c.modal },
   { id: 'depth', where: 'A project or Home', keys: ['1', '2', '3'], does: 'Depth 30s, 5m, 30m', match: (e, c) => ['1', '2', '3'].includes(e.key) && plain(e) && !c.inField },
@@ -18,7 +19,8 @@ export const SHORTCUTS = [
   { id: 'blur', where: 'While typing', keys: ['Esc'], does: 'Leave the text box', match: (e, c) => e.key === 'Escape' && c.inField },
 ];
 
-// The shortcut a key press means here. c says where focus is: { inField, input, compose, modal, item, launcher }.
+// The shortcut a key press means here. c says where focus is: { inField, input, compose, modal, item, launcher, menu }
+// (menu: one of the rail's menus is open, #824).
 export const shortcutFor = (e, c) => SHORTCUTS.find((s) => s.match(e, c)) ?? null;
 
 const cap = (k, mac) => `<kbd>${k === 'mod' ? (mac ? '⌘' : 'Ctrl') : k}</kbd>`;

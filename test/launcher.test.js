@@ -124,7 +124,8 @@ describe('the quick launcher (#290)', () => {
       for (const op of ops(role)) assert.ok(PERSON_CAN[role].includes(op), `${role} may ${op}`);
       assert.ok(!ops(role).some((op) => ['archive', 'delete', 'restore', 'remote'].includes(op)), role);
     }
-    const all = commands({ index: index({ needs }), current: 'nuworq', view }).map((c) => c.label + JSON.stringify(c.run));
+    // Archived projects only opens the list (#824), and Sign out shows only to someone signed in (test/rail.test.js).
+    const all = commands({ index: index({ needs }), current: 'nuworq', view }).filter((c) => c.run.action !== 'archived').map((c) => c.label + JSON.stringify(c.run));
     assert.ok(!all.some((l) => /delete|archive|remove|logout|sign out/i.test(l)));
   });
 

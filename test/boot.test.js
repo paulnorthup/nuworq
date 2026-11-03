@@ -17,14 +17,15 @@ function stub(answers) {
 
 describe("the app's boot asks for everything at once (#599)", () => {
   test('on a project: who, version, feedback, the list and the view start before any answer; each once', async () => {
-    const { api, calls, release } = stub({ '/api/me': { org: null }, '/api/people/me': null, '/api/info': { commit: 'abc' }, '/api/feedback': { on: false }, '/api/projects': [{ slug: 'acme' }], '/api/p/acme/view?depth=30s': { project: {} } });
+    const { api, calls, release } = stub({ '/api/me': { org: null }, '/api/people/me': null, '/api/info': { commit: 'abc' }, '/api/feedback': { on: false }, '/api/projects': [{ slug: 'acme' }], '/api/projects?archived=1': [{ slug: 'old' }], '/api/p/acme/view?depth=30s': { project: {} } });
     const done = bootData(api, { view: () => api('/api/p/acme/view?depth=30s') });
     await new Promise((r) => setImmediate(r));
-    assert.deepEqual([...calls].sort(), ['/api/feedback', '/api/info', '/api/me', '/api/p/acme/view?depth=30s', '/api/people/me', '/api/projects'],
+    assert.deepEqual([...calls].sort(), ['/api/feedback', '/api/info', '/api/me', '/api/p/acme/view?depth=30s', '/api/people/me', '/api/projects', '/api/projects?archived=1'],
       'every request is out before the first answer');
     await release();
     const b = await done;
     assert.deepEqual(b.projects, [{ slug: 'acme' }]);
+    assert.equal(b.archived, 1, "the rail's Archived (n) (#824)");
     assert.equal(b.info.commit, 'abc');
     assert.equal(b.billing, undefined, 'not a workspace hub: no billing asked for');
     assert.equal(new Set(calls).size, calls.length, 'no URL twice');

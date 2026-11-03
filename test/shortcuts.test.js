@@ -64,7 +64,7 @@ describe('keyboard shortcuts come from one list (#274)', () => {
   });
 
   test('every entry fires on its own keys somewhere', () => {
-    const places = [none, { ...none, modal: true }, { ...none, item: true }, { ...none, inField: true }, { ...none, inField: true, input: true }, { ...none, inField: true, compose: true }, launcher];
+    const places = [none, { ...none, modal: true }, { ...none, item: true }, { ...none, inField: true }, { ...none, inField: true, input: true }, { ...none, inField: true, compose: true }, launcher, { ...none, menu: true }];
     const named = { Esc: 'Escape', '↑': 'ArrowUp', '↓': 'ArrowDown' };
     for (const s of SHORTCUTS) {
       const k = named[s.keys.at(-1)] ?? s.keys.at(-1);
@@ -84,8 +84,8 @@ describe('keyboard shortcuts come from one list (#274)', () => {
     assert.match(shortcutsHtml({ mac: false }), /<kbd>Ctrl<\/kbd> \+ <kbd>Enter<\/kbd>/);
   });
 
-  test('the rail hints at ? only with a keyboard and a fine pointer', () => {
-    assert.match(app, /class="rail-item kbd-hint" data-action="shortcuts"/);
+  test('the help menu hints at ? only with a keyboard and a fine pointer', () => {
+    assert.match(app, /data-action="shortcuts"><span class="name" data-new="shortcuts">Keyboard shortcuts<\/span><kbd class="kbd-hint">\?<\/kbd>/);
     const css = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
     assert.match(css, /\.kbd-hint \{ display: none !important; \}/);
     assert.match(css, /@media \(hover: hover\) and \(pointer: fine\) \{ \.kbd-hint \{ display: flex !important; \} \}/);

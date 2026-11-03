@@ -12,6 +12,7 @@ const R = 'rail', M = 'main', D = 'drawer';
 export const FIELDS = {
   // where the person is
   projects: [() => [], [R, M]],
+  archived: [0, [R]], // how many projects are archived: the rail's Archived (n) shows only when there are any (#824)
   slug: [null, [R, M, D]],
   view: [null, [M, D]],
   views: [() => new Map(), []], // slug → the last view seen for it this visit, drawn at once when it opens again (#503)
@@ -62,7 +63,7 @@ export const FIELDS = {
   feedAll: [false, [M]],
   onlyFeedback: [false, [M]],
   railMenu: [false, [R]],
-  orgOpen: [false, [R]],
+  railOpen: [null, [R]], // the rail's open menu (#824): 'ws' (the workspace's) or 'help'
   actSlug: [null, []], // on the home, the project of the card clicked
   // bookkeeping
   pending: [false, []], // a redraw waits until the person stops typing or scrolling

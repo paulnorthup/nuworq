@@ -9,11 +9,11 @@ export async function bootData(api, { home = false, view = null } = {}) {
   const quiet = (p) => p.catch(() => null);
   const me = quiet(api('/api/me'));
   const billing = me.then((m) => (m?.org ? quiet(api('/api/billing')) : undefined));
-  const [m, person, info, feedback, projects, gs, b, first] = await Promise.all([
-    me, quiet(api('/api/people/me')), quiet(api('/api/info')), quiet(api('/api/feedback')), quiet(api('/api/projects')),
+  const [m, person, info, feedback, projects, archived, gs, b, first] = await Promise.all([
+    me, quiet(api('/api/people/me')), quiet(api('/api/info')), quiet(api('/api/feedback')), quiet(api('/api/projects')), quiet(api('/api/projects?archived=1')),
     home ? quiet(api('/api/get-started')) : undefined,
     billing,
     view ? quiet(view()) : null,
   ]);
-  return { me: m, person, info, feedback, projects, gs, billing: b, first };
+  return { me: m, person, info, feedback, projects, archived: archived?.length ?? 0, gs, billing: b, first };
 }

@@ -74,9 +74,10 @@ const ZOOMS = ['30s', '5m', '30m'];
 // Every command this viewer may run here, before any typing. ctx: { index, current (slug or null), view (the open
 // project's view or null), zoom, role, billingOwner, theme (this browser's appearance) }. index.can is what the viewer's role may do (PERSON_CAN):
 // nothing it doesn't allow is listed, and removing or deleting anything never is.
-// The appearances a browser can choose (#485): web/views/rail.js draws them as the rail's Appearance setting.
+// The appearances a browser can choose (#485): web/views/rail.js draws them as the workspace menu's Appearance setting.
 export const THEMES = [['device', 'Match device'], ['light', 'Light'], ['dark', 'Dark']];
-export function commands({ index, current = null, view = null, zoom = '30s', role = 'owner', billingOwner = false, theme = 'device' }) {
+// feedback: the hub takes feedback; signOut: the person signed in. Whatever the rail's menus hold is here by its name (#824).
+export function commands({ index, current = null, view = null, zoom = '30s', role = 'owner', billingOwner = false, theme = 'device', feedback = false, signOut = false }) {
   const can = new Set(index.can ?? []);
   const names = new Map((index.projects ?? []).map((p) => [p.slug, p.name]));
   const out = [];
@@ -88,7 +89,11 @@ export function commands({ index, current = null, view = null, zoom = '30s', rol
   if (billingOwner) go('Workspace settings', { action: 'workspace-settings' });
   go('Notifications', { action: 'notify' });
   go('Connect an agent', { action: 'connect' });
+  go('Archived projects', { action: 'archived' });
   go('Keyboard shortcuts', { action: 'shortcuts' });
+  go('Guide', { action: 'guide' });
+  if (feedback) go('Send feedback', { action: 'feedback' });
+  if (signOut) go('Sign out', { action: 'logout' }, 'Leave');
   // Change settings: depth anywhere; the open project's own settings, by role.
   const set = (label, confirm, run) => out.push({ kind: 'set', label, hint: 'Change', confirm, run });
   for (const k of ZOOMS) if (k !== zoom) set(`Depth ${k}`, `Depth: ${zoom} → ${k}. Only what you see changes.`, { zoom: k });

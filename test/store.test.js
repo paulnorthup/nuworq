@@ -82,7 +82,7 @@ describe('the app state store (#600)', () => {
     // The whole table, pinned: a field that moves between regions is a change someone meant.
     const table = Object.fromEntries(Object.keys(FIELDS).map((k) => [k, regionsOf(k).join(' ')]));
     assert.deepEqual(table, {
-      projects: 'rail main', slug: 'rail main drawer', view: 'main drawer', views: '', loading: 'main', shellOnly: 'main', missing: 'main', listStale: '',
+      projects: 'rail main', archived: 'rail', slug: 'rail main drawer', view: 'main drawer', views: '', loading: 'main', shellOnly: 'main', missing: 'main', listStale: '',
       pages: 'main', zoom: 'main drawer', home: 'main', homeFresh: '', gs: 'main', gsFresh: '',
       analytics: 'rail main', period: 'main', outcomes: 'main',
       me: 'rail main drawer', person: 'rail main', info: 'rail drawer', billing: 'rail', checkoutDone: '', feedback: 'rail main', feedbackCtx: '',
@@ -90,7 +90,7 @@ describe('the app state store (#600)', () => {
       itemRef: 'drawer', item: 'drawer', deep: 'drawer', editItem: 'drawer', editPre: 'drawer', prefetched: '',
       open: 'main drawer', folded: 'main', reveal: 'main drawer', drafts: 'main drawer', composeKind: 'main', stage: 'main', addWork: 'main',
       addMore: 'main', addRemote: 'main', linkRepo: '', onArrive: '', editMission: 'main', feedAll: 'main', onlyFeedback: 'main',
-      railMenu: 'rail', orgOpen: 'rail', actSlug: '', pending: '', sending: '',
+      railMenu: 'rail', railOpen: 'rail', actSlug: '', pending: '', sending: '',
     });
   });
 });

@@ -69,10 +69,10 @@ describe('the appearance a browser chose applies before the first paint (#485)',
 });
 
 describe('the Appearance setting', () => {
-  test('in the rail footer: a named radio group of three, Match device first, the chosen one reached by Tab', () => {
+  test('in the workspace menu: a named radio group of three, Match device first, the chosen one reached by Tab', () => {
     const app = appSource();
-    assert.match(app, /\$\{appearance\(\)\}\n\s*\$\{versionLine\(\)\}\n\s*<\/div>`;/, 'in .rail-foot, which a phone opens with Menu');
-    assert.match(app, /role="radiogroup" aria-labelledby="appearance-label"/);
+    assert.match(app, /<button class="rail-item" data-action="notify">Notifications<\/button>\n\s*\$\{appearance\(at\)\}/, 'in the workspace menu (#824), which a phone shows under Menu');
+    assert.match(app, /role="radiogroup" aria-labelledby="appearance-label-\$\{at\}"/);
     assert.match(app, /role="radio" aria-checked="\$\{k === now\}" tabindex="\$\{k === now \? 0 : -1\}"/);
     assert.match(app, /radioKeys\(document, '\.appearance \[role="radio"\]', /, 'arrow keys move the choice');
     assert.match(read('web/radiogroup.js'), /\{ ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 \}/);
