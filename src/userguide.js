@@ -183,7 +183,7 @@ export const ESSENTIALS = [
       '`nuworq worker --agent claude --run`',
       'Or up to three on the projects you let them work on (the board also offers **Staff it with nuworq run**). Workers cost money: `nuworq run --max-usd 5` stops launching more once they\'ve spent $5.',
       '`nuworq run --workers 3 --agent claude`',
-      'The same runner as a service, so workers keep going after you close the terminal or restart: `nuworq run --install` sets it up (a LaunchAgent on macOS, a systemd user unit on Linux). When nuworq updates, the service moves onto the new version by itself once its workers finish. It adds that one service; its log is ~/.nuworq/logs/run.log. `nuworq run --uninstall` removes it.',
+      'The same runner as a service, so workers keep going after you close the terminal, and start again when you log in after a restart: `nuworq run --install` sets it up (a LaunchAgent on macOS, a systemd user unit on Linux). When nuworq updates, the service moves onto the new version by itself once its workers finish. It adds that one service; its log is ~/.nuworq/logs/run.log. `nuworq run --uninstall` removes it.',
       'Workers can run on other agents too: `--agent codex`, or `--agent opencode` or `--agent pi` with a model as <provider>/<model> (`--model ollama/qwen3.8:27b-mtp-q4_K_M` runs a local Ollama model at no cost). Only Claude workers are kept from your machine\'s keys, so these start only with `--can-read-keys`, and only on projects without a remote: Codex\'s sandbox (its limit on what a program may touch) limits writes and network, not reads, and opencode and pi have no sandbox. A pi worker gets a config folder of its own: your pi extensions, skills and sign-ins stay out, so give its provider key in the environment (e.g. ANTHROPIC_API_KEY).',
     ],
   },
@@ -193,6 +193,18 @@ export const ESSENTIALS = [
       'Workers run git, and the project\'s checks, without asking: `npm test`, `npm ci` and the package.json scripts named test, lint, check, typecheck or build (`test:unit` too), `pytest`, and `cargo` and `go` test and build.',
       'They never run `npm install`, a deploy, release or publish script, or an interpreter like `node` on its own: each could run anything.',
       'To add a command, e.g. `npm run e2e` or `make test`: open the project\'s **Settings**, find **Worker commands**, and type one per line. Workers started from then on may run it, with any arguments.',
+    ],
+  },
+  {
+    // Drawn from how nuworq itself is built (#685): Paul's own setup and the habits its repository shows.
+    key: 'best-practices', title: 'Best practices', glance: 'How nuworq itself is built with nuworq.',
+    body: [
+      'Keep two sessions open. An operator in a terminal keeps the work moving: it answers workers, lands their work and runs what touches real systems. A shaper in the Claude Code app is where you and an agent plan: you say what you want and why, and it proposes the work once you agree. Workers do the rest in the background.',
+      'Keep what the project knows on the hub, not in files agents may not read: the mission, your decisions and the field notes agents leave. Every agent reads them when it checks in, and a decision is a standing rule nobody asks about again.',
+      'Make every change an item whose "done" someone else can check: what a person sees, or a test that passes. Agents never accept their own work, so a vague "done" comes back to you as a question.',
+      'One item, one branch; one worker, one copy of the repository. Workers do this by themselves (`nuworq/<item>` branches, a worktree each), so many items move at once without touching each other or your own checkout.',
+      'Have one check decide what lands: the project\'s whole test suite, run by CI on every pull request. Work lands on main only when it passes, so keep it fast enough to run every time and strict enough to trust.',
+      'Write commit titles and headlines outcome first, as the person using the software would say it ("Leases renew only with progress"), with the item\'s number. The history then reads as what changed for people, and every line leads back to its item.',
     ],
   },
 ];
