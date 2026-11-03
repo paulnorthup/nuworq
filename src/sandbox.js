@@ -144,19 +144,42 @@ export function workerGitDenies({ home = null } = {}) {
   return [...cmds.flatMap((c) => flag(c, ...GIT_RUNS)), ...rebaseRuns(), ...(home ? flag(`git -C ${home} merge --ff-only`, '--strategy', '-s') : [])];
 }
 
-// The project's own test and build commands: npm's scripts by name (with arguments, e.g. npm test -- test/a.test.js),
-// installing what the lockfile says (no packages by name), and the usual test and build commands of Python, Rust
-// and Go. Each still runs project code, which is why the sandbox is around it.
-export function projectCommands(home) {
+// The npm scripts a worker runs by default (#768): the project's checks (test, lint, check, typecheck, build, and
+// their test:unit-style variants), never deploy, release, publish or anything else a script name doesn't promise.
+const CHECK_SCRIPT = /^(test|lint|check|typecheck|build)(:[\w.-]+)?$/;
+const NOT_A_CHECK = /deploy|release|publish|upload|push|migrate/i;
+
+// The project's own checks: npm's check scripts by name (with arguments, e.g. npm test -- test/a.test.js),
+// installing what the lockfile says (npm ci: no packages by name, no lockfile rewrite), and the usual test and
+// build commands of Python, Rust and Go. Each still runs project code, which is why the sandbox is around it.
+// extra: the commands a person added in the project's settings (workerCommands), each with any arguments.
+export function projectCommands(home, extra = []) {
   const out = [];
   if (has(home, 'package.json')) {
     let scripts = {};
     try { scripts = JSON.parse(readFileSync(join(home, 'package.json'), 'utf8')).scripts ?? {}; } catch { /* not JSON: no scripts */ }
-    out.push('Bash(npm test:*)', 'Bash(npm ci)', 'Bash(npm install)');
-    for (const name of Object.keys(scripts).filter((n) => /^[\w:.-]+$/.test(n) && n !== 'test')) out.push(`Bash(npm run ${name}:*)`);
+    out.push('Bash(npm test:*)', 'Bash(npm ci)');
+    for (const name of Object.keys(scripts).filter((n) => CHECK_SCRIPT.test(n) && !NOT_A_CHECK.test(n) && n !== 'test')) out.push(`Bash(npm run ${name}:*)`);
   }
   if (['pyproject.toml', 'requirements.txt', 'setup.py'].some((f) => has(home, f))) out.push('Bash(pytest:*)', 'Bash(python3 -m pytest:*)');
   if (has(home, 'Cargo.toml')) out.push('Bash(cargo test:*)', 'Bash(cargo build:*)', 'Bash(cargo check:*)', 'Bash(cargo clippy:*)');
   if (has(home, 'go.mod')) out.push('Bash(go test:*)', 'Bash(go build:*)', 'Bash(go vet:*)');
-  return out;
+  return [...new Set([...out, ...extra.map((c) => `Bash(${c}:*)`)])];
+}
+
+export const COMMANDS_HINT = 'Give whole commands, one per line, e.g. npm run e2e or make test: words only, no ;, |, &, $, quotes or redirects, and not an interpreter on its own (node, python3, bash…) or code given inline (node -e, npm exec, npx).';
+// Alone, these run whatever follows them: a person adds `node scripts/check.js`, never `node`.
+const RUNS_ANYTHING = new Set(['node', 'python', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun', 'npx', 'bunx', 'pnpx', 'sh', 'bash', 'zsh', 'fish', 'env', 'sudo', 'eval', 'exec', 'xargs', 'curl', 'wget', 'ssh', 'git', 'npm', 'make']);
+// The commands a person lets workers run beyond the project's checks (#768): a list, or one per line (or comma).
+// Each is plain words, so it can't chain another command, and isn't an interpreter or a tool with nothing after it.
+// The runner checks what the hub sends with this too, as with sandbox hosts (#624).
+export function workerCommands(v) {
+  const list = (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]+/)).map((c) => String(c ?? '').trim().replace(/\s+/g, ' ')).filter(Boolean);
+  const bad = list.filter((c) => c.length > 200 || !/^[\w.@/+=-]+( [\w.@/:+=-]+)*$/.test(c) || RUNS_ANYTHING.has(c) || /^(sudo|env|eval|exec|xargs|curl|wget|ssh|sh|bash|zsh|npx|bunx|pnpx) /.test(c)
+    // Nor one that runs code given inline: node -e, python -c, npm exec.
+    || /^(node|python3?|ruby|perl|php|deno|bun) (-e|-c|-p|-r|--eval|--print)\b/.test(c) || /^npm (exec|x) /.test(c));
+  // Quoted: a refusal shown at its field starts with a capital, which would change the command.
+  if (bad.length) throw Object.assign(new Error(`${bad.map((c) => `"${c}"`).join(', ')} ${bad.length === 1 ? "isn't a command workers may run" : "aren't commands workers may run"}`), { hint: COMMANDS_HINT });
+  if (list.length > 20) throw Object.assign(new Error('At most 20 commands'), { hint: 'Name the commands workers need for this project\'s checks; a script that runs several counts as one.' });
+  return [...new Set(list)];
 }

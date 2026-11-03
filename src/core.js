@@ -15,7 +15,7 @@ import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease, settleTags } from './releases.js';
 import { builtWhatItReviews, reviewRelease } from './security.js';
-import { sandboxHosts } from './sandbox.js';
+import { sandboxHosts, workerCommands } from './sandbox.js';
 import { BUDGET as DEFAULT_BUDGET } from './setup.js';
 import { AGENTS, DEFAULT_TIERS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, tiersOf, trialEligible } from './models.js';
 import { jobsTaken, JOB_EVENTS } from './outcomes.js';
@@ -4494,7 +4494,7 @@ const HUMAN_OPS = {
     return { deleted: p.slug, by, revoked_tokens: revoked };
   },
 
-  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, security, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality, sandbox_hosts }, by) {
+  settings(p, { name, mission, autonomy, parked, path, runner, fresh, live, releases, security, github_secret, issue_label, ci, reporter_wait, wait_days, run_workers, run_paused, run_budget, model_routing, model_tiers, model_trial, model_race, model_quality, sandbox_hosts, worker_commands }, by) {
     const changes = [];
     // What workers' sandbox may reach besides the hub, GitHub and package registries (#472): hosts, e.g. "api.stripe.com" or "*.example.com".
     if (sandbox_hosts !== undefined) {
@@ -4504,6 +4504,16 @@ const HUMAN_OPS = {
         this.q('UPDATE projects SET sandbox_hosts = ? WHERE id = ?').run(JSON.stringify(hosts), p.id);
         p.sandbox_hosts = JSON.stringify(hosts);
         this.event(p, { actor: by, type: 'runner', headline: hosts.length ? `${You(by)} let workers' tests here reach ${hosts.join(', ')}` : `${You(by)} let workers here reach only the hub, GitHub and package registries` });
+      }
+    }
+    // What workers may run beyond the project's checks (#768): whole commands, e.g. "npm run e2e" or "make test".
+    if (worker_commands !== undefined) {
+      let cmds;
+      try { cmds = workerCommands(worker_commands); } catch (e) { throw new UserError(e.message, { hint: e.hint }); }
+      if (JSON.stringify(cmds) !== JSON.stringify(json(p.worker_commands, []))) {
+        this.q('UPDATE projects SET worker_commands = ? WHERE id = ?').run(JSON.stringify(cmds), p.id);
+        p.worker_commands = JSON.stringify(cmds);
+        this.event(p, { actor: by, type: 'runner', headline: cmds.length ? `${You(by)} let workers here run ${cmds.join(', ')} besides the project's checks` : `${You(by)} let workers here run only the project's checks` });
       }
     }
     // The quality bar routing keeps to (#349): how close to the best model's results a cheaper one must come.

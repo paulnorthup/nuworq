@@ -45,7 +45,7 @@ export function projectList(hub, { viewer } = {}) {
   return hub.projects().map((p) => projectLine(hub, p, view(hub, p.slug, { light: true, viewer })));
 }
 
-const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, sandbox_hosts: json(p.sandbox_hosts, []), operators: liveOperators(hub, p), pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
+const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, sandbox_hosts: json(p.sandbox_hosts, []), worker_commands: json(p.worker_commands, []), operators: liveOperators(hub, p), pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
 
 // The operator sessions a project has (#559), for nuworq up: checked in as operators, not signed off, and seen in the
 // last day. An idle operator only listens, which leaves last_seen alone, and one that ends signs itself off (#558).
@@ -852,7 +852,7 @@ function build(hub, p, t, { light = false } = {}) {
 
   const v = {
     // runners_here (#643): runners that reached this project in the last week; staffing is offered only once one has.
-    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), runners_here: hub.runnersFor(p.slug).length, fresh: !!p.fresh, security: !!p.security, live: !!p.live, releases: p.releases || 'off', ci: p.ci || 'auto', autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p) },
+    project: { slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path, runner: !!p.runner, staffing: hub.staffing(p), runners_here: hub.runnersFor(p.slug).length, fresh: !!p.fresh, security: !!p.security, live: !!p.live, releases: p.releases || 'off', ci: p.ci || 'auto', autonomy: p.autonomy, autonomy_label: AUTONOMY[p.autonomy].label, autonomy_options: AUTONOMY, seen_at: p.seen_at, github: !!p.github_secret, remotes: hub.remotesOf(p), worker_commands: json(p.worker_commands, []) },
     pulse: null, since, attention, motion, flow, // pulse: personalize's
     ...groupsOf(hub, p, items, { agents, openQs, t, stalled: stalledGroups }),
     queue, proposed, waiting, verifying, done,

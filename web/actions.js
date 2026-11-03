@@ -174,6 +174,9 @@ function settingsModal() {
     ${row('runner', 'Staff it with nuworq run', `Runners start headless workers here whenever work is waiting. They can cost money.${P.runner
       ? `<span class="staff-words">${esc(staffWords(P.staffing))} <button class="link" data-action="staffing-from-settings">Change</button></span>` : ''}`,
       sw('runner', !!P.runner, P.runner ? 'runner-off' : 'runner-on'))}
+    ${row('commands', 'Worker commands', `Workers run the project's checks: npm test, npm ci and its test, lint, check, typecheck and build scripts; pytest; cargo and go test and build. ${P.worker_commands?.length
+      ? `Also: ${P.worker_commands.map((c) => `<code>${esc(c)}</code>`).join(', ')}.` : 'Nothing else, until you add a command.'}`,
+      `<button class="btn" data-action="worker-commands">${P.worker_commands?.length ? 'Change' : 'Add'}</button>`, 'worker-commands')}
     ${row('fresh', 'Keep it fresh weekly', 'Once a week an agent updates dependencies, the runtime and CI actions, and proposes each breaking upgrade.',
       sw('fresh', !!P.fresh, P.fresh ? 'fresh-off' : 'fresh-on'))}
     ${row('security', 'Security audits', P.security
@@ -199,6 +202,26 @@ function settingsModal() {
     ${row('remove', 'Remove', 'Archive it (history kept), or delete it for good.', '<button class="btn" data-action="remove-project">Remove…</button>')}
     <div class="foot"><button class="btn primary" data-action="close-modal">Done</button></div>`);
 }
+// The commands workers may run beyond the project's checks (#768), one per line, one step from Settings. A refusal
+// shows at the field (#748), saying which command and why.
+function workerCommandsModal() {
+  const P = S.view?.project;
+  if (!P) return;
+  modal(`<button class="link back" data-action="settings">← Settings</button><h2>Worker commands</h2>
+    <p class="lead">Workers run ${esc(P.name)}'s checks without asking: npm test, npm ci and its test, lint, check, typecheck and build scripts, and the usual test commands of Python, Rust and Go. Never npm install, a deploy or release script, or an interpreter like node on its own.</p>
+    <div class="form"><label>Also let them run, one command per line<textarea id="wc-commands" rows="4" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="npm run e2e&#10;make test">${esc((P.worker_commands ?? []).join('\n'))}</textarea></label></div>
+    <p class="faint">Each runs with any arguments after it, inside the worker's sandbox. Runners use it for the workers they start next.</p>
+    <div class="foot"><button class="btn primary" data-action="worker-commands-save">Save</button></div>`);
+}
+async function saveWorkerCommands() {
+  try {
+    await api(`/api/p/${encodeURIComponent(S.slug)}/human/settings`, { method: 'POST', body: JSON.stringify({ worker_commands: val('wc-commands') ?? '' }) });
+    await refresh();
+    toast('Worker commands saved: workers started from now on may run them');
+    settingsModal();
+  } catch (e) { if (e.status === 400) fieldError('wc-commands', fieldReason(e)); else toastError(e); }
+}
+
 // A setting changed from the dialog shows its new state there. The redraw replaces the control that changed it,
 // so focus goes back to that row's control: otherwise it falls behind the dialog, and the next Tab or a screen
 // reader starts over from the page.
@@ -620,6 +643,8 @@ export const ACTIONS = {
   park: () => { if (confirm('Park this project? No new work starts and nothing here will ask for you until you unpark it.')) setting({ parked: true }, 'Parked'); },
   'unpark-project': () => setting({ parked: false }, 'Unparked'),
   settings: () => settingsModal(),
+  'worker-commands': () => workerCommandsModal(),
+  'worker-commands-save': () => saveWorkerCommands(),
   'remove-project': () => {
     const P = S.view.project;
     modal(`<h2>Remove ${esc(P.name)}</h2>

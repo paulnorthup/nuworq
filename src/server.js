@@ -1572,7 +1572,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Agents get only what a worker needs to find its checkout, for the projects their token may reach.
       if (req.method === 'GET' && path === '/api/projects' && who.role === 'agent') {
         return send(200, hub.projects().filter((p) => !caller.scope || caller.scope.includes(p.slug))
-          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner, sandbox_hosts: JSON.parse(p.sandbox_hosts || '[]'), operators: liveOperators(hub, p) })));
+          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner, sandbox_hosts: JSON.parse(p.sandbox_hosts || '[]'), worker_commands: JSON.parse(p.worker_commands || '[]'), operators: liveOperators(hub, p) })));
       }
       if (req.method === 'GET' && path === '/api/projects' && url.searchParams.get('archived')) {
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
