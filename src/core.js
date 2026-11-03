@@ -1496,6 +1496,7 @@ export class Hub extends EventEmitter {
       this.event(p, { item, actor: agent, type: 'staged', headline: `${agent} dropped #${item.seq}, as ${by === HUMAN ? 'you' : by} answered: "${clip(q.answer, 80)}"`, data: { decided_by: by, question: q.id } });
       for (const holder of others) this.addNote(p, 'steer', `#${item.seq} was dropped (${by === HUMAN ? 'the human' : by} said so); stop working on it.`, null, holder, by, { notice: true });
     });
+    autoMergeOff.call(this, p, item, `: #${item.seq} was dropped`); // as a person's update to dropped does (#827)
     return { ok: true, item: `#${item.seq}`, stage: 'dropped', decided_by: by, hint: 'Dropped. Call next.' };
   }
 

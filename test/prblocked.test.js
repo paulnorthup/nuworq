@@ -227,6 +227,35 @@ describe('sending back or dropping a landing item turns its auto-merge off', () 
     }
   });
 
+  // #827: a drop a person decided in an answer, carried out by refine with drop or by the hub for a parked item.
+  test('a drop a person answered turns auto-merge off too: refine with drop, and "drop" to the question it is parked on', async () => {
+    {
+      const w = await landing();
+      const { question } = w.op('a1', 'ask', { item: '#1', question: 'Is #1 still wanted?', assumption: 'yes' });
+      w.hub.humanOp('demo', 'answer', { question, answer: 'Drop it' });
+      assert.equal(w.op('a1', 'refine', { item: '#1', drop: question }).stage, 'dropped');
+      await w.hub.prsSettled();
+      assert.deepEqual(w.gh.off, off(w), 'refine with drop');
+      w.merged();
+      assert.equal(w.item().stage, 'dropped', 'a merge afterwards changes nothing');
+    }
+    {
+      // CI sends it back to its builder with auto-merge kept on; the builder parks it on a question; a person says drop.
+      const w = await landing();
+      w.hub.humanOp('demo', 'settings', { autonomy: 'full' });
+      w.deliver('check_run', { action: 'completed', check_run: { name: 'test', head_sha: SHA, status: 'completed', conclusion: 'failure' } });
+      await w.hub.prsSettled();
+      w.op('a1', 'next');
+      const { question } = w.op('a1', 'ask', { item: '#1', question: 'CI fails on a test #2 removes. Still wanted?', blocking: true });
+      assert.equal(w.item().stage, 'waiting');
+      assert.deepEqual(w.gh.off, []);
+      w.hub.humanOp('demo', 'answer', { question, answer: 'Drop it' });
+      assert.equal(w.item().stage, 'dropped');
+      await w.hub.prsSettled();
+      assert.deepEqual(w.gh.off, off(w), 'answering drop to the parked question');
+    }
+  });
+
   test("a reviewer rejecting the builder's CI fix turns auto-merge off; only CI's own send-back keeps it", async () => {
     const w = await landing();
     w.hub.humanOp('demo', 'settings', { autonomy: 'full' });
