@@ -202,7 +202,7 @@ const CARD_LABELS = {
   question: 'Question', review: 'Ready to verify', proposal: 'Shaped, needs your approval', struggling: 'Keeps bouncing', direction: 'Pick the next work',
   'no-agents': 'Nobody is working', 'group-stalled': 'A "now" milestone is stalled', 'ci-failing': 'CI is failing', 'pr-review': 'Needs your approval on GitHub',
   'operator-missing': 'No operator connected', 'kept-parked': 'Kept parked', 'app-wiring': 'GitHub App setup', 'payment-failed': 'Payment failed',
-  'plan-limit': 'Free plan limit',
+  'plan-limit': 'Free plan limit', 'budget-near': 'Daily budget nearly spent', 'run-spend': 'A worker is running long',
 };
 
 // Why a card sits where it does (#506): the priority of the work it holds up, as the app's priority tag (by weight,
@@ -304,6 +304,13 @@ function cardActions(a, hasMore, open, key) {
   }
   if (a.kind === 'plan-limit') {
     return `<div class="actions"><button class="btn primary" data-action="workspace-settings">Upgrade</button><button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}</div>`;
+  }
+  // Spend (#767): raise the budget or pause runners; one worker running long, stop it.
+  if (a.kind === 'budget-near') {
+    return `<div class="actions" data-new="spend-alerts"><button class="btn primary" data-action="staffing">Raise budget</button><button class="btn" data-action="staffing-pause" data-paused="0">Pause runners</button><button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Not now</button>${moreBtn}</div>`;
+  }
+  if (a.kind === 'run-spend') {
+    return `<div class="actions" data-new="spend-alerts"><button class="btn primary" data-action="stop-worker" data-agent="${esc(a.agent)}">Stop it</button>${a.item ? `<button class="btn" data-action="open" data-item="${esc(a.item)}">Open ${esc(a.item)}</button>` : ''}<button class="btn ghost" data-action="dismiss" data-key="${esc(a.key)}">Let it run</button>${moreBtn}</div>`;
   }
   if (a.kind === 'kept-parked') {
     return `<div class="actions"><button class="btn primary" data-action="unpark" data-item="${esc(a.item)}">Unpark</button><button class="btn ghost" data-action="open" data-item="${esc(a.item)}">Open</button>${moreBtn}</div>`;

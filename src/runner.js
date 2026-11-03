@@ -395,6 +395,8 @@ export async function run({
       live: running.map((w) => w.name),
       // What each has spent so far (#761): the project's daily budget counts it before the worker exits.
       spending: running.filter((w) => !w.gone && spendOf(w) > 0).map((w) => ({ name: w.name, project: w.project, usd: spendOf(w) })),
+      // When each started (#767): Needs you says when one runs past an hour.
+      runs: running.filter((w) => !w.gone && w.started != null).map((w) => ({ name: w.name, project: w.project, since: w.started })),
       // Its per-worker cap (#782): the hub counts no worker's spend past it.
       ...(Number.isFinite(workerUsd) ? { worker_usd: workerUsd } : {}),
       skipping: [
@@ -404,7 +406,15 @@ export async function run({
       paused: pausedUntil > t ? { until: pausedUntil, reason: pausedWhy } : null,
     };
   };
-  const tell = (s) => Promise.resolve().then(() => report(s)).catch(() => {});
+  // The hub's reply names any worker a person stopped from Needs you (#767): stopped as at its caps.
+  const stopAsked = (res) => {
+    for (const w of running.filter((x) => (res?.stop ?? []).includes(x.name) && !x.killedAt && !x.gone)) {
+      log(`${w.name}: a person asked the hub to stop it; stopping it (its lease expires and the item returns to the queue)`);
+      w.kill('SIGTERM');
+      w.killedAt = now();
+    }
+  };
+  const tell = (s) => Promise.resolve().then(() => report(s)).then(stopAsked).catch(() => {});
   const failedAfter = (ms) => {
     failing.push(ms);
     if (failing.length < FAILS) return;

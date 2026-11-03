@@ -125,7 +125,7 @@ const steeredBy = (steers) => {
 
 // Which human actions each person role may take. Reading is open to every role.
 const MEMBER_CAN = ['comment', 'create', 'dismiss', 'seen'];
-const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'always', 'keep', 'promote', 'check', 'release'];
+const STEWARD_CAN = [...MEMBER_CAN, 'answer', 'step', 'unpark', 'confirm', 'steer', 'decide', 'accept', 'sendback', 'update', 'pick', 'retire', 'unretire', 'always', 'keep', 'promote', 'check', 'release', 'stop'];
 export const PERSON_CAN = { viewer: [], member: MEMBER_CAN, steward: STEWARD_CAN, owner: [...STEWARD_CAN, 'settings', 'stewards', 'remote', 'archive', 'restore', 'delete'] };
 // Which agent operations a person may use on the agent routes (#469): what their role allows on the human
 // routes. A member proposes and comments, never claims, reviews or gets a push token. null: every one.
@@ -1158,6 +1158,38 @@ export class Hub extends EventEmitter {
     return usd;
   }
 
+  // The workers running in a project now (#767), as their runners last said: { runner, name, since, usd } each,
+  // usd their spend so far (0 when unpriced). A runner that is down or stopped no longer counts, nor a worker
+  // whose usage is on record (it exited), nor one a person asked its runner to stop.
+  workerRuns(p) {
+    const t = this.now();
+    const out = [];
+    for (const r of this.q('SELECT name, state, scope, seen_at, poll_ms, stop FROM runners WHERE seen_at > ?').all(t - DAY)) {
+      const s = json(r.state, {});
+      if (s.stopped || t - r.seen_at > RUNNER_DOWN_POLLS * r.poll_ms) continue;
+      if (r.scope && !r.scope.split(',').includes(p.slug)) continue;
+      const stopping = new Set(json(r.stop, []));
+      for (const w of s.runs ?? []) {
+        if (w.project !== p.slug || stopping.has(w.name)) continue;
+        if (this.q('SELECT 1 FROM usage WHERE project_id = ? AND agent = ? LIMIT 1').get(p.id, w.name)) continue;
+        const usd = Number((s.spending ?? []).find((x) => x.name === w.name && x.project === p.slug)?.usd) || 0;
+        out.push({ runner: r.name, name: w.name, since: w.since, usd });
+      }
+    }
+    return out;
+  }
+
+  // Which of a runner's live workers a person asked it to stop (#767), told on its every poll until they're gone.
+  runnerStops(name, live = []) {
+    const row = this.q('SELECT stop FROM runners WHERE name = ?').get(name);
+    const asked = json(row?.stop, []);
+    if (!asked.length) return [];
+    const names = new Set((Array.isArray(live) ? live : []).map(String));
+    const left = asked.filter((n) => names.has(n));
+    if (left.length !== asked.length) this.q('UPDATE runners SET stop = ? WHERE name = ?').run(JSON.stringify(left), name);
+    return left;
+  }
+
   // How many jobs an agent took since a moment, across the projects a token may reach: tells
   // `nuworq run` whether a worker that exited quickly did anything, even between its polls.
   claimsSince(agent, since, { scope = null } = {}) {
@@ -1252,6 +1284,10 @@ export class Hub extends EventEmitter {
       // Its running workers' spend so far (#761), which the projects' daily budgets count until they exit.
       spending: (runner && Array.isArray(r.spending) ? r.spending : []).slice(0, 50).filter((w) => w?.name && w.project && num(w.usd) > 0)
         .map((w) => ({ name: clip(w.name, 80), project: clip(w.project, 80), usd: Math.round(Math.min(num(w.usd), most) * 10000) / 10000 }))
+        .filter(vouched),
+      // When each of its running workers started (#767): Needs you says when one runs past an hour.
+      runs: (runner && Array.isArray(r.runs) ? r.runs : []).slice(0, 50).filter((w) => w?.name && w.project && when(w.since))
+        .map((w) => ({ name: clip(w.name, 80), project: clip(w.project, 80), since: Math.min(when(w.since), this.now()) }))
         .filter(vouched),
     };
     const pollMs = Math.min(Math.max(num(r.poll_seconds) || 30, 1), 3600) * 1000;
@@ -4409,6 +4445,16 @@ const HUMAN_OPS = {
   release(p, _args, by) {
     const it = askRelease(this, p, by);
     return { item: `#${it.seq}`, title: it.title };
+  },
+
+  // Stop it (#767): a worker running here is stopped by its runner on its next poll (SIGTERM, as at its caps); its
+  // lease lapses and its job goes back to the queue.
+  stop(p, { agent }, by) {
+    const w = this.workerRuns(p).find((x) => x.name === agent);
+    if (!w) throw new UserError(`${agent || 'That worker'} isn't running here`, { status: 404, hint: 'It may have finished already: the Runners section shows who runs now.' });
+    const row = this.q('SELECT stop FROM runners WHERE name = ?').get(w.runner);
+    this.q('UPDATE runners SET stop = ? WHERE name = ?').run(JSON.stringify([...new Set([...json(row.stop, []), w.name])]), w.runner);
+    this.event(p, { actor: by, type: 'runner', headline: `${You(by)} asked ${w.runner} to stop ${w.name}, after $${w.usd.toFixed(2)} over ${dur(this.now() - w.since)}`, data: { agent: w.name, runner: w.runner } });
   },
 
   // "Check now": forget the backoff, so the next sweep checks it.

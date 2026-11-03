@@ -18,6 +18,9 @@ const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
 const RUNNER_ON_DUTY = 5 * MIN; // a runner that polled this recently is on duty (#185): ten of its default 30s polls
 const CHURN_AGENTS = 3;
+// One worker's run worth a person's look (#767): past this spend so far, or this long.
+const RUN_USD = 50;
+const RUN_MS = HOUR;
 // The guide's Start an operator (#712), opened at that part; relative, so it stays in the workspace.
 export const OPERATOR_GUIDE = 'guide#operator';
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
@@ -134,6 +137,7 @@ export function withEntry(h, entry) {
 // part), then oldest first. Worth knowing keeps its own order.
 const RANK = { now: 0, soon: 1, later: 2 };
 const ALL_WORK = new Set(['app-wiring', 'plan-limit', 'operator-missing', 'direction', 'no-agents', 'payment-failed']);
+const SPENDING = new Set(['budget-near', 'run-spend']); // #767
 const HOLDS_LANDING = new Set(['review', 'ci-failing', 'pr-review']);
 export const byNeed = (a, b) => (b.picked ? 1 : 0) - (a.picked ? 1 : 0) || (RANK[a.priority] ?? 1) - (RANK[b.priority] ?? 1)
   || (a.holds ?? 3) - (b.holds ?? 3) || a.at - b.at;
@@ -154,6 +158,7 @@ function prioritize(hub, p, attention, items) {
     const it = a.item ? bySeq.get(a.item) : null;
     let r;
     if (ALL_WORK.has(a.kind)) r = { priority: 'now', why: `now: it holds up all of ${a.hubwide ? "the hub's" : `${p.name}'s`} work` };
+    else if (SPENDING.has(a.kind)) r = { priority: 'now', why: 'now: money is spent while it waits' };
     else if (it) r = of(it);
     else if (a.kind === 'question') {
       // A question about no item parks what it names, e.g. "Drop #136-#139?" (the question only: its why can quote
@@ -505,6 +510,33 @@ function build(hub, p, t, { light = false } = {}) {
       sub: `refused ${timeIn(refused.at)} ago`,
       why: `On Free, a second agent waits until the first finishes or hands off. Pro runs any number side by side. Upgrade opens Stripe Checkout; the plan changes within a minute once Stripe confirms the payment.`,
       owners: hub.q("SELECT handle FROM people WHERE role = 'owner' ORDER BY handle").all().map((r) => `@${r.handle}`),
+    });
+  }
+
+  // Spend before it surprises anyone (#767): 80% of today's budget for workers here, once a day (the key is the
+  // day's), until a person pauses staffing. At 100% runners start no one new, so it's then or never.
+  const staff = p.runner ? hub.staffing(p) : null;
+  if (staff?.budget && !staff.paused && staff.spent_today >= 0.8 * staff.budget) {
+    const day = Math.floor(t / DAY) * DAY;
+    push({
+      key: `budget:${day}`, level: 'act', kind: 'budget-near', at: t,
+      headline: `${p.name} has spent $${staff.spent_today.toFixed(2)} of its $${staff.budget.toFixed(2)} daily budget; it resets at 00:00 UTC, in ${dur(day + DAY - t)}`,
+      sub: staff.spent_today >= staff.budget ? 'all spent: no new workers start until then' : `${Math.round((staff.spent_today / staff.budget) * 100)}% spent; at 100% no new workers start`,
+      why: "Every agent's recorded cost here today counts, and running workers' spend so far. Raise the budget if the work is worth it, or pause runners: running workers finish, and no new ones start until you resume.",
+      actions: ['raise-budget', 'pause-runners'],
+    });
+  }
+  // One worker past $50 or an hour (#767), once per run (the key is its start): Stop it, or let it go on.
+  for (const w of p.runner ? hub.workerRuns(p) : []) {
+    if (w.usd <= RUN_USD && t - w.since <= RUN_MS) continue;
+    const it = items.find((i) => i.holder === w.name && OPEN_STAGES.includes(i.stage));
+    const spent = w.usd > 0 ? `has spent $${w.usd.toFixed(2)}` : 'has run';
+    push({
+      key: `run-spend:${w.runner}:${w.name}:${w.since}`, level: 'act', kind: 'run-spend', at: w.since,
+      headline: `${w.name} ${spent}${it ? ` on ${ref(it)}` : ''} ${w.usd > 0 ? 'over' : ''} ${dur(t - w.since)}`.replace(/ +/g, ' '),
+      sub: [it?.title, `runs on ${w.runner}`].filter(Boolean).join(' · '),
+      why: `A worker usually finishes a job well under $${RUN_USD} and an hour. Stop it if it's stuck: its runner stops it on its next poll, and the job goes back to the queue. Or let it go on: its runner's own caps (--max-minutes, --worker-usd) still stop it.`,
+      item: it ? ref(it) : null, agent: w.name, presence: presence(w.name), actions: ['stop-worker'],
     });
   }
 

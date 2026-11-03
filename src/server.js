@@ -1981,7 +1981,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (changed) hub.changed(null, { kind: 'runner' });
         // Its live workers' leases renew with the report (#540), so a worker in a long test run keeps its job.
         const renewed = hub.renewWorkers(b.live, { scope: caller.scope, identity: caller.identity });
-        return send(200, { ok: true, renewed });
+        // Workers a person stopped from Needs you (#767): only a runner token's own.
+        const stop = caller.token?.runner ? hub.runnerStops(caller.token.runner, b.live) : [];
+        return send(200, { ok: true, renewed, ...(stop.length ? { stop } : {}) });
       }
       if (req.method === 'GET' && path === '/api/claims') {
         const [who, since] = [url.searchParams.get('agent') ?? '', Number(url.searchParams.get('since')) || 0];

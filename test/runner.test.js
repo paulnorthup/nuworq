@@ -941,6 +941,24 @@ describe('run: the supervising loop', () => {
     await p;
   });
 
+  test('reports when each worker started, and stops the one the hub names in its reply (#767)', async () => {
+    const w = world([[route('a', 5)]]);
+    const reports = [];
+    let stop = [];
+    const p = run({ ...w.opts, workers: 2, maxRuns: 2, report: async (s) => { reports.push(s); return { ok: true, stop }; } });
+    await checked(w, p, async () => {
+      await until(() => w.workers.length >= 2, 'two workers');
+      await until(() => reports.some((r) => r.runs?.length === 2), 'their starts reported');
+      assert.ok(reports.at(-1).runs.every((r) => r.project === 'a' && r.since >= 0));
+      stop = ['w2'];
+      await until(() => w.workers[1].signals.includes('SIGTERM'), 'SIGTERM for the one named');
+      assert.deepEqual(w.workers[0].signals, [], 'the other runs on');
+      assert.ok(w.lines.some((l) => /w2: a person asked the hub to stop it/.test(l)));
+    });
+    w.workers.forEach((x) => x.finish(0));
+    await p;
+  });
+
   // #761: a claude worker that streams assistant messages and never exits on its own.
   const opus = (id, input, output) => JSON.stringify({ type: 'assistant', message: { id, model: 'claude-opus-4-5', content: [{ type: 'text', text: 'working' }], usage: { input_tokens: input, output_tokens: output } } });
 

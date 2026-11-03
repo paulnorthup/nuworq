@@ -699,6 +699,8 @@ export const ACTIONS = {
   },
   'models-off': () => modelRouting(false),
   'staffing-pause': (el) => { closeModal(); human('settings', { run_paused: el.dataset.paused !== '1' }, el.dataset.paused === '1' ? 'Staffing resumed' : 'Paused: runners start no new workers here; running ones finish'); },
+  // Stop it (#767): its runner stops the worker at its next poll; its job goes back to the queue.
+  'stop-worker': (el) => human('stop', { agent: el.dataset.agent }, `Stopping ${el.dataset.agent}: its runner stops it within a poll, and its job goes back to the queue`),
   'fresh-on': () => setting({ fresh: true }, 'The weekly freshness sweep is on'),
   'security-on': () => setting({ security: true }, 'Security audits are on: the first one opens within a minute'),
   'security-off': () => { if (confirm('Turn off security audits? Releases stop waiting for an audit of what they ship, and the monthly audits stop.')) setting({ security: false }, 'Security audits are off'); },
