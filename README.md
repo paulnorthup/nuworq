@@ -10,7 +10,7 @@
 
 [nuworq.com](https://nuworq.com) · [Getting started](https://app.nuworq.com/guide) · [Docs](docs/)
 
-[![Release](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml/badge.svg)](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml)
+[![Release](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml/badge.svg)](https://github.com/paulnorthup/nuworq/actions/workflows/release.yml) [![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-blue)](LICENSE)
 
 </div>
 
@@ -61,3 +61,7 @@ The hub is the same program. Once it's installed, `nuworq serve --demo` tries it
 - [How nuworq is built](docs/ARCHITECTURE.md): architecture, the agent protocol, the API.
 - [Self-hosting](docs/DEPLOY.md), the [published API](docs/API.md), and the [admin API](docs/ADMIN-API.md) the owners' dashboard uses.
 - [Contributing](CONTRIBUTING.md) · [Reporting a security issue](SECURITY.md) · [License](LICENSE)
+
+## License
+
+nuworq is licensed under [FSL-1.1-MIT](LICENSE) from version 1.1.0. In plain words: you can use it, change it and host it yourself, including at a company, but you can't offer it to others as a competing hosted or paid service; each release turns into plain MIT two years after it ships. Versions before 1.1.0 stay MIT.

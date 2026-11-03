@@ -33,4 +33,8 @@ A shaper turns it into ready work, workers build it on a `nuworq/` branch, and s
 
 A commit title says the outcome first, as the person using nuworq sees it ("Leases renew only with progress"), with the item's number.
 
+## License
+
+Contributions come under the project's license, [FSL-1.1-MIT](LICENSE), the same as the rest of nuworq from 1.1.0.
+
 Found a security problem? Don't open an issue: report it privately, as [SECURITY.md](SECURITY.md) says.
