@@ -753,10 +753,12 @@ Usage
   nuworq handoff <item> <headline> [flags]
 
 Flags
-  --summary <summary>  done, next, gotchas, at most 4,000 characters
-  --detail <detail>    the 30-minute version: logs, reasoning, alternatives, at
-                       most 32,000 characters
-  --usage <json>       since your last report, if known
+  --summary <summary>    done, next, gotchas, at most 4,000 characters
+  --detail <detail>      the 30-minute version: logs, reasoning, alternatives,
+                         at most 32,000 characters
+  --precondition <json>  as propose's; {} clears it
+  --needs <a,b>          tags a taker must have (checkin has), e.g. ["docker"]
+  --usage <json>         since your last report, if known
 
 Example
   nuworq handoff 12 "Parser half done; tests next" --as claude-1

@@ -138,7 +138,7 @@ describe('preconditions: work that waits on an outside fact', () => {
       for (const t of tools(format)) {
         const name = t.name ?? t.function.name;
         const props = (t.inputSchema ?? t.input_schema ?? t.function?.parameters).properties;
-        assert.equal(!!props.precondition, ['propose', 'refine'].includes(name), `${format} ${name}`);
+        assert.equal(!!props.precondition, ['propose', 'refine', 'handoff'].includes(name), `${format} ${name}`);
       }
     }
     const { hub, item } = setup();

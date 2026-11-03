@@ -91,7 +91,7 @@ export const MODE_RULES = {
   // An operator's next, for its answer and live-step jobs.
   operator: `${OPERATOR_NEXT} Build an item yourself only when it is the step on real infrastructure: its code, docs and tests are for workers. Declare only the capabilities you really have. Never pass your powers on: workers you start get no operator tag, tokens or permissions. Keep work moving without the human: read the hub first (questions, decisions, earlier answers and waivers) and act on what they settle; make reversible calls yourself, recording what changed and how to undo it. Ask the human only for what only they can do (their accounts, keys, signing, money, a CAPTCHA, an irreversible step or product call no decision covers), as one hub question with escalates and evidence, plus steps when they must act. Your client's own permission prompts still apply.`,
   // A shaping job: rating it, and saying who a change makes act.
-  shape: 'Rate its difficulty (rote, standard or hard) with a one-line difficulty_why. Set breaking when shipping it makes someone on the previous version act (an API route or tool removed or changed incompatibly, a CLI command or flag removed, the runtime minimum raised, a manual migration), in one line saying who must do what, e.g. "Machines on Node 24 must upgrade to 26 before `nuworq update`"; dev tools and a runtime only tested in CI break nobody. Infra work (it would need an operator tag such as infra) comes in two parts: it carries no operator tag, so any worker builds its code, docs and tests, and the step on real infrastructure is an ask to: "operator" with steps (the exact command, how to check), whose answer is the evidence; only when that live step is all there is, it is a small child item with the tag. A top-level item with parts is a milestone: its title names what is released when it is done. An item in the wrong milestone: refine it with parent ("" takes it out).',
+  shape: 'Work that can only start after an outside event (a release tag, a date, a vendor change) gets a precondition, and work only an operator can do gets an operator tag. Rate its difficulty (rote, standard or hard) with a one-line difficulty_why. Set breaking when shipping it makes someone on the previous version act (an API route or tool removed or changed incompatibly, a CLI command or flag removed, the runtime minimum raised, a manual migration), in one line saying who must do what, e.g. "Machines on Node 24 must upgrade to 26 before `nuworq update`"; dev tools and a runtime only tested in CI break nobody. Infra work (it would need an operator tag such as infra) comes in two parts: it carries no operator tag, so any worker builds its code, docs and tests, and the step on real infrastructure is an ask to: "operator" with steps (the exact command, how to check), whose answer is the evidence; only when that live step is all there is, it is a small child item with the tag. A top-level item with parts is a milestone: its title names what is released when it is done. An item in the wrong milestone: refine it with parent ("" takes it out).',
   // A review, whatever the item.
   review: 'Check breaking too: set when the change makes someone act, and saying accurately who must do what; reject it when missing, wrong, or set on a change that breaks nobody. Reject any item but a release that changes the version.',
   // A tidy job (src/tidy.js).
@@ -211,12 +211,14 @@ export const OPS = [
   },
   {
     name: 'handoff',
-    description: 'Hand off an item you hold unfinished, saying where you left off.',
+    description: 'Hand off an item you hold unfinished, saying where you left off. If it can only start after an outside event, add precondition; if only an operator can do it, add needs ["operator"]: it is held back, not restarted.',
     params: {
       item: ITEM,
       headline: s('Where you left off.'),
       summary: capped(4_000, 'Done, next, gotchas.'),
       detail: LAYERS.detail,
+      precondition: PRECONDITION_REF,
+      needs: NEEDS,
       usage: USAGE,
     },
     required: ['item', 'headline'],
@@ -536,7 +538,7 @@ Use \`${command}\` with \`--as <your-name>\` on every command (or NUWORQ_AGENT).
 2. ${c('next')} claims one job (work, shape, review, land, tidy, answer); its hint says how to do that kind. Read done_means, history and last_handoff: don't repeat what failed.
 3. Once you know your files, ${c('progress')} with \`touching\`, then at real milestones. Your lease renews by itself while you make calls.
 4. Done? ${c('submit')} with evidence a reviewer checks fast: tests and results, branch and commit. Run the tests near your change; the whole suite only where the hint says CI doesn't check the pull request. Never mark your own work done. Evidence is as public as the repository: from a demo or local hub, never a live workspace's data.
-5. Can't finish, or low on context? ${c('handoff')}: what's done, what's next. A person said to drop it? ${c('refine')} with \`drop\` set to that question.
+5. Can't finish, or low on context? ${c('handoff')}: what's done, what's next. If it waits on an outside event, add \`precondition\`; if only an operator can do it, add \`needs\` ["operator"]: it is held back, not restarted. A person said to drop it? ${c('refine')} with \`drop\` set to that question.
 6. Other work? ${c('propose')} it with acceptance criteria; don't grow your item. If it repairs landed work, set \`fixes\` to that item. Learned something the hard way? ${c('learn')} it. nuworq got in your way? ${c('feedback')}.
 7. Leaving? ${c('signoff')}.
 
