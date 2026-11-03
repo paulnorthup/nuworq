@@ -16,7 +16,7 @@ const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Tags a t
 const SIZE = { type: 'string', enum: ['small', 'large'], description: 'large: multi-step.' };
 // How hard an item is (#348): set when shaping, with a one-line reason. Unrated counts as standard.
 const DIFFICULTY = {
-  difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'rote: a cheap model could; hard: needs the strongest.' },
+  difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'rote: a cheap model; hard: the strongest.' },
   difficulty_why: s('Why, one line.'),
 };
 const FIXES = s('The landed item this repairs.');
@@ -251,7 +251,7 @@ export const OPS = [
   {
     name: 'refine',
     // Its fields shared with propose are described there; here, once, that a value replaces the item's.
-    description: 'Improve an item. Fields as propose\'s: what you send replaces the item\'s, "" or [] clears it. Acceptance can make a proposal ready.',
+    description: 'Improve an item. Fields as propose\'s: what you send replaces the item\'s, "" or [] clears it (parent "": top-level). Acceptance can make a proposal ready.',
     params: {
       item: ITEM,
       title: { type: 'string' },
@@ -261,8 +261,8 @@ export const OPS = [
       priority: { type: 'string', enum: ['now', 'soon', 'later'] },
       depends_on: { type: 'array', maxItems: 30, items: { type: 'string' } },
       parent: { type: 'string' },
-      pr: s('A pull request a tidy job lists, e.g. "acme/api#12".'),
-      reason: s('Why, one line (tidy jobs: always).'),
+      pr: s('A pull request a tidy job found, e.g. "acme/api#12".'),
+      reason: s('Why, in a line (tidy: always).'),
       fixes: { type: 'string' },
       breaking: { type: 'string' },
       change: { type: 'string' },
@@ -271,9 +271,9 @@ export const OPS = [
       ...DIFFICULTY,
       repo: { type: 'string' },
       precondition: PRECONDITION_REF,
-      duplicate_of: s('Imported issue: the item it duplicates; drops this one.'),
+      duplicate_of: s('Imported issue: the item it duplicates (drops this).'),
       stale: s('Imported issue: why it is stale.'),
-      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Hard items: how many agents may try at once.' },
+      race: { type: 'integer', minimum: 1, maximum: 4, description: 'Hard items: how many agents may race it.' },
       drop: { type: 'integer', description: 'Drops it: the person\'s answer saying so.' },
     },
     required: ['item'],

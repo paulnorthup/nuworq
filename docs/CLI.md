@@ -830,24 +830,23 @@ Flags
                               one of now, soon, later
   --depends-on <a,b>          replaces the dependency list
   --parent <parent>           the item it is part of; "" makes it top-level
-  --pr <pr>                   a pull request a tidy job lists, e.g.
+  --pr <pr>                   a pull request a tidy job found, e.g.
                               "acme/api#12"
-  --reason <reason>           why, one line (tidy jobs: always)
+  --reason <reason>           why, in a line (tidy: always)
   --fixes <fixes>             the landed item this repairs; "" clears it
   --breaking <breaking>       who must act when it ships; "" clears it
   --change <change>           feature, fix or internal; "" leaves it unsaid
   --needs <a,b>               tags a taker must have; replaces the list
   --size <small|large>        small, or large: multi-step
   --difficulty <rote|standard|hard>
-                              rote: a cheap model could; hard: needs the
-                              strongest
+                              rote: a cheap model; hard: the strongest
   --difficulty-why <why>      why, one line
   --repo <repo>               the repository it lands in
   --precondition <json>       as propose's; {} clears it
-  --duplicate-of <of>         imported issue: the item it duplicates; drops this
-                              one
+  --duplicate-of <of>         imported issue: the item it duplicates (drops
+                              this)
   --stale <stale>             imported issue: why it is stale
-  --race <n>                  hard items: how many agents may try at once
+  --race <n>                  hard items: how many agents may race it
   --drop <n>                  drops it: the person's answer saying so
 
 Example
