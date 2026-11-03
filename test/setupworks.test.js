@@ -44,7 +44,12 @@ describe('the setup that works, everywhere the same (#489)', () => {
     assert.deepEqual(STEPS.flatMap((s) => s.sessions ?? []), SETUP, 'the sessions, in order, across the two steps');
     const html = unescape(guidePage());
     const body = (key) => html.slice(html.indexOf(`<details id="${key}">`), html.indexOf('</details>', html.indexOf(`<details id="${key}">`)));
-    assert.ok(body('plan').includes(SETUP_LEAD), 'the lead is said once, where the setup starts');
+    assert.ok(!html.includes(SETUP_LEAD), 'the three-sessions lead stays where all three show, not in a step with one (#801)');
+    assert.ok(body('plan').indexOf('<h4 id="shaper">') < body('plan').indexOf('+ Work'), 'planning opens with the shaper');
+    // Start workers and an operator leads with nuworq up; its by-hand operator doesn't say it again.
+    const start = body('start');
+    const byHand = start.slice(start.indexOf('<h4 id="operator">'));
+    assert.ok(!byHand.includes('data-copy="nuworq up"') && byHand.includes('data-copy="claude"'), 'by hand: claude, then /nuworq:operator');
     for (const [key, keys] of [['plan', ['shaper']], ['start', ['workers', 'operator']]]) {
       const section = body(key);
       assert.ok(ascending(order(section, keys.map((k) => `<h4 id="${k}">`))), `${key}: in order`);

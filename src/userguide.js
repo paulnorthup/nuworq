@@ -15,15 +15,17 @@
 // An item that changes what a new person does updates this file in the same change.
 // The recommended setup (#489) is web/connect.js's SETUP: its sessions are parts with their own ids, in the steps
 // that start them, so Get started's Shape work with a shaper, Start workers and Start an operator link straight to them.
-import { SETUP, SETUP_LEAD, setupLine } from '../web/connect.js';
+// A step with one part doesn't number it; a step with byHand shows each part's by-hand form, after its own nuworq up.
+import { SETUP, setupLine } from '../web/connect.js';
 import { commandParts } from '../web/commands.js';
 
 export const SETUP_TITLE = 'Recommended setup';
 
 // A session's lines in the guide's marks: what it does, where and why, then its commands, each to copy.
-// Words that lead into a command end in a colon; a note after the last one (#646) doesn't.
-export const sessionLines = (s) => {
-  const parts = commandParts(s.how);
+// Words that lead into a command end in a colon; a note after the last one (#646) doesn't. byHand: the form
+// without nuworq up, where it is said already (#801).
+export const sessionLines = (s, byHand = false) => {
+  const parts = commandParts((byHand && s.byHand) || s.how);
   return [setupLine(s), ...parts.map((x, i) => (x.cmd ? `\`${x.cmd}\``
     : `${x.text.charAt(0).toUpperCase()}${x.text.slice(1)}${parts.slice(i + 1).some((y) => y.cmd) ? ':' : ''}`))];
 };
@@ -90,7 +92,7 @@ export const STEPS = [
   {
     key: 'plan', title: 'Plan the first work with a shaper', glance: 'Talk it through in the Claude Code app, or write it on the board yourself.',
     hand: [
-      `${SETUP_LEAD} A shaper comes first: it plans the work that workers then do.`,
+      'Start with a shaper: it plans the work with you, and workers then do it.',
     ],
     sessions: session('shaper'),
     then: [
@@ -108,11 +110,13 @@ export const STEPS = [
     hand: [
       'In a clone of the project, run:',
       '`nuworq up`',
-      'It keeps the runner (the program that starts workers) going as a service, with workers started as work arrives, and opens an operator in its own terminal (tmux when you have it) for each project that isn\'t parked. **Park** in a project\'s Settings pauses it. Run `nuworq up` again after any restart: it starts only what\'s missing, and ends with a table of each project. `nuworq down` stops what it started.',
+      'It keeps the runner (the program that starts workers) going as a service, with workers started as work arrives.',
+      'It opens an operator in its own terminal for each project that isn\'t parked (**Park** in a project\'s Settings pauses one). With tmux installed, a terminal that keeps running after you close its window, the operators run there: `tmux attach -t nuworq` shows them.',
+      'Run `nuworq up` again after any restart: it starts only what\'s missing, and ends with a table of each project. `nuworq down` stops what it started.',
       'Workers work only on the projects you let them. `nuworq connect` asks, or open the project, then **Settings**, and switch on **Staff it with nuworq run**, which lets workers on your machine take that project\'s work.',
       'Or start each by hand:',
     ],
-    sessions: SETUP.filter((s) => s.key !== 'shaper'),
+    sessions: SETUP.filter((s) => s.key !== 'shaper'), byHand: true,
     then: [
       '`nuworq operator --start` opens one operator here and allows the commands it needs every day: git and the project\'s checks. `nuworq run --uninstall` removes the workers\' service.',
       'More ways to run agents, and what workers may run, are under Once you\'re going: [Other ways to run agents](#other-ways) and [What workers may run](#worker-commands).',
@@ -205,7 +209,7 @@ const para = (s) => {
 
 // Every command, label and app path the guide names, for tests that keep it true.
 export function mentions() {
-  const text = [...STEPS.flatMap((s) => [s.glance, ...s.hand, ...(s.sessions ?? []).flatMap(sessionLines), ...(s.then ?? []), s.check]),
+  const text = [...STEPS.flatMap((s) => [s.glance, ...s.hand, ...(s.sessions ?? []).flatMap((x) => sessionLines(x, s.byHand)), ...(s.then ?? []), s.check]),
     ...ESSENTIALS.flatMap((e) => [e.glance, ...e.body])].filter(Boolean);
   const all = (re) => [...new Set(text.flatMap((t) => [...t.matchAll(re)].map((m) => m[1])))];
   return { commands: all(/`([^`]+)`/g), labels: all(/\*\*([^*]+)\*\*/g), paths: all(/(?:^|[\s(])(\/[a-z][\w-]*(?:\/[\w-]+)*)/g) };
@@ -213,9 +217,9 @@ export function mentions() {
 
 // version: e.g. "v0.2.0 · c3a3008". base: the app's address on this host ('' or /w/<workspace>).
 export function guidePage({ version = '', base = '', logo = '', favicon = '' } = {}) {
-  const part = (x, k) => `<h4 id="${x.key}">${k + 1}. ${esc(x.title)}</h4>${sessionLines(x).map(para).join('')}`;
+  const part = (s) => (x, k) => `<h4 id="${x.key}">${s.sessions.length > 1 ? `${k + 1}. ` : ''}${esc(x.title)}</h4>${sessionLines(x, s.byHand).map(para).join('')}`;
   const step = (s, n) => `<li><details id="${s.key}"><summary><span class="n">${n}</span><span class="t"><b>${esc(s.title)}</b><span class="g">${inline(s.glance)}</span></span></summary>
-    <div class="body">${s.hand.map(para).join('')}${(s.sessions ?? []).map(part).join('')}${(s.then ?? []).map(para).join('')}
+    <div class="body">${s.hand.map(para).join('')}${(s.sessions ?? []).map(part(s)).join('')}${(s.then ?? []).map(para).join('')}
     <h4>How you know it worked</h4>${para(s.check)}</div></details></li>`;
   const essential = (e) => `<li><details id="${e.key}"><summary><span class="t"><b>${esc(e.title)}</b><span class="g">${inline(e.glance)}</span></span></summary>
     <div class="body">${e.body.map(para).join('')}</div></details></li>`;

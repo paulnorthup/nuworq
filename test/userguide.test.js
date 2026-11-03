@@ -78,7 +78,8 @@ describe('the page', () => {
     const html = guidePage({ version: 'v1.2.3 · abc1234', base: '/w/acme' });
     assert.match(html, /This guide describes nuworq v1\.2\.3 · abc1234/);
     for (const s of [...STEPS, ...ESSENTIALS]) assert.match(html, new RegExp(`<details id="${s.key}">`));
-    for (const p of STEPS.flatMap((s) => s.sessions ?? [])) assert.match(html, new RegExp(`<h4 id="${p.key}">\\d\\. ${p.title}</h4>`), `#${p.key} is a part Get started links to`);
+    for (const p of STEPS.flatMap((s) => s.sessions ?? [])) assert.match(html, new RegExp(`<h4 id="${p.key}">(\\d\\. )?${p.title}</h4>`), `#${p.key} is a part Get started links to`);
+    assert.match(html, /<h4 id="shaper">Shape work with a shaper<\/h4>/, 'a lone part is not numbered (#801)');
     assert.match(html, /href="\/w\/acme\/guide\.css"/, 'its assets come from the workspace it is served in');
     assert.match(html, /<button type="button" data-copy="nuworq run --workers 3 --agent claude">Copy<\/button>/);
     assert.match(html, /<b>Accept<\/b>/, 'labels are bold');

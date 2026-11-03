@@ -62,7 +62,7 @@ export function connectCommands(info, page = null, slug = 'my-project') {
 
 // The recommended setup (#489, #801): how nuworq itself is built, and what every place that says how to get going offers
 // first, in this order and these words: the guide, Get started, Connect an agent, the README and the CLI's bare
-// screen (test/setup.test.js holds them together). name, where and does make one sentence (setupLine); how is
+// screen (test/setup.test.js holds them together). says is what it is, in short sentences (setupLine); how is
 // what to type, with each command to copy in backticks.
 export const SETUP = [
   {
@@ -89,8 +89,9 @@ export const SETUP = [
       'It asks you only for what it can\'t do itself.',
       'In its own terminal, it never interrupts your conversation with the shaper.'],
     // nuworq up first (#797), then by hand. Without the plugin (declined, or no access to the repository yet), connect
-    // writes it as /nuworq-operator (#492).
+    // writes it as /nuworq-operator (#492). byHand: the guide's by-hand part, which follows its own nuworq up (#801).
     how: '`nuworq up` starts one for each project that doesn\'t have one yet. Or, in the project\'s folder, run `claude`, then type `/nuworq:operator` (or "/nuworq-operator" without the plugin)',
+    byHand: 'In the project\'s folder, run `claude`, then type `/nuworq:operator` (or "/nuworq-operator" without the plugin)',
   },
 ];
 // One session in short sentences, in backtick marks.
