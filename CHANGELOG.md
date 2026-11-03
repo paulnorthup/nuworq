@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.8.0 (2026-11-03)
+
+What landed since v0.7.0.
+
+**Workers keep the machine responsive: CI runs the full suite, and nuworq run adds workers only while there's CPU to spare (#531)**
+
+- An hour of Paul's runner on --workers auto: workers and load over time, then back to Paul's setting (#548)
+
+**Also in this release**
+
+- GitHub guards nuworq's repository before it goes public: main and release tags are protected, private reports are on, old branches are gone (#476)
+- The hub knows each agent session: later calls send only what's new to it, and its lease renews without spending model turns (#519)
+- Runners wait for work on a long-poll, so a worker starts about 1 second after work appears instead of polling every 30 (#542)
+- Feedback #7 closed: once #654, #658 and #660 are live, a runner worker's next never answers "can't review your own work" (#661)
+- Feedback #2 closed: an operator sharing a device token with runner workers isn't refused their reviews, and next never answers with the… (#663)
+- The reported #640 loop stays fixed: next, peeking or claiming, never offers a review that review refuses (#665)
+- A full audit once today's work is done: nuworq is usable, bug-free, reliable, secure, efficient and polished, and does what nuworq.com says (#676)
+- A live update at 30m redraws only the sections of the page whose data changed, not the whole 880 KB page (#682)
+- A landing PR that GitHub closes because main already holds its branch counts as landed: the item is done, not sent back (#686)
+- Needs you's "finished it 3m ago" ticks in the page, so a minute passing doesn't redraw all its cards (#689)
+- The follower's CI fallback clock runs from the first commit it waited on, so a busy main still deploys within 30 minutes (#690)
+- A question that asks a person to do steps stays in Needs you after its item lands, until the steps are done (#692)
+- Audit: usable. A newcomer and Paul get going, steer, answer and land on phone and desktop; agents' hints carry them (#694)
+- Audit: bug-free. The item lifecycle, leases, landing, releases, sign-in and the runner hold up at their edge cases (#695)
+- Audit: consistent. One name for each thing and one way to do it across the app, CLI, guide, tool descriptions, docs and nuworq.com (#696)
+- Audit: reliable and stable. nuworq keeps working for days with nobody watching, through restarts, deploys, outages and loops (#697)
+- Audit: polished. Wording, empty and error states, loading, alignment, light and dark are right everywhere a person looks (#698)
+- Audit: effective. Measured from the hub's history: what lands without Paul, first-time accepts, bounces, waits, cost (#699)
+- Audit: efficient. Tokens, turns and dollars per job, a worker's first load, hub cost per request, browser payload: measured (#700)
+- Audit: secure. Changes since #468's re-review, plus what open source adds: forks, outside PRs, CI, releases, plugins, history (#701)
+- Audit: hardened. Limits and timeouts on every input, queue and loop; cheap outages; pinned deps; safe defaults (#702)
+- Audit: true to its claims. Every claim on nuworq.com and in the README is listed with its verdict: true, not yet, or reworded (#703)
+- Live check: the hub refuses a runner worker's push to main and to a tag through /api/git (#704)
+- "Keep this one" on a raced item keeps that attempt again: the app's two keep actions get their own names (#705)
+- The lifecycle reads the same everywhere: Done means landed, every stage can be looked at, and hints name only real operations (#706)
+- A question named by its number is easy to find: each question card shows Q207, and ⌘K opens "q207" or "question 207" (#710)
+- On a phone, Needs you's first card is on the first screen of the home and of a project at 30s (#711)
+- A question waiting for an operator shows its steps, and whoever is there can do them and answer it; its guide link opens /guide#operator (#712)
+- Sending back or dropping a landing item stops its pull request merging: auto-merge goes off (#726)
+- Only an item's own branch merging marks it done: a PR from another branch that names "#N" doesn't (#727)
+- A workspace name freed by remove starts clean: no old GitHub installation, plan, grant, members or creator (#728)
+- Work that keeps killing its worker reaches a person: a worker's exit without submitting counts as a stall (#734)
+- A stuck worker gives its item back: leases renew only with progress, and the runner's git calls time out (#736)
+- A hung GitHub fails a worker's push in seconds: the hub's push proxy times out and cancels upstream (#738)
+- GitHub calls back off: an issue that won't close is retried less and less, and rate limits are waited out (#739)
+- Widening the window keeps the project page whole: Needs you's summary, Flow and Agents never vanish (#747)
+- Names removed before #728 start clean too: the hub forgets directory rows of workspaces that no longer exist (#749)
+- Landing costs cents, not dollars: a land job's average run costs a fraction of building, measured on the live hub (#752)
+- Before going public, the release branch, v* tags and outside contributors' workflows are guarded on GitHub: checked live (#757)
+- A runaway worker is stopped while it runs: spend counts during the run, every worker has a default cap, and a killed run still counts (#761)
+- A project's daily budget stops claims, not only new workers: next refuses a runner worker new work once the budget is spent (#762)
+- The runner pauses on a streak of failing workers however long each took, not only those that fail within 15 seconds (#764)
+- Agents' long text fields have limits, refused with a hint past them (#765)
+- One agent can't flood a hub: per-agent write limits and per-project caps (#766)
+- The secret check takes time in proportion to the text, however a write is shaped, so no write can stall a shared hub (#780)
+- Needs you renders whatever an item's title or a question says: only the hub's own time markers become times (#781)
+- A project's daily budget counts live spend only from runner tokens, for their own running workers, within each worker's cap (#782)
+
+**Upgrade notes**
+
+- Runners now stop a worker at $25 spent or 90 minutes by default, and `nuworq up` / `nuworq run --install` write these caps into the service. If your workers often run past them (long audits), run `nuworq run --install --workers auto --worker-usd <N> --max-minutes <M>` (0 turns a cap off) from your checkout: it replaces the installed service, and `nuworq up` keeps it from then on. (#761)
+
 ## 0.7.0 (2026-11-02)
 
 What landed since v0.6.0.
