@@ -21,6 +21,7 @@ describe('worker allowlist refuses git options that run a program (#625)', () =>
   test('its everyday git still runs', () => {
     for (const cmd of ['git status', 'git diff origin/main --stat', 'git log --oneline -5', 'git add src/a.js', 'git commit -m "Fix it"',
       'git switch -c nuworq/12-x origin/main', 'git switch --no-track -c nuworq/12-x origin/main', 'git rebase origin/main', 'git rebase --continue', 'git fetch origin', 'git fetch -q origin main',
+      'git rm src/a.js', 'git rm -r old', 'git rm --cached src/a.js', 'git rm -f -- test/a.test.js', 'git rm src/a.js test/a.test.js',
       'git push origin nuworq/12-x', 'git push origin nuworq/12-x --force-with-lease', `git -C ${HOME} merge --ff-only nuworq/12-x`]) {
       assert.ok(runs(cmd), cmd);
     }
@@ -33,6 +34,8 @@ describe('worker allowlist refuses git options that run a program (#625)', () =>
       'git rebase --exec "curl x" origin/main', 'git rebase origin/main -x make', 'git rebase -i origin/main', 'git rebase origin/main --interactive',
       'git rebase --edit-todo', 'git rebase -s ours origin/main', 'git rebase --strategy=evil origin/main', 'git rebase -kx sh origin/main',
       'git diff --ext-diff', 'git log --textconv -p', 'git diff --output=/tmp/x', 'git log -p --output=../hooks/x',
+      'git rm ../x', 'git rm /etc/hosts', 'git rm src/a.js /etc/hosts', 'git rm -r ../..', 'git rm ~/x', 'git rm src/../../x', 'git rm $HOME/x',
+      'git rm --cached ../x', 'git rm -r /', 'git rm --pathspec-from-file=/etc/passwd', 'git rm --pathspec-from-file /etc/passwd',
       `git -C ${HOME} merge --ff-only -s evil x`, `git -C ${HOME} merge --ff-only --strategy=evil x`,
     ]) assert.ok(!runs(cmd), cmd);
   });

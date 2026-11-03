@@ -1046,7 +1046,9 @@ function workerSetup(target, agent, flags, s, token = null) {
     projectCommands(home, commands),
     // nuworq itself: the demo hub its UI work is looked at with.
     browser && has('bin/nuworq.js') && ['Bash(node bin/nuworq.js serve --demo --port 0)'],
-    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)', 'Bash(git rebase:*)'],
+    isRepo && ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git switch:*)', 'Bash(git rebase:*)',
+      // Deleting a tracked file the change replaces (#796); workerGitDenies keeps its paths in the worktree.
+      'Bash(git rm:*)'],
     // Landing without an origin: fast-forward main in this one checkout. Nothing else with -C.
     isRepo && !origin && [`Bash(git -C ${home} merge --ff-only:*)`],
     // Through origin: fetch, and push the item's branch. Every push goes through the hub, which passes on only
