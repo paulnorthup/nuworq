@@ -58,20 +58,79 @@ export const contains = (repo, into, ref) => git(repo, 'merge-base', '--is-ances
 const count = (repo, range) => Number(git(repo, 'rev-list', '--count', range) ?? 0);
 // The full commit a ref points at; null when there is none.
 export const shaOf = (repo, ref) => git(repo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
-// Whether commit b is commit a's change, rebased or with base merged into it (#605, #784): the diff each makes against
-// base, from where it branched, removes and adds the same lines in the same order in each file (renames, modes and
-// binary changes too). Context isn't compared, nor blob ids, line numbers or similarity, so base's own edits beside
-// the change don't count. A conflict resolved differently, a commit or file added or anything else that changes what
-// lands says false, and so does git not being able to say (a commit it doesn't have, a diff too big to read). A merge
-// of a newer base than the hub's copy has is diffed from the older one, so base's newer commits count as change: false.
+// Whether commit b is commit a's change, rebased or with base merged into it (#605, #784, #806): the diff each makes
+// against base, from where it branched, removes and adds the same lines in the same order in each file (renames, modes
+// and binary changes too), and each hunk of b's sits where a's lands once base's own edits between the two branch
+// points have moved the lines (#806: a hunk moved elsewhere in its file is another change). Context isn't compared,
+// nor blob ids or similarity, so base's own edits beside the change don't count; where base added lines at the very
+// spot the change adds its own, either may come first. A conflict resolved differently, a commit or file added or
+// anything else that changes what lands says false, and so does git not being able to say (a commit it doesn't have,
+// a diff too big to read). A merge of a newer base than the hub's copy has is diffed from the older one, so base's
+// newer commits count as change: false.
 export function sameChange(repo, base, a, b) {
-  const change = (c) => {
-    const from = git(repo, 'merge-base', base, c);
-    const diff = from && git(repo, 'diff', '--no-color', '--no-ext-diff', '--binary', '-U0', from, c);
-    return diff ? diff.split('\n').filter((l) => !/^(index|similarity index|dissimilarity index) /.test(l)).map((l) => (l.startsWith('@@ ') ? '@@' : l)).join('\n') : null;
-  };
-  const x = change(a);
-  return !!x && x === change(b);
+  const x = change(repo, base, a), y = x && change(repo, base, b);
+  if (!y || x.text !== y.text) return false;
+  const moves = baseMoves(repo, x.from, y.from, a);
+  return !!moves && x.at.every(([file, s, n], i) => fits(moves.get(file) ?? [], s, n, y.at[i][1]));
+}
+// Commit c's diff from where it branched off base: its text with hunk positions dropped, the positions apart
+// (at: per hunk, the file's "--- " name, the first line it removes or the line it adds after, and how many it
+// removes), and from, the branch point. null when git can't say.
+function change(repo, base, c) {
+  const from = git(repo, 'merge-base', base, c);
+  const diff = from && git(repo, 'diff', '--no-color', '--no-ext-diff', '--binary', '-U0', from, c);
+  if (!diff) return null;
+  const at = [];
+  let file = null, hunks = false;
+  const text = diff.split('\n').filter((l) => !/^(index|similarity index|dissimilarity index) /.test(l)).map((l) => {
+    if (l.startsWith('diff --git ')) [file, hunks] = [null, false];
+    else if (!hunks && l.startsWith('--- ')) file = l.slice(4);
+    const h = /^@@ -(\d+)(?:,(\d+))? /.exec(l);
+    if (!h) return l;
+    hunks = true;
+    at.push([file, Number(h[1]), h[2] === undefined ? 1 : Number(h[2])]);
+    return '@@';
+  }).join('\n');
+  return { text, at, from };
+}
+// Base's own hunks between two branch points in the files commit c touches from the first: per "--- " name, [line, removed,
+// added] each, as change() names them. Empty when the branch points are one; null when git can't say.
+function baseMoves(repo, from, to, c) {
+  const moves = new Map();
+  if (from === to) return moves;
+  const files = git(repo, 'diff', '--name-only', '-z', '--no-renames', from, c);
+  const diff = files === null ? null : git(repo, 'diff', '--no-color', '--no-ext-diff', '--no-renames', '-U0', from, to, '--',
+    ...files.split('\0').filter(Boolean).map((f) => `:(literal)${f}`));
+  if (diff === null) return null;
+  let file = null, hunks = false;
+  for (const l of diff.split('\n')) {
+    if (l.startsWith('diff --git ')) [file, hunks] = [null, false];
+    else if (!hunks && l.startsWith('--- ')) file = l.slice(4);
+    const h = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(l);
+    if (!h) continue;
+    hunks = true;
+    if (!moves.has(file)) moves.set(file, []);
+    moves.get(file).push([Number(h[1]), h[2] === undefined ? 1 : Number(h[2]), h[3] === undefined ? 1 : Number(h[3])]);
+  }
+  return moves;
+}
+// Whether a hunk that removes n lines from line s (with n 0: adds after line s) sits at t once base's hunks moved
+// the file. Base touching the lines it removes, or adding inside them, or replacing lines around where it adds, says
+// false; base adding at the very spot it adds lets it sit either side of base's lines.
+function fits(moves, s, n, t) {
+  let shift = 0, either = 0;
+  for (const [line, removed, added] of moves) {
+    const last = line + removed - 1;
+    if (n > 0) {
+      if (removed > 0 ? line <= s + n - 1 && last >= s : line >= s && line < s + n - 1) return false;
+      if (removed > 0 ? last < s : line < s) shift += added - removed;
+    } else if (removed > 0) {
+      if (line <= s && s < last) return false;
+      if (last <= s) shift += added - removed;
+    } else if (line < s) shift += added;
+    else if (line === s) either += added;
+  }
+  return t >= s + shift && t <= s + shift + either;
 }
 // Whether commit c merges base in (#784): a merge whose other parents base already contains.
 export function mergesBase(repo, base, c) {
