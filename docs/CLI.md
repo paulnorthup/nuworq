@@ -772,7 +772,7 @@ repeated.
 ### nuworq propose
 
 ```text
-nuworq propose: add work you noticed (don't silently expand your current item)
+nuworq propose: add work you noticed; don't grow your current item
 
 Usage
   nuworq propose <title> [flags]
@@ -782,18 +782,17 @@ Flags
                               characters
   --detail <detail>           the 30-minute version: logs, reasoning,
                               alternatives, at most 32,000 characters
-  --acceptance <acceptance>   what done means: checkable criteria, at most 4,000
+  --acceptance <acceptance>   checkable criteria for done, at most 4,000
                               characters
   --priority <now|soon|later>
                               default "soon"
   --parent <parent>           the item it is part of
   --depends-on <a,b>          items to finish first
-  --fixes <fixes>             the landed item this repairs (counts as an escape)
-  --breaking <breaking>       who must act when it ships, one line
+  --fixes <fixes>             the landed item this repairs
+  --breaking <breaking>       who must act when it ships
   --change <feature|fix|internal>
-                              unset counts as a feature
-  --needs <a,b>               tags a taker must have (checkin has), e.g.
-                              ["docker"]
+                              feature, fix or internal; "" leaves it unsaid
+  --needs <a,b>               tags a taker must have, e.g. ["docker"]
   --size <small|large>        large: multi-step
   --repo <repo>               e.g. "github.com/acme/api"; default the project's
                               first

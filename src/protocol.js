@@ -12,18 +12,19 @@ const capped = (maxLength, description) => ({ type: 'string', maxLength, ...(des
 // An item is "#12", "12" or "nuworq-12": claim's says so once.
 const ITEM = { type: 'string' };
 const TOUCHING = { type: 'array', items: { type: 'string' }, description: 'Paths you change, so others steer clear.' };
-const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Tags a taker must have (checkin has), e.g. ["docker"].' };
+const NEEDS = { type: 'array', items: { type: 'string' }, description: 'Tags a taker must have, e.g. ["docker"].' };
 const SIZE = { type: 'string', enum: ['small', 'large'], description: 'large: multi-step.' };
 // How hard an item is (#348): set when shaping, with a one-line reason. Unrated counts as standard.
 const DIFFICULTY = {
   difficulty: { type: 'string', enum: ['rote', 'standard', 'hard'], description: 'rote: a cheap model could; hard: needs the strongest.' },
   difficulty_why: s('Why, one line.'),
 };
-const FIXES = s('The landed item this repairs (counts as an escape).');
+const FIXES = s('The landed item this repairs.');
 // Who an item breaks once it ships (#398): the release that carries it bumps by who must act. Its example is in MODE_RULES.shape.
-const BREAKING = s('Who must act when it ships, one line.');
-// Its kind of change (#863), for the release's semver bump. How to choose is in MODE_RULES.shape.
-const CHANGE = { type: 'string', enum: ['feature', 'fix', 'internal'], description: 'Unset counts as a feature.' };
+const BREAKING = s('Who must act when it ships.');
+// Its kind of change (#863), for the release's semver bump. How to choose, and that unset counts as a feature, is
+// in MODE_RULES.shape.
+const CHANGE = { type: 'string', enum: ['feature', 'fix', 'internal'] };
 // A runner records its workers' usage itself, so a worker isn't offered it.
 const USAGE = {
   type: 'object',
@@ -227,12 +228,12 @@ export const OPS = [
   },
   {
     name: 'propose',
-    description: "Add work you noticed (don't silently expand your current item).",
+    description: "Add work you noticed; don't grow your current item.",
     params: {
       title: s('The outcome, not the activity.'),
       summary: capped(4_000, 'Why it matters, what you know.'),
       detail: LAYERS.detail,
-      acceptance: capped(4_000, 'What done means: checkable criteria.'),
+      acceptance: capped(4_000, 'Checkable criteria for done.'),
       priority: { type: 'string', enum: ['now', 'soon', 'later'], description: 'Default "soon".' },
       parent: s('The item it is part of.'),
       depends_on: { type: 'array', maxItems: 30, items: { type: 'string' }, description: 'Items to finish first.' },
@@ -250,7 +251,7 @@ export const OPS = [
   {
     name: 'refine',
     // Its fields shared with propose are described there; here, once, that a value replaces the item's.
-    description: 'Improve an item. Fields as propose\'s: what you send replaces the item\'s, "" or [] clears it (parent "": top-level). Acceptance on a proposal can make it ready.',
+    description: 'Improve an item. Fields as propose\'s: what you send replaces the item\'s, "" or [] clears it. Acceptance can make a proposal ready.',
     params: {
       item: ITEM,
       title: { type: 'string' },
