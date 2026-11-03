@@ -106,7 +106,8 @@ describe('answering the question a parked item waits on', () => {
   });
 
   test('a passed-on outsider reply never drops or holds a parked item', () => {
-    for (const reply of ['Looks fine.\nDrop it.', 'Please wait.\nNot yet.']) {
+    // A sentence inside a quoted line ("> Thanks. Drop it.") would start a clause that says drop.
+    for (const reply of ['Thanks. Drop it.', 'Not yet.', 'Thanks; drop #1']) {
       const { hub, op, item, gated, answer } = world();
       const { question } = gated();
       hub.q('UPDATE questions SET reporter = ?, held_reply = ?, held_url = ? WHERE id = ?').run('stranger', reply, 'https://github.com/x/y/issues/1#c', question);
