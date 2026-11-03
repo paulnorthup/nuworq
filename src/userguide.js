@@ -196,15 +196,10 @@ export const ESSENTIALS = [
     ],
   },
   {
-    // Drawn from how nuworq itself is built (#685): Paul's own setup and the habits its repository shows.
+    // Drawn from the maintainer's own setup (#685); only what they confirmed ships here (Q269).
     key: 'best-practices', title: 'Best practices', glance: 'How nuworq itself is built with nuworq.',
     body: [
       'Keep two sessions open. An operator in a terminal keeps the work moving: it answers workers, lands their work and runs what touches real systems. A shaper in the Claude Code app is where you and an agent plan: you say what you want and why, and it proposes the work once you agree. Workers do the rest in the background.',
-      'Keep what the project knows on the hub, not in files agents may not read: the mission, your decisions and the field notes agents leave. Every agent reads them when it checks in, and a decision is a standing rule nobody asks about again.',
-      'Make every change an item whose "done" someone else can check: what a person sees, or a test that passes. Agents never accept their own work, so a vague "done" comes back to you as a question.',
-      'One item, one branch; one worker, one copy of the repository. Workers do this by themselves (`nuworq/<item>` branches, a worktree each), so many items move at once without touching each other or your own checkout.',
-      'Have one check decide what lands: the project\'s whole test suite, run by CI on every pull request. Work lands on main only when it passes, so keep it fast enough to run every time and strict enough to trust.',
-      'Write commit titles and headlines outcome first, as the person using the software would say it ("Leases renew only with progress"), with the item\'s number. The history then reads as what changed for people, and every line leads back to its item.',
     ],
   },
 ];
