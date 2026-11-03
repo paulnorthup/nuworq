@@ -281,6 +281,17 @@ export function runCaps(flags = {}) {
   return { maxMinutes: cap('max-minutes'), maxUsd: cap('max-usd'), workerUsd: cap('worker-usd') };
 }
 
+// Why a worker stopped (#754), sent with the signoff the runner makes for it, so the hand-back of what it held names
+// the cause: { cause: 'timeout', minutes } (ran past --max-minutes), { cause: 'budget', usd } (spent past --worker-usd
+// or a land job's cap), { cause: 'interrupted' } (Ctrl-C) or { cause: 'exited', code } (it ended on its own: a crash,
+// a context or API error, or 0). headline: the signoff's one line on it.
+export function stopHeadline(s) {
+  if (s?.cause === 'timeout') return `Worker stopped: ran past ${s.minutes}m`;
+  if (s?.cause === 'budget') return `Worker stopped: spent past its $${s.usd} cap`;
+  if (s?.cause === 'interrupted') return 'Worker stopped: the runner was interrupted';
+  return s?.code != null ? `Worker exited ${s.code}` : 'Worker exited';
+}
+
 // Workers in a row that fail, however long each ran (#764): an outage whose workers retry for a minute, or for
 // twenty, is as stuck as one whose workers fail at once. Those under 15 s are said to fail within seconds.
 const FAST_FAIL_MS = 15_000;
@@ -321,6 +332,7 @@ const WAIT_MAX_S = 90;
 // unstaffed(): the line on work waiting in projects it doesn't staff (see unstaffedLine), or null; said the first
 // time nothing is waiting for it (#491), once per run. signoff(worker): signs off a worker that exited, handing back what
 // it held (#558), so a crashed one's item doesn't wait out its lease; the hub ignores it for one that already signed off.
+// worker.stopped says why it stopped (stopHeadline, #754).
 // waitRoutes({ skip, seconds, signal }) (#542): routes(), but the hub holds the answer until work appears outside
 // skip (projects this machine can't work on now), at most seconds. With nothing to start and room for a worker,
 // the runner waits on it instead of sleeping, so a worker starts about a second after work appears. A hub that
@@ -419,11 +431,13 @@ export async function run({
         log(`${w.name} ${over}: stopping it (its lease expires and the item returns to the queue)`);
         w.kill('SIGTERM');
         w.killedAt = t;
+        w.stopped = /^ran past/.test(over) ? { cause: 'timeout', minutes: maxMinutes } : { cause: 'budget', usd: workerUsd };
       } else if (!w.killedAt && w.cap && usd > w.cap) {
         // A land job's dollar cap (#752), for agents that report spend as they go; Claude stops itself there.
         log(`${w.name} spent past its $${w.cap} cap for a land job: stopping it (the item goes back as a land job)`);
         w.kill('SIGTERM');
         w.killedAt = t;
+        w.stopped = { cause: 'budget', usd: w.cap };
       } else if (w.killedAt && t - w.killedAt > KILL_GRACE_MS) {
         w.kill('SIGKILL');
       }
@@ -527,6 +541,7 @@ export async function run({
             log(`■ ${w.name} (${w.project}) exited ${code} after ${secs}s${said === null ? ', cost unpriced' : usd ? `, spent $${usd.toFixed(2)}` : ''}`);
             const others = running.filter((x) => !x.gone).length;
             if (total() >= maxUsd) stop(`reached --max-usd ${maxUsd} ($${total().toFixed(2)} spent)${others ? `; letting ${others} running worker(s) finish` : ''}`);
+            w.stopped ??= interrupted ? { cause: 'interrupted' } : { cause: 'exited', code };
             // It counts as running until the hub answers, so no replacement starts meanwhile.
             await Promise.resolve().then(() => signoff(w)).catch(() => {});
             const failure = code !== 0 && !interrupted && !w.killedAt;

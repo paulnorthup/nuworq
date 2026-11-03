@@ -54,6 +54,7 @@ export const NEW = {
   'milestones-waiting': '2026-11-02', // #746: milestones that only wait step out of the list behind one quiet line; Stuck means something must change
   'default-tiers': '2026-11-02', // #723: Staffing's Claude models say the default tiers are in use, and when trials can't run
   'worker-commands': '2026-11-02', // #768: Settings' Worker commands: workers run the project's checks, and the commands a person adds
+  'stall-causes': '2026-11-02', // #754: analytics' Why work stalled, stalled jobs by cause (exited, timeout, budget, went quiet…)
 };
 
 const DAYS = 7;

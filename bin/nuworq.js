@@ -1233,7 +1233,7 @@ async function runCmd(flags) {
   const { spawn, execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const { createWriteStream } = await import('node:fs');
-  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, runnerGit, runCaps } = await import('../src/runner.js');
+  const { run, cleanWorktree, cleanBranch, sweep, sweepLine, unstaffedLine, refsOf, restoreRefs, restoredLine, keptLine, worktreeTrusted, runnerGit, runCaps, stopHeadline } = await import('../src/runner.js');
   // --max-minutes, --max-usd and --worker-usd, with their defaults (#761); 0 turns one off.
   let caps;
   try { caps = runCaps(flags); } catch (e) { throw new HubError(e.message, { hint: e.hint }); }
@@ -1416,8 +1416,12 @@ async function runCmd(flags) {
     // A failed worker that handed something in still worked (#764); an older hub doesn't say, so it counts as failed.
     submitted: async (w) => (await client.get(`/api/claims?agent=${encodeURIComponent(w.name)}&since=${w.started - 60_000}`)).submitted > 0,
     // A worker that exited without signing off (#558), say it crashed: what it held goes back now, not at its lease's end.
-    // At most 5 s, since it counts as running until then.
-    signoff: (w) => Promise.race([reporter.call('signoff', { headline: 'Worker exited' }, { agent: w.name, project: w.project }), new Promise((r) => setTimeout(r, 5000).unref())]),
+    // At most 5 s, since it counts as running until then. It says why it stopped (#754); a hub older than that
+    // refuses the field, so it signs off without it.
+    signoff: (w) => Promise.race([
+      reporter.call('signoff', { headline: stopHeadline(w.stopped), stopped: w.stopped }, { agent: w.name, project: w.project })
+        .catch(() => reporter.call('signoff', { headline: stopHeadline(w.stopped) }, { agent: w.name, project: w.project })),
+      new Promise((r) => setTimeout(r, 5000).unref())]),
     maxRuns: num(flags['max-runs'], Infinity),
     untilIdle: !!flags['until-idle'],
     ...caps,
