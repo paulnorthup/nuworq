@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub } from '../src/core.js';
-import { capacity, autoMax, cpuBusy, cpuSampler, run } from '../src/runner.js';
+import { capacity, autoMax, cpuBusy, cpuSampler, vmAvailable, run } from '../src/runner.js';
 
 const GB = 1024 ** 3;
 const roomy = { busy: 0.2, cores: 10, free: 16 * GB };
@@ -54,6 +54,24 @@ describe('how many workers the machine has room for', () => {
     assert.equal(busy(), 0.8, 'asked again in the same round: the last measure');
     t = 60_000;
     assert.equal(busy(), 0.1);
+  });
+
+  // Paul's 64 GB Mac (Q253): os.freemem() read 1 GB while vm_stat held 28 GB inactive.
+  const vmStat = (free, inactive, speculative = 0) => `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               ${free}.
+Pages active:                           1500000.
+Pages inactive:                           ${inactive}.
+Pages speculative:                          ${speculative}.
+Pages throttled:                                0.
+Pages wired down:                        400000.
+`;
+  test('#790: on macOS, available memory counts inactive and speculative pages, not only free ones', () => {
+    assert.equal(vmAvailable(vmStat(37972, 1862894, 1000)), (37972 + 1862894 + 1000) * 16384);
+    const free = vmAvailable(vmStat(65536, 1835008)); // 1 GB free, 28 GB inactive
+    assert.equal(free, 29 * GB);
+    assert.deepEqual(capacity(1, { busy: 0.4, cores: 10, free }), { workers: 2, holding: null });
+    assert.equal(vmAvailable(''), null, 'not vm_stat: fall back to os.freemem()');
+    assert.equal(vmAvailable('Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages active: 5.\n'), null);
   });
 
   test('the default cap is half the cores, at least one', () => {

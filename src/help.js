@@ -71,7 +71,7 @@ export const COMMANDS = [
     does: 'keep up to N headless workers on waiting work in the projects you opted in',
     usage: ['run [flags]', 'run --sweep [--dry-run]', 'run --install [run flags]', 'run --uninstall'],
     flags: [
-      ['--workers <n|auto>', 'workers at once; auto: one more only while the CPUs are under 80% busy (measured across all cores between polls) and 2 GB of memory is free (at least one), and it says why when it holds', '1'],
+      ['--workers <n|auto>', 'workers at once; auto: one more only while the CPUs are under 80% busy (measured across all cores between polls) and 2 GB of memory is available (on macOS, free plus inactive) (at least one), and it says why when it holds', '1'],
       ['--max-workers <m>', 'with --workers auto: the most at once', 'half the cores'],
       ['--agent <name>', 'claude, codex, opencode or pi', 'claude'],
       ['--can-read-keys', "start codex, opencode or pi workers, whose shells can read this machine's keys (only Claude's sandbox hides them), on projects without a remote"],

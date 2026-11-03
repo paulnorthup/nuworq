@@ -1433,10 +1433,12 @@ async function runCmd(flags) {
   };
 
   // --workers auto (#533): as many as the machine has room for, up to --max-workers (half its cores by default).
-  const { autoMax, cpuSampler } = await import('../src/runner.js');
+  const { autoMax, cpuSampler, vmAvailable } = await import('../src/runner.js');
   const { cpus, availableParallelism, freemem } = await import('node:os');
   const busy = cpuSampler(cpus);
-  const machine = () => ({ busy: busy(), cores: availableParallelism(), free: process.availableMemory?.() || freemem() });
+  const vm = () => { try { return vmAvailable(execFileSync('/usr/bin/vm_stat', { encoding: 'utf8', timeout: 5_000 })); } catch { return null; } };
+  const free = () => (process.platform === 'darwin' && vm()) || process.availableMemory?.() || freemem();
+  const machine = () => ({ busy: busy(), cores: availableParallelism(), free: free() });
   const auto = flags.workers === 'auto';
   const workers = auto ? 'auto' : num(flags.workers, 1);
   const maxWorkers = auto ? num(flags['max-workers'], autoMax(availableParallelism())) : undefined;

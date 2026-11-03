@@ -113,8 +113,9 @@ Usage
 Flags
   --workers <n|auto>  workers at once; auto: one more only while the CPUs are
                       under 80% busy (measured across all cores between polls)
-                      and 2 GB of memory is free (at least one), and it says why
-                      when it holds (default: 1)
+                      and 2 GB of memory is available (on macOS, free plus
+                      inactive) (at least one), and it says why when it holds
+                      (default: 1)
   --max-workers <m>   with --workers auto: the most at once (default: half the
                       cores)
   --agent <name>      claude, codex, opencode or pi (default: claude)

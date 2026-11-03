@@ -36,7 +36,7 @@ export function plan(routes, running, { workers = 1, maxRuns = Infinity, launche
 // --workers auto (#533): how many workers this machine takes now, from how busy it is. running: how many run;
 // machine: { busy (the share of CPU time spent busy across all cores since the last sample, 0 to 1, null before
 // there is one: cpuSampler), cores, free (bytes of memory available) }; max: --max-workers; sinceStart: ms since
-// this runner last started one. One more only while the CPUs are under 80% busy and 2 GB is free, and only once
+// this runner last started one. One more only while the CPUs are under 80% busy and 2 GB is available, and only once
 // the last one has had a minute to show in them. At least one, always, so waiting work never stalls. holding: why
 // it adds none now, or null. CPU time, not the load average (#790): macOS's stays above the core count while its
 // CPUs sit mostly idle, which held a 10-core Mac at one worker.
@@ -79,6 +79,16 @@ export function cpuSampler(read, { now = () => Date.now(), minMs = 5_000 } = {})
     at = now();
     return last;
   };
+}
+
+// machine()'s free on macOS (#790): the bytes `vm_stat` counts free, inactive or speculative. macOS keeps free pages
+// near zero and parks reclaimable memory as inactive, so os.freemem() read 1 GB on a 64 GB Mac with 28 GB to spare,
+// which held it at one worker. null when the text isn't vm_stat's.
+export function vmAvailable(text = '') {
+  const size = Number(text.match(/page size of (\d+) bytes/)?.[1]);
+  const pages = (name) => Number(text.match(new RegExp(`^Pages ${name}:\\s+(\\d+)`, 'm'))?.[1]);
+  const n = pages('free') + pages('inactive') + (pages('speculative') || 0);
+  return size > 0 && Number.isFinite(n) ? n * size : null;
 }
 
 // Whether the runner's own git may read a worker's worktree (#640): its .git file names a folder in
