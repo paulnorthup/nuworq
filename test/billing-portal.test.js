@@ -30,6 +30,7 @@ async function fakeStripe() {
       res.writeHead(refuse ? 400 : 200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(refuse ? { error: { message: 'No configuration provided' } } : { id: 'bps_1', url: 'https://billing.stripe.test/p/session_1' }));
     }
+    if (req.url.startsWith('/v1/prices/')) { res.writeHead(404); return res.end('{}'); } // a price it won't give (#872)
     pushes.push({ to: req.url.slice(1), msg: JSON.parse(raw) });
     res.end('ok');
   });
@@ -109,7 +110,7 @@ describe("a paying owner manages billing in Stripe's portal (#231)", () => {
   test('a workspace with no subscription reads Free, with Upgrade and no Manage billing; the portal says to upgrade first', async () => {
     assert.deepEqual((await call('freeown', 'GET', '/api/billing', undefined, 'free')).json, {
       on: true, owner: true, plan: 'free', state: null, failing: false, manage: false,
-      plans: [{ plan: 'pro', label: 'Pro' }], terms: 'https://nuworq.com/terms', privacy: 'https://nuworq.com/privacy',
+      plans: [{ plan: 'pro', label: 'Pro', gives: 'any number of agents side by side', price: null }], terms: 'https://nuworq.com/terms', privacy: 'https://nuworq.com/privacy',
     });
     const p = await call('freeown', 'POST', '/api/billing/portal', {}, 'free');
     assert.equal(p.status, 409);

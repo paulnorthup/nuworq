@@ -193,6 +193,48 @@ export const canSell = (billing) => !!(billing?.secretKey && Object.keys(billing
 export const plansOf = (billing) => Object.entries(billing?.prices ?? {})
   .map(([price, plan]) => ({ plan, price, label: plan.charAt(0).toUpperCase() + plan.slice(1) }));
 
+// ── What a plan gives and costs (#872): said before Checkout opens, in settings and in Free's refusal ──
+
+export const GIVES = 'any number of agents side by side'; // what every paid plan gives over Free
+export const OFFER_MS = 60 * 60 * 1000; // how long a price read from Stripe is trusted before it's read again
+
+// "$19 a month", "€190 a year", "$5 every 3 months", from a Stripe Price; null without an amount.
+export function priceText(p) {
+  if (!Number.isFinite(p?.unit_amount) || !p.currency) return null;
+  const currency = p.currency.toUpperCase();
+  const digits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits;
+  const n = p.unit_amount / 10 ** digits;
+  const money = new Intl.NumberFormat('en', { style: 'currency', currency, ...(Number.isInteger(n) ? { maximumFractionDigits: 0 } : {}) }).format(n);
+  const { interval, interval_count: k = 1 } = p.recurring ?? {};
+  if (!interval) return money;
+  return k > 1 ? `${money} every ${k} ${interval}s` : `${money} a ${interval}`;
+}
+
+// Each plan on sale with what it gives and its price as Stripe has it: [{ plan, label, gives, price }]. The price
+// is the configured Stripe Price's own (GET /v1/prices/<id>), never written down here, so it can't drift from
+// what Checkout charges. Read once an hour; a price Stripe won't give stays null and the line says "see Checkout".
+export async function offers(billing, { now = Date.now() } = {}) {
+  const cache = (billing.offerCache ??= new Map());
+  await Promise.all(plansOf(billing).map(async ({ price }) => {
+    const c = cache.get(price);
+    if (c && now - c.at < OFFER_MS) return;
+    try {
+      const r = await fetch(`${billing.api ?? 'https://api.stripe.com'}/v1/prices/${encodeURIComponent(price)}`, {
+        signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${billing.secretKey}` },
+      });
+      cache.set(price, { at: now, text: r.ok ? priceText(await r.json()) : null });
+    } catch { cache.set(price, { at: now - OFFER_MS + 60_000, text: c?.text ?? null }); } // try again in a minute
+  }));
+  return offersNow(billing);
+}
+
+// The same from what's already been read, for a caller that can't wait (an agent's refused claim).
+export const offersNow = (billing) => plansOf(billing)
+  .map(({ plan, price, label }) => ({ plan, label, gives: GIVES, price: billing.offerCache?.get(price)?.text ?? null }));
+
+// One plan in one line: "Pro: any number of agents side by side, $19 a month".
+export const offerLine = (o) => `${o.label}: ${o.gives}, ${o.price ?? 'price shown at Checkout'}`;
+
 // Stripe's API: form-encoded POST, JSON back. billing.api points it at a fake in tests. Throws on anything
 // but 2xx, with Stripe's own message.
 export async function stripe(billing, path, params) {
