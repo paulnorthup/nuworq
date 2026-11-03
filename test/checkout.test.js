@@ -155,7 +155,7 @@ test("Workspace settings say what Pro gives and costs above Upgrade; a paid work
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   const pro = { plan: 'pro', label: 'Pro', gives: 'any number of agents side by side', price: '$19 a month' };
   const html = billingSection({ owner: true, plan: 'free', plans: [pro], terms: 't', privacy: 'p' }, { esc });
-  assert.match(html, /<b>Pro<\/b>: any number of agents side by side, <b>\$19 a month<\/b>\./);
+  assert.match(html, /<b>Pro<\/b>: any number of agents side by side, <b class="flag">\$19 a month<\/b>\./, 'the price stays on one line');
   assert.ok(html.indexOf('$19 a month') < html.indexOf('Upgrade to Pro'), 'the price comes before the button');
   assert.match(billingSection({ owner: true, plan: 'free', plans: [{ ...pro, price: null }] }, { esc }), /Pro<\/b>: any number of agents side by side, price shown at Checkout\./);
   assert.doesNotMatch(billingSection({ owner: true, plan: 'unlimited', plans: [] }, { esc }), /a month/);

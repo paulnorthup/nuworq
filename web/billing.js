@@ -17,7 +17,7 @@ export function billingSection(b, { esc, done = false, last = true }) {
     : '';
   const buy = free && !done && b.plans?.length
     ? `<p class="lead faint">A second agent waits until the first finishes or hands off.</p>
-      ${b.plans.map((p) => `<p class="lead billing-offer" data-new="plan-price"><b>${esc(p.label)}</b>: ${esc(p.gives ?? '')}${p.price ? `, <b>${esc(p.price)}</b>` : ', price shown at Checkout'}.</p>`).join('')}
+      ${b.plans.map((p) => `<p class="lead billing-offer"><span data-new="plan-price"><b>${esc(p.label)}</b>: ${esc(p.gives ?? '')}${p.price ? `, <b class="flag">${esc(p.price)}</b>` : ', price shown at Checkout'}.</span></p>`).join('')}
       <div class="actions billing-buy">${b.plans.map((p) => `<button class="btn primary" data-action="upgrade" data-plan="${esc(p.plan)}">Upgrade to ${esc(p.label)}</button>`).join('')}</div>
       <p class="hint">Opens Stripe Checkout to pay. By subscribing you agree to nuworq's <a href="${esc(b.terms)}" target="_blank" rel="noopener">Terms</a> and <a href="${esc(b.privacy)}" target="_blank" rel="noopener">Privacy Policy</a>.</p>`
     : '';
