@@ -78,7 +78,8 @@ export function draftRelease(hub, p, by = SYSTEM) {
   if (!items.length) return open ?? null;
   const since = last.tag ? `since ${last.tag}` : `since ${last.version === '0.0.0' ? 'the start' : `v${last.version}`}`;
   const draft = `What landed ${since}.\n\n${changelog(hub, items, milestones)}`;
-  const title = `Release v${version}`;
+  // A person may raise the version (to 1.0.0 on 0.x, say): a redraft never lowers it.
+  const title = `Release v${open && compare(releaseVersion(open), version) > 0 ? releaseVersion(open) : version}`;
   const through = hub.now();
   if (!open) {
     const it = hub.createItem(p, by, { title, summary: draft, acceptance: ACCEPTANCE, priority: 'soon' });

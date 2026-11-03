@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { Hub, PERSON_CAN } from '../src/core.js';
 import { view } from '../src/insight.js';
 import { OPS } from '../src/protocol.js';
-import { nextVersion, tagRelease, tagsSettled } from '../src/releases.js';
+import { nextVersion, releaseVersion, tagRelease, tagsSettled } from '../src/releases.js';
 import { prMerged } from '../src/github.js';
 import { appSource } from './appsource.js';
 
@@ -91,6 +91,21 @@ describe('a finished milestone drafts the release (#399)', () => {
     w.milestone('New API', [{ title: 'Drop /v1', breaking: 'Move to /v2' }]);
     assert.equal(w.releases()[0].title, 'Release v0.3.0');
     assert.match(w.releases()[0].summary, /^What landed since v0\.2\.0\./);
+  });
+
+  test('a person sets the draft to 1.0.0, and it stays that through a redraft (#679)', () => {
+    const w = world({ pkg: '0.9.0' });
+    w.milestone('Push', [{ title: 'Drop /v1', breaking: 'Move to /v2' }]);
+    const [r] = w.releases();
+    assert.equal(r.title, 'Release v0.10.0', 'on 0.x a breaking item bumps only the minor');
+    w.hub.humanOp('p', 'update', { item: r.id, title: 'Release v1.0.0' });
+    assert.equal(w.hub.itemById(r.id).title, 'Release v1.0.0');
+    w.milestone('More', ['B']);
+    assert.equal(w.releases().length, 1);
+    assert.equal(w.releases()[0].title, 'Release v1.0.0', 'a redraft keeps the version a person set');
+    assert.equal(releaseVersion(w.releases()[0]), '1.0.0');
+    assert.equal(nextVersion('1.0.0', { breaking: true }), '2.0.0');
+    assert.equal(nextVersion('1.0.0', { milestone: true }), '1.1.0');
   });
 
   test('no tag and no version file: the first release is 0.1.0, of everything done', () => {
