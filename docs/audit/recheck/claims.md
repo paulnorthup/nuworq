@@ -8,6 +8,8 @@
 
 **Update after #827 and #828 landed.** The privacy and terms pages were re-read live on 2026-11-03 by #828 (docs/audit/recheck/site-pages.md): P4, P6, P8 and T6 now hold, and their rows below say so. The three high claims are closed, so no critical or high claim is left. R1 is fixed on main by #832: the README says workers review each other's work only under Run with it (README.md:52).
 
+**Update for the release (#679).** An operator re-read nuworq.com and nuworq.com/workflow live on 2026-11-03, 14:45-14:48Z (Q286): S28, S31, S42 and W20 hold as reworded by nuworq-site #34, and W25 and W27 as reworded by site #40. Those were the six the person ruled must hold before 1.0.0 (Q285); the other mediums and lows can follow.
+
 **nuworq.com was otherwise not re-read.** It can't be reached from here. Its claims use the text as true.md quotes it (nuworq-site at ab4abc1). Where the code still contradicts that text, the verdict is "doesn't hold as quoted". If nuworq-site #33-#36 have changed the pages since, those rows may already hold.
 
 **Couldn't run.** `node bin/nuworq.js --help` (and `serve --demo`) needed approval, so no CLI output is quoted. Demo-screenshot claims S9 and S10 rest on true.md's check at 75f477c. Policy claims (P9, P12, T2, T4, T5, T7) and live figures (S5, S32, S59) weren't checked: they need the live hub or aren't code.
@@ -59,11 +61,11 @@
 | S16 | index #how 1 | doesn't hold as quoted | priority comes before building-before-shaping (src/core.js:2633-2635) |
 | S23 | index #how 3 | doesn't hold as quoted | own-work rule holds (src/core.js:3932); by default a person reviews |
 | S25 | index #how 3 | doesn't hold as quoted | "a different agent" only under Run with it (src/core.js:3827) |
-| S28 | index #how 4 | doesn't hold as quoted | a PR landing is done on GitHub's merged event (src/github.js:102-108) |
-| S31 | index #how 4 | doesn't hold as quoted | as S28 |
+| S28 | index #how 4 | holds (live, 2026-11-03), reworded by site #34 | live: "done only when main has it: git shows main contains the branch, or GitHub reports its pull request merged", which matches src/github.js:102-108's merged event |
+| S31 | index #how 4 | holds (live, 2026-11-03), reworded by site #34 | as S28 |
 | S38 | index #see mock | doesn't hold as quoted | the app says "since you last looked" (src/insight.js:94, 249) |
 | S41 | index #why | doesn't hold as quoted | as S2 |
-| S42 | index #why | doesn't hold as quoted | as S28 |
+| S42 | index #why | holds (live, 2026-11-03), reworded by site #34 | as S28 |
 | S44 | index #why | doesn't hold as quoted | as S1; pi not named |
 | S47 | index #why | doesn't hold as quoted | the mirror also feeds prefetch and rebase nudges (src/core.js:824, 4301) |
 | S50 | index #why | doesn't hold as quoted | the app's level is "Check with me" (src/core.js:189) |
@@ -75,7 +77,7 @@
 | S68 | index #faq | doesn't hold as quoted | only projects you let it staff (test/staffing.test.js "off until answered") |
 | W15 | workflow #workers | doesn't hold as quoted | as S2 |
 | W16 | workflow #workers | doesn't hold as quoted | across projects priority comes first |
-| W20 | workflow #workers | doesn't hold as quoted | as S28 |
+| W20 | workflow #workers | holds (live, 2026-11-03), reworded by site #34 | as S28 |
 | W22 | workflow #operator | doesn't hold as quoted | "It signs releases": the release workflow signs after the maintainer approves; no session reads the key (docs/SECURITY-MODEL.md:76) |
 | W26 | workflow #cheaper | holds | Settings → Staffing → "Cheaper models where they do as well" (web/actions.js:123; test/routingconfirm.test.js) |
 | W38 | workflow #you | doesn't hold as quoted | only once a channel is added; channels also get a weekly line |
@@ -110,8 +112,8 @@
 | S46 | model keys | holds | src/runtrust.js:118 scrubs ANTHROPIC_API_KEY and others from Claude workers |
 | S63 | read-only mirror | holds | src/ghapp.js:15 (contents: read) |
 | E4 | Turnstile | holds | test/earlyaccess.test.js "a passing Turnstile token is stored; none or a bad one is refused" |
-| W25 | workflow #cheaper | doesn't hold | "Off until you turn it on": on by default since #723, for new projects (src/core.js:621) and old ones nobody set (src/db.js:637-643); test/models.test.js "on by default" |
-| W27 | workflow #cheaper | doesn't hold | "nuworq never adds a model itself": Claude defaults to Haiku, Sonnet and Opus 5.5 when none are set (src/models.js:14, 37) |
+| W25 | workflow #cheaper | holds (live, 2026-11-03), reworded by site #40 | live: "On by default; turn it off in Settings → Staffing.", which matches #723: on for new projects (src/core.js:630) and for old ones nobody set (src/db.js:637-643); test/models.test.js "on by default" |
+| W27 | workflow #cheaper | holds (live, 2026-11-03), reworded by site #40 | live: "Set none, and it uses Claude's Haiku, Sonnet and Opus 5.5…", which matches the defaults used when none are set (src/models.js:14, 37) |
 | W28 | up to six | holds | src/models.js:9 |
 | W29 | quality bars | holds | src/models.js:62-66; test/routing.test.js |
 | W32 | 10% trials | holds | src/models.js:119; web/routingconfirm.js:7 |
@@ -146,11 +148,11 @@ Severity is high if a person relying on the claim would be misled about safety, 
 **Medium**
 - R1 (README:9, 19, 52). Says agents review each other's work. By default (Keep moving) the person verifies. Fix: "…build it and land it on main, checked by you or, under Run with it, by another agent", and "Workers build and land the work, and review it under Run with it".
 - S2, S4, S23, S25, S41, S62, W15 (site). The same claim on nuworq.com. Fix: site #33.
-- S28, S31, S42, W20 (site). "Done only when git shows main contains it": a PR is done on GitHub's merged event. Fix: site #34.
+- S28, S31, S42, W20 (site). "Done only when git shows main contains it": a PR is done on GitHub's merged event. Fixed by site #34; hold live since 2026-11-03.
 - S47 (site). The mirror is read for more than landing checks. Fix: site #34.
 - P4 (privacy). It leaves out the keyed address hash. Fix: name it (site #36).
-- W25 (site). "Off until you turn it on": Cheaper models is on by default since #723. Fix: reword to "On by default; turn it off in Settings → Staffing" (nuworq-site).
-- W27 (site). "Never adds a model itself": Claude's tiers default to Haiku, Sonnet and Opus 5.5. Fix: "Uses Claude's three current models unless you set your own; adds no others" (nuworq-site).
+- W25 (site). "Off until you turn it on": Cheaper models is on by default since #723. Fixed by site #40; holds live since 2026-11-03.
+- W27 (site). "Never adds a model itself": Claude's tiers default to Haiku, Sonnet and Opus 5.5. Fixed by site #40; holds live since 2026-11-03.
 
 **Low**
 - B71 (docs/ARCHITECTURE.md:93). "Every error carries a hint": 6 UserErrors in src/core.js have none. Fix: add hints (#715), or say "most errors".
@@ -169,4 +171,4 @@ Severity is high if a person relying on the claim would be misled about safety, 
 
 Not a claim, but seen: package.json still says 0.11.0 (0.9.0 at the re-check) while CHANGELOG.md leads with 1.0.0. The release checks refuse a version mismatch, so the release step has to bump it.
 
-Claims checked: 112. At the re-check: hold 71, don't hold 41 (critical 0, high 3). After #828 and #832: hold 76, don't hold 36 (critical 0, high 0).
+Claims checked: 112. At the re-check: hold 71, don't hold 41 (critical 0, high 3). After #828 and #832: hold 76, don't hold 36 (critical 0, high 0). After site #34 and #40: hold 82, don't hold 30 (critical 0, high 0); per the person's call (Q285), these six misleading ones had to hold before 1.0.0, and the rest can follow.
