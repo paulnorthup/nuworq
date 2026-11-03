@@ -6,7 +6,8 @@
 //   node scripts/sign-release.js sign <nuworq.tgz> <release-key.pem>   writes <nuworq.tgz>.sig
 //   node scripts/sign-release.js release <vX.Y.Z> <release-key.pem> <hub>
 //                                                      signing by hand, the fallback to the workflow (#815): in a
-//                                                      checkout of nuworq, at a terminal. It checks origin's tag
+//                                                      checkout of nuworq at the last signed release's tag, with
+//                                                      nothing changed (#829), at a terminal. It checks origin's tag
 //                                                      by the workflow's rules (scripts/release.js handCheck),
 //                                                      shows its commit and changelog, and once you type the tag,
 //                                                      builds the package from GitHub's copy as the hub does and
@@ -17,6 +18,8 @@ import { generateKeyPairSync, createPrivateKey, createPublicKey, sign, verify } 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { checkoutRefusal } from './checkout.js';
 
 const signed = (bytes, key) => {
   const sig = sign(null, bytes, key);
@@ -47,11 +50,12 @@ async function releaseCmd(tag, pem, hub) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('release needs a person at a terminal: run it yourself, in a terminal on the machine that holds the release key');
   }
-  const { repoRoot } = await import('../src/client.js');
+  // The checkout this script runs from: the one whose modules it loads below, whatever the working directory.
+  const repo = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
+  const refusal = await checkoutRefusal(repo, hub);
+  if (refusal) throw new Error(`not signed, and the key wasn't read: ${refusal}`);
   const { archive } = await import('../src/package.js');
   const { handCheck } = await import('./release.js');
-  const repo = repoRoot(process.cwd());
-  if (!repo) throw new Error('run release in a checkout of nuworq: it builds the release from its origin (GitHub)');
   const key = createPrivateKey(readFileSync(pem));
   const pub = createPublicKey(key).export({ type: 'spki', format: 'pem' });
   const r = await handCheck(repo, { tag, pub, hub });

@@ -2,17 +2,18 @@
 // (scripts/release.js), and the hub taking a release's .sig from its GitHub Release (src/ghrelease.js).
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, execFile } from 'node:child_process';
+import { execFileSync, execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { generateKeyPairSync, createPublicKey, sign, verify } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { archive, newestSigned } from '../src/package.js';
 import { releaseRefusal, latest, newer, handCheck } from '../scripts/release.js';
+import { checkoutRefusal } from '../scripts/checkout.js';
 import { takeReleases, githubRepoOf, releaseAlarm } from '../src/ghrelease.js';
 import { Hub } from '../src/core.js';
 import { createServer as createHubServer } from '../src/server.js';
@@ -137,6 +138,51 @@ describe('signing by hand (#815)', () => {
     const r = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url)), 'release', 'v1.0.0', join(dir, 'none.pem'), 'https://hub.test'], { cwd: repo }).then(() => null, (e) => e);
     assert.ok(r, 'it refused');
     assert.match(r.stderr, /release needs a person at a terminal/);
+  });
+
+  // #829: release loads its checkout's modules, so only the last signed release's code may run with the key.
+  test('runs only from a checkout at the last signed release\'s tag, with nothing changed', async () => {
+    const at = (release, get = hubAt(release)) => checkoutRefusal(repo, 'https://hub.test', get);
+    assert.match(await at(null), /https:\/\/hub\.test has no signed release yet.*release workflow/);
+    assert.match(await at(undefined, async () => { throw new Error('offline'); }), /couldn't ask https:\/\/hub\.test for its signed release \(offline\)/);
+    assert.match(await checkoutRefusal(dir, 'https://hub.test', hubAt(null)), /isn't a checkout of nuworq/);
+    const signed = release('1.0.0');
+    git(work, 'tag', '-a', '-m', 'v1.1.0', 'v1.1.0', release('1.0.1')); // annotated: origin peels it with ^{}
+    git(work, 'tag', '-d', 'v1.0.1'); git(work, 'push', '-q', 'origin', ':refs/tags/v1.0.1', 'v1.1.0');
+    const untagged = commit({ 'src/update.js': '// landed by an agent\n' }, 'landed');
+    git(work, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin'); git(repo, 'merge', '-q', '--ff-only', 'origin/main');
+    assert.match(await at({ commit: untagged }), /signed release [0-9a-f]{7} has no vX\.Y\.Z tag on origin/);
+    assert.match(await at({ commit: signed }), new RegExp(`this checkout is at ${untagged.slice(0, 7)}, not the last signed release v1\\.0\\.0 \\(${signed.slice(0, 7)}\\).*git fetch origin tag v1\\.0\\.0 && git switch --detach v1\\.0\\.0$`));
+    git(repo, 'switch', '-q', '--detach', 'v1.0.0');
+    assert.equal(await at({ commit: signed }), '');
+    writeFileSync(join(repo, 'src/update.js'), '// changed here\n');
+    assert.match(await at({ commit: signed }), /this checkout changes v1\.0\.0's files.*git restore \./);
+    git(repo, 'restore', '.'); git(repo, 'switch', '-q', '--detach', 'v1.1.0');
+    assert.equal(await at({ commit: git(repo, 'rev-parse', 'HEAD') }), '', 'an annotated tag counts by its commit');
+  });
+
+  test('release checks its checkout before it loads any repository module or reads the key', () => {
+    const src = readFileSync(fileURLToPath(new URL('../scripts/sign-release.js', import.meta.url)), 'utf8');
+    const body = src.slice(src.indexOf('async function releaseCmd'));
+    const check = body.indexOf('await checkoutRefusal(');
+    assert.ok(check > 0 && check < body.indexOf('import(') && check < body.indexOf('readFileSync(pem)'));
+    const imports = (text) => [...text.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
+    assert.deepEqual(imports(src).filter((m) => !m.startsWith('node:')), ['./checkout.js'], 'no other repository module at the top');
+    const own = readFileSync(fileURLToPath(new URL('../scripts/checkout.js', import.meta.url)), 'utf8');
+    assert.deepEqual(imports(own).filter((m) => !m.startsWith('node:')), [], 'the check itself loads only Node\'s built-ins');
+  });
+
+  test('the command works when its checkout is reached through a symlink', () => {
+    const link = join(dir, 'linked');
+    symlinkSync(fileURLToPath(new URL('..', import.meta.url)), link);
+    const run = (...args) => spawnSync(process.execPath, [join(link, 'scripts', 'sign-release.js'), ...args], { encoding: 'utf8' });
+    const bogus = run('bogus');
+    assert.equal(bogus.status, 2);
+    assert.match(bogus.stderr, /usage: sign-release\.js keygen/);
+    const keys = join(dir, 'keys');
+    mkdirSync(keys);
+    assert.equal(run('keygen', keys).status, 0);
+    assert.ok(existsSync(join(keys, 'release-key.pem')) && existsSync(join(keys, 'release-key.pub')));
   });
 });
 
