@@ -846,9 +846,10 @@ function build(hub, p, t, { light = false } = {}) {
       (holdingOf.get(name) ?? holdingOf.set(name, []).get(name)).push(ref(i));
     }
   }
-  // Who answers for each agent: the person who minted its token, or the runner it belongs to.
+  // Who answers for each agent: the person who minted its token, or the runner it belongs to. Not a later person
+  // who got a removed minter's id (#865).
   const tokenIds = agents.map((a) => a.token_id).filter((id) => id != null);
-  const tokens = new Map(tokenIds.length ? hub.q(`SELECT t.id, t.runner, m.handle FROM tokens t LEFT JOIN people m ON m.id = t.minted_by WHERE t.id IN (SELECT value FROM json_each(?))`)
+  const tokens = new Map(tokenIds.length ? hub.q(`SELECT t.id, t.runner, m.handle FROM tokens t LEFT JOIN people m ON m.id = t.minted_by AND m.created_at <= t.created_at WHERE t.id IN (SELECT value FROM json_each(?))`)
     .all(JSON.stringify(tokenIds)).map((r) => [r.id, r]) : []);
   const agentRows = agents.map((a) => {
     const holding = holdingOf.get(a.name) ?? [];

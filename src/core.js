@@ -2404,13 +2404,17 @@ export class Hub extends EventEmitter {
   // The names on a project that the agent's token is bound to (#851), the agent's own among them; null when the
   // agent has no token (a hub without logins, or a person's browser session). A person mints tokens freely through
   // device login, so the names of every token the same person minted count together (#857), their machines' runner
-  // tokens among them; a token no person minted (a named runner's, an admin's) counts on its own.
+  // tokens among them; a token no person minted (a named runner's, an admin's) counts on its own. SQLite reuses a
+  // removed person's id for the next person added (#865), so a token counts as its minter's only when that person
+  // existed when it was minted: a removed person's tokens never count against whoever gets their id.
   tokenNames(p, agent) {
     const a = this.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent);
     if (a?.token_id == null) return null;
     try {
       return this.q(`SELECT name FROM agents WHERE project_id = ? AND (token_id = ? OR token_id IN
-        (SELECT id FROM tokens WHERE minted_by = (SELECT minted_by FROM tokens WHERE id = ?)))`).all(p.id, a.token_id, a.token_id).map((r) => r.name);
+        (SELECT t.id FROM tokens t JOIN people m ON m.id = t.minted_by AND m.created_at <= t.created_at WHERE t.minted_by =
+          (SELECT c.minted_by FROM tokens c JOIN people cm ON cm.id = c.minted_by AND cm.created_at <= c.created_at WHERE c.id = ?)))`)
+        .all(p.id, a.token_id, a.token_id).map((r) => r.name);
     } catch { /* no tokens table: a hub without logins */ }
     return this.q('SELECT name FROM agents WHERE project_id = ? AND token_id = ?').all(p.id, a.token_id).map((r) => r.name);
   }

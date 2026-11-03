@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Hub, LIMITS, TOKEN_SHARE } from '../src/core.js';
 import { Auth } from '../src/auth.js';
+import { view } from '../src/insight.js';
 
 // One agent can't flood a hub (#766): a write window per agent, and caps on what a project or hub holds.
 function hub() {
@@ -176,6 +177,45 @@ test("one person's tokens together can't fill a project's comment day or field n
   assert.ok(h.agentOp('app', 'comment', 'k1', { headline: 'Its own share' }, kim).ok);
   assert.ok(h.agentOp('app', 'learn', 'k1', { note: 'Its own note' }, kim).ok);
   assert.ok(h.agentOp('app', 'comment', 'c1', { headline: 'No minter' }, ci).ok);
+});
+
+test("a removed person's comments never count against the next person added", () => {
+  const h = hub();
+  const p = h.project('app');
+  let t = Date.UTC(2026, 10, 2, 12);
+  const auth = new Auth(h.db, { now: () => t });
+  auth.addPerson('kim', 'member');
+  auth.addPerson('sam', 'member');
+  const id = (name) => h.q('SELECT id FROM tokens WHERE name = ?').get(name).id;
+  auth.createToken('sam@laptop', 'agent', { mintedBy: 'sam' });
+  const sam = { identity: { id: id('sam@laptop') } };
+  h.agentOp('app', 'checkin', 's1', {}, sam);
+  const comments = LIMITS.commentsPerDay * TOKEN_SHARE, notes = LIMITS.fieldNotes * TOKEN_SHARE;
+  for (let i = 0; i < comments; i++) {
+    h.q(`INSERT INTO events (project_id, actor, type, headline, at) VALUES (?, 's1', 'comment', ?, ?)`).run(p.id, `C${i}`, h.now() - i);
+  }
+  for (let i = 0; i < notes; i++) {
+    h.q(`INSERT INTO notes (project_id, kind, author, body, at) VALUES (?, 'learning', 's1', ?, ?)`).run(p.id, `N${i}`, h.now());
+  }
+  // Sam, the newest person, is removed; the next person added gets Sam's id.
+  const samId = h.q(`SELECT id FROM people WHERE handle = 'sam'`).get().id;
+  auth.removePerson('sam');
+  t += 1000;
+  auth.addPerson('lee', 'member');
+  assert.equal(h.q(`SELECT id FROM people WHERE handle = 'lee'`).get().id, samId, 'SQLite reuses the id');
+  auth.createToken('lee@laptop', 'agent', { mintedBy: 'lee' });
+  const lee = { identity: { id: id('lee@laptop') } };
+  h.agentOp('app', 'checkin', 'l1', {}, lee);
+  // Lee's agents have their full share, whatever Sam's wrote.
+  assert.equal(h.tokenNames(p, 'l1').join(), 'l1');
+  assert.ok(h.agentOp('app', 'comment', 'l1', { headline: 'My own share' }, lee).ok);
+  assert.ok(h.agentOp('app', 'learn', 'l1', { note: 'My own note' }, lee).ok);
+  // Sam's revoked token counts toward no one else, and its name stays its own.
+  assert.equal(h.tokenNames(p, 's1').join(), 's1');
+  // Insight names no one for Sam's agent: Lee didn't mint its token.
+  const agents = view(h, 'app').agents;
+  assert.equal(agents.find((a) => a.name === 's1').via, null);
+  assert.equal(agents.find((a) => a.name === 'l1').via, 'via @lee');
 });
 
 test('a project holds at most 200 open questions and 500 proposed items', () => {
