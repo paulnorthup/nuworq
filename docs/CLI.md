@@ -112,9 +112,8 @@ Flags
                       so and offers this clone's
   --max-runs <n>      stop after starting n workers
   --max-minutes <t>   stop a worker that runs past t minutes; 0: no limit
-                      (default: 90)
   --worker-usd <x>    stop a worker once it has spent $x so far (claude also
-                      gets --max-budget-usd x); 0: no cap (default: 25)
+                      gets --max-budget-usd x); 0: no cap
   --max-usd <x>       stop starting workers once they've spent $x in all,
                       running ones' spend so far included; 0: no cap (local
                       models and unpriced codex models count nothing)

@@ -288,16 +288,14 @@ export function unstaffedLine(routes, projects) {
   return `${n} item${n === 1 ? ' waits' : 's wait'} in projects nuworq run doesn't staff: ${where}. To staff one, ${STAFF_HOW}.`;
 }
 
-// The runner's caps (#761), with the defaults it uses when no flag is given: a worker stops after 90 minutes or
-// $25, whichever comes first; the runner as a whole has no budget unless --max-usd sets one. 0 turns a cap off.
-export const CAPS = { 'max-minutes': 90, 'max-usd': Infinity, 'worker-usd': 25 };
-export const CAP_ARGS = ['--max-minutes', String(CAPS['max-minutes']), '--worker-usd', String(CAPS['worker-usd'])];
+// The runner's caps (#761): each is off unless its flag sets it (#795, Paul in Q230: a subscription and an API key
+// need different caps, so nuworq picks none). 0 turns a cap off.
 export function runCaps(flags = {}) {
   const cap = (k) => {
     const v = flags[k];
-    if (v === undefined || v === true) return CAPS[k];
+    if (v === undefined || v === true) return Infinity;
     const n = Number(v);
-    if (!Number.isFinite(n) || n < 0 || String(v).trim() === '') throw Object.assign(new Error(`--${k} expects a number ≥ 0, got "${v}"`), { hint: `e.g. --${k} ${CAPS[k] === Infinity ? 10 : CAPS[k]}, or --${k} 0 for no cap` });
+    if (!Number.isFinite(n) || n < 0 || String(v).trim() === '') throw Object.assign(new Error(`--${k} expects a number ≥ 0, got "${v}"`), { hint: `e.g. --${k} ${k === 'max-minutes' ? 90 : 25}, or --${k} 0 for no cap` });
     return n === 0 ? Infinity : n;
   };
   return { maxMinutes: cap('max-minutes'), maxUsd: cap('max-usd'), workerUsd: cap('worker-usd') };
