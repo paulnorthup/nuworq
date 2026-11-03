@@ -28,9 +28,10 @@ const REGISTRIES = [
 // file tools, so it still reads its own login. Then every other harness's and toolchain's stored credentials (#616):
 // Codex's auth.json, ~/.claude.json (user MCP servers' env and headers), git's XDG credential store, cargo's, gem's
 // and Terraform's tokens, yarn's auth; shell and REPL histories (pasted keys); and the logins a browser keeps: the
-// macOS keychains, Safari's and the browsers' profiles (cookies, saved passwords) on macOS and Linux.
+// macOS keychains, Safari's and the browsers' profiles (cookies, saved passwords) on macOS and Linux. And the
+// release key's folder, where docs/DEPLOY.md keeps the release key and the release workflow's deploy key (#850).
 const APP_SUPPORT = '~/Library/Application Support';
-export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude/.credentials.json', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
+export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude/.credentials.json', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
   '~/.codex', '~/.claude.json', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.terraform.d', '~/.yarnrc.yml',
   '~/.bash_history', '~/.zsh_history', '~/.zsh_sessions', '~/.history', '~/.local/share/fish', '~/.python_history', '~/.node_repl_history', '~/.psql_history', '~/.mysql_history', '~/.sqlite_history',
   '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
