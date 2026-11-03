@@ -211,14 +211,14 @@ export const OPS = [
   },
   {
     name: 'handoff',
-    description: 'Hand off an item you hold unfinished, saying where you left off. If it can only start after an outside event, add precondition; if only an operator can do it, add needs ["operator"]: it is held back, not restarted.',
+    description: 'Hand off an item you hold unfinished, saying where you left off. Hold: precondition, needs ["operator"].',
     params: {
       item: ITEM,
       headline: s('Where you left off.'),
       summary: capped(4_000, 'Done, next, gotchas.'),
       detail: LAYERS.detail,
-      precondition: PRECONDITION_REF,
-      needs: NEEDS,
+      precondition: { type: 'object' },
+      needs: { type: 'array', items: { type: 'string' } },
       usage: USAGE,
     },
     required: ['item', 'headline'],
@@ -538,7 +538,7 @@ Use \`${command}\` with \`--as <your-name>\` on every command (or NUWORQ_AGENT).
 2. ${c('next')} claims one job (work, shape, review, land, tidy, answer); its hint says how to do that kind. Read done_means, history and last_handoff: don't repeat what failed.
 3. Once you know your files, ${c('progress')} with \`touching\`, then at real milestones. Your lease renews by itself while you make calls.
 4. Done? ${c('submit')} with evidence a reviewer checks fast: tests and results, branch and commit. Run the tests near your change; the whole suite only where the hint says CI doesn't check the pull request. Never mark your own work done. Evidence is as public as the repository: from a demo or local hub, never a live workspace's data.
-5. Can't finish, or low on context? ${c('handoff')}: what's done, what's next. If it waits on an outside event, add \`precondition\`; if only an operator can do it, add \`needs\` ["operator"]: it is held back, not restarted. A person said to drop it? ${c('refine')} with \`drop\` set to that question.
+5. Can't finish, or low on context? ${c('handoff')}: what's done, what's next. A person said to drop it? ${c('refine')} with \`drop\` set to that question.
 6. Other work? ${c('propose')} it with acceptance criteria; don't grow your item. If it repairs landed work, set \`fixes\` to that item. Learned something the hard way? ${c('learn')} it. nuworq got in your way? ${c('feedback')}.
 7. Leaving? ${c('signoff')}.
 

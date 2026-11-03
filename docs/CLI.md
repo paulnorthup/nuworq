@@ -757,7 +757,7 @@ Flags
   --detail <detail>      the 30-minute version: logs, reasoning, alternatives,
                          at most 32,000 characters
   --precondition <json>  as propose's; {} clears it
-  --needs <a,b>          tags a taker must have (checkin has), e.g. ["docker"]
+  --needs <a,b>          tags a taker must have; replaces the list
   --usage <json>         since your last report, if known
 
 Example

@@ -479,6 +479,7 @@ const PARAM_TEXT = {
   // refine's, which its description covers at once ("Fields as propose's").
   parent: 'the item it is part of; "" makes it top-level', depends_on: 'replaces the dependency list',
   fixes: 'the landed item this repairs; "" clears it', breaking: 'who must act when it ships; "" clears it',
+  precondition: "as propose's; {} clears it",
   needs: 'tags a taker must have; replaces the list', repo: 'the repository it lands in', size: 'small, or large: multi-step',
   direction: 'Direction today: at most 7 plain lines, each with its source ("decision 12", "note 7", "#468")',
   notes: 'a gist per decision and field note; for a note, recommend keep (default), retire or decide, why for retire or decide, and draft (the decision) for decide',

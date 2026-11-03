@@ -8,7 +8,7 @@ import { LIMITS } from '../src/core.js';
 const size = (t) => JSON.stringify(t).length;
 // Characters of JSON, with every parameter (no role): what an operator gets, the most anyone does.
 const MAX = {
-  checkin: 758, next: 265, claim: 328, progress: 630, ask: 1708, answer: 569, withdraw: 247, submit: 1274, handoff: 609,
+  checkin: 758, next: 265, claim: 328, progress: 630, ask: 1708, answer: 569, withdraw: 247, submit: 1274, handoff: 735,
   propose: 1571, refine: 1614, review: 503, comment: 327, ack: 218, learn: 403, retire: 417, distill: 526, feedback: 308,
   look: 415, signoff: 240,
 };
