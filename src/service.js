@@ -6,8 +6,6 @@ import { dirname, join, delimiter } from 'node:path';
 
 export const LABEL = 'com.nuworq.run';
 export const UNIT = 'nuworq-run.service';
-// The release signer (scripts/signer.js, #430): its own service beside the runner, installed the same way.
-export const SIGNER = { label: 'com.nuworq.signer', unit: 'nuworq-signer.service', description: 'nuworq release signer: signs each release tag on main' };
 
 const xml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 // One systemd word: quoted, with what systemd would expand ($, %, \, ") kept literal.
@@ -15,7 +13,7 @@ const word = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').re
 
 // command: [node, bin, 'run', ...flags]. env: what the runner needs from this shell (PATH, NUWORQ_*). log: one file.
 // cwd: where it was installed from; the runner starts there, so it finds the checkouts `nuworq run` would (#225).
-// label: the job's name, the runner's unless given (the signer's is SIGNER.label).
+// label: the job's name, the runner's unless given.
 export function launchdPlist({ command, env = {}, log, cwd, label = LABEL }) {
   const strings = (xs) => xs.map((x) => `    <string>${xml(x)}</string>`).join('\n');
   const vars = Object.entries(env).map(([k, v]) => `    <key>${xml(k)}</key>\n    <string>${xml(v)}</string>`).join('\n');
@@ -107,7 +105,7 @@ const said = (e) => String(e?.stderr ?? '').trim() || e.message;
 // retries a failed load once, then waits up to ~10s for the runner to be up (#250).
 // Returns { file, kind, log, up, status, uninstall }: up is false when it didn't start in time; status and uninstall
 // are the exact commands to check on it and to remove it.
-// label, unit, description: whose service it is, the runner's unless given (SIGNER for the release signer).
+// label, unit, description: whose service it is, the runner's unless given.
 export async function install({ platform, home, uid, command, env, log, cwd, exec, sleep = pause, fs = { mkdirSync, writeFileSync }, label, unit, description }) {
   const s = serviceFor({ platform, home, uid, label, unit });
   if (!s) throw Object.assign(new Error(`--install knows macOS (launchd) and Linux (systemd), not ${platform}`), { hint: 'Run nuworq run under your own supervisor instead.' });
