@@ -108,7 +108,7 @@ describe('sign in with GitHub or Google', () => {
       assert.equal((await request(pp, 'GET', '/auth/github/start')).status, 404);
       assert.match((await request(pp, 'GET', '/login.html')).text, /Paste your human token/);
     } finally { plain.close(); }
-    assert.deepEqual(oauthFromEnv({ NUWORQ_GITHUB_CLIENT_ID: 'a', NUWORQ_GITHUB_CLIENT_SECRET: 'b', TRELLIS_GOOGLE_CLIENT_ID: 'c' }), { github: { id: 'a', secret: 'b' } });
+    assert.deepEqual(oauthFromEnv({ NUWORQ_GITHUB_CLIENT_ID: 'a', NUWORQ_GITHUB_CLIENT_SECRET: 'b', NUWORQ_GOOGLE_CLIENT_ID: 'c' }), { github: { id: 'a', secret: 'b' } });
   });
 
   test('the provider gets a signed state and a PKCE challenge; the hub sends the verifier', async () => {

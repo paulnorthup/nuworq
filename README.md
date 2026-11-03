@@ -106,7 +106,6 @@ default_tools_approval_mode = "approve"
 ```
 
 Working on nuworq itself? See [CONTRIBUTING.md](CONTRIBUTING.md).
-nuworq used to be called Trellis. Setups from then keep working: the `trellis` command (`bin/trellis.js`), `TRELLIS_*` variables, `.trellis.json`, `~/.trellis` and `trl_` tokens are still read wherever the new names are.
 
 ---
 
@@ -210,7 +209,7 @@ src/notify.js      push channels (ntfy, Slack, webhook): new act-level entries, 
 src/github.js      signed GitHub webhook: PRs link to items, CI results per head commit
 src/mcp.js         stdio MCP server (one process per agent session) → HTTP
 src/client.js      hub/project/token resolution for CLI and MCP
-src/names.js       the new names, and the old Trellis ones still read (env, config file, data folder)
+src/names.js       where nuworq's names are read: NUWORQ_* env, .nuworq.json, ~/.nuworq
 src/runner.js      nuworq run: which workers to start (pure plan) and the supervising loop
 src/usage.js       tokens and cost: reading them from agent CLIs' JSON output, splitting a run across items
 src/llmproxy.js    measured usage from llm-proxy (NUWORQ_LLM_PROXY_URL/_KEY) for each agent's lease windows; supersedes reported

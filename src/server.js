@@ -109,7 +109,6 @@ const guideHtml = (base) => {
   return guidePage({ version: [b.version && `v${b.version}`, b.commit].filter(Boolean).join(' · '), base, logo: LOGO, favicon: FAVICON });
 };
 const COOKIE = 'nuworq_session';
-const OLD_COOKIE = 'trellis_session'; // still read, so logins from before the rename stay signed in
 const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode): who you are, not any one workspace
 const ADMIN_COOKIE = 'nuworq_admin'; // signed in to the admin host: host-only, and only an admin session opens it
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
@@ -454,7 +453,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     return jar;
   };
-  const cookieOf = (req) => { const jar = jarOf(req); return jar.get(COOKIE) ?? jar.get(OLD_COOKIE) ?? null; };
+  const cookieOf = (req) => { const jar = jarOf(req); return jar.get(COOKIE) ?? null; };
   const sessionCookie = (req, sid, path) => `${COOKIE}=${sid}; HttpOnly; SameSite=Strict; Path=${path}; Max-Age=${SESSION_MS / 1000}${https(req) ? '; Secure' : ''}`;
   // Where sign-in with GitHub or Google starts and returns: the hub's public address, the same for every workspace.
   const authOrigin = (req) => publicUrl || origin(req);
@@ -2076,8 +2075,7 @@ function siteOf(publicUrl) {
   return /^[\d.]+$|:/.test(host) || labels.length < 3 ? '' : `https://${labels.slice(1).join('.')}`;
 }
 
-// x-nuworq-<name>, else the old x-trellis-<name> that clients from before the rename send.
-const header = (req, name) => req.headers[`x-nuworq-${name}`] ?? req.headers[`x-trellis-${name}`];
+const header = (req, name) => req.headers[`x-nuworq-${name}`];
 
 // The answers to writes sent with an idempotency key (#524), kept 10 minutes in the hub's database, so a retry
 // after a proxy's 502 or a restart gets the first answer instead of applying the write again.

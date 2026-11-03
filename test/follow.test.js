@@ -671,7 +671,7 @@ describe('the real world, in a scratch repo', () => {
   const suite = (sum) => `import { test, describe } from 'node:test';\nimport assert from 'node:assert/strict';\ndescribe('math', () => { test('adds', () => assert.equal(1 + 1, ${sum})); });\n`;
   let green, redSha;
   before(() => {
-    for (const k of ['NUWORQ_TOKEN', 'TRELLIS_TOKEN', 'NUWORQ_PROJECT', 'TRELLIS_PROJECT']) { saved[k] = process.env[k]; delete process.env[k]; }
+    for (const k of ['NUWORQ_TOKEN', 'NUWORQ_PROJECT']) { saved[k] = process.env[k]; delete process.env[k]; }
     // main: a green commit, then a red one.
     mkdirSync(join(repo, 'test'), { recursive: true });
     g('init', '-q', '-b', 'main');

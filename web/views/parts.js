@@ -13,7 +13,7 @@ const agentNamed = (name) => S.view?.agents.find((a) => a.name === name) ?? null
 export function who(name, model, { job = false, presence } = {}) {
   if (!name) return '';
   if (name === 'you') return '<span class="you-chip">You</span>';
-  if (name === 'nuworq' || name === 'trellis') return '<span class="sys-chip">nuworq</span>'; // trellis: events from before the rename
+  if (name === 'nuworq') return '<span class="sys-chip">nuworq</span>';
   const known = agentNamed(name);
   presence ??= known;
   model ??= known?.model ?? '';
@@ -23,7 +23,7 @@ export function who(name, model, { job = false, presence } = {}) {
 // A line the hub wrote that names an agent ("claude-4e0a picked up #4"), with the agent said as who it is. Beside
 // the actor (the activity feed, a timeline), a line that opens with its name drops it: "Picked up #4".
 export const named = (text, name, presence, { beside = false } = {}) => {
-  if (!name || ['you', 'nuworq', 'trellis'].includes(name)) return esc(text);
+  if (!name || ['you', 'nuworq'].includes(name)) return esc(text);
   if (beside && text.startsWith(`${name} `)) { const rest = text.slice(name.length + 1); return esc(rest[0].toUpperCase() + rest.slice(1)); }
   return esc(text).replace(esc(name), who(name, null, { presence }));
 };

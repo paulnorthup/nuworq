@@ -163,7 +163,7 @@ describe('nuworq run --install (#172)', () => {
     assert.deepEqual(takeToken(['--workers', '2', '--agent-token', 'nwq_abc', '--agent', 'codex']), { args: ['--workers', '2', '--agent', 'codex'], token: 'nwq_abc' });
     assert.deepEqual(takeToken(['--agent-token=nwq_abc']), { args: [], token: 'nwq_abc' });
     assert.deepEqual(takeToken(['--workers', '2']), { args: ['--workers', '2'], token: null });
-    assert.deepEqual(serviceEnv({ PATH: '/bin', HOME: '/h', NUWORQ_TOKEN: 't', TRELLIS_URL: 'u', SECRET: 'no', SHELL: '/bin/zsh' }), { HOME: '/h', NUWORQ_TOKEN: 't', PATH: '/bin', TRELLIS_URL: 'u' });
+    assert.deepEqual(serviceEnv({ PATH: '/bin', HOME: '/h', NUWORQ_TOKEN: 't', NUWORQ_URL: 'u', OLD_URL: 'no', SECRET: 'no', SHELL: '/bin/zsh' }), { HOME: '/h', NUWORQ_TOKEN: 't', NUWORQ_URL: 'u', PATH: '/bin' });
   });
 });
 
@@ -180,7 +180,6 @@ describe('an installed runner finds the checkouts and its node (#225)', () => {
   test('NUWORQ_REPOS is the folder holding the checkout it was installed beside, unless the shell set one', () => {
     assert.equal(serviceEnv({ PATH: '/bin' }, { repos: '/Users/ann/Projects' }).NUWORQ_REPOS, '/Users/ann/Projects');
     assert.equal(serviceEnv({ NUWORQ_REPOS: '/src:/more' }, { repos: '/Users/ann/Projects' }).NUWORQ_REPOS, '/src:/more');
-    assert.deepEqual(serviceEnv({ TRELLIS_REPOS: '/old' }, { repos: '/p' }), { TRELLIS_REPOS: '/old' });
     const u = systemdUnit({ command, env: serviceEnv({ HOME: '/h' }, { repos: '/h/Projects' }), log: '/l', cwd: '/h/Projects/app' });
     assert.match(u, /^Environment="NUWORQ_REPOS=\/h\/Projects"$/m);
   });

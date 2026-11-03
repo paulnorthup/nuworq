@@ -107,7 +107,7 @@ describe('nuworq run against a hub where no project is staffed', () => {
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const home = mkdtempSync(join(tmpdir(), 'nuworq-unstaffed-'));
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))), HOME: home };
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: home };
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'run', '--url', `http://127.0.0.1:${server.address().port}`, '--agent', 'claude', '--until-idle', '--poll', '1', ...a], { env, cwd: home });
     try {
       const none = (await cli()).stdout;

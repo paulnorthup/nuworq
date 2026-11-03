@@ -309,7 +309,7 @@ test('connect with no terminal asks nothing, staffs nothing, and prints the comm
   const server = createServer(hub, {});
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))), HOME: home, PATH: '/usr/bin:/bin' };
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: home, PATH: '/usr/bin:/bin' };
     const out = await new Promise((resolve) => {
       const child = spawn(process.execPath, [BIN, 'connect', `http://127.0.0.1:${server.address().port}`], { env, cwd: clone });
       let stdout = '', stderr = '';

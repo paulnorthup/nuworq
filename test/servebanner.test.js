@@ -11,7 +11,7 @@ const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 // serve's startup banner says what the Connect dialog says (#105): the installed `nuworq`, never a path into the checkout.
 test('the serve banner connects with the installed nuworq, not node <path>/bin/nuworq.js (#157)', { timeout: 20_000 }, async () => {
   const env = {
-    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))),
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))),
     HOME: mkdtempSync(join(tmpdir(), 'nuworq-banner-')), NO_COLOR: '1',
   };
   const child = spawn(process.execPath, [BIN, 'serve', '--demo', '--port', '0', '--public-url', 'https://hub.example'], { env });

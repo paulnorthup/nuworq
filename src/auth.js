@@ -17,8 +17,8 @@ const HANDLE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 const sha = (s) => createHash('sha256').update(String(s)).digest();
 const same = (a, b) => a.length === b.length && timingSafeEqual(a, b);
 const scopeOf = (s) => (s ? s.split(',') : null); // null: every project
-// Tokens start nwq_ (invites nwi_). Tokens made before the rename start trl_ and still work.
-const TOKEN_PREFIXES = ['nwq_', 'trl_'];
+// Tokens start nwq_ (invites nwi_).
+const TOKEN_PREFIX = 'nwq_';
 
 export class Auth {
   constructor(db, { now = () => Date.now() } = {}) {
@@ -272,7 +272,7 @@ export class Auth {
         power = JSON.stringify([...new Set(list)]);
       }
     }
-    const token = TOKEN_PREFIXES[0] + randomBytes(32).toString('base64url');
+    const token = TOKEN_PREFIX + randomBytes(32).toString('base64url');
     this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, person_id, minted_by, runner, powers, created_at, projects) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(name, role, sha(token), token.slice(0, 8), personId, minter, runner ? String(runner) : null, power, this.now(), projects.join(','));
     return token;
@@ -292,7 +292,7 @@ export class Auth {
     const root = `${from.name.slice(0, 50)}.runner`;
     let name = root;
     for (let n = 2; this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name); n++) name = `${root}-${n}`;
-    const token = TOKEN_PREFIXES[0] + randomBytes(32).toString('base64url');
+    const token = TOKEN_PREFIX + randomBytes(32).toString('base64url');
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const old of this.db.prepare('SELECT id FROM tokens WHERE from_token = ? AND revoked_at IS NULL').all(from.id)) this.revoke(old.id);
@@ -375,7 +375,7 @@ export class Auth {
 
   verifyToken(token) {
     token = String(token ?? '').trim();
-    if (!TOKEN_PREFIXES.some((p) => token.startsWith(p)) || token.length < 20) return null;
+    if (!token.startsWith(TOKEN_PREFIX) || token.length < 20) return null;
     const h = sha(token);
     this._byPrefix ??= this.db.prepare('SELECT * FROM tokens WHERE prefix = ? AND revoked_at IS NULL');
     const match = this._byPrefix.all(token.slice(0, 8)).find((t) => same(Buffer.from(t.hash), h));

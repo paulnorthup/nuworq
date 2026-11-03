@@ -88,7 +88,7 @@ Lines at 0fcaec3.
 | A59 | 88 | Agents find their project from the folder, else the hub routes them | true | bin/nuworq.js:638-651 |
 | A60 | 89 | Node 24+, no dependencies | true | package.json (`engines >=24`, no `dependencies`) |
 | A61 | 97 | `nuworq init` does "the same for opencode and other MCP clients" | reworded → #685 | `init` only prints snippets, and they use `node "<path>/nuworq.js" mcp`, not `nuworq mcp` (bin/nuworq.js:1606-1639) |
-| A62 | 109 | Trellis names are still read | true | bin/trellis.js; src/names.js; test/rename.test.js:57-390 |
+| A62 | 109 | The product's former name is still read | removed → #792 | Only nuworq's own names are read now: src/names.js; test/names.test.js |
 | B1 | 120 | 0: healthy work, recovered failures, idle projects don't appear | true | src/insight.js:231; test/notify.test.js "healthy activity sends nothing" |
 | B2 | 121 | 30 s: a sentence of pulse and the act entries; `nuworq status` | true | bin/nuworq.js:77-93 |
 | B3 | 122-123 | 5m, 30m and *Deep dive* | true | src/insight.js:180, 251-288; web/views/drawer.js:195 |

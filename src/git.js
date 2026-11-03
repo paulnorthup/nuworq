@@ -128,9 +128,9 @@ export function gitFacts(repo, agent, claim, own = '', holderOf = () => null) {
   if (!isRepo(repo)) return null;
   const base = baseOf(repo);
   const text = [claim.headline, claim.summary, ...(claim.evidence ?? []).map((e) => e.label)].join(' ');
-  // The item's own branch first; then worker branches, nuworq/<agent> (or trellis/<agent> from before the rename).
-  const mine = [own, `nuworq/${agent}`, `trellis/${agent}`];
-  const named = text.match(/\b(?:nuworq|trellis)\/[\w.@-]+/)?.[0];
+  // The item's own branch first; then worker branches, nuworq/<agent>.
+  const mine = [own, `nuworq/${agent}`];
+  const named = text.match(/\bnuworq\/[\w.@-]+/)?.[0];
   const holder = named && !mine.includes(named) ? holderOf(named) : null;
   const branch = [...mine, holder ? null : named].find((b) => b && exists(repo, b)) ?? null;
   const commits = branch && base

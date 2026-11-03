@@ -64,7 +64,7 @@ describe('an ended session signs off once', () => {
     const { hub, items: [a], item, listed } = hubWith('A');
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))), NUWORQ_URL: `http://127.0.0.1:${server.address().port}`, NUWORQ_PROJECT: 'p' };
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), NUWORQ_URL: `http://127.0.0.1:${server.address().port}`, NUWORQ_PROJECT: 'p' };
     const child = spawn(process.execPath, [BIN, 'mcp'], { env, stdio: ['pipe', 'pipe', 'ignore'] });
     const answers = [];
     let buf = '';

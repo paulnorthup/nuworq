@@ -26,7 +26,7 @@ The worker passes opencode its config through `OPENCODE_CONFIG_CONTENT`: the nuw
 | `qwen3.8:27b-mtp-q4_K_M` | multi-step (2 functions, test suite, package.json, README) | Same loop in ~8 min: 6/6 tests, committed, and it kept its local `opencode.json` out of the commit. No `progress`. |
 | `qwen3.8:27b-mtp-q4_K_M`, after the hint fix below | multi-step | **checkin → next → progress → submit → signoff**: 5/5 tests, commit `d58e260`, item in Verifying. |
 | `qwen3.8:27b-mtp-q4_K_M`, after the hint fix | one-line fix | The full loop including `progress`, but it posted it after finishing rather than up front. Committed `5fc2e1c`. |
-| `qwen3.8:27b-mtp-q4_K_M` via `nuworq run --agent opencode` | one-line fix | The runner started one worker in its own worktree. It committed `692b265` on `trellis/opencode-fb47`, left the worktree clean, and #1 reached Verifying; the runner then exited ("1 launched, 1 exited cleanly"). The model reported itself as "unknown", so the MCP server now prefers the launcher's `NUWORQ_MODEL`. |
+| `qwen3.8:27b-mtp-q4_K_M` via `nuworq run --agent opencode` | one-line fix | The runner started one worker in its own worktree. It committed `692b265` on its worker branch, left the worktree clean, and #1 reached Verifying; the runner then exited ("1 launched, 1 exited cleanly"). The model reported itself as "unknown", so the MCP server now prefers the launcher's `NUWORQ_MODEL`. |
 | `qwen3:8b` | one-line fix | Correct code, submitted, item in Verifying, but it **said "Committed" without committing**, and its evidence was just a file path. |
 | `qwen3:8b` | multi-step | Claimed the item, ran a shell one-liner with broken quoting, then ended its turn without a submit or handoff. The lease expiry returns the item to the queue. |
 
