@@ -121,7 +121,7 @@ node bin/nuworq.js token create claude-laptop          # on the hub's host; role
 Then give the agent `NUWORQ_URL` and `NUWORQ_TOKEN`, e.g. `claude mcp add nuworq -e NUWORQ_URL=https://nuworq.example.com -e NUWORQ_TOKEN=nwq_… -- nuworq mcp`. Codex, opencode and the plain CLI read the same two variables.
 
 ### GitHub: pull requests and CI on items
-A signed webhook links pull requests to items and shows CI results on them. When CI fails on work in Verifying, it lands under "Needs you" (and gets pushed, if you set up [notifications](../README.md#getting-pinged-ntfy-slack-or-any-webhook)).
+A signed webhook links pull requests to items and shows CI results on them. When CI fails on work in Verifying, it lands under "Needs you" (and gets pushed, if you set up [notifications](USAGE.md#getting-pinged-ntfy-slack-or-any-webhook)).
 1. In the project (5m view, top right): **Settings**, then **Set up** beside GitHub (**Manage** once it's connected). Under "Without the app: a webhook for this project", generate a secret, copy it, and click **Save the webhook**. (Get started's **Connect GitHub** is the GitHub App, not this webhook.)
 2. In the repo on GitHub: **Settings → Webhooks → Add webhook**:
    - Payload URL: `https://<your hub>/api/hooks/github/<project>` (the dialog shows it)

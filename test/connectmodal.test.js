@@ -59,16 +59,16 @@ describe('connect an agent: commands that paste and run', () => {
     assert.equal(lines[0], 'curl -fsSLO https://app.nuworq.com/nuworq-release.tgz -O https://app.nuworq.com/nuworq-release.tgz.sig');
     assert.ok(lines[1].startsWith("node -e '") && lines[1].endsWith(` nuworq-release.tgz ${KEY}`));
     assert.equal(lines[2], 'npm install -g ./nuworq-release.tgz');
-    assert.ok(readFileSync(new URL('../README.md', import.meta.url), 'utf8').includes(c.install), 'the README\'s lines, with the key this repository pins');
+    for (const doc of ['README.md', 'docs/USAGE.md']) assert.ok(readFileSync(new URL(`../${doc}`, import.meta.url), 'utf8').includes(c.install), `${doc}'s lines, with the key this repository pins`);
     // The one-paste setup (#490) runs the same lines joined by &&, so a check that fails stops npm and connect.
     assert.equal(c.setup, `${lines.join(' && ')} && nuworq connect https://app.nuworq.com`);
     assert.equal(connectCommands({ ...REMOTE, package: { url: 'https://nuworq.com/nuworq.tgz', release: null } }).verified, false, 'no signed release: nothing to check');
   });
 
-  test('the optional Claude Code plugin step copies the README\'s commands, exactly as shown (#132)', () => {
+  test('the optional Claude Code plugin step copies docs/USAGE.md\'s commands, exactly as shown (#132, #808)', () => {
     const c = connectCommands({ ...REMOTE, package: { url: 'https://nuworq.com/nuworq.tgz' } }, null, 'demo');
     assert.equal(c.plugin, 'claude plugin marketplace add paulnorthup/nuworq#release\nclaude plugin install nuworq@nuworq --scope user');
-    assert.ok(readFileSync(new URL('../README.md', import.meta.url), 'utf8').includes(c.plugin), 'the same lines as the README');
+    assert.ok(readFileSync(new URL('../docs/USAGE.md', import.meta.url), 'utf8').includes(c.plugin), 'the same lines as docs/USAGE.md');
     const html = copyBlock(c.plugin);
     const text = (s) => s.replace(/&(lt|gt|quot|#39|amp);/g, (_, e) => ({ lt: '<', gt: '>', quot: '"', '#39': "'", amp: '&' })[e]);
     assert.equal(text(html.match(/<pre>([^]*)<\/pre>/)[1]), c.plugin, 'shown');

@@ -124,6 +124,15 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.ok(icon.includes(`rx="8" fill="${BRAND}"/><g fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round">${q}</g>`), 'the favicon is the same q on --brand');
     // Every logo the hub draws uses that one source; no page keeps its own copy.
     const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+    // The README's header (#808): the same mark as files GitHub can show, the name in --ink of each theme beside it.
+    const { mark } = await import('../web/logo.js');
+    const ink = { light: THEMES.light['--ink'], dark: THEMES.dark['--ink'] };
+    for (const theme of ['light', 'dark']) {
+      const svg = read(`docs/logo-${theme}.svg`);
+      assert.ok(svg.includes(mark(BRAND, INK, 3.2)), `docs/logo-${theme}.svg draws logo.js's mark`);
+      assert.match(svg, new RegExp(`<text [^>]*fill="${ink[theme]}"[^>]*>nuworq</text>`), `docs/logo-${theme}.svg: the name in ${theme} --ink`);
+      assert.match(read('README.md'), new RegExp(`<source media="\\(prefers-color-scheme: ${theme}\\)" srcset="docs/logo-${theme}.svg">`), `the README picks ${theme} by the reader's theme`);
+    }
     assert.match(appSource(), /import \{ LOGO \} from '\.\/logo\.js';/);
     assert.match(read('src/server.js'), /<link rel="icon" href="\$\{FAVICON\}">[^`]*<div class="brand">\$\{LOGO\}<span>nuworq<\/span>/, 'the flow pages');
     // Every page has the favicon (#318), and the sign-in style pages the logo above their card.

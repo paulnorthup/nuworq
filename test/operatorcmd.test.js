@@ -152,7 +152,7 @@ describe('one start line for the skill, the README and the command; no /loop any
     const g = guide({ project: 'acme' });
     assert.ok(skill().includes(operatorStart()));
     assert.ok(operatorSkill().includes(OPERATOR_WAIT));
-    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+    const readme = readFileSync(new URL('../docs/USAGE.md', import.meta.url), 'utf8'); // the README's usage, since #808
     assert.ok(readme.includes(operatorStart()));
     assert.ok(readme.includes(OPERATOR_WAIT));
     assert.match(readme, /Capabilities are optional\. Left out, the session runs `nuworq operator --detect`/);
