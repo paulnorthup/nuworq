@@ -829,19 +829,25 @@ describe('a worker for a project with no checkout on this machine', () => {
   test('run --workers 4 starts four workers on four different items, each claims its own, and nothing pauses (#793)', async () => {
     const w = far();
     for (const t of ['Two', 'Three', 'Four', 'Five']) w.hub.humanOp('far', 'create', { title: t, acceptance: 'done' });
-    // A Claude that claims the one job it was started for, as its MCP server would, then exits.
+    // A Claude that claims the one job it was started for, as its MCP server would, then exits. It reads the answer
+    // and exits by itself (#844): an unread body can hold its socket, which the hub keeps open up to 2 minutes.
     writeFileSync(join(w.dir, 'bin', 'claude'), `#!${process.execPath}
 const a = process.argv.slice(2);
 const mcp = JSON.parse(a[a.indexOf('--mcp-config') + 1]).mcpServers.nuworq.env;
 const item = a[a.indexOf('-p') + 1].match(/claim (#\\d+)/)[1];
 const r = await fetch(mcp.NUWORQ_URL + '/api/p/far/agent/claim', { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': mcp.NUWORQ_AGENT }, body: JSON.stringify({ item }) });
+await r.text();
 console.log('CLAIMED', item, r.status);
+process.exit(0);
 `, { mode: 0o755 });
     const server = createServer(w.hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
     try {
-      const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--workers', '4', '--max-runs', '4', '--poll', '1'], { env: w.env, cwd: w.home });
+      // Killed well inside the test's own limit (#844), so a run that doesn't end fails with what it said. SIGKILL: the
+      // runner takes SIGTERM as "stop once the workers finish", which a hung worker never does.
+      const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'run', '--url', url, '--agent', 'claude', '--workers', '4', '--max-runs', '4', '--poll', '1'], { env: w.env, cwd: w.home, timeout: 60_000, killSignal: 'SIGKILL' })
+        .catch((e) => assert.fail(`nuworq run didn't finish (${e.signal ?? e.code}):\n${e.stdout}\n${e.stderr}`));
       const started = [...stdout.matchAll(/▶ \S+ → far: (#\d+) /g)].map((m) => m[1]);
       assert.deepEqual(started, ['#1', '#2', '#3', '#4'], stdout);
       assert.doesNotMatch(stdout, /Paused|found nothing|was taken by/, stdout);
