@@ -12,6 +12,8 @@ import { createServer, buildInfo } from '../src/server.js';
 import { getStarted } from '../src/getstarted.js';
 import { STEPS, ESSENTIALS, guidePage, mentions } from '../src/userguide.js';
 import { getStartedCard } from '../web/getstarted.js';
+import { SETUP } from '../web/connect.js';
+import { command } from '../src/help.js';
 
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(`http://127.0.0.1:${s.address().port}`)));
 const stop = (s) => { s.close(); s.closeAllConnections(); };
@@ -79,6 +81,21 @@ describe('the page', () => {
     const m = mentions();
     assert.ok(m.commands.includes('nuworq run --install'));
     assert.ok(m.labels.includes('Connect an agent'));
+  });
+
+  // #797: what an operator is, in plain words, and how to start one: nuworq up first, then by hand.
+  test('the operator, plainly: nuworq up first, then claude and /nuworq:operator, and no jargon', () => {
+    const op = ESSENTIALS.find((e) => e.key === 'the-operator');
+    assert.equal(op.glance, 'A Claude Code session you keep open, for the work workers aren\'t allowed to do.');
+    const body = op.body.join(' ');
+    assert.match(body, /^Workers run on their own, so they can't change live servers, sign releases or change GitHub settings\./);
+    assert.ok(body.indexOf('`nuworq up`') < body.indexOf('`claude`') && body.indexOf('`claude`') < body.indexOf('`/nuworq:operator`'));
+    const start = SETUP.find((s) => s.key === 'operator');
+    assert.ok(start.how.startsWith('`nuworq up`'), 'Start an operator gives nuworq up first');
+    for (const t of [op.glance, body, ...['does', 'why', 'how'].map((k) => start[k])]) {
+      assert.doesNotMatch(t, /attended|questions to the operator|as in The setup that works|listener|starts a turn|nuworq operator --project/, t);
+    }
+    for (const c of ['up', 'operator']) assert.ok(command(c), `nuworq ${c} exists`);
   });
 });
 

@@ -20,7 +20,7 @@ describe('the setup that works, everywhere the same (#489)', () => {
   test('three sessions: workers, an operator, a shaper, each with what to type', () => {
     assert.deepEqual(SETUP.map((s) => s.key), ['workers', 'operator', 'shaper']);
     assert.deepEqual(SETUP.map((s) => s.title), ['Start workers', 'Start an operator', 'Shape work with a shaper']);
-    assert.deepEqual(SETUP.map((s) => commandsIn(s.how)), [['nuworq run --install --workers auto'], ['claude', '/nuworq:operator'], ['/nuworq:shaper']]);
+    assert.deepEqual(SETUP.map((s) => commandsIn(s.how)), [['nuworq run --install --workers auto'], ['nuworq up', 'claude', '/nuworq:operator'], ['/nuworq:shaper']]);
     assert.match(SETUP_LEAD, /how nuworq itself is built/);
     assert.match(SETUP_LEAD, /Starting with just a shaper is fine/);
   });

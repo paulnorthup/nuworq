@@ -173,7 +173,7 @@ async function operatorCmd(flags) {
     }
     console.log(now.without_infra ? `This machine declares no ${bold('infra')}: it can't reach ${project}'s live systems. Undo: nuworq operator --with infra`
       : now.infra_check ? `${bold('infra')} is declared only while ${bold(now.infra_check)} passes. Clear it: nuworq operator --infra-check ""`
-      : `${bold('infra')} is declared: a person starts this attended operator here.`);
+      : `${bold('infra')} is declared: a person starts this operator here, in a terminal they can see.`);
     return;
   }
   if (flags.detect) return detectCmd(flags);
