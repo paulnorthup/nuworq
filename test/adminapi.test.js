@@ -91,6 +91,10 @@ describe('the admin host serves an owner\'s own console from a directory (#877)'
     writeFileSync(join(outside, 'secret.txt'), 'not for the web');
     symlinkSync(join(outside, 'secret.txt'), join(dir, 'leak.txt'));
     symlinkSync(outside, join(dir, 'out'));
+    mkdirSync(join(dir, '.git'));
+    writeFileSync(join(dir, '.git', 'config'), '[remote "origin"]\n  url = https://x:not for the web@example.com/console.git');
+    writeFileSync(join(dir, '.env'), 'SECRET=not for the web');
+    writeFileSync(join(dir, 'assets', '.hidden'), 'not for the web');
     h = await hub(dir);
   });
   after(() => h.close());
@@ -117,8 +121,9 @@ describe('the admin host serves an owner\'s own console from a directory (#877)'
     for (const path of ['/requests.html', '/w/acme/admin.html']) assert.equal((await request(h.port, 'GET', path)).headers.location, `http://${ADMIN}/`, path);
   });
 
-  test('a path that escapes the directory is a 404, symlinks included', async () => {
-    for (const path of ['/../outside/secret.txt', '/%2e%2e/outside/secret.txt', '/assets/..%2f..%2foutside%2fsecret.txt', '/assets%5c..%5c..%5coutside%5csecret.txt', '/leak.txt', '/out/secret.txt', '/assets', '/nope.html', '/%E0%A4%A']) {
+  test('a path that escapes the directory, or names a dot-file, is a 404, symlinks included', async () => {
+    for (const path of ['/../outside/secret.txt', '/%2e%2e/outside/secret.txt', '/assets/..%2f..%2foutside%2fsecret.txt', '/assets%5c..%5c..%5coutside%5csecret.txt', '/leak.txt', '/out/secret.txt', '/assets', '/nope.html', '/%E0%A4%A',
+      '/.git/config', '/%2egit/config', '/.git%2fconfig', '/assets%5c..%5c.git%5cconfig', '/.env', '/assets/.hidden', '/assets/%2ehidden']) {
       const r = await request(h.port, 'GET', path, { host: ADMIN });
       assert.equal(r.status, 404, path);
       assert.doesNotMatch(r.text, /not for the web/, path);

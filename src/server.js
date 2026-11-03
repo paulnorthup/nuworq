@@ -881,11 +881,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const toAdmin = (req, res) => { res.writeHead(308, { location: `${adminOrigin(req)}/`, 'cache-control': 'no-store' }); res.end(); };
 
   // A file of the admin console: only what lies inside its directory, symlinks resolved, so nothing outside it.
+  // Dot-files and dot-directories are never served: a git checkout's .git (remote URL, history) or an .env stays private.
   async function consoleFile(path, { send, deny }) {
     const missing = () => deny(404, 'the admin console has no such file', 'GET / is its page.');
     let rel;
     try { rel = path === '/' ? 'index.html' : decodeURIComponent(path.slice(1)); } catch { return missing(); }
-    if (rel.split(/[/\\]/).includes('..') || rel.includes('\0')) return missing();
+    if (rel.split(/[/\\]/).some((s) => s.startsWith('.')) || rel.includes('\0')) return missing();
     try {
       const file = realpathSync(join(consoleDir, rel));
       if (!file.startsWith(consoleDir + sep) || !statSync(file).isFile()) return missing();
