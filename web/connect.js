@@ -46,7 +46,7 @@ export function connectCommands(info, page = null, slug = 'my-project') {
     // Keep workers going wherever work is waiting, across projects; one worker on its own.
     run: 'nuworq run --workers 3 --agent claude',
     worker: 'nuworq worker --agent claude --run',
-    // For Claude Code (#97, #432): the MCP server, /nuworq:shaper and /nuworq:operator as one plugin, as in the README.
+    // For Claude Code (#97, #432): the MCP server, /nuworq:shaper and /nuworq:operator as one plugin, as in docs/USAGE.md.
     // At its release branch (#473): the plugin changes only with a release Paul approved and the signer signed.
     plugin: 'claude plugin marketplace add paulnorthup/nuworq#release\nclaude plugin install nuworq@nuworq --scope user',
     // By hand (what connect does for you): no token, no address, no path.
@@ -61,7 +61,7 @@ export function connectCommands(info, page = null, slug = 'my-project') {
 }
 
 // The recommended setup (#489, #801): how nuworq itself is built, and what every place that says how to get going offers
-// first, in this order and these words: the guide, Get started, Connect an agent, the README and the CLI's bare
+// first, in this order and these words: the guide, Get started, Connect an agent, docs/USAGE.md and the CLI's bare
 // screen (test/setup.test.js holds them together). says is what it is, in short sentences (setupLine); how is
 // what to type, with each command to copy in backticks.
 export const SETUP = [

@@ -87,8 +87,8 @@ describe('the setup that works, everywhere the same (#489)', () => {
     assert.deepEqual(dialog.slice(0, fold).match(/commandBlocks\([^)]*\)/g), ['commandBlocks(c.setup)'], 'one block to copy before it');
   });
 
-  test('the README opens its usage with the same setup, in the same words and order', () => {
-    const readme = read('README.md');
+  test('docs/USAGE.md (the README\'s usage, since #808) opens with the same setup, in the same words and order', () => {
+    const readme = read('docs/USAGE.md');
     const usage = readme.slice(readme.indexOf('## 30 seconds'));
     assert.ok(usage.includes(`### ${SETUP_TITLE}`) && usage.includes(SETUP_LEAD));
     assert.ok(usage.indexOf(`### ${SETUP_TITLE}`) < usage.indexOf('nuworq up'), 'before the rest of the usage');

@@ -44,7 +44,7 @@ describe('the Claude Code plugin', () => {
     const { connectCommands } = await import('../web/connect.js');
     assert.deepEqual(PLUGIN_INSTALL[0], ['plugin', 'marketplace', 'add', 'paulnorthup/nuworq#release'], 'connect adds the marketplace at the release branch');
     assert.match(connectCommands({ url: 'https://app.nuworq.com' }).plugin, /^claude plugin marketplace add paulnorthup\/nuworq#release\n/);
-    for (const doc of ['README.md', join('docs', 'DEPLOY.md'), join('src', 'userguide.js')]) {
+    for (const doc of ['README.md', join('docs', 'USAGE.md'), join('docs', 'DEPLOY.md'), join('src', 'userguide.js')]) {
       assert.doesNotMatch(read(ROOT, doc), /marketplace add paulnorthup\/nuworq(?!#release)/, `${doc} adds the marketplace at the release branch`);
     }
   });

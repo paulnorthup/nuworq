@@ -1,6 +1,6 @@
 # Working on nuworq itself
 
-Contributors run nuworq from a checkout: every command in the README works as `node bin/nuworq.js …` there. A checkout never updates itself.
+Contributors run nuworq from a checkout: every command in the README and docs/ works as `node bin/nuworq.js …` there. A checkout never updates itself.
 
 ```bash
 git clone https://github.com/paulnorthup/nuworq.git && cd nuworq && npm test

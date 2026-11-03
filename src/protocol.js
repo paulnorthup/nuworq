@@ -46,7 +46,7 @@ export const OPERATOR_TAGS = ['operator', 'claude-cli', 'infra', 'github-admin']
 // Old tag names still accepted wherever tags come in, and stored as the new one.
 export const TAG_ALIASES = { 'nuworq-infra': 'infra', 'homelab-vm': 'infra' };
 
-// What a person types to start an operator session, one text for the guide, the README and `nuworq operator`:
+// What a person types to start an operator session, one text for the guide, docs/USAGE.md and `nuworq operator`:
 // the plugin's operator skill with the tags to check in with. Invoking it starts the plugin's listener (no /loop).
 // has: the capabilities besides "operator"; without it, the bare line, whose session detects them (#494).
 // plugin: false for a machine without the plugin, whose copy `nuworq connect` wrote as nuworq-operator (#432).

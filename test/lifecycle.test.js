@@ -9,7 +9,7 @@ import { view } from '../src/insight.js';
 // is the accepted stage, look couldn't list landing or dropped, the README skipped stages, a tidy hint said "close"
 // (there's no such operation), and next's description named three of its six modes.
 const op = (name) => OPS.find((o) => o.name === name);
-const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+const readme = readFileSync(new URL('../docs/USAGE.md', import.meta.url), 'utf8'); // the README's usage, since #808
 const guide = readFileSync(new URL('../src/protocol.js', import.meta.url), 'utf8') + readFileSync(new URL('../src/tidy.js', import.meta.url), 'utf8');
 
 describe('the lifecycle reads the same everywhere (#706)', () => {
