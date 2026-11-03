@@ -216,8 +216,10 @@ describe('the release workflow (#813)', () => {
 
   test('sign builds with git alone what src/package.js builds: the same files', () => {
     const runs = /const RUNS = \[([^\]]+)\]/.exec(readFileSync(fileURLToPath(new URL('../src/package.js', import.meta.url)), 'utf8'))[1].match(/'[^']+'/g).map((s) => s.slice(1, -1));
-    const yaml = /for f in ([^;]+); do/.exec(stepRun('Build the package again with git alone'))[1].split(' ');
-    assert.deepEqual(yaml, runs);
+    for (const step of ['Build the package again with git alone', 'What the approval rests on']) {
+      const yaml = /for f in ([^;]+); do/.exec(stepRun(step))[1].split(' ');
+      assert.deepEqual(yaml, runs, step);
+    }
   });
 
   const run = (args, env = {}) => promisify(execFile)(process.execPath, [RELEASE, ...args], { cwd: repo, env: { PATH: process.env.PATH, HOME: dir, ...env } });
@@ -292,18 +294,61 @@ describe('the release workflow (#813)', () => {
       assert.match(said, /The `sign` job runs none of the repository's code/);
     });
 
+    // A hub naming commit as its signed release, and serving sig (base64, as src/server.js does) as its .sig, if any.
+    const fakeHub = async (commit, sig) => {
+      const hub = createServer((req, res) => {
+        if (req.url === '/api/package') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ package: { release: { commit } } })); }
+        if (req.url === `/nuworq-${commit}.tgz.sig` && sig) { res.writeHead(200); return res.end(`${sig.toString('base64')}\n`); }
+        res.writeHead(404); res.end();
+      });
+      return { at: `http://127.0.0.1:${await listen(hub)}`, close: () => hub.close() };
+    };
+    // What sign would have signed for commit: src/package.js's archive, which sign builds with git alone.
+    const signed = async (commit, key = ours.key) => { const f = join(dir, `signed-${commit}.tgz`); await archive(origin, commit, f); return sign(null, readFileSync(f), key); };
+
     test('the hub\'s signed release counts when it is newer than GitHub\'s', async () => {
       const a = release('1.0.0'), b = release('1.1.0');
       fakeGh(['v1.0.0']);
-      const hub = createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ package: { release: { commit: b } } })); });
-      const at = `http://127.0.0.1:${await listen(hub)}`;
+      const hub = await fakeHub(b, await signed(b));
       try {
         const c = release('1.2.0', { files: { 'scripts/release.js': '// changed\n' } });
-        const { failed, said } = await changes('v1.2.0', c, { NUWORQ_HUB: `${at}/` });
+        const { failed, said } = await changes('v1.2.0', c, { NUWORQ_HUB: `${hub.at}/` });
         assert.equal(failed, null, failed?.stderr);
         assert.match(said, new RegExp(`changed\\*\\* since the hub's signed release \\(\`${b.slice(0, 7)}\`\\): \`scripts/release\\.js\``));
         assert.ok(!said.includes(a.slice(0, 7)));
+        assert.doesNotMatch(said, /didn't verify/);
       } finally { hub.close(); }
+    });
+
+    test('the approval summary\'s base is a release whose signature verified', async () => {
+      const a = release('1.0.0');
+      fakeGh(['v1.0.0']);
+      // A compromised hub names the tag's parent, which changed the code check runs, as its signed release.
+      const parent = commit({ 'src/update.js': '// changed by landed code\n' }, 'x');
+      git(work, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin');
+      const c = release('1.1.0');
+      for (const sig of [null, Buffer.alloc(64), await signed(parent, keypair().key)]) {
+        const hub = await fakeHub(parent, sig);
+        try {
+          const { failed, said } = await changes('v1.1.0', c, { NUWORQ_HUB: hub.at });
+          assert.equal(failed, null, failed?.stderr);
+          assert.match(said, new RegExp(`The hub's claim didn't verify:\\*\\* it names \`${parent.slice(0, 7)}\``));
+          assert.match(said, new RegExp(`The code \`check\` ran changed\\*\\* since v1\\.0\\.0 \\(\`${a.slice(0, 7)}\`\\): \`src/update\\.js\``));
+          assert.doesNotMatch(said, /unchanged/);
+        } finally { hub.close(); }
+      }
+      // Its claim still counts against a rollback: a tag no newer than it isn't signed.
+      const hub = await fakeHub(c, null);
+      try {
+        const r = await changes('v1.1.0', c, { NUWORQ_HUB: hub.at });
+        assert.ok(r.failed);
+        assert.match(r.said, /isn't newer than the hub's signed release .*roll installs back/);
+      } finally { hub.close(); }
+      // The step verifies with node:crypto inline, over sign's own build, before the hub's commit becomes the base.
+      const step = stepRun('What the approval rests on');
+      assert.ok(step.indexOf('verify(null, pkg') < step.indexOf('last=$hub'));
+      assert.match(step, /curl [^\n]*"\$\{NUWORQ_HUB%\/\}\/nuworq-\$hub\.tgz\.sig"/);
+      assert.match(step, /git show "\$commit:release-key\.pub"/);
     });
 
     test('refuses, before anyone is asked, a tag off main, at another version, or a rollback', async () => {
