@@ -149,6 +149,16 @@ describe("a worker's file tools stay where its shell does (#472)", () => {
     assert.ok(may(perms, 'Read', join(me, '.claude', 'settings.json')), 'the rest of ~/.claude stays readable');
     assert.ok(may(perms, 'Read', join(me, '.local', 'share', 'other', 'x')), 'the rest of ~/.local/share stays readable');
   });
+
+  // docs/DEPLOY.md keeps the release key and the release workflow's deploy key there (#850).
+  test("the release key's folder is hidden from workers", () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
+    assert.ok(filesystem.denyRead.includes('~/.nuworq-release'), 'the shell');
+    const perms = filePermissions({ home, worktree });
+    for (const f of ['release-key.pem', 'release-push']) {
+      for (const tool of ['Read', 'Edit', 'Write']) assert.ok(!may(perms, tool, join(me, '.nuworq-release', f)), `${tool} ${f}`);
+    }
+  });
 });
 
 // npm install and any npm run script amount to running anything (#768, docs/audit/hardened.md 9): by default a
