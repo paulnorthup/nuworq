@@ -18,7 +18,7 @@ const CLIENT = new URL('../src/client.js', import.meta.url).href;
 
 // A home of its own, and none of this machine's NUWORQ_* settings.
 const envFor = (home, extra = {}) => ({
-  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))),
+  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))),
   HOME: home, ...extra,
 });
 

@@ -158,9 +158,9 @@ export function importGraph(read, roots = SELF_ROOTS) {
   return seen;
 }
 
-// The tests run without the hub's own NUWORQ_* / TRELLIS_* settings, so they can't reach its database or
+// The tests run without the hub's own NUWORQ_* settings, so they can't reach its database or
 // the hub itself (and without NODE_TEST_CONTEXT, so they report normally even when this runs under node --test).
-const testEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ_|TRELLIS_|NODE_TEST_CONTEXT$)/.test(k)));
+const testEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ_|NODE_TEST_CONTEXT$)/.test(k)));
 
 // The first failing test in `npm test` output, "suite › test" either way: from node --test's spec reporter,
 // or from TAP (what Node 22 prints when its output is piped), whose suites are the "# Subtest:" lines above it

@@ -42,7 +42,7 @@ describe('what the hub sends is checked before a shell sees it', () => {
 
   test("a worker's environment holds no token: the person's, an agent's, or a git helper that carries one", () => {
     const env = withoutTokens({
-      PATH: '/bin', NUWORQ_TOKEN: 'nwq_human1234', NUWORQ_AGENT_TOKEN: 'nwq_agent1234', TRELLIS_TOKEN: 'x', NUWORQ_URL: 'http://h',
+      PATH: '/bin', NUWORQ_TOKEN: 'nwq_human1234', NUWORQ_AGENT_TOKEN: 'nwq_agent1234',NUWORQ_URL: 'http://h',
       GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '!NUWORQ_TOKEN=nwq_old12345 node x', OTHER: 'ghs_abcdef12',
     });
     assert.deepEqual(env, { PATH: '/bin', NUWORQ_URL: 'http://h' }, 'the git config set goes whole, or git would refuse it');

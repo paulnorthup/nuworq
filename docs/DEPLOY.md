@@ -380,10 +380,7 @@ Or stop the service and copy the `.db` file. To restore, put the file back and s
 
 **How long copies are kept.** `--follow`'s copies: the last 10 moves, which is days to weeks, depending on how often main moves. `nuworq workspace adopt`'s dated copy (`nuworq.db.before-workspaces-<time>`): until the workspace is removed. `nuworq workspace remove <name>` deletes the workspace's database, its copy in every `backups/<sha>/` folder, and the dated copy it was adopted from, so nothing of it (its GitHub secret, channel URLs, people's emails) stays on the hub's disk. Off-machine backups you make yourself are yours to expire.
 
-### Upgrading a deployment from before the rename
-nuworq used to be called Trellis, and so did these recipes: the `trellis` user, `/opt/trellis`, `/var/lib/trellis/trellis.db` and `trellis.service`; in Docker, the `trellis` service, the `trellis-data` volume and `/data/trellis.db`. The code still answers to the old names: `bin/trellis.js` runs nuworq, and old tokens (`trl_…`), sessions, `TRELLIS_*` variables and `trellis/<agent>` branches keep working.
-- **systemd**: your installed unit keeps running as it is after `git pull`. To move to the new names, stop it and move the database to `/var/lib/nuworq/nuworq.db` (owned by the `nuworq` user) before starting `nuworq.service`.
-- **Docker**: the compose file in the repo is the recipe, so after an update `up` would start a new `nuworq` service on an empty `nuworq-data` volume, next to the old container. Stop the old container first and copy `trellis.db` into the new volume as `nuworq.db` (owned by the container's user), or keep using your previous compose file.
+### Operator tags after an update
 - **Operator tags**: work on a project's live infrastructure (servers and VMs, DNS, cloud accounts, deploys) is tagged `infra`. On its first start after the update, the hub rewrites stored `needs` and declared `has` from the old names to `infra`, and keeps accepting the old names from agents and the CLI.
 
 ### Threat model (honest version)

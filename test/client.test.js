@@ -373,7 +373,7 @@ describe('the client follows a moved hub, and only a moved hub (#222)', () => {
       if (c.settings.url !== ${JSON.stringify(dead)}) throw new Error('started on ' + c.settings.url);
       writeFileSync(${JSON.stringify(file)}, JSON.stringify({ url: 'http://127.0.0.1:${port}', token: 'new' }));
       console.log(JSON.stringify(await c.get('/api/projects')));`;
-    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k)));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k)));
     try {
       const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], { env: { ...env, HOME: home }, cwd });
       assert.deepEqual(JSON.parse(stdout), { ok: true, at: 'new' });

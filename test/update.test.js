@@ -129,7 +129,7 @@ describe('the package updates itself only to a release signed by its pinned key'
     const home = tmp('nuworq-upd-home-'), dir = join(home, '.nuworq', 'update');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'update.json'), JSON.stringify({ checked_at: Date.now(), news: { from: '0.3.0', to: '0.4.0', changes: ['- Releases tag themselves (#400)'], shown: {} } }));
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))), HOME: home, NUWORQ_URL: 'http://127.0.0.1:1' };
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: home, NUWORQ_URL: 'http://127.0.0.1:1' };
     const cli = (...args) => promisify(execFile)(process.execPath, [BIN, ...args], { env }).catch((e) => e);
     const mcpRun = await new Promise((resolve) => { const c = execFile(process.execPath, [BIN, 'mcp'], { env }, (e, stdout, stderr) => resolve({ stderr })); c.stdin.end(); });
     assert.doesNotMatch(mcpRun.stderr, /updated 0\.3\.0/);

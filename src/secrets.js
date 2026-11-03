@@ -36,7 +36,7 @@ export const SHAPES = [
   ['a Slack token', /\bxox[abprs]-[A-Za-z0-9-]{10,}/],
   ['a Slack webhook URL', /hooks\.slack\.com\/services\/T[A-Za-z0-9]+\/B[A-Za-z0-9]+\/[A-Za-z0-9]{16,}/],
   ['a private key', /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?-----/],
-  ['a nuworq token', /\b(?:nwq|trl)_[A-Za-z0-9_-]{40,}/], // trl_: tokens from before the rename
+  ['a nuworq token', /\bnwq_[A-Za-z0-9_-]{40,}/],
   ['a bearer token', /\bAuthorization:\s*Bearer\s+[A-Za-z0-9._~+/=-]{20,}/i],
 ];
 

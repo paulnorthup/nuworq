@@ -81,7 +81,7 @@ describe('a hub at its public URL', () => {
 // #164: nuworq.com is served from nuworq-site, so a unit that still passes --site-host starts as if it didn't.
 test('serve with the old --site-host (or NUWORQ_SITE_HOST) starts normally and says once that it is ignored', { timeout: 20_000 }, async () => {
   const env = {
-    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(NUWORQ|TRELLIS)_/.test(k))),
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))),
     HOME: mkdtempSync(join(tmpdir(), 'nuworq-sitehost-')), NO_COLOR: '1', NUWORQ_SITE_HOST: 'nuworq.com',
   };
   const child = spawn(process.execPath, [BIN, 'serve', '--demo', '--port', '0', '--public-url', 'https://app.example', '--site-host', 'nuworq.com'], { env });

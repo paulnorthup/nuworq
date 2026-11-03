@@ -98,9 +98,8 @@ const CHECKS_GRACE = 30 * MIN;
 const CHECKS_READ = 10 * MIN;
 const CI_RECENT = 30 * DAY; // checks recorded this recently mean CI checks the project's pull requests (ciGated)
 const MIRROR_RETRY = 5 * MIN; // after GitHub refuses the app a token for a mirror, ask again this often
-// The hub's own entries on the record: SYSTEM, GitHub's (webhooks, the pull requests it opens), or
-// "trellis" in events recorded before the rename. None of them is an agent.
-export const isSystem = (actor) => actor === SYSTEM || actor === GITHUB || actor === 'trellis';
+// The hub's own entries on the record: SYSTEM, or GitHub's (webhooks, the pull requests it opens). Neither is an agent.
+export const isSystem = (actor) => actor === SYSTEM || actor === GITHUB;
 // People act on the record as "@handle"; without accounts (local mode) the one human is "you".
 export const isHuman = (actor) => actor === HUMAN || String(actor ?? '').startsWith('@');
 const You = (by) => (by === HUMAN ? 'You' : by);
