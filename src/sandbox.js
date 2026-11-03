@@ -149,22 +149,51 @@ export function workerGitDenies({ home = null } = {}) {
 const CHECK_SCRIPT = /^(test|lint|check|typecheck|build)(:[\w.-]+)?$/;
 const NOT_A_CHECK = /deploy|release|publish|upload|push|migrate/i;
 
+// The kinds of project a worker knows how to check, by the file that marks each: the commands it may run (each
+// with any arguments, unless exact), and how it runs the whole suite and one test (#789). The worker's allowlist
+// (projectCommands) and the hints that name a test command (testsLine) both read this, so they can't drift.
+export const PROJECT_KINDS = [
+  { files: ['package.json'], allow: ['npm test', { exact: 'npm ci' }], all: 'npm test', one: 'npm test -- test/<file>.test.js', not: 'node --test' },
+  { files: ['pyproject.toml', 'requirements.txt', 'setup.py'], allow: ['pytest', 'python3 -m pytest'], all: 'pytest', one: 'pytest tests/test_<name>.py', not: 'python3 <file>' },
+  { files: ['Cargo.toml'], allow: ['cargo test', 'cargo build', 'cargo check', 'cargo clippy'], all: 'cargo test', one: 'cargo test <name>' },
+  { files: ['go.mod'], allow: ['go test', 'go build', 'go vet'], all: 'go test ./...', one: 'go test ./<package>' },
+];
+const allowRule = (a) => (typeof a === 'string' ? `Bash(${a}:*)` : `Bash(${a.exact})`);
+// Whether an allowlist (projectCommands) lets a worker run cmd: a rule's prefix with any arguments, or an exact one.
+export const allows = (allow, cmd) => allow.some((r) => {
+  const m = /^Bash\((.*?)(:\*)?\)$/.exec(r);
+  return m && (m[2] ? cmd === m[1] || cmd.startsWith(`${m[1]} `) : cmd === m[1]);
+});
+// The kinds of project whose marking file present(file) finds: a checkout's (has) or the hub's mirror's (git.js hasFile).
+export const kindsOf = (present) => PROJECT_KINDS.filter((k) => k.files.some((f) => present(f)));
+
 // The project's own checks: npm's check scripts by name (with arguments, e.g. npm test -- test/a.test.js),
 // installing what the lockfile says (npm ci: no packages by name, no lockfile rewrite), and the usual test and
 // build commands of Python, Rust and Go. Each still runs project code, which is why the sandbox is around it.
 // extra: the commands a person added in the project's settings (workerCommands), each with any arguments.
 export function projectCommands(home, extra = []) {
   const out = [];
-  if (has(home, 'package.json')) {
+  for (const kind of kindsOf((f) => has(home, f))) {
+    out.push(...kind.allow.map(allowRule));
+    if (!kind.files.includes('package.json')) continue;
     let scripts = {};
     try { scripts = JSON.parse(readFileSync(join(home, 'package.json'), 'utf8')).scripts ?? {}; } catch { /* not JSON: no scripts */ }
-    out.push('Bash(npm test:*)', 'Bash(npm ci)');
     for (const name of Object.keys(scripts).filter((n) => CHECK_SCRIPT.test(n) && !NOT_A_CHECK.test(n) && n !== 'test')) out.push(`Bash(npm run ${name}:*)`);
   }
-  if (['pyproject.toml', 'requirements.txt', 'setup.py'].some((f) => has(home, f))) out.push('Bash(pytest:*)', 'Bash(python3 -m pytest:*)');
-  if (has(home, 'Cargo.toml')) out.push('Bash(cargo test:*)', 'Bash(cargo build:*)', 'Bash(cargo check:*)', 'Bash(cargo clippy:*)');
-  if (has(home, 'go.mod')) out.push('Bash(go test:*)', 'Bash(go build:*)', 'Bash(go vet:*)');
   return [...new Set([...out, ...extra.map((c) => `Bash(${c}:*)`)])];
+}
+
+// How a worker runs this project's tests without stalling on approval (#789): the commands its allowlist has, for
+// the hints and the worker's prompt. present(file): whether the project has that file. extra: its worker commands.
+// With none it may run, it says to ask the operator, rather than name one that waits for an approval nobody gives.
+export function testsLine(present, extra = []) {
+  const kinds = kindsOf(present);
+  if (!kinds.length && !extra.length) {
+    return 'This project has no test command a worker may run without approval: don\'t start one (it stalls). Ask to: "operator" to run the tests, with the exact command, and use the answer as evidence.';
+  }
+  const ways = kinds.map((k) => `\`${k.all}\` (one test: \`${k.one}\`)`).concat(extra.map((c) => `\`${c}\``));
+  const not = kinds.map((k) => k.not).filter(Boolean).map((c) => `\`${c}\``);
+  return `Run tests with ${ways.join(', or ')}: the runner's sandbox allows ${ways.length > 1 ? 'these' : 'it'}${not.length ? `, not ${not.join(' or ')}, which stalls on approval` : ''}.`;
 }
 
 export const COMMANDS_HINT = 'Give whole commands, one per line, e.g. npm run e2e or make test: words only, no ;, |, &, $, quotes or redirects, and not an interpreter on its own (node, python3, bash…) or code given inline (node -e, npm exec, npx).';

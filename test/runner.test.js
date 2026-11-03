@@ -259,6 +259,9 @@ describe('nuworq worker --agent claude', () => {
       assert.match(stdout, /^export NODE_USE_ENV_PROXY=1(?= && \\\n)/m, "Node's fetch goes through the sandbox's proxy too");
       assert.match(stdout, /detached at origin\/main/);
       assert.match(stdout, /run only the tests that cover what you change\. For the whole suite, follow the hint `next` gives: where CI checks the pull request, CI runs it; otherwise run it once, just before you submit/);
+      // The test command its allowlist has, so it doesn't reach for node --test and stall (#789).
+      assert.match(stdout, /Run tests with `npm test` \(one test: `npm test -- test\/<file>\.test\.js`\), or `npm run e2e`: the runner/);
+      assert.match(stdout, /sandbox allows these, not `node --test`, which stalls on approval/);
       // Its test runs take 2 files at a time (or what the operator set), for every process the agent starts.
       const cap = stdout.match(/^export NUWORQ_TEST_CONCURRENCY=\S+(?= && \\\n)/m)?.[0];
       assert.ok(cap && stdout.indexOf(cap) < stdout.indexOf('claude -p'), stdout);
