@@ -61,7 +61,7 @@
 | S16 | index #how 1 | doesn't hold as quoted | priority comes before building-before-shaping (src/core.js:2633-2635) |
 | S23 | index #how 3 | doesn't hold as quoted | own-work rule holds (src/core.js:3932); by default a person reviews |
 | S25 | index #how 3 | doesn't hold as quoted | "a different agent" only under Run with it (src/core.js:3827) |
-| S28 | index #how 4 | holds (live, 2026-11-03), reworded by site #34; at the re-check it didn't | live: "done only when main has it: git shows main contains the branch, or GitHub reports its pull request merged", which matches src/github.js:102-108's merged event |
+| S28 | index #how 4 | holds (live, 2026-11-03), reworded by site #34 | live: "done only when main has it: git shows main contains the branch, or GitHub reports its pull request merged", which matches src/github.js:102-108's merged event |
 | S31 | index #how 4 | holds (live, 2026-11-03), reworded by site #34 | as S28 |
 | S38 | index #see mock | doesn't hold as quoted | the app says "since you last looked" (src/insight.js:94, 249) |
 | S41 | index #why | doesn't hold as quoted | as S2 |
@@ -112,8 +112,8 @@
 | S46 | model keys | holds | src/runtrust.js:118 scrubs ANTHROPIC_API_KEY and others from Claude workers |
 | S63 | read-only mirror | holds | src/ghapp.js:15 (contents: read) |
 | E4 | Turnstile | holds | test/earlyaccess.test.js "a passing Turnstile token is stored; none or a bad one is refused" |
-| W25 | workflow #cheaper | holds (live, 2026-11-03), reworded by site #40: "On by default; turn it off in Settings → Staffing."; at the re-check it didn't | "Off until you turn it on": on by default since #723, for new projects (src/core.js:621) and old ones nobody set (src/db.js:637-643); test/models.test.js "on by default" |
-| W27 | workflow #cheaper | holds (live, 2026-11-03), reworded by site #40: "Set none, and it uses Claude's Haiku, Sonnet and Opus 5.5…"; at the re-check it didn't | "nuworq never adds a model itself": Claude defaults to Haiku, Sonnet and Opus 5.5 when none are set (src/models.js:14, 37) |
+| W25 | workflow #cheaper | holds (live, 2026-11-03), reworded by site #40 | live: "On by default; turn it off in Settings → Staffing.", which matches #723: on for new projects (src/core.js:630) and for old ones nobody set (src/db.js:637-643); test/models.test.js "on by default" |
+| W27 | workflow #cheaper | holds (live, 2026-11-03), reworded by site #40 | live: "Set none, and it uses Claude's Haiku, Sonnet and Opus 5.5…", which matches the defaults used when none are set (src/models.js:14, 37) |
 | W28 | up to six | holds | src/models.js:9 |
 | W29 | quality bars | holds | src/models.js:62-66; test/routing.test.js |
 | W32 | 10% trials | holds | src/models.js:119; web/routingconfirm.js:7 |
