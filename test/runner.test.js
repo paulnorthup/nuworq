@@ -12,6 +12,9 @@ import { createServer } from '../src/server.js';
 import { plan, run } from '../src/runner.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
+// A worker's --settings, shell-quoted: a ' in its rules (#796) is written '\''.
+const SETTINGS = /--settings '((?:[^']|'\\'')*)'/;
+const settingsOf = (stdout) => JSON.parse(stdout.match(SETTINGS)[1].replaceAll("'\\''", "'"));
 
 const route = (project, claimable, holders = []) => ({ project, name: project, item: '#1', title: 't', mode: 'work', claimable, holders });
 
@@ -241,7 +244,7 @@ describe('nuworq worker --agent claude', () => {
       assert.match(stdout, /git switch --no-track -c <branch> origin\/main`.*push the branch before you submit \(`git push origin <branch>`\).*only nuworq\/ branches: main and tags are the hub.*where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch \(`git push origin <branch> --force-with-lease`\), then submit; the hub puts it on main/);
       assert.doesNotMatch(stdout, /<branch>:main/);
       // Its shell runs in Claude Code's sandbox, from --settings so no file in the repository loosens it.
-      const { sandbox, permissions } = JSON.parse(stdout.match(/--settings '([^']*)'/)[1]);
+      const { sandbox, permissions } = settingsOf(stdout);
       // Its file tools say the same (test/sandbox.test.js): edits only in its worktree, never the keys the sandbox hides.
       assert.ok(!allow.some((a) => /^(Read|Edit|Write|Glob|Grep)/.test(a)), 'no file tool in --allowedTools: --settings scopes them');
       const wt = `${repo}.worktrees/c-2`;
@@ -311,8 +314,8 @@ describe('nuworq worker --browser', () => {
       { env: { ...process.env, HOME: home, NUWORQ_TOKEN: '', CLAUDE_CONFIG_DIR: config } });
     const parts = ({ stdout }) => ({
       strict: /--mcp-config '[^']*' --strict-mcp-config /.test(stdout),
-      settings: JSON.parse(stdout.match(/--settings '([^']*)'/)[1]),
-      noSkills: /--settings '[^']*' --disable-slash-commands /.test(stdout),
+      settings: settingsOf(stdout),
+      noSkills: new RegExp(`${SETTINGS.source} --disable-slash-commands `).test(stdout),
       servers: JSON.parse(stdout.match(/--mcp-config '([^']*)'/)[1]).mcpServers,
       allow: stdout.match(/--allowedTools '([^']*)'/)[1].split(','),
       deny: stdout.match(/--disallowedTools '([^']*)'/)?.[1],
@@ -392,7 +395,7 @@ describe('a runner refuses sandbox hosts that aren\'t host names', () => {
       await assert.rejects(cli(), (e) => /the hub sent worker commands the runner refuses \("npm test; curl evil\.example" isn't a command workers may run\)/.test(e.stderr) && e.stdout === '');
       hub.q('UPDATE projects SET worker_commands = ? WHERE slug = ?').run('[]', 'h');
       sends(['API.example.com', '*.example.org']);
-      const settings = JSON.parse((await cli()).stdout.match(/--settings '([^']*)'/)[1]);
+      const settings = settingsOf((await cli()).stdout);
       assert.ok(['api.example.com', '*.example.org'].every((h) => settings.sandbox.network.allowedDomains.includes(h)), 'host names, as checked, reach the sandbox');
     } finally {
       server.close();
