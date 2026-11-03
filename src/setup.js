@@ -4,8 +4,6 @@
 // mode: 'ask' with a person at the terminal; 'yes' or 'no' (--yes, --no, or no terminal: 'no') answers every
 // question without asking. Nothing is installed or opted in without a yes.
 
-import { CAPS } from './runner.js';
-
 export const BUDGET = 20; // dollars a day: the cap a person accepts or types over
 
 // How this machine pays for Claude (#776), and the runner caps that fit. On an API key every run spends real money,
@@ -13,6 +11,7 @@ export const BUDGET = 20; // dollars a day: the cap a person accepts or types ov
 // windows are: a worker gets fewer minutes and no dollar cap.
 export const WORKER_USD = 10; // dollars one worker may spend on an API key
 export const SUB_MINUTES = 60; // minutes one worker may run on a subscription
+export const API_MINUTES = 90; // minutes one worker may run on an API key, besides its dollar cap
 const PAID = { api: 'an API key', subscription: 'a subscription' };
 
 // What this machine seems to pay with: an API key when ANTHROPIC_API_KEY is set, else what `claude auth status`
@@ -67,8 +66,8 @@ export async function paysOf(mode, ask, detected, { pays: named, budget } = {}) 
   }
   const usd = await budgetOf(mode, ask, budget);
   const worker = mode === 'ask' ? await dollarsAsked(ask, `Cap for each worker, in dollars [${WORKER_USD}]: `, WORKER_USD) : WORKER_USD;
-  lines.push(`On an API key every run spends money: each worker stops at $${worker} or ${CAPS['max-minutes']} minutes, and the runner at $${usd} in all (--worker-usd ${worker} --max-usd ${usd}).`);
-  return { pays, usd, args: ['--pays', pays, '--max-minutes', String(CAPS['max-minutes']), '--worker-usd', String(worker), '--max-usd', String(usd)], lines };
+  lines.push(`On an API key every run spends money: each worker stops at $${worker} or ${API_MINUTES} minutes, and the runner at $${usd} in all (--worker-usd ${worker} --max-usd ${usd}).`);
+  return { pays, usd, args: ['--pays', pays, '--max-minutes', String(API_MINUTES), '--worker-usd', String(worker), '--max-usd', String(usd)], lines };
 }
 
 // A dollar amount asked for: what is typed, def on Enter, asked again once when it isn't one.

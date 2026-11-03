@@ -208,10 +208,10 @@ describe('connect asks how this machine pays for Claude, and sets the caps to fi
   });
 
   test("the runner's start line names the caps in force and where they came from", () => {
-    assert.equal(capsLine(runCaps({})), 'each stops at 90m or $25 (caps: the defaults)');
+    assert.equal(capsLine(runCaps({})), 'no caps (none set: nuworq connect sets them)', 'no defaults since #795');
     assert.equal(capsLine(runCaps({ pays: 'subscription', 'max-minutes': '60', 'worker-usd': '0' })), 'each stops at 60m, no dollar cap (caps: set by connect for a subscription)');
     assert.equal(capsLine(runCaps({ pays: 'api', 'max-minutes': '90', 'worker-usd': '10', 'max-usd': '20' })), 'each stops at 90m or $10; $20 in all (caps: set by connect for an API key)');
-    assert.equal(capsLine(runCaps({ 'worker-usd': '5' })), 'each stops at 90m or $5 (caps: from its flags)');
+    assert.equal(capsLine(runCaps({ 'worker-usd': '5' })), 'each stops at $5 (caps: from its flags)');
     assert.throws(() => runCaps({ pays: 'credit' }), /--pays expects api or subscription/);
   });
 });

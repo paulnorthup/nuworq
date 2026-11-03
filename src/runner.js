@@ -303,15 +303,16 @@ export function runCaps(flags = {}) {
 }
 
 // Where the caps came from (#776), for the runner's start line: connect's question (it writes --pays with them),
-// flags typed, or the defaults.
+// flags typed, or none set (#795: there are no defaults).
 const PAYS = { api: 'an API key', subscription: 'a subscription' };
 export function capsFrom(flags = {}) {
   if (PAYS[flags.pays]) return `set by connect for ${PAYS[flags.pays]}`;
-  return Object.keys(CAPS).some((k) => flags[k] !== undefined) ? 'from its flags' : 'the defaults';
+  return ['max-minutes', 'max-usd', 'worker-usd'].some((k) => flags[k] !== undefined) ? 'from its flags' : 'none set';
 }
 
-// The caps in force, in words: "each stops at 90m or $25; $20 in all (caps: the defaults)".
+// The caps in force, in words: "each stops at 90m or $25; $20 in all (caps: from its flags)".
 export function capsLine({ maxMinutes, maxUsd, workerUsd, from }) {
+  if (maxMinutes === Infinity && maxUsd === Infinity && workerUsd === Infinity) return `no caps (${from}: nuworq connect sets them)`;
   const limits = [maxMinutes < Infinity && `${maxMinutes}m`, workerUsd < Infinity && `$${workerUsd}`].filter(Boolean);
   const each = limits.length ? `each stops at ${limits.join(' or ')}` : 'no worker cap';
   return `${each}${workerUsd === Infinity ? ', no dollar cap' : ''}${maxUsd < Infinity ? `; $${maxUsd} in all` : ''} (caps: ${from})`;
