@@ -125,6 +125,29 @@ describe('each item says its kind of change (#863)', () => {
     assert.match(w.releases()[0].summary, /\n\n1\.3\.0: minor, for 1 feature \(#\d+\); no breaking change\.\n\n/);
   });
 
+  test('a person edited the draft: on redraft the hub\'s "why" line follows the version, their words stay (#868)', () => {
+    const w = world({ tags: [['v1.2.3', T0]] });
+    w.milestone('Polish', [{ title: 'Fix the crash', change: 'fix' }]);
+    const [r] = w.releases();
+    w.hub.humanOp('p', 'update', { item: r.id, summary: r.summary.replace('- Fix the crash', '- Fixed the crash on start') });
+    const feature = w.add('Add export');
+    w.done(feature);
+    w.hub.humanOp('p', 'release');
+    const s = w.releases()[0];
+    assert.equal(s.title, 'Release v1.3.0');
+    assert.match(s.summary, new RegExp(`\\n\\n1\\.3\\.0: minor, for 1 feature \\(#${feature.slice(1)}\\); no breaking change\\.\\n\\n`));
+    assert.doesNotMatch(s.summary, /1\.2\.4: patch/);
+    assert.match(s.summary, /- Fixed the crash on start/, 'the person\'s edit is kept');
+    assert.match(s.summary, /Landed since this was edited:\n\n\*\*In this release\*\*\n\n- Add export/, 'the feature is still added');
+    // A person's own rewrite of the line is left alone.
+    w.hub.humanOp('p', 'update', { item: r.id, summary: s.summary.replace(/\n\n1\.3\.0: minor[^\n]*\n\n/, '\n\nA minor release: export is new.\n\n') });
+    w.done(w.add('Add import'));
+    w.hub.humanOp('p', 'release');
+    const t = w.releases()[0].summary;
+    assert.match(t, /A minor release: export is new\./);
+    assert.doesNotMatch(t, /1\.3\.0: minor, for 2 features/);
+  });
+
   test('a person\'s higher version is kept through redrafts, and the summary says so (#679)', () => {
     const w = world({ pkg: '0.11.0' });
     w.milestone('Push', [{ title: 'Add export', change: 'feature' }]);
