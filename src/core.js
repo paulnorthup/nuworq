@@ -327,7 +327,7 @@ export function layered(headline, summary = '', detail = '', what = 'headline', 
 
 // What an agent session hasn't been sent yet (#539). r: a checkin, next, claim or look response, trimmed in place to
 // what changed since sent (the session's cursor). The mission and autonomy, and each decision, field note and
-// agent's presence, are sent once and again only when they change. Decisions and agents are compared as whole
+// agent's presence, and who else is working, are sent once and again only when they change. Decisions and agents are compared as whole
 // lists: one retired or gone resends the list. Field notes add up, since each response picks its own ten.
 // all: send everything (look with notes: "all"). Returns the new cursor, and the line saying what was left out.
 const SENT_ONCE = ['mission', 'autonomy'];
@@ -364,6 +364,13 @@ export function sendOnce(r, sent = {}, { all = false } = {}) {
     if (fresh.length) r.agents = fresh; else delete r.agents;
     cursor.agents = now;
   }
+  // Who else is working, and on what (#514): the whole list, again only when any of it changed. A reply without
+  // it forgets it, so the list is sent whole when it comes back.
+  if (Array.isArray(r.others_working)) {
+    const f = fingerprint(r.others_working);
+    if (!all && sent.others_working === f) { same.push('who else is working'); delete r.others_working; }
+    cursor.others_working = f;
+  } else delete cursor.others_working;
   return { cursor, unchanged: same.length ? `${same.join(', ')}: as this session was last sent them. To see them again: look with notes: "all".` : '' };
 }
 

@@ -62,6 +62,24 @@ describe('an agent session is sent the mission, decisions, field notes and who i
     assert.ok(r.field_notes.some((n) => /Field note 99/.test(n.note)) && r.field_notes.length < 10);
   });
 
+  test('who else is working is sent once, and whole again when any of it changes (#514)', () => {
+    const { hub, op } = setup();
+    hub.humanOp('p', 'create', { title: 'Another thing', acceptance: 'x' });
+    hub.agentOp('p', 'claim', 'w2', { item: '#1', touching: ['src/a.js'] });
+    const first = op('checkin');
+    assert.equal(first.others_working.length, 1);
+    const again = op('checkin');
+    assert.ok(!('others_working' in again));
+    assert.match(again.unchanged, /who else is working/);
+    hub.agentOp('p', 'claim', 'w3', { item: '#2' });
+    assert.equal(op('checkin').others_working.length, 2, 'one more at work: the whole list');
+    hub.agentOp('p', 'handoff', 'w2', { item: '#1', headline: 'stopping' });
+    hub.agentOp('p', 'handoff', 'w3', { item: '#2', headline: 'stopping' });
+    assert.deepEqual(op('checkin').others_working ?? [], [], 'nobody else at work');
+    hub.agentOp('p', 'claim', 'w3', { item: '#2' });
+    assert.equal(op('checkin').others_working.length, 1, 'back after an empty spell: sent again');
+  });
+
   test('a retired decision resends the whole list, so nothing stale is kept', () => {
     const { hub, op } = setup();
     op('checkin');
