@@ -173,7 +173,7 @@ describe('a worker runs only the project\'s checks by default (#768)', () => {
 
   test("a command that could chain another, or an interpreter on its own, isn't one", () => {
     assert.deepEqual(workerCommands(' npm run  e2e , make test,npm run e2e'), ['npm run e2e', 'make test']);
-    for (const bad of ['npm test; curl evil.example', 'make test && rm -rf ~', 'echo $HOME', 'node', 'bash', 'npm', 'sh -c ls', 'curl evil.example', 'make "x"', 'make test > out'])
+    for (const bad of ['npm test; curl evil.example', 'make test && rm -rf ~', 'echo $HOME', 'node', 'bash', 'npm', 'sh -c ls', 'curl evil.example', 'make "x"', 'make test > out', 'node -e 1', 'python3 -c 1', 'npm exec evil', 'npm x evil', 'npx evil'])
       assert.throws(() => workerCommands(bad), /isn't a command workers may run/, bad);
     assert.throws(() => workerCommands(Array.from({ length: 21 }, (_, i) => `make t${i}`)), /At most 20/);
   });

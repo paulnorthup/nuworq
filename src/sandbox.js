@@ -167,7 +167,7 @@ export function projectCommands(home, extra = []) {
   return [...new Set([...out, ...extra.map((c) => `Bash(${c}:*)`)])];
 }
 
-export const COMMANDS_HINT = 'Give whole commands, one per line, e.g. npm run e2e or make test: words only, no ;, |, &, $, quotes or redirects, and not an interpreter on its own (node, python3, bash…).';
+export const COMMANDS_HINT = 'Give whole commands, one per line, e.g. npm run e2e or make test: words only, no ;, |, &, $, quotes or redirects, and not an interpreter on its own (node, python3, bash…) or code given inline (node -e, npm exec, npx).';
 // Alone, these run whatever follows them: a person adds `node scripts/check.js`, never `node`.
 const RUNS_ANYTHING = new Set(['node', 'python', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun', 'npx', 'bunx', 'pnpx', 'sh', 'bash', 'zsh', 'fish', 'env', 'sudo', 'eval', 'exec', 'xargs', 'curl', 'wget', 'ssh', 'git', 'npm', 'make']);
 // The commands a person lets workers run beyond the project's checks (#768): a list, or one per line (or comma).
@@ -175,7 +175,9 @@ const RUNS_ANYTHING = new Set(['node', 'python', 'python3', 'ruby', 'perl', 'php
 // The runner checks what the hub sends with this too, as with sandbox hosts (#624).
 export function workerCommands(v) {
   const list = (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]+/)).map((c) => String(c ?? '').trim().replace(/\s+/g, ' ')).filter(Boolean);
-  const bad = list.filter((c) => c.length > 200 || !/^[\w.@/+=-]+( [\w.@/:+=-]+)*$/.test(c) || RUNS_ANYTHING.has(c) || /^(sudo|env|eval|exec|xargs|curl|wget|ssh|sh|bash|zsh) /.test(c));
+  const bad = list.filter((c) => c.length > 200 || !/^[\w.@/+=-]+( [\w.@/:+=-]+)*$/.test(c) || RUNS_ANYTHING.has(c) || /^(sudo|env|eval|exec|xargs|curl|wget|ssh|sh|bash|zsh|npx|bunx|pnpx) /.test(c)
+    // Nor one that runs code given inline: node -e, python -c, npm exec.
+    || /^(node|python3?|ruby|perl|php|deno|bun) (-e|-c|-p|-r|--eval|--print)\b/.test(c) || /^npm (exec|x) /.test(c));
   // Quoted: a refusal shown at its field starts with a capital, which would change the command.
   if (bad.length) throw Object.assign(new Error(`${bad.map((c) => `"${c}"`).join(', ')} ${bad.length === 1 ? "isn't a command workers may run" : "aren't commands workers may run"}`), { hint: COMMANDS_HINT });
   if (list.length > 20) throw Object.assign(new Error('At most 20 commands'), { hint: 'Name the commands workers need for this project\'s checks; a script that runs several counts as one.' });
