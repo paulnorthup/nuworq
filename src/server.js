@@ -149,7 +149,7 @@ const REPO_PAGE = 30; // repositories per page in "+ Project"
 // is off, and POST /api/stripe/webhook answers 404.
 // feedbackProject (workspaces mode, with an admin host): "<workspace>/<project>", where feedback about nuworq that
 // the owners approve becomes a proposal (#295). '': feedback is off. feedbackBatchMs: how long its push waits for more.
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
@@ -374,10 +374,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     hub._running = (hub._running ?? 0) + 1;
     return work.finally(() => hub._running--);
   };
-  checkApp();
-  // Drift that built up while the hub was down becomes its tidy job now, not a sweep later (#536).
-  for (const hub of hubs()) try { hub.tidyAll(); } catch (e) { console.error('checking milestones and field notes failed', e); }
-  const sweeper = setInterval(() => {
+  // The background loops (mirror fetches, pull-request merges, preconditions, tidy jobs). One hub runs them at a
+  // time (#523): a standby hub, started beside the one serving, runs them from lead() and stops at quiet().
+  const sweep = () => {
     checkApp();
     sweepMirrors(); // mirrors are the process's, not one hub's
     // Workspaces nobody uses close; one closed workspace a tick opens for its sweep (and closes again later).
@@ -408,7 +407,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     // Feedback whose work landed: its sender hears once (#297).
     if (feedbackOn) try { tellFixed(); } catch (e) { console.error('telling senders their feedback is fixed failed', e); }
-  }, sweepMs);
+  };
+  let sweeper = null;
+  const lead = () => {
+    if (sweeper) return;
+    checkApp();
+    // Drift that built up while the hub was down becomes its tidy job now, not a sweep later (#536).
+    for (const hub of hubs()) try { hub.tidyAll(); } catch (e) { console.error('checking milestones and field notes failed', e); }
+    sweeper = setInterval(sweep, sweepMs);
+  };
+  const quiet = () => { clearInterval(sweeper); sweeper = null; };
+  if (!standby) lead();
   // Requests held open (/api/stream, /api/wait), counted per hub and per token, sign-in, or (local mode) address,
   // so no one caller ties up the hub's connections. A wait is also counted per listener (its --as name, else the
   // session keys it sends): one machine's operators share a token, each with a listener of its own, and a
@@ -2069,7 +2078,20 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   if (!spaces) server.auth = scopeOf(target).authz;
   server.package = pkg; // resolves to the built package, or null when this hub serves none
 
-  server.on('close', () => { clearInterval(sweeper); clearInterval(keepalive); });
+  server.on('close', () => { quiet(); clearInterval(keepalive); });
+  server.lead = lead;
+  server.quiet = quiet;
+  server.leading = () => !!sweeper;
+  // A connection the supervisor accepted and passed on (#523): served like one this server accepted, and drain waits for it.
+  // net checks maxConnections only for sockets it accepts itself, so the cap (#261) is applied here too: past it, dropped.
+  const adopted = new Set();
+  server.adopt = (socket) => {
+    if (adopted.size >= server.maxConnections) return socket.destroy();
+    adopted.add(socket);
+    socket.once('close', () => adopted.delete(socket));
+    server.emit('connection', socket);
+    socket.resume();
+  };
   // Shutting down without dropping work (#545): accept no more connections; answer waits now, empty; tell streams
   // to reconnect (to whichever hub answers next) and end them; let requests in flight finish, each on a connection
   // that closes after it. Resolves once every connection is gone, or after ms with the rest cut.
@@ -2082,7 +2104,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     for (const res of open) res.once('finish', idle);
     server.on('request', (_, res) => res.once('finish', idle));
     const cut = setTimeout(() => server.closeAllConnections(), ms);
-    server.close(() => { clearTimeout(cut); resolve(); });
+    // Passed-on connections aren't counted by net, so wait for them too.
+    const gone = () => { if (adopted.size) return setTimeout(gone, 50); clearTimeout(cut); resolve(); };
+    server.close(gone);
     server.closeIdleConnections();
   });
   return server;

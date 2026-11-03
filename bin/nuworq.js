@@ -1804,7 +1804,9 @@ async function serve(flags) {
   // The GitHub App: from the environment, else the one the hub created for itself (Create GitHub App).
   const appFile = join(dataHome(flags), 'github-app.json');
   ignoreSiteHost(flags);
-  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), ...(flags.smoke ? SMOKE : {}) });
+  const { handedOver, handoff } = await import('../src/handoff.js');
+  const handed = handedOver() && !flags.smoke; // under serve --follow: the supervisor owns the port (#523)
+  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, ...(flags.smoke ? SMOKE : {}) });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -1814,15 +1816,31 @@ hint: Create one, then start again:
       node ${JSON.stringify(BIN)} token create <your-name> --role human --db ${JSON.stringify(db)}`);
     process.exit(1);
   }
-  server.listen(port, host, async () => {
-    const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
-    if (flags.smoke) return console.log(`nuworq booted on ${db} at ${url} (smoke: no pushes, no sweeps)`);
+  // Drained first (#545): requests in flight finish, waits answer and streams reconnect. A second signal doesn't wait.
+  let stopping = false;
+  const stop = async () => { if (stopping) process.exit(0); stopping = true; await server.drain(); process.exit(0); };
+  const urlOf = (p) => `http://${host.includes(':') ? `[${host}]` : host}:${p}`;
+  let notifier = null;
+  // What only the hub that leads does: the Notifier, and telling local clients where the hub is.
+  const lead = (url) => {
     if (!flags.demo) {
       // Let agents and the CLI on this machine find the hub without configuration.
       try { mkdirSync(dirname(HUB_FILE), { recursive: true }); writeFileSync(HUB_FILE, JSON.stringify({ url, pid: process.pid }) + '\n'); } catch {}
     }
-    const notifier = new Notifier(hub, { baseUrl: publicUrl || url }).start();
-    server.on('close', () => notifier.stop());
+    notifier = new Notifier(hub, { baseUrl: publicUrl || url }).start();
+  };
+  const quiet = () => { notifier?.stop(); notifier = null; };
+  if (handed) {
+    server.on('close', quiet);
+    handoff(server, { lead: () => lead(urlOf(port)), quiet, stop });
+  }
+  const onUp = async () => {
+    const url = handed ? urlOf(port) : urlOf(server.address().port);
+    if (flags.smoke) return console.log(`nuworq booted on ${db} at ${url} (smoke: no pushes, no sweeps)`);
+    if (!handed) {
+      lead(url);
+      server.on('close', quiet);
+    }
     const authLine = auth === 'required'
       ? `${green('locked')}: browsers log in with a human token; agents send NUWORQ_TOKEN (an agent token)${trustProxy ? '; trusting X-Forwarded-* from your proxy' : ''}`
       : `${amber('open')} on loopback: no login (only this machine can reach it)`;
@@ -1837,10 +1855,9 @@ ${pkg ? `    Install (once):     npm install -g ${base}/nuworq.tgz\n` : ''}    C
     Keep workers going: nuworq run --workers 3 --agent claude   (add --browser for UI checks; Ctrl-C stops)
     Shell:              nuworq guide
     Tool schemas:       ${base}/api/tools?format=openai`)}`);
-  });
-  // Drained first (#545): requests in flight finish, waits answer and streams reconnect. A second signal doesn't wait.
-  let stopping = false;
-  const stop = async () => { if (stopping) process.exit(0); stopping = true; await server.drain(); process.exit(0); };
+  };
+  if (handed) onUp();
+  else server.listen(port, host, onUp);
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }
@@ -1875,6 +1892,9 @@ async function serveFollow(flags) {
     ci: await followCi(repo, data),
     dir: join(data, 'hub-src'),
     next: join(data, 'hub-next'),
+    alt: join(data, 'hub-alt'),
+    // The supervisor holds this address and passes connections to the hub (#523), so a deploy has no gap.
+    listen: flags.demo ? null : { host, port },
     args,
     url: `http://${probe.includes(':') ? `[${probe}]` : probe}:${port}`,
     // A red main is reported in the workspace whose project lives in this repo (#561).
@@ -1925,9 +1945,13 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
   const feedbackProject = String(flags['feedback-project'] || envVar('FEEDBACK_PROJECT') || '');
   // Billing (#227): Stripe, from the environment only; off unless NUWORQ_STRIPE_WEBHOOK_SECRET is set.
   const { billingFromEnv } = await import('../src/billing.js');
-  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject, ...(flags.smoke ? SMOKE : {}) });
-  server.listen(port, host, () => {
-    const url = `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
+  const { handedOver, handoff } = await import('../src/handoff.js');
+  const handed = handedOver() && !flags.smoke; // under serve --follow: the supervisor owns the port (#523)
+  const server = createServer(spaces, { trustProxy, baseDomain, publicUrl, adminHost, oauth: oauthFromEnv(), orgCap, githubApp: appFromEnv() ?? appFromFile(join(dataHome(flags), 'github-app.json')), packageDir: join(dataHome(flags), 'package'), earlyAccess, billing: billingFromEnv(), feedbackProject, standby: handed, ...(flags.smoke ? SMOKE : {}) });
+  const urlOf = (p) => `http://${host.includes(':') ? `[${host}]` : host}:${p}`;
+  const pushUp = (url) => { pushes = notifyWorkspaces(spaces, (name) => workspaceUrl(name, { baseDomain, publicUrl, url })); };
+  const onUp = () => {
+    const url = handed ? urlOf(port) : urlOf(server.address().port);
     if (flags.smoke) return console.log(`nuworq booted ${spaces.list().length} workspaces in ${dir} at ${url} (smoke: no pushes, no sweeps)`);
     const names = spaces.list();
     console.log(`${green('●')} ${bold('nuworq')} is serving workspaces at ${bold(url)}  ${dim(`(${dir})`)}
@@ -1936,11 +1960,15 @@ async function serveWorkspaces(flags, { host, port, trustProxy }) {
 ${dim(`  Reached at ${baseDomain ? `<workspace>.${baseDomain} or ` : ''}${url}/w/<workspace>/
   Add one:   node ${JSON.stringify(BIN)} workspace create <name>
   Then:      node ${JSON.stringify(BIN)} token create <you> --role human --workspace <name>`)}`);
-    // Pushes: each workspace's own channels, linking to its own address.
-    pushes = notifyWorkspaces(spaces, (name) => workspaceUrl(name, { baseDomain, publicUrl, url }));
-  });
+    // Pushes: each workspace's own channels, linking to its own address. Only the hub that leads sends them (#523).
+    if (!handed) pushUp(url);
+  };
   let stopping = false;
   const stop = async () => { if (stopping) process.exit(0); stopping = true; pushes?.stop(); await server.drain(); spaces.close(); process.exit(0); };
+  if (handed) {
+    handoff(server, { lead: () => pushUp(urlOf(port)), quiet: () => { pushes?.stop(); pushes = null; }, stop });
+    onUp();
+  } else server.listen(port, host, onUp);
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }
