@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Hub } from '../src/core.js';
 import { view } from '../src/insight.js';
-import { claimedHashes } from '../src/git.js';
+import { claimedHashes, sameChange, mergesBase } from '../src/git.js';
 
 function repo() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-git-')));
@@ -114,5 +114,98 @@ describe('git facts on submit', () => {
   test('only plausible commit claims are checked', () => {
     assert.deepEqual(claimedHashes({ evidence: [{ label: 'npm test: 1234567 assertions' }, { label: 'commit d58e260' }] }), ['d58e260']);
     assert.deepEqual(claimedHashes({ headline: 'acceded to the request', summary: 'committed as 5fc2e1c; deadbeef elsewhere' }), ['5fc2e1c']);
+  });
+});
+
+// Whether a moved head is the reviewed change (#605, #784): the lines it removes and adds per file, not their context.
+describe('sameChange', () => {
+  function history() {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-same-')));
+    const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const write = (files) => { for (const [f, s] of Object.entries(files)) writeFileSync(join(dir, f), s); g('add', '-A'); };
+    const keys = (...k) => `export const NEW = {\n${['old', ...k].map((x) => `  ${x}: '2026-11-01',\n`).join('')}};\n`;
+    const doc = Array.from({ length: 20 }, (_, i) => `line ${i}\n`).join('');
+    const bin = (b) => Buffer.from([0, 1, 2, 3, 0, b]);
+    g('init', '-q', '-b', 'main');
+    write({ 'new.js': keys(), 'doc.txt': doc, 'img.bin': bin(255) });
+    g('commit', '-qm', 'init');
+    // The reviewed change: a key after old's, a rename with an edit, a binary change.
+    const work = (more = {}) => {
+      g('mv', 'doc.txt', 'docs.txt');
+      write({ 'new.js': keys('mine'), 'docs.txt': `${doc}line 20\n`, 'img.bin': bin(254), ...more });
+      g('commit', '-qm', 'work');
+      return g('rev-parse', 'HEAD');
+    };
+    g('switch', '-qc', 'work');
+    const reviewed = work();
+    // Main adds its own key right beside it.
+    g('switch', '-q', 'main');
+    write({ 'new.js': keys('theirs') });
+    g('commit', '-qm', 'theirs');
+    // The change made again on top of parent, with new.js as given and anything more.
+    const on = (parent, resolved, more = {}) => { g('switch', '-q', '--detach', parent); return work({ 'new.js': resolved, ...more }); };
+    // from merged into into; a conflict resolved with new.js as given.
+    const merged = (resolved, into = reviewed, from = 'main') => {
+      g('switch', '-q', '--detach', into);
+      try { g('merge', '-q', '--no-edit', from); } catch {
+        write({ 'new.js': resolved });
+        g('commit', '-q', '--no-edit');
+      }
+      return g('rev-parse', 'HEAD');
+    };
+    return { dir, g, keys, write, bin, reviewed, on, merged };
+  }
+
+  test('a rebase across main editing beside the change is the same change', () => {
+    const h = history();
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('theirs', 'mine'))), true);
+  });
+
+  test('a merge of main, resolved by keeping both sides, is the same change, and merges main', () => {
+    const h = history();
+    const m = h.merged(h.keys('theirs', 'mine'));
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, m), true);
+    assert.equal(mergesBase(h.dir, 'main', m), true);
+    assert.equal(mergesBase(h.dir, 'main', h.reviewed), false, 'not a merge');
+  });
+
+  test('a clean merge of main is the same change', () => {
+    const h = history();
+    const rebased = h.on('main', h.keys('theirs', 'mine'));
+    h.g('switch', '-q', 'main');
+    h.write({ 'other.txt': 'x\n' });
+    h.g('commit', '-qm', 'other');
+    const m = h.merged('', rebased);
+    assert.equal(mergesBase(h.dir, 'main', m), true);
+    assert.equal(sameChange(h.dir, 'main', rebased, m), true);
+  });
+
+  test('a resolution that alters or drops one of its lines, or adds one, is not', () => {
+    const h = history();
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.merged(h.keys('theirs', 'mine2'))), false, 'altered');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.merged(h.keys('theirs'))), false, 'dropped');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('theirs', 'mine', 'extra'))), false, 'added');
+  });
+
+  test('the same lines in another file, an extra file, another binary or another rename are not', () => {
+    const h = history();
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('theirs'), { 'new2.js': `  mine: '2026-11-01',\n` })), false, 'another file');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('theirs', 'mine'), { 'extra.js': 'x\n' })), false, 'extra file');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.on('main', h.keys('theirs', 'mine'), { 'img.bin': h.bin(253) })), false, 'binary');
+    h.on('main', h.keys('theirs', 'mine'));
+    h.g('mv', 'docs.txt', 'doc2.txt');
+    h.g('commit', '-qm', 'renamed elsewhere');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, h.g('rev-parse', 'HEAD')), false, 'rename');
+  });
+
+  test("a merge of a main the hub's copy doesn't have yet is not", () => {
+    const h = history();
+    // Upstream main moved on past the copy's main.
+    h.g('switch', '-qc', 'upstream', 'main');
+    h.write({ 'later.txt': 'later\n' });
+    h.g('commit', '-qm', 'later');
+    const m = h.merged(h.keys('theirs', 'mine'), h.reviewed, 'upstream');
+    assert.equal(sameChange(h.dir, 'main', h.reviewed, m), false);
+    assert.equal(sameChange(h.dir, 'upstream', h.reviewed, m), true, 'once the copy has it');
   });
 });

@@ -54,12 +54,13 @@ function world({ fail = null, autoFail = null } = {}) {
   const events = (n, type) => hub.q('SELECT * FROM events WHERE item_id = ? AND type = ? ORDER BY id').all(item(n).id, type);
 
   // An agent builds #n on its branch and submits it; push: whether the branch reaches origin first.
-  const build = (agent, { push = true, model = 'claude-opus-5-5' } = {}) => {
+  // files: what it writes, else <agent>.txt.
+  const build = (agent, { push = true, model = 'claude-opus-5-5', files = { [`${agent}.txt`]: 'work\n' } } = {}) => {
     op(agent, 'checkin', { model });
     const j = op(agent, 'next');
     const dir = clone(`work-${agent}-${j.item.slice(1)}`);
     git(dir, 'switch', '-q', '-c', j.branch, 'origin/main');
-    writeFileSync(join(dir, `${agent}.txt`), 'work\n');
+    for (const [f, s] of Object.entries(files)) writeFileSync(join(dir, f), s);
     git(dir, 'add', '.');
     git(dir, 'commit', '-q', '-m', `work by ${agent}`);
     if (push) git(dir, 'push', '-q', 'origin', j.branch);
@@ -540,10 +541,11 @@ describe('accepted remote work lands through a pull request the hub opens', () =
 // rebased. GitHub, here, answers pull() with the branch as the bare repo has it, and refuses a merge pinned to another head.
 describe('landing merges only the reviewed head', () => {
   // #1 built, accepted with its PR open; GitHub's view of the PR follows the branch on origin.
-  async function accepted({ auto = true } = {}) {
+  // beside (#784): #1 and main each add a key after the same line of README, as items do in web/new.js.
+  async function accepted({ auto = true, beside = false } = {}) {
     const w = world();
     w.hub.humanOp('demo', 'create', { title: 'Api endpoint', acceptance: 'x' });
-    const j = w.build('a1');
+    const j = w.build('a1', beside ? { files: { README: README('mine') } } : {});
     const reviewed = w.git(j.dir, 'rev-parse', 'HEAD');
     w.hub.humanOp('demo', 'accept', { item: '#1' });
     await w.hub.prsSettled();
@@ -562,13 +564,44 @@ describe('landing merges only the reviewed head', () => {
     // Main moves on, apart from #1's file.
     const other = w.git(j.dir, 'rev-parse', '--show-toplevel').replace(/work-[^/]+$/, 'seed');
     w.git(other, 'pull', '-q', 'origin', 'main');
-    writeFileSync(join(other, 'OTHER'), 'x\n');
+    writeFileSync(join(other, beside ? 'README' : 'OTHER'), beside ? README('theirs') : 'x\n');
     w.git(other, 'add', '.');
     w.git(other, 'commit', '-q', '-m', 'other work');
     w.git(other, 'push', '-q', 'origin', 'main');
     return { ...w, j, reviewed, head, state };
   }
+  const README = (...keys) => `api\n${keys.map((k) => `  ${k}: '2026-11-02',\n`).join('')}`;
   const pass = async (w) => { w.advance(60_000); await w.hub.mergeReady(); await w.hub.prsSettled(); };
+  // Main merged into #1's branch and pushed, as an operator who can't force-push lands it (#784); a conflict in
+  // README resolved as given.
+  const mergeMain = (w, resolved = '') => {
+    w.git(w.j.dir, 'fetch', '-q', 'origin');
+    try { w.git(w.j.dir, 'merge', '-q', '--no-edit', 'origin/main'); } catch {
+      writeFileSync(join(w.j.dir, 'README'), resolved);
+      w.git(w.j.dir, 'add', 'README');
+      w.git(w.j.dir, 'commit', '-q', '--no-edit');
+    }
+    w.git(w.j.dir, 'push', '-q', 'origin', w.j.branch);
+    return w.head();
+  };
+  // The same, rebased instead, and force-pushed.
+  const rebaseMain = (w, resolved) => {
+    w.git(w.j.dir, 'fetch', '-q', 'origin');
+    try { w.git(w.j.dir, 'rebase', '-q', 'origin/main'); } catch {
+      writeFileSync(join(w.j.dir, 'README'), resolved);
+      w.git(w.j.dir, 'add', 'README');
+      w.git(w.j.dir, '-c', 'core.editor=true', 'rebase', '--continue');
+    }
+    w.git(w.j.dir, 'push', '-q', '--force', 'origin', w.j.branch);
+    return w.head();
+  };
+  // Back to review, auto-merge off, nothing merged.
+  const sentBack = (w) => {
+    assert.equal(w.item(1).stage, 'verifying');
+    assert.equal(w.calls.off.length, 1, 'auto-merge off');
+    assert.deepEqual(w.calls.merged, []);
+    assert.match(w.events(1, 'rebased').at(-1).headline, /changed after #1 was accepted/);
+  };
 
   test('acceptance records the head it accepted; the merge is pinned to it', async () => {
     const w = await accepted({ auto: false });
@@ -622,6 +655,49 @@ describe('landing merges only the reviewed head', () => {
     assert.equal(w.item(1).stage, 'done');
     assert.deepEqual(w.calls.merged, [rebased]);
     assert.match(w.events(1, 'head_rebased')[0].headline, /the same change #1's review accepted, so it still lands/);
+  });
+
+  test('main merged into the accepted head still lands, pinned to the merge, and says main was merged (#784)', async () => {
+    const w = await accepted({ auto: false });
+    const merged = mergeMain(w);
+    assert.equal(w.git(w.j.dir, 'rev-parse', 'HEAD^1'), w.reviewed, 'first parent is the reviewed head');
+    await pass(w);
+    assert.equal(w.item(1).reviewed_sha, merged);
+    assert.deepEqual(w.calls.merged, [merged]);
+    assert.equal(w.item(1).stage, 'done');
+    const e = w.events(1, 'head_rebased')[0];
+    assert.match(e.headline, new RegExp(`^${w.j.branch} merged main \\(${merged.slice(0, 7)}\\): the same change #1's review accepted, so it still lands`));
+    assert.equal(JSON.parse(e.data).merged, true);
+  });
+
+  test("main's own key beside #1's doesn't count: rebased or merged, keeping both, it lands (#784)", async () => {
+    for (const move of [rebaseMain, mergeMain]) {
+      const w = await accepted({ auto: false, beside: true });
+      const head = move(w, README('theirs', 'mine'));
+      await pass(w);
+      assert.equal(w.item(1).stage, 'done', move.name);
+      assert.deepEqual(w.calls.merged, [head], move.name);
+      assert.equal(w.calls.off.length, 0, move.name);
+    }
+  });
+
+  test('a merge whose resolution alters or drops one of its lines goes back to review (#784)', async () => {
+    for (const resolved of [README('theirs', 'mine, changed'), README('theirs')]) {
+      const w = await accepted({ beside: true });
+      mergeMain(w, resolved);
+      await pass(w);
+      sentBack(w);
+    }
+  });
+
+  test('a merge of main, then a commit adding a line, goes back to review (#784)', async () => {
+    const w = await accepted({ beside: true });
+    mergeMain(w, README('theirs', 'mine'));
+    writeFileSync(join(w.j.dir, 'README'), README('theirs', 'mine', 'extra'));
+    w.git(w.j.dir, 'commit', '-q', '-am', 'one more key');
+    w.git(w.j.dir, 'push', '-q', 'origin', w.j.branch);
+    await pass(w);
+    sentBack(w);
   });
 
   test('a rebase that slips in a change is not the same change', async () => {
