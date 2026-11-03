@@ -2,18 +2,18 @@
 // (scripts/release.js), and the hub taking a release's .sig from its GitHub Release (src/ghrelease.js).
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, execFile } from 'node:child_process';
+import { execFileSync, execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { generateKeyPairSync, createPublicKey, sign, verify } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { archive, newestSigned } from '../src/package.js';
 import { releaseRefusal, latest, newer, handCheck } from '../scripts/release.js';
-import { checkoutRefusal } from '../scripts/sign-release.js';
+import { checkoutRefusal } from '../scripts/checkout.js';
 import { takeReleases, githubRepoOf, releaseAlarm } from '../src/ghrelease.js';
 import { Hub } from '../src/core.js';
 import { createServer as createHubServer } from '../src/server.js';
@@ -166,7 +166,23 @@ describe('signing by hand (#815)', () => {
     const body = src.slice(src.indexOf('async function releaseCmd'));
     const check = body.indexOf('await checkoutRefusal(');
     assert.ok(check > 0 && check < body.indexOf('import(') && check < body.indexOf('readFileSync(pem)'));
-    assert.doesNotMatch(src.slice(0, src.indexOf('async function releaseCmd')), /from '\.\.?\//, 'no repository module at the top');
+    const imports = (text) => [...text.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
+    assert.deepEqual(imports(src).filter((m) => !m.startsWith('node:')), ['./checkout.js'], 'no other repository module at the top');
+    const own = readFileSync(fileURLToPath(new URL('../scripts/checkout.js', import.meta.url)), 'utf8');
+    assert.deepEqual(imports(own).filter((m) => !m.startsWith('node:')), [], 'the check itself loads only Node\'s built-ins');
+  });
+
+  test('the command works when its checkout is reached through a symlink', () => {
+    const link = join(dir, 'linked');
+    symlinkSync(fileURLToPath(new URL('..', import.meta.url)), link);
+    const run = (...args) => spawnSync(process.execPath, [join(link, 'scripts', 'sign-release.js'), ...args], { encoding: 'utf8' });
+    const bogus = run('bogus');
+    assert.equal(bogus.status, 2);
+    assert.match(bogus.stderr, /usage: sign-release\.js keygen/);
+    const keys = join(dir, 'keys');
+    mkdirSync(keys);
+    assert.equal(run('keygen', keys).status, 0);
+    assert.ok(existsSync(join(keys, 'release-key.pem')) && existsSync(join(keys, 'release-key.pub')));
   });
 });
 
