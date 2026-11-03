@@ -15,25 +15,14 @@ permissions:
   contents: read
 
 jobs:
-  # Every supported Node: the engines floor and maintenance LTS (24), and the active LTS (26).
-  node:
+  # One job on one Node: the minimum package.json's engines declares, so CI tests what nuworq promises to run on
+  # (#811). Newer Nodes get the suite on the machines that run workers. test/ciworkflow.test.js keeps the two in step.
+  test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24
       - run: npm test
-
-  # The required check keeps its name: it passes only when every Node passed.
-  test:
-    if: always()
-    needs: node
-    runs-on: ubuntu-latest
-    steps:
-      - run: test "${{ needs.node.result }}" = success

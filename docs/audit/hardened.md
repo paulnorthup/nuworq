@@ -70,8 +70,9 @@ through `npm test -- <file>` (scripts/run-tests.js), against the repo's own code
 
 ## Pinning
 
-- **CI:** actions pinned by full SHA (`.github/workflows/test.yml:27-28`), `permissions: contents: read`, 10-minute
-  timeout, Node 24 and 26. Node is pinned by major only and the runner image is `ubuntu-latest`. That's acceptable
+- **CI:** actions pinned by full SHA (`.github/workflows/test.yml:24-25`), `permissions: contents: read`, 10-minute
+  timeout, one job on Node 24, the minimum package.json's engines declares (#811; it ran 24 and 26 when audited, and
+  test/ciworkflow.test.js now keeps the workflow and engines in step). Node is pinned by major only and the runner image is `ubuntu-latest`. That's acceptable
   with zero dependencies.
 - **Updates:** `nuworq update` checks the sha256, verifies the ed25519 signature against the key in the installed
   package, refuses a different key, and refuses downgrades (src/update.js:209-226; gap in finding 18).
