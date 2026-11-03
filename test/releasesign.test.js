@@ -12,12 +12,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { archive, newestSigned } from '../src/package.js';
-import { releaseRefusal, filesRun, runsChanged, summary, latest, WORKFLOW } from '../scripts/release.js';
+import { releaseRefusal, latest } from '../scripts/release.js';
 import { takeReleases, githubRepoOf, releaseAlarm } from '../src/ghrelease.js';
 import { Hub } from '../src/core.js';
 import { createServer as createHubServer } from '../src/server.js';
 
 const RELEASE = fileURLToPath(new URL('../scripts/release.js', import.meta.url));
+const WORKFLOW = '.github/workflows/release.yml';
+const YAML = readFileSync(fileURLToPath(new URL('../scripts/release-workflow.yml', import.meta.url)), 'utf8');
+const jobOf = (name) => YAML.split(/\n  (?=\w+:\n)/).find((j) => j.startsWith(`${name}:\n`));
+// The shell a step runs, as the runner gets it: its `run: |` block, unindented.
+const stepRun = (name) => {
+  const lines = YAML.split('\n');
+  let i = lines.findIndex((l) => l.trim() === `- name: ${name}`);
+  assert.ok(i >= 0, `no step named ${name}`);
+  while (!/^\s+run: \|$/.test(lines[i])) i++;
+  const body = [];
+  const indent = lines[i].search(/\S/) + 2;
+  for (i++; i < lines.length && (lines[i].trim() === '' || lines[i].search(/\S/) >= indent); i++) body.push(lines[i].slice(indent));
+  return body.join('\n');
+};
 const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 let stamp = 1_700_000_000;
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: { ...process.env, GIT_COMMITTER_DATE: `${stamp} +0000`, GIT_AUTHOR_DATE: `${stamp} +0000` } }).trim();
@@ -93,23 +107,45 @@ describe('the rules every signer shares (#813)', () => {
 
 describe('the release workflow (#813)', () => {
   test('the workflow a person installs is the one reviewed, and signs only after the release environment\'s approval', () => {
-    const staged = readFileSync(fileURLToPath(new URL('../scripts/release-workflow.yml', import.meta.url)), 'utf8');
     const installed = fileURLToPath(new URL(`../${WORKFLOW}`, import.meta.url));
-    if (existsSync(installed)) assert.equal(readFileSync(installed, 'utf8'), staged, `${WORKFLOW} differs from scripts/release-workflow.yml`);
-    const jobs = staged.split(/\n  (?=check:|sign:)/);
-    const check = jobs.find((j) => j.startsWith('check:')), signJob = jobs.find((j) => j.startsWith('sign:'));
-    assert.match(staged, /\npermissions: \{\}\n/, 'nothing by default');
-    assert.match(check, /contents: read/);
-    assert.doesNotMatch(check, /secrets\.|environment:/, 'check holds no secret');
-    assert.match(signJob, /needs: check\n\s+runs-on: ubuntu-latest\n\s+timeout-minutes: \d+\n\s+environment: release\n/);
+    if (existsSync(installed)) assert.equal(readFileSync(installed, 'utf8'), YAML, `${WORKFLOW} differs from scripts/release-workflow.yml`);
+    const check = jobOf('check'), changes = jobOf('changes'), signJob = jobOf('sign');
+    assert.match(YAML, /\npermissions: \{\}\n/, 'nothing by default');
+    for (const job of [check, changes]) {
+      assert.match(job, /contents: read/);
+      assert.doesNotMatch(job, /secrets\.|environment:/, 'check and changes hold no secret');
+    }
+    assert.match(signJob, /needs: \[check, changes\]\n\s+runs-on: ubuntu-latest\n\s+timeout-minutes: \d+\n\s+environment: release\n/);
     assert.match(signJob, /RELEASE_KEY: \$\{\{ secrets\.RELEASE_KEY \}\}/);
-    assert.doesNotMatch(staged, /upload-artifact|echo "\$RELEASE_KEY"|set -x/, 'no artifact, and the key never echoed');
-    assert.match(staged, /^on:\n  push:\n    tags: \['v\*'\]\n/m);
+    assert.doesNotMatch(YAML, /upload-artifact|echo "\$RELEASE_KEY"|set -x/, 'no artifact, and the key never echoed');
+    assert.match(YAML, /^on:\n  push:\n    tags: \['v\*'\]\n/m);
+  });
+
+  test('sign and changes run none of the repository\'s code: no script, module, npm or set-up node of the tag\'s', () => {
+    for (const job of [jobOf('changes'), jobOf('sign')]) {
+      assert.doesNotMatch(job, /node (?:\.\/)?(?:scripts|src|bin)\/|npm |npx |setup-node|import\(|require\(['"]\./);
+      // node only ever runs a script written in this file.
+      const nodes = [...job.matchAll(/(?:^\s*|[|(]\s*)node (\S+ \S+)/gm)].map((m) => m[1]);
+      assert.ok(nodes.length > 0);
+      for (const args of nodes) assert.match(args, /^--input-type=commonjs (?:-p|-)$/);
+    }
+    // The secrets reach sign's own steps only, and the approval's "changed" line comes from changes, not from check.
+    assert.equal(YAML.match(/secrets\./g).length, 2);
+    assert.match(stepRun('What the approval rests on'), /git diff --name-only "\$last" "\$commit" -- \.github\/workflows "\$\{ran\[@\]\}"/);
+    assert.doesNotMatch(readFileSync(RELEASE, 'utf8'), /changed since/);
+  });
+
+  test('sign builds with git alone what src/package.js builds: the same files', () => {
+    const runs = /const RUNS = \[([^\]]+)\]/.exec(readFileSync(fileURLToPath(new URL('../src/package.js', import.meta.url)), 'utf8'))[1].match(/'[^']+'/g).map((s) => s.slice(1, -1));
+    const yaml = /for f in ([^;]+); do/.exec(stepRun('Build the package again with git alone'))[1].split(' ');
+    assert.deepEqual(yaml, runs);
   });
 
   const run = (args, env = {}) => promisify(execFile)(process.execPath, [RELEASE, ...args], { cwd: repo, env: { PATH: process.env.PATH, HOME: dir, ...env } });
+  // A workflow step, run as the runner would: bash, in the checkout, with node on PATH and the given environment.
+  const step = (name, env = {}, cwd = repo) => promisify(execFile)('bash', ['-c', stepRun(name)], { cwd, env: { PATH: `${join(dir, 'bin')}:${join(process.execPath, '..')}:${process.env.PATH}`, HOME: dir, TMPDIR: tmpdir(), RUNNER_TEMP: join(dir, 'runner'), GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'o/r', ...env } });
 
-  test('check builds the package byte for byte as the hub does, and says what Paul approves', async () => {
+  test('check builds the package byte for byte as the hub does, and shows its version, sha256 and changelog', async () => {
     const c = release('1.0.0');
     const out = join(dir, 'out');
     const summaryFile = join(dir, 'summary.md'), outputs = join(dir, 'outputs');
@@ -121,9 +157,91 @@ describe('the release workflow (#813)', () => {
     assert.match(said, /## Release v1\.0\.0/);
     assert.match(said, new RegExp(c));
     assert.match(said, /- things/);
-    assert.match(said, /no signed release to compare with/);
     assert.match(readFileSync(outputs, 'utf8'), new RegExp(`commit=${c}\\nsha256=[0-9a-f]{64}`));
-    assert.equal(readFileSync(join(out, 'notes.md'), 'utf8'), '- things\n');
+  });
+
+  test('sign rebuilds the bytes check showed with git alone, and its signature verifies with release-key.pub; the key is never printed', async () => {
+    const c = release('1.0.0', { changelog: '# Changelog\n\n## 1.0.0 (2026-11-03)\n\n- things\n\n## 0.9.0\n\n- older\n' });
+    const outputs = join(dir, 'outputs');
+    await run(['check', 'v1.0.0', join(dir, 'out')], { GITHUB_OUTPUT: outputs });
+    const sha = /sha256=(\w+)/.exec(readFileSync(outputs, 'utf8'))[1];
+    await step('Build the package again with git alone', { GITHUB_SHA: c, CHECKED: c });
+    const out = join(dir, 'runner', 'release');
+    const pkg = readFileSync(join(out, `nuworq-${c}.tgz`));
+    assert.deepEqual(pkg, readFileSync(join(dir, 'out', `nuworq-${c}.tgz`)), 'git alone builds what check built');
+    assert.equal(readFileSync(join(out, 'notes.md'), 'utf8').trim(), '- things');
+    const { stdout, stderr } = await step('Sign it', { COMMIT: c, SHA256: sha, RELEASE_KEY: ours.pem });
+    const sig = Buffer.from(readFileSync(join(out, `nuworq-${c}.tgz.sig`), 'utf8').trim(), 'base64');
+    assert.ok(verify(null, pkg, createPublicKey(readFileSync(join(work, 'release-key.pub'))), sig));
+    const body = ours.pem.split('\n')[1];
+    assert.ok(!`${stdout}${stderr}`.includes(body), 'no part of the key in the log');
+    // Not the bytes check showed, another key than the one the release pins, or no key: nothing new is signed.
+    await assert.rejects(step('Sign it', { COMMIT: c, SHA256: 'f'.repeat(64), RELEASE_KEY: ours.pem }), /as the check job showed/);
+    await assert.rejects(step('Sign it', { COMMIT: c, SHA256: sha, RELEASE_KEY: keypair().pem }), /doesn't verify against the tag's release-key\.pub/);
+    await assert.rejects(step('Sign it', { COMMIT: c, SHA256: sha }), /RELEASE_KEY is empty/);
+    await assert.rejects(step('Build the package again with git alone', { GITHUB_SHA: c, CHECKED: 'a'.repeat(40) }), /not the tag's commit/);
+  });
+
+  describe('changes: what the approval rests on, from the workflow alone', () => {
+    // gh, as GitHub's releases API filtered by the step's --jq: the tags of signed releases, one a line.
+    const fakeGh = (tags) => {
+      mkdirSync(join(dir, 'bin'), { recursive: true });
+      writeFileSync(join(dir, 'bin', 'gh'), `#!/bin/sh\ncat <<'EOF'\n${tags.map((t) => `${t}\n`).join('')}EOF\n`, { mode: 0o755 });
+    };
+    const changes = async (tag, c, env = {}) => {
+      const summaryFile = join(dir, `changes-${tag}.md`);
+      writeFileSync(summaryFile, '');
+      const r = await step('What the approval rests on', { GITHUB_SHA: c, GITHUB_REF_NAME: tag, GITHUB_STEP_SUMMARY: summaryFile, ...env }).then(() => null, (e) => e);
+      return { failed: r, said: readFileSync(summaryFile, 'utf8') };
+    };
+
+    test('says whether the code check ran changed since the last signed release, with the diff', async () => {
+      fakeGh([]);
+      const a = release('1.0.0');
+      let { failed, said } = await changes('v1.0.0', a);
+      assert.equal(failed, null, failed?.stderr);
+      assert.match(said, /No signed release to compare with/);
+      fakeGh(['v1.0.0']);
+      const b = release('1.1.0', { files: { 'bin/nuworq.js': '// not run by check\n' } });
+      ({ failed, said } = await changes('v1.1.0', b));
+      assert.equal(failed, null, failed?.stderr);
+      assert.match(said, new RegExp(`The code \`check\` ran is unchanged\\*\\* since v1\\.0\\.0 \\(\`${a.slice(0, 7)}\`\\)`));
+      const c = release('1.2.0', { files: { 'src/update.js': '// changed\n' } });
+      ({ failed, said } = await changes('v1.2.0', c));
+      assert.equal(failed, null, failed?.stderr);
+      assert.match(said, new RegExp(`The code \`check\` ran changed\\*\\* since v1\\.0\\.0 \\(\`${a.slice(0, 7)}\`\\): \`src/update\\.js\`\\. \\[Read the diff\\]\\(https://github\\.com/o/r/compare/${a}\\.\\.\\.${c}\\)`));
+      assert.match(said, /The `sign` job runs none of the repository's code/);
+    });
+
+    test('the hub\'s signed release counts when it is newer than GitHub\'s', async () => {
+      const a = release('1.0.0'), b = release('1.1.0');
+      fakeGh(['v1.0.0']);
+      const hub = createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ package: { release: { commit: b } } })); });
+      const at = `http://127.0.0.1:${await listen(hub)}`;
+      try {
+        const c = release('1.2.0', { files: { 'scripts/release.js': '// changed\n' } });
+        const { failed, said } = await changes('v1.2.0', c, { NUWORQ_HUB: `${at}/` });
+        assert.equal(failed, null, failed?.stderr);
+        assert.match(said, new RegExp(`changed\\*\\* since the hub's signed release \\(\`${b.slice(0, 7)}\`\\): \`scripts/release\\.js\``));
+        assert.ok(!said.includes(a.slice(0, 7)));
+      } finally { hub.close(); }
+    });
+
+    test('refuses, before anyone is asked, a tag off main, at another version, or a rollback', async () => {
+      fakeGh([]);
+      let r = await changes('v1.0.0', release('1.0.0', { branch: 'side' }));
+      assert.ok(r.failed);
+      assert.match(r.said, /won't be signed: \w{7} isn't on main/);
+      const wrong = commit({ 'package.json': JSON.stringify({ version: '1.0.1' }) }, 'x');
+      git(work, 'push', '-q', 'origin', 'main'); git(repo, 'fetch', '-q', 'origin');
+      r = await changes('v1.0.2', wrong);
+      assert.match(r.said, /package\.json says 1\.0\.1, not 1\.0\.2/);
+      const old = release('1.1.0'); release('1.2.0');
+      fakeGh(['v1.2.0']);
+      r = await changes('v1.1.0', old);
+      assert.ok(r.failed);
+      assert.match(r.said, /isn't newer than v1\.2\.0 .*roll installs back/);
+    });
   });
 
   test('a failed check stops before anyone is asked: the summary says why and nothing is built', async () => {
@@ -132,37 +250,6 @@ describe('the release workflow (#813)', () => {
     await assert.rejects(run(['check', 'v1.0.0', out], { GITHUB_STEP_SUMMARY: summaryFile }));
     assert.match(readFileSync(summaryFile, 'utf8'), /won't be signed: its CHANGELOG\.md doesn't begin with 1\.0\.0/);
     assert.equal(existsSync(out), false);
-  });
-
-  test('sign signs the bytes check showed, and the signature verifies with release-key.pub; the key is never printed', async () => {
-    const c = release('1.0.0');
-    const out = join(dir, 'out'), outputs = join(dir, 'outputs');
-    await run(['check', 'v1.0.0', out], { GITHUB_OUTPUT: outputs });
-    const sha = /sha256=(\w+)/.exec(readFileSync(outputs, 'utf8'))[1];
-    const { stdout, stderr } = await run(['sign', 'v1.0.0', out, sha], { RELEASE_KEY: ours.pem });
-    const pkg = readFileSync(join(out, `nuworq-${c}.tgz`));
-    const sig = Buffer.from(readFileSync(join(out, `nuworq-${c}.tgz.sig`), 'utf8').trim(), 'base64');
-    assert.ok(verify(null, pkg, createPublicKey(readFileSync(join(work, 'release-key.pub'))), sig));
-    const body = ours.pem.split('\n')[1];
-    assert.ok(!`${stdout}${stderr}`.includes(body), 'no part of the key in the log');
-    // Not the bytes check showed, or another key than the one the release pins: nothing is signed.
-    await assert.rejects(run(['sign', 'v1.0.0', join(dir, 'o2'), 'f'.repeat(64)], { RELEASE_KEY: ours.pem }), /not the .* check job showed|as the check job showed/);
-    await assert.rejects(run(['sign', 'v1.0.0', join(dir, 'o3'), sha], { RELEASE_KEY: keypair().pem }), /release-key\.pub isn't this key's public half/);
-    await assert.rejects(run(['sign', 'v1.0.0', join(dir, 'o4'), sha]), /RELEASE_KEY is empty/);
-    assert.equal(existsSync(join(dir, 'o3', `nuworq-${c}.tgz.sig`)), false);
-  });
-
-  test('the summary says whether the workflow or the code it runs changed since the last signed release', async () => {
-    const a = release('1.0.0');
-    assert.deepEqual(await filesRun(repo, a), [WORKFLOW, 'scripts/release.js', 'src/package.js', 'src/update.js']);
-    const b = release('1.1.0');
-    const last = { version: '1.0.0', commit: a, time: 0 };
-    assert.deepEqual(await runsChanged(repo, last, b), []);
-    const c = release('1.2.0', { files: { 'src/update.js': '// changed\n', 'bin/nuworq.js': '// not run by the workflow\n' } });
-    assert.deepEqual(await runsChanged(repo, last, c), ['src/update.js']);
-    const said = summary({ tag: 'v1.2.0', commit: c, sha256: 'ab', changes: '- x', last, changed: ['src/update.js'], compare: 'https://github.com/o/r/compare/a...c' });
-    assert.match(said, /The release workflow or the code it runs changed\*\* since v1\.0\.0: `src\/update\.js`\. \[Read the diff\]\(https:\/\/github\.com\/o\/r\/compare\/a\.\.\.c\)/);
-    assert.match(summary({ tag: 'v1.1.0', commit: b, sha256: 'ab', changes: '', last, changed: [] }), /are unchanged\*\* since v1\.0\.0/);
   });
 
   test('check refuses a rollback past the last release signed on GitHub', async () => {
