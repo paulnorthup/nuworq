@@ -60,7 +60,8 @@ describe('nuworq run --install (#172)', () => {
       ['darwin', join('Library', 'LaunchAgents', `${LABEL}.plist`), [['launchctl', 'bootstrap', 'gui/501']], [['launchctl', 'bootout', `gui/501/${LABEL}`]]],
       ['linux', join('.config', 'systemd', 'user', UNIT), [['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', '--now', UNIT]], [['systemctl', '--user', 'disable', '--now', UNIT]]],
     ]) {
-      const home = mkdtempSync(join(tmpdir(), 'nuworq-svc-'));
+      // Named like a Claude Code sandbox's temp folder (/tmp/claude-501/…), so the log path holds "claude" (#771).
+      const home = mkdtempSync(join(tmpdir(), 'claude-nuworq-svc-'));
       const ran = [];
       let loaded = false;
       const exec = async (cmd, args) => {
@@ -84,8 +85,13 @@ describe('nuworq run --install (#172)', () => {
       assert.deepEqual(ran.slice(unload.length).map((c) => c.slice(0, load[0].length)), load.map((c) => c.slice(0, load[0].length)), platform);
       // Installing again replaces it.
       await install({ platform, home, uid: 501, command: [...command.slice(0, 3), '--workers', '1'], env, log, exec, sleep: async () => {} });
-      assert.doesNotMatch(readFileSync(r.file, 'utf8'), /claude/);
-      ran.length = 0;
+      // Only the command and PATH: the log path sits in the temp folder, which may be named claude (#771).
+      const text = readFileSync(r.file, 'utf8');
+      const runs = platform === 'darwin'
+        ? [text.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/)[1], text.match(/<key>PATH<\/key>\s*<string>(.*)<\/string>/)[1]]
+        : [text.match(/^ExecStart=.*$/m)[0], text.match(/^Environment="PATH=.*$/m)[0]];
+      assert.match(runs[0], /--workers/, platform);
+      for (const s of runs) assert.doesNotMatch(s, /claude/, platform);      ran.length = 0;
       const gone = await uninstall({ platform, home, uid: 501, exec });
       assert.equal(gone.removed, true);
       assert.equal(existsSync(r.file), false);
