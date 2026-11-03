@@ -335,7 +335,7 @@ export async function workspaceSettings({ again = false } = {}) {
 // Delete workspace (#799): the settings' last section, and the dialog it opens. Deleting is immediate and for good,
 // backups too, so the dialog says what goes and what stays, and Delete waits for the name typed exactly. A plan that
 // renews is cancelled first; the server checks all of it again.
-const deleteSection = (w) => `<h4 data-new="workspace-delete">Delete workspace</h4>
+const deleteSection = (w) => `<h4><span data-new="workspace-delete">Delete workspace</span></h4>
   <p class="lead faint">Deletes <b>${esc(w.name)}</b> and everything in it, for good. There is no undo.</p>
   <div class="foot"><button class="btn ghost" data-action="workspace-delete">Delete workspace…</button><button class="btn primary" data-action="close-modal">Done</button></div>`;
 
@@ -349,7 +349,8 @@ function deleteDialog(w) {
     <ul class="lead"><li>every project, item and its history</li><li>every member's access</li><li>every agent token: connected agents and runners stop</li></ul>
     <p class="lead faint">What stays: ${github} Stripe keeps the billing records the law requires.</p>
     ${w.renewing ? `<p class="lead" style="color:var(--warn)"><b>Its plan renews, so it can't be deleted yet.</b> Cancel the plan first in Manage billing; once it is set to end, come back here.</p>` : ''}
-    <div class="form"><label for="wsd-name">Type <code>${name}</code> to confirm</label><input id="wsd-name" placeholder="${name}" autocomplete="off" autocapitalize="off" spellcheck="false"${w.renewing ? ' disabled' : ''}></div>
+    <p class="lead" id="wsd-label">Type <code>${name}</code> to delete it.</p>
+    <div class="form"><input id="wsd-name" aria-labelledby="wsd-label" placeholder="${name}" autocomplete="off" autocapitalize="off" spellcheck="false"${w.renewing ? ' disabled' : ''}></div>
     <div class="foot"><button class="btn ghost" data-action="workspace-settings">Back</button>${w.renewing && w.portal ? '<button class="btn primary" data-action="billing-portal">Manage billing</button>' : ''}<button class="btn" id="wsd-go" data-action="workspace-delete-now" disabled>Delete workspace</button></div>`);
   $('#wsd-name').addEventListener('input', (e) => { $('#wsd-go').disabled = w.renewing || e.target.value !== w.name; });
 }
