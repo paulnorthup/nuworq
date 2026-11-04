@@ -64,7 +64,8 @@ describe('an ended session signs off once', () => {
     const { hub, items: [a], item, listed } = hubWith('A');
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), NUWORQ_URL: `http://127.0.0.1:${server.address().port}`, NUWORQ_PROJECT: 'p' };
+    // The MCP session speaks as an agent: the runner token a local hub mints (#892); tokenless it's nobody (#900).
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), NUWORQ_URL: `http://127.0.0.1:${server.address().port}`, NUWORQ_PROJECT: 'p', NUWORQ_TOKEN: server.auth.localRunnerToken('box').token };
     const child = spawn(process.execPath, [BIN, 'mcp'], { env, stdio: ['pipe', 'pipe', 'ignore'] });
     const answers = [];
     let buf = '';

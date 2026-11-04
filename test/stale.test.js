@@ -42,7 +42,7 @@ describe('bulk shaping of an imported backlog', () => {
     const raw = JSON.stringify(payload);
     await fetch(`${base}/api/hooks/github/app`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-github-event': event, 'x-hub-signature-256': 'sha256=' + createHmac('sha256', SECRET).update(raw).digest('hex') }, body: raw });
   };
-  const human = async (action, body) => (await fetch(`${base}/api/p/app/human/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+  const human = async (action, body) => (await fetch(`${base}/api/p/app/human/${action}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify(body) })).json();
   const refine = (agent, args) => hub.agentOp('app', 'refine', agent, args);
   const staleQs = () => hub.q("SELECT * FROM questions WHERE asked_by = 'nuworq' AND question LIKE 'Close these %' ORDER BY id").all();
   const stage = (n) => hub.item(hub.project('app'), `#${n}`).stage;

@@ -41,7 +41,7 @@ function github() {
 }
 
 describe('text from outside the project waits for a person', () => {
-  let gh, hub, server, base;
+  let gh, hub, server, base, runner;
   const deliver = async (event, payload) => {
     const raw = JSON.stringify(payload);
     const r = await fetch(`${base}/api/hooks/github/app`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-github-event': event, 'x-hub-signature-256': sign(raw) }, body: raw });
@@ -60,6 +60,7 @@ describe('text from outside the project waits for a person', () => {
     hub.humanOp('app', 'settings', { github_secret: SECRET, autonomy: 'full' });
     server = createServer(hub, { githubApp: { id: 1, key: PEM, slug: 'nuworq-test', api } });
     base = `http://127.0.0.1:${await listen(server)}`;
+    runner = server.auth.localRunnerToken('box');
   });
   afterEach(() => { server.close(); gh.server.close(); });
 
@@ -137,7 +138,7 @@ describe('text from outside the project waits for a person', () => {
     answer(needsYou()[0], LET_IN);
     hub.agentOp('app', 'refine', 'shaper', { item: '#1', acceptance: 'Export takes under a second.' });
     hub.agentOp('app', 'claim', 'w1', { item: '#1' });
-    const asked = await fetch(`${base}/api/p/app/agent/ask`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agent: 'w1', item: '#1', to: 'reporter', question: 'CSV or PDF?' }) });
+    const asked = await fetch(`${base}/api/p/app/agent/ask`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${runner.token}` }, body: JSON.stringify({ agent: 'w1', item: '#1', to: 'reporter', question: 'CSV or PDF?' }) });
     assert.equal(asked.status, 200);
     assert.deepEqual(needsYou(), [], 'the reporter has time to answer first');
 

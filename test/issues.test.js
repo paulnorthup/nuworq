@@ -83,7 +83,7 @@ describe('GitHub issues come in as proposals', () => {
       assert.deepEqual(gh.state.perms[0], { issues: 'write', metadata: 'read' }, 'a token that can only read issues and comment');
 
       await install();
-      const re = await fetch(`${base}/api/p/app/github/resync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      const re = await fetch(`${base}/api/p/app/github/resync`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: '{}' });
       const { alerts, ...issues } = await re.json();
       assert.deepEqual(issues, { ok: true, issues: 3, commented: 0 });
       assert.equal(alerts.alerts, 0, 'this fake GitHub has no alerts to give');

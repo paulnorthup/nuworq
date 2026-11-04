@@ -34,11 +34,11 @@ describe('local mode', () => {
   before(async () => { ctx = await start(); });
   after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
 
-  test('is open on loopback', async () => {
+  test('reads are open on loopback; who am I says anonymous until the key', async () => {
     const r = await request(ctx.port, 'GET', '/api/projects');
     assert.equal(r.status, 200);
     const me = await request(ctx.port, 'GET', '/api/me');
-    assert.deepEqual(me.json, { auth: 'local', role: 'human', name: 'you' });
+    assert.deepEqual(me.json, { auth: 'local', role: 'anon', name: 'anonymous' });
   });
 
   test('refuses non-loopback Host headers (DNS rebinding) and cross-origin writes', async () => {
@@ -61,7 +61,7 @@ describe('local mode', () => {
 
   test('bodies over 1MB are refused', async () => {
     const big = JSON.stringify({ title: 'x'.repeat(1024 * 1024 + 10) });
-    const r = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: big, headers: { 'x-nuworq-agent': 'a1' } });
+    const r = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: big, headers: { 'x-nuworq-agent': 'a1', authorization: `Bearer ${ctx.server.personKey}` } });
     assert.equal(r.status, 413);
   });
 
@@ -90,11 +90,19 @@ describe('local mode', () => {
     assert.match(op.json.error, /can't be an operator|can't act as an operator/);
   });
 
-  test('a tokenless caller is still the one person, and a bad token is refused', async () => {
-    const me = await request(ctx.port, 'GET', '/api/me');
-    assert.deepEqual(me.json, { auth: 'local', role: 'human', name: 'you' });
+  test('a tokenless caller reads but cannot act (#900), and a bad token is refused', async () => {
+    // What code a worker runs can send: no token at all, just the NUWORQ_URL it was given.
     const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'as you' } });
-    assert.equal(steer.status, 200);
+    assert.equal(steer.status, 403);
+    assert.match(steer.json.error, /acts only for its person/);
+    assert.ok(steer.json.hint);
+    const accept = await request(ctx.port, 'POST', '/api/p/demo/human/accept', { body: {} });
+    assert.equal(accept.status, 403);
+    const staff = await request(ctx.port, 'POST', '/api/staff', { body: { project: 'demo', budget: 5 } });
+    assert.equal(staff.status, 403);
+    // Agent routes are agent operations: without a token there is no agent.
+    const checkin = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: {}, headers: { 'x-nuworq-agent': 'w1' } });
+    assert.equal(checkin.status, 403);
     const bad = await request(ctx.port, 'GET', '/api/projects', { headers: { authorization: 'Bearer nwq_wrongwrongwrongwrongwrongwrong' } });
     assert.equal(bad.status, 401);
     assert.match(bad.json.error, /invalid or revoked token/);
@@ -102,6 +110,35 @@ describe('local mode', () => {
     ctx.server.auth.revoke('gone');
     const r = await request(ctx.port, 'GET', '/api/projects', { headers: { authorization: `Bearer ${revoked}` } });
     assert.equal(r.status, 401);
+  });
+
+  test('the person\'s key acts as the person; a wrong one claims an identity and is refused', async () => {
+    const me = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${ctx.server.personKey}` } });
+    assert.deepEqual(me.json, { auth: 'local', role: 'human', name: 'you' });
+    const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'mine' }, headers: { authorization: `Bearer ${ctx.server.personKey}` } });
+    assert.equal(steer.status, 200);
+    const bad = await request(ctx.port, 'GET', '/api/projects', { headers: { authorization: `Bearer not-the-key-${ctx.server.personKey.slice(0, 3)}` } });
+    assert.equal(bad.status, 401);
+    assert.match(bad.json.error, /invalid or revoked token/);
+  });
+
+  test('one open of the address with ?person= sets the cookie, and the browser keeps acting', async () => {
+    const open = await request(ctx.port, 'GET', '/?person=notit');
+    assert.equal(open.status, 200); // a wrong key is just the plain page
+    assert.equal(open.headers['set-cookie'], undefined);
+    const first = await request(ctx.port, 'GET', `/?person=${ctx.server.personKey}`);
+    assert.equal(first.status, 303);
+    assert.match(first.headers.location, /^\/$/);
+    const cookie = first.headers['set-cookie'].join('\n');
+    assert.match(cookie, /nuworq_person=/);
+    assert.match(cookie, /HttpOnly/);
+    assert.doesNotMatch(cookie, new RegExp(ctx.server.personKey));
+    // Cookies ride along, so an unsafe request proves it's this site (the browser's fetch sends Origin).
+    const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'from the browser' }, headers: { cookie, origin: `http://127.0.0.1:${ctx.port}` } });
+    assert.equal(steer.status, 200);
+    // Cookies ride along, so an unsafe request must be same-origin.
+    const evil = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'csrf' }, headers: { cookie, origin: 'https://evil.example' } });
+    assert.equal(evil.status, 403);
   });
 
   test('the hub mints the machine\'s runner token for nuworq run, and minting again replaces the last one', async () => {

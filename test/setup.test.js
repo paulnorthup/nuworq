@@ -286,13 +286,15 @@ describe('a machine asks to staff a project (POST /api/staff, #490)', () => {
   });
 });
 
-test('a hub without logins staffs it at once', async () => {
+test('a hub without logins staffs it at once, for its person (#900)', async () => {
   const hub = new Hub();
   hub.tx(() => hub.project('demo', { create: true }));
   const server = createServer(hub, {});
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {
-    const r = await request(server.address().port, 'POST', '/api/staff', { body: { project: 'demo', budget: 20 } });
+    const anon = await request(server.address().port, 'POST', '/api/staff', { body: { project: 'demo', budget: 20 } });
+    assert.equal(anon.status, 403, 'without the key, nobody staffs');
+    const r = await request(server.address().port, 'POST', '/api/staff', { headers: { authorization: `Bearer ${server.personKey}` }, body: { project: 'demo', budget: 20 } });
     assert.deepEqual(r.json, { ok: true, staffed: true });
     assert.deepEqual([hub.project('demo').runner, hub.project('demo').run_budget], [1, 20]);
   } finally { server.close(); server.closeAllConnections(); }

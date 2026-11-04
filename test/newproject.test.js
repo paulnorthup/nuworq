@@ -45,7 +45,8 @@ async function hubWithApp({ auth = 'local' } = {}) {
   const server = createServer(hub, { auth, githubApp: { id: 1, key: PEM, slug: 'nuworq-test', api } });
   const base = `http://127.0.0.1:${await listen(server)}`;
   const call = async (method, path, body, headers = {}) => {
-    const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined });
+    // Creating a project is the person's act: their key rides along (#900).
+    const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}`, ...headers }, body: body ? JSON.stringify(body) : undefined });
     return { status: r.status, json: await r.json() };
   };
   return { gh, hub, server, call, close: () => { server.close(); gh.server.close(); } };

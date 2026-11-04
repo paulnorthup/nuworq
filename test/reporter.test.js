@@ -43,14 +43,14 @@ function github() {
 }
 
 describe('ask to: "reporter" puts the question on the GitHub issue', () => {
-  let gh, hub, server, base, t;
+  let gh, hub, server, base, t, runner;
   const deliver = async (event, payload) => {
     const raw = JSON.stringify(payload);
     const r = await fetch(`${base}/api/hooks/github/app`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-github-event': event, 'x-hub-signature-256': sign(raw) }, body: raw });
     return { status: r.status, body: await r.json() };
   };
   const agent = async (op, name, args = {}) => {
-    const r = await fetch(`${base}/api/p/app/agent/${op}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agent: name, ...args }) });
+    const r = await fetch(`${base}/api/p/app/agent/${op}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${runner}` }, body: JSON.stringify({ agent: name, ...args }) });
     return { status: r.status, body: await r.json() };
   };
   const comment = (id, login, body, over = {}) => deliver('issue_comment', {
@@ -71,6 +71,7 @@ describe('ask to: "reporter" puts the question on the GitHub issue', () => {
     hub.humanOp('app', 'create', { title: 'Not from an issue', acceptance: 'x' }); // #1
     server = createServer(hub, { githubApp: { id: 1, key: PEM, slug: 'nuworq-test', api } });
     base = `http://127.0.0.1:${await listen(server)}`;
+    runner = server.auth.localRunnerToken('box').token;
     await deliver('issues', { action: 'opened', repository, issue }); // #2, with its link comment
     gh.state.comments.length = 0;
     hub.agentOp('app', 'refine', 'shaper', { item: '#2', acceptance: 'Export takes under a second.' });

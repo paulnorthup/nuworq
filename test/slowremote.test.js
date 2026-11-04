@@ -41,7 +41,7 @@ describe('a slow remote never blocks the hub', () => {
     hub.agentOp(SLUG, 'submit', 'a1', { item: job.item, headline: 'Built' });
 
     const t0 = Date.now();
-    const accept = fetch(`${url}/api/p/${SLUG}/human/accept`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ item: job.item }) });
+    const accept = fetch(`${url}/api/p/${SLUG}/human/accept`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify({ item: job.item }) });
     await new Promise((r) => setTimeout(r, 200)); // the fetch is under way
     const r0 = Date.now();
     const read = await fetch(`${url}/api/p/${SLUG}/view`);

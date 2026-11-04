@@ -125,8 +125,9 @@ describe('nuworq learn, end to end (#521)', () => {
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${server.address().port}`;
+    // Agents speak with the runner token a local hub mints (#892); without a token they're nobody (#900).
     const home = mkdtempSync(join(tmpdir(), 'nuworq-learn-'));
-    const env = { ...process.env, HOME: home, NUWORQ_NO_UPDATE: '1', NUWORQ_TOKEN: '', NUWORQ_AGENT: '', NUWORQ_PROJECT: '' };
+    const env = { ...process.env, HOME: home, NUWORQ_NO_UPDATE: '1', NUWORQ_TOKEN: server.auth.localRunnerToken('box').token, NUWORQ_AGENT: '', NUWORQ_PROJECT: '' };
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, ...a, '--url', url, '--project', 'acme', '--as', 'claude-1'], { cwd: home, env });
     try {
       await cli('checkin');

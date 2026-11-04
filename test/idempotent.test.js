@@ -40,7 +40,7 @@ async function setup(reached) {
   const p = proxy(`http://127.0.0.1:${await listen(hs)}`, { reached });
   const url = `http://127.0.0.1:${await listen(p.server)}`;
   const close = () => { for (const s of [hs, p.server]) { s.close(); s.closeAllConnections(); } };
-  return { hub, url, tries: p.tries, close, items: () => hub.q('SELECT title FROM items').all().map((i) => i.title) };
+  return { hub, hs, url, tries: p.tries, close, items: () => hub.q('SELECT title FROM items').all().map((i) => i.title) };
 }
 
 // Agents' writes can be retried safely (#524).
@@ -49,14 +49,15 @@ describe('a write retried through a 502 is applied once', () => {
     test(`its first try ${reached ? 'reached the hub before the 502' : 'never reached the hub'}`, async () => {
       const s = await setup(reached);
       try {
-        const c = createClient({ url: s.url, token: '', cwd: tmpdir(), project: 'p', retryMs: 5000 });
+        const runner = s.hs.auth.localRunnerToken('box');
+        const c = createClient({ url: s.url, token: runner.token, cwd: tmpdir(), project: 'p', retryMs: 5000 });
         const out = await c.call('propose', { title: 'Retry me' }, { agent: 'claude-a' });
         assert.equal(out.ok, true);
         assert.deepEqual(s.items(), ['Retry me'], 'applied once');
         assert.equal(s.tries.length, 2);
         assert.equal(new Set(s.tries).size, 1, 'the retry carried the same key');
         // The same key again (e.g. a later retry) gets the first answer, and still applies nothing.
-        const again = await (await fetch(`${s.url}/api/p/p/agent/propose`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': 'claude-a', 'idempotency-key': s.tries[0] }, body: '{"title":"Retry me"}' })).json();
+        const again = await (await fetch(`${s.url}/api/p/p/agent/propose`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': 'claude-a', 'idempotency-key': s.tries[0], authorization: `Bearer ${runner.token}` }, body: '{"title":"Retry me"}' })).json();
         assert.deepEqual(again, out);
         assert.deepEqual(s.items(), ['Retry me']);
       } finally { s.close(); }
@@ -74,7 +75,7 @@ describe('a write retried through a 502 is applied once', () => {
     hub.prefetch = () => held;
     const hs = hubServer(hub);
     const port = await listen(hs);
-    const headers = { 'content-type': 'application/json', 'x-nuworq-agent': 'b1', 'idempotency-key': 'slow-1' };
+    const headers = { 'content-type': 'application/json', 'x-nuworq-agent': 'b1', 'idempotency-key': 'slow-1', authorization: `Bearer ${hs.auth.localRunnerToken('box').token}` };
     const body = JSON.stringify({ item, headline: 'Built' });
     try {
       // The first try: sent, then its connection dropped mid-write, as a proxy giving up does.
@@ -100,7 +101,8 @@ describe('a write retried through a 502 is applied once', () => {
   test("a key is the caller's own: another agent's call with the same key is its own write", async () => {
     const s = await setup(false);
     try {
-      const post = (agent) => fetch(`${s.url}/api/p/p/agent/propose`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, 'idempotency-key': 'k1' }, body: JSON.stringify({ title: `From ${agent}` }) });
+      const runner = s.hs.auth.localRunnerToken('box');
+      const post = (agent) => fetch(`${s.url}/api/p/p/agent/propose`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, 'idempotency-key': 'k1', authorization: `Bearer ${runner.token}` }, body: JSON.stringify({ title: `From ${agent}` }) });
       await (await post('warm-up')).text(); // the proxy's one 502
       await (await post('claude-a')).json();
       await (await post('claude-b')).json();

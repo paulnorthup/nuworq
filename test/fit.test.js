@@ -235,7 +235,7 @@ describe('workers report what their machine has', () => {
       // A background update left news (#436): the next checkin carries it, once.
       const updateDir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-fit-upd-')));
       writeFileSync(join(updateDir, 'update.json'), JSON.stringify({ news: { from: '0.3.0', to: '0.4.0', changes: ['- Releases tag themselves (#400)'], shown: { cli: true } } }));
-      runMcp({ input, output, updateDir, env: { NUWORQ_AGENT: 'w', NUWORQ_HAS: 'docker,macos', NUWORQ_CLIENT: 'pi' }, clientOpts: { url: `http://127.0.0.1:${server.address().port}`, project: 'fitp', token: '' } });
+      runMcp({ input, output, updateDir, env: { NUWORQ_AGENT: 'w', NUWORQ_HAS: 'docker,macos', NUWORQ_CLIENT: 'pi' }, clientOpts: { url: `http://127.0.0.1:${server.address().port}`, project: 'fitp', token: server.auth.localRunnerToken('box').token } });
       const checkin = async (id) => {
         input.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'checkin', arguments: { client: 'claude-code' } } }) + '\n');
         for (let i = 0; i < 100 && !lines.some((l) => l.id === id); i++) await new Promise((r) => setTimeout(r, 20));

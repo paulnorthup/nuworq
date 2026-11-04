@@ -15,7 +15,7 @@ Two kinds of token:
 - **human**: logs in to the web UI; can do everything.
 - **agent**: goes in an agent's `NUWORQ_TOKEN`; can only check in, claim, report, ask and submit.
 
-Workers carry an agent token on this setup too: `nuworq run` mints the machine's runner token from the hub (loopback is trusted for that one ask), and a worker's calls act as an agent, never as you (#892).
+Workers carry an agent token on this setup too: `nuworq run` mints the machine's runner token from the hub (loopback is trusted for that one ask), and a worker's calls act as an agent, never as you (#892). And the loopback address alone is trusted for nothing you do: the hub keeps a person key in `~/.nuworq/tokens/person.token` — the CLI sends it by itself, `serve` prints the browser address that carries it once, and a request without it can look but not act (#900).
 
 ---
 

@@ -260,7 +260,7 @@ describe('get started over HTTP: complete once, then gone for good', () => {
     const p = hub.tx(() => hub.project('demo', { create: true }));
     const server = createServer(hub, { sweepMs: 60_000, githubApp: { id: '1', key: PEM, slug: 'nuworq-test' }, github: { api: `http://127.0.0.1:${ghPort}` } });
     const port = await listen(server);
-    const call = async (path, method = 'GET') => (await fetch(`http://127.0.0.1:${port}${path}`, { method, headers: { origin: `http://127.0.0.1:${port}` } })).json();
+    const call = async (path, method = 'GET') => (await fetch(`http://127.0.0.1:${port}${path}`, { method, headers: { origin: `http://127.0.0.1:${port}`, ...(method === 'POST' ? { authorization: `Bearer ${server.personKey}` } : {}) } })).json();
     return { hub, p, call, close: () => { server.close(); gh.close(); } };
   }
 

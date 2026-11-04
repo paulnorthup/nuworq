@@ -166,7 +166,7 @@ describe('preconditions: the human sees and sets them', () => {
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
-      const r = await fetch(`http://127.0.0.1:${server.address().port}/api/p/w/human/check`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ item: '#1' }) });
+      const r = await fetch(`http://127.0.0.1:${server.address().port}/api/p/w/human/check`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify({ item: '#1' }) });
       assert.equal(r.status, 200, await r.clone().text());
       assert.equal(item(1).next_check, hub.now());
       assert.equal(item(1).check_fails, 0);

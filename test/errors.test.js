@@ -33,7 +33,7 @@ describe('errors as a person reads them', () => {
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
       const r = await fetch(`http://127.0.0.1:${server.address().port}/api/projects`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'dup', repo: 'github.com/acme/held' }),
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify({ name: 'dup', repo: 'github.com/acme/held' }),
       });
       const j = await r.json();
       assert.equal(r.status, 409);
@@ -62,7 +62,7 @@ describe('a refused field', () => {
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const post = async (path, body) => {
-      const r = await fetch(`http://127.0.0.1:${server.address().port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await fetch(`http://127.0.0.1:${server.address().port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify(body) });
       return { status: r.status, ...(await r.json()) };
     };
     try {

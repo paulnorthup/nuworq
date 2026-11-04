@@ -33,7 +33,8 @@ const until = (ms) => new Promise((r) => setTimeout(r, ms));
 describe('the hub drains on shutdown (#545)', () => {
   test('a request in flight finishes, on a connection that then closes', async () => {
     const { server, port } = await hub();
-    const r = request(port, 'POST', '/api/p/o/agent/checkin', { 'content-type': 'application/json', 'x-nuworq-agent': 'w1' });
+    const runner = server.auth.localRunnerToken('box');
+    const r = request(port, 'POST', '/api/p/o/agent/checkin', { 'content-type': 'application/json', 'x-nuworq-agent': 'w1', authorization: `Bearer ${runner.token}` });
     r.req.write('{"has":');
     await until(50); // the hub has the request, not yet its body
     const drained = server.drain();
