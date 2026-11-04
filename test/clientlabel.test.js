@@ -211,6 +211,15 @@ describe("a worker's shell sees no credential variables", () => {
     assert.deepEqual(creds(workerEnv(keys('pi', 'ollama/qwen3:8b'), SECRETS)), []);
   });
 
+  // The XDG dirs are exactly where credentials pile up (#891): a person's non-default config or data dir would
+  // move that pile outside the sandbox's ~/.config and ~/.local/share denies, so neither reaches the worker.
+  test("the person's XDG_CONFIG_HOME and XDG_DATA_HOME don't reach the worker (#891)", () => {
+    const env = workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/xdg-config', XDG_DATA_HOME: '/home/me/xdg-data', XDG_CACHE_HOME: '/home/me/xdg-cache' });
+    assert.equal(env.XDG_CONFIG_HOME, undefined);
+    assert.equal(env.XDG_DATA_HOME, undefined);
+    assert.equal(env.XDG_CACHE_HOME, '/home/me/xdg-cache', 'cache and state carry no logins');
+  });
+
   // The allowlist's addition point: a project whose build reads DOCKER_HOST or VIRTUAL_ENV names them.
   test('a worker gets a variable the person named, and still no credential variables', async () => {
     const PROJECT = { DOCKER_HOST: 'unix:///run/docker.sock', VIRTUAL_ENV: '/home/me/app/.venv', DATABASE_URL_TEST: 'postgres://localhost/test', JAVA_OPTS: '-Xmx2g' };

@@ -84,8 +84,11 @@ export function withoutTokens(env = process.env) {
 // nuworq's own settings, never its secrets; then the names its harness needs to reach its model (keys: workerSetup's
 // `keys`, each one its harness keeps from its own shell). AWS_*, OPENAI_API_KEY for a Claude worker, an SSH agent,
 // npm's auth: none of it is there to read. Values holding a nuworq or GitHub token go too, whatever their name.
+// Not XDG_CONFIG_HOME or XDG_DATA_HOME, whatever the person's shell exports (#891): they are exactly where
+// credentials pile up — ~/.config and ~/.local/share in the sandbox's deny list — and a person's non-default dir
+// for them would move that pile outside every deny. Without them each tool falls back to the default, denied, path.
 const BASE_ENV = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'COLORTERM', 'NO_COLOR', 'FORCE_COLOR',
-  'LANG', 'TZ', '__CF_USER_TEXT_ENCODING', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+  'LANG', 'TZ', '__CF_USER_TEXT_ENCODING', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
   'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
   'GOPATH', 'GOROOT', 'GOCACHE', 'CARGO_HOME', 'RUSTUP_HOME', 'JAVA_HOME', 'NVM_DIR', 'PYENV_ROOT', 'VOLTA_HOME', 'PNPM_HOME', 'BUN_INSTALL']);

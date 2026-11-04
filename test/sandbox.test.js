@@ -62,13 +62,31 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     }
   });
 
+  // The keys beside the stores (#891): the rc files that export them, atuin's history, and the single files that
+  // hold a login outright.
+  test("DENY_READ covers the shell's rc files and the credential files beside the stores (#891)", () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
+    const files = filePermissions({ home, worktree });
+    for (const p of ['~/.zshenv', '~/.zshrc', '~/.profile', '~/.bashrc', '~/.config/fish', '~/.local/share/atuin',
+      '~/.pgpass', '~/.my.cnf', '~/.gitcookies', '~/.config/hub', '~/.config/rclone', '~/.vault-token', '~/.config/sops', '~/.terraformrc']) {
+      assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
+      assert.ok(files.deny.includes(`Read(${p})`) && files.deny.includes(`Read(${p}/**)`), `the file tools: ${p}`);
+    }
+    // rc files and single files have no tree worth denying, but the deny is there all the same; and the file
+    // tools can't read under them through any of Read, Edit or Write.
+    const perms = filePermissions({ home, worktree });
+    for (const p of [join(me, '.zshenv'), join(me, '.pgpass'), join(me, '.gitcookies'), join(me, '.vault-token'), join(me, '.terraformrc'), join(me, '.config', 'fish', 'config.fish'), join(me, '.local', 'share', 'atuin', 'history.db'), join(me, '.config', 'hub'), join(me, '.config', 'rclone', 'rclone.conf'), join(me, '.config', 'sops', 'age', 'keys.txt')]) {
+      for (const tool of ['Read', 'Glob', 'Grep', 'Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
+    }
+  });
+
   // #885: the security review of #468 — past session transcripts, the settings' env block and the plugins are one
   // store with the logins, so ~/.claude is denied wholesale, like ~/.codex.
   test("its shell and file tools don't read any of ~/.claude (#885)", () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
     const perms = filePermissions({ home, worktree });
     for (const f of ['projects/past/session.jsonl', 'settings.json', 'plugins/config.json', '.credentials.json', 'statsig/stable_id']) {
-      for (const tool of ['Read', 'Edit', 'Write']) assert.ok(!may(perms, tool, join(me, '.claude', f)), `${tool} ~/.claude/${f}`);
+      for (const tool of ['Read', 'Glob', 'Grep', 'Edit', 'Write']) assert.ok(!may(perms, tool, join(me, '.claude', f)), `${tool} ~/.claude/${f}`);
     }
     assert.ok(perms.deny.includes('Read(~/.claude)') && perms.deny.includes('Read(~/.claude/**)'), 'the file tools: the folder and everything under it');
   });
@@ -120,10 +138,12 @@ const matches = (r, tool, p) => {
   return at.endsWith('/**') ? p.startsWith(at.slice(0, -2)) : p === at;
 };
 // Headless, nobody answers a prompt: only an allowed call that no deny matches goes through. Write answers to Edit
-// rules (a Write(path) rule never matches), and a Read deny holds for edits too.
+// rules (a Write(path) rule never matches), a Read deny holds for edits too, and for Grep and Glob: Claude Code
+// applies Read deny rules to the directory their path argument resolves to (code.claude.com/docs/en/permissions,
+// checked 2026-11-04) — which is why DENY_READ goes out as Read trees, and no Glob/Grep ones are emitted.
 const may = ({ allow, deny }, tool, p) => {
   const as = tool === 'Write' ? 'Edit' : tool;
-  const denied = deny.some((r) => matches(r, as, p) || (as === 'Edit' && matches(r, 'Read', p)));
+  const denied = deny.some((r) => matches(r, as, p) || (as !== 'Read' && matches(r, 'Read', p)));
   return !denied && allow.some((r) => matches(r, as, p) || (tool === 'Write' && r === 'Write'));
 };
 
