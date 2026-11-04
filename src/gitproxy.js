@@ -107,6 +107,15 @@ function unreachable(res, e) {
   res.end(`nuworq: ${e.code === 'UPSTREAM_TIMEOUT' ? e.message : `couldn't reach GitHub (${e.code || e.message})`}. Try the push again in a minute.\n`);
 }
 
+// A body the hub can't read as a push (#895): a 4xx whose one line git shows, not a 500 with a stack trace only
+// an operator can dig out. Signed pushes say their own refusal; the pack (if any) is dropped, nothing was taken.
+function unreadable(res, e) {
+  if (res.headersSent) return res.destroy();
+  const why = e.message === 'not a git push' ? 'unusual client or a broken request' : e.message;
+  res.writeHead(400, { 'content-type': 'text/plain', connection: 'close' });
+  res.end(`nuworq: the hub couldn't read this push (${why}): report it as feedback\n`);
+}
+
 // One push through the hub. git: the repository's address on GitHub (https://github.com/o/r.git), service the
 // smart HTTP path (info/refs or git-receive-pack), token the hub's write token for it, branch the held item's
 // (refusedRef), holder the other live item holding that branch too, if any. onRefused(cmds, reasons) and
@@ -127,17 +136,22 @@ export async function proxyPush(req, res, { git, service, token, branch = '', ho
     res.writeHead(415, { 'content-type': 'text/plain' });
     return res.end('nuworq: send the push uncompressed\n');
   }
-  // Read up to the end of the commands; the pack after them streams on to GitHub untouched.
+  // Read up to the end of the commands; the pack after them streams on to GitHub untouched. Anything the parser
+  // refuses — and a body that ends before the commands do — is the worker's 4xx above, not a 500.
   let head = Buffer.alloc(0), parsed = null;
   const it = req[Symbol.asyncIterator]();
-  while (!parsed) {
-    const { value, done } = await it.next();
-    if (done) break;
-    head = Buffer.concat([head, value]);
-    parsed = readCommands(head);
-    if (!parsed && head.length > MAX_HEAD) throw new Error('not a git push');
+  try {
+    while (!parsed) {
+      const { value, done } = await it.next();
+      if (done) break;
+      head = Buffer.concat([head, value]);
+      parsed = readCommands(head);
+      if (!parsed && head.length > MAX_HEAD) throw new Error('not a git push');
+    }
+  } catch (e) {
+    return unreadable(res, e);
   }
-  if (!parsed) throw new Error('not a git push');
+  if (!parsed) return unreadable(res, new Error('not a git push'));
   const reasons = parsed.cmds.map((c) => refusedRef(c, branch, holder));
   if (reasons.some(Boolean)) {
     for await (const _ of { [Symbol.asyncIterator]: () => it }) { /* drain the pack: nothing goes on */ }
