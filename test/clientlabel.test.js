@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { guide } from '../src/protocol.js';
-import { workerEnv, harnessKeys, namedEnv, CLAUDE_SCRUBS } from '../src/runtrust.js';
+import { sq, workerEnv, gitConfigEnv, harnessKeys, namedEnv, CLAUDE_SCRUBS } from '../src/runtrust.js';
 import { serviceEnv } from '../src/service.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
@@ -213,11 +213,29 @@ describe("a worker's shell sees no credential variables", () => {
 
   // The XDG dirs are exactly where credentials pile up (#891): a person's non-default config or data dir would
   // move that pile outside the sandbox's ~/.config and ~/.local/share denies, so neither reaches the worker.
-  test("the person's XDG_CONFIG_HOME and XDG_DATA_HOME don't reach the worker (#891)", () => {
-    const env = workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/xdg-config', XDG_DATA_HOME: '/home/me/xdg-data', XDG_CACHE_HOME: '/home/me/xdg-cache' });
+  // The cache and cargo homes joined them (#899): a non-default dir moves huggingface's token out of ~/.cache
+  // and cargo's credentials out of ~/.cargo.
+  test("the person's XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME and CARGO_HOME don't reach the worker (#891, #899)", () => {
+    const env = workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/xdg-config', XDG_DATA_HOME: '/home/me/xdg-data', XDG_CACHE_HOME: '/home/me/xdg-cache', CARGO_HOME: '/home/me/cargo-home' });
     assert.equal(env.XDG_CONFIG_HOME, undefined);
     assert.equal(env.XDG_DATA_HOME, undefined);
-    assert.equal(env.XDG_CACHE_HOME, '/home/me/xdg-cache', 'cache and state carry no logins');
+    assert.equal(env.XDG_CACHE_HOME, undefined);
+    assert.equal(env.CARGO_HOME, undefined);
+  });
+
+  // git's own configs are read-denied (#899), and a sandbox read-deny is EPERM, which git dies on instead of
+  // skipping — so the worker's git reads /dev/null for its global config, whatever the person's shell pointed
+  // GIT_CONFIG_GLOBAL at, and their identity rides along as env config entries.
+  test("git reads no global config in the worker: GIT_CONFIG_GLOBAL is /dev/null (#899)", () => {
+    const env = workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me', GIT_CONFIG_GLOBAL: '/home/me/elsewhere.gitconfig' });
+    assert.equal(env.GIT_CONFIG_GLOBAL, '/dev/null');
+    assert.equal(workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me' }).GIT_CONFIG_GLOBAL, '/dev/null', 'and when the person set none');
+  });
+
+  test('the identity goes to git as GIT_CONFIG_KEY_n/VALUE_n entries, shell-quoted (#899)', () => {
+    const line = gitConfigEnv([['user.name', "Alex O'Hara"], ['user.email', 'alex@example.com']]);
+    assert.equal(line, `export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=${sq('user.name')} GIT_CONFIG_VALUE_0=${sq("Alex O'Hara")} GIT_CONFIG_KEY_1=${sq('user.email')} GIT_CONFIG_VALUE_1=${sq('alex@example.com')}`);
+    assert.equal(gitConfigEnv([]), 'export GIT_CONFIG_COUNT=0 ');
   });
 
   // The allowlist's addition point: a project whose build reads DOCKER_HOST or VIRTUAL_ENV names them.

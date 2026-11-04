@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { join, sep } from 'node:path';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { sandboxSettings, filePermissions, projectCommands, workerCommands } from '../src/sandbox.js';
+import { sq, workerEnv, gitConfigEnv } from '../src/runtrust.js';
 
 // What a worker's sandbox lets it write (#472): never what an unsandboxed git later runs or reads its settings from.
 const home = '/work/api';
@@ -104,6 +106,24 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     for (const p of ['~/.config/github-copilot/hosts.json', '~/.continue/config.json', '~/.m2/settings.xml', '~/.nuget/NuGet.Config']) assert.ok(!filesystem.denyRead.includes(p), p);
   });
 
+  // #899: the fresh workers-area review of #468 — the tail the first three sweeps missed: sops' age key where
+  // macOS puts it, VS Code's and the sibling editors' stores where Linux puts them, and the toolchains' and
+  // CLIs' remaining credential files, git's own configs among them.
+  test("its shell and file tools don't read the credential stores the first sweeps missed (#899)", () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
+    const perms = filePermissions({ home, worktree });
+    for (const p of ['~/Library/Application Support/sops', '~/Library/Application Support/Cursor', '~/Library/Application Support/Code - Insiders', '~/Library/Application Support/VSCodium',
+      '~/.config/Code', '~/.config/Code - Insiders', '~/.config/VSCodium',
+      '~/.config/npm', '~/.yarnrc', '~/.config/pip', '~/.cargo/config.toml', '~/.config/containers', '~/.composer', '~/.wrangler', '~/.netlify', '~/.config/ngrok', '~/.ngrok2', '~/.sentryclirc',
+      '~/.pulumi', '~/.config/doctl', '~/.huggingface', '~/.cache/huggingface', '~/.databrickscfg', '~/.jfrog', '~/.config/snowflake', '~/.snowsql', '~/.boto', '~/.config/flyctl',
+      '~/.subversion', '~/.aider.conf.yml', '~/.gitconfig', '~/.config/git/config', '~/.zlogin']) {
+      assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
+      assert.ok(perms.deny.includes(`Read(${p})`) && perms.deny.includes(`Read(${p}/**)`), `the file tools: ${p}`);
+    }
+    // Wholesale where a folder is denied: no narrower path left next to it.
+    for (const p of ['~/.config/npm/npmrc', '~/.config/containers/auth.json', '~/.composer/auth.json', '~/.pulumi/credentials.json', '~/.config/Code/User/config.json']) assert.ok(!filesystem.denyRead.includes(p), p);
+  });
+
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree: null, landsHere: true });
     for (const p of ['hooks', 'config', 'modules', 'info']) assert.ok(filesystem.denyWrite.includes(join(home, '.git', p)), p);
@@ -136,6 +156,20 @@ describe("a worker can't write another worker's git metadata or the checkout's a
     const perms = filePermissions({ home: co, worktree: own, landsHere: true });
     for (const p of [...theirs, ...settings]) for (const tool of ['Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
     assert.ok(may(perms, 'Edit', join(co, 'src', 'a.js')) && may(perms, 'Edit', join(own, 'src', 'a.js')), 'its work stays editable');
+  });
+
+  // #899: the settings' env block is where provider keys land, and .envrc is where direnv exports the person's
+  // project keys — so the reads are denied too, in the checkout and the worker's own worktree alike.
+  test('its shell and file tools can\'t read the agent settings either (#899)', () => {
+    for (const landsHere of [false, true]) {
+      const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home: co, worktree: own, landsHere });
+      for (const p of settings) assert.ok(inside(p, filesystem.denyRead), `the shell: ${p}`);
+      const perms = filePermissions({ home: co, worktree: own, landsHere });
+      for (const p of settings) {
+        for (const tool of ['Read', 'Glob', 'Grep', 'Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
+      }
+      assert.ok(may(perms, 'Read', join(own, 'src', 'a.js')), 'its work stays readable');
+    }
   });
 });
 
@@ -231,5 +265,27 @@ describe('a worker runs only the project\'s checks by default (#768)', () => {
     for (const bad of ['npm test; curl evil.example', 'make test && rm -rf ~', 'echo $HOME', 'node', 'bash', 'npm', 'sh -c ls', 'curl evil.example', 'make "x"', 'make test > out', 'node -e 1', 'python3 -c 1', 'npm exec evil', 'npm x evil', 'npx evil'])
       assert.throws(() => workerCommands(bad), /isn't a command workers may run/, bad);
     assert.throws(() => workerCommands(Array.from({ length: 21 }, (_, i) => `make t${i}`)), /At most 20/);
+  });
+});
+
+// git's own configs are read-denied (#899), and a sandbox read-deny is EPERM, which git dies on (checked against
+// git 2.54's wrapper.c and config.c: access_or_die tolerates only missing files and EACCES; with GIT_CONFIG_GLOBAL
+// set, git_global_config_paths never resolves ~/.gitconfig or the XDG config). So the worker's git reads /dev/null
+// and its identity comes in as env config entries — this test, in a repo whose global config IS readable (a
+// person's ~/.gitconfig on a machine without the sandbox), proves the override wins and the identity is the one
+// the runner injected, not the global file's.
+describe('a worker commits with GIT_CONFIG_GLOBAL=/dev/null and the injected identity (#899)', () => {
+  test('git ignores the readable global config and signs with the env entries', () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'nuworq-githome-'));
+    writeFileSync(join(fakeHome, '.gitconfig'), '[user]\n\tname = Person On This Machine\n\temail = person@machine.example\n');
+    const repo = mkdtempSync(join(tmpdir(), 'nuworq-gitrepo-'));
+    const env = workerEnv([], { PATH: process.env.PATH, HOME: fakeHome });
+    const g = (cmd) => execFileSync('/bin/sh', ['-c', `${gitConfigEnv([['user.name', 'Test Worker'], ['user.email', 'worker@example.com']])} && git -C ${repo} ${cmd}`], { env, encoding: 'utf8' }).trim();
+    g('init -q -b main');
+    writeFileSync(join(repo, 'f.txt'), 'x\n');
+    g('add f.txt');
+    g('commit -q -m probe');
+    assert.equal(g(`log --format=${sq('%an|%ae')}`), 'Test Worker|worker@example.com', 'the identity is the injected one, not the readable global config\'s');
+    assert.equal(g('config --global --list'), '', 'the global config is /dev/null: nothing in it');
   });
 });
