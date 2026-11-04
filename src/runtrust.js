@@ -86,12 +86,14 @@ export function withoutTokens(env = process.env) {
 // npm's auth: none of it is there to read. Values holding a nuworq or GitHub token go too, whatever their name.
 // Not XDG_CONFIG_HOME or XDG_DATA_HOME, whatever the person's shell exports (#891): they are exactly where
 // credentials pile up — ~/.config and ~/.local/share in the sandbox's deny list — and a person's non-default dir
-// for them would move that pile outside every deny. Without them each tool falls back to the default, denied, path.
+// for them would move that pile outside every deny. The same for XDG_CACHE_HOME and CARGO_HOME (#899): a
+// non-default cache dir moves huggingface's token out of ~/.cache, a non-default cargo home moves its
+// credentials and config out of ~/.cargo. Without them each tool falls back to the default, denied, path.
 const BASE_ENV = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'TERM', 'COLORTERM', 'NO_COLOR', 'FORCE_COLOR',
-  'LANG', 'TZ', '__CF_USER_TEXT_ENCODING', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+  'LANG', 'TZ', '__CF_USER_TEXT_ENCODING', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
   'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
-  'GOPATH', 'GOROOT', 'GOCACHE', 'CARGO_HOME', 'RUSTUP_HOME', 'JAVA_HOME', 'NVM_DIR', 'PYENV_ROOT', 'VOLTA_HOME', 'PNPM_HOME', 'BUN_INSTALL']);
+  'GOPATH', 'GOROOT', 'GOCACHE', 'RUSTUP_HOME', 'JAVA_HOME', 'NVM_DIR', 'PYENV_ROOT', 'VOLTA_HOME', 'PNPM_HOME', 'BUN_INSTALL']);
 const nuworqSetting = (k) => /^NUWORQ_/.test(k) && !/TOKEN|KEY|SECRET|PASS|ACCESS/.test(k);
 export function workerEnv(keys = [], env = process.env) {
   const keep = (k) => BASE_ENV.has(k) || /^LC_[A-Z]+$/.test(k) || nuworqSetting(k) || keys.includes(k);

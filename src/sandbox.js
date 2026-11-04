@@ -43,15 +43,25 @@ const REGISTRIES = [
 // (settings-sync tokens; a worker never touches the editor, so denying it costs nothing). And the logins a
 // browser keeps: the macOS keychains, Safari's and the browsers' profiles (cookies, saved passwords) on macOS
 // and Linux. And the release key's folder, where docs/DEPLOY.md keeps the release key and the release
-// workflow's deploy key (#850).
+// workflow's deploy key (#850). The tail the fresh workers-area review found (#899): the agent settings in the
+// checkout and the worktree (`nuworq operator --allow` writes .claude/settings(.local).json, direnv exports
+// .envrc, VS Code keeps its settings and tasks), sops' age key where macOS puts it (App Support/sops/age),
+// VS Code's store where Linux puts it and the sibling editors' (Cursor, Code - Insiders, VSCodium), and the
+// toolchains' and CLIs' remaining credential files — npm's XDG npmrc, yarn v1's, pip's, cargo's config beside
+// its credentials, podman's auth.json, composer, wrangler, netlify, ngrok (both homes), sentry, pulumi,
+// doctl, huggingface (its home and its cache token), databricks, jfrog, snowflake and snowsql, boto, flyctl,
+// subversion, aider's conf, and git's own configs whose url.*.insteadOf can carry a token. When a config file
+// is unreadable git skips it and commits with a fallback identity (checked 2026-11-04), so nothing a worker
+// needs breaks; its registries are reached with the env the runner injects or the project's own config.
 const APP_SUPPORT = '~/Library/Application Support';
 export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
-  '~/.codex', '~/.claude.json', '~/.gemini', '~/.cursor', '~/.codeium', '~/.config/github-copilot', '~/.copilot', '~/.continue', '~/.config/goose', '~/.config/crush', '~/.config/zed', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.terraform.d', '~/.m2', '~/.nuget', '~/.yarnrc.yml',
-  '~/.zshenv', '~/.zprofile', '~/.zshrc', '~/.profile', '~/.bashrc', '~/.bash_profile', '~/.config/fish',
+  '~/.codex', '~/.claude.json', '~/.gemini', '~/.cursor', '~/.codeium', '~/.config/github-copilot', '~/.copilot', '~/.continue', '~/.config/goose', '~/.config/crush', '~/.config/zed', '~/.config/git/credentials', '~/.config/git/config', '~/.gitconfig', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.cargo/config.toml', '~/.cargo/config', '~/.gem/credentials', '~/.terraform.d', '~/.m2', '~/.nuget', '~/.yarnrc.yml', '~/.yarnrc',
+  '~/.config/npm', '~/.config/pip', '~/.config/containers', '~/.composer', '~/.jfrog', '~/.pulumi', '~/.config/doctl', '~/.config/snowflake', '~/.snowsql', '~/.boto', '~/.databrickscfg', '~/.config/flyctl', '~/.wrangler', '~/.netlify', '~/.config/ngrok', '~/.ngrok2', '~/.sentryclirc', '~/.subversion', '~/.aider.conf.yml', '~/.huggingface', '~/.cache/huggingface',
+  '~/.zshenv', '~/.zprofile', '~/.zshrc', '~/.zlogin', '~/.profile', '~/.bashrc', '~/.bash_profile', '~/.config/fish',
   '~/.bash_history', '~/.zsh_history', '~/.zsh_sessions', '~/.history', '~/.local/share/fish', '~/.local/share/atuin', '~/.python_history', '~/.node_repl_history', '~/.psql_history', '~/.mysql_history', '~/.sqlite_history',
   '~/.pgpass', '~/.my.cnf', '~/.gitcookies', '~/.config/hub', '~/.config/rclone', '~/.vault-token', '~/.config/sops', '~/.terraformrc',
-  '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Code`, `${APP_SUPPORT}/Claude`, `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
-  '~/.mozilla', '~/.config/google-chrome', '~/.config/chromium', '~/.config/BraveSoftware', '~/.config/microsoft-edge'];
+  '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Code`, `${APP_SUPPORT}/Code - Insiders`, `${APP_SUPPORT}/VSCodium`, `${APP_SUPPORT}/Cursor`, `${APP_SUPPORT}/sops`, `${APP_SUPPORT}/Claude`, `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
+  '~/.mozilla', '~/.config/google-chrome', '~/.config/chromium', '~/.config/BraveSoftware', '~/.config/microsoft-edge', '~/.config/Code', '~/.config/Code - Insiders', '~/.config/VSCodium'];
 
 // A project's extra hosts, as a person gives them: a list, or names split by commas or spaces. Host names only
 // ("api.example.com", "*.example.com", "localhost:8080"), never a URL or a path. A wildcard covers a domain, never a
@@ -78,8 +88,11 @@ export const gitWrites = (home, name) => [
 
 // What an unsandboxed tool later reads from a folder a worker may write (#606): Claude Code's project settings (an
 // operator in the checkout, or the next worker in this worktree, starts with them; `nuworq operator --allow` writes
-// there), direnv's .envrc (the person's shell) and VS Code's tasks and settings.
+// there), direnv's .envrc (the person's shell) and VS Code's tasks and settings. A worker may not write them, and
+// since #899 may not read them either: the settings' env block is exactly where provider keys land, and .envrc is
+// where direnv exports the person's project keys.
 export const AGENT_SETTINGS = ['.claude', '.envrc', '.vscode'];
+const agentSettingsOf = (home, worktree) => [home, worktree].filter(Boolean).flatMap((d) => AGENT_SETTINGS.map((f) => join(d, f)));
 
 // Other workers' folders in the checkout's .git/worktrees (#606), as they are when this worker starts: their
 // commondir and gitdir point the runner's unsandboxed git (its cleanup when they exit) at a config, so a worker that
@@ -101,7 +114,7 @@ export const gitDenies = (home, worktree, { landsHere = false } = {}) => [
   ...(worktree ? ['config.worktree', 'commondir', 'gitdir'].map((p) => join(home, '.git', 'worktrees', basename(worktree), p)) : []),
   ...(worktree ? [join(worktree, '.git')] : []),
   ...(landsHere ? otherWorktrees(home, worktree && basename(worktree)) : []),
-  ...[home, worktree].filter(Boolean).flatMap((d) => AGENT_SETTINGS.map((f) => join(d, f))),
+  ...agentSettingsOf(home, worktree),
 ];
 
 // Claude Code's sandbox for a worker: hub is the hub's address, home the project's checkout (its .git holds the
@@ -125,7 +138,7 @@ export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = f
     filesystem: {
       allowWrite: landsHere ? [home] : gitWrites(home, worktree && basename(worktree)),
       denyWrite: gitDenies(home, worktree, { landsHere }),
-      denyRead: DENY_READ,
+      denyRead: [...DENY_READ, ...agentSettingsOf(home, worktree)],
       ...(tokenFile ? { allowRead: [tokenFile] } : {}),
     },
   };
@@ -137,7 +150,7 @@ export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = f
 // Read, Glob and Grep anywhere but the keys DENY_READ names, the worker's own token file included: only its git's
 // credential helper reads that, in the shell. Deny wins over allow. Rule paths: //abs is absolute, ~/ the home
 // folder. Edit rules cover Write too, and a Write(path) rule never matches (code.claude.com/docs/en/permissions,
-// checked 2026-11-01). DENY_READ goes out as Read and Edit trees only: Claude Code applies Read deny rules to
+// checked 2026-11-01). DENY_READ and the agent settings go out as Read and Edit trees only: Claude Code applies Read deny rules to
 // Grep and Glob as well — to the directory their path argument resolves to, and best-effort to every built-in
 // tool that reads files — while a Glob(path) rule never matches and a Grep rule's content is a pattern, not a
 // path (docs checked 2026-11-04), so Grep/Glob trees of these paths would be dead rules.
@@ -149,6 +162,8 @@ export function filePermissions({ home, worktree, cwd = worktree ?? home, landsH
     allow: ['Read', 'Glob', 'Grep', ...writable.map((p) => rule('Edit', `${p}/**`))],
     deny: [
       ...DENY_READ.flatMap((p) => [...tree('Read', p), ...tree('Edit', p)]),
+      // The agent settings in the checkout and the worktree: never written (gitDenies), never read either (#899).
+      ...agentSettingsOf(home, worktree).flatMap((p) => tree('Read', p)),
       ...gitDenies(home, worktree, { landsHere }).flatMap((p) => tree('Edit', p)),
     ],
   };

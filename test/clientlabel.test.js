@@ -213,11 +213,14 @@ describe("a worker's shell sees no credential variables", () => {
 
   // The XDG dirs are exactly where credentials pile up (#891): a person's non-default config or data dir would
   // move that pile outside the sandbox's ~/.config and ~/.local/share denies, so neither reaches the worker.
-  test("the person's XDG_CONFIG_HOME and XDG_DATA_HOME don't reach the worker (#891)", () => {
-    const env = workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/xdg-config', XDG_DATA_HOME: '/home/me/xdg-data', XDG_CACHE_HOME: '/home/me/xdg-cache' });
+  // The cache and cargo homes joined them (#899): a non-default dir moves huggingface's token out of ~/.cache
+  // and cargo's credentials out of ~/.cargo.
+  test("the person's XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME and CARGO_HOME don't reach the worker (#891, #899)", () => {
+    const env = workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/xdg-config', XDG_DATA_HOME: '/home/me/xdg-data', XDG_CACHE_HOME: '/home/me/xdg-cache', CARGO_HOME: '/home/me/cargo-home' });
     assert.equal(env.XDG_CONFIG_HOME, undefined);
     assert.equal(env.XDG_DATA_HOME, undefined);
-    assert.equal(env.XDG_CACHE_HOME, '/home/me/xdg-cache', 'cache and state carry no logins');
+    assert.equal(env.XDG_CACHE_HOME, undefined);
+    assert.equal(env.CARGO_HOME, undefined);
   });
 
   // The allowlist's addition point: a project whose build reads DOCKER_HOST or VIRTUAL_ENV names them.

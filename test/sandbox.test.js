@@ -104,6 +104,24 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     for (const p of ['~/.config/github-copilot/hosts.json', '~/.continue/config.json', '~/.m2/settings.xml', '~/.nuget/NuGet.Config']) assert.ok(!filesystem.denyRead.includes(p), p);
   });
 
+  // #899: the fresh workers-area review of #468 — the tail the first three sweeps missed: sops' age key where
+  // macOS puts it, VS Code's and the sibling editors' stores where Linux puts them, and the toolchains' and
+  // CLIs' remaining credential files, git's own configs among them.
+  test("its shell and file tools don't read the credential stores the first sweeps missed (#899)", () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
+    const perms = filePermissions({ home, worktree });
+    for (const p of ['~/Library/Application Support/sops', '~/Library/Application Support/Cursor', '~/Library/Application Support/Code - Insiders', '~/Library/Application Support/VSCodium',
+      '~/.config/Code', '~/.config/Code - Insiders', '~/.config/VSCodium',
+      '~/.config/npm', '~/.yarnrc', '~/.config/pip', '~/.cargo/config.toml', '~/.config/containers', '~/.composer', '~/.wrangler', '~/.netlify', '~/.config/ngrok', '~/.ngrok2', '~/.sentryclirc',
+      '~/.pulumi', '~/.config/doctl', '~/.huggingface', '~/.cache/huggingface', '~/.databrickscfg', '~/.jfrog', '~/.config/snowflake', '~/.snowsql', '~/.boto', '~/.config/flyctl',
+      '~/.subversion', '~/.aider.conf.yml', '~/.gitconfig', '~/.config/git/config', '~/.zlogin']) {
+      assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
+      assert.ok(perms.deny.includes(`Read(${p})`) && perms.deny.includes(`Read(${p}/**)`), `the file tools: ${p}`);
+    }
+    // Wholesale where a folder is denied: no narrower path left next to it.
+    for (const p of ['~/.config/npm/npmrc', '~/.config/containers/auth.json', '~/.composer/auth.json', '~/.pulumi/credentials.json', '~/.config/Code/User/config.json']) assert.ok(!filesystem.denyRead.includes(p), p);
+  });
+
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree: null, landsHere: true });
     for (const p of ['hooks', 'config', 'modules', 'info']) assert.ok(filesystem.denyWrite.includes(join(home, '.git', p)), p);
@@ -136,6 +154,20 @@ describe("a worker can't write another worker's git metadata or the checkout's a
     const perms = filePermissions({ home: co, worktree: own, landsHere: true });
     for (const p of [...theirs, ...settings]) for (const tool of ['Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
     assert.ok(may(perms, 'Edit', join(co, 'src', 'a.js')) && may(perms, 'Edit', join(own, 'src', 'a.js')), 'its work stays editable');
+  });
+
+  // #899: the settings' env block is where provider keys land, and .envrc is where direnv exports the person's
+  // project keys — so the reads are denied too, in the checkout and the worker's own worktree alike.
+  test('its shell and file tools can\'t read the agent settings either (#899)', () => {
+    for (const landsHere of [false, true]) {
+      const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home: co, worktree: own, landsHere });
+      for (const p of settings) assert.ok(inside(p, filesystem.denyRead), `the shell: ${p}`);
+      const perms = filePermissions({ home: co, worktree: own, landsHere });
+      for (const p of settings) {
+        for (const tool of ['Read', 'Glob', 'Grep', 'Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
+      }
+      assert.ok(may(perms, 'Read', join(own, 'src', 'a.js')), 'its work stays readable');
+    }
   });
 });
 
