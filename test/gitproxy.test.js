@@ -1,7 +1,12 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { readCommands, refusedRef, refusal, proxyPush } from '../src/gitproxy.js';
 
 // The ref updates at the head of a push (#472), as git sends them: pkt-lines, capabilities after a NUL on the first.
@@ -20,6 +25,24 @@ describe('the hub reads a push before passing it on', () => {
     assert.deepEqual(readCommands(Buffer.from('0000')).cmds, [], "git's empty probe before a large push");
     assert.throws(() => readCommands(Buffer.from(pkt('push-cert\0report-status\n'))), /signed pushes/);
     assert.throws(() => readCommands(Buffer.from(pkt('hello\n'))), /not a git push/);
+  });
+
+  test('a shallow clone\'s push: leading shallow lines are skipped (#886)', () => {
+    // As git sends it from a clone made with --depth, and as #878's worker push was captured: the shallow
+    // line is the first pkt (0035 = "shallow " + a 40-hex sha + a newline), the commands after it.
+    const S = '27a7511244b3f5c3ab98e7ea5a7b6f8d3b2a1c0d';
+    const head = pkt(`shallow ${S}\n`) + pkt(`${A} ${B} refs/heads/nuworq/1-x\0report-status side-band-64k agent=git/2\n`) + '0000';
+    const buf = Buffer.concat([Buffer.from(head), Buffer.from('PACK...')]);
+    for (let n = 0; n < head.length; n++) assert.equal(readCommands(buf.subarray(0, n)), null, `${n} bytes are not enough`);
+    const r = readCommands(buf);
+    assert.deepEqual(r.cmds, [{ old: A, new: B, ref: 'refs/heads/nuworq/1-x' }]);
+    assert.deepEqual(r.caps, ['report-status', 'side-band-64k', 'agent=git/2'], 'caps still ride the first command');
+    assert.equal(r.end, head.length, 'the flush, not a shallow line, ends the commands');
+    const two = readCommands(Buffer.from(pkt(`shallow ${S}\n`) + pkt(`shallow ${B}\n`) + pkt(`${A} ${B} refs/heads/nuworq/1-x\n`) + '0000'));
+    assert.deepEqual(two.cmds, [{ old: A, new: B, ref: 'refs/heads/nuworq/1-x' }], 'a clone may be shallow at more than one commit');
+    assert.throws(() => readCommands(Buffer.from(pkt(`shallow ${S.slice(0, 20)}\n`) + pkt(`${A} ${B} refs/heads/nuworq/1-x\n`) + '0000')), /not a git push/, 'a short shallow line is no push');
+    assert.throws(() => readCommands(Buffer.from(pkt(`shallow ${S}\n`) + pkt('push-cert\0report-status\n') + '0000')), /signed pushes/, 'a cert after shallow lines is still refused');
+    assert.throws(() => readCommands(Buffer.from(pkt(`shallow ${S}\n`) + pkt('hello\n') + '0000')), /not a git push/, 'garbage after shallow lines is still no push');
   });
 
   test('only the held item\'s nuworq/ branch, and no deletions (#605)', () => {
@@ -136,5 +159,89 @@ describe('the push proxy when GitHub hangs or goes', () => {
     const again = await ask(hub, 'info/refs');
     assert.ok(again.cut || again.error);
     close(hub, github);
+  });
+});
+
+// #886: a worker whose clone is shallow (it fetched with --depth, as #878's did) still pushes through the hub:
+// its git opens the receive-pack body with shallow lines, and the hub reads the commands after them. The fake
+// GitHub here is real git (http-backend), as the package and flow tests use.
+describe('a push from a shallow clone goes through the hub', () => {
+  const BRANCH = 'nuworq/1-x';
+  const run = promisify(execFile);
+  const git = (cwd, args, env) => run('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', cwd, ...args], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env }, timeout: 30_000 });
+  let root, bare, clone, hub, github;
+
+  const listen = (handler) => new Promise((resolve) => {
+    const s = http.createServer(handler);
+    s.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const url = (s) => `http://127.0.0.1:${s.address().port}`;
+  // GitHub's smart HTTP for the bare repository under root, tokens it takes on trust (the hub's own side).
+  const gitHttp = (req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks);
+      const u = new URL(req.url, 'http://x');
+      const cgi = spawn('git', ['http-backend'], { env: {
+        ...process.env, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: '1', REMOTE_USER: 'x-access-token',
+        REQUEST_METHOD: req.method, PATH_INFO: u.pathname, QUERY_STRING: u.search.slice(1),
+        CONTENT_TYPE: req.headers['content-type'] ?? '', CONTENT_LENGTH: String(raw.length),
+        HTTP_CONTENT_ENCODING: req.headers['content-encoding'] ?? '', HTTP_GIT_PROTOCOL: req.headers['git-protocol'] ?? '',
+      } });
+      const out = [];
+      cgi.stdout.on('data', (c) => out.push(c));
+      cgi.on('close', () => {
+        const buf = Buffer.concat(out);
+        const split = buf.indexOf('\r\n\r\n');
+        const head = buf.subarray(0, split).toString();
+        const status = Number((head.match(/^Status: (\d+)/m) ?? [])[1] ?? 200);
+        const headers = Object.fromEntries(head.split('\r\n').slice(1).map((l) => { const i = l.indexOf(':'); return [l.slice(0, i).toLowerCase(), l.slice(i + 1).trim()]; }).filter(([k]) => k));
+        res.writeHead(status, headers);
+        res.end(buf.subarray(split + 4));
+      });
+      cgi.stdin.end(raw);
+    });
+  };
+
+  before(async () => {
+    root = join(realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-shallow-'))));
+    bare = join(root, 'o', 'r.git');
+    mkdirSync(bare, { recursive: true });
+    await git(bare, ['init', '-q', '--bare', '-b', 'main']);
+    await git(bare, ['config', 'http.receivepack', 'true']);
+    await git(bare, ['config', 'receive.shallowUpdate', 'true']);
+    // A commit on main, so the server has the history the shallow clone will push against.
+    const seed = join(root, 'seed');
+    await run('git', ['clone', '-q', bare, seed], {});
+    writeFileSync(join(seed, 'f.txt'), 'one\n');
+    await git(seed, ['add', 'f.txt']);
+    await git(seed, ['commit', '-qm', 'one']);
+    await git(seed, ['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+    // The worker's clone, one commit deep: shallow, as a depth-1 fetch makes it.
+    clone = join(root, 'work');
+    await run('git', ['clone', '-q', '--depth', '1', `file://${bare}`, clone], {});
+    assert.ok(existsSync(join(clone, '.git', 'shallow')), 'the clone is shallow');
+    // The hub in front of it, as pushInsteadOf wires a worker's pushes for github.com to it (#472).
+    github = await listen(gitHttp);
+    hub = await listen((req, res) => proxyPush(req, res, { git: `${url(github)}/o/r.git`, service: req.url.includes('info/refs') ? 'info/refs' : 'git-receive-pack', token: 't', branch: BRANCH }));
+    // The worker's wiring (#472): its pushes for the repository go through the hub.
+    const through = `${url(hub)}/api/git/github.com/o/r.git`;
+    await git(clone, ['config', `url.${through}.pushInsteadOf`, `file://${bare}`]);
+    await git(clone, ['switch', '-qc', BRANCH]);
+    writeFileSync(join(clone, 'f.txt'), 'two\n');
+    await git(clone, ['commit', '-qam', 'two']);
+  });
+  after(() => {
+    for (const s of [hub, github]) { if (s) { s.closeAllConnections(); s.close(); } }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('the push lands on its branch, and main is untouched', async () => {
+    await git(clone, ['push', '-q', 'origin', `HEAD:refs/heads/${BRANCH}`]);
+    const rev = (repo, ref) => git(repo, ['rev-parse', ref]).then((r) => r.stdout.trim());
+    const pushed = await rev(bare, `refs/heads/${BRANCH}`);
+    assert.equal(pushed, await rev(clone, 'HEAD'), 'GitHub took the shallow clone\'s push');
+    assert.notEqual(await rev(bare, 'refs/heads/main'), pushed, 'main never moved');
   });
 });

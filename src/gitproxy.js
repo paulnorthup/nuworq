@@ -15,6 +15,9 @@ export const UPSTREAM_MS = 30_000;
 
 // The commands at the head of a git-receive-pack request: [{ old, new, ref }] and the client's capabilities,
 // and where they end (the flush). null while more bytes are needed; throws on anything that isn't a push.
+// A push from a shallow clone (git clone/fetch --depth, #886) opens with `shallow <sha>` pkt-lines before the
+// commands, protocol-legal for receive-pack; the leading ones are skipped. A shallow line after a command
+// matches nothing and throws, as before.
 export function readCommands(buf) {
   const cmds = [];
   let caps = [], at = 0;
@@ -29,6 +32,7 @@ export function readCommands(buf) {
     if (line.startsWith('push-cert')) throw new Error('signed pushes go to GitHub directly');
     const nul = line.indexOf('\0');
     if (nul >= 0) { caps = line.slice(nul + 1).split(' ').filter(Boolean); line = line.slice(0, nul); }
+    if (!cmds.length && /^shallow [0-9a-f]{40,64}$/.test(line)) continue;
     const m = line.match(/^([0-9a-f]{40,64}) ([0-9a-f]{40,64}) (\S+)$/);
     if (!m) throw new Error('not a git push');
     cmds.push({ old: m[1], new: m[2], ref: m[3] });
