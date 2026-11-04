@@ -21,20 +21,25 @@ const REGISTRIES = [
 ];
 
 // What no worker reads, whatever its task says: keys, the person's nuworq login, cloud and GitHub CLI credentials,
-// and the harnesses' own logins: Claude Code's OAuth token (in this file on Linux; macOS keeps it in the Keychain)
-// and opencode's config and data: `opencode auth login` keeps provider keys in its XDG data dir (auth.json, and
+// and the harnesses' own stores, denied wholesale like ~/.codex, opencode and pi: ~/.claude holds every past Claude
+// Code session's transcript (~/.claude/projects — they routinely carry pasted keys and .env contents read into
+// context, the same class as the shell histories below), settings.json's env block (provider keys), and plugins;
+// its OAuth login is in the Keychain on macOS (in .credentials.json on Linux) and a runner worker's harness config
+// comes inline, so the folder costs it nothing. Claude Desktop's local store (MCP tokens) in Application Support;
+// opencode's config and data: `opencode auth login` keeps provider keys in its XDG data dir (auth.json, and
 // mcp-auth.json for MCP logins), next to its sessions (#580, #581); and pi's agent folder, where it keeps auth.json, models.json keys and sessions (#495). Denying them costs the worker nothing: claude
 // itself runs outside the sandbox and its permission rules, which hold only for the shell it starts and for its
 // file tools, so it still reads its own login. Then every other harness's and toolchain's stored credentials (#616):
 // Codex's auth.json, ~/.claude.json (user MCP servers' env and headers), git's XDG credential store, cargo's, gem's
-// and Terraform's tokens, yarn's auth; shell and REPL histories (pasted keys); and the logins a browser keeps: the
+// and Terraform's tokens, yarn's auth; the Gemini, Cursor and Codeium CLIs' own stores (auth, settings, chat
+// history); shell and REPL histories (pasted keys); and the logins a browser keeps: the
 // macOS keychains, Safari's and the browsers' profiles (cookies, saved passwords) on macOS and Linux. And the
 // release key's folder, where docs/DEPLOY.md keeps the release key and the release workflow's deploy key (#850).
 const APP_SUPPORT = '~/Library/Application Support';
-export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude/.credentials.json', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
-  '~/.codex', '~/.claude.json', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.terraform.d', '~/.yarnrc.yml',
+export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
+  '~/.codex', '~/.claude.json', '~/.gemini', '~/.cursor', '~/.codeium', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.terraform.d', '~/.yarnrc.yml',
   '~/.bash_history', '~/.zsh_history', '~/.zsh_sessions', '~/.history', '~/.local/share/fish', '~/.python_history', '~/.node_repl_history', '~/.psql_history', '~/.mysql_history', '~/.sqlite_history',
-  '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
+  '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Claude`, `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
   '~/.mozilla', '~/.config/google-chrome', '~/.config/chromium', '~/.config/BraveSoftware', '~/.config/microsoft-edge'];
 
 // A project's extra hosts, as a person gives them: a list, or names split by commas or spaces. Host names only
