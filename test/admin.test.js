@@ -148,6 +148,12 @@ describe('the admin host', () => {
     assert.equal((await request(port, 'POST', '/api/early-access', { host: ADMIN, body: { email: 'x@example.com', turnstile: 'good' } })).status, 404);
   });
 
+  test('the open admin page keeps only what running a hub needs: wiring, early access, workspaces (#879)', async () => {
+    const js = (await request(port, 'GET', '/admin.js', { host: ADMIN })).text;
+    for (const route of ['/api/github/app/wiring', '/api/early-access', '/api/workspaces']) assert.match(js, new RegExp(route.replace(/\//g, '\\/')));
+    assert.doesNotMatch(js, /\/api\/feedback|early-access\/sources|Where they came from|Feedback/, 'the business views are the console\'s; their routes stay in the API');
+  });
+
   test("an app session doesn't open the admin host, and an admin session doesn't open the app", async () => {
     const dir = spaces.directory;
     const id = dir.identify('remy@example.com', 'github').id;

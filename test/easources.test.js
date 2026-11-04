@@ -101,11 +101,12 @@ describe('early-access sources (#356)', () => {
     } finally { h.close(); }
   });
 
-  test('the dashboard shows the source on each request and a "Where they came from" section, tagged new', () => {
+  test('the open admin page keeps the source on each request but not the funnel (#879): the API stays', async () => {
     const js = readFileSync(new URL('../web/admin.js', import.meta.url), 'utf8');
     assert.match(js, /via \$\{esc\(r\.source\)\}/);
-    assert.match(js, /data-new="ea-sources">Where they came from/);
-    assert.match(js, /\/api\/early-access\/sources/);
-    assert.match(readFileSync(new URL('../web/new.js', import.meta.url), 'utf8'), /'ea-sources': '2026-10-31'/);
+    assert.doesNotMatch(js, /Where they came from/);
+    assert.doesNotMatch(js, /\/api\/early-access\/sources/, 'the funnel moved to the console; the open page stops calling it');
+    assert.doesNotMatch(readFileSync(new URL('../web/new.js', import.meta.url), 'utf8'), /'ea-sources'/);
+    assert.match(readFileSync(new URL('../docs/ADMIN-API.md', import.meta.url), 'utf8'), /GET \/api\/early-access\/sources/, 'the route stays documented');
   });
 });

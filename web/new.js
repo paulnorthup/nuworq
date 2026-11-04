@@ -21,10 +21,8 @@ export const NEW = {
   'model-trials': '2026-10-31', // #348: in Staffing, the share of building jobs that try a cheaper model
   feedback: '2026-10-31', // #295: tell nuworq's developers what got in your way (the rail's Feedback, on hubs that take it)
   'feedback-mine': '2026-10-31', // #297: under the Feedback form, what you sent and what happened to each
-  'feedback-autonomy': '2026-10-31', // #296: how far feedback goes on its own (the admin dashboard's Feedback section)
   guide: '2026-10-31', // #383: the getting-started guide at /guide (the rail's Guide)
   'guide-gs': '2026-10-31', // #383: the same guide from Get started's head (each undone step's How? opens its section)
-  'ea-sources': '2026-10-31', // #356: on the admin dashboard, how far the people from each early-access source got
   'model-quality': '2026-10-31', // #349: the quality bar routing keeps to, in Staffing
   'model-why': '2026-10-31', // #349: in an item's drawer, which model its job runs on and why
   'model-routing-results': '2026-10-31', // #349: analytics' Model routing, each model's results per kind of job
@@ -53,7 +51,6 @@ export const NEW = {
   'question-numbers': '2026-11-02', // #710: each question shows its number (Q207), and ⌘K finds it by q207 or "question 207"
   'operator-question': '2026-11-02', // #712: with no operator connected, its questions are yours: steps to tick and an answer, and How to start an operator
   'one-name': '2026-11-02', // #708: one name per step of getting going: + Project, Home, Guide, Connect an agent, Staff it with nuworq run (the rail's + Project)
-  'feedback-groups': '2026-11-02', // #688: the admin dashboard's feedback in groups: what covers each, a suggested call, one tap, Undo
   'feedback-waiting': '2026-11-02', // #688: for the hub's owners, the home's line of feedback waiting, opening the groups
   'milestones-waiting': '2026-11-02', // #746: milestones that only wait step out of the list behind one quiet line; Stuck means something must change
   'default-tiers': '2026-11-02', // #723: Staffing's Claude models say the default tiers are in use, and when trials can't run
