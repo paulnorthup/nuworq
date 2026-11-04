@@ -36,17 +36,21 @@ const REGISTRIES = [
 // same keys, exported there instead of pasted, fish's config with them), atuin's full-history store, and the
 // single files that hold a login outright: ~/.pgpass, ~/.my.cnf, git's cookie store, hub's GitHub token,
 // rclone's remotes (each remote's password is in rclone.conf), Vault's token, sops' age keys and Terraform's
-// own credentials file (~/.terraformrc — ~/.terraform.d is the plugin cache, already denied). And the logins a
+// own credentials file (~/.terraformrc — ~/.terraform.d is the plugin cache, already denied). The AI-CLI stores
+// the first sweep missed (#893): github-copilot's hosts.json (the GitHub OAuth token), ~/.copilot, continue's
+// config.json (plaintext provider keys), goose, crush and zed; the toolchains' remaining credential files (#893):
+// maven's ~/.m2/settings.xml and NuGet's ~/.nuget/NuGet.Config; and VS Code's local store in Application Support
+// (settings-sync tokens; a worker never touches the editor, so denying it costs nothing). And the logins a
 // browser keeps: the macOS keychains, Safari's and the browsers' profiles (cookies, saved passwords) on macOS
 // and Linux. And the release key's folder, where docs/DEPLOY.md keeps the release key and the release
 // workflow's deploy key (#850).
 const APP_SUPPORT = '~/Library/Application Support';
 export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
-  '~/.codex', '~/.claude.json', '~/.gemini', '~/.cursor', '~/.codeium', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.terraform.d', '~/.yarnrc.yml',
+  '~/.codex', '~/.claude.json', '~/.gemini', '~/.cursor', '~/.codeium', '~/.config/github-copilot', '~/.copilot', '~/.continue', '~/.config/goose', '~/.config/crush', '~/.config/zed', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.terraform.d', '~/.m2', '~/.nuget', '~/.yarnrc.yml',
   '~/.zshenv', '~/.zprofile', '~/.zshrc', '~/.profile', '~/.bashrc', '~/.bash_profile', '~/.config/fish',
   '~/.bash_history', '~/.zsh_history', '~/.zsh_sessions', '~/.history', '~/.local/share/fish', '~/.local/share/atuin', '~/.python_history', '~/.node_repl_history', '~/.psql_history', '~/.mysql_history', '~/.sqlite_history',
   '~/.pgpass', '~/.my.cnf', '~/.gitcookies', '~/.config/hub', '~/.config/rclone', '~/.vault-token', '~/.config/sops', '~/.terraformrc',
-  '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Claude`, `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
+  '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Code`, `${APP_SUPPORT}/Claude`, `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
   '~/.mozilla', '~/.config/google-chrome', '~/.config/chromium', '~/.config/BraveSoftware', '~/.config/microsoft-edge'];
 
 // A project's extra hosts, as a person gives them: a list, or names split by commas or spaces. Host names only

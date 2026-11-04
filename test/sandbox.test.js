@@ -91,6 +91,19 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     assert.ok(perms.deny.includes('Read(~/.claude)') && perms.deny.includes('Read(~/.claude/**)'), 'the file tools: the folder and everything under it');
   });
 
+  // #893: the fresh workers-area review of #468 — the rc files that export the keys, the AI-CLI stores the first
+  // sweep missed, and the toolchains' remaining credential files are the same class as the histories and the rest.
+  test("its shell and file tools don't read the rc files, the remaining AI-CLI stores or the toolchain credentials (#893)", () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
+    const perms = filePermissions({ home, worktree });
+    for (const p of ['~/.zshrc', '~/.bashrc', '~/.bash_profile', '~/.profile', '~/.config/github-copilot', '~/.copilot', '~/.continue', '~/.config/goose', '~/.config/crush', '~/.config/zed', '~/.terraformrc', '~/.m2', '~/.nuget', '~/Library/Application Support/Code']) {
+      assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
+      assert.ok(perms.deny.includes(`Read(${p})`) && perms.deny.includes(`Read(${p}/**)`), `the file tools: ${p}`);
+    }
+    // Wholesale where a folder is denied: no narrower path left next to it.
+    for (const p of ['~/.config/github-copilot/hosts.json', '~/.continue/config.json', '~/.m2/settings.xml', '~/.nuget/NuGet.Config']) assert.ok(!filesystem.denyRead.includes(p), p);
+  });
+
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree: null, landsHere: true });
     for (const p of ['hooks', 'config', 'modules', 'info']) assert.ok(filesystem.denyWrite.includes(join(home, '.git', p)), p);
