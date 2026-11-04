@@ -382,7 +382,11 @@ Environment
 Example
   nuworq serve --demo
 
-On loopback it needs no login. Any other host (or --auth) requires tokens: make
+On loopback it needs no login. It prints the address to open in your browser,
+which carries the hub's person key once (#900): that open is what lets the
+browser act — the address alone proves nothing, since code a worker runs
+reaches it too. The key lives in ~/.nuworq/tokens/person.token, and the CLI on
+this machine sends it by itself. Any other host (or --auth) requires tokens: make
 one with nuworq token create. With --workspaces, each workspace is at
 <name>.<base-domain> or /w/<name>/.
 

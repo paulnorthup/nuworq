@@ -115,16 +115,18 @@ describe('local: the same build, with no login and no config', () => {
   });
   after(() => { server.close(); server.closeAllConnections(); hub.close?.(); });
 
-  test('a person on this machine makes a project and an agent finishes an item, with no token or cookie anywhere', async () => {
-    const proj = await request(port, 'POST', '/api/projects', { headers: { origin: `http://127.0.0.1:${port}` }, body: { name: 'shop', mission: 'Sell things.' } });
+  test('the person (by their key) makes a project and an agent (by the runner token) finishes an item', async () => {
+    const mine = { authorization: `Bearer ${server.personKey}`, origin: `http://127.0.0.1:${port}` };
+    const proj = await request(port, 'POST', '/api/projects', { headers: mine, body: { name: 'shop', mission: 'Sell things.' } });
     assert.equal(proj.status, 200, proj.text);
-    const agent = (op, body) => request(port, 'POST', `/api/p/shop/agent/${op}`, { body: { agent: 'w1', ...body } });
+    const runner = server.auth.localRunnerToken('box');
+    const agent = (op, body) => request(port, 'POST', `/api/p/shop/agent/${op}`, { headers: { authorization: `Bearer ${runner.token}` }, body: { agent: 'w1', ...body } });
     assert.equal((await agent('checkin')).json.project, 'shop');
     assert.equal((await agent('propose', { title: 'Checkout works', acceptance: 'A cart can be paid for.' })).status, 200);
     const job = (await agent('next')).json;
     assert.equal(job.mode, 'work', JSON.stringify(job));
     assert.equal((await agent('submit', { item: job.item, headline: 'Checkout pays', evidence: [{ label: 'tests pass' }] })).status, 200);
-    const ok = await request(port, 'POST', '/api/p/shop/human/accept', { headers: { origin: `http://127.0.0.1:${port}` }, body: { item: job.item } });
+    const ok = await request(port, 'POST', '/api/p/shop/human/accept', { headers: mine, body: { item: job.item } });
     assert.equal(ok.status, 200, ok.text);
     assert.equal((await agent('look', { item: job.item })).json.stage, 'done');
   });

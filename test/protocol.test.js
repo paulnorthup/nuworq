@@ -182,12 +182,14 @@ describe('lifecycle', () => {
 });
 
 describe('transports', () => {
-  let hub, server, url;
+  let hub, server, url, runner;
   before(async () => {
     hub = new Hub();
     server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     url = `http://127.0.0.1:${server.address().port}`;
+    // Agents speak with the runner token a local hub mints (#892); without a token they're nobody (#900).
+    runner = server.auth.localRunnerToken('box').token;
   });
   after(() => {
     server.closeAllConnections?.();
@@ -195,7 +197,7 @@ describe('transports', () => {
   });
 
   const post = (path, body, headers = {}) =>
-    fetch(url + path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    fetch(url + path, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${runner}`, ...headers }, body: JSON.stringify(body) });
 
   test('HTTP: missing agent name → 400 with a hint; unknown project → 404', async () => {
     const r1 = await post('/api/p/anything/agent/checkin', {});
@@ -210,7 +212,7 @@ describe('transports', () => {
   test('MCP: initialize, list tools, call checkin and next', async () => {
     hub.humanOp(hub.tx(() => hub.project('mcp-proj', { create: true })).slug, 'create', { title: 'MCP task', acceptance: 'x' });
     const child = spawn(process.execPath, [BIN, 'mcp'], {
-      env: { ...process.env, NUWORQ_URL: url, NUWORQ_PROJECT: 'mcp-proj', NUWORQ_MODEL: 'gpt-5', NUWORQ_AGENT: '', NUWORQ_ROLE: '' },
+      env: { ...process.env, NUWORQ_URL: url, NUWORQ_PROJECT: 'mcp-proj', NUWORQ_MODEL: 'gpt-5', NUWORQ_AGENT: '', NUWORQ_ROLE: '', NUWORQ_TOKEN: runner },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const pending = new Map();
@@ -271,8 +273,11 @@ describe('transports', () => {
   });
 
   test('CLI: checkin, propose, next, submit', async () => {
-    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_PROJECT: 'cli-proj', NUWORQ_AGENT: '' };
-    const cli = (...args) => run(process.execPath, [BIN, ...args], { env });
+    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_PROJECT: 'cli-proj', NUWORQ_AGENT: '', NUWORQ_TOKEN: runner };
+    const cli = (...args) => {
+      const opts = typeof args.at(-1) === 'object' ? args.pop() : {};
+      return run(process.execPath, [BIN, ...args], { env, ...opts });
+    };
 
     const c = JSON.parse((await cli('checkin', '--as', 'cli-1', '--model', 'qwen3-coder', '--client', 'opencode')).stdout);
     assert.equal(c.project, 'cli-proj');
@@ -296,7 +301,7 @@ describe('transports', () => {
     await assert.rejects(cli('next'), (e) => e.code === 1 && /who are you/.test(e.stderr));
     await assert.rejects(cli('claim', '#42', '--as', 'cli-1'), (e) => e.code === 1 && /error: No item #42/.test(e.stderr));
 
-    const status = await cli('status', '--project', 'cli-proj');
+    const status = await cli('status', '--project', 'cli-proj', { env: { ...env, NUWORQ_TOKEN: server.personKey } }); // the person's view
     assert.match(status.stdout, /1 thing needs you/);
   });
 });

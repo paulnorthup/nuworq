@@ -89,6 +89,22 @@ function discoveredUrl() {
   try { return JSON.parse(readFileSync(HUB_FILE, 'utf8')).url || null; } catch { return null; }
 }
 
+// What the serving hub last said about itself (serve writes hub.json): its address, and whether it needs login.
+// The CLI sends the person's key only to a hub it knows is local (#900) — a required hub would read the key as
+// just a bad token.
+function discoveredHub() {
+  try {
+    const h = JSON.parse(readFileSync(HUB_FILE, 'utf8'));
+    return h?.url ? { url: String(h.url).replace(/\/+$/, ''), auth: h.auth ?? null } : null;
+  } catch { return null; }
+}
+
+// The person's key on a hub without logins (#900): the person's CLI and runner read it here — workers can't,
+// since the token folder is among what a worker's sandbox denies (~/.nuworq, src/sandbox.js).
+function personToken() {
+  try { return readFileSync(join(dirname(HUB_FILE), 'tokens', 'person.token'), 'utf8').trim() || null; } catch { return null; }
+}
+
 export function connected(file = CONNECT_FILE) {
   try {
     const c = JSON.parse(readFileSync(file, 'utf8'));
@@ -106,12 +122,18 @@ export function connected(file = CONNECT_FILE) {
 export function resolveSettings({ url, project, token, cwd = process.cwd(), connectFile } = {}) {
   const config = findConfig(cwd);
   const conn = connected(connectFile);
-  const hubUrl = (url || envVar('URL') || config?.url || conn?.url || discoveredUrl() || DEFAULT_URL).replace(/\/+$/, '');
+  const disc = discoveredHub();
+  const hubUrl = (url || envVar('URL') || config?.url || conn?.url || disc?.url || DEFAULT_URL).replace(/\/+$/, '');
   const named = project || envVar('PROJECT') || config?.project;
   const fromFile = () => { const f = envVar('TOKEN_FILE'); try { return f ? readFileSync(f, 'utf8').trim() || null : null; } catch { return null; } };
+  // Last of all, so any agent token wins over it: the person's key, sent only to the local hub this machine
+  // serves (the hub.json serve wrote says auth: local) (#900).
+  let host = '';
+  try { host = new URL(hubUrl).hostname; } catch { /* a junk address sends no key */ }
+  const person = !disc || disc.url !== hubUrl || disc.auth !== 'local' || !LOOPBACK_HOST.test(host) ? null : personToken();
   return {
     url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd),
-    token: token ?? envVar('TOKEN') ?? fromFile() ?? (conn?.url === hubUrl ? conn.token : ''), config,
+    token: token ?? envVar('TOKEN') ?? fromFile() ?? ((conn?.url === hubUrl ? conn.token : '') || person), config,
   };
 }
 

@@ -76,8 +76,10 @@ describe('agent errors name the field and say what to send', () => {
     const hub = single();
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    // An agent operation needs an agent to speak: the runner token a local hub mints (#892).
+    const runner = server.auth.localRunnerToken('box');
     const post = (op, body) => fetch(`http://127.0.0.1:${server.address().port}/api/p/demo/agent/${op}`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': 'w1' }, body,
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': 'w1', authorization: `Bearer ${runner.token}` }, body,
     }).then(async (r) => ({ status: r.status, json: await r.json() }));
     try {
       await post('checkin', '{}');

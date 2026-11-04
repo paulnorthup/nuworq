@@ -686,7 +686,7 @@ async function localRunnerToken(client, flags = {}) {
     console.log(dim(`Workers here carry the runner token ${r.name}, so code they run acts as an agent on this hub, never as you.`));
     return r.token;
   }
-  console.log(amber(`! Workers here go without a token, so this hub still answers them as you. ${how}`));
+  console.log(amber(`! Workers here go without a token, and this hub refuses writes that carry none — it acts only for its person (#900). ${how}`));
   return null;
 }
 
@@ -1086,7 +1086,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     worktree && origin ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} on origin with \`git fetch origin\`, then \`git switch --no-track -c <branch> origin/${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, push the branch before you submit (\`git push origin <branch>\`), and include the branch and commit in your evidence. Your pushes go through the hub, which takes only nuworq/ branches: ${main} and tags are the hub's. To land accepted work, follow the hub's steps: rebase onto origin/${main}; where CI checks the pull request, push the rebased branch and let its checks decide; otherwise run the checks, push the rebased branch (\`git push origin <branch> --force-with-lease\`), then submit; the hub puts it on ${main}. Never work in the main checkout, ${home}.`
       : worktree ? `You work in your own git worktree, ${worktree}. For each item, the hub names a branch: create it from the latest ${main} with \`git switch -c <branch> ${main}\`, or \`git switch <branch>\` if it exists. Commit your work there, and include the branch and commit in your evidence when you submit. Never work in the main checkout, ${home}.` : '',
     browser && (has('bin/nuworq.js')
-      ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints its address, and on loopback it needs no login. When you ship a visible UI feature, add its key with today\'s date to web/new.js and data-new="<key>" to its element, so people see it\'s new.'
+      ? 'To check UI work, start a local nuworq with demo data from this worktree on a free port: run `node bin/nuworq.js serve --demo --port 0` in the background; it prints the address to open in your browser — it carries the hub\'s key once, and the browser keeps it (on loopback pages need no other login). When you ship a visible UI feature, add its key with today\'s date to web/new.js and data-new="<key>" to its element, so people see it\'s new.'
       : 'To check UI work, start the app from this worktree on a free local port, in the background.'),
     browser && 'Then look at it with the browser tools (mcp__playwright: local pages only) at desktop width and at 375px wide (browser_resize), in light and in dark: the app follows the device, so to check dark set document.documentElement.dataset.theme = "dark" with browser_evaluate. Take each screenshot without a file name, look at it, and describe in your evidence what you saw. Stop the server when you are done.',
     landing ? 'Follow the steps the claim gives you, and nothing more: no reading around, no other changes.'
@@ -1856,7 +1856,18 @@ async function serve(flags) {
   ignoreSiteHost(flags);
   const { handedOver, handoff } = await import('../src/handoff.js');
   const handed = handedOver() && !flags.smoke; // under serve --follow: the supervisor owns the port (#523)
-  const server = createServer(hub, { auth, trustProxy, publicUrl, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
+  // The person's key on a hub without logins (#900), kept in tokens/person.token so it survives restarts and the
+  // printed address keeps working. A demo keeps data in memory: a fresh key each run, printed below. A home the
+  // key can't be kept in (or read back from): a fresh key for this run, still printed.
+  const localKey = () => {
+    const file = join(dirname(HUB_FILE), 'tokens', 'person.token');
+    try { const k = readFileSync(file, 'utf8').trim(); if (k) return k; } catch { /* none yet */ }
+    try { tokenFile(dirname(HUB_FILE), 'person', randomBytes(24).toString('base64url')); return readFileSync(file, 'utf8').trim(); } catch (e) {
+      console.warn(amber(`warning: couldn't keep the person key in ${file} (${e.message}); this run's key is fresh`));
+      return '';
+    }
+  };
+  const server = createServer(hub, { auth, trustProxy, publicUrl, personKey: auth === 'local' && !flags.demo ? localKey() : '', oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -1874,8 +1885,9 @@ hint: Create one, then start again:
   // What only the hub that leads does: the Notifier, and telling local clients where the hub is.
   const lead = (url) => {
     if (!flags.demo) {
-      // Let agents and the CLI on this machine find the hub without configuration.
-      try { mkdirSync(dirname(HUB_FILE), { recursive: true }); writeFileSync(HUB_FILE, JSON.stringify({ url, pid: process.pid }) + '\n'); } catch {}
+      // Let agents and the CLI on this machine find the hub without configuration. auth says whether the CLI may
+      // send the person's key here (#900): only a local hub answers it as the person.
+      try { mkdirSync(dirname(HUB_FILE), { recursive: true }); writeFileSync(HUB_FILE, JSON.stringify({ url, pid: process.pid, auth: auth === 'required' ? 'required' : 'local' }) + '\n'); } catch {}
     }
     notifier = new Notifier(hub, { baseUrl: publicUrl || url }).start();
   };
@@ -1897,7 +1909,11 @@ hint: Create one, then start again:
     // The same commands as the Connect dialog: the installed `nuworq`, never a path into this checkout (#157).
     const base = publicUrl || url;
     const pkg = await server.package;
+    // The browser's address carries the person's key once (#900): this open sets the cookie, the address after it
+    // is plain. On a hub without logins the address alone proves nothing — code a worker runs reaches it too.
+    const open = auth === 'local' && server.personKey ? `${url}/?person=${server.personKey}` : url;
     console.log(`${green('●')} ${bold('nuworq')} is running at ${bold(url)}${flags.demo ? dim('  (demo data, in memory)') : dim(`  (${db})`)}
+  Browser:  ${bold(open)}${auth === 'local' ? dim('  (your key once; the browser keeps it)') : ''}
   Auth: ${authLine}
 ${dim(`
   Connect an agent (on any machine):

@@ -22,7 +22,8 @@ describe('leases renew without spending a model turn', () => {
     hub.agentOp('p', 'claim', 'w2', { item: b });
     const server = createServer(hub, { sweepMs: 60_000 });
     const url = `http://127.0.0.1:${await listen(server)}`;
-    const report = async (live) => (await (await fetch(`${url}/api/runner`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'mac', running: live.length, workers: 2, live }) })).json());
+    const runner = server.auth.localRunnerToken('mac');
+    const report = async (live) => (await (await fetch(`${url}/api/runner`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${runner.token}` }, body: JSON.stringify({ name: 'mac', running: live.length, workers: 2, live }) })).json());
     try {
       // A 30-minute test run: the runner reports every few minutes; w1 makes no call at all.
       for (let m = 0; m < 30; m += 5) {

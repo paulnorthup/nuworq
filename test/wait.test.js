@@ -365,9 +365,10 @@ describe('GET /api/wait and nuworq wait', () => {
     const KA = serverKeys({ env: { CLAUDE_CODE_SESSION_ID: 'session-a' }, host: 'mac', ppid: 501 });
     const KB = serverKeys({ env: {}, host: 'mac', ppid: 502 });
     try {
+      // The operator is the person's side: it holds the hub's key (#900), as it held the person's powers before.
       const call = (path, agent, session, body) => fetch(`${url}${path}`, {
         method: body ? 'POST' : 'GET',
-        headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, 'x-nuworq-session': session.join(',') },
+        headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, 'x-nuworq-session': session.join(','), authorization: `Bearer ${server.personKey}` },
         ...(body ? { body: JSON.stringify(body) } : {}),
       }).then((r) => r.json());
       await call('/api/p/o/agent/checkin', 'opa', KA, { has: ['operator'] });
@@ -397,9 +398,10 @@ describe('GET /api/wait and nuworq wait', () => {
     const url = `http://127.0.0.1:${await listen(server)}`;
     const KA = serverKeys({ env: { CLAUDE_CODE_SESSION_ID: 'session-a' }, host: 'mac', ppid: 501 });
     try {
+      // The operator and the human answer are both the person's side: they hold the hub's key (#900).
       const call = (path, agent, session, body) => fetch(`${url}${path}`, {
         method: body ? 'POST' : 'GET',
-        headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, 'x-nuworq-session': session.join(',') },
+        headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, 'x-nuworq-session': session.join(','), authorization: `Bearer ${server.personKey}` },
         ...(body ? { body: JSON.stringify(body) } : {}),
       }).then((r) => r.json());
       await call('/api/p/o/agent/checkin', 'opa', KA, { has: ['operator'] });

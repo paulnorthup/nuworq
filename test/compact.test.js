@@ -24,7 +24,7 @@ const look = (port, args, headers = {}) => new Promise((resolve, reject) => {
 });
 
 describe('compact JSON, gzipped when the client takes it (#528)', () => {
-  let hub, server, port;
+  let hub, server, port, runner;
   before(async () => {
     hub = new Hub();
     hub.agentOp('acme', 'checkin', 'claude-a');
@@ -32,11 +32,12 @@ describe('compact JSON, gzipped when the client takes it (#528)', () => {
     server = createServer(hub, {});
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     port = server.address().port;
+    runner = server.auth.localRunnerToken('box');
   });
   after(() => { server.close(); hub.close?.(); });
 
   test('without Accept-Encoding: plain, compact JSON, and Vary says it could differ', async () => {
-    const r = await look(port, { stage: 'ready' });
+    const r = await look(port, { stage: 'ready' }, { authorization: `Bearer ${runner.token}` });
     assert.equal(r.headers['content-encoding'], undefined);
     assert.equal(r.headers.vary, 'Accept-Encoding');
     const text = r.body.toString('utf8');
@@ -45,8 +46,8 @@ describe('compact JSON, gzipped when the client takes it (#528)', () => {
   });
 
   test('with Accept-Encoding: gzip, the same body gzipped', async () => {
-    const plain = (await look(port, { stage: 'ready' })).body;
-    const r = await look(port, { stage: 'ready' }, { 'accept-encoding': 'gzip, deflate, br' });
+    const plain = (await look(port, { stage: 'ready' }, { authorization: `Bearer ${runner.token}` })).body;
+    const r = await look(port, { stage: 'ready' }, { 'accept-encoding': 'gzip, deflate, br', authorization: `Bearer ${runner.token}` });
     assert.equal(r.headers['content-encoding'], 'gzip');
     assert.ok(r.body.length < plain.length / 2, `${r.body.length} vs ${plain.length}`);
     assert.deepEqual(JSON.parse(gunzipSync(r.body)).board, JSON.parse(plain).board);
@@ -65,7 +66,7 @@ describe('compact JSON, gzipped when the client takes it (#528)', () => {
   test('the MCP tool output is compact too', async () => {
     const input = new PassThrough(), output = new PassThrough(), lines = [];
     output.on('data', (d) => lines.push(...String(d).split('\n').filter(Boolean).map((l) => JSON.parse(l))));
-    runMcp({ input, output, updateDir: mkdtempSync(join(tmpdir(), 'nuworq-compact-')), env: { NUWORQ_AGENT: 'claude-a' }, clientOpts: { url: `http://127.0.0.1:${port}`, project: 'acme', token: '' } });
+    runMcp({ input, output, updateDir: mkdtempSync(join(tmpdir(), 'nuworq-compact-')), env: { NUWORQ_AGENT: 'claude-a' }, clientOpts: { url: `http://127.0.0.1:${port}`, project: 'acme', token: runner.token } });
     input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'look', arguments: { stage: 'ready' } } }) + '\n');
     for (let i = 0; i < 100 && !lines.some((l) => l.id === 1); i++) await new Promise((r) => setTimeout(r, 20));
     const text = lines.find((l) => l.id === 1).result.content[0].text;

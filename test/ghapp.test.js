@@ -103,7 +103,7 @@ function github() {
 }
 
 describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
-  let gh, hub, server, port, url, api;
+  let gh, hub, server, port, url, api, runner;
   before(async () => {
     gh = github();
     api = `http://127.0.0.1:${await listen(gh.server)}`;
@@ -116,10 +116,12 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     server = createServer(hub, { githubApp: { id: 1234, key: PEM, slug: 'nuworq-test', api } });
     port = await listen(server);
     url = `http://127.0.0.1:${port}`;
+    // The workers ask as agents: the runner token a local hub mints (#892), never the person (#900).
+    runner = server.auth.localRunnerToken('box');
   });
   after(() => { for (const s of [server, gh.server]) { s.close(); s.closeAllConnections(); } });
 
-  const credential = (agent) => fetch(`${url}/api/agent/credential`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent }, body: '{}' })
+  const credential = (agent) => fetch(`${url}/api/agent/credential`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, authorization: `Bearer ${runner.token}` }, body: '{}' })
     .then(async (r) => ({ status: r.status, json: await r.json() }));
 
   test('without a claim there is nothing to push for', async () => {
@@ -144,7 +146,7 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     const e = hub.q(`SELECT * FROM events WHERE type = 'credential'`).get();
     assert.equal(e.actor, 'a1');
     assert.match(e.headline, new RegExp(`a1 got a read-only GitHub token for github\\.com/acme/api on #1, until ${expires.slice(11, 16)} UTC`));
-    assert.deepEqual(JSON.parse(e.data), { agent: 'a1', item: 1, repo: 'github.com/acme/api', expires_at: expires, token: null, write: false });
+    assert.deepEqual(JSON.parse(e.data), { agent: 'a1', item: 1, repo: 'github.com/acme/api', expires_at: expires, token: 'box.runner', write: false });
     assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE data LIKE '%ghs_%' OR headline LIKE '%ghs_%'`).get().n, 0, 'the token itself is never stored');
   });
 
@@ -166,7 +168,7 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
   test('git-credential answers git for the held repository only, and stays quiet elsewhere', async () => {
     // As git runs it: the request on stdin, the answer on stdout.
     const git = (input) => new Promise((resolve, reject) => {
-      const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
+      const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: runner.token, HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
       const child = execFile(process.execPath, [BIN, 'git-credential', 'get', '--as', 'a1'], { env }, (err, stdout, stderr) => (err ? reject(err) : resolve({ stdout, stderr })));
       child.stdin.end(input);
     });
@@ -176,8 +178,8 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     assert.equal(other.stdout, '');
     assert.match(other.stderr, /the token is for github\.com\/acme\/api/);
     assert.equal((await git('protocol=https\nhost=gitlab.com\npath=acme/api.git\n\n')).stdout, '');
-    // The hub, where its pushes go (#472): the worker's name, and its agent token (none on this hub) as the password.
-    assert.equal((await git(`protocol=http\nhost=127.0.0.1:${port}\npath=api/git/github.com/acme/api.git\n\n`)).stdout, 'username=a1\npassword=none\n');
+    // The hub, where its pushes go (#472): the worker's name, and its agent token as the password.
+    assert.equal((await git(`protocol=http\nhost=127.0.0.1:${port}\npath=api/git/github.com/acme/api.git\n\n`)).stdout, `username=a1\npassword=${runner.token}\n`);
     assert.equal((await git(`protocol=https\nhost=127.0.0.1:${port}\n\n`)).stdout, '', 'not over another protocol');
   });
 
@@ -200,7 +202,7 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
   });
 
   test('cloning a project with no item held: a read-only token for one of its repos, on the record; never for others', async () => {
-    const clone = (b, headers = {}, at = url) => fetch(`${at}/api/agent/credential`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ purpose: 'clone', ...b }) })
+    const clone = (b, headers = {}, at = url) => fetch(`${at}/api/agent/credential`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${runner.token}`, ...headers }, body: JSON.stringify({ purpose: 'clone', ...b }) })
       .then(async (r) => ({ status: r.status, json: await r.json() }));
     const mints = gh.state.mints.length;
     const r = await clone({ project: 'api', repo: 'github.com/acme/api', agent: 'run-1' });
@@ -209,7 +211,7 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     assert.match(r.json.password, /^ghs_/);
     assert.deepEqual(gh.state.mints[mints], { repositories: ['api'], permissions: { contents: 'read', metadata: 'read' } });
     const e = hub.q(`SELECT * FROM events WHERE type = 'credential' AND data LIKE '%"purpose":"clone"%'`).get();
-    assert.match(e.headline, /run-1 got a read-only GitHub token to clone github\.com\/acme\/api/);
+    assert.match(e.headline, /box\.runner got a read-only GitHub token to clone github\.com\/acme\/api/, 'named by the token that asked');
     assert.equal(e.item_id, null, 'on the project, no item');
     assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE data LIKE '%ghs_%' OR headline LIKE '%ghs_%'`).get().n, 0, 'never stored');
 
@@ -236,7 +238,7 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
   });
 
   test('git-credential --project answers git with the clone token', async () => {
-    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
+    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: runner.token, HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
     const out = await new Promise((resolve, reject) => {
       const child = execFile(process.execPath, [BIN, 'git-credential', 'get', '--project', 'api'], { env }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
       child.stdin.end('protocol=https\nhost=github.com\npath=acme/api.git\n\n');
@@ -247,12 +249,13 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
   test('a hub without an app says so (404, which the helper takes as "step aside")', async () => {
     const plain = createServer(new Hub());
     const pp = await listen(plain);
+    const helper = plain.auth.localRunnerToken('box');
     try {
-      const r = await fetch(`http://127.0.0.1:${pp}/api/agent/credential`, { method: 'POST', headers: { 'x-nuworq-agent': 'a1' }, body: '{}' });
+      const r = await fetch(`http://127.0.0.1:${pp}/api/agent/credential`, { method: 'POST', headers: { 'x-nuworq-agent': 'a1', authorization: `Bearer ${helper.token}` }, body: '{}' });
       assert.equal(r.status, 404);
       assert.match((await r.json()).hint, /NUWORQ_GITHUB_APP_ID/);
       // A worker's fetch asks with --project: on such a hub the helper steps aside quietly, so git goes on.
-      const env = { ...process.env, NUWORQ_URL: `http://127.0.0.1:${pp}`, NUWORQ_TOKEN: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
+      const env = { ...process.env, NUWORQ_URL: `http://127.0.0.1:${pp}`, NUWORQ_TOKEN: helper.token, HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
       const out = await new Promise((resolve, reject) => {
         const child = execFile(process.execPath, [BIN, 'git-credential', 'get', '--project', 'api'], { env }, (err, stdout, stderr) => (err ? reject(err) : resolve(stdout + stderr)));
         child.stdin.end('protocol=https\nhost=github.com\npath=acme/api.git\n\n');
@@ -314,7 +317,8 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       assert.deepEqual(appFromFile(appFile).id, '999', 'serve picks it up from the file next time');
 
       hub.agentOp('api', 'claim', 'a1', { item: '#1' });
-      const r = await fetch(`http://127.0.0.1:${port}/api/agent/credential`, { method: 'POST', headers: { 'x-nuworq-agent': 'a1' }, body: '{}' });
+      const mine = server.auth.localRunnerToken('box');
+      const r = await fetch(`http://127.0.0.1:${port}/api/agent/credential`, { method: 'POST', headers: { 'x-nuworq-agent': 'a1', authorization: `Bearer ${mine.token}` }, body: '{}' });
       assert.equal(r.status, 200, 'the new app mints at once, no restart');
       assert.equal(gh.state.jwts.at(-1).iss, '999');
     } finally { for (const s of [server, gh.server]) { s.close(); s.closeAllConnections(); } }

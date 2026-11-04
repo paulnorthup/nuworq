@@ -112,10 +112,11 @@ describe('headers', () => {
     const hub = new Hub();
     hub.tx(() => hub.project('demo', { create: true }));
     const ctx = await start(hub);
+    const runner = ctx.server.auth.localRunnerToken('box');
     try {
-      const r = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: {}, headers: { 'x-nuworq-agent': 'new-1', [`x-${OLD}-agent`]: 'old-1' } });
+      const r = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: {}, headers: { 'x-nuworq-agent': 'new-1', [`x-${OLD}-agent`]: 'old-1', authorization: `Bearer ${runner.token}` } });
       assert.equal(r.json.you, 'new-1');
-      const old = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: {}, headers: { [`x-${OLD}-agent`]: 'old-2' } });
+      const old = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: {}, headers: { [`x-${OLD}-agent`]: 'old-2', authorization: `Bearer ${runner.token}` } });
       assert.notEqual(old.json?.you, 'old-2', old.text);
     } finally {
       stop(ctx);
