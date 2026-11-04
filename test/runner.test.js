@@ -835,7 +835,9 @@ describe('a worker for a project with no checkout on this machine', () => {
 const a = process.argv.slice(2);
 const mcp = JSON.parse(a[a.indexOf('--mcp-config') + 1]).mcpServers.nuworq.env;
 const item = a[a.indexOf('-p') + 1].match(/claim (#\\d+)/)[1];
-const r = await fetch(mcp.NUWORQ_URL + '/api/p/far/agent/claim', { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': mcp.NUWORQ_AGENT }, body: JSON.stringify({ item }) });
+const { readFileSync } = await import('node:fs');
+const token = mcp.NUWORQ_TOKEN_FILE ? readFileSync(mcp.NUWORQ_TOKEN_FILE, 'utf8').trim() : '';
+const r = await fetch(mcp.NUWORQ_URL + '/api/p/far/agent/claim', { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': mcp.NUWORQ_AGENT, ...(token ? { authorization: \`Bearer \${token}\` } : {}) }, body: JSON.stringify({ item }) });
 await r.text();
 console.log('CLAIMED', item, r.status);
 process.exit(0);

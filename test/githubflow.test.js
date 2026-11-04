@@ -178,7 +178,8 @@ describe('a project lives on GitHub: install the app, and issues become work tha
   afterEach(() => { for (const s of [server, gh.server]) { s.close(); s.closeAllConnections(); } });
 
   const post = async (path, payload, headers = {}) => {
-    const r = await fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(payload) });
+    // Agents speak with an agent token (#892); without one, nobody (#900).
+    const r = await fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${workerToken}`, ...headers }, body: JSON.stringify(payload) });
     return { status: r.status, body: await r.json() };
   };
   const op = async (agent, name, args = {}) => {
@@ -261,8 +262,8 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     await op('a1', 'submit', { item: job.item, headline: 'GET /things', evidence: [{ label: 'npm test: 3 passed' }] });
     assert.equal(item(n).stage, 'verifying');
 
-    // 4. Accepting it opens one PR with "Fixes #<issue>" and auto-merge on; the item waits in landing.
-    const accepted = await post('/api/p/api/human/accept', { item: job.item });
+    // 4. Accepting it opens one PR with "Fixes #<issue>" and auto-merge on; the item waits in landing. The person accepts; an agent token may not (#900).
+    const accepted = await post('/api/p/api/human/accept', { item: job.item }, { authorization: `Bearer ${server.personKey}` });
     assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
     await hub.prsSettled();
     assert.equal(gh.state.prs.size, 1);
@@ -302,7 +303,8 @@ describe('a project lives on GitHub: install the app, and issues become work tha
 
   // #605: holding one item never rewrites another's branch, accepted or not, fast-forward or forced.
   test("the hub passes on a push only to the held item's branch", async () => {
-    for (const title of ['One', 'Two']) await post('/api/p/api/human/create', { title, acceptance: 'x' });
+    // The person files the work; an agent token may not (#900).
+    for (const title of ['One', 'Two']) await post('/api/p/api/human/create', { title, acceptance: 'x' }, { authorization: `Bearer ${server.personKey}` });
     const url = `${stub}/acme/api.git`;
     const via = (agent) => `${base.replace('//', `//${agent}:${workerToken}@`)}/api/git/github.com/acme/api.git`;
     // An agent claims an item, commits on its branch and pushes it through the hub.

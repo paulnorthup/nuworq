@@ -107,7 +107,9 @@ describe('nuworq run against a hub where no project is staffed', () => {
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const home = mkdtempSync(join(tmpdir(), 'nuworq-unstaffed-'));
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: home };
+    // Opting a project in changes settings, the person's act: nuworq run on the hub's own machine carries the
+    // person's key (in production from ~/.nuworq, hub.json says auth: local) (#900).
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: home, NUWORQ_TOKEN: server.personKey };
     const cli = (...a) => promisify(execFile)(process.execPath, [BIN, 'run', '--url', `http://127.0.0.1:${server.address().port}`, '--agent', 'claude', '--until-idle', '--poll', '1', ...a], { env, cwd: home });
     try {
       const none = (await cli()).stdout;

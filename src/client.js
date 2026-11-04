@@ -133,7 +133,7 @@ export function resolveSettings({ url, project, token, cwd = process.cwd(), conn
   const person = !disc || disc.url !== hubUrl || disc.auth !== 'local' || !LOOPBACK_HOST.test(host) ? null : personToken();
   return {
     url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd),
-    token: token ?? envVar('TOKEN') ?? fromFile() ?? ((conn?.url === hubUrl ? conn.token : '') || person), config,
+    token: token ?? envVar('TOKEN') ?? fromFile() ?? ((conn?.url === hubUrl ? conn.token : '') || person || ''), config,
   };
 }
 

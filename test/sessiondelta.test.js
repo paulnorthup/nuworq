@@ -148,7 +148,8 @@ describe('the cursor over HTTP', () => {
     });
     await new Promise((r) => proxy.listen(0, '127.0.0.1', r));
     try {
-      const c = createClient({ url: `http://127.0.0.1:${proxy.address().port}`, project: 'p', token: '', cwd: tmpdir(), session: ['0123456789abcdef'] });
+      // An agent speaks with a token (#892); without one it's nobody (#900).
+      const c = createClient({ url: `http://127.0.0.1:${proxy.address().port}`, project: 'p', token: server.auth.localRunnerToken('box').token, cwd: tmpdir(), session: ['0123456789abcdef'] });
       const first = await c.call('checkin', {}, { agent: 'w1' });
       assert.equal(first.decisions.length, 1);
       assert.equal(first.cursor, undefined, 'the agent never sees the cursor');

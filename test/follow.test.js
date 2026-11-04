@@ -717,6 +717,10 @@ describe('the real world, in a scratch repo', () => {
     hub.humanOp('fol', 'settings', { path: repo });
     const server = createServer(hub);
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    // The supervisor files it as the hub's person: in production its client finds the key serve keeps
+    // (hub.json says auth: local, tokens/person.token); here the env carries it, as NUWORQ_TOKEN would (#900).
+    const saved = process.env.NUWORQ_TOKEN;
+    process.env.NUWORQ_TOKEN = server.personKey;
     try {
       const sys = system({ repo, dir: join(dir, 'hub-src'), url: `http://127.0.0.1:${server.address().port}` });
       const where = await sys.redMain('abcdef1234567890', 'math › adds', '1234567abcdef');
@@ -724,6 +728,7 @@ describe('the real world, in a scratch repo', () => {
       const items = hub.q('SELECT title, priority, stage FROM items').all();
       assert.deepEqual(items.map((i) => ({ ...i })), [{ title: 'main fails its tests at abcdef1: math › adds', priority: 'now', stage: 'ready' }]);
     } finally {
+      if (saved === undefined) delete process.env.NUWORQ_TOKEN; else process.env.NUWORQ_TOKEN = saved;
       server.close();
     }
   });

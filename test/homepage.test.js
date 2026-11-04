@@ -92,7 +92,8 @@ describe('the home page', () => {
     const server = createServer(hub, { sweepMs: 3_600_000 });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
-    const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(body) }).then((r) => r.json());
+    // The person acts from the home page: their key acts, the address alone proves nothing (#900).
+    const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', origin: base, authorization: `Bearer ${server.personKey}` }, body: JSON.stringify(body) }).then((r) => r.json());
     try {
       // The page last opened p1; the cards say which project each action is for.
       await fetch(`${base}/api/p/p1/view`);

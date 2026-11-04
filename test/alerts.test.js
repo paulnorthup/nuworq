@@ -158,7 +158,7 @@ describe('Dependabot alerts come in as work (#180)', () => {
       assert.deepEqual(r.body.alerts, { alerts: 2 }, 'both pages of alerts');
       assert.deepEqual(items().map((i) => [i.seq, i.priority]), [[1, 'now'], [2, 'later']]);
       await install();
-      const re = await fetch(`${base}/api/p/app/github/resync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      const re = await fetch(`${base}/api/p/app/github/resync`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: '{}' });
       assert.deepEqual((await re.json()).alerts, { alerts: 2 });
       assert.equal(items().length, 2, 'nothing new');
       const other = await deliver('dependabot_alert', { action: 'created', alert: alert(9), repository: { full_name: 'acme/elsewhere' } });

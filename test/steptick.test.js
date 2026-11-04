@@ -74,7 +74,8 @@ describe('ticking a question\'s steps (#162)', () => {
     const server = createServer(hub, {});
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
-    const step = (body) => fetch(`${base}/api/p/o/human/step`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    // Stepping through steps is the person's act: their key acts (#900).
+    const step = (body) => fetch(`${base}/api/p/o/human/step`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify(body) });
     try {
       const r = await step({ question: q, step: 1, done: true });
       assert.equal(r.status, 200);

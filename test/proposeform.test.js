@@ -79,7 +79,7 @@ describe('propose from the board', () => {
     const server = createServer(hub, { sweepMs: 3_600_000 });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const send = async (form) => (await (await fetch(`http://127.0.0.1:${server.address().port}/api/p/w/human/create`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(proposal(form)),
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify(proposal(form)),
     })).json()).item;
     try {
       const ready = await send({ title: 'Users can reset their password', acceptance: 'A reset email arrives', ready: true });
@@ -98,7 +98,7 @@ describe('propose from the board', () => {
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     try {
       const res = await fetch(`http://127.0.0.1:${server.address().port}/api/p/w/human/create`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(proposal(form)),
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify(proposal(form)),
       });
       assert.equal(res.status, 200);
       const { item } = await res.json();
