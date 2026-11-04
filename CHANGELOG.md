@@ -1,8 +1,24 @@
 # Changelog
 
-## 1.1.0 (unreleased)
+## 1.1.0 (2026-11-04)
 
-nuworq is licensed under FSL-1.1-MIT from this version: use, change and self-host it freely, including at a company, but no competing hosted or paid service, and each release becomes MIT two years after it ships. Versions before 1.1.0, including 1.0.0, stay MIT (#875).
+1.1.0: minor, for 10 features (#579, #679, #859, #863, #867, #868, #869, #872, #875, #877); no breaking change.
+
+**nuworq's architecture fits how it's used: projects load once, only real changes travel, agents get deltas, and deploys drop nothing (#514)**
+
+**Also in this release**
+
+- One full item cycle by a sandboxed worker on the live hub after #472: claim, build, test, push through /api/git, land (#579)
+- nuworq v1.0.0 is released: every v1.0.0 part done, no critical or high finding left on a re-check, approved by the maintainer and signed (#679)
+- A worker who finds its item waits on an outside event, or is the operator's to do, parks it in one call, so the next worker isn't started… (#859)
+- Release versions follow semver: a breaking change bumps major, a new feature minor, and only fixes or internal work a patch (#863)
+- A new person never inherits a removed person's share of a project's comments or field notes (#865)
+- v1.0.0's groundwork lands: a person can set a release to 1.0.0 (tested), the audit re-check reports, and CHANGELOG's 1.0.0 entry (#867)
+- A release draft a person edited keeps its "why" line in step with its version on redraft (#868)
+- nuworq up opens every operator in tmux: the operator's permission rules go in a settings file, not into the command (#869)
+- The paid plan says what it gives and costs, and early access becomes a trial instead of Unlimited forever (#872)
+- From 1.1.0 nuworq is licensed FSL-1.1-MIT, so hosting it for money stays the maintainer's; earlier releases stay MIT (#875)
+- The hub's admin API is documented in docs/ADMIN-API.md, and the admin host can serve an owner's own console from a directory (#877)
 
 ## 1.0.0 (2026-11-03)
 
