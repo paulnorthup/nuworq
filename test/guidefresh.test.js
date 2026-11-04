@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { mentions } from '../src/userguide.js';
 import { COMMANDS } from '../src/help.js';
+import { AUTONOMY } from '../src/core.js';
 import { cliContract, stale } from './stale.js';
 
 // The guide never names what nuworq no longer has (#384): every `nuworq …` command and flag is in the CLI's help,
-// every **label** is in a web/ file, and every /path is a page src/server.js serves. The marks are documented at
-// the top of src/userguide.js. test/docsfresh.test.js holds README and docs/ to the same commands and flags.
+// every **label** is text a person sees in the app, and every /path is a page src/server.js serves. The marks are
+// documented at the top of src/userguide.js. test/docsfresh.test.js holds README and docs/ to the same commands and flags.
 const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
 
 describe('the getting-started guide names only what nuworq has (#384)', () => {
@@ -15,7 +16,10 @@ describe('the getting-started guide names only what nuworq has (#384)', () => {
   before(async () => {
     cli = cliContract(COMMANDS);
     // The web app's text, and Get started's button labels, which the hub sends to web/getstarted.js to draw.
-    webText = [...readdirSync(new URL('../web/', import.meta.url), { recursive: true }).filter((f) => /\.(js|html)$/.test(f)).map((f) => `web/${f}`), 'src/getstarted.js'].map(read).join('\n');
+    // The autonomy labels (#879) the hub serves to web/launcher.js (AUTONOMY): the menu draws them from that
+    // data, so they aren't literals in any web/ file — the admin page's own copy went with its Feedback view.
+    webText = [...readdirSync(new URL('../web/', import.meta.url), { recursive: true }).filter((f) => /\.(js|html)$/.test(f)).map((f) => `web/${f}`), 'src/getstarted.js'].map(read).join('\n')
+      + '\n' + Object.values(AUTONOMY).map((a) => a.label).join('\n');
     const server = read('src/server.js');
     served = (p) => server.includes(`'${p}'`) || server.includes(`"${p}"`) || server.includes(`\`${p}\``);
   });

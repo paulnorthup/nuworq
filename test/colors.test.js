@@ -303,7 +303,7 @@ describe('the color map keeps meanings apart (#188)', () => {
     assert.match(web('admin.html'), /<p id="error" class="bad" role="alert" hidden>/);
     const admin = web('admin.js');
     assert.doesNotMatch(admin, /class="warn">\$\{esc\(e\.message\)\}/, 'an error from the hub is not amber');
-    assert.equal(admin.match(/class="bad">\$\{esc\(e\.message\)\}/g)?.length, 4, 'requests, sources (#356), feedback (#295), workspaces');
+    assert.equal(admin.match(/class="bad">\$\{esc\(e\.message\)\}/g)?.length, 2, 'requests and workspaces');
     assert.match(admin, /'payment failed' \? 'bad'/);
     assert.match(appSource(), /<span class="bad">⚠ failing: \$\{esc\(c\.last_error\)\}/);
     assert.doesNotMatch(web('join.js'), /className = [^;]*'warn'/, 'join shows the hub\'s refusals and errors in red');

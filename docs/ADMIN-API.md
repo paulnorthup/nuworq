@@ -23,7 +23,7 @@ Every error is `{ "ok": false, "error": "…", "hint": "…" }`; the hint is lef
 
 ## Pages and sign-in
 
-- `GET /`: the dashboard, `web/admin.html`, with its `/admin.js`, `/new.js`, `/instant.js`, `/style.css` and `/theme.js`. With `--admin-console <dir>`, `<dir>/index.html` and the files under `<dir>` instead (next section).
+- `GET /`: the dashboard, `web/admin.html`, with its `/admin.js`, `/new.js`, `/instant.js`, `/style.css` and `/theme.js`. It renders only what running a hub needs — GitHub App wiring, early access and workspaces — so the business views (feedback triage, the sources funnel) are a console's (#879); their routes below stay. With `--admin-console <dir>`, `<dir>/index.html` and the files under `<dir>` instead (next section).
 - `GET /auth/<provider>/start`: a `302` to the provider. `GET /auth/<provider>/callback`: back from it; signs in and sends the browser to `/`. A sign-in started on the app can't finish here (`400`).
 
 ## Your own console
