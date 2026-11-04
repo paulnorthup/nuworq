@@ -306,6 +306,26 @@ export class Auth {
     return { token, name, runner: from.name };
   }
 
+  // A hub without logins mints its workers' runner token on request (#892): the caller is the one person the
+  // loopback hub serves — or one of their workers, which holds no more than a runner token already gives it.
+  // The runner is the machine's hostname. Minting again replaces the last one, like runnerToken does.
+  localRunnerToken(runner) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const old of this.db.prepare('SELECT id FROM tokens WHERE runner = ? AND from_token IS NULL AND revoked_at IS NULL').all(runner)) this.revoke(old.id);
+      let name = `${runner}.runner`;
+      for (let n = 2; this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name); n++) name = `${runner}.runner-${n}`;
+      const token = TOKEN_PREFIX + randomBytes(32).toString('base64url');
+      this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, runner, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(name, 'agent', sha(token), token.slice(0, 8), String(runner), this.now());
+      this.db.exec('COMMIT');
+      return { token, name, runner };
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
   listTokens() {
     return this.db.prepare(`SELECT t.id, t.name, t.role, t.prefix, t.created_at, t.last_used_at, t.revoked_at, t.projects, p.handle AS person,
         m.handle AS minted_by, t.runner, t.powers
