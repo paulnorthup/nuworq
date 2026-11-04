@@ -40,6 +40,8 @@ describe('the hub reads a push before passing it on', () => {
     assert.equal(r.end, head.length, 'the flush, not a shallow line, ends the commands');
     const two = readCommands(Buffer.from(pkt(`shallow ${S}\n`) + pkt(`shallow ${B}\n`) + pkt(`${A} ${B} refs/heads/nuworq/1-x\n`) + '0000'));
     assert.deepEqual(two.cmds, [{ old: A, new: B, ref: 'refs/heads/nuworq/1-x' }], 'a clone may be shallow at more than one commit');
+    const stranger = readCommands(Buffer.from(pkt(`shallow ${'f'.repeat(64)}\n`) + pkt(`${A} ${B} refs/heads/nuworq/1-x\n`) + '0000'));
+    assert.deepEqual(stranger.cmds, [{ old: A, new: B, ref: 'refs/heads/nuworq/1-x' }], 'a shallow line naming a sha the hub has never heard of is skipped just the same');
     assert.throws(() => readCommands(Buffer.from(pkt(`shallow ${S.slice(0, 20)}\n`) + pkt(`${A} ${B} refs/heads/nuworq/1-x\n`) + '0000')), /not a git push/, 'a short shallow line is no push');
     assert.throws(() => readCommands(Buffer.from(pkt(`shallow ${S}\n`) + pkt('push-cert\0report-status\n') + '0000')), /signed pushes/, 'a cert after shallow lines is still refused');
     assert.throws(() => readCommands(Buffer.from(pkt(`shallow ${S}\n`) + pkt('hello\n') + '0000')), /not a git push/, 'garbage after shallow lines is still no push');
@@ -143,6 +145,31 @@ describe('the push proxy when GitHub hangs or goes', () => {
     assert.ok(await until(() => github.open === 1), 'the push reached GitHub');
     r.destroy();
     assert.ok(await until(() => github.open === 0), 'and its request to GitHub is cut, not left open for a minute');
+    close(hub, github);
+  });
+
+  test('a body the hub can\'t read answers 400 with the line git shows, not a 500 (#895)', async () => {
+    const github = await listen(() => {});
+    const hub = await hubFor(github, 60_000);
+    const post = (body) => new Promise((resolve, reject) => {
+      const r = http.request(`${url(hub)}/git-receive-pack`, { method: 'POST' }, (res) => {
+        let out = '';
+        res.on('data', (c) => (out += c));
+        res.on('close', () => resolve({ status: res.statusCode, body: out }));
+      });
+      r.on('error', reject);
+      r.end(body);
+    });
+    const garbage = await post('this is not a push at all\n');
+    assert.equal(garbage.status, 400, 'not a 500: the worker hears why, no operator needed');
+    assert.equal(garbage.body, "nuworq: the hub couldn't read this push (unusual client or a broken request): report it as feedback\n");
+    const truncated = await post(pkt(`${A} ${B} refs/heads/${BRANCH}\n`)); // commands without their flush: the body ended first
+    assert.equal(truncated.status, 400);
+    assert.equal(truncated.body, garbage.body, 'the same line: git shows it as remote: nuworq: …');
+    const signed = await post(Buffer.from(pkt('push-cert\0report-status\n') + '0000'));
+    assert.equal(signed.status, 400);
+    assert.match(signed.body, /signed pushes go to GitHub directly/);
+    assert.ok(await until(() => github.open === 0), 'none of the three reached GitHub');
     close(hub, github);
   });
 
