@@ -120,12 +120,12 @@ describe('local mode', () => {
   });
 
   test('a person\'s own bearer token keeps its powers on a hub without logins', async () => {
-    const human = ctx.server.auth.createToken('paul', 'human');
+    const human = ctx.server.auth.createToken('ada', 'human');
     const r = await request(ctx.port, 'GET', '/api/p/demo/view', { headers: { authorization: `Bearer ${human}` } });
     assert.equal(r.status, 200);
     const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'mine' }, headers: { authorization: `Bearer ${human}` } });
     assert.equal(steer.status, 200);
-    ctx.server.auth.revoke('paul');
+    ctx.server.auth.revoke('ada');
   });
 });
 
