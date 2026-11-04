@@ -9,7 +9,7 @@
 **Also in this release**
 
 - One full item cycle by a sandboxed worker on the live hub after #472: claim, build, test, push through /api/git, land (#579)
-- nuworq v1.0.0 is released: every v1.0.0 part done, no critical or high finding left on a re-check, approved by Paul and signed (#679)
+- nuworq v1.0.0 is released: every v1.0.0 part done, no critical or high finding left on a re-check, approved by the maintainer and signed (#679)
 - A worker who finds its item waits on an outside event, or is the operator's to do, parks it in one call, so the next worker isn't started… (#859)
 - Release versions follow semver: a breaking change bumps major, a new feature minor, and only fixes or internal work a patch (#863)
 - A new person never inherits a removed person's share of a project's comments or field notes (#865)
