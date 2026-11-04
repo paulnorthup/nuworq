@@ -32,13 +32,20 @@ const REGISTRIES = [
 // file tools, so it still reads its own login. Then every other harness's and toolchain's stored credentials (#616):
 // Codex's auth.json, ~/.claude.json (user MCP servers' env and headers), git's XDG credential store, cargo's, gem's
 // and Terraform's tokens, yarn's auth; the Gemini, Cursor and Codeium CLIs' own stores (auth, settings, chat
-// history); shell and REPL histories (pasted keys); and the logins a browser keeps: the
-// macOS keychains, Safari's and the browsers' profiles (cookies, saved passwords) on macOS and Linux. And the
-// release key's folder, where docs/DEPLOY.md keeps the release key and the release workflow's deploy key (#850).
+// history); shell and REPL histories (pasted keys), the shell's rc files that define the environment (#891 — the
+// same keys, exported there instead of pasted, fish's config with them), atuin's full-history store, and the
+// single files that hold a login outright: ~/.pgpass, ~/.my.cnf, git's cookie store, hub's GitHub token,
+// rclone's remotes (each remote's password is in rclone.conf), Vault's token, sops' age keys and Terraform's
+// own credentials file (~/.terraformrc — ~/.terraform.d is the plugin cache, already denied). And the logins a
+// browser keeps: the macOS keychains, Safari's and the browsers' profiles (cookies, saved passwords) on macOS
+// and Linux. And the release key's folder, where docs/DEPLOY.md keeps the release key and the release
+// workflow's deploy key (#850).
 const APP_SUPPORT = '~/Library/Application Support';
 export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
   '~/.codex', '~/.claude.json', '~/.gemini', '~/.cursor', '~/.codeium', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.terraform.d', '~/.yarnrc.yml',
-  '~/.bash_history', '~/.zsh_history', '~/.zsh_sessions', '~/.history', '~/.local/share/fish', '~/.python_history', '~/.node_repl_history', '~/.psql_history', '~/.mysql_history', '~/.sqlite_history',
+  '~/.zshenv', '~/.zprofile', '~/.zshrc', '~/.profile', '~/.bashrc', '~/.bash_profile', '~/.config/fish',
+  '~/.bash_history', '~/.zsh_history', '~/.zsh_sessions', '~/.history', '~/.local/share/fish', '~/.local/share/atuin', '~/.python_history', '~/.node_repl_history', '~/.psql_history', '~/.mysql_history', '~/.sqlite_history',
+  '~/.pgpass', '~/.my.cnf', '~/.gitcookies', '~/.config/hub', '~/.config/rclone', '~/.vault-token', '~/.config/sops', '~/.terraformrc',
   '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Claude`, `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
   '~/.mozilla', '~/.config/google-chrome', '~/.config/chromium', '~/.config/BraveSoftware', '~/.config/microsoft-edge'];
 
@@ -126,7 +133,10 @@ export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = f
 // Read, Glob and Grep anywhere but the keys DENY_READ names, the worker's own token file included: only its git's
 // credential helper reads that, in the shell. Deny wins over allow. Rule paths: //abs is absolute, ~/ the home
 // folder. Edit rules cover Write too, and a Write(path) rule never matches (code.claude.com/docs/en/permissions,
-// checked 2026-11-01).
+// checked 2026-11-01). DENY_READ goes out as Read and Edit trees only: Claude Code applies Read deny rules to
+// Grep and Glob as well — to the directory their path argument resolves to, and best-effort to every built-in
+// tool that reads files — while a Glob(path) rule never matches and a Grep rule's content is a pattern, not a
+// path (docs checked 2026-11-04), so Grep/Glob trees of these paths would be dead rules.
 const rule = (tool, p) => `${tool}(${p.startsWith('~/') ? p : `/${p}`})`;
 const tree = (tool, p) => [rule(tool, p), rule(tool, `${p}/**`)];
 export function filePermissions({ home, worktree, cwd = worktree ?? home, landsHere = false }) {
