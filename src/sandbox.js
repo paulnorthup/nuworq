@@ -50,9 +50,13 @@ const REGISTRIES = [
 // toolchains' and CLIs' remaining credential files — npm's XDG npmrc, yarn v1's, pip's, cargo's config beside
 // its credentials, podman's auth.json, composer, wrangler, netlify, ngrok (both homes), sentry, pulumi,
 // doctl, huggingface (its home and its cache token), databricks, jfrog, snowflake and snowsql, boto, flyctl,
-// subversion, aider's conf, and git's own configs whose url.*.insteadOf can carry a token. When a config file
-// is unreadable git skips it and commits with a fallback identity (checked 2026-11-04), so nothing a worker
-// needs breaks; its registries are reached with the env the runner injects or the project's own config.
+// subversion, aider's conf, and git's own configs whose url.*.insteadOf can carry a token. Denying those two
+// doesn't cost a worker its git: a sandbox read-deny surfaces as EPERM, and git dies on EPERM rather than
+// skipping the file (git's access_or_die tolerates only missing files and EACCES) — so the worker's shell gets
+// GIT_CONFIG_GLOBAL=/dev/null (git then never resolves ~/.gitconfig or ~/.config/git/config) and the person's
+// commit identity as env config entries (workerEnv and gitConfigEnv, src/runtrust.js). The other stores are
+// read only by their own tools, which skip a file they can't open; a worker's registries are reached with the
+// env the runner injects or the project's own config.
 const APP_SUPPORT = '~/Library/Application Support';
 export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
   '~/.codex', '~/.claude.json', '~/.gemini', '~/.cursor', '~/.codeium', '~/.config/github-copilot', '~/.copilot', '~/.continue', '~/.config/goose', '~/.config/crush', '~/.config/zed', '~/.config/git/credentials', '~/.config/git/config', '~/.gitconfig', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.cargo/config.toml', '~/.cargo/config', '~/.gem/credentials', '~/.terraform.d', '~/.m2', '~/.nuget', '~/.yarnrc.yml', '~/.yarnrc',

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
 import { guide } from '../src/protocol.js';
-import { workerEnv, harnessKeys, namedEnv, CLAUDE_SCRUBS } from '../src/runtrust.js';
+import { sq, workerEnv, gitConfigEnv, harnessKeys, namedEnv, CLAUDE_SCRUBS } from '../src/runtrust.js';
 import { serviceEnv } from '../src/service.js';
 
 const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
@@ -221,6 +221,21 @@ describe("a worker's shell sees no credential variables", () => {
     assert.equal(env.XDG_DATA_HOME, undefined);
     assert.equal(env.XDG_CACHE_HOME, undefined);
     assert.equal(env.CARGO_HOME, undefined);
+  });
+
+  // git's own configs are read-denied (#899), and a sandbox read-deny is EPERM, which git dies on instead of
+  // skipping — so the worker's git reads /dev/null for its global config, whatever the person's shell pointed
+  // GIT_CONFIG_GLOBAL at, and their identity rides along as env config entries.
+  test("git reads no global config in the worker: GIT_CONFIG_GLOBAL is /dev/null (#899)", () => {
+    const env = workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me', GIT_CONFIG_GLOBAL: '/home/me/elsewhere.gitconfig' });
+    assert.equal(env.GIT_CONFIG_GLOBAL, '/dev/null');
+    assert.equal(workerEnv([], { PATH: '/usr/bin:/bin', HOME: '/home/me' }).GIT_CONFIG_GLOBAL, '/dev/null', 'and when the person set none');
+  });
+
+  test('the identity goes to git as GIT_CONFIG_KEY_n/VALUE_n entries, shell-quoted (#899)', () => {
+    const line = gitConfigEnv([['user.name', "Paul O'Hara"], ['user.email', 'paul@example.com']]);
+    assert.equal(line, `export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=${sq('user.name')} GIT_CONFIG_VALUE_0=${sq("Paul O'Hara")} GIT_CONFIG_KEY_1=${sq('user.email')} GIT_CONFIG_VALUE_1=${sq('paul@example.com')}`);
+    assert.equal(gitConfigEnv([]), 'export GIT_CONFIG_COUNT=0 ');
   });
 
   // The allowlist's addition point: a project whose build reads DOCKER_HOST or VIRTUAL_ENV names them.

@@ -9,7 +9,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILE } from '../src/names.js';
-import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
+import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, gitConfigEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
 import { sandboxSettings, filePermissions, projectCommands, sandboxHosts, testsLine, workerCommands, workerGitDenies } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
 
@@ -1002,7 +1002,7 @@ function workerSettings(sandbox, { own = false } = {}) {
 // SSH agent is unset, so no SSH key of the person's is ever used. No branch it makes tracks another (#724): git
 // would write that into the checkout's .git/config, which its sandbox denies (#606), for `git switch -c <b>
 // origin/main` and for `git switch <b>` when only origin has <b>. Its pushes name the branch, so it needs no upstream.
-function gitEnv({ hub, tokenAt, name, project }) {
+function gitEnv({ hub, tokenAt, name, project, identity = [] }) {
   // Every value quoted, and the token only as the path of its 0600 file (#477).
   const helper = `!NUWORQ_URL=${sq(hub)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --project ${sq(project)} --as ${sq(name)}`;
   const through = `${hub.replace(/\/+$/, '')}/api/git/github.com/`;
@@ -1012,7 +1012,16 @@ function gitEnv({ hub, tokenAt, name, project }) {
     [`url.${through}.pushInsteadOf`, 'https://github.com/'], [`url.${through}.pushInsteadOf`, 'git@github.com:'], [`url.${through}.pushInsteadOf`, 'ssh://git@github.com/'],
     ['branch.autoSetupMerge', 'false'],
   ];
-  return `unset SSH_AUTH_SOCK && export GIT_CONFIG_COUNT=${config.length} ${config.map(([k, v], i) => `GIT_CONFIG_KEY_${i}=${sq(k)} GIT_CONFIG_VALUE_${i}=${sq(v)}`).join(' ')}`;
+  return `unset SSH_AUTH_SOCK && ${gitConfigEnv([...config, ...identity])}`;
+}
+
+// The person's commit identity, read by the runner from its own global git config (git config --global): the
+// worker's shell can't read it any more (#899 — ~/.gitconfig and ~/.config/git/config are read-denied, and
+// its GIT_CONFIG_GLOBAL is /dev/null). Empty when they set none: the project's own config, or git's
+// auto-detected identity, applies as it did.
+function gitIdentity() {
+  const one = (k) => { try { return execFileSync('git', ['config', '--global', '--get', k], { encoding: 'utf8' }).trim() || null; } catch { return null; } };
+  return [['user.name', one('user.name')], ['user.email', one('user.email')]].filter(([, v]) => v);
 }
 
 // The shell command that gives a worker its worktree (detached at main, or at origin/main after a
@@ -1123,7 +1132,11 @@ function workerSetup(target, agent, flags, s, token = null) {
   // (the person's keychain, gh and any other are reset), answering GitHub with a read-only token for the project's
   // repository and the hub with the worker's name. Pushes to GitHub go to the hub instead (#472), which passes
   // nuworq/ branches on with its own token. SSH remotes go over HTTPS, without the person's SSH agent.
-  if (origin) lines.push(gitEnv({ hub: s.url, tokenAt, name, project: target.slug }));
+  // With a remote, gitEnv is the worker's whole git wiring; without one it still gets the commit identity
+  // (#899), or its commits would fall back to an auto-detected name@hostname.
+  const identity = gitIdentity();
+  if (origin) lines.push(gitEnv({ hub: s.url, tokenAt, name, project: target.slug, identity }));
+  else if (identity.length) lines.push(gitConfigEnv(identity));
   // Node's fetch goes through the sandbox's proxy, as git and curl do (the credential helper reaches the hub).
   if (agent === 'claude') lines.push('export NODE_USE_ENV_PROXY=1');
   // Workers each running a Node project's whole suite on every core at once saturate the machine: their test

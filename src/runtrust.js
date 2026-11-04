@@ -97,7 +97,21 @@ const BASE_ENV = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 
 const nuworqSetting = (k) => /^NUWORQ_/.test(k) && !/TOKEN|KEY|SECRET|PASS|ACCESS/.test(k);
 export function workerEnv(keys = [], env = process.env) {
   const keep = (k) => BASE_ENV.has(k) || /^LC_[A-Z]+$/.test(k) || nuworqSetting(k) || keys.includes(k);
-  return Object.fromEntries(Object.entries(env).filter(([k, v]) => keep(k) && !new RegExp(TOKENS.source).test(String(v))));
+  return Object.assign(Object.fromEntries(Object.entries(env).filter(([k, v]) => keep(k) && !new RegExp(TOKENS.source).test(String(v)))),
+    // git's own configs are read-denied (#899), and a sandbox read-deny surfaces as EPERM — git dies on that
+    // instead of skipping the file (git's access_or_die tolerates only missing files and EACCES). With
+    // GIT_CONFIG_GLOBAL set, git reads just this and never resolves ~/.gitconfig or ~/.config/git/config
+    // (git's git_global_config_paths), so the denies cost it nothing. The person's commit identity rides along
+    // as env config entries (gitConfigEnv below, filled by the runner in bin/nuworq.js), or commits would fall
+    // back to an auto-detected name@hostname.
+    { GIT_CONFIG_GLOBAL: '/dev/null' });
+}
+
+// Git settings as the environment entries git accepts for exactly this (GIT_CONFIG_COUNT/KEY_n/VALUE_n): the
+// worker's commit identity goes to it this way (#899), beside the credential-helper and insteadOf wiring a
+// worker's git gets with a remote (bin/nuworq.js's gitEnv).
+export function gitConfigEnv(entries) {
+  return `export GIT_CONFIG_COUNT=${entries.length} ${entries.map(([k, v], i) => `GIT_CONFIG_KEY_${i}=${sq(k)} GIT_CONFIG_VALUE_${i}=${sq(v)}`).join(' ')}`;
 }
 
 // The project's own variables the person names for workers (#616), e.g. `nuworq run --env DOCKER_HOST,VIRTUAL_ENV`:
