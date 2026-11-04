@@ -190,6 +190,7 @@ It works whenever something needs it, and waits for free when there's nothing to
 }
 
 const OPERATOR_FILE = join(dataDir(), 'operator.json');
+const OPERATOR_SETTINGS = join(dataDir(), 'operator-settings.json');
 
 // The tags typed with --has, with old names renamed. renamed: old tag names given, with their new ones.
 function operatorHas(flags) {
@@ -260,13 +261,13 @@ async function startOperator(folder, has = null) {
   if (r.error) console.log(`${amber('!')} Couldn't start Claude Code (${r.error.message}). Open it in ${folder} and type: ${line}`);
 }
 
-// The operator line, the --settings that allow its routine commands, and why this Claude Code can't take them (cant:
+// The operator line, the --settings file (rewritten here) that allows its routine commands, and why this Claude Code can't take them (cant:
 // not on PATH, or no first-prompt argument), for startOperator and nuworq up.
 async function operatorLaunch(has = null) {
   const { pluginInstalled } = await import('../src/connect.js');
-  const { rules, sshHost, localOf } = await import('../src/operator.js');
+  const { rules, sshHost, localOf, writeSettings } = await import('../src/operator.js');
   const line = operatorStart(has, { plugin: pluginInstalled(homedir()) });
-  const settings = JSON.stringify({ permissions: rules({ host: sshHost(localOf(OPERATOR_FILE).infra_check) }) });
+  const settings = writeSettings(OPERATOR_SETTINGS, rules({ host: sshHost(localOf(OPERATOR_FILE).infra_check) }));
   let help = '';
   try { help = execFileSync('claude', ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 }); } catch {}
   const cant = /\[prompt\]/.test(help) ? null : help ? "This Claude Code can't take a first prompt" : "Claude Code isn't on PATH";

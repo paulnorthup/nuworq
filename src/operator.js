@@ -3,7 +3,7 @@
 // skill checks in with it when the person typed no capabilities. Commands run through run(cmd, args), so tests
 // fake them. The infra check is this machine's own, set by its person and kept in ~/.nuworq/operator.json:
 // never sent by the hub (see the decision "Never run code fetched at runtime", and #477).
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { OPS, OPERATOR_WAIT } from './protocol.js';
 import { flag, short, GIT_RUNS, rebaseRuns } from './gitrules.js';
@@ -135,6 +135,15 @@ export function rules({ host = null } = {}) {
     'Bash(gh repo delete:*)', 'Bash(gh release delete:*)', 'Bash(gh run delete:*)',
   ];
   return { allow, deny };
+}
+
+// The operator's own Claude Code settings file (#869): the rules as { permissions }, rewritten each launch so it is
+// always current, and passed as `--settings <file>`. Inline, the JSON made the line too long for tmux and osascript.
+export function writeSettings(file, r) {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${JSON.stringify({ permissions: r }, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(file, 0o600);
+  return file;
 }
 
 // Add the rules to a Claude Code settings file (the project's .claude/settings.local.json), keeping everything

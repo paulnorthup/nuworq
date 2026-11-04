@@ -148,7 +148,7 @@ export function launcherFor({ tmux = false, platform = process.platform, iterm =
 }
 
 // The shell line that starts one operator: in its folder, writing its pid (the shell's, which exec hands to claude)
-// so up knows it runs before it checks in and down can stop it. settings: the --settings JSON (its routine commands).
+// so up knows it runs before it checks in and down can stop it. settings: the path of its --settings file (its routine commands, #869).
 export function operatorShell({ folder, pidFile, settings, line }) {
   return `cd ${sq(folder)} && echo $$ > ${sq(pidFile)} && exec claude${settings ? ` --settings ${sq(settings)}` : ''} ${sq(line)}`;
 }
