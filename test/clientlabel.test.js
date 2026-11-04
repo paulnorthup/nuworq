@@ -233,8 +233,8 @@ describe("a worker's shell sees no credential variables", () => {
   });
 
   test('the identity goes to git as GIT_CONFIG_KEY_n/VALUE_n entries, shell-quoted (#899)', () => {
-    const line = gitConfigEnv([['user.name', "Paul O'Hara"], ['user.email', 'paul@example.com']]);
-    assert.equal(line, `export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=${sq('user.name')} GIT_CONFIG_VALUE_0=${sq("Paul O'Hara")} GIT_CONFIG_KEY_1=${sq('user.email')} GIT_CONFIG_VALUE_1=${sq('paul@example.com')}`);
+    const line = gitConfigEnv([['user.name', "Alex O'Hara"], ['user.email', 'alex@example.com']]);
+    assert.equal(line, `export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=${sq('user.name')} GIT_CONFIG_VALUE_0=${sq("Alex O'Hara")} GIT_CONFIG_KEY_1=${sq('user.email')} GIT_CONFIG_VALUE_1=${sq('alex@example.com')}`);
     assert.equal(gitConfigEnv([]), 'export GIT_CONFIG_COUNT=0 ');
   });
 
