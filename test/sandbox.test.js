@@ -47,18 +47,30 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
 
   test("its shell doesn't read Claude Code's or opencode's own logins (#580, #581)", () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
-    for (const p of ['~/.claude/.credentials.json', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent']) assert.ok(filesystem.denyRead.includes(p), p);
+    for (const p of ['~/.claude', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent']) assert.ok(filesystem.denyRead.includes(p), p);
+    assert.ok(!filesystem.denyRead.includes('~/.claude/.credentials.json'), 'wholesale: no narrower path left next to it');
   });
 
   test("DENY_READ covers each harness's and toolchain's stored credentials (#616)", () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
     const files = filePermissions({ home, worktree });
-    for (const p of ['~/.codex', '~/.claude.json', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials',
+    for (const p of ['~/.codex', '~/.claude.json', '~/.gemini', '~/.cursor', '~/.codeium', '~/.config/git/credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials',
       '~/.terraform.d', '~/.yarnrc.yml', '~/.bash_history', '~/.zsh_history', '~/.local/share/fish', '~/Library/Keychains',
-      '~/Library/Application Support/Google/Chrome', '~/Library/Application Support/Firefox', '~/Library/Safari', '~/.mozilla', '~/.config/google-chrome']) {
+      '~/Library/Application Support/Claude', '~/Library/Application Support/Google/Chrome', '~/Library/Application Support/Firefox', '~/Library/Safari', '~/.mozilla', '~/.config/google-chrome']) {
       assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
       assert.ok(files.deny.includes(`Read(${p})`) && files.deny.includes(`Read(${p}/**)`), `the file tools: ${p}`);
     }
+  });
+
+  // #885: the security review of #468 — past session transcripts, the settings' env block and the plugins are one
+  // store with the logins, so ~/.claude is denied wholesale, like ~/.codex.
+  test("its shell and file tools don't read any of ~/.claude (#885)", () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
+    const perms = filePermissions({ home, worktree });
+    for (const f of ['projects/past/session.jsonl', 'settings.json', 'plugins/config.json', '.credentials.json', 'statsig/stable_id']) {
+      for (const tool of ['Read', 'Edit', 'Write']) assert.ok(!may(perms, tool, join(me, '.claude', f)), `${tool} ~/.claude/${f}`);
+    }
+    assert.ok(perms.deny.includes('Read(~/.claude)') && perms.deny.includes('Read(~/.claude/**)'), 'the file tools: the folder and everything under it');
   });
 
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
@@ -142,11 +154,11 @@ describe("a worker's file tools stay where its shell does (#472)", () => {
 
   test("its file tools don't read or edit Claude Code's or opencode's own logins (#580, #581)", () => {
     const perms = filePermissions({ home, worktree });
-    for (const r of ['Read(~/.claude/.credentials.json)', 'Edit(~/.claude/.credentials.json)', 'Read(~/.config/opencode)', 'Read(~/.config/opencode/**)', 'Edit(~/.config/opencode)', 'Edit(~/.config/opencode/**)', 'Read(~/.local/share/opencode)', 'Read(~/.local/share/opencode/**)', 'Edit(~/.local/share/opencode)', 'Edit(~/.local/share/opencode/**)']) assert.ok(perms.deny.includes(r), r);
-    for (const p of [join(me, '.claude', '.credentials.json'), join(me, '.config', 'opencode', 'opencode.json'), join(me, '.config', 'opencode', 'auth.json'), join(me, '.local', 'share', 'opencode', 'auth.json'), join(me, '.local', 'share', 'opencode', 'mcp-auth.json'), join(me, '.pi', 'agent', 'auth.json'), join(me, '.pi', 'agent', 'models.json')]) {
+    for (const r of ['Read(~/.claude)', 'Edit(~/.claude)', 'Read(~/.config/opencode)', 'Read(~/.config/opencode/**)', 'Edit(~/.config/opencode)', 'Edit(~/.config/opencode/**)', 'Read(~/.local/share/opencode)', 'Read(~/.local/share/opencode/**)', 'Edit(~/.local/share/opencode)', 'Edit(~/.local/share/opencode/**)']) assert.ok(perms.deny.includes(r), r);
+    for (const p of [join(me, '.claude', '.credentials.json'), join(me, '.claude', 'settings.json'), join(me, '.claude', 'projects', 'x', 'session.jsonl'), join(me, '.config', 'opencode', 'opencode.json'), join(me, '.config', 'opencode', 'auth.json'), join(me, '.local', 'share', 'opencode', 'auth.json'), join(me, '.local', 'share', 'opencode', 'mcp-auth.json'), join(me, '.pi', 'agent', 'auth.json'), join(me, '.pi', 'agent', 'models.json')]) {
       for (const tool of ['Read', 'Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
     }
-    assert.ok(may(perms, 'Read', join(me, '.claude', 'settings.json')), 'the rest of ~/.claude stays readable');
+    assert.ok(!may(perms, 'Read', join(me, '.claude', 'settings.json')), 'all of ~/.claude, not only the login file (#885)');
     assert.ok(may(perms, 'Read', join(me, '.local', 'share', 'other', 'x')), 'the rest of ~/.local/share stays readable');
   });
 
