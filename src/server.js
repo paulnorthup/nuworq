@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { hostname as machineName } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -1437,42 +1438,68 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       }
 
       // ── who is this? ──
+      // A request that carries a token claims an identity on any hub (#892): on one without logins too, a
+      // worker's runner or agent token is that agent, with agent-route limits — never the person. A token that
+      // doesn't verify is refused, not fallen back to the person: presenting one claims an identity, and a stale
+      // or revoked one must not quietly become "you". Without one, a local hub serves the one person on the
+      // machine it answers localhost for; that trade-off is written down in docs/SECURITY-MODEL.md.
+      const bearer = String(req.headers.authorization ?? '').match(/^Bearer\s+(\S+)/i)?.[1];
       let who = { role: 'human', name: 'you', via: 'local' };
-      if (required) {
-        const bearer = String(req.headers.authorization ?? '').match(/^Bearer\s+(\S+)/i)?.[1];
+      if (bearer) {
+        who = authz.verifyToken(bearer);
+        if (who) who.via = 'bearer';
+        if (req.method === 'GET' && path === '/api/me') {
+          return send(200, { auth: required ? 'required' : 'local', role: who?.role ?? null, name: who?.name ?? null, ...(who?.runner ? { runner: who.runner } : {}), ...(who?.projects ? { projects: who.projects } : {}), ...(required && spaces && who?.person ? orgsHere(req, hub, ws, who.person) : {}) });
+        }
+        if (!who) {
+          return deny(401, 'invalid or revoked token', 'Check NUWORQ_TOKEN; tokens are managed with `nuworq token` on the hub host.');
+        }
+      } else if (required) {
         const sid = cookieOf(req);
-        who = bearer ? authz.verifyToken(bearer) : sid ? authz.verifySession(sid) : null;
-        if (who) who.via = bearer ? 'bearer' : 'cookie';
+        who = sid ? authz.verifySession(sid) : null;
+        if (who) who.via = 'cookie';
         if (req.method === 'GET' && path === '/api/me') {
           return send(200, { auth: 'required', role: who?.role ?? null, name: who?.name ?? null, ...(who?.runner ? { runner: who.runner } : {}), ...(who?.projects ? { projects: who.projects } : {}), ...(spaces && who?.person ? orgsHere(req, hub, ws, who.person) : {}) });
         }
         if (!who) {
-          return deny(401, bearer ? 'invalid or revoked token' : 'login required',
-            bearer ? 'Check NUWORQ_TOKEN; tokens are managed with `nuworq token` on the hub host.' : 'Log in at /login.html, or send Authorization: Bearer <token>.');
+          return deny(401, 'login required', 'Log in at /login.html, or send Authorization: Bearer <token>.');
         }
         // Cookies ride along automatically, so they must prove the request came from this site.
-        if (who.via === 'cookie' && unsafe && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
-        // A token revokes itself (nuworq disconnect). Bearer only: a browser session logs out instead.
-        if (req.method === 'POST' && path === '/api/me/revoke') {
-          if (who.via !== 'bearer') return deny(400, 'only a token can revoke itself', 'Send Authorization: Bearer <token>. To sign out of the browser, use Sign out.');
-          authz.revoke(who.id);
-          return send(200, { ok: true, revoked: who.name });
+        if (unsafe && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
+      }
+      // A token revokes itself (nuworq disconnect). Bearer only: a browser session logs out instead.
+      if (req.method === 'POST' && path === '/api/me/revoke') {
+        if (who.via !== 'bearer') {
+          if (!required) return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
+          return deny(400, 'only a token can revoke itself', 'Send Authorization: Bearer <token>. To sign out of the browser, use Sign out.');
         }
-        // A machine's device login mints its runner token (#656): nuworq run hands that one to its workers.
-        if (req.method === 'POST' && path === '/api/me/runner-token') {
-          if (who.via !== 'bearer' || who.role !== 'agent' || who.runner) {
-            return deny(400, who.runner ? 'this is a runner token already' : 'only an agent token can mint a runner token',
-              'Send the machine\'s connect token (nuworq connect) as Authorization: Bearer <token>.');
-          }
+        authz.revoke(who.id);
+        return send(200, { ok: true, revoked: who.name });
+      }
+      // A machine's device login mints its runner token (#656): nuworq run hands that one to its workers. A hub
+      // without logins has no device login: the runner asks tokenless, as the one person this loopback hub
+      // serves, and the hub mints the machine's runner token (#892) — the least a worker may carry, so code a
+      // worker runs acts as an agent here too, never as the person.
+      if (req.method === 'POST' && path === '/api/me/runner-token') {
+        if (who.via === 'bearer' && who.role === 'agent' && !who.runner) {
           try {
             return send(200, { ok: true, ...authz.runnerToken(who.id) });
           } catch (e) {
             return deny(400, e.message, 'Give the workers a token of their own: nuworq run --agent-token <token>.');
           }
         }
-        if (who.role === 'agent' && !AGENT_ROUTES.some((r) => r.test(`${req.method} ${path}`))) {
-          return deny(403, 'agent tokens can only use agent operations', 'Use a human token for the UI and human actions.');
+        if (required) {
+          return deny(400, who.runner ? 'this is a runner token already' : 'only an agent token can mint a runner token',
+            'Send the machine\'s connect token (nuworq connect) as Authorization: Bearer <token>.');
         }
+        try {
+          return send(200, { ok: true, ...authz.localRunnerToken(machineName().split('.')[0]) });
+        } catch (e) {
+          return deny(400, e.message, 'See: nuworq token list.');
+        }
+      }
+      if (who.role === 'agent' && !AGENT_ROUTES.some((r) => r.test(`${req.method} ${path}`))) {
+        return deny(403, 'agent tokens can only use agent operations', 'Use a human token for the UI and human actions.');
       }
 
       // What a token-bearing agent may reach, and its token (name for the record; powers, provenance).

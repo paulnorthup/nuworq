@@ -64,6 +64,69 @@ describe('local mode', () => {
     const r = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: big, headers: { 'x-nuworq-agent': 'a1' } });
     assert.equal(r.status, 413);
   });
+
+  test('a token that identifies a worker is that agent, not the person (#892)', async () => {
+    const { hostname } = await import('node:os');
+    const runner = ctx.server.auth.localRunnerToken(hostname().split('.')[0]);
+    const H = { authorization: `Bearer ${runner.token}`, 'x-nuworq-agent': 'w1' };
+    const me = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${runner.token}` } });
+    assert.equal(me.json.auth, 'local');
+    assert.equal(me.json.role, 'agent');
+    assert.equal(me.json.runner, runner.runner);
+    // Agent operations work; the person's human operations don't.
+    const ok = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: {}, headers: H });
+    assert.equal(ok.status, 200, ok.text);
+    const view = await request(ctx.port, 'GET', '/api/p/demo/view', { headers: H });
+    assert.equal(view.status, 403);
+    assert.match(view.json.error, /agent tokens can only use agent operations/);
+    const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'hi' }, headers: H });
+    assert.equal(steer.status, 403);
+    // Settings stay out of reach: what #892 is about.
+    const settings = await request(ctx.port, 'POST', '/api/p/demo/human/settings', { body: { sandbox_hosts: 'evil.example' }, headers: H });
+    assert.equal(settings.status, 403);
+    // A runner token never operates (#609), on a hub without logins either.
+    const op = await request(ctx.port, 'POST', '/api/p/demo/agent/checkin', { body: { has: 'operator' }, headers: H });
+    assert.equal(op.status, 403);
+    assert.match(op.json.error, /can't be an operator|can't act as an operator/);
+  });
+
+  test('a tokenless caller is still the one person, and a bad token is refused', async () => {
+    const me = await request(ctx.port, 'GET', '/api/me');
+    assert.deepEqual(me.json, { auth: 'local', role: 'human', name: 'you' });
+    const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'as you' } });
+    assert.equal(steer.status, 200);
+    const bad = await request(ctx.port, 'GET', '/api/projects', { headers: { authorization: 'Bearer nwq_wrongwrongwrongwrongwrongwrong' } });
+    assert.equal(bad.status, 401);
+    assert.match(bad.json.error, /invalid or revoked token/);
+    const revoked = ctx.server.auth.createToken('gone', 'agent');
+    ctx.server.auth.revoke('gone');
+    const r = await request(ctx.port, 'GET', '/api/projects', { headers: { authorization: `Bearer ${revoked}` } });
+    assert.equal(r.status, 401);
+  });
+
+  test('the hub mints the machine\'s runner token for nuworq run, and minting again replaces the last one', async () => {
+    const { hostname } = await import('node:os');
+    const name = hostname().split('.')[0];
+    const one = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {} });
+    assert.equal(one.status, 200);
+    assert.equal(one.json.runner, name);
+    assert.match(one.json.name, new RegExp(`^${name}\\.runner`));
+    const again = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {} });
+    assert.notEqual(again.json.token, one.json.token);
+    const old = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${one.json.token}` } });
+    assert.equal(old.json.role, null); // the previous mint was revoked with the new one
+    const cur = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${again.json.token}` } });
+    assert.equal(cur.json.role, 'agent');
+  });
+
+  test('a person\'s own bearer token keeps its powers on a hub without logins', async () => {
+    const human = ctx.server.auth.createToken('ada', 'human');
+    const r = await request(ctx.port, 'GET', '/api/p/demo/view', { headers: { authorization: `Bearer ${human}` } });
+    assert.equal(r.status, 200);
+    const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'mine' }, headers: { authorization: `Bearer ${human}` } });
+    assert.equal(steer.status, 200);
+    ctx.server.auth.revoke('ada');
+  });
 });
 
 describe('required mode', () => {

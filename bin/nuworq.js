@@ -660,10 +660,41 @@ async function runnerToken(client, me) {
   }
 }
 
-// The token a started agent gets. Never yours: a hub that requires login needs a separate agent token.
+// The workers' token on a hub without logins (#892): the hub mints the machine's runner token, so code a worker
+// runs acts as an agent on its own loopback hub, never as the person. Kept in tokens/runner.token like the
+// required-mode one; --agent-token and NUWORQ_AGENT_TOKEN still win. A hub too old to mint one: workers go
+// without, as they did before #892, with one line saying what that costs.
+async function localRunnerToken(client, flags = {}) {
+  const fromFile = () => { try { return readFileSync(envVar('AGENT_TOKEN_FILE'), 'utf8').trim() || null; } catch { return null; } };
+  const t = flags['agent-token'] || envVar('AGENT_TOKEN') || (envVar('AGENT_TOKEN_FILE') && fromFile()) || null;
+  const how = 'Update the hub, or create one on the hub host: nuworq token create <name> --role agent. Pass it with --agent-token or NUWORQ_AGENT_TOKEN.';
+  if (t && t !== true) {
+    const who = await createClient({ url: client.settings.url, token: t }).get('/api/me').catch(() => null);
+    if (who?.role === 'agent') return t;
+    throw new HubError('The hub refused the agent token (wrong or revoked)', { hint: how });
+  }
+  const file = join(dirname(HUB_FILE), 'tokens', 'runner.token');
+  let kept = null;
+  try { kept = readFileSync(file, 'utf8').trim() || null; } catch { /* none yet */ }
+  if (kept) {
+    const who = await createClient({ url: client.settings.url, token: kept }).get('/api/me').catch(() => null);
+    if (who?.role === 'agent' && who.runner) return kept; // the hub minted it for this machine, and it's live
+  }
+  const r = await client.post('/api/me/runner-token', {}).catch(() => null);
+  if (r?.token && r.name) {
+    tokenFile(dirname(HUB_FILE), 'runner', r.token);
+    console.log(dim(`Workers here carry the runner token ${r.name}, so code they run acts as an agent on this hub, never as you.`));
+    return r.token;
+  }
+  console.log(amber(`! Workers here go without a token, so this hub still answers them as you. ${how}`));
+  return null;
+}
+
+// The token a started agent gets. Never yours: a hub that requires login needs a separate agent token, and on
+// one without logins workers carry the machine's runner token, so they act as agents there too (#892).
 async function agentToken(client, flags) {
   const me = await client.get('/api/me');
-  if (me.auth !== 'required') return null;
+  if (me.auth !== 'required') return localRunnerToken(client, flags);
   // A machine connected with an agent token (nuworq connect) hands that one on.
   // NUWORQ_AGENT_TOKEN_FILE: how an installed runner keeps its --agent-token off its command line (#477).
   const fromFile = () => { try { return readFileSync(envVar('AGENT_TOKEN_FILE'), 'utf8').trim() || null; } catch { return null; } };

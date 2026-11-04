@@ -154,7 +154,7 @@ function github(root) {
 }
 
 describe('a project lives on GitHub: install the app, and issues become work that lands and closes them', () => {
-  let root, gh, hub, server, base, stub;
+  let root, gh, hub, server, base, stub, workerToken;
   beforeEach(async () => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-ghflow-')));
     gh = github(join(root, 'github'));
@@ -172,6 +172,8 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     hub.humanOp('api', 'settings', { autonomy: 'full' });
     server = createServer(hub, { githubApp: { id: 1, key: PEM, slug: 'nuworq-test', webhook_secret: WHS }, github: { api: stub, web: stub }, sweepMs: 3600_000 });
     base = `http://127.0.0.1:${await listen(server)}`;
+    // A worker pushes with its agent token as the git password (#892): a token that doesn't verify is refused.
+    workerToken = server.auth.createToken('workers', 'agent');
   });
   afterEach(() => { for (const s of [server, gh.server]) { s.close(); s.closeAllConnections(); } });
 
@@ -234,7 +236,7 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     git(wt, ['commit', '-q', '-m', 'GET /things']);
     await assert.rejects(netGit(wt, ['push', '-q', 'origin', job.branch], asWorker), /403/, "GitHub refuses the worker's own token a push");
     // Through the hub, as the worker's git does (pushInsteadOf): name and agent token as basic auth.
-    const via = `${base.replace('//', '//a1:none@')}/api/git/github.com/acme/api.git`;
+    const via = `${base.replace('//', `//a1:${workerToken}@`)}/api/git/github.com/acme/api.git`;
     git(wt, ['remote', 'set-url', '--push', 'origin', via]);
     await netGit(wt, ['push', '-q', 'origin', job.branch], asWorker);
     assert.equal(git(gh.bare, ['rev-parse', job.branch]), git(wt, ['rev-parse', 'HEAD']), 'the branch is on GitHub');
@@ -248,13 +250,13 @@ describe('a project lives on GitHub: install the app, and issues become work tha
     assert.equal(git(gh.bare, ['rev-parse', job.branch]), git(wt, ['rev-parse', 'HEAD']), 'nor is the branch deleted');
     assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE type = 'push_refused'`).get().n, 4, 'each refusal is on the record');
     // Not the repository of the item it holds, or no name: refused before anything reaches GitHub.
-    const other = await fetch(`${base}/api/git/github.com/acme/web.git/info/refs?service=git-receive-pack`, { headers: { authorization: `Basic ${Buffer.from('a1:none').toString('base64')}` } });
+    const other = await fetch(`${base}/api/git/github.com/acme/web.git/info/refs?service=git-receive-pack`, { headers: { authorization: `Basic ${Buffer.from(`a1:${workerToken}`).toString('base64')}` } });
     assert.equal(other.status, 403);
     assert.match(await other.text(), /lands in github\.com\/acme\/api, not github\.com\/acme\/web/);
     const anon = await fetch(`${base}/api/git/github.com/acme/api.git/info/refs?service=git-receive-pack`);
     assert.equal(anon.status, 401);
     assert.match(anon.headers.get('www-authenticate'), /^Basic/);
-    const idle = await fetch(`${base}/api/git/github.com/acme/api.git/info/refs?service=git-receive-pack`, { headers: { authorization: `Basic ${Buffer.from('a9:none').toString('base64')}` } });
+    const idle = await fetch(`${base}/api/git/github.com/acme/api.git/info/refs?service=git-receive-pack`, { headers: { authorization: `Basic ${Buffer.from(`a9:${workerToken}`).toString('base64')}` } });
     assert.equal(idle.status, 403, 'an agent holding nothing pushes nothing');
     await op('a1', 'submit', { item: job.item, headline: 'GET /things', evidence: [{ label: 'npm test: 3 passed' }] });
     assert.equal(item(n).stage, 'verifying');
@@ -302,7 +304,7 @@ describe('a project lives on GitHub: install the app, and issues become work tha
   test("the hub passes on a push only to the held item's branch", async () => {
     for (const title of ['One', 'Two']) await post('/api/p/api/human/create', { title, acceptance: 'x' });
     const url = `${stub}/acme/api.git`;
-    const via = (agent) => `${base.replace('//', `//${agent}:none@`)}/api/git/github.com/acme/api.git`;
+    const via = (agent) => `${base.replace('//', `//${agent}:${workerToken}@`)}/api/git/github.com/acme/api.git`;
     // An agent claims an item, commits on its branch and pushes it through the hub.
     const claimAndPush = async (agent) => {
       await op(agent, 'checkin', { model: 'claude-opus-5-5' });

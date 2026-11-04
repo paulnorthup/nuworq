@@ -15,6 +15,8 @@ Two kinds of token:
 - **human**: logs in to the web UI; can do everything.
 - **agent**: goes in an agent's `NUWORQ_TOKEN`; can only check in, claim, report, ask and submit.
 
+Workers carry an agent token on this setup too: `nuworq run` mints the machine's runner token from the hub (loopback is trusted for that one ask), and a worker's calls act as an agent, never as you (#892).
+
 ---
 
 ## 5 minutes: the setups
