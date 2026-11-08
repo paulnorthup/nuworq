@@ -161,7 +161,7 @@ export const ESSENTIALS = [
   {
     key: 'notifications', title: 'Notifications', glance: 'One message when something new needs you.',
     body: [
-      'Open **Notifications** in the workspace menu: click the workspace\'s name at the top of the rail (on a phone, it\'s under **Menu**). Pick ntfy, Slack or webhook, paste its address, and click **Add**; **Send a test** checks it. Messages are batched over two minutes, and healthy work sends nothing. Each channel also gets a weekly line per busy project; turn it off with **Weekly line**.',
+      'Open **Notifications** in the workspace menu: click the workspace\'s name at the top of the rail (on a phone, it\'s under **Menu**). Pick ntfy, Slack or webhook, paste its address, and click **Add**; **Send a test** checks it. Messages are batched over two minutes, and healthy work sends nothing. Each channel also gets a weekly line per busy project, plus one saying what agents tidied, if anything; turn it off with **Weekly line**.',
     ],
   },
   {
