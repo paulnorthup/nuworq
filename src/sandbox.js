@@ -5,6 +5,7 @@
 // would run anything. Setting names: https://code.claude.com/docs/en/sandboxing (checked 2026-11-01).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { flag, GIT_RUNS, rebaseRuns, rmOutside } from './gitrules.js';
 
 export const HOSTS_HINT = 'Give host names only, e.g. api.stripe.com or *.example.com, separated by commas.';
@@ -88,6 +89,22 @@ export function machineDenies(env = process.env, { platform = process.platform, 
   ])];
 }
 
+// DENY_READ is a list with no end: four sweeps each found more (#885, #891, #893, #899), and it never named another
+// project's .env (#909). So a worker's shell is denied the whole home folder and given back only what its work needs:
+// its checkout and worktree, the parts of nuworq its git's credential helper runs (nuworq usually sits in some other
+// checkout), and these: where each toolchain keeps its versions, packages and caches, plus git's two per-person files
+// that hold no secret (without its global ignore, `git add .` would sweep up what the person ignores everywhere). Named
+// one by one, not ~/.cache or ~/.local whole, whose siblings keep logins; ~/go only pkg and bin, since ~/go/src can be
+// a person's own projects. The narrowest rule wins (code.claude.com/docs/en/sandboxing, checked 2026-11-09), so the
+// DENY_READ entries inside these (~/.cargo/credentials) stay denied, and none of these may sit inside a DENY_READ
+// folder, which it would re-open. A toolchain missing here fails loudly on EPERM, the safe way round.
+export const TOOLCHAIN_READS = ['~/.npm', '~/.node-gyp', '~/.cache/node-gyp', '~/Library/Caches/node-gyp', '~/.nvm', '~/.volta', '~/.asdf', '~/.tool-versions', '~/.nodenv', '~/.fnm', '~/.local/share/fnm', `${APP_SUPPORT}/fnm`, '~/.local/share/mise',
+  '~/.bun', '~/.deno', '~/.yarn/berry', '~/.cache/yarn', '~/Library/Caches/Yarn', '~/.local/share/pnpm', '~/Library/pnpm', '~/.cache/pnpm', '~/Library/Caches/pnpm', '~/.cache/ms-playwright', '~/Library/Caches/ms-playwright',
+  '~/.pyenv', '~/.local/bin', '~/.local/lib', '~/.local/pipx', '~/Library/Python', '~/.local/share/uv', '~/.cache/uv', '~/Library/Caches/uv', '~/.cache/pip', '~/Library/Caches/pip', '~/.cache/pypoetry', '~/Library/Caches/pypoetry',
+  '~/.cargo', '~/.rustup', '~/go/pkg', '~/go/bin', '~/.cache/go-build', '~/Library/Caches/go-build',
+  '~/.config/git/ignore', '~/.config/git/attributes'];
+const NUWORQ_RUNS = ['bin', 'src', 'package.json'].map((p) => fileURLToPath(new URL(`../${p}`, import.meta.url)));
+
 // A project's extra hosts, as a person gives them: a list, or names split by commas or spaces. Host names only
 // ("api.example.com", "*.example.com", "localhost:8080"), never a URL or a path. A wildcard covers a domain, never a
 // whole top-level one ("*.com"). The runner checks what the hub sends with this too (#624).
@@ -147,7 +164,8 @@ export const gitDenies = (home, worktree, { landsHere = false } = {}) => [
 // person added for the project's tests. landsHere: the project has no origin, so work lands by fast-forwarding the
 // checkout itself, which the worker may then write, all but its .git's hooks and config. tokenFile: the worker's own
 // token, in ~/.nuworq/tokens (#477), which its git's credential helper reads inside the sandbox; the narrower allowRead
-// re-opens that one file in the denied ~/.nuworq (code.claude.com/docs/en/sandboxing, checked 2026-11-01).
+// re-opens that one file in the denied ~/.nuworq (code.claude.com/docs/en/sandboxing, checked 2026-11-01). Reads are
+// the whole home folder denied, and TOOLCHAIN_READS and these folders given back (#909).
 export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = false, tokenFile = null, env = process.env }) {
   const hubHost = hub ? new URL(hub).host : '';
   return {
@@ -163,8 +181,8 @@ export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = f
     filesystem: {
       allowWrite: landsHere ? [home] : gitWrites(home, worktree && basename(worktree)),
       denyWrite: gitDenies(home, worktree, { landsHere }),
-      denyRead: [...DENY_READ, ...machineDenies(env), ...agentSettingsOf(home, worktree)],
-      ...(tokenFile ? { allowRead: [tokenFile] } : {}),
+      denyRead: ['~/', ...DENY_READ, ...machineDenies(env), ...agentSettingsOf(home, worktree)],
+      allowRead: [...new Set([home, worktree, tokenFile, ...NUWORQ_RUNS, ...TOOLCHAIN_READS].filter(Boolean))],
     },
   };
 }
@@ -172,8 +190,11 @@ export function sandboxSettings({ hub, home, worktree, hosts = [], landsHere = f
 // The sandbox holds only for the shell; Claude Code's own file tools (Read, Edit, Write, Glob, Grep) answer to
 // permission rules instead, so these say the same (#472). Edit and Write only in the worker's folder (cwd: its
 // worktree, or the checkout itself) and, when work lands here, the checkout; never git's hooks or config there.
-// Read, Glob and Grep anywhere but the keys DENY_READ names, the worker's own token file included: only its git's
-// credential helper reads that, in the shell. Deny wins over allow. Rule paths: //abs is absolute, ~/ the home
+// Read in its own folders and temp, never the keys DENY_READ names, the worker's own token file included: only its
+// git's credential helper reads that, in the shell. A bare Read, Glob or Grep would reach another project's .env (#909),
+// and a deny can't carve the worker's folders out of the home folder, since deny wins over allow; so reads are allowed by
+// path, and Glob and Grep get no rule: Claude Code runs them unasked in its working folder, and elsewhere headless nobody
+// answers the prompt. Rule paths: //abs is absolute, ~/ the home
 // folder. Edit rules cover Write too, and a Write(path) rule never matches (code.claude.com/docs/en/permissions,
 // checked 2026-11-01). DENY_READ and the agent settings go out as Read and Edit trees only: Claude Code applies Read deny rules to
 // Grep and Glob as well — to the directory their path argument resolves to, and best-effort to every built-in
@@ -183,8 +204,9 @@ const rule = (tool, p) => `${tool}(${p.startsWith('~/') ? p : `/${p}`})`;
 const tree = (tool, p) => [rule(tool, p), rule(tool, `${p}/**`)];
 export function filePermissions({ home, worktree, cwd = worktree ?? home, landsHere = false, env = process.env }) {
   const writable = [...new Set([cwd, ...(landsHere ? [home] : [])].filter(Boolean))];
+  const readable = [...new Set([cwd, worktree, home, '/tmp', '/private/tmp'].filter(Boolean))];
   return {
-    allow: ['Read', 'Glob', 'Grep', ...writable.map((p) => rule('Edit', `${p}/**`))],
+    allow: [...readable.map((p) => rule('Read', `${p}/**`)), ...writable.map((p) => rule('Edit', `${p}/**`))],
     deny: [
       ...[...DENY_READ, ...machineDenies(env)].flatMap((p) => [...tree('Read', p), ...tree('Edit', p)]),
       // The agent settings in the checkout and the worktree: never written (gitDenies), never read either (#899).

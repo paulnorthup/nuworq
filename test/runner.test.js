@@ -300,7 +300,8 @@ describe('nuworq worker --agent claude', () => {
       // Its file tools say the same (test/sandbox.test.js): edits only in its worktree, never the keys the sandbox hides.
       assert.ok(!allow.some((a) => /^(Read|Edit|Write|Glob|Grep)/.test(a)), 'no file tool in --allowedTools: --settings scopes them');
       const wt = `${repo}.worktrees/c-2`;
-      assert.deepEqual(permissions.allow, ['Read', 'Glob', 'Grep', `Edit(/${wt}/**)`]);
+      // Reads by path, no bare Read, Glob or Grep: those would reach another project's checkout (#909).
+      assert.deepEqual(permissions.allow, [`Read(/${wt}/**)`, `Read(/${repo}/**)`, 'Read(//tmp/**)', 'Read(//private/tmp/**)', `Edit(/${wt}/**)`]);
       for (const r of ['Read(~/.ssh/**)', 'Read(~/.nuworq/**)', 'Edit(~/.ssh/**)', `Edit(/${join(repo, '.git', 'hooks')}/**)`, `Edit(/${join(wt, '.git')})`]) assert.ok(permissions.deny.includes(r), r);
       assert.deepEqual({ ...sandbox, network: undefined, filesystem: undefined }, { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false, network: undefined, filesystem: undefined });
       assert.deepEqual(sandbox.network, { allowedDomains: [`127.0.0.1:${server.address().port}`, 'github.com', '*.github.com', '*.githubusercontent.com', 'registry.npmjs.org', 'api.stripe.com'], strictAllowlist: true, allowLocalBinding: true });
@@ -628,7 +629,8 @@ describe('workers on a hub that requires login', () => {
       // Up to the next flag: its deny rules hold spaces (#625).
       const { sandbox } = JSON.parse(ran.match(/--settings (\{.*?\}) --disable-slash-commands/)[1]);
       assert.ok(sandbox.filesystem.denyRead.includes('~/.nuworq'));
-      assert.deepEqual(sandbox.filesystem.allowRead, [file], 'its own token file, nothing else of ~/.nuworq');
+      assert.ok(sandbox.filesystem.allowRead.includes(file), 'its own token file');
+      assert.deepEqual(sandbox.filesystem.allowRead.filter((p) => p.startsWith(join(home, '.nuworq')) || p.startsWith('~/.nuworq')), [file], 'nothing else of ~/.nuworq');
       assert.doesNotMatch(ran, /ARGS: .*nwq_/, 'no token in its arguments');
       assert.match(ran, /^ENV TOKENS: 0$/m, 'no token in its environment, not even the person\'s');
       assert.match(ran, /^-rw-------@? .* w\.token$/m, 'a file only this user reads');
