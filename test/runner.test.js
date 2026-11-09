@@ -586,6 +586,29 @@ describe('workers on a hub that requires login', () => {
     }
   });
 
+  test("on a hub without logins each worker's token file holds a token of its own, gone once the worker is (#919)", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-wtok-')));
+    const bin = join(dir, 'bin');
+    execFileSync('mkdir', [bin]);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "OWN: $(cat "$HOME/.nuworq/tokens/w.token")"\n', { mode: 0o755 });
+    const hub = new Hub();
+    hub.tx(() => hub.project('lock', { create: true }));
+    hub.humanOp('lock', 'settings', { path: dir });
+    const server = createServer(hub, { personKey: 'the-persons-key-for-this-test' });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-wtok-home-'));
+    const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, NUWORQ_TOKEN: 'the-persons-key-for-this-test', NUWORQ_AGENT_TOKEN: '', NUWORQ_AGENT_TOKEN_FILE: '' };
+    try {
+      const ran = (await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'lock', '--here', '--as', 'w', '--run'], { env, cwd: dir })).stdout;
+      const own = ran.match(/^OWN: (\S+)$/m)[1];
+      assert.notEqual(own, readFileSync(join(home, '.nuworq', 'tokens', 'runner.token'), 'utf8').trim(), 'not the token the machine\'s workers share');
+      assert.equal(server.auth.verifyToken(own), null, 'dropped when the worker ended');
+      assert.deepEqual(server.auth.listTokens().filter((t) => t.name === 'w.worker'), [], 'its row too');
+    } finally {
+      server.close();
+    }
+  });
+
   test("a machine connected with an agent token gives its workers a runner token minted from it, kept for the next start (#656)", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-rtok-')));
     const bin = join(dir, 'bin');

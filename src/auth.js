@@ -4,6 +4,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 export const SESSION_MS = 30 * 24 * 3600_000;
 export const USED_EVERY_MS = 60_000; // a token's last-used time is written at most this often
 export const INVITE_MS = 7 * 24 * 3600_000;
+const WORKER_TOKEN_MS = 7 * 24 * 3600_000; // a worker's own token left by a crash goes after this (#919)
 const ROLES = ['human', 'agent'];
 // What a person may do here: owner > steward > member > viewer (see PERSON_CAN in core.js).
 export const PERSON_ROLES = ['owner', 'steward', 'member', 'viewer'];
@@ -55,6 +56,7 @@ export class Auth {
       'ALTER TABLE tokens ADD COLUMN runner TEXT', // or a named runner (CI, cloud agents) that outlives any one person
       'ALTER TABLE tokens ADD COLUMN powers TEXT', // JSON subset of shape/build/review; NULL means all
       'ALTER TABLE tokens ADD COLUMN from_token INTEGER', // a runner token: the device login it was minted from (#656)
+      'ALTER TABLE tokens ADD COLUMN worker TEXT', // one worker's token on a hub without logins: the agent name it speaks for (#919)
     ]) {
       try { db.exec(sql); } catch { /* already there */ }
     }
@@ -332,6 +334,37 @@ export class Auth {
     }
   }
 
+  // One worker's own token on a hub without logins (#919): nothing else ties a name to a token there, and a machine's
+  // workers share its runner token, so that token can't tell them apart. A child of the token the runner holds: the
+  // same runner, projects and powers, never operating, revoked with it. Minted only for the person's key (the runner
+  // has it, a worker doesn't). Minting for a name again replaces its token, and a crash's leftovers go at each mint.
+  workerToken(fromId, worker) {
+    const from = this.db.prepare('SELECT * FROM tokens WHERE id = ? AND revoked_at IS NULL').get(fromId);
+    if (!from || from.role !== 'agent') throw new Error('only an agent token can have workers');
+    if (from.worker) throw new Error("this is a worker's token already");
+    const powers = from.powers ? JSON.parse(from.powers).filter((x) => x !== OPERATE) : null;
+    if (powers && !powers.length) throw new Error('this token has no powers a worker could use');
+    const token = TOKEN_PREFIX + randomBytes(32).toString('base64url');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM tokens WHERE worker IS NOT NULL AND (worker = ? OR created_at < ?)').run(worker, this.now() - WORKER_TOKEN_MS);
+      let name = `${worker.slice(0, 50)}.worker`;
+      if (this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name)) name += `-${randomBytes(3).toString('hex')}`;
+      this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, minted_by, runner, powers, created_at, projects, from_token, worker) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(name, 'agent', sha(token), token.slice(0, 8), from.minted_by, from.runner ?? from.name, powers ? JSON.stringify(powers) : null, this.now(), from.projects, from.id, worker);
+      this.db.exec('COMMIT');
+      return { token, name, worker };
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  // The worker is done: its token goes with it.
+  dropWorkerToken(worker) {
+    return this.db.prepare('DELETE FROM tokens WHERE worker = ?').run(worker).changes;
+  }
+
   listTokens() {
     return this.db.prepare(`SELECT t.id, t.name, t.role, t.prefix, t.created_at, t.last_used_at, t.revoked_at, t.projects, p.handle AS person,
         m.handle AS minted_by, t.runner, t.powers
@@ -380,6 +413,7 @@ export class Auth {
       out.actsAs = minter === 'viewer' || (minter === 'member' && !full.powers) ? minter : null;
       if (out.actsAs) { out.powers = []; out.operator = false; }
       if (row.runner) out.runner = row.runner; // a runner's token: the runner it reports as (#171)
+      if (row.worker) out.worker = row.worker; // one worker's token (#919): the only agent name it speaks for
     }
     if (row.role === 'human') {
       const p = row.person_id != null ? this.db.prepare('SELECT * FROM people WHERE id = ?').get(row.person_id) : null;

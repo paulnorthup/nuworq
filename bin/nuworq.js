@@ -742,7 +742,7 @@ async function worker(flags) {
     target = { ...target, repo: routes.find((r) => r.project === target.slug)?.repo ?? null };
   }
   const token = flags.run ? await agentToken(client, flags) : null;
-  const { name, worktree, main, origin, cwd, cmd, checkout, start, keys, tokenAt, piDir } = await setupOrClone(target, agent, flags, s, client, token);
+  const { name, worktree, main, origin, cwd, cmd, checkout, start, keys, tokenAt, piDir, retire } = await setupOrClone(target, agent, flags, s, client, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
@@ -765,6 +765,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
     if (checkout) execFileSync('/bin/sh', ['-c', checkout], { stdio: ['ignore', 'inherit', 'inherit'], env: { ...withoutTokens(), GIT_TERMINAL_PROMPT: '0' } });
   } catch (e) {
     dropTokenFile(tokenAt);
+    await retire();
     dropPiDir(piDir);
     process.exitCode = e.status ?? 1;
     return;
@@ -773,6 +774,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
   const usage = await tapUsage(child, agent, flags, (l) => console.log(l));
   await new Promise((done) => child.on('close', (code) => { process.exitCode = code ?? 1; done(); }));
   dropTokenFile(tokenAt);
+  await retire();
   dropPiDir(piDir);
   await reportUsage(s, token, target.slug, name, usage());
 }
@@ -876,12 +878,29 @@ async function cloneHome(target, flags, s, client, token, missing) {
 
 // workerSetup, cloning the project first when this machine has no checkout of it.
 async function setupOrClone(target, agent, flags, s, client, token) {
+  let setup;
   try {
-    return workerSetup(target, agent, flags, s, token);
+    setup = workerSetup(target, agent, flags, s, token);
   } catch (e) {
     if (!(e instanceof HubError) || !e.missing) throw e;
     await cloneHome(target, flags, s, client, token, e);
-    return workerSetup(target, agent, flags, s, token);
+    setup = workerSetup(target, agent, flags, s, token);
+  }
+  return { ...setup, retire: setup.tokenAt ? await ownToken(client, setup, token) : async () => {} };
+}
+
+// A hub without logins can't tell a machine's workers apart by the runner token they share (#919), so each gets a
+// token of its own in its token file, and the hub takes its pushes under that name only. Asked with the person's key,
+// which a worker can't read. A hub with logins, or one too old for this, answers 404 and the shared token stands.
+// Returns what drops the token when the worker ends.
+async function ownToken(client, { name, origin }, token) {
+  try {
+    const r = await client.post('/api/me/worker-token', { name, from: token });
+    tokenFile(dirname(HUB_FILE), name, r.token);
+    return () => client.post('/api/me/worker-token', { name, drop: true }).catch(() => {});
+  } catch (e) {
+    if (e.status !== 404 && origin) console.log(amber(`! ${name} shares this machine's runner token, so the hub won't take its pushes (${e.message}). Start nuworq run on the machine that serves this hub, where ~/.nuworq/tokens/person.token is.`));
+    return async () => {};
   }
 }
 
@@ -1399,7 +1418,7 @@ async function runCmd(flags) {
       if (e instanceof HubError) e.skip = true;
       throw e;
     }
-    const { name, home, worktree, cwd, checkout, start, keys, tokenAt, piDir } = setup;
+    const { name, home, worktree, cwd, checkout, start, keys, tokenAt, piDir, retire } = setup;
     const log = join(logs, `${name}.log`);
     // Its worktree, at the latest main. When git can't do that (e.g. it can't reach origin), the agent never
     // starts: the runner leaves the project alone for a while and the others go on.
@@ -1411,6 +1430,7 @@ async function runCmd(flags) {
         const err = redact(String(e.stderr || (e.killed ? 'timed out' : `exited with ${e.code ?? 'an error'}`)).trim());
         writeFileSync(log, `${err}\n`, { mode: 0o600 });
         dropTokenFile(tokenAt);
+        await retire();
         dropPiDir(piDir);
         const said = err.split('\n').find((l) => /^(fatal|error):/.test(l)) ?? err.split('\n').pop();
         throw Object.assign(new HubError(`couldn't update its checkout: ${said}`, { hint: `log: ${log}` }), { skip: true, pause: true });
@@ -1433,6 +1453,7 @@ async function runCmd(flags) {
       exited: new Promise((done) => child.on('close', async (code, sig) => {
         out.end();
         dropTokenFile(tokenAt);
+        await retire();
         dropPiDir(piDir);
         await reportUsage(s, token, target.slug, name, usage());
         // Its worktree goes with it, unless something there would be lost; and its branch, once its item is
