@@ -67,8 +67,9 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
   test("a worker can't read a browser's stored credential, Vivaldi and Opera included (#921)", () => {
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
     const files = filePermissions({ home, worktree });
-    for (const p of ['~/Library/Application Support/Vivaldi', '~/Library/Application Support/com.operasoftware.Opera', '~/Library/Application Support/com.operasoftware.OperaGX',
-      '~/Library/Containers/com.apple.Safari', '~/.config/vivaldi', '~/.config/opera']) {
+    for (const p of ['~/Library/Application Support/Vivaldi', '~/Library/Application Support/Vivaldi Snapshot', '~/Library/Application Support/com.operasoftware.Opera',
+      '~/Library/Application Support/com.operasoftware.OperaNext', '~/Library/Application Support/com.operasoftware.OperaDeveloper', '~/Library/Application Support/com.operasoftware.OperaGX',
+      '~/Library/Containers/com.apple.Safari', '~/.config/vivaldi', '~/.config/vivaldi-snapshot', '~/.config/opera', '~/.config/opera-beta', '~/.config/opera-developer']) {
       assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
       assert.ok(files.deny.includes(`Read(${p})`) && files.deny.includes(`Read(${p}/**)`), `the file tools: ${p}`);
     }

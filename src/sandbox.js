@@ -42,8 +42,10 @@ const REGISTRIES = [
 // maven's ~/.m2/settings.xml and NuGet's ~/.nuget/NuGet.Config; and VS Code's local store in Application Support
 // (settings-sync tokens; a worker never touches the editor, so denying it costs nothing). And the logins a
 // browser keeps: the macOS keychains, Safari's and the browsers' profiles (cookies, saved passwords) on macOS
-// and Linux, Vivaldi's and Opera's included, and Safari's container (#921: a browser's localStorage is a plain file). And the release key's folder, where docs/DEPLOY.md keeps the release key and the release
-// workflow's deploy key (#850). The tail the fresh workers-area review found (#899): the agent settings in the
+// and Linux, Vivaldi's and Opera's included, and Safari's container (#921: a browser's localStorage is a plain
+// file; those browsers' paths are from memory, not confirmed against their documentation or an install, and a
+// deny on a folder a browser doesn't use costs nothing). And the release key's folder, where docs/DEPLOY.md keeps
+// the release key and the release workflow's deploy key (#850). The tail the fresh workers-area review found (#899): the agent settings in the
 // checkout and the worktree (`nuworq operator --allow` writes .claude/settings(.local).json, direnv exports
 // .envrc, VS Code keeps its settings and tasks), sops' age key where macOS puts it (App Support/sops/age),
 // VS Code's store where Linux puts it and the sibling editors' (Cursor, Code - Insiders, VSCodium), and the
@@ -65,7 +67,7 @@ export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', 
   '~/.bash_history', '~/.zsh_history', '~/.zsh_sessions', '~/.history', '~/.local/share/fish', '~/.local/share/atuin', '~/.python_history', '~/.node_repl_history', '~/.psql_history', '~/.mysql_history', '~/.sqlite_history',
   '~/.pgpass', '~/.my.cnf', '~/.gitcookies', '~/.config/hub', '~/.config/rclone', '~/.vault-token', '~/.config/sops', '~/.terraformrc',
   '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Code`, `${APP_SUPPORT}/Code - Insiders`, `${APP_SUPPORT}/VSCodium`, `${APP_SUPPORT}/Cursor`, `${APP_SUPPORT}/sops`, `${APP_SUPPORT}/Claude`, `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
-  `${APP_SUPPORT}/Vivaldi`, `${APP_SUPPORT}/com.operasoftware.Opera`, `${APP_SUPPORT}/com.operasoftware.OperaGX`, '~/Library/Containers/com.apple.Safari',
+  `${APP_SUPPORT}/Vivaldi`, `${APP_SUPPORT}/Vivaldi Snapshot`, `${APP_SUPPORT}/com.operasoftware.Opera`, `${APP_SUPPORT}/com.operasoftware.OperaNext`, `${APP_SUPPORT}/com.operasoftware.OperaDeveloper`, `${APP_SUPPORT}/com.operasoftware.OperaGX`, '~/Library/Containers/com.apple.Safari',
   '~/.config/vivaldi', '~/.config/vivaldi-snapshot', '~/.config/opera', '~/.config/opera-beta', '~/.config/opera-developer',
   '~/.mozilla', '~/.config/google-chrome', '~/.config/chromium', '~/.config/BraveSoftware', '~/.config/microsoft-edge', '~/.config/Code', '~/.config/Code - Insiders', '~/.config/VSCodium'];
 
