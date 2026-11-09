@@ -1094,6 +1094,8 @@ function workerSetup(target, agent, flags, s, token = null) {
   const model = typeof flags.model === 'string' && flags.model ? flags.model : '';
   const env = {
     NUWORQ_URL: s.url, NUWORQ_PROJECT: target.slug, NUWORQ_AGENT: name,
+    // Never the machine's own keys, with a token or without (#912: src/client.js resolveSettings).
+    NUWORQ_AGENT_ONLY: '1',
     ...(tags.length ? { NUWORQ_HAS: tags.join(',') } : {}),
     ...(model && agent !== 'opencode' && agent !== 'pi' ? { NUWORQ_MODEL: model } : {}),
     // A worker nuworq run started says so at checkin, with its runner (#238); a runner's token says it too.
@@ -1146,7 +1148,8 @@ function workerSetup(target, agent, flags, s, token = null) {
     setup.push(`git -C ${sq(home)} -c credential.helper= -c credential.https://github.com.helper= -c ${sq(`credential.https://github.com.helper=${reader}`)} -c credential.https://github.com.useHttpPath=true fetch -q origin`,
       `{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(`origin/${main}`)}; }`);
   } else if (worktree) setup.push(`{ [ -d ${sq(worktree)} ] || git -C ${sq(home)} worktree add -q --detach ${sq(worktree)} ${sq(main)}; }`);
-  const lines = [`cd ${sq(cwd)}`];
+  // Its shell and what that starts (the git credential helper) are held to the same as its MCP process (#912).
+  const lines = [`cd ${sq(cwd)}`, 'export NUWORQ_AGENT_ONLY=1'];
   // git in this worker's processes only (no config file changes): nuworq's helper is its one credential helper
   // (the person's keychain, gh and any other are reset), answering GitHub with a read-only token for the project's
   // repository and the hub with the worker's name. Pushes to GitHub go to the hub instead (#472), which passes

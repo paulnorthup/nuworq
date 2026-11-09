@@ -17,7 +17,8 @@ const n = Number.parseInt(process.env.NUWORQ_TEST_CONCURRENCY ?? '', 10);
 const timeout = Number.parseInt(process.env.NUWORQ_TEST_TIMEOUT ?? '', 10) || 120_000;
 const tmp = mkdtempSync(join(tmpdir(), 'nuworq-tests-'));
 const r = spawnSync(process.execPath, ['--test', `--test-timeout=${timeout}`, ...(n > 0 ? [`--test-concurrency=${n}`] : []), ...process.argv.slice(2)], {
-  stdio: 'inherit', env: { ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+  // Not NUWORQ_AGENT_ONLY: a worker's shell has it (#912), and tests of the person's own CLI would see a worker's.
+  stdio: 'inherit', env: { ...process.env, NUWORQ_AGENT_ONLY: undefined, TMPDIR: tmp, TMP: tmp, TEMP: tmp },
 });
 rmSync(tmp, { recursive: true, force: true });
 if (r.signal) process.kill(process.pid, r.signal);
