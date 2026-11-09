@@ -190,7 +190,7 @@ describe("the person's key goes only to a hub that proves it holds it (#911)", (
     process.env.HOME = home;
     const fresh = await import(new URL(`../src/client.js?home=${encodeURIComponent(home)}`, import.meta.url).href);
     const notices = [];
-    return { c: fresh.createClient({ cwd: tmpdir(), retryMs, notice: (l) => notices.push(l) }), notices, fresh };
+    return { c: fresh.createClient({ cwd: tmpdir(), retryMs, notice: (l) => notices.push(l) }), notices, fresh, home };
   }
   before(() => { for (const k of Object.keys(process.env)) if (k.startsWith('NUWORQ_')) delete process.env[k]; });
   after(() => { Object.assign(process.env, saved); });
@@ -277,6 +277,42 @@ describe("the person's key goes only to a hub that proves it holds it (#911)", (
       assert.ok(seen.length >= 2, 'it asked, then called without the key');
     } finally {
       server.close();
+    }
+  });
+
+  test("a client that outlives a change of the person's key picks up the new one, once the hub proves it", async () => {
+    const NEW = 'the-key-after-the-hub-restarted';
+    const hub = hubServer(new Hub(), { personKey: NEW });
+    const port = await listen(hub);
+    const { c, notices, home } = await clientAt(port);
+    try {
+      assert.equal(c.settings.personKey, KEY, 'it read the old key');
+      writeFileSync(join(home, '.nuworq', 'tokens', 'person.token'), NEW);
+      await c.post('/api/projects', { name: 'after-the-change' }); // refused without the key, then sent again with the new one
+      assert.equal(c.settings.personKey, NEW);
+      assert.equal((await c.get('/api/me')).role, 'human');
+      assert.deepEqual(notices, [], 'nothing is wrong with this hub, so nothing is said');
+    } finally {
+      hub.close();
+      hub.closeAllConnections();
+    }
+  });
+
+  test("a client started before this machine's key existed picks it up", async () => {
+    const hub = hubServer(new Hub(), { personKey: KEY });
+    const port = await listen(hub);
+    const { fresh, home } = await clientAt(port);
+    const file = join(home, '.nuworq', 'tokens', 'person.token');
+    writeFileSync(file, '');
+    const c = fresh.createClient({ cwd: tmpdir(), retryMs: 0 });
+    try {
+      assert.equal(c.settings.personKey, null);
+      writeFileSync(file, KEY);
+      await c.post('/api/projects', { name: 'after-the-first-serve' });
+      assert.equal((await c.get('/api/me')).role, 'human');
+    } finally {
+      hub.close();
+      hub.closeAllConnections();
     }
   });
 

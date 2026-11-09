@@ -154,7 +154,8 @@ export async function provenPersonKey(s, notice = console.error) {
   const res = await fetch(`${s.url}/api/person-proof?nonce=${nonce}`, { redirect: 'manual', signal: AbortSignal.timeout(PROOF_MS) });
   const proof = res.ok && isJson(res) ? (await res.json().catch(() => null))?.proof : (await res.body?.cancel(), null);
   if (proof === personProof(s.personKey, nonce, at.port || (at.protocol === 'https:' ? 443 : 80))) return s.personKey;
-  if (!told.has(s.url)) {
+  // A key that changed since this client read it fails here too: the refused call then picks up the new one.
+  if (!told.has(s.url) && personToken() === s.personKey) {
     told.add(s.url);
     notice(`nuworq: ${s.url} didn't prove it holds this machine's person key, so the key wasn't sent. If that's your hub, it's older than this CLI: update it and restart nuworq serve.`);
   }
@@ -199,7 +200,7 @@ const clip = (s, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
 export function createClient(opts = {}) {
   const settings = resolveSettings(opts);
   // What the saved connection said when last read: `nuworq connect` may change it while this client lives.
-  const saved = (s) => `${s.url} ${s.token}`;
+  const saved = (s) => `${s.url} ${s.token} ${s.personKey}`;
   let seen = saved(settings);
   const named = (h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [`x-nuworq-${k}`, v]));
   // The cursor of the last reply this session got (#539): the hub counts as sent only what it names.
