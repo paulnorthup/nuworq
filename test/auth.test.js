@@ -248,11 +248,21 @@ describe('local mode', () => {
       const me = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${t.json.token}` } });
       assert.equal(me.json.role, 'agent');
     }
-    // The holder of the current runner token asks for its replacement: that revokes the older ones.
-    const next = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {}, headers: { authorization: `Bearer ${again.json.token}` } });
+    const role = async (t) => (await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${t}` } })).json.role;
+    // A worker holds the runner token, so showing it replaces nothing and revokes nothing, however often.
+    for (let i = 0; i < 12; i++) {
+      const refused = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {}, headers: { authorization: `Bearer ${again.json.token}` } });
+      assert.equal(refused.status, 400);
+      assert.match(refused.json.error, /runner token already/);
+    }
+    const selfRevoke = await request(ctx.port, 'POST', '/api/me/revoke', { body: {}, headers: { authorization: `Bearer ${again.json.token}` } });
+    assert.equal(selfRevoke.status, 400);
+    for (const t of [one, again]) assert.equal(await role(t.json.token), 'agent');
+    // Only the person's key replaces it.
+    const next = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {}, headers: { authorization: `Bearer ${ctx.server.personKey}` } });
     assert.equal(next.status, 200);
-    const old = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${one.json.token}` } });
-    assert.equal(old.json.role, null);
+    for (const t of [one, again]) assert.equal(await role(t.json.token), null);
+    assert.equal(await role(next.json.token), 'agent');
   });
 
   test('tokenless runner-token mints are limited', async () => {

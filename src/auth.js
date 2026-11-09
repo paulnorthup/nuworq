@@ -308,10 +308,9 @@ export class Auth {
 
   // A hub without logins mints its workers' runner token on request (#892): the caller is the one person the
   // loopback hub serves — or one of their workers, which holds no more than a runner token already gives it.
-  // The runner is the machine's hostname. Only a caller holding the person's key or the current runner token
-  // passes replace: the previous mint is then revoked, like runnerToken does. A tokenless caller adds a token and
-  // revokes nothing, so it can't stall the workers sharing the machine's one (#913). The name costs one lookup
-  // however many mints came before.
+  // The runner is the machine's hostname. Only a caller holding the person's key passes replace: the previous mint
+  // is then revoked, like runnerToken does. A tokenless caller adds a token and revokes nothing, so it can't stall
+  // the workers sharing the machine's one (#913). The name costs one lookup however many mints came before.
   localRunnerToken(runner, { replace = false } = {}) {
     this.db.exec('BEGIN IMMEDIATE');
     try {

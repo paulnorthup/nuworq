@@ -1519,6 +1519,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           if (!required) return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
           return deny(400, 'only a token can revoke itself', 'Send Authorization: Bearer <token>. To sign out of the browser, use Sign out.');
         }
+        // A runner token is the machine's workers' together: one of them can't revoke it for the rest (#913).
+        if (who.runner) return deny(400, 'a runner token can\'t revoke itself', 'The machine\'s workers share it. To revoke it, on the hub host: nuworq token revoke <name>.');
         authz.revoke(who.id);
         return send(200, { ok: true, revoked: who.name });
       }
@@ -1538,9 +1540,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           return deny(400, who.runner ? 'this is a runner token already' : 'only an agent token can mint a runner token',
             'Send the machine\'s connect token (nuworq connect) as Authorization: Bearer <token>.');
         }
-        // The person's key or the current runner token replaces the machine's token; a tokenless caller only adds
-        // one, within a limit, so it can't take away what the machine's workers hold (#913).
-        const replace = who.role === 'human' || (who.via === 'bearer' && !!who.runner);
+        if (who.runner) return deny(400, 'this is a runner token already', 'The machine\'s workers share it, so one of them can\'t replace it. Keep using it.');
+        // Only the person's key replaces the machine's token; a tokenless caller only adds one, within a limit, so
+        // no worker can take away what the machine's other workers hold (#913).
+        const replace = who.role === 'human';
         if (!replace) {
           const ip = clientIp(req);
           if (recent(mints, ip).length >= RUNNER_MINT_MAX) return deny(429, 'too many runner tokens asked for from this address', 'Wait 10 minutes, then try again. A runner asks once, then keeps its token.');
