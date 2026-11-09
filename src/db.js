@@ -684,6 +684,11 @@ export const MIGRATIONS = [
     name: "an item's kind of change",
     up(db) { addColumn(db, "ALTER TABLE items ADD COLUMN change TEXT NOT NULL DEFAULT ''"); },
   },
+  {
+    // On a hub without logins (#923): 1 while an agent's last call came with the person's key or a person-made token.
+    name: 'an agent last active with a credential no runner shares',
+    up(db) { addColumn(db, 'ALTER TABLE agents ADD COLUMN by_person INTEGER NOT NULL DEFAULT 0'); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

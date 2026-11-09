@@ -1658,11 +1658,13 @@ export class Hub extends EventEmitter {
   // No logins, so no name is bound to a token by first use (#922); a worker's own token (#919) binds its name instead.
   // That token speaks only for its worker, and while it's live the runner token the machine shares can't speak for
   // that worker either: anyone on the machine can mint one. The runner signs a worker off after dropping its token.
+  // Nor can it speak for a name last active with the person's key or a person-made token (#923). Workers that got no
+  // token of their own only ever call with the runner token, so that never marks their names.
   speaksAs(name, token, identity) {
     if (identity || !token?.runner) return;
-    let bound = false;
+    let bound = !!this.q('SELECT 1 FROM agents WHERE name = ? AND by_person = 1').get(name);
     if (token.worker) bound = token.worker !== name;
-    else try { bound = !!this.q('SELECT 1 FROM tokens WHERE worker = ? AND revoked_at IS NULL').get(name); } catch { /* no tokens table: no worker has a token */ }
+    else if (!bound) try { bound = !!this.q('SELECT 1 FROM tokens WHERE worker = ? AND revoked_at IS NULL').get(name); } catch { /* no tokens table: no worker has a token */ }
     if (bound) throw new UserError(`"${name}" is another agent's name here`, { status: 403, hint: "A worker acts only under the name its runner started it with. That's the agent name in your setup: use it." });
   }
 
@@ -2548,6 +2550,11 @@ export class Hub extends EventEmitter {
       }
       this.noteToken(p, agent, token?.name);
       if (identity && !identity.session) this.q('UPDATE agents SET token_id = ? WHERE project_id = ? AND name = ? AND token_id IS NULL').run(identity.id, p.id, agent);
+      // What speaksAs reads (#923). A worker's own token frees the name: the person's key made that token for it.
+      if (presence && !identity && token) {
+        if (!token.runner) this.q('UPDATE agents SET by_person = 1 WHERE project_id = ? AND name = ? AND by_person = 0').run(p.id, agent);
+        else if (token.worker) this.q('UPDATE agents SET by_person = 0 WHERE name = ? AND by_person = 1').run(agent);
+      }
       // Any call it makes renews what it holds here (#540): a session at work keeps its job without heartbeats.
       if (presence) this.renewHeld(p, agent);
       // Its session's keys (#335): the listener beside it sends the same, and wakes it alone.

@@ -400,6 +400,66 @@ describe('agent names on a hub without logins (#922)', () => {
   });
 });
 
+describe("a runner token and a name with no worker token, on a hub without logins (#923)", () => {
+  let ctx, runner, made;
+  const stateOf = () => ctx.hub.q('SELECT seq, stage, holder FROM items ORDER BY seq').all().map((i) => ({ ...i }));
+  const as = (agent, token, op, body = {}) => request(ctx.port, 'POST', `/api/p/api/agent/${op}`, { body, headers: { authorization: `Bearer ${token}`, 'x-nuworq-agent': agent } });
+  before(async () => {
+    ctx = await start();
+    ctx.hub.agentOp('api', 'checkin', 'starter', {});
+    for (const title of ['first', 'second', 'third']) ctx.hub.humanOp('api', 'create', { title, acceptance: 'done' });
+    runner = ctx.server.auth.localRunnerToken('box');
+    made = ctx.server.auth.createToken('laptop', 'agent');
+  });
+  after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
+
+  test("a runner token can't act under the name of an agent last active with the person's key or a person-made token", async () => {
+    assert.equal((await as('session-key', ctx.server.personKey, 'claim', { item: '#1' })).status, 200);
+    assert.equal((await as('session-made', made, 'claim', { item: '#2' })).status, 200);
+    const minted = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {} }); // any code on this machine can get one
+    const before_ = stateOf();
+    const events = ctx.hub.q('SELECT COUNT(*) AS n FROM events').get().n;
+    const calls = (item) => ({ checkin: {}, claim: { item: '#3' }, handoff: { item, headline: 'taken' }, submit: { item, headline: 'mine' }, progress: { item, headline: 'mine' }, signoff: {} });
+    for (const [name, item] of [['session-key', '#1'], ['session-made', '#2']]) {
+      for (const [what, token] of Object.entries({ "the machine's runner token": runner.token, 'a fresh tokenless mint': minted.json.token })) {
+        for (const [op, body] of Object.entries(calls(item))) {
+          const r = await as(name, token, op, body);
+          assert.equal(r.status, 403, `${name}, ${what}: ${op}`);
+          assert.match(r.json.error, new RegExp(`"${name}" is another agent's name here`), `${name}, ${what}: ${op}`);
+        }
+      }
+    }
+    assert.deepEqual(stateOf(), before_, 'nothing moved');
+    assert.equal(ctx.hub.q('SELECT COUNT(*) AS n FROM events').get().n, events, 'and nothing is on the record');
+    // The two-step #923 closes: nothing was handed back, so the runner's own name can't take it.
+    assert.equal((await as('thief', runner.token, 'claim', { item: '#1' })).status, 409);
+    assert.equal(stateOf().find((i) => i.seq === 1).holder, 'session-key');
+    // The session itself goes on.
+    assert.equal((await as('session-key', ctx.server.personKey, 'progress', { item: '#1', headline: 'going' })).status, 200);
+    assert.equal((await as('session-made', made, 'progress', { item: '#2', headline: 'going' })).status, 200);
+  });
+
+  test('workers sharing a runner token, with none of their own, still work under their own names', async () => {
+    assert.equal((await as('shared-1', runner.token, 'checkin')).status, 200);
+    assert.equal((await as('shared-2', runner.token, 'checkin')).status, 200);
+    assert.equal((await as('shared-1', runner.token, 'claim', { item: '#3' })).status, 200);
+    assert.equal((await as('shared-1', runner.token, 'progress', { item: '#3', headline: 'going' })).status, 200);
+    assert.equal((await as('shared-1', runner.token, 'handoff', { item: '#3', headline: 'stopping' })).status, 200);
+    assert.equal((await as('shared-2', runner.token, 'signoff', { headline: 'exited' })).status, 200);
+    assert.equal(ctx.hub.q('SELECT COUNT(*) AS n FROM agents WHERE by_person = 1 AND name LIKE ?').get('shared-%').n, 0);
+  });
+
+  test("a worker's own token frees a name the person's key used, so its runner can still sign it off", async () => {
+    assert.equal((await as('reused', ctx.server.personKey, 'checkin')).status, 200);
+    assert.equal((await as('reused', runner.token, 'checkin')).status, 403);
+    const parent = ctx.server.auth.verifyToken(runner.token).id;
+    const own = ctx.server.auth.workerToken(parent, 'reused').token;
+    assert.equal((await as('reused', own, 'checkin')).status, 200);
+    ctx.server.auth.dropWorkerToken('reused');
+    assert.equal((await as('reused', runner.token, 'signoff', { headline: 'exited' })).status, 200);
+  });
+});
+
 describe('required mode', () => {
   let ctx, human, agent;
   const H = () => ({ authorization: `Bearer ${human}` });
