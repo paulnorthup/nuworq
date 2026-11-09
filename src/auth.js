@@ -1,5 +1,5 @@
 // Tokens and browser sessions. Only hashes are stored; plaintext tokens are shown once.
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const SESSION_MS = 30 * 24 * 3600_000;
 export const USED_EVERY_MS = 60_000; // a token's last-used time is written at most this often
@@ -15,6 +15,10 @@ export const OPERATE = 'operate';
 const OPERATOR_MINTERS = ['owner', 'steward'];
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 const sha = (s) => createHash('sha256').update(String(s)).digest();
+
+// A local hub's answer to the CLI's challenge (#911): proves it holds the person's key without showing it. The port
+// is the one the hub was reached on, so a listener elsewhere can't hand on a real hub's answer as its own.
+export const personProof = (key, nonce, port) => createHmac('sha256', key).update(`nuworq person proof\n${nonce}\n${port}`).digest('hex');
 const same = (a, b) => a.length === b.length && timingSafeEqual(a, b);
 const scopeOf = (s) => (s ? s.split(',') : null); // null: every project
 // Tokens start nwq_ (invites nwi_).

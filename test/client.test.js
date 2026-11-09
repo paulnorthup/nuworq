@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'n
 import { join } from 'node:path';
 import { createClient } from '../src/client.js';
 import { createServer as hubServer } from '../src/server.js';
+import { Hub } from '../src/core.js';
 import { Workspaces } from '../src/workspaces.js';
 
 // A port nothing listens on (for now).
@@ -174,6 +175,180 @@ const listen = async (server, host = '127.0.0.1') => { await new Promise((r) => 
 const json = (res, body) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(body)); };
 // The old address: answers every /api call with a 308 to the same path at `to()`.
 const mover = (to, seen = []) => createServer((req, res) => { seen.push(req.url); res.writeHead(308, { location: `${to()}${req.url}` }); res.end(); });
+
+describe("the person's key goes only to a hub that proves it holds it (#911)", () => {
+  const KEY = 'the-persons-key-on-this-machine';
+  const saved = { ...process.env };
+  const sent = (seen) => seen.filter((a) => a?.includes(KEY));
+  // A client reading hub.json and tokens/person.token from a HOME of its own: a fresh copy of the module, as
+  // HUB_FILE is fixed at import. Its hub.json says a local hub serves at port.
+  async function clientAt(port, retryMs = 0) {
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-person-'));
+    mkdirSync(join(home, '.nuworq', 'tokens'), { recursive: true });
+    writeFileSync(join(home, '.nuworq', 'tokens', 'person.token'), KEY);
+    writeFileSync(join(home, '.nuworq', 'hub.json'), JSON.stringify({ url: `http://127.0.0.1:${port}`, auth: 'local' }));
+    process.env.HOME = home;
+    const fresh = await import(new URL(`../src/client.js?home=${encodeURIComponent(home)}`, import.meta.url).href);
+    const notices = [];
+    return { c: fresh.createClient({ cwd: tmpdir(), retryMs, notice: (l) => notices.push(l) }), notices, fresh, home };
+  }
+  before(() => { for (const k of Object.keys(process.env)) if (k.startsWith('NUWORQ_')) delete process.env[k]; });
+  after(() => { Object.assign(process.env, saved); });
+
+  // Every request it gets, with what it would do about the proof.
+  const impostor = (answer) => {
+    const seen = [];
+    const server = createServer((req, res) => {
+      seen.push(req.headers.authorization);
+      if (req.url.startsWith('/api/person-proof')) return answer(req, res);
+      json(res, { ok: true });
+    });
+    return { server, seen };
+  };
+
+  test("the person's key is never sent to a listener that can't prove it holds it", async () => {
+    const answers = {
+      'too old to know the question': (req, res) => { res.statusCode = 404; json(res, { error: 'not found' }); },
+      'a made-up proof': (req, res) => json(res, { proof: 'f'.repeat(64) }),
+      'a web page': (req, res) => { res.setHeader('content-type', 'text/html'); res.end('<html>'); },
+      'a redirect': (req, res) => { res.statusCode = 302; res.setHeader('location', '/elsewhere'); res.end(); },
+    };
+    for (const [what, answer] of Object.entries(answers)) {
+      const { server, seen } = impostor(answer);
+      const port = await listen(server);
+      const { c, notices } = await clientAt(port);
+      try {
+        assert.ok(c.settings.personKey, 'the key is on hand for a hub that proves it');
+        assert.equal(c.settings.token, '', 'it is no ordinary token');
+        await c.get('/api/projects');
+        await c.get('/api/projects');
+        assert.deepEqual(sent(seen), [], `${what}: the key stayed here`);
+        assert.equal(notices.length, 1, `${what}: said once`);
+        assert.match(notices[0], /didn't prove it holds this machine's person key, so the key wasn't sent/);
+        assert.doesNotMatch(notices[0], /\n/);
+        assert.ok(!notices[0].includes(KEY));
+      } finally {
+        server.close();
+      }
+    }
+  });
+
+  test("nuworq token rotate-person doesn't send the key to a listener that can't prove it, and changes nothing", async () => {
+    const { server, seen } = impostor((req, res) => json(res, { proof: 'f'.repeat(64) }));
+    const port = await listen(server);
+    const { home } = await clientAt(port);
+    const file = join(home, '.nuworq', 'tokens', 'person.token');
+    try {
+      const failed = await promisify(execFile)(process.execPath, [new URL('../bin/nuworq.js', import.meta.url).pathname, 'token', 'rotate-person'], { env: { ...process.env, NUWORQ_NO_UPDATE: '1' } }).catch((e) => e);
+      assert.equal(failed.code, 1, 'it refuses');
+      assert.deepEqual(sent(seen), [], 'the key stayed here');
+      assert.equal(seen.length, 1, 'only the question went out');
+      assert.equal(readFileSync(file, 'utf8'), KEY, 'the file is as it was');
+      assert.doesNotMatch(failed.stdout, /Rotated/);
+      assert.match(failed.stderr, /didn't prove it holds this machine's person key, so the key wasn't sent and nothing was rotated/);
+      assert.equal(failed.stderr.trim().split('\n').length, 1, failed.stderr);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('the real hub proves it, and the person is the person there', async () => {
+    const server = hubServer(new Hub(), { personKey: KEY });
+    const port = await listen(server);
+    const { c, notices } = await clientAt(port);
+    try {
+      assert.equal((await c.get('/api/me')).role, 'human');
+      assert.deepEqual(notices, []);
+    } finally {
+      server.close();
+      server.closeAllConnections();
+    }
+  });
+
+  test("a real hub's answer, passed on by a listener on another port, proves nothing", async () => {
+    const hub = hubServer(new Hub(), { personKey: KEY });
+    const hubPort = await listen(hub);
+    const { server, seen } = impostor(async (req, res) => json(res, await (await fetch(`http://127.0.0.1:${hubPort}${req.url}`)).json()));
+    const port = await listen(server);
+    const { c, notices } = await clientAt(port);
+    try {
+      await c.get('/api/projects');
+      assert.deepEqual(sent(seen), []);
+      assert.equal(notices.length, 1);
+    } finally {
+      server.close();
+      hub.close();
+      hub.closeAllConnections();
+    }
+  });
+
+  test('a proof holds for one call: a listener that takes the port later gets nothing', async () => {
+    const hub = hubServer(new Hub(), { personKey: KEY });
+    const port = await listen(hub);
+    const { c } = await clientAt(port, 2000); // the hub's closed connection is retried, as a runner's would be
+    const { server, seen } = impostor((req, res) => { res.statusCode = 404; json(res, {}); });
+    try {
+      assert.equal((await c.get('/api/me')).role, 'human');
+      await new Promise((r) => { hub.close(r); hub.closeAllConnections(); });
+      await new Promise((r) => server.listen(port, '127.0.0.1', r));
+      await c.get('/api/projects');
+      assert.deepEqual(sent(seen), []);
+      assert.ok(seen.length >= 2, 'it asked, then called without the key');
+    } finally {
+      server.close();
+    }
+  });
+
+  test("a client that outlives a change of the person's key picks up the new one, once the hub proves it", async () => {
+    const NEW = 'the-key-after-the-hub-restarted';
+    const hub = hubServer(new Hub(), { personKey: NEW });
+    const port = await listen(hub);
+    const { c, notices, home } = await clientAt(port);
+    try {
+      assert.equal(c.settings.personKey, KEY, 'it read the old key');
+      writeFileSync(join(home, '.nuworq', 'tokens', 'person.token'), NEW);
+      await c.post('/api/projects', { name: 'after-the-change' }); // refused without the key, then sent again with the new one
+      assert.equal(c.settings.personKey, NEW);
+      assert.equal((await c.get('/api/me')).role, 'human');
+      assert.deepEqual(notices, [], 'nothing is wrong with this hub, so nothing is said');
+    } finally {
+      hub.close();
+      hub.closeAllConnections();
+    }
+  });
+
+  test("a client started before this machine's key existed picks it up", async () => {
+    const hub = hubServer(new Hub(), { personKey: KEY });
+    const port = await listen(hub);
+    const { fresh, home } = await clientAt(port);
+    const file = join(home, '.nuworq', 'tokens', 'person.token');
+    writeFileSync(file, '');
+    const c = fresh.createClient({ cwd: tmpdir(), retryMs: 0 });
+    try {
+      assert.equal(c.settings.personKey, null);
+      writeFileSync(file, KEY);
+      await c.post('/api/projects', { name: 'after-the-first-serve' });
+      assert.equal((await c.get('/api/me')).role, 'human');
+    } finally {
+      hub.close();
+      hub.closeAllConnections();
+    }
+  });
+
+  test('a client given its own token, or told to go without, never asks for proof', async () => {
+    const seen = [];
+    const server = createServer((req, res) => { seen.push(req.url); json(res, { ok: true }); });
+    const port = await listen(server);
+    const { fresh } = await clientAt(port);
+    try {
+      await fresh.createClient({ cwd: tmpdir(), token: 'nwq_agent', retryMs: 0 }).get('/api/projects');
+      await fresh.createClient({ cwd: tmpdir(), token: '', retryMs: 0 }).get('/api/projects');
+      assert.deepEqual(seen, ['/api/projects', '/api/projects']);
+    } finally {
+      server.close();
+    }
+  });
+});
 
 describe('a hub that moved to a subdomain', () => {
   // nuworq.com answers app paths with a 308 to app.nuworq.com. Names like app.hub.test don't resolve, so fetch is faked.

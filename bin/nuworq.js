@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
+import { createClient, resolveSettings, provenPersonKey, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILE } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, gitConfigEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
@@ -755,7 +755,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
       opencode: `opencode has no sandbox, so it runs only on projects without a remote, and never git pushes (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
       pi: `pi has no sandbox, so it runs only on projects without a remote, and never git pushes (nuworq's pi extension blocks it). Its config is a folder of its own (${piDir}): none of your pi extensions, skills, MCP servers or sign-ins follow it in. Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
     }[agent] + '\nAdd --run to start it now.'));
-    if (s.token) console.log(dim('Replace <agent-token> with an agent token (nuworq token create <name> --role agent --project <p>). With --run, pass it as --agent-token.'));
+    if (s.token || s.personKey) console.log(dim('Replace <agent-token> with an agent token (nuworq token create <name> --role agent --project <p>). With --run, pass it as --agent-token.'));
     return;
   }
   const { spawn } = await import('node:child_process');
@@ -792,7 +792,7 @@ async function tapUsage(child, agent, flags, show) {
 async function reportUsage(s, token, project, name, usage) {
   if (!usage) return;
   try {
-    await createClient({ url: s.url, token: token ?? s.token }).call('usage', { usage }, { agent: name, project });
+    await createClient({ url: s.url, token: token ?? (s.token || undefined) }).call('usage', { usage }, { agent: name, project });
   } catch (e) {
     console.error(dim(`Couldn't record ${name}'s usage: ${e.message}`));
   }
@@ -1079,7 +1079,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     ...(model && agent !== 'opencode' && agent !== 'pi' ? { NUWORQ_MODEL: model } : {}),
     // A worker nuworq run started says so at checkin, with its runner (#238); a runner's token says it too.
     ...(flags.run ? { NUWORQ_ROLE: 'worker', NUWORQ_RUNNER: hostname() } : {}),
-    ...(tokenAt ? { NUWORQ_TOKEN_FILE: tokenAt } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
+    ...(tokenAt ? { NUWORQ_TOKEN_FILE: tokenAt } : (s.token || s.personKey) && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
   };
   const task = [
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
@@ -1473,7 +1473,7 @@ async function runCmd(flags) {
     const item = branch.match(/^nuworq\/(\d+)-/)?.[1];
     const n = g.restored.length;
     try {
-      await createClient({ url: s.url, token: token ?? s.token }).call('comment', {
+      await createClient({ url: s.url, token: token ?? (s.token || undefined) }).call('comment', {
         ...(item ? { item: `#${item}` } : {}),
         headline: n ? `The runner put back ${n === 1 ? 'a branch' : `${n} branches or tags`} ${name} moved outside its own${g.kept.length ? `; ${g.kept.length} checked out elsewhere to check` : ''}`
           : `${g.kept.length === 1 ? 'A branch' : `${g.kept.length} branches`} checked out elsewhere moved while ${name} ran: check ${g.kept.length === 1 ? 'it' : 'them'}`,
@@ -1492,7 +1492,7 @@ async function runCmd(flags) {
   const auto = flags.workers === 'auto';
   const workers = auto ? 'auto' : num(flags.workers, 1);
   const maxWorkers = auto ? num(flags['max-workers'], autoMax(availableParallelism())) : undefined;
-  const reporter = createClient({ url: s.url, token: token ?? s.token });
+  const reporter = createClient({ url: s.url, token: token ?? (s.token || undefined) });
   const howMany = auto ? `as many ${agent} workers as this machine has room for (up to ${maxWorkers})` : `up to ${workers} ${agent} worker${workers > 1 ? 's' : ''}`;
   console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`${howMany} on opted-in projects at ${s.url}; ${capsLine(caps)}; Ctrl-C stops`)}`);
   // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
@@ -2212,12 +2212,16 @@ async function rotatePersonKey() {
   let hub = null;
   try { hub = JSON.parse(read(HUB_FILE)); } catch { /* none served from here */ }
   if (hub?.auth === 'required') throw new HubError('this hub has logins, so it has no person key', { hint: 'See: nuworq token list, nuworq token revoke <name|id>' });
-  const client = hub?.url ? createClient({ url: hub.url, token: read(join(dir, 'tokens', 'person.token')).trim(), retryMs: 0 }) : null;
-  if (!client || !(await client.get('/api/health').catch(() => null))) {
+  // The old key goes only to a listener that proves it holds it (#911). The proof can't be asked: no hub. Asked and
+  // not proved: something else holds the port, and neither the file nor the hub changes.
+  const personKey = read(join(dir, 'tokens', 'person.token')).trim();
+  const proven = hub?.url && personKey ? await provenPersonKey({ url: hub.url, personKey }, () => {}).catch(() => null) : null;
+  if (proven === null) {
     tokenFile(dir, 'person', randomBytes(24).toString('base64url'));
     return console.log(`${green('Rotated')} the person key. No hub is running here: the next ${bold('nuworq serve')} uses the new key and prints the address to open.`);
   }
-  const { key } = await client.post('/api/me/person-key', {});
+  if (!proven) throw new HubError(`${hub.url} didn't prove it holds this machine's person key, so the key wasn't sent and nothing was rotated. If that's your hub, it's older than this CLI: update it and restart nuworq serve.`);
+  const { key } = await createClient({ url: hub.url, token: proven, retryMs: 0 }).post('/api/me/person-key', {});
   console.log(`${green('Rotated')} the person key. The old one has stopped working, and every browser signed in with it can only look now.
 
   Browser:  ${bold(`${hub.url}/?person=${key}`)}${dim('  (open it once in each browser you use)')}
@@ -2319,7 +2323,8 @@ async function gitCredential(pos, flags) {
   if (ask.host === hub.host && ask.protocol === hub.protocol.slice(0, -1)) {
     const agent = flags.as || envVar('AGENT');
     if (!agent) throw new HubError('who are you?', { hint: 'The helper needs --as <name> or NUWORQ_AGENT.' });
-    return process.stdout.write(`username=${agent}\npassword=${resolveSettings(flags).token || 'none'}\n`);
+    const s = resolveSettings(flags);
+    return process.stdout.write(`username=${agent}\npassword=${s.token || await provenPersonKey(s) || 'none'}\n`);
   }
   if (ask.host !== 'github.com') return;
   // --project: a read-only token to clone or fetch that project's repository (a worker before it holds an item).

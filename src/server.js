@@ -9,7 +9,7 @@ import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_
 import { checkLocalModels } from './llmproxy.js';
 import { view, itemView, projectList, homeView, withEntry, liveOperators } from './insight.js';
 import { tools, guide, LISTENER, protocolVersion } from './protocol.js';
-import { Auth, SESSION_MS } from './auth.js';
+import { Auth, SESSION_MS, personProof } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces, IDLE_MS, WAKE_MS } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, notifyFeedback, composeFixed, deliver, workspaceUrl, requestChannels, setWeekly } from './notify.js';
@@ -1349,6 +1349,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // subdomain (baseDomain) is where it was asked.
       const onPublic = publicUrl && hostname(new URL(publicUrl).host) === hostname(hostOf(req));
       if (req.method === 'GET' && path === '/api/health') return send(200, { ok: true, name: 'nuworq', url: ((!spaces || onPublic) && publicUrl || origin(req)) + base });
+      // Before the CLI sends the person's key, this hub shows it holds that key (#911). Open: the answer gives away nothing.
+      if (!required && req.method === 'GET' && path === '/api/person-proof') return send(200, { proof: personProof(localPersonKey, url.searchParams.get('nonce') ?? '', req.socket.localPort) });
       // The guide is how any agent learns nuworq, before it has a token: no project data, no secrets.
       if (req.method === 'GET' && (path === '/agents.md' || path === '/api/guide')) {
         return send(200, guide({ project: url.searchParams.get('project') ?? '<project>', url: origin(req) + base, via: url.searchParams.get('via') ?? 'tools' }), TYPES['.md']);
