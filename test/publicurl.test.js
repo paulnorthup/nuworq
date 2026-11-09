@@ -20,8 +20,8 @@ const PEM = privateKey.export({ type: 'pkcs8', format: 'pem' });
 
 const listen = (server) => new Promise((r) => server.listen(0, '127.0.0.1', () => r(server.address().port)));
 // fetch can't set Host, so a raw request does.
-const get = (port, host, path, method = 'GET') => new Promise((resolve, reject) => {
-  const req = http.request({ host: '127.0.0.1', port, path, method, headers: { host } }, (res) => {
+const get = (port, host, path, method = 'GET', headers = {}) => new Promise((resolve, reject) => {
+  const req = http.request({ host: '127.0.0.1', port, path, method, headers: { host, ...headers } }, (res) => {
     let body = '';
     res.on('data', (c) => (body += c));
     res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
@@ -68,7 +68,7 @@ describe('a hub at its public URL', () => {
     const plain = createServer(new Hub(), { publicUrl: APP, sweepMs: 3600_000 });
     const pp = await listen(plain);
     try {
-      const r = await get(pp, '127.0.0.1', '/api/github/app/new');
+      const r = await get(pp, '127.0.0.1', '/api/github/app/new', 'GET', { authorization: `Bearer ${plain.personKey}` });
       assert.equal(r.status, 200);
       const m = JSON.parse(r.body.match(/name="manifest" value="([^"]+)"/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
       const urls = [m.url, m.redirect_url, m.setup_url, m.hook_attributes.url, ...(m.callback_urls ?? [])].filter(Boolean);

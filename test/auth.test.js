@@ -99,6 +99,38 @@ describe('local mode', () => {
     assert.match(op.json.error, /can't be an operator|can't act as an operator/);
   });
 
+  test("a tokenless caller reads no one's email, and nothing says it is an owner (#915)", async () => {
+    ctx.server.auth.addPerson('remy', 'owner', { email: 'remy@example.com' });
+    const key = { authorization: `Bearer ${ctx.server.personKey}` };
+    const people = await request(ctx.port, 'GET', '/api/people');
+    assert.equal(people.status, 200);
+    assert.ok(people.json.some((p) => p.handle === 'remy'));
+    assert.doesNotMatch(people.text, /remy@example\.com/);
+    assert.match((await request(ctx.port, 'GET', '/api/people', { headers: key })).text, /remy@example\.com/, "the person's key still sees them");
+
+    assert.deepEqual((await request(ctx.port, 'GET', '/api/people/me')).json, { person: null, role: null });
+    assert.equal((await request(ctx.port, 'GET', '/api/people/me', { headers: key })).json.role, 'owner');
+    assert.equal((await request(ctx.port, 'GET', '/api/info')).json.github_app, null);
+    assert.equal((await request(ctx.port, 'GET', '/api/info', { headers: key })).json.github_app, 'create');
+    assert.equal((await request(ctx.port, 'GET', '/api/github/app')).json.can_create, false);
+    assert.equal((await request(ctx.port, 'GET', '/api/github/app', { headers: key })).json.can_create, true);
+
+    const invites = await request(ctx.port, 'GET', '/api/invites');
+    assert.equal(invites.status, 403);
+    assert.match(invites.json.hint, /nuworq serve printed/);
+    assert.equal((await request(ctx.port, 'GET', '/api/invites', { headers: key })).status, 200);
+    assert.equal((await request(ctx.port, 'GET', '/api/github/repos')).status, 403);
+    assert.deepEqual((await request(ctx.port, 'GET', '/api/launcher')).json.can, []);
+  });
+
+  test("a tokenless caller sees none of the hub's push channels (#915)", async () => {
+    const key = { authorization: `Bearer ${ctx.server.personKey}` };
+    const added = await request(ctx.port, 'POST', '/api/notify', { headers: key, body: { kind: 'webhook', url: 'https://hooks.example.com/secret-path' } });
+    assert.equal(added.status, 200, added.text);
+    assert.deepEqual((await request(ctx.port, 'GET', '/api/notify')).json.channels, []);
+    assert.equal((await request(ctx.port, 'GET', '/api/notify', { headers: key })).json.channels.length, 1);
+  });
+
   test('a tokenless caller reads but cannot act (#900), and a bad token is refused', async () => {
     // What code a worker runs can send: no token at all, just the NUWORQ_URL it was given.
     const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'as you' } });
