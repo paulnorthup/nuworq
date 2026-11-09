@@ -233,6 +233,25 @@ describe("the person's key goes only to a hub that proves it holds it (#911)", (
     }
   });
 
+  test("nuworq token rotate-person doesn't send the key to a listener that can't prove it, and changes nothing", async () => {
+    const { server, seen } = impostor((req, res) => json(res, { proof: 'f'.repeat(64) }));
+    const port = await listen(server);
+    const { home } = await clientAt(port);
+    const file = join(home, '.nuworq', 'tokens', 'person.token');
+    try {
+      const failed = await promisify(execFile)(process.execPath, [new URL('../bin/nuworq.js', import.meta.url).pathname, 'token', 'rotate-person'], { env: { ...process.env, NUWORQ_NO_UPDATE: '1' } }).catch((e) => e);
+      assert.equal(failed.code, 1, 'it refuses');
+      assert.deepEqual(sent(seen), [], 'the key stayed here');
+      assert.equal(seen.length, 1, 'only the question went out');
+      assert.equal(readFileSync(file, 'utf8'), KEY, 'the file is as it was');
+      assert.doesNotMatch(failed.stdout, /Rotated/);
+      assert.match(failed.stderr, /didn't prove it holds this machine's person key, so the key wasn't sent and nothing was rotated/);
+      assert.equal(failed.stderr.trim().split('\n').length, 1, failed.stderr);
+    } finally {
+      server.close();
+    }
+  });
+
   test('the real hub proves it, and the person is the person there', async () => {
     const server = hubServer(new Hub(), { personKey: KEY });
     const port = await listen(server);

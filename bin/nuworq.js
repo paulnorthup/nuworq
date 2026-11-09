@@ -2212,12 +2212,16 @@ async function rotatePersonKey() {
   let hub = null;
   try { hub = JSON.parse(read(HUB_FILE)); } catch { /* none served from here */ }
   if (hub?.auth === 'required') throw new HubError('this hub has logins, so it has no person key', { hint: 'See: nuworq token list, nuworq token revoke <name|id>' });
-  const client = hub?.url ? createClient({ url: hub.url, token: read(join(dir, 'tokens', 'person.token')).trim(), retryMs: 0 }) : null;
-  if (!client || !(await client.get('/api/health').catch(() => null))) {
+  // The old key goes only to a listener that proves it holds it (#911). The proof can't be asked: no hub. Asked and
+  // not proved: something else holds the port, and neither the file nor the hub changes.
+  const personKey = read(join(dir, 'tokens', 'person.token')).trim();
+  const proven = hub?.url && personKey ? await provenPersonKey({ url: hub.url, personKey }, () => {}).catch(() => null) : null;
+  if (proven === null) {
     tokenFile(dir, 'person', randomBytes(24).toString('base64url'));
     return console.log(`${green('Rotated')} the person key. No hub is running here: the next ${bold('nuworq serve')} uses the new key and prints the address to open.`);
   }
-  const { key } = await client.post('/api/me/person-key', {});
+  if (!proven) throw new HubError(`${hub.url} didn't prove it holds this machine's person key, so the key wasn't sent and nothing was rotated. If that's your hub, it's older than this CLI: update it and restart nuworq serve.`);
+  const { key } = await createClient({ url: hub.url, token: proven, retryMs: 0 }).post('/api/me/person-key', {});
   console.log(`${green('Rotated')} the person key. The old one has stopped working, and every browser signed in with it can only look now.
 
   Browser:  ${bold(`${hub.url}/?person=${key}`)}${dim('  (open it once in each browser you use)')}
