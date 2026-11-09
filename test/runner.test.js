@@ -340,6 +340,59 @@ describe('nuworq worker --agent claude', () => {
   });
 });
 
+describe('a worker the runner has no token for (#912)', () => {
+  test("a worker with no token never falls back to the person's key", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-nokey-')));
+    const repo = join(home, 'app');
+    mkdirSync(repo);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    const hub = new Hub();
+    hub.tx(() => hub.project('nokey', { create: true }));
+    hub.humanOp('nokey', 'settings', { path: repo });
+    // Holding the key, so it can prove that (#911) and an unmarked caller sends it.
+    const server = createServer(hub, { personKey: 'nwq_person_key' });
+    const sent = [];
+    server.prependListener('request', (req) => { if (!req.url.startsWith('/api/person-proof')) sent.push(req.headers.authorization ?? null); });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const base = { PATH: process.env.PATH, HOME: home, NO_COLOR: '1', NUWORQ_NO_UPDATE: '1' };
+    // git's question to the helper, from the worker's folder; the answer and the headers the hub saw.
+    const helper = (env, ask) => new Promise((resolve) => {
+      sent.length = 0;
+      const child = execFile(process.execPath, [BIN, 'git-credential', 'get', '--project', 'nokey', '--as', 'w-1'], { cwd: repo, env: { ...base, ...env } }, (e, stdout) => resolve({ stdout, sent: [...sent] }));
+      child.stdin.end(`${ask}\n\n`);
+    });
+    try {
+      const { stdout } = await promisify(execFile)(process.execPath, [BIN, 'worker', '--url', url, '--project', 'nokey', '--agent', 'claude', '--as', 'w-1'], { env: base });
+      const { env } = JSON.parse(stdout.match(/--mcp-config '([^']*)'/)[1]).mcpServers.nuworq;
+      assert.equal(env.NUWORQ_AGENT_ONLY, '1', 'its MCP process is marked');
+      assert.equal(env.NUWORQ_TOKEN_FILE, undefined, 'and has no token');
+      assert.match(stdout, /export NUWORQ_AGENT_ONLY=1/, 'its shell is marked too');
+
+      // This machine serves the hub without logins and keeps the person's key, as serve leaves it.
+      mkdirSync(join(home, '.nuworq', 'tokens'), { recursive: true });
+      writeFileSync(join(home, '.nuworq', 'hub.json'), JSON.stringify({ url, auth: 'local' }));
+      writeFileSync(join(home, '.nuworq', 'tokens', 'person.token'), 'nwq_person_key\n');
+      const toHub = `protocol=http\nhost=127.0.0.1:${server.address().port}`, toGitHub = 'protocol=https\nhost=github.com\npath=o/r.git';
+      const person = { NUWORQ_URL: url };
+
+      // Without the mark the key is sent: what the rest of this test rules out.
+      assert.match((await helper(person, toHub)).stdout, /password=nwq_person_key/);
+      assert.deepEqual((await helper(person, toGitHub)).sent, ['Bearer nwq_person_key']);
+
+      assert.match((await helper(env, toHub)).stdout, /password=none/, 'the password a worker gives its hub');
+      assert.deepEqual((await helper(env, toGitHub)).sent, [null], 'what a worker sends the hub');
+
+      // A connected hub's token is this machine's too.
+      writeFileSync(join(home, '.nuworq', 'connect.json'), JSON.stringify({ url, token: 'nwq_connected' }));
+      assert.match((await helper(person, toHub)).stdout, /password=nwq_connected/);
+      assert.match((await helper(env, toHub)).stdout, /password=none/);
+    } finally {
+      server.close();
+    }
+  });
+});
+
 describe('nuworq worker --browser', () => {
   test('only with --browser: a headless Chrome through Playwright MCP (local pages only), mcp__playwright allowed, and the browser tag', async () => {
     const repo = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-ui-')));

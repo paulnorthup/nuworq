@@ -119,7 +119,9 @@ export function connected(file = CONNECT_FILE) {
 // from the folder the agent is in, or by routing it to the work that matters most.
 // The hub: flag, env, .nuworq.json, the connected hub, the one serving on this machine, the default.
 // The token: flag, env, a file the env names (NUWORQ_TOKEN_FILE: how a runner's workers get theirs, #477), then
-// the connected hub's, which is only ever sent to that hub.
+// the connected hub's, which is only ever sent to that hub. A worker (NUWORQ_AGENT_ONLY=1, set by workerSetup) stops
+// before that: it has the token it was handed or none, never this machine's own (#912). Its MCP process runs outside
+// the sandbox that hides those files, and without a token, or once its token file is gone, it would pick them up here.
 export function resolveSettings({ url, project, token, cwd = process.cwd(), connectFile } = {}) {
   const config = findConfig(cwd);
   const conn = connected(connectFile);
@@ -134,10 +136,11 @@ export function resolveSettings({ url, project, token, cwd = process.cwd(), conn
   try { host = new URL(hubUrl).hostname; } catch { /* a junk address sends no key */ }
   const person = !disc || disc.url !== hubUrl || disc.auth !== 'local' || !LOOPBACK_HOST.test(host) ? null : personToken();
   const given = token ?? envVar('TOKEN') ?? fromFile();
-  const chosen = given ?? (conn?.url === hubUrl ? conn.token : '');
+  const agentOnly = envVar('AGENT_ONLY') === '1';
+  const chosen = given ?? (!agentOnly && conn?.url === hubUrl ? conn.token : '');
   return {
     url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd),
-    token: chosen, personKey: given == null && !chosen ? person : null, config,
+    token: chosen, personKey: given == null && !chosen && !agentOnly ? person : null, config,
   };
 }
 
