@@ -4,7 +4,7 @@ import { join, sep } from 'node:path';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { sandboxSettings, filePermissions, projectCommands, workerCommands } from '../src/sandbox.js';
+import { sandboxSettings, filePermissions, machineDenies, projectCommands, workerCommands } from '../src/sandbox.js';
 import { sq, workerEnv, gitConfigEnv } from '../src/runtrust.js';
 
 // What a worker's sandbox lets it write (#472): never what an unsandboxed git later runs or reads its settings from.
@@ -122,6 +122,24 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     }
     // Wholesale where a folder is denied: no narrower path left next to it.
     for (const p of ['~/.config/npm/npmrc', '~/.config/containers/auth.json', '~/.composer/auth.json', '~/.pulumi/credentials.json', '~/.config/Code/User/config.json']) assert.ok(!filesystem.denyRead.includes(p), p);
+  });
+
+  // #910: audit #907 — the folders the list had for these CLIs weren't where they keep their logins on each system.
+  test("the denies cover each CLI's real credential store", () => {
+    const env = { XDG_RUNTIME_DIR: '/run/user/501', ZDOTDIR: '/Users/x/.config/zsh' };
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree, env });
+    const perms = filePermissions({ home, worktree, env });
+    for (const p of ['~/.fly', '~/.config/flyctl', '~/.wrangler', '~/.config/.wrangler', '~/Library/Preferences/.wrangler', '~/.netlify', '~/.config/netlify', '~/Library/Preferences/netlify',
+      '~/.config/doctl', '~/Library/Application Support/doctl', '~/.config/ngrok', '~/.ngrok2', '~/Library/Application Support/ngrok', '~/.composer', '~/.config/composer', '~/.bash_login',
+      '/run/user/501/containers/auth.json', '/Users/x/.config/zsh/.zshenv', '/Users/x/.config/zsh/.zshrc', '/Users/x/.config/zsh/.zsh_history']) {
+      assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
+      assert.ok(perms.deny.includes(p.startsWith('~/') ? `Read(${p})` : `Read(/${p})`), `the file tools: ${p}`);
+    }
+    // Podman's login, not its run state: rootless podman works in that folder.
+    assert.ok(!filesystem.denyRead.includes('/run/user/501/containers'));
+    // Only absolute paths, and the runtime dir's default on Linux even when the variable never reached the runner.
+    assert.deepEqual(machineDenies({ XDG_RUNTIME_DIR: 'run', ZDOTDIR: '~/zsh' }, { platform: 'darwin' }), []);
+    assert.deepEqual(machineDenies({}, { platform: 'linux', uid: 1000 }), ['/run/user/1000/containers/auth.json']);
   });
 
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {
