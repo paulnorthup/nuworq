@@ -59,6 +59,7 @@ Repository → Settings → Rules → **Rulesets** → New branch ruleset:
 
 - **What a token can do.** A worker's: contents read and metadata read. The hub's own, for passing a worker's pushes on: contents write, pull requests write, checks read and metadata read. Each is for one repository, for one hour. It is minted when git first asks, not at claim time, so claims that never fetch or push cost nothing. Git asks on every fetch and push. The same agent, item, repository and kind reuse the token until 5 minutes before it expires: one mint and one event, not one per git command. The reused token is kept in the hub's memory only, never in its database.
 - **When there is no token.**
+  - A push through the hub with a name and no valid token: 401, before the hub looks up an item or mints anything.
   - The agent holds no item: 409, "claim one, then fetch"; a push through the hub, 403.
   - The project isn't on GitHub: the hub says so.
   - The app isn't installed on the repository, was uninstalled, or is suspended: 424, *"The nuworq GitHub App isn't installed on acme/api (or was uninstalled), so the hub can't give out tokens for it"*, with the install link. The refusal goes on the item's record too.

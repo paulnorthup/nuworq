@@ -1181,11 +1181,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     // A reply that holds a credential (#623): sent, never kept for a retry, which asks again instead.
     const sendSecret = (status, body) => { answered = null; send(status, body); };
     // A worker's git pushes through the hub (#472) with basic auth, as git does: its name, and its agent token as
-    // the password. Asked first, so git's credential helper answers (nuworq git-credential).
+    // the password. Asked first, so git's credential helper answers (nuworq git-credential). A name with no token is
+    // no one (#916): on a hub without logins nothing ties a name to a token, so it would pass as anonymous and reach the mint.
     let gitAgent = '';
     if (/^(\/w\/[^/]+)?\/api\/git\//.test(path)) {
       const [user, ...pass] = Buffer.from(String(req.headers.authorization ?? '').match(/^basic\s+(\S+)/i)?.[1] ?? '', 'base64').toString('utf8').split(':');
-      if (!user) {
+      if (!user || !pass.join(':').trim()) {
         res.writeHead(401, { 'www-authenticate': 'Basic realm="nuworq"', 'content-type': 'text/plain' });
         return res.end('nuworq: pushes through the hub need the worker\'s name and agent token (nuworq git-credential)\n');
       }

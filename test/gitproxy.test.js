@@ -7,6 +7,9 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { generateKeyPairSync } from 'node:crypto';
+import { Hub } from '../src/core.js';
+import { createServer } from '../src/server.js';
 import { readCommands, refusedRef, refusal, proxyPush } from '../src/gitproxy.js';
 
 // The ref updates at the head of a push (#472), as git sends them: pkt-lines, capabilities after a NUL on the first.
@@ -270,5 +273,71 @@ describe('a push from a shallow clone goes through the hub', () => {
     const pushed = await rev(bare, `refs/heads/${BRANCH}`);
     assert.equal(pushed, await rev(clone, 'HEAD'), 'GitHub took the shallow clone\'s push');
     assert.notEqual(await rev(bare, 'refs/heads/main'), pushed, 'main never moved');
+  });
+});
+
+// #916: on a hub without logins nothing ties a name to a token, so a name alone would pass as the anonymous public
+// of this machine and get the hub to mint its write token for an item another agent holds. The fake GitHub here
+// records every request the hub makes, its token mints among them.
+describe('the git proxy on a hub without logins', () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  let github, hub, server, base, runner;
+  const seen = [];
+  const listen = (s) => new Promise((resolve) => s.listen(0, '127.0.0.1', () => resolve(s.address().port)));
+  const basic = (user, pass) => `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+  const credentials = () => hub.q(`SELECT COUNT(*) AS n FROM events WHERE type IN ('credential', 'credential_refused')`).get().n;
+  const advert = (authorization) => fetch(`${base}/api/git/github.com/acme/api.git/info/refs?service=git-receive-pack`, { headers: authorization ? { authorization } : {} });
+
+  before(async () => {
+    github = http.createServer((req, res) => {
+      if (req.url !== '/app') seen.push(`${req.method} ${req.url}`); // GET /app: the hub reading its own app as it starts
+      req.resume();
+      const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+      if (req.url === '/repos/acme/api/installation') return json(200, { id: 42, account: { login: 'acme' } });
+      if (req.url === '/app/installations/42/access_tokens') return json(201, { token: 'ghs_write', expires_at: new Date(Date.now() + 3600_000).toISOString(), repository_selection: 'selected' });
+      res.writeHead(200, { 'content-type': 'application/x-git-receive-pack-advertisement' });
+      res.end('001f# service=git-receive-pack\n0000');
+    });
+    const stub = `http://127.0.0.1:${await listen(github)}`;
+    hub = new Hub();
+    hub.tx(() => hub.project('api', { create: true }));
+    hub.addRemote(hub.project('api'), 'git@github.com:acme/api.git', 'you');
+    hub.humanOp('api', 'create', { title: 'api work', acceptance: 'done' });
+    hub.agentOp('api', 'claim', 'a1', { item: '#1' });
+    server = createServer(hub, { githubApp: { id: 1, key: privateKey.export({ type: 'pkcs8', format: 'pem' }), slug: 'nuworq-test' }, github: { api: stub, web: stub }, sweepMs: 3600_000 });
+    base = `http://127.0.0.1:${await listen(server)}`;
+    runner = server.auth.localRunnerToken('box');
+  });
+  after(() => { for (const s of [server, github]) { s.close(); s.closeAllConnections(); } });
+
+  test('a caller with no token gets nothing from the git proxy', async () => {
+    const asked = {
+      'no credential at all': '',
+      'the holder\'s name, an empty password': basic('a1', ''),
+      'the holder\'s name, a blank password': basic('a1', '   '),
+      'the holder\'s name, no colon': `Basic ${Buffer.from('a1').toString('base64')}`,
+    };
+    for (const [what, authorization] of Object.entries(asked)) {
+      const r = await advert(authorization);
+      assert.equal(r.status, 401, what);
+      assert.match(r.headers.get('www-authenticate'), /^Basic/, `${what}: git asks its helper`);
+      assert.match(await r.text(), /need the worker's name and agent token/, what);
+    }
+    const post = await fetch(`${base}/api/git/github.com/acme/api.git/git-receive-pack`, { method: 'POST', headers: { authorization: basic('a1', '') }, body: '0000' });
+    assert.equal(post.status, 401, 'the push itself too');
+    await post.text();
+    const none = await advert(basic('a1', 'none')); // what nuworq git-credential sends when it has no token
+    assert.equal(none.status, 401, 'a token that doesn\'t verify');
+    await none.text();
+    assert.deepEqual(seen, [], 'GitHub heard of none of them');
+    assert.equal(credentials(), 0, 'and no credential event names a1');
+  });
+
+  test('a worker with its token still gets through', async () => {
+    const r = await advert(basic('a1', runner.token));
+    assert.equal(r.status, 200);
+    await r.text();
+    assert.ok(seen.includes('GET /acme/api.git/info/refs?service=git-receive-pack'), `reached GitHub: ${seen.join(', ')}`);
+    assert.equal(hub.q(`SELECT actor FROM events WHERE type = 'credential'`).get().actor, 'a1');
   });
 });
