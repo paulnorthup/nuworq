@@ -345,12 +345,15 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // Workers' tokens, reused until 5 minutes before they expire: memory only, never the database.
   const minted = new Map(); // `${agent}|${item id}|${repo}|r or w` → { token, expires_at, repo }
   // The item an agent holds (building or landing), in a project its token reaches: held is { it, p }, or undefined.
-  // With logins, only for the token that agent uses (#469): other says the name is someone else's.
+  // With logins, only for the token that agent uses (#469): other says the name is someone else's. Without them
+  // (#919) no name is bound to a token and a machine's workers share its runner token, so only these speak for a
+  // name: the person's key, the token made for that one worker, or an agent token a person made and no runner shares.
+  const speaksFor = (t, agent) => t?.role === 'human' || (t?.role === 'agent' && (t.worker ? t.worker === agent : !t.runner));
   const heldBy = (hub, agent, caller) => {
     const holding = hub.q(`SELECT i.* FROM items i WHERE i.holder = ? AND i.stage IN ('active', 'landing') ORDER BY i.updated_at DESC`).all(String(agent ?? ''))
       .map((it) => ({ it, p: hub.q('SELECT * FROM projects WHERE id = ?').get(it.project_id) }))
       .filter(({ p }) => !caller.scope || caller.scope.includes(p.slug));
-    const held = holding.find(({ p }) => !caller.identity || hub.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.token_id === caller.identity.id);
+    const held = holding.find(({ p }) => (caller.identity ? hub.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, agent)?.token_id === caller.identity.id : speaksFor(caller.token, agent)));
     return { held, other: !held && holding.length > 0 };
   };
   // A token for the repository of the item an agent holds, for an hour: read-only for the worker to fetch with;
@@ -1559,6 +1562,23 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         }
         try {
           return send(200, { ok: true, ...authz.localRunnerToken(machineName().split('.')[0], { replace }) });
+        } catch (e) {
+          return deny(400, e.message, 'See: nuworq token list.');
+        }
+      }
+      // One worker's own token on a hub without logins (#919), minted as the runner starts it and dropped as it ends.
+      // Only the person's key asks: anyone can mint a runner token here, so holding one proves nothing.
+      if (req.method === 'POST' && path === '/api/me/worker-token') {
+        if (required) return deny(404, 'a hub with logins ties each name to its token already', 'Workers use the runner token.');
+        if (who.role !== 'human' || who.via !== 'bearer') return deny(403, "only the person's key makes a worker's token", 'nuworq run sends it from ~/.nuworq/tokens/person.token. A worker gets its token from the runner that starts it.');
+        const b = await body(req);
+        const name = String(b.name ?? '');
+        if (!/^[a-z0-9._-]{1,80}$/.test(name)) return deny(400, "a worker's name is plain: a-z, 0-9, ., _ or -");
+        if (b.drop) return send(200, { ok: true, dropped: authz.dropWorkerToken(name) });
+        const from = authz.verifyToken(b.from);
+        if (from?.role !== 'agent') return deny(400, 'from must be the live agent token the runner holds', 'See: nuworq token list.');
+        try {
+          return sendSecret(200, { ok: true, ...authz.workerToken(from.id, name) });
         } catch (e) {
           return deny(400, e.message, 'See: nuworq token list.');
         }
