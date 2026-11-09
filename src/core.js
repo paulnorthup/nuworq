@@ -1655,6 +1655,17 @@ export class Hub extends EventEmitter {
     });
   }
 
+  // No logins, so no name is bound to a token by first use (#922); a worker's own token (#919) binds its name instead.
+  // That token speaks only for its worker, and while it's live the runner token the machine shares can't speak for
+  // that worker either: anyone on the machine can mint one. The runner signs a worker off after dropping its token.
+  speaksAs(name, token, identity) {
+    if (identity || !token?.runner) return;
+    let bound = false;
+    if (token.worker) bound = token.worker !== name;
+    else try { bound = !!this.q('SELECT 1 FROM tokens WHERE worker = ? AND revoked_at IS NULL').get(name); } catch { /* no tokens table: no worker has a token */ }
+    if (bound) throw new UserError(`"${name}" is another agent's name here`, { status: 403, hint: "A worker acts only under the name its runner started it with. That's the agent name in your setup: use it." });
+  }
+
   // A token limited to some projects: refuse the rest, saying which it may use.
   inScope(scope, slug) {
     if (!scope || scope.includes(slugify(slug))) return;
@@ -2470,6 +2481,7 @@ export class Hub extends EventEmitter {
     refuseLong(args);
     this.sweep();
     const agent = this.requireAgent(name);
+    this.speaksAs(agent, token, identity); // before anything is created or learned from this call
     const powers = token?.powers ?? null;
     remote = normRemote(remote);
     let p;

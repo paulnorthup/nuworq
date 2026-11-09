@@ -316,6 +316,58 @@ describe('local mode', () => {
   });
 });
 
+describe('agent names on a hub without logins (#922)', () => {
+  let ctx, runner, own;
+  const stateOf = () => ctx.hub.q('SELECT seq, stage, holder FROM items ORDER BY seq').all().map((i) => ({ ...i }));
+  const as = (agent, token, op, body = {}) => request(ctx.port, 'POST', `/api/p/api/agent/${op}`, { body, headers: { authorization: `Bearer ${token}`, 'x-nuworq-agent': agent } });
+  before(async () => {
+    ctx = await start();
+    ctx.hub.agentOp('api', 'checkin', 'a1', {});
+    ctx.hub.humanOp('api', 'create', { title: 'first', acceptance: 'done' });
+    ctx.hub.humanOp('api', 'create', { title: 'second', acceptance: 'done' });
+    runner = ctx.server.auth.localRunnerToken('box');
+    const parent = ctx.server.auth.verifyToken(runner.token).id;
+    own = { a1: ctx.server.auth.workerToken(parent, 'a1').token, a2: ctx.server.auth.workerToken(parent, 'a2').token };
+    ctx.hub.agentOp('api', 'claim', 'a1', { item: '#1' });
+  });
+  after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
+
+  test("a worker's token can't act under another agent's name on the agent API", async () => {
+    const minted = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {} }); // any code on this machine can get one
+    const asked = { "another worker's own token": own.a2, "the machine's runner token": runner.token, 'a fresh tokenless mint': minted.json.token };
+    const before_ = stateOf();
+    const events = ctx.hub.q('SELECT COUNT(*) AS n FROM events').get().n;
+    const calls = { claim: { item: '#2' }, handoff: { item: '#1', headline: 'taken' }, submit: { item: '#1', headline: 'mine' }, progress: { item: '#1', headline: 'mine' }, signoff: {} };
+    for (const [what, token] of Object.entries(asked)) {
+      for (const [op, body] of Object.entries(calls)) {
+        const r = await as('a1', token, op, body);
+        assert.equal(r.status, 403, `${what}: ${op}`);
+        assert.match(r.json.error, /"a1" is another agent's name here/, `${what}: ${op}`);
+      }
+    }
+    assert.deepEqual(stateOf(), before_, 'nothing moved');
+    assert.equal(ctx.hub.q('SELECT COUNT(*) AS n FROM events').get().n, events, 'and nothing is on the record');
+  });
+
+  test('each worker on a machine still acts under its own name, and the runner signs one off once its token is gone', async () => {
+    assert.equal((await as('a1', own.a1, 'progress', { item: '#1', headline: 'going' })).status, 200);
+    assert.equal((await as('a2', own.a2, 'claim', { item: '#2' })).status, 200);
+    assert.equal((await as('a2', own.a2, 'progress', { item: '#2', headline: 'going too' })).status, 200);
+    assert.equal((await as('a1', own.a1, 'handoff', { item: '#1', headline: 'stopping' })).status, 200);
+    assert.equal(stateOf().find((i) => i.seq === 1).holder, null, 'its own hand-off works');
+    // The order nuworq run uses: drop the worker's token, then sign it off with the runner token.
+    ctx.server.auth.dropWorkerToken('a2');
+    assert.equal((await as('a2', runner.token, 'signoff', { headline: 'exited' })).status, 200);
+    assert.equal(stateOf().find((i) => i.seq === 2).holder, null, 'what it held went back');
+  });
+
+  test("the person's key, and a runner's workers with no token of their own, are unaffected", async () => {
+    ctx.server.auth.dropWorkerToken('a1');
+    assert.equal((await as('a1', ctx.server.personKey, 'checkin')).status, 200, "the person's key");
+    assert.equal((await as('a3', runner.token, 'checkin')).status, 200, 'a shared runner token, with no worker token for that name');
+  });
+});
+
 describe('required mode', () => {
   let ctx, human, agent;
   const H = () => ({ authorization: `Bearer ${human}` });
