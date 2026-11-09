@@ -64,6 +64,16 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     }
   });
 
+  test("a worker can't read a browser's stored credential, Vivaldi and Opera included (#921)", () => {
+    const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree });
+    const files = filePermissions({ home, worktree });
+    for (const p of ['~/Library/Application Support/Vivaldi', '~/Library/Application Support/com.operasoftware.Opera', '~/Library/Application Support/com.operasoftware.OperaGX',
+      '~/Library/Containers/com.apple.Safari', '~/.config/vivaldi', '~/.config/opera']) {
+      assert.ok(filesystem.denyRead.includes(p), `the shell: ${p}`);
+      assert.ok(files.deny.includes(`Read(${p})`) && files.deny.includes(`Read(${p}/**)`), `the file tools: ${p}`);
+    }
+  });
+
   // The keys beside the stores (#891): the rc files that export them, atuin's history, and the single files that
   // hold a login outright.
   test("DENY_READ covers the shell's rc files and the credential files beside the stores (#891)", () => {
