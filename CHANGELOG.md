@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.0.0 (2026-11-09)
+
+What landed since v1.1.0.
+
+2.0.0: major, for 1 breaking change (#879).
+
+**nuworq stays uncluttered by itself: each kind of thing shows only while it matters, history is kept, and agents do the tidying (#439)**
+
+**Also in this release**
+
+- The business console is its own private app, and the open hub keeps only what running a hub needs (#876)
+- The business console runs on admin.nuworq.com from its own private repository: the early-access funnel, feedback triage and plan analytics (#878)
+- The open admin page keeps only running a hub: workspaces, plans, GitHub App wiring and early-access decisions (#879)
+- A worker can't read Claude Code's past sessions and settings, or the remaining AI CLIs' local stores (#885)
+- A worker with a shallow clone can push through the hub: readCommands skips leading shallow lines (#886)
+- docs/ADMIN-API.md documents every route the admin host serves, so the console's contract is complete (#887)
+- A worker can't read the keys in the shell's rc files or the stored credentials beside the stores DENY_READ names (#891)
+- On a hub without logins, a sandboxed worker still acts as an agent, not as the person (#892)
+- A worker can't read shell rc files, the remaining AI-CLI stores or toolchain credential files (#893)
+- The hub's git proxy takes pushes from shallow checkouts: shallow lines are skipped, and an unparseable push says why instead of a bare 500 (#895)
+- Workers can't read the credential stores the first three sweeps missed (#899)
+- On a hub without logins, code a worker runs acts as an agent, never as the person — tokenless traffic included (#900)
+
+**Upgrade notes**
+
+- Owners of a hub running an admin host without an owner console: the open dashboard no longer shows feedback triage or the sources funnel. Install a console (--admin-console, docs/DEPLOY.md "Your own console") or read feedback and the source counts through the admin API (docs/ADMIN-API.md). (#879)
+
 ## 1.1.0 (2026-11-04)
 
 1.1.0: minor, for 10 features (#579, #679, #859, #863, #867, #868, #869, #872, #875, #877); no breaking change.
