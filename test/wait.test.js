@@ -274,6 +274,81 @@ describe('an operator waits on the hub', () => {
 describe('GET /api/wait and nuworq wait', () => {
   const listen = (s) => new Promise((r) => s.listen(0, '127.0.0.1', () => r(s.address().port)));
 
+  // #918: anyone could name an operator and keep it looking present, so Needs you never said nobody was there.
+  describe("only an operator's own session keeps it present", () => {
+    const seenAt = (hub, name = 'op') => hub.q('SELECT last_seen FROM agents WHERE name = ?').get(name).last_seen;
+    const wait = async (url, headers) => {
+      const r = await fetch(`${url}/api/wait?for=operator&timeout=0.02`, { headers });
+      return { status: r.status, body: await r.json() };
+    };
+    const bearer = (token, agent) => ({ authorization: `Bearer ${token}`, ...(agent ? { 'x-nuworq-agent': agent } : {}) });
+
+    test("on a hub without logins: no key, or a worker's token, is refused and moves nobody; the key and an operator's token wait", async () => {
+      const { hub, tick } = setup();
+      const server = createServer(hub);
+      const url = `http://127.0.0.1:${await listen(server)}`;
+      try {
+        const before = seenAt(hub);
+        tick(1000);
+        let r = await wait(url, { 'x-nuworq-agent': 'op' });
+        assert.equal(r.status, 403, 'no key, named');
+        assert.match(r.body.hint, /person\.token/);
+        assert.equal(r.body.events, undefined, 'and hears nothing');
+        assert.equal((await wait(url, {})).status, 403, 'no key, unnamed');
+        const worker = server.auth.localRunnerToken('mac').token;
+        assert.equal((await wait(url, bearer(worker, 'op'))).status, 403, "a worker's token");
+        assert.equal(seenAt(hub), before, 'nobody moved');
+
+        r = await wait(url, bearer(server.personKey, 'op'));
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(seenAt(hub), before + 1000, "the person's key keeps its operator present");
+        tick(1000);
+        r = await wait(url, bearer(server.auth.createToken('ops', 'agent'), 'op'));
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(seenAt(hub), before + 2000, "and so does an operator's token");
+      } finally {
+        server.close();
+        server.closeAllConnections();
+      }
+    });
+
+    test('with logins: another token, or a browser session, is refused and moves nobody; its own token waits, by name or unnamed', async () => {
+      const { hub, tick } = setup();
+      const server = createServer(hub, { auth: 'required' });
+      const url = `http://127.0.0.1:${await listen(server)}`;
+      try {
+        const mine = server.auth.createToken('ops', 'agent');
+        const theirs = server.auth.createToken('other-machine', 'agent');
+        hub.agentOp('o', 'checkin', 'op2', { has: ['operator'] });
+        hub.q(`UPDATE agents SET token_id = (SELECT id FROM tokens WHERE name = 'ops') WHERE name = 'op'`).run();
+        hub.q(`UPDATE agents SET token_id = (SELECT id FROM tokens WHERE name = 'other-machine') WHERE name = 'op2'`).run();
+        const before = seenAt(hub);
+        tick(1000);
+        let r = await wait(url, bearer(theirs, 'op'));
+        assert.equal(r.status, 403, 'a token naming an operator that is not its own');
+        assert.match(r.body.error, /op didn't check in with this token/);
+        assert.equal(r.body.events, undefined, 'and hears nothing');
+        server.auth.createToken('a-person', 'human');
+        const sid = server.auth.createSession(hub.q(`SELECT id FROM tokens WHERE name = 'a-person'`).get().id);
+        assert.equal((await wait(url, { cookie: `nuworq_session=${sid}`, 'x-nuworq-agent': 'op' })).status, 403, 'a browser session, named');
+        assert.equal((await wait(url, { cookie: `nuworq_session=${sid}` })).status, 403, 'a browser session, unnamed');
+        assert.equal(seenAt(hub), before, 'nobody moved');
+
+        r = await wait(url, bearer(mine, 'op'));
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(seenAt(hub), before + 1000, 'by name, its own token keeps it present');
+        tick(1000);
+        r = await wait(url, bearer(mine));
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(seenAt(hub), before + 2000, 'and unnamed');
+        assert.equal(seenAt(hub, 'op2'), before, "and only its own: the other token's operator stays where it was");
+      } finally {
+        server.close();
+        server.closeAllConnections();
+      }
+    });
+  });
+
   test("answers over HTTP, keeps to the token's projects, and refuses a worker", async () => {
     const { hub, tick } = setup();
     hub.agentOp('other', 'checkin', 'op', { has: ['operator', 'infra'] });
@@ -282,6 +357,7 @@ describe('GET /api/wait and nuworq wait', () => {
     const url = `http://127.0.0.1:${await listen(server)}`;
     try {
       const token = server.auth.createToken('ops', 'agent', { projects: ['o'] });
+      hub.q(`UPDATE agents SET token_id = (SELECT id FROM tokens WHERE name = 'ops') WHERE name = 'op'`).run();
       const get = async (q, agent) => {
         const r = await fetch(`${url}/api/wait?${q}`, { headers: { authorization: `Bearer ${token}`, 'x-nuworq-agent': agent } });
         return { status: r.status, body: await r.json() };
@@ -314,6 +390,7 @@ describe('GET /api/wait and nuworq wait', () => {
     const server = createServer(hub, { auth: 'required' });
     const url = `http://127.0.0.1:${await listen(server)}`;
     const token = server.auth.createToken('mac', 'agent');
+    hub.q(`UPDATE agents SET token_id = (SELECT id FROM tokens WHERE name = 'mac') WHERE role = 'operator'`).run();
     const waits = [];
     const wait = (agent) => {
       const done = new AbortController();
@@ -344,7 +421,7 @@ describe('GET /api/wait and nuworq wait', () => {
     const server = createServer(hub);
     const url = `http://127.0.0.1:${await listen(server)}`;
     try {
-      const get = async (q, headers = {}) => (await (await fetch(`${url}/api/wait?for=operator&timeout=0.05&${q}`, { headers: { 'x-nuworq-agent': 'op', ...headers } })).json()).events;
+      const get = async (q, headers = {}) => (await (await fetch(`${url}/api/wait?for=operator&timeout=0.05&${q}`, { headers: { 'x-nuworq-agent': 'op', authorization: `Bearer ${server.personKey}`, ...headers } })).json()).events;
       tick(1);
       hub.humanOp('other', 'create', { title: 'Elsewhere', acceptance: 'x', needs: ['infra'] });
       const inO = { 'x-nuworq-remote': encodeURIComponent('github.com/acme/o') };
@@ -444,7 +521,7 @@ describe('GET /api/wait and nuworq wait', () => {
     hub.humanOp('o', 'create', { title: 'On the VM', acceptance: 'x', needs: ['infra'] });
     const server = createServer(hub);
     const url = `http://127.0.0.1:${await listen(server)}`;
-    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
+    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: server.personKey, HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
     const run = (...args) => new Promise((resolve) => {
       execFile(process.execPath, [join(import.meta.dirname, '..', 'bin', 'nuworq.js'), 'wait', ...args], { env }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr }));
     });
@@ -468,7 +545,7 @@ describe('GET /api/wait and nuworq wait', () => {
     hub.tx(() => hub.project('o', { create: true }));
     const server = createServer(hub);
     const url = `http://127.0.0.1:${await listen(server)}`;
-    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: '', NUWORQ_AGENT: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
+    const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: server.personKey, NUWORQ_AGENT: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
     const bin = join(import.meta.dirname, '..', 'bin', 'nuworq.js');
     try {
       const gaveUp = await new Promise((resolve) => execFile(process.execPath, [bin, 'wait', '--operator', '--follow', '--settle-ms', '300'], { env }, (err, _o, stderr) => resolve({ code: err?.code ?? 0, stderr })));
@@ -557,11 +634,12 @@ describe('GET /api/wait and nuworq wait', () => {
       const first = new Hub({ file });
       first.tx(() => first.project('o', { create: true }));
       first.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] });
-      let server = createServer(first);
+      const personKey = 'the-key-kept-across-the-restart';
+      let server = createServer(first, { personKey });
       // The server listens for changes itself: the listener's wait is one more (#569).
       const own = first.listenerCount('change');
       const port = await listen(server);
-      const env = { ...process.env, NUWORQ_URL: `http://127.0.0.1:${port}`, NUWORQ_TOKEN: '', NUWORQ_AGENT: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
+      const env = { ...process.env, NUWORQ_URL: `http://127.0.0.1:${port}`, NUWORQ_TOKEN: personKey, NUWORQ_AGENT: '', HOME: mkdtempSync(join(tmpdir(), 'nuworq-wait-')) };
       const child = execFile(process.execPath, [bin, 'wait', '--operator', '--follow', '--as', 'op', '--retry-ms', '50'], { env });
       let stdout = '';
       child.stdout.on('data', (d) => { stdout += d; });
@@ -578,7 +656,7 @@ describe('GET /api/wait and nuworq wait', () => {
         server.closeAllConnections(); // the old process exits
         first.db.close();
         second = new Hub({ file });
-        server = createServer(second);
+        server = createServer(second, { personKey });
         // Each wait the new hub is asked: when it was asked, and when the answer went out.
         const waits = [];
         server.on('request', (req, res) => {

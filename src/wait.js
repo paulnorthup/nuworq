@@ -14,7 +14,8 @@ const MAX_WAIT_MS = 10 * 60_000;
 const json = (s, d) => { try { return JSON.parse(s) ?? d; } catch { return d; } };
 
 // Who waits, as { p, agent } per project, within the token's scope. Named: that agent wherever it is an
-// operator. Unnamed (a watcher started beside the session, which can't know the session's name): the
+// operator, and with a token only where its row carries that token (#918): waiting keeps an operator present,
+// so one token can't do it for another's. Unnamed (a watcher started beside the session, which can't know the session's name): the
 // operators that checked in with this token in the last day and haven't signed off, or with no token
 // (a hub without logins) every such operator. session: the watcher's session keys (src/session.js, #335):
 // then only the operators whose checkin said one of them, so two operator sessions on one token don't
@@ -23,8 +24,10 @@ const json = (s, d) => { try { return JSON.parse(s) ?? d; } catch { return d; } 
 export function operatorsOf(hub, agent, { scope = null, tokenId = null, session = [] } = {}) {
   const name = String(agent ?? '').trim();
   const ps = hub.projects().filter((p) => !scope || scope.includes(p.slug));
+  const operating = name ? ps.filter((p) => hub.isOperator(p, name)) : [];
+  const own = (p) => tokenId == null || hub.q('SELECT token_id FROM agents WHERE project_id = ? AND name = ?').get(p.id, name).token_id === tokenId;
   let found = name
-    ? ps.filter((p) => hub.isOperator(p, name)).map((p) => ({ p, agent: name }))
+    ? operating.filter(own).map((p) => ({ p, agent: name }))
     : ps.flatMap((p) => hub.q(`SELECT name, session FROM agents WHERE project_id = ? AND role = 'operator' AND signed_off = 0 AND last_seen > ?
         ${tokenId != null ? 'AND token_id = ?' : ''} ORDER BY name`).all(p.id, hub.now() - DAY, ...(tokenId != null ? [tokenId] : []))
       .map((a) => ({ p, agent: a.name, session: a.session })));
@@ -33,6 +36,9 @@ export function operatorsOf(hub, agent, { scope = null, tokenId = null, session 
     found = mine.length ? mine : found.filter((o) => !o.session);
   }
   found = found.map(({ p, agent: a }) => ({ p, agent: a }));
+  if (!found.length && operating.length) {
+    throw new UserError(`${name} didn't check in with this token`, { status: 403, hint: 'An operator waits with the token it checked in with. Run this where that session runs, or check in with this token first if the operator is yours.' });
+  }
   if (!found.length) {
     throw new UserError(name ? `${name} isn't an operator here, so there is nothing for it to wait for` : 'no operator has checked in here with this token in the last day', {
       status: 403,

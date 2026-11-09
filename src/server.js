@@ -2140,6 +2140,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // and kinds only, or empty after a few minutes. ?since= the last answer's at, so each event comes once.
       if (req.method === 'GET' && path === '/api/wait') {
         if (url.searchParams.get('for') !== 'operator') return deny(400, 'wait for what?', 'Only operators wait: GET /api/wait?for=operator.');
+        // A wait counts its operator as present (#918), so it takes that operator's own credential. Without logins no
+        // row carries a token: the person's key or an operator's token waits, not the machine's anonymous public or a
+        // worker's token. With logins, the token the operator's row carries (operatorsOf).
+        if (!required && !caller.operate) return deny(403, 'only an operator waits here', 'Run nuworq wait on the machine serving this hub, so it sends the key in ~/.nuworq/tokens/person.token, or send an operator\'s token. Workers find work with next.');
         if (!hold(req, res, hub, who, 'wait')) return tooMany('waits', `${MAX_HELD.listener} per listener, ${MAX_HELD.wait} per token`);
         const done = new AbortController();
         res.on('close', () => done.abort());
@@ -2151,7 +2155,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         const only = named ? slugify(named) : here?.slug;
         const scope = only ? (caller.scope && !caller.scope.includes(only) ? [] : [only]) : caller.scope;
         const r = await waitFor(hub, header(req, 'agent'), {
-          since: Number(url.searchParams.get('since')) || 0, scope, tokenId: caller.token?.id ?? null, session: sessionOf(req), signal: done.signal, drain: draining.signal,
+          since: Number(url.searchParams.get('since')) || 0, scope, tokenId: required ? who.id : null, session: sessionOf(req), signal: done.signal, drain: draining.signal,
           ...(timeout > 0 ? { ms: timeout * 1000 } : {}),
         });
         if (!done.signal.aborted) send(200, r);
