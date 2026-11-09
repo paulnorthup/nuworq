@@ -116,6 +116,7 @@ const COOKIE = 'nuworq_session';
 const HUB_COOKIE = 'nuworq_id'; // signed in to the hub itself (workspaces mode): who you are, not any one workspace
 const ADMIN_COOKIE = 'nuworq_admin'; // signed in to the admin host: host-only, and only an admin session opens it
 const LOGIN_WINDOW = 10 * 60_000, LOGIN_MAX_FAILS = 10;
+const RUNNER_MINT_MAX = 10; // tokenless runner-token mints per IP per LOGIN_WINDOW (#913)
 const DEVICE_MAX_STARTS = 10; // device logins started per IP per LOGIN_WINDOW
 const ASK_MAX = 5, ASK_WINDOW = 60 * 60_000; // early-access requests per IP per hour
 const TURNSTILE = 'https://challenges.cloudflare.com'; // where the request form's widget comes from
@@ -411,6 +412,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   const failures = new Map(); // ip → [timestamps of failed logins]
   const asks = new Map(); // ip → [timestamps of early-access requests]
   const starts = new Map(); // ip → [timestamps of device logins started]
+  const mints = new Map(); // ip → [timestamps of tokenless runner-token mints]
   // Per hub: its tokens and sessions, and the browsers streaming its changes. Nothing is shared across hubs.
   const scopes = new Map();
   const scopeOf = (hub) => {
@@ -1518,6 +1520,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           if (!required) return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
           return deny(400, 'only a token can revoke itself', 'Send Authorization: Bearer <token>. To sign out of the browser, use Sign out.');
         }
+        // A runner token is the machine's workers' together: one of them can't revoke it for the rest (#913).
+        if (who.runner) return deny(400, 'a runner token can\'t revoke itself', 'The machine\'s workers share it. To revoke it, on the hub host: nuworq token revoke <name>.');
         authz.revoke(who.id);
         return send(200, { ok: true, revoked: who.name });
       }
@@ -1537,8 +1541,17 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           return deny(400, who.runner ? 'this is a runner token already' : 'only an agent token can mint a runner token',
             'Send the machine\'s connect token (nuworq connect) as Authorization: Bearer <token>.');
         }
+        if (who.runner) return deny(400, 'this is a runner token already', 'The machine\'s workers share it, so one of them can\'t replace it. Keep using it.');
+        // Only the person's key replaces the machine's token; a tokenless caller only adds one, within a limit, so
+        // no worker can take away what the machine's other workers hold (#913).
+        const replace = who.role === 'human';
+        if (!replace) {
+          const ip = clientIp(req);
+          if (recent(mints, ip).length >= RUNNER_MINT_MAX) return deny(429, 'too many runner tokens asked for from this address', 'Wait 10 minutes, then try again. A runner asks once, then keeps its token.');
+          recent(mints, ip).push(Date.now());
+        }
         try {
-          return send(200, { ok: true, ...authz.localRunnerToken(machineName().split('.')[0]) });
+          return send(200, { ok: true, ...authz.localRunnerToken(machineName().split('.')[0], { replace }) });
         } catch (e) {
           return deny(400, e.message, 'See: nuworq token list.');
         }
