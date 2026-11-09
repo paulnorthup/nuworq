@@ -4,7 +4,8 @@ import { join, sep } from 'node:path';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { sandboxSettings, filePermissions, machineDenies, projectCommands, workerCommands } from '../src/sandbox.js';
+import { fileURLToPath } from 'node:url';
+import { sandboxSettings, filePermissions, machineDenies, projectCommands, workerCommands, DENY_READ, TOOLCHAIN_READS } from '../src/sandbox.js';
 import { sq, workerEnv, gitConfigEnv } from '../src/runtrust.js';
 
 // What a worker's sandbox lets it write (#472): never what an unsandboxed git later runs or reads its settings from.
@@ -43,8 +44,8 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     const tokenFile = join('/home/me', '.nuworq', 'tokens', 'claude-1a2b.token');
     const { filesystem } = sandboxSettings({ hub: 'https://hub.example', home, worktree, tokenFile });
     assert.ok(filesystem.denyRead.includes('~/.nuworq'));
-    assert.deepEqual(filesystem.allowRead, [tokenFile], 'one file: the narrower path re-opens it');
-    assert.equal(sandboxSettings({ hub: 'https://hub.example', home, worktree }).filesystem.allowRead, undefined, 'no token, nothing re-opened');
+    assert.deepEqual(filesystem.allowRead.filter((p) => p.includes('.nuworq')), [tokenFile], 'one file: the narrower path re-opens it');
+    assert.ok(!sandboxSettings({ hub: 'https://hub.example', home, worktree }).filesystem.allowRead.some((p) => p.includes('.nuworq')), 'no token, nothing of it re-opened');
   });
 
   test("its shell doesn't read Claude Code's or opencode's own logins (#580, #581)", () => {
@@ -205,9 +206,10 @@ const matches = (r, tool, p) => {
 // Headless, nobody answers a prompt: only an allowed call that no deny matches goes through. Write answers to Edit
 // rules (a Write(path) rule never matches), a Read deny holds for edits too, and for Grep and Glob: Claude Code
 // applies Read deny rules to the directory their path argument resolves to (code.claude.com/docs/en/permissions,
-// checked 2026-11-04) — which is why DENY_READ goes out as Read trees, and no Glob/Grep ones are emitted.
+// checked 2026-11-04) — which is why DENY_READ goes out as Read trees, and no Glob/Grep ones are emitted. Glob and
+// Grep have no allow rule of their own either (#909): here they go where Read may.
 const may = ({ allow, deny }, tool, p) => {
-  const as = tool === 'Write' ? 'Edit' : tool;
+  const as = tool === 'Write' ? 'Edit' : tool === 'Glob' || tool === 'Grep' ? 'Read' : tool;
   const denied = deny.some((r) => matches(r, as, p) || (as !== 'Read' && matches(r, 'Read', p)));
   return !denied && allow.some((r) => matches(r, as, p) || (tool === 'Write' && r === 'Write'));
 };
@@ -244,7 +246,7 @@ describe("a worker's file tools stay where its shell does (#472)", () => {
       for (const tool of ['Read', 'Edit', 'Write']) assert.ok(!may(perms, tool, p), `${tool} ${p}`);
     }
     assert.ok(!may(perms, 'Read', join(me, '.claude', 'settings.json')), 'all of ~/.claude, not only the login file (#885)');
-    assert.ok(may(perms, 'Read', join(me, '.local', 'share', 'other', 'x')), 'the rest of ~/.local/share stays readable');
+    assert.ok(!may(perms, 'Read', join(me, '.local', 'share', 'other', 'x')), 'nor the rest of the home folder (#909)');
   });
 
   // docs/DEPLOY.md keeps the release key and the release workflow's deploy key there (#850).
@@ -254,6 +256,47 @@ describe("a worker's file tools stay where its shell does (#472)", () => {
     const perms = filePermissions({ home, worktree });
     for (const f of ['release-key.pem', 'release-push']) {
       for (const tool of ['Read', 'Edit', 'Write']) assert.ok(!may(perms, tool, join(me, '.nuworq-release', f)), `${tool} ${f}`);
+    }
+  });
+});
+
+// #909: the audit of #907 — reads were a deny-list, so every other project's .env, .envrc and .claude stayed open.
+// The narrowest rule wins, as Claude Code's sandbox applies them (code.claude.com/docs/en/sandboxing, checked 2026-11-09).
+describe("a worker reads only what its own work needs (#909)", () => {
+  const co = join(me, 'Projects', 'api'), own = join(me, 'Projects', 'api.worktrees', 'claude-1a2b');
+  const token = join(me, '.nuworq', 'tokens', 'claude-1a2b.token');
+  const fs = sandboxSettings({ hub: 'https://hub.example', home: co, worktree: own, tokenFile: token }).filesystem;
+  const full = (r) => (r === '~/' ? me : r.startsWith('~/') ? join(me, r.slice(2)) : r);
+  const deepest = (rules, p) => Math.max(-1, ...rules.map(full).filter((r) => p === r || p.startsWith(r + sep)).map((r) => r.length));
+  const readable = (p) => deepest(fs.allowRead, p) >= deepest(fs.denyRead, p);
+
+  test("a worker's shell can't read another project's checkout", () => {
+    assert.ok(fs.denyRead.includes('~/'), 'the home folder as a whole');
+    const others = [join(me, 'Projects', 'billing'), join(me, 'Projects', 'billing.worktrees', 'claude-77'), join(me, 'code', 'side'), join(me, 'Projects', 'api.worktrees', 'claude-9f9f')];
+    for (const d of others) {
+      for (const f of ['.env', '.envrc', '.claude/settings.local.json', 'src/a.js']) {
+        const p = join(d, f);
+        assert.ok(!readable(p), `the shell: ${p}`);
+        for (const tool of ['Read', 'Glob', 'Grep']) assert.ok(!may(filePermissions({ home: co, worktree: own }), tool, p), `${tool} ${p}`);
+      }
+    }
+  });
+
+  test('it still reads its own work, its git, its token and its toolchains', () => {
+    for (const p of [join(own, 'src', 'a.js'), join(own, 'node_modules', 'x', 'index.js'), join(co, '.git', 'objects', 'ab', 'cd'), join(co, '.git', 'config'), token,
+      join(me, '.npm', '_cacache', 'x'), join(me, '.nvm', 'versions', 'node', 'v24', 'bin', 'node'), join(me, '.cargo', 'registry', 'x'), join(me, 'go', 'pkg', 'mod', 'x'), join(me, '.config', 'git', 'ignore')]) {
+      assert.ok(readable(p), p);
+    }
+    for (const f of ['bin/nuworq.js', 'src/client.js', 'package.json']) assert.ok(readable(fileURLToPath(new URL(`../${f}`, import.meta.url))), `its credential helper: ${f}`);
+  });
+
+  test('what it is given back opens no secret', () => {
+    for (const p of [join(own, '.claude', 'settings.json'), join(co, '.envrc'), join(me, '.cargo', 'credentials.toml'), join(me, '.nuworq', 'connect.json'), join(me, '.nuworq', 'tokens', 'other.token'), join(me, 'go', 'src', 'mine', '.env'), join(me, '.cache', 'huggingface', 'token'), join(me, '.config', 'git', 'config')]) {
+      assert.ok(!readable(p), p);
+    }
+    for (const given of TOOLCHAIN_READS) {
+      const inDenied = DENY_READ.filter((d) => given === d || given.startsWith(`${d}/`));
+      assert.deepEqual(inDenied, [], `${given} would re-open what DENY_READ hides`);
     }
   });
 });
