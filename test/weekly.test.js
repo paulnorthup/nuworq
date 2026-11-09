@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { Hub, DAY, MIN } from '../src/core.js';
-import { Notifier, addChannel, listChannels, setWeekly } from '../src/notify.js';
+import { Hub, DAY, MIN, SYSTEM } from '../src/core.js';
+import { Notifier, addChannel, composeWeekly, listChannels, setWeekly } from '../src/notify.js';
 import { outcomes } from '../src/outcomes.js';
 
 // Once a week, one push says what you got (#178).
@@ -77,5 +77,47 @@ describe('the weekly line (#178)', () => {
     w.tick(8 * DAY);
     await w.n.weekly();
     assert.equal(w.pushed.length, 0);
+  });
+});
+
+describe('the weekly line says what was tidied (#439)', () => {
+  const made = (w, title, fields) => {
+    const it = w.hub.item(w.hub.project('app'), w.hub.humanOp('app', 'create', { title, acceptance: 'x' }).item);
+    w.hub.tx(() => w.hub.patch(it, fields));
+    return w.hub.item(w.hub.project('app'), `#${it.seq}`);
+  };
+  const event = (w, item, actor, type, headline) => w.hub.tx(() => w.hub.event(w.hub.project('app'), { item, actor, type, headline }));
+
+  test('one line of counts, from what history holds', async () => {
+    const w = world();
+    aBusyWeek(w);
+    const review = made(w, 'Review the field notes', { tidy: '[]', notes_review: 1 });
+    for (const n of [1, 2]) event(w, review, 'a1', 'retired', `a1 retired field note ${n}`);
+    const job = made(w, 'Keep the milestones true', { tidy: JSON.stringify(['stale:1:100', 'stale:2:100', 'ungrouped:3:ready']) });
+    w.hub.tx(() => w.hub.move(job, 'done', 'a1'));
+    event(w, null, SYSTEM, 'branch_deleted', 'nuworq deleted nuworq/1-login on acme/api');
+    event(w, made(w, 'Other work', {}), 'you', 'retired', 'You retired a field note');
+    w.tick(7 * DAY);
+    await w.n.weekly();
+    const lines = w.pushed[0].text.split('\n');
+    assert.equal(lines.filter((l) => l.startsWith('Tidied:')).length, 1);
+    assert.equal(lines.at(-1), 'Tidied: 2 notes retired, 2 stale items reviewed, 1 branch removed');
+    const week = composeWeekly(w.hub, '', w.hub.now(), w.hub.now() + 7 * DAY);
+    assert.equal(week, null, 'the next week starts from zero');
+  });
+
+  test('nothing tidied, no line, and a count of nothing is left out', async () => {
+    const w = world();
+    aBusyWeek(w);
+    w.tick(7 * DAY);
+    await w.n.weekly();
+    assert.ok(!w.pushed[0].text.includes('Tidied'));
+
+    const v = world();
+    aBusyWeek(v);
+    event(v, null, SYSTEM, 'branch_deleted', 'nuworq deleted nuworq/1-login on acme/api');
+    v.tick(7 * DAY);
+    await v.n.weekly();
+    assert.equal(v.pushed[0].text.split('\n').at(-1), 'Tidied: 1 branch removed');
   });
 });

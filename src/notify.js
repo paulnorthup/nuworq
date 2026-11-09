@@ -135,11 +135,13 @@ export function compose(entries, baseUrl = '') {
 
 // What the week got you (#178), one line per unparked project where anything happened in (from, to]: items
 // landed, your actions, recorded cost and escapes, the same numbers as the outcomes API for that window, with a
-// link to the project. null when nothing happened anywhere: a quiet week sends nothing.
+// link to the project. null when nothing happened anywhere: a quiet week sends nothing. After them, at most one
+// line for what was tidied across those projects (#439); every count is an entry in history.
 export function composeWeekly(hub, baseUrl, from, to) {
   const link = (slug) => (baseUrl ? `${baseUrl}/#/p/${encodeURIComponent(slug)}` : '');
   const money = (usd) => `$${usd < 10 ? usd.toFixed(2) : Math.round(usd)}`;
   const lines = [], links = [];
+  const tidied = { notes: 0, stale: 0, branches: 0 };
   for (const p of hub.projects()) {
     if (p.parked) continue;
     if (!hub.q('SELECT 1 FROM events WHERE project_id = ? AND at > ? AND at <= ? AND actor != ? LIMIT 1').get(p.id, from, to, SYSTEM)) continue;
@@ -149,9 +151,14 @@ export function composeWeekly(hub, baseUrl, from, to) {
     const cost = costs.length ? money(costs.reduce((a, c) => a + c, 0)) : 'no cost recorded';
     lines.push(`${p.name}: ${landed} landed, ${o.human_actions.total} of your actions, ${cost}, ${plural(o.items.filter((i) => i.escaped).length, 'escape')}${link(p.slug) ? ` → ${link(p.slug)}` : ''}`);
     links.push(link(p.slug));
+    tidied.notes += hub.q(`SELECT COUNT(*) AS n FROM events e JOIN items i ON i.id = e.item_id WHERE e.project_id = ? AND e.type = 'retired' AND i.notes_review = 1 AND e.at > ? AND e.at <= ?`).get(p.id, from, to).n;
+    tidied.stale += hub.q(`SELECT COUNT(*) AS n FROM items i, json_each(i.tidy) k WHERE i.project_id = ? AND i.tidy != '' AND i.notes_review = 0 AND i.stage = 'done' AND i.stage_since > ? AND i.stage_since <= ? AND k.value LIKE 'stale:%'`).get(p.id, from, to).n;
+    tidied.branches += hub.q(`SELECT COUNT(*) AS n FROM events WHERE project_id = ? AND type = 'branch_deleted' AND at > ? AND at <= ?`).get(p.id, from, to).n;
   }
   if (!lines.length) return null;
   const title = 'nuworq: this week';
+  const tidy = [tidied.notes && `${plural(tidied.notes, 'note')} retired`, tidied.stale && `${plural(tidied.stale, 'stale item')} reviewed`, tidied.branches && `${plural(tidied.branches, 'branch', 'branches')} removed`].filter(Boolean);
+  if (tidy.length) lines.push(`Tidied: ${tidy.join(', ')}`);
   return { title, url: (links.length === 1 ? links[0] : baseUrl ? `${baseUrl}/#/` : '') || undefined, text: [title, ...lines].join('\n'), entries: [] };
 }
 
