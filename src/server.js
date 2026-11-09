@@ -169,7 +169,7 @@ export function adminConsoleDir(dir, adminHost) {
   return root;
 }
 
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, githubReleases = false, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false, adminConsole = '', personKey = '' } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, githubReleases = false, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false, adminConsole = '', personKey = '', savePersonKey = null } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
@@ -388,15 +388,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // The person's key on a hub without logins (#900): what separates the person from code a worker runs, which a
   // loopback address alone never could. serve keeps it in tokens/person.token and prints the address that carries
   // it once; the hub holds only its hash, and answers a request that presents it — as a bearer token or the
-  // browser cookie one open of that address sets — as the person. Without one (a hub this process started that
-  // nobody configured) a fresh key is made for this run, so tests and `serve --demo` still have a person.
-  const localPersonKey = required ? '' : (personKey || randomBytes(24).toString('base64url'));
+  // browser's credential that one open of that address hands the page — as the person. Without one (a hub this
+  // process started that nobody configured) a fresh key is made for this run, so tests and `serve --demo` still
+  // have a person. POST /api/me/person-key replaces it (#908).
   const sameBytes = (a, b) => a.length === b.length && a.equals(b);
-  const personHash = localPersonKey ? createHash('sha256').update(localPersonKey).digest() : null;
+  let localPersonKey, personHash, personHex;
+  const usePersonKey = (k) => {
+    localPersonKey = k;
+    personHash = k ? createHash('sha256').update(k).digest() : null;
+    personHex = personHash?.toString('hex') ?? '';
+  };
+  usePersonKey(required ? '' : (personKey || randomBytes(24).toString('base64url')));
   const personMatches = (v) => !!personHash && sameBytes(personHash, createHash('sha256').update(String(v ?? '')).digest());
-  // The cookie holds the hex of the key's hash, never the key: accepted by comparing digests.
-  const personHex = personHash?.toString('hex') ?? '';
-  const cookieMatches = (v) => {
+  // The browser's credential is the hex of the key's hash, never the key: accepted by comparing digests. Never a
+  // cookie (#908): cookies aren't separated by port, so one would reach anything a worker serves on loopback. The
+  // page keeps it in localStorage, which is per origin, and sends it as x-nuworq-person.
+  const browserMatches = (v) => {
     if (!personHash) return false;
     return sameBytes(createHash('sha256').update(String(v ?? '')).digest(), createHash('sha256').update(personHex).digest());
   };
@@ -1441,11 +1448,13 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return res.end(watch[1] ? JSON.stringify(data) : withLogo(await readFile(join(WEB, 'live.html'), 'utf8')).replace(/(href|src)="\//g, (_, attr) => `${attr}="${base}/`));
       }
       if (req.method === 'GET' && !path.startsWith('/api/') && path !== '/agents.md' && !/^\/styleguide(\.html)?$/.test(path)) {
-        // The person's first open of the address serve printed (#900): the key in the URL becomes the browser's
-        // cookie, and the address without it. The key itself is never served back or kept in the page.
+        // An open of the address serve printed (#900): the key leaves the address, and the page gets the browser's
+        // credential in the fragment, which no request carries; web/person.js keeps it per origin (#908). The key
+        // itself is never served back or kept in the page. A cookie from before #908, or another local hub's, plays
+        // no part; this hub's is retired.
         const shown = url.searchParams.get('person');
-        if (shown && personMatches(shown) && !jarOf(req).get('nuworq_person')) {
-          res.writeHead(303, { location: path, 'set-cookie': `nuworq_person=${createHash('sha256').update(shown).digest('hex')}; HttpOnly; SameSite=Strict; Path=${cookiePath}${https(req) ? '; Secure' : ''}; Max-Age=31536000` });
+        if (shown && personMatches(shown)) {
+          res.writeHead(303, { location: `${path}#person=${personHex}`, 'cache-control': 'no-store', 'set-cookie': `nuworq_person=; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=0` });
           return res.end();
         }
         const file = path === '/' || !extname(path) ? 'index.html' : path.slice(1);
@@ -1464,8 +1473,8 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // worker's runner or agent token is that agent, with agent-route limits — never the person. A token that
       // doesn't verify is refused, not fallen back to the person: presenting one claims an identity, and a stale
       // or revoked one must not quietly become "you". On a hub without logins the person is the one holding the
-      // hub's key (#900): as a bearer token (the CLI and the runner read tokens/person.token), or the cookie one
-      // open of the address `serve` printed sets. The address alone proves nothing — code a worker runs reaches
+      // hub's key (#900): as a bearer token (the CLI and the runner read tokens/person.token), or the header the
+      // page sends once the address `serve` printed is opened (#908). The address alone proves nothing — code a worker runs reaches
       // it too — so without the key a request is the anonymous public of this machine: it reads, and only the
       // person's key acts. That trade-off is written down in docs/SECURITY-MODEL.md.
       const bearer = String(req.headers.authorization ?? '').match(/^Bearer\s+(\S+)/i)?.[1];
@@ -1492,12 +1501,9 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         // Cookies ride along automatically, so they must prove the request came from this site.
         if (unsafe && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
       } else if (who.via === 'anon') {
-        const sid = jarOf(req).get('nuworq_person');
-        if (sid && cookieMatches(sid)) {
-          who = { role: 'human', name: 'you', via: 'local-cookie' };
-          // Cookies ride along automatically, so they must prove the request came from this site.
-          if (unsafe && !sameOrigin(req)) return deny(403, 'missing or mismatched Origin header');
-        }
+        // A header rides along with nothing, so only a page of this origin, which holds the credential, can send
+        // it (#908). One that doesn't match (a rotated key) is simply not the person: this browser can still look.
+        if (browserMatches(req.headers['x-nuworq-person'])) who = { role: 'human', name: 'you', via: 'local-browser' };
       }
       // The anonymous public of this machine reads; the person's key acts (#900). Two self-routes stay open
       // tokenless: revoking nothing, and the runner-token mint (#892), whose answer is an agent token and so the
@@ -1594,6 +1600,19 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       if (req.method === 'GET' && path === '/styleguide') return send(200, withLogo(readFileSync(join(WEB, 'styleguide.html'), 'utf8')), TYPES['.html']);
       if (req.method === 'GET' && path === '/api/me') return send(200, { auth: required ? 'required' : 'local', role: who.role, name: who.name, ...(caller.scope ? { projects: caller.scope } : {}) });
       if (req.method === 'POST' && path === '/api/me/revoke') return send(200, { ok: true, revoked: null }); // no logins here: nothing to revoke
+      // The person replaces their key (#908): kept first, so a key that can't be kept never takes over, then the old
+      // one and every browser credential made from it stop at once. Above the idempotency keys: a secret isn't replayed.
+      if (req.method === 'POST' && path === '/api/me/person-key') {
+        if (required) return deny(400, 'this hub has logins, so it has no person key', 'Tokens are managed with `nuworq token` on the hub host.');
+        if (personRole !== 'owner') return deny(403, 'only the person who runs this hub replaces its key', 'Run nuworq token rotate-person on the hub host.');
+        const fresh = randomBytes(24).toString('base64url');
+        try { savePersonKey?.(fresh); } catch (e) {
+          return deny(500, `couldn't keep the new key: ${e.message}`, 'The old key still works. Check that ~/.nuworq/tokens is writable, then try again.');
+        }
+        usePersonKey(fresh);
+        server.personKey = fresh;
+        return sendSecret(200, { ok: true, key: fresh });
+      }
       if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
       // A write sent again with the same idempotency key (#524: the client retries writes through a proxy's 502 or
       // a dropped connection) gets the answer the first one got, and is applied once. One still being applied is

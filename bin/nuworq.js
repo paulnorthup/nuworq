@@ -1867,7 +1867,7 @@ async function serve(flags) {
       return '';
     }
   };
-  const server = createServer(hub, { auth, trustProxy, publicUrl, personKey: auth === 'local' && !flags.demo ? localKey() : '', oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
+  const server = createServer(hub, { auth, trustProxy, publicUrl, personKey: auth === 'local' && !flags.demo ? localKey() : '', savePersonKey: auth === 'local' && !flags.demo ? (k) => tokenFile(dirname(HUB_FILE), 'person', k) : null, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -1909,8 +1909,8 @@ hint: Create one, then start again:
     // The same commands as the Connect dialog: the installed `nuworq`, never a path into this checkout (#157).
     const base = publicUrl || url;
     const pkg = await server.package;
-    // The browser's address carries the person's key once (#900): this open sets the cookie, the address after it
-    // is plain. On a hub without logins the address alone proves nothing — code a worker runs reaches it too.
+    // The browser's address carries the person's key once (#900): this open signs the browser in (#908), the address
+    // after it is plain. On a hub without logins the address alone proves nothing — code a worker runs reaches it too.
     const open = auth === 'local' && server.personKey ? `${url}/?person=${server.personKey}` : url;
     console.log(`${green('●')} ${bold('nuworq')} is running at ${bold(url)}${flags.demo ? dim('  (demo data, in memory)') : dim(`  (${db})`)}
   Browser:  ${bold(open)}${auth === 'local' ? dim('  (your key once; the browser keeps it)') : ''}
@@ -2204,8 +2204,29 @@ async function invite(pos, flags) {
   throw new HubError(`usage: nuworq invite create --role ${PERSON_ROLES.join('|')} [--email e] [--by <owner>] [--public-url u] | list | revoke <id>`);
 }
 
+// A new person key (#908): the running hub replaces it, so the old one stops at once. With no hub up, the file serve
+// reads next.
+async function rotatePersonKey() {
+  const dir = dirname(HUB_FILE);
+  const read = (f) => { try { return readFileSync(f, 'utf8'); } catch { return ''; } };
+  let hub = null;
+  try { hub = JSON.parse(read(HUB_FILE)); } catch { /* none served from here */ }
+  if (hub?.auth === 'required') throw new HubError('this hub has logins, so it has no person key', { hint: 'See: nuworq token list, nuworq token revoke <name|id>' });
+  const client = hub?.url ? createClient({ url: hub.url, token: read(join(dir, 'tokens', 'person.token')).trim(), retryMs: 0 }) : null;
+  if (!client || !(await client.get('/api/health').catch(() => null))) {
+    tokenFile(dir, 'person', randomBytes(24).toString('base64url'));
+    return console.log(`${green('Rotated')} the person key. No hub is running here: the next ${bold('nuworq serve')} uses the new key and prints the address to open.`);
+  }
+  const { key } = await client.post('/api/me/person-key', {});
+  console.log(`${green('Rotated')} the person key. The old one has stopped working, and every browser signed in with it can only look now.
+
+  Browser:  ${bold(`${hub.url}/?person=${key}`)}${dim('  (open it once in each browser you use)')}
+${dim('  Restart nuworq run on this machine: a running one still holds the old key.')}`);
+}
+
 // Token management runs on the hub host, straight against the database file.
 async function token(pos, flags) {
+  if (pos[0] === 'rotate-person') return rotatePersonKey();
   const { openDb } = await import('../src/db.js');
   const { Auth } = await import('../src/auth.js');
   const db = dbPath(flags);
@@ -2251,7 +2272,7 @@ async function token(pos, flags) {
     if (!r) throw new HubError(`no token "${name}"`, { hint: 'See: nuworq token list' });
     return console.log(`${green('Revoked')} ${r.role} token ${bold(r.name)}; its sessions are logged out.`);
   }
-  throw new HubError('usage: nuworq token create <name> --role human|agent | list | revoke <name|id>');
+  throw new HubError('usage: nuworq token create <name> --role human|agent | list | revoke <name|id> | rotate-person');
 }
 
 // Push channels are managed on the hub host, straight against the database file (like tokens).

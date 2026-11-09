@@ -12,6 +12,7 @@ import { bootData } from './boot.js';
 import { S, setState, putIn } from './store.js';
 import { ACTIONS, KEYS, L, backFromGitHub, closeLauncher, closeRailMenu, drawLauncher, runLauncher, setTheme, workspaceSettings } from './actions.js';
 import { store } from './prefs.js';
+import { signInFromAddress } from './person.js';
 import { go, openTarget, prefetch, projectTarget, route } from './router.js';
 import { $, api, closeModal, data, live, offline, online, prefetchView, render, scheduleRefresh, typing, views } from './ui.js';
 import { WIDE } from './views/html.js';
@@ -119,6 +120,7 @@ function listen() {
 }
 
 (async function start() {
+  await signInFromAddress(); // before anything reads the hub or the hash
   // GitHub returns to the app's setup_url (#/) with ?installation_id=…&setup_action=install, before or in the hash.
   const fromGitHub = /[?&]setup_action=(install|update)\b/.test(location.search + location.hash);
   if (fromGitHub) history.replaceState(null, '', `${location.pathname}#/`);

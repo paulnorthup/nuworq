@@ -280,7 +280,7 @@ export const COMMANDS = [
   {
     name: 'token', group: 'hub', brief: 'agent and human tokens',
     does: 'create, list and revoke tokens (on the hub host)',
-    usage: ['token create <name> --role human|agent [flags]', 'token list', 'token revoke <name|id>'],
+    usage: ['token create <name> --role human|agent [flags]', 'token list', 'token revoke <name|id>', 'token rotate-person'],
     flags: [
       ['--role <role>', 'human or agent', 'agent'],
       ['--project <a,b>', 'limit an agent token to those projects'],
@@ -292,7 +292,7 @@ export const COMMANDS = [
       ['--db <file>', 'the database'],
     ],
     example: 'nuworq token create box --role agent --project acme',
-    notes: ['A new token is shown only once. Revoking one logs out its sessions.'],
+    notes: ['A new token is shown only once. Revoking one logs out its sessions.', 'rotate-person replaces the key of a hub without logins: the old one stops at once, and it prints the new address to open.'],
   },
   {
     name: 'notify', group: 'hub', brief: 'push channels for "needs you"',
