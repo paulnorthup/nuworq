@@ -308,13 +308,16 @@ export class Auth {
 
   // A hub without logins mints its workers' runner token on request (#892): the caller is the one person the
   // loopback hub serves — or one of their workers, which holds no more than a runner token already gives it.
-  // The runner is the machine's hostname. Minting again replaces the last one, like runnerToken does.
-  localRunnerToken(runner) {
+  // The runner is the machine's hostname. Only a caller holding the person's key or the current runner token
+  // passes replace: the previous mint is then revoked, like runnerToken does. A tokenless caller adds a token and
+  // revokes nothing, so it can't stall the workers sharing the machine's one (#913). The name costs one lookup
+  // however many mints came before.
+  localRunnerToken(runner, { replace = false } = {}) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const old of this.db.prepare('SELECT id FROM tokens WHERE runner = ? AND from_token IS NULL AND revoked_at IS NULL').all(runner)) this.revoke(old.id);
+      if (replace) for (const old of this.db.prepare('SELECT id FROM tokens WHERE runner = ? AND from_token IS NULL AND revoked_at IS NULL').all(runner)) this.revoke(old.id);
       let name = `${runner}.runner`;
-      for (let n = 2; this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name); n++) name = `${runner}.runner-${n}`;
+      if (this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name)) name = `${runner}.runner-${randomBytes(4).toString('hex')}`;
       const token = TOKEN_PREFIX + randomBytes(32).toString('base64url');
       this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, runner, created_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(name, 'agent', sha(token), token.slice(0, 8), String(runner), this.now());

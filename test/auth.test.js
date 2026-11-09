@@ -235,7 +235,7 @@ describe('local mode', () => {
     } finally { stuck.server.close(); stuck.server.closeAllConnections(); }
   });
 
-  test('the hub mints the machine\'s runner token for nuworq run, and minting again replaces the last one', async () => {
+  test('a tokenless mint leaves the machine\'s workers\' runner token live', async () => {
     const { hostname } = await import('node:os');
     const name = hostname().split('.')[0];
     const one = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {} });
@@ -244,10 +244,21 @@ describe('local mode', () => {
     assert.match(one.json.name, new RegExp(`^${name}\\.runner`));
     const again = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {} });
     assert.notEqual(again.json.token, one.json.token);
+    for (const t of [one, again]) {
+      const me = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${t.json.token}` } });
+      assert.equal(me.json.role, 'agent');
+    }
+    // The holder of the current runner token asks for its replacement: that revokes the older ones.
+    const next = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {}, headers: { authorization: `Bearer ${again.json.token}` } });
+    assert.equal(next.status, 200);
     const old = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${one.json.token}` } });
-    assert.equal(old.json.role, null); // the previous mint was revoked with the new one
-    const cur = await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${again.json.token}` } });
-    assert.equal(cur.json.role, 'agent');
+    assert.equal(old.json.role, null);
+  });
+
+  test('tokenless runner-token mints are limited', async () => {
+    let last;
+    for (let i = 0; i < 12; i++) last = await request(ctx.port, 'POST', '/api/me/runner-token', { body: {} });
+    assert.equal(last.status, 429);
   });
 
   test('a person\'s own bearer token keeps its powers on a hub without logins', async () => {
