@@ -170,7 +170,7 @@ export function adminConsoleDir(dir, adminHost) {
   return root;
 }
 
-export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, githubReleases = false, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false, adminConsole = '', personKey = '', savePersonKey = null } = {}) {
+export function createServer(target, { auth = 'local', trustProxy = false, baseDomain = '', sweepMs = 15_000, publicUrl = '', adminHost = '', oauth = {}, orgCap = ORG_CAP, githubApp = null, appFile = '', github = {}, packageDir = join(tmpdir(), 'nuworq-package'), source = ROOT, githubReleases = false, earlyAccess = null, billing = null, appCheckMs = DAY, feedbackProject = '', feedbackBatchMs = MIN, maxConnections = MAX_CONNECTIONS, standby = false, adminConsole = '', personKey = '', savePersonKey = null, hubRun = '' } = {}) {
   const spaces = target instanceof Workspaces ? target : null;
   adminHost = String(adminHost).toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
   if (adminHost && !spaces) throw new Error('an admin host needs a hub of workspaces (--workspaces)');
@@ -394,14 +394,19 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
   // have a person. POST /api/me/person-key replaces it (#908).
   const sameBytes = (a, b) => a.length === b.length && a.equals(b);
   let localPersonKey, personHash, personHex;
+  // Whoever holds this port is this origin, so what a browser stored can be read by anything that listens here while
+  // the hub is down (#920). Its credential is made from this run too, and stops when the port is let go; serve
+  // --follow holds the port across a deploy and hands each hub the same value. It needn't be secret: without the key,
+  // knowing it makes no credential.
+  const run = hubRun || randomBytes(16).toString('hex');
   const usePersonKey = (k) => {
     localPersonKey = k;
     personHash = k ? createHash('sha256').update(k).digest() : null;
-    personHex = personHash?.toString('hex') ?? '';
+    personHex = personHash ? createHash('sha256').update(`${personHash.toString('hex')}\n${run}`).digest('hex') : '';
   };
   usePersonKey(required ? '' : (personKey || randomBytes(24).toString('base64url')));
   const personMatches = (v) => !!personHash && sameBytes(personHash, createHash('sha256').update(String(v ?? '')).digest());
-  // The browser's credential is the hex of the key's hash, never the key: accepted by comparing digests. Never a
+  // The browser's credential is a hash of the key and this run, never the key: accepted by comparing digests. Never a
   // cookie (#908): cookies aren't separated by port, so one would reach anything a worker serves on loopback. The
   // page keeps it in localStorage, which is per origin, and sends it as x-nuworq-person.
   const browserMatches = (v) => {

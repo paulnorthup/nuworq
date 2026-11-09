@@ -10,6 +10,7 @@
 // is and fixing main goes to the front of the queue: stop the line, not the hub. Before each move the
 // database is copied aside, and a rollback puts the copy back: new code may migrate it on startup.
 import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, copyFileSync } from 'node:fs';
 import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -280,7 +281,8 @@ export function system({ repo, dir, next = `${dir}-next`, alt = `${dir}-alt`, ar
     await new Promise((resolve, reject) => { s.once('error', reject); s.listen(listen.port, listen.host, resolve); })
       .catch((e) => { throw new Error(`can't hold ${listen.host}:${listen.port} (${e.message}): something else is using it`); });
     front = {
-      server: s, target: null,
+      // One value for as long as this port is held (#920): the hubs it passes to take each other's browser credentials.
+      server: s, target: null, run: randomBytes(16).toString('hex'),
       set(h) { this.target = h; for (const sock of waiting) { waiting.delete(sock); if (!sock.destroyed) pass(h, sock); } },
       async close() { for (const sock of waiting) sock.destroy(); s.close(); await new Promise((r) => setImmediate(r)); },
     };
@@ -290,7 +292,7 @@ export function system({ repo, dir, next = `${dir}-next`, alt = `${dir}-alt`, ar
   const spawnHub = (path, sha) => {
     const h = { dir: path, sha, port: null, commit: null, ready: false, loops: false, exited: false };
     h.child = spawn(process.execPath, [join(path, bin), 'serve', ...args], {
-      cwd, stdio: ['inherit', 'inherit', 'inherit', 'ipc'], detached: true, env: { ...process.env, NUWORQ_HANDOFF: '1', NUWORQ_COMMIT: sha },
+      cwd, stdio: ['inherit', 'inherit', 'inherit', 'ipc'], detached: true, env: { ...process.env, NUWORQ_HANDOFF: '1', NUWORQ_COMMIT: sha, NUWORQ_HANDOFF_RUN: front?.run ?? '' },
     });
     h.child.on('message', (m) => {
       if (m?.type === 'ready') Object.assign(h, { port: m.port, commit: m.commit, ready: true });

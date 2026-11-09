@@ -3,10 +3,12 @@
 // is ready (like node:cluster, but a new hub can start beside the old one, from another worktree). The hub listens
 // only on a private loopback port, for the supervisor's health check, and says so with { type: 'ready', port, commit };
 // NUWORQ_COMMIT is the commit it was started on, so the supervisor checks it is the code it meant to run.
+// NUWORQ_HANDOFF_RUN stays the same while the supervisor holds the port, so a deploy doesn't sign browsers out (#920).
 // Messages in: { type: 'conn' } + a socket (serve it), 'lead' (run the background loops: sweeper, Notifier, pull-request
 // merges, mirror fetches), 'quiet' (stop them), 'drain' (finish what is in flight, then exit). Out: 'ready', and
 // { type: 'loops', on } after lead and quiet. The channel closing (the supervisor died) drains the hub too.
 export const handedOver = () => !!process.env.NUWORQ_HANDOFF && typeof process.send === 'function';
+export const handoffRun = () => process.env.NUWORQ_HANDOFF_RUN || '';
 
 // server: createServer's, made with standby: true. lead() and quiet() run besides the server's own loops (the Notifier
 // and the pushes live in the CLI). stop(): drain, then exit.

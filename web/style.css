@@ -812,7 +812,7 @@ main.narrow .faint, .setup .faint, .dialog .faint, .d-sec .faint { color: var(--
 #toast .toast-undo { margin-left: var(--sp-3); min-height: 44px; padding: var(--sp-1) var(--sp-3); border: var(--rule) solid currentColor; border-radius: var(--r-m); background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
 #toast a { color: inherit; text-decoration: underline; font-weight: 600; }
 /* The hub out of reach (#142): a bar that stays until it answers, and the pulse marked as possibly stale. */
-#offline { position: sticky; top: 0; z-index: 35; background: var(--warn); color: var(--on-fill); font-size: var(--fs-3); font-weight: 550; text-align: center; padding: var(--sp-2) var(--sp-4); }
+#offline, #signed-out { position: sticky; top: 0; z-index: 35; background: var(--warn); color: var(--on-fill); font-size: var(--fs-3); font-weight: 550; text-align: center; padding: var(--sp-2) var(--sp-4); }
 body.offline .pulse { opacity: .55; filter: grayscale(.7); }
 body.offline .pulse .state-chip::after { content: '· out of date'; color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 500; }
 

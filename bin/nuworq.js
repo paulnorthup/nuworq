@@ -1854,7 +1854,7 @@ async function serve(flags) {
   // The GitHub App: from the environment, else the one the hub created for itself (Create GitHub App).
   const appFile = join(dataHome(flags), 'github-app.json');
   ignoreSiteHost(flags);
-  const { handedOver, handoff } = await import('../src/handoff.js');
+  const { handedOver, handoff, handoffRun } = await import('../src/handoff.js');
   const handed = handedOver() && !flags.smoke; // under serve --follow: the supervisor owns the port (#523)
   // The person's key on a hub without logins (#900), kept in tokens/person.token so it survives restarts and the
   // printed address keeps working. A demo keeps data in memory: a fresh key each run, printed below. A home the
@@ -1867,7 +1867,7 @@ async function serve(flags) {
       return '';
     }
   };
-  const server = createServer(hub, { auth, trustProxy, publicUrl, personKey: auth === 'local' && !flags.demo ? localKey() : '', savePersonKey: auth === 'local' && !flags.demo ? (k) => tokenFile(dirname(HUB_FILE), 'person', k) : null, oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
+  const server = createServer(hub, { auth, trustProxy, publicUrl, personKey: auth === 'local' && !flags.demo ? localKey() : '', savePersonKey: auth === 'local' && !flags.demo ? (k) => tokenFile(dirname(HUB_FILE), 'person', k) : null, hubRun: handed ? handoffRun() : '', oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
