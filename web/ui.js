@@ -7,6 +7,7 @@ import { untimed, tick } from './ago.js';
 import { liveGate } from './pace.js';
 import { loadProject } from './switching.js';
 import { dataCache } from './data.js';
+import { personHeaders } from './person.js';
 import { S, setState, putIn, markDirty, takeDirty, PAGE } from './store.js';
 import { drawerHtml } from './views/drawer.js';
 import { esc } from './views/html.js';
@@ -86,7 +87,7 @@ export async function api(path, opts = {}) {
   // Relative, so the UI also works under a workspace path prefix (/w/<slug>/).
   let r;
   try {
-    r = await fetch(path.replace(/^\//, ''), { ...opts, headers: { 'content-type': 'application/json' }, credentials: 'same-origin' });
+    r = await fetch(path.replace(/^\//, ''), { ...opts, headers: { 'content-type': 'application/json', ...personHeaders() }, credentials: 'same-origin' });
   } catch {
     offline();
     throw new Error(OFFLINE); // the browser's own words ("Failed to fetch") mean nothing to a person

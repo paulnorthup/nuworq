@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { createClient, resolveSettings, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
+import { createClient, resolveSettings, provenPersonKey, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILE } from '../src/names.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, gitConfigEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
@@ -742,7 +742,7 @@ async function worker(flags) {
     target = { ...target, repo: routes.find((r) => r.project === target.slug)?.repo ?? null };
   }
   const token = flags.run ? await agentToken(client, flags) : null;
-  const { name, worktree, main, origin, cwd, cmd, checkout, start, keys, tokenAt, piDir } = await setupOrClone(target, agent, flags, s, client, token);
+  const { name, worktree, main, origin, cwd, cmd, checkout, start, keys, tokenAt, piDir, retire } = await setupOrClone(target, agent, flags, s, client, token);
 
   console.log(`${bold(`${name} → ${target.name}`)}${why ? dim(`  (${why})`) : ''}
 ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Each item it claims gets its own branch (the hub names it), made from the latest ${main}. When it's done: git worktree remove ${sq(worktree)}` : `Works in ${cwd}.`)}`);
@@ -755,7 +755,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
       opencode: `opencode has no sandbox, so it runs only on projects without a remote, and never git pushes (denied). Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
       pi: `pi has no sandbox, so it runs only on projects without a remote, and never git pushes (nuworq's pi extension blocks it). Its config is a folder of its own (${piDir}): none of your pi extensions, skills, MCP servers or sign-ins follow it in. Use a model that calls tools well; see docs/OPEN-WEIGHT.md.`,
     }[agent] + '\nAdd --run to start it now.'));
-    if (s.token) console.log(dim('Replace <agent-token> with an agent token (nuworq token create <name> --role agent --project <p>). With --run, pass it as --agent-token.'));
+    if (s.token || s.personKey) console.log(dim('Replace <agent-token> with an agent token (nuworq token create <name> --role agent --project <p>). With --run, pass it as --agent-token.'));
     return;
   }
   const { spawn } = await import('node:child_process');
@@ -765,6 +765,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
     if (checkout) execFileSync('/bin/sh', ['-c', checkout], { stdio: ['ignore', 'inherit', 'inherit'], env: { ...withoutTokens(), GIT_TERMINAL_PROMPT: '0' } });
   } catch (e) {
     dropTokenFile(tokenAt);
+    await retire();
     dropPiDir(piDir);
     process.exitCode = e.status ?? 1;
     return;
@@ -773,6 +774,7 @@ ${dim(worktree ? `Works in its own worktree ${worktree}, detached at ${main}. Ea
   const usage = await tapUsage(child, agent, flags, (l) => console.log(l));
   await new Promise((done) => child.on('close', (code) => { process.exitCode = code ?? 1; done(); }));
   dropTokenFile(tokenAt);
+  await retire();
   dropPiDir(piDir);
   await reportUsage(s, token, target.slug, name, usage());
 }
@@ -792,7 +794,7 @@ async function tapUsage(child, agent, flags, show) {
 async function reportUsage(s, token, project, name, usage) {
   if (!usage) return;
   try {
-    await createClient({ url: s.url, token: token ?? s.token }).call('usage', { usage }, { agent: name, project });
+    await createClient({ url: s.url, token: token ?? (s.token || undefined) }).call('usage', { usage }, { agent: name, project });
   } catch (e) {
     console.error(dim(`Couldn't record ${name}'s usage: ${e.message}`));
   }
@@ -876,12 +878,29 @@ async function cloneHome(target, flags, s, client, token, missing) {
 
 // workerSetup, cloning the project first when this machine has no checkout of it.
 async function setupOrClone(target, agent, flags, s, client, token) {
+  let setup;
   try {
-    return workerSetup(target, agent, flags, s, token);
+    setup = workerSetup(target, agent, flags, s, token);
   } catch (e) {
     if (!(e instanceof HubError) || !e.missing) throw e;
     await cloneHome(target, flags, s, client, token, e);
-    return workerSetup(target, agent, flags, s, token);
+    setup = workerSetup(target, agent, flags, s, token);
+  }
+  return { ...setup, retire: setup.tokenAt ? await ownToken(client, setup, token) : async () => {} };
+}
+
+// A hub without logins can't tell a machine's workers apart by the runner token they share (#919), so each gets a
+// token of its own in its token file, and the hub takes its pushes under that name only. Asked with the person's key,
+// which a worker can't read. A hub with logins, or one too old for this, answers 404 and the shared token stands.
+// Returns what drops the token when the worker ends.
+async function ownToken(client, { name, origin }, token) {
+  try {
+    const r = await client.post('/api/me/worker-token', { name, from: token });
+    tokenFile(dirname(HUB_FILE), name, r.token);
+    return () => client.post('/api/me/worker-token', { name, drop: true }).catch(() => {});
+  } catch (e) {
+    if (e.status !== 404 && origin) console.log(amber(`! ${name} shares this machine's runner token, so the hub won't take its pushes (${e.message}). Start nuworq run on the machine that serves this hub, where ~/.nuworq/tokens/person.token is.`));
+    return async () => {};
   }
 }
 
@@ -1079,7 +1098,7 @@ function workerSetup(target, agent, flags, s, token = null) {
     ...(model && agent !== 'opencode' && agent !== 'pi' ? { NUWORQ_MODEL: model } : {}),
     // A worker nuworq run started says so at checkin, with its runner (#238); a runner's token says it too.
     ...(flags.run ? { NUWORQ_ROLE: 'worker', NUWORQ_RUNNER: hostname() } : {}),
-    ...(tokenAt ? { NUWORQ_TOKEN_FILE: tokenAt } : s.token && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
+    ...(tokenAt ? { NUWORQ_TOKEN_FILE: tokenAt } : (s.token || s.personKey) && !flags.run ? { NUWORQ_TOKEN: '<agent-token>' } : {}),
   };
   const task = [
     `Work on the ${target.name} project using nuworq (project: ${target.slug}). Do the work in this directory.`,
@@ -1399,7 +1418,7 @@ async function runCmd(flags) {
       if (e instanceof HubError) e.skip = true;
       throw e;
     }
-    const { name, home, worktree, cwd, checkout, start, keys, tokenAt, piDir } = setup;
+    const { name, home, worktree, cwd, checkout, start, keys, tokenAt, piDir, retire } = setup;
     const log = join(logs, `${name}.log`);
     // Its worktree, at the latest main. When git can't do that (e.g. it can't reach origin), the agent never
     // starts: the runner leaves the project alone for a while and the others go on.
@@ -1411,6 +1430,7 @@ async function runCmd(flags) {
         const err = redact(String(e.stderr || (e.killed ? 'timed out' : `exited with ${e.code ?? 'an error'}`)).trim());
         writeFileSync(log, `${err}\n`, { mode: 0o600 });
         dropTokenFile(tokenAt);
+        await retire();
         dropPiDir(piDir);
         const said = err.split('\n').find((l) => /^(fatal|error):/.test(l)) ?? err.split('\n').pop();
         throw Object.assign(new HubError(`couldn't update its checkout: ${said}`, { hint: `log: ${log}` }), { skip: true, pause: true });
@@ -1433,6 +1453,7 @@ async function runCmd(flags) {
       exited: new Promise((done) => child.on('close', async (code, sig) => {
         out.end();
         dropTokenFile(tokenAt);
+        await retire();
         dropPiDir(piDir);
         await reportUsage(s, token, target.slug, name, usage());
         // Its worktree goes with it, unless something there would be lost; and its branch, once its item is
@@ -1473,7 +1494,7 @@ async function runCmd(flags) {
     const item = branch.match(/^nuworq\/(\d+)-/)?.[1];
     const n = g.restored.length;
     try {
-      await createClient({ url: s.url, token: token ?? s.token }).call('comment', {
+      await createClient({ url: s.url, token: token ?? (s.token || undefined) }).call('comment', {
         ...(item ? { item: `#${item}` } : {}),
         headline: n ? `The runner put back ${n === 1 ? 'a branch' : `${n} branches or tags`} ${name} moved outside its own${g.kept.length ? `; ${g.kept.length} checked out elsewhere to check` : ''}`
           : `${g.kept.length === 1 ? 'A branch' : `${g.kept.length} branches`} checked out elsewhere moved while ${name} ran: check ${g.kept.length === 1 ? 'it' : 'them'}`,
@@ -1492,7 +1513,7 @@ async function runCmd(flags) {
   const auto = flags.workers === 'auto';
   const workers = auto ? 'auto' : num(flags.workers, 1);
   const maxWorkers = auto ? num(flags['max-workers'], autoMax(availableParallelism())) : undefined;
-  const reporter = createClient({ url: s.url, token: token ?? s.token });
+  const reporter = createClient({ url: s.url, token: token ?? (s.token || undefined) });
   const howMany = auto ? `as many ${agent} workers as this machine has room for (up to ${maxWorkers})` : `up to ${workers} ${agent} worker${workers > 1 ? 's' : ''}`;
   console.log(`${green('●')} ${bold('nuworq run')}  ${dim(`${howMany} on opted-in projects at ${s.url}; ${capsLine(caps)}; Ctrl-C stops`)}`);
   // The package it started on: when an update replaces it on disk, the code in memory is the old one (#456).
@@ -1854,7 +1875,7 @@ async function serve(flags) {
   // The GitHub App: from the environment, else the one the hub created for itself (Create GitHub App).
   const appFile = join(dataHome(flags), 'github-app.json');
   ignoreSiteHost(flags);
-  const { handedOver, handoff } = await import('../src/handoff.js');
+  const { handedOver, handoff, handoffRun } = await import('../src/handoff.js');
   const handed = handedOver() && !flags.smoke; // under serve --follow: the supervisor owns the port (#523)
   // The person's key on a hub without logins (#900), kept in tokens/person.token so it survives restarts and the
   // printed address keeps working. A demo keeps data in memory: a fresh key each run, printed below. A home the
@@ -1867,7 +1888,7 @@ async function serve(flags) {
       return '';
     }
   };
-  const server = createServer(hub, { auth, trustProxy, publicUrl, personKey: auth === 'local' && !flags.demo ? localKey() : '', oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
+  const server = createServer(hub, { auth, trustProxy, publicUrl, personKey: auth === 'local' && !flags.demo ? localKey() : '', savePersonKey: auth === 'local' && !flags.demo ? (k) => tokenFile(dirname(HUB_FILE), 'person', k) : null, hubRun: handed ? handoffRun() : '', oauth: oauthFromEnv(), githubApp: appFromEnv() ?? appFromFile(appFile), appFile, packageDir: join(dataHome(flags), 'package'), standby: handed, githubReleases: !flags.demo && !flags.smoke, ...(flags.smoke ? SMOKE : {}) });
   if (auth === 'required' && !server.auth.hasHumanToken()) {
     console.error(flags.demo
       ? `error: --demo keeps data in memory, so it can't hold login tokens.
@@ -1909,8 +1930,8 @@ hint: Create one, then start again:
     // The same commands as the Connect dialog: the installed `nuworq`, never a path into this checkout (#157).
     const base = publicUrl || url;
     const pkg = await server.package;
-    // The browser's address carries the person's key once (#900): this open sets the cookie, the address after it
-    // is plain. On a hub without logins the address alone proves nothing — code a worker runs reaches it too.
+    // The browser's address carries the person's key once (#900): this open signs the browser in (#908), the address
+    // after it is plain. On a hub without logins the address alone proves nothing — code a worker runs reaches it too.
     const open = auth === 'local' && server.personKey ? `${url}/?person=${server.personKey}` : url;
     console.log(`${green('●')} ${bold('nuworq')} is running at ${bold(url)}${flags.demo ? dim('  (demo data, in memory)') : dim(`  (${db})`)}
   Browser:  ${bold(open)}${auth === 'local' ? dim('  (your key once; the browser keeps it)') : ''}
@@ -2204,8 +2225,33 @@ async function invite(pos, flags) {
   throw new HubError(`usage: nuworq invite create --role ${PERSON_ROLES.join('|')} [--email e] [--by <owner>] [--public-url u] | list | revoke <id>`);
 }
 
+// A new person key (#908): the running hub replaces it, so the old one stops at once. With no hub up, the file serve
+// reads next.
+async function rotatePersonKey() {
+  const dir = dirname(HUB_FILE);
+  const read = (f) => { try { return readFileSync(f, 'utf8'); } catch { return ''; } };
+  let hub = null;
+  try { hub = JSON.parse(read(HUB_FILE)); } catch { /* none served from here */ }
+  if (hub?.auth === 'required') throw new HubError('this hub has logins, so it has no person key', { hint: 'See: nuworq token list, nuworq token revoke <name|id>' });
+  // The old key goes only to a listener that proves it holds it (#911). The proof can't be asked: no hub. Asked and
+  // not proved: something else holds the port, and neither the file nor the hub changes.
+  const personKey = read(join(dir, 'tokens', 'person.token')).trim();
+  const proven = hub?.url && personKey ? await provenPersonKey({ url: hub.url, personKey }, () => {}).catch(() => null) : null;
+  if (proven === null) {
+    tokenFile(dir, 'person', randomBytes(24).toString('base64url'));
+    return console.log(`${green('Rotated')} the person key. No hub is running here: the next ${bold('nuworq serve')} uses the new key and prints the address to open.`);
+  }
+  if (!proven) throw new HubError(`${hub.url} didn't prove it holds this machine's person key, so the key wasn't sent and nothing was rotated. If that's your hub, it's older than this CLI: update it and restart nuworq serve.`);
+  const { key } = await createClient({ url: hub.url, token: proven, retryMs: 0 }).post('/api/me/person-key', {});
+  console.log(`${green('Rotated')} the person key. The old one has stopped working, and every browser signed in with it can only look now.
+
+  Browser:  ${bold(`${hub.url}/?person=${key}`)}${dim('  (open it once in each browser you use)')}
+${dim('  Restart nuworq run on this machine: a running one still holds the old key.')}`);
+}
+
 // Token management runs on the hub host, straight against the database file.
 async function token(pos, flags) {
+  if (pos[0] === 'rotate-person') return rotatePersonKey();
   const { openDb } = await import('../src/db.js');
   const { Auth } = await import('../src/auth.js');
   const db = dbPath(flags);
@@ -2251,7 +2297,7 @@ async function token(pos, flags) {
     if (!r) throw new HubError(`no token "${name}"`, { hint: 'See: nuworq token list' });
     return console.log(`${green('Revoked')} ${r.role} token ${bold(r.name)}; its sessions are logged out.`);
   }
-  throw new HubError('usage: nuworq token create <name> --role human|agent | list | revoke <name|id>');
+  throw new HubError('usage: nuworq token create <name> --role human|agent | list | revoke <name|id> | rotate-person');
 }
 
 // Push channels are managed on the hub host, straight against the database file (like tokens).
@@ -2298,7 +2344,8 @@ async function gitCredential(pos, flags) {
   if (ask.host === hub.host && ask.protocol === hub.protocol.slice(0, -1)) {
     const agent = flags.as || envVar('AGENT');
     if (!agent) throw new HubError('who are you?', { hint: 'The helper needs --as <name> or NUWORQ_AGENT.' });
-    return process.stdout.write(`username=${agent}\npassword=${resolveSettings(flags).token || 'none'}\n`);
+    const s = resolveSettings(flags);
+    return process.stdout.write(`username=${agent}\npassword=${s.token || await provenPersonKey(s) || 'none'}\n`);
   }
   if (ask.host !== 'github.com') return;
   // --project: a read-only token to clone or fetch that project's repository (a worker before it holds an item).

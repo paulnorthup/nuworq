@@ -7,6 +7,9 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { generateKeyPairSync } from 'node:crypto';
+import { Hub } from '../src/core.js';
+import { createServer } from '../src/server.js';
 import { readCommands, refusedRef, refusal, proxyPush } from '../src/gitproxy.js';
 
 // The ref updates at the head of a push (#472), as git sends them: pkt-lines, capabilities after a NUL on the first.
@@ -270,5 +273,120 @@ describe('a push from a shallow clone goes through the hub', () => {
     const pushed = await rev(bare, `refs/heads/${BRANCH}`);
     assert.equal(pushed, await rev(clone, 'HEAD'), 'GitHub took the shallow clone\'s push');
     assert.notEqual(await rev(bare, 'refs/heads/main'), pushed, 'main never moved');
+  });
+});
+
+// #916: on a hub without logins nothing ties a name to a token, so a name alone would pass as the anonymous public
+// of this machine and get the hub to mint its write token for an item another agent holds. The fake GitHub here
+// records every request the hub makes, its token mints among them.
+describe('the git proxy on a hub without logins', () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  let github, hub, server, base, runner;
+  const personKey = 'the-persons-key-for-this-test';
+  const seen = [];
+  const listen = (s) => new Promise((resolve) => s.listen(0, '127.0.0.1', () => resolve(s.address().port)));
+  const basic = (user, pass) => `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+  const credentials = () => hub.q(`SELECT COUNT(*) AS n FROM events WHERE type IN ('credential', 'credential_refused')`).get().n;
+  const advert = (authorization) => fetch(`${base}/api/git/github.com/acme/api.git/info/refs?service=git-receive-pack`, { headers: authorization ? { authorization } : {} });
+
+  before(async () => {
+    github = http.createServer((req, res) => {
+      if (req.url !== '/app') seen.push(`${req.method} ${req.url}`); // GET /app: the hub reading its own app as it starts
+      req.resume();
+      const json = (status, b) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(b)); };
+      if (req.url === '/repos/acme/api/installation') return json(200, { id: 42, account: { login: 'acme' } });
+      if (req.url === '/app/installations/42/access_tokens') return json(201, { token: 'ghs_write', expires_at: new Date(Date.now() + 3600_000).toISOString(), repository_selection: 'selected' });
+      res.writeHead(200, { 'content-type': 'application/x-git-receive-pack-advertisement' });
+      res.end('001f# service=git-receive-pack\n0000');
+    });
+    const stub = `http://127.0.0.1:${await listen(github)}`;
+    hub = new Hub();
+    hub.tx(() => hub.project('api', { create: true }));
+    hub.addRemote(hub.project('api'), 'git@github.com:acme/api.git', 'you');
+    hub.humanOp('api', 'create', { title: 'api work', acceptance: 'done' });
+    hub.agentOp('api', 'claim', 'a1', { item: '#1' });
+    server = createServer(hub, { personKey, githubApp: { id: 1, key: privateKey.export({ type: 'pkcs8', format: 'pem' }), slug: 'nuworq-test' }, github: { api: stub, web: stub }, sweepMs: 3600_000 });
+    base = `http://127.0.0.1:${await listen(server)}`;
+    runner = server.auth.localRunnerToken('box');
+  });
+  after(() => { for (const s of [server, github]) { s.close(); s.closeAllConnections(); } });
+
+  test('a caller with no token gets nothing from the git proxy', async () => {
+    const asked = {
+      'no credential at all': '',
+      'the holder\'s name, an empty password': basic('a1', ''),
+      'the holder\'s name, a blank password': basic('a1', '   '),
+      'the holder\'s name, no colon': `Basic ${Buffer.from('a1').toString('base64')}`,
+    };
+    for (const [what, authorization] of Object.entries(asked)) {
+      const r = await advert(authorization);
+      assert.equal(r.status, 401, what);
+      assert.match(r.headers.get('www-authenticate'), /^Basic/, `${what}: git asks its helper`);
+      assert.match(await r.text(), /need the worker's name and agent token/, what);
+    }
+    const post = await fetch(`${base}/api/git/github.com/acme/api.git/git-receive-pack`, { method: 'POST', headers: { authorization: basic('a1', '') }, body: '0000' });
+    assert.equal(post.status, 401, 'the push itself too');
+    await post.text();
+    const none = await advert(basic('a1', 'none')); // what nuworq git-credential sends when it has no token
+    assert.equal(none.status, 401, 'a token that doesn\'t verify');
+    await none.text();
+    assert.deepEqual(seen, [], 'GitHub heard of none of them');
+    assert.equal(credentials(), 0, 'and no credential event names a1');
+  });
+
+  // #919: a machine's workers share its runner token, so a valid token isn't enough: it has to speak for that name.
+  test("a worker's token can't act under another agent's name at the git proxy", async () => {
+    const other = server.auth.workerToken(server.auth.verifyToken(runner.token).id, 'a2');
+    const minted = await (await fetch(`${base}/api/me/runner-token`, { method: 'POST' })).json(); // any code on this machine can get one
+    const asked = { 'the machine\'s runner token': runner.token, 'a fresh tokenless mint': minted.token, 'another worker\'s own token': other.token };
+    for (const [what, token] of Object.entries(asked)) {
+      const r = await advert(basic('a1', token));
+      assert.equal(r.status, 403, what);
+      assert.match(await r.text(), /a1 is another agent's name here/, what);
+      const push = await fetch(`${base}/api/git/github.com/acme/api.git/git-receive-pack`, { method: 'POST', headers: { authorization: basic('a1', token) }, body: '0000' });
+      assert.equal(push.status, 403, `${what}: the push itself too`);
+      await push.text();
+      const read = await fetch(`${base}/api/agent/credential`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ agent: 'a1' }) });
+      assert.equal(read.status, 403, `${what}: and the read-only token`);
+      await read.text();
+    }
+    assert.deepEqual(seen, [], 'GitHub heard of none of them');
+    assert.equal(credentials(), 0, 'and no credential event names a1');
+    server.auth.dropWorkerToken('a2');
+  });
+
+  test("only the person's key makes a worker's token", async () => {
+    const mint = (authorization) => fetch(`${base}/api/me/worker-token`, { method: 'POST', headers: { 'content-type': 'application/json', ...(authorization ? { authorization } : {}) }, body: JSON.stringify({ name: 'a1', from: runner.token }) });
+    for (const [what, authorization] of Object.entries({ 'no token': '', 'the runner token': `Bearer ${runner.token}` })) {
+      const r = await mint(authorization);
+      assert.equal(r.status, 403, what);
+      await r.text();
+    }
+    const mine = await mint(`Bearer ${personKey}`);
+    assert.equal(mine.status, 200);
+    const made = await mine.json();
+    assert.equal(server.auth.verifyToken(made.token).worker, 'a1');
+    assert.equal(server.auth.verifyToken(made.token).runner, 'box', 'still its machine\'s worker');
+    const refused = await fetch(`${base}/api/me/worker-token`, { method: 'POST', headers: { authorization: `Bearer ${made.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'a2', from: made.token }) });
+    assert.equal(refused.status, 403, 'a worker\'s token can\'t make another');
+    await refused.text();
+    server.auth.revoke(server.auth.verifyToken(runner.token).id);
+    assert.equal(server.auth.verifyToken(made.token), null, 'it goes with the runner token it came from');
+    runner = server.auth.localRunnerToken('box');
+    assert.equal(server.auth.workerToken(server.auth.verifyToken(runner.token).id, 'a3').name, 'a3.worker');
+    assert.equal(server.auth.dropWorkerToken('a3'), 1);
+  });
+
+  test('each worker on a machine pushes with its own token', async () => {
+    hub.humanOp('api', 'create', { title: 'more api work', acceptance: 'done' });
+    hub.agentOp('api', 'claim', 'a2', { item: '#2' });
+    const parent = server.auth.verifyToken(runner.token).id;
+    for (const name of ['a1', 'a2']) {
+      const r = await advert(basic(name, server.auth.workerToken(parent, name).token));
+      assert.equal(r.status, 200, name);
+      await r.text();
+    }
+    assert.ok(seen.includes('GET /acme/api.git/info/refs?service=git-receive-pack'), `reached GitHub: ${seen.join(', ')}`);
+    assert.deepEqual(hub.q(`SELECT actor FROM events WHERE type = 'credential' ORDER BY id`).all().map((e) => e.actor), ['a1', 'a2']);
   });
 });

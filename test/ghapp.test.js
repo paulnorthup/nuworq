@@ -121,7 +121,10 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
   });
   after(() => { for (const s of [server, gh.server]) { s.close(); s.closeAllConnections(); } });
 
-  const credential = (agent) => fetch(`${url}/api/agent/credential`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, authorization: `Bearer ${runner.token}` }, body: '{}' })
+  // Each worker's own token (#919): the runner token doesn't speak for any one name.
+  const own = {};
+  const ownToken = (agent) => (own[agent] ??= server.auth.workerToken(server.auth.verifyToken(runner.token).id, agent).token);
+  const credential = (agent) => fetch(`${url}/api/agent/credential`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nuworq-agent': agent, authorization: `Bearer ${ownToken(agent)}` }, body: '{}' })
     .then(async (r) => ({ status: r.status, json: await r.json() }));
 
   test('without a claim there is nothing to push for', async () => {
@@ -146,7 +149,7 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     const e = hub.q(`SELECT * FROM events WHERE type = 'credential'`).get();
     assert.equal(e.actor, 'a1');
     assert.match(e.headline, new RegExp(`a1 got a read-only GitHub token for github\\.com/acme/api on #1, until ${expires.slice(11, 16)} UTC`));
-    assert.deepEqual(JSON.parse(e.data), { agent: 'a1', item: 1, repo: 'github.com/acme/api', expires_at: expires, token: 'box.runner', write: false });
+    assert.deepEqual(JSON.parse(e.data), { agent: 'a1', item: 1, repo: 'github.com/acme/api', expires_at: expires, token: 'a1.worker', write: false });
     assert.equal(hub.q(`SELECT COUNT(*) AS n FROM events WHERE data LIKE '%ghs_%' OR headline LIKE '%ghs_%'`).get().n, 0, 'the token itself is never stored');
   });
 
@@ -168,7 +171,7 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
   test('git-credential answers git for the held repository only, and stays quiet elsewhere', async () => {
     // As git runs it: the request on stdin, the answer on stdout.
     const git = (input) => new Promise((resolve, reject) => {
-      const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: runner.token, HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
+      const env = { ...process.env, NUWORQ_URL: url, NUWORQ_TOKEN: ownToken('a1'), HOME: mkdtempSync(join(tmpdir(), 'nuworq-cred-')) };
       const child = execFile(process.execPath, [BIN, 'git-credential', 'get', '--as', 'a1'], { env }, (err, stdout, stderr) => (err ? reject(err) : resolve({ stdout, stderr })));
       child.stdin.end(input);
     });
@@ -179,7 +182,7 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
     assert.match(other.stderr, /the token is for github\.com\/acme\/api/);
     assert.equal((await git('protocol=https\nhost=gitlab.com\npath=acme/api.git\n\n')).stdout, '');
     // The hub, where its pushes go (#472): the worker's name, and its agent token as the password.
-    assert.equal((await git(`protocol=http\nhost=127.0.0.1:${port}\npath=api/git/github.com/acme/api.git\n\n`)).stdout, `username=a1\npassword=${runner.token}\n`);
+    assert.equal((await git(`protocol=http\nhost=127.0.0.1:${port}\npath=api/git/github.com/acme/api.git\n\n`)).stdout, `username=a1\npassword=${ownToken('a1')}\n`);
     assert.equal((await git(`protocol=https\nhost=127.0.0.1:${port}\n\n`)).stdout, '', 'not over another protocol');
   });
 
@@ -317,7 +320,7 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       assert.deepEqual(appFromFile(appFile).id, '999', 'serve picks it up from the file next time');
 
       hub.agentOp('api', 'claim', 'a1', { item: '#1' });
-      const mine = server.auth.localRunnerToken('box');
+      const mine = server.auth.workerToken(server.auth.verifyToken(server.auth.localRunnerToken('box').token).id, 'a1');
       const r = await fetch(`http://127.0.0.1:${port}/api/agent/credential`, { method: 'POST', headers: { 'x-nuworq-agent': 'a1', authorization: `Bearer ${mine.token}` }, body: '{}' });
       assert.equal(r.status, 200, 'the new app mints at once, no restart');
       assert.equal(gh.state.jwts.at(-1).iss, '999');

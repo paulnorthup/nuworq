@@ -1,9 +1,10 @@
 // Tokens and browser sessions. Only hashes are stored; plaintext tokens are shown once.
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const SESSION_MS = 30 * 24 * 3600_000;
 export const USED_EVERY_MS = 60_000; // a token's last-used time is written at most this often
 export const INVITE_MS = 7 * 24 * 3600_000;
+const WORKER_TOKEN_MS = 7 * 24 * 3600_000; // a worker's own token left by a crash goes after this (#919)
 const ROLES = ['human', 'agent'];
 // What a person may do here: owner > steward > member > viewer (see PERSON_CAN in core.js).
 export const PERSON_ROLES = ['owner', 'steward', 'member', 'viewer'];
@@ -15,6 +16,10 @@ export const OPERATE = 'operate';
 const OPERATOR_MINTERS = ['owner', 'steward'];
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 const sha = (s) => createHash('sha256').update(String(s)).digest();
+
+// A local hub's answer to the CLI's challenge (#911): proves it holds the person's key without showing it. The port
+// is the one the hub was reached on, so a listener elsewhere can't hand on a real hub's answer as its own.
+export const personProof = (key, nonce, port) => createHmac('sha256', key).update(`nuworq person proof\n${nonce}\n${port}`).digest('hex');
 const same = (a, b) => a.length === b.length && timingSafeEqual(a, b);
 const scopeOf = (s) => (s ? s.split(',') : null); // null: every project
 // Tokens start nwq_ (invites nwi_).
@@ -51,6 +56,7 @@ export class Auth {
       'ALTER TABLE tokens ADD COLUMN runner TEXT', // or a named runner (CI, cloud agents) that outlives any one person
       'ALTER TABLE tokens ADD COLUMN powers TEXT', // JSON subset of shape/build/review; NULL means all
       'ALTER TABLE tokens ADD COLUMN from_token INTEGER', // a runner token: the device login it was minted from (#656)
+      'ALTER TABLE tokens ADD COLUMN worker TEXT', // one worker's token on a hub without logins: the agent name it speaks for (#919)
     ]) {
       try { db.exec(sql); } catch { /* already there */ }
     }
@@ -308,13 +314,15 @@ export class Auth {
 
   // A hub without logins mints its workers' runner token on request (#892): the caller is the one person the
   // loopback hub serves — or one of their workers, which holds no more than a runner token already gives it.
-  // The runner is the machine's hostname. Minting again replaces the last one, like runnerToken does.
-  localRunnerToken(runner) {
+  // The runner is the machine's hostname. Only a caller holding the person's key passes replace: the previous mint
+  // is then revoked, like runnerToken does. A tokenless caller adds a token and revokes nothing, so it can't stall
+  // the workers sharing the machine's one (#913). The name costs one lookup however many mints came before.
+  localRunnerToken(runner, { replace = false } = {}) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const old of this.db.prepare('SELECT id FROM tokens WHERE runner = ? AND from_token IS NULL AND revoked_at IS NULL').all(runner)) this.revoke(old.id);
+      if (replace) for (const old of this.db.prepare('SELECT id FROM tokens WHERE runner = ? AND from_token IS NULL AND revoked_at IS NULL').all(runner)) this.revoke(old.id);
       let name = `${runner}.runner`;
-      for (let n = 2; this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name); n++) name = `${runner}.runner-${n}`;
+      if (this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name)) name = `${runner}.runner-${randomBytes(4).toString('hex')}`;
       const token = TOKEN_PREFIX + randomBytes(32).toString('base64url');
       this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, runner, created_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(name, 'agent', sha(token), token.slice(0, 8), String(runner), this.now());
@@ -324,6 +332,37 @@ export class Auth {
       this.db.exec('ROLLBACK');
       throw e;
     }
+  }
+
+  // One worker's own token on a hub without logins (#919): nothing else ties a name to a token there, and a machine's
+  // workers share its runner token, so that token can't tell them apart. A child of the token the runner holds: the
+  // same runner, projects and powers, never operating, revoked with it. Minted only for the person's key (the runner
+  // has it, a worker doesn't). Minting for a name again replaces its token, and a crash's leftovers go at each mint.
+  workerToken(fromId, worker) {
+    const from = this.db.prepare('SELECT * FROM tokens WHERE id = ? AND revoked_at IS NULL').get(fromId);
+    if (!from || from.role !== 'agent') throw new Error('only an agent token can have workers');
+    if (from.worker) throw new Error("this is a worker's token already");
+    const powers = from.powers ? JSON.parse(from.powers).filter((x) => x !== OPERATE) : null;
+    if (powers && !powers.length) throw new Error('this token has no powers a worker could use');
+    const token = TOKEN_PREFIX + randomBytes(32).toString('base64url');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM tokens WHERE worker IS NOT NULL AND (worker = ? OR created_at < ?)').run(worker, this.now() - WORKER_TOKEN_MS);
+      let name = `${worker.slice(0, 50)}.worker`;
+      if (this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name)) name += `-${randomBytes(3).toString('hex')}`;
+      this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, minted_by, runner, powers, created_at, projects, from_token, worker) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(name, 'agent', sha(token), token.slice(0, 8), from.minted_by, from.runner ?? from.name, powers ? JSON.stringify(powers) : null, this.now(), from.projects, from.id, worker);
+      this.db.exec('COMMIT');
+      return { token, name, worker };
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  // The worker is done: its token goes with it.
+  dropWorkerToken(worker) {
+    return this.db.prepare('DELETE FROM tokens WHERE worker = ?').run(worker).changes;
   }
 
   listTokens() {
@@ -374,6 +413,7 @@ export class Auth {
       out.actsAs = minter === 'viewer' || (minter === 'member' && !full.powers) ? minter : null;
       if (out.actsAs) { out.powers = []; out.operator = false; }
       if (row.runner) out.runner = row.runner; // a runner's token: the runner it reports as (#171)
+      if (row.worker) out.worker = row.worker; // one worker's token (#919): the only agent name it speaks for
     }
     if (row.role === 'human') {
       const p = row.person_id != null ? this.db.prepare('SELECT * FROM people WHERE id = ?').get(row.person_id) : null;

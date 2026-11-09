@@ -244,6 +244,10 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.equal((await op('submit', { token: device, agent: 'rita-laptop-a', body: { item: own, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
     assert.match((await op('review', { token: device, agent: 'rita-laptop-b', body: { item: own, verdict: 'accept', headline: 'x' } })).json.error, /can't review your own work/);
 
+    // The machine's workers share the runner token, so one of them can't revoke it (#913).
+    assert.equal((await call('/api/me/revoke', { token: runner })).status, 400);
+    assert.equal((await me(runner)).role, 'agent');
+
     // Minting again replaces it; disconnecting the machine revokes its runner token too.
     const again = (await mint(device)).json.token;
     assert.equal((await me(runner)).role, null, 'the old runner token is revoked');

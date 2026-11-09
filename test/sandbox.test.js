@@ -139,7 +139,7 @@ describe("a worker's sandbox never lets it write git's hooks or config (#472)", 
     assert.ok(!filesystem.denyRead.includes('/run/user/501/containers'));
     // Only absolute paths, and the runtime dir's default on Linux even when the variable never reached the runner.
     assert.deepEqual(machineDenies({ XDG_RUNTIME_DIR: 'run', ZDOTDIR: '~/zsh' }, { platform: 'darwin' }), []);
-    assert.deepEqual(machineDenies({}, { platform: 'linux', uid: 1000 }), ['/run/user/1000/containers/auth.json']);
+    assert.deepEqual(machineDenies({}, { platform: 'linux', uid: 1000 }), ['/run/user/1000/containers/auth.json', '/run/containers/1000/auth.json']);
   });
 
   test('without a worktree of its own (--here), the checkout\'s hooks and config are still denied', () => {

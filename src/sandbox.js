@@ -56,10 +56,11 @@ const REGISTRIES = [
 // GIT_CONFIG_GLOBAL=/dev/null (git then never resolves ~/.gitconfig or ~/.config/git/config) and the person's
 // commit identity as env config entries (workerEnv and gitConfigEnv, src/runtrust.js). The other stores are
 // read only by their own tools, which skip a file they can't open; a worker's registries are reached with the
-// env the runner injects or the project's own config. Where audit #907 reports those CLIs keep their logins on each
-// system (#910, not confirmed against installed tools): fly's ~/.fly, wrangler's and netlify's XDG config (Preferences
-// on macOS), doctl's and ngrok's Application Support on macOS, composer's XDG home on Linux; the older folders stay
-// denied, since a machine that upgraded still has them, and a deny on a folder a tool doesn't use costs nothing.
+// env the runner injects or the project's own config. Where those CLIs keep their logins on each system (#910,
+// checked 2026-11-09 against their docs, or their source for flyctl and doctl, whose docs don't say): fly's ~/.fly,
+// wrangler's and netlify's XDG config (Preferences on macOS), doctl's and ngrok's Application Support on macOS,
+// composer's XDG home on Linux; the older folders stay denied, since a machine that upgraded still has them, and a
+// deny on a folder a tool doesn't use costs nothing.
 const APP_SUPPORT = '~/Library/Application Support';
 const PREFERENCES = '~/Library/Preferences';
 export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.azure', '~/.kube', '~/.docker', '~/.git-credentials', '~/.netrc', '~/.npmrc', '~/.pypirc', '~/.gnupg', '~/.claude', '~/.config/opencode', '~/.local/share/opencode', '~/.pi/agent',
@@ -71,15 +72,18 @@ export const DENY_READ = ['~/.ssh', '~/.nuworq', '~/.nuworq-release', '~/.aws', 
   '~/Library/Keychains', '~/Library/Cookies', '~/Library/Safari', `${APP_SUPPORT}/Code`, `${APP_SUPPORT}/Code - Insiders`, `${APP_SUPPORT}/VSCodium`, `${APP_SUPPORT}/Cursor`, `${APP_SUPPORT}/sops`, `${APP_SUPPORT}/Claude`, `${APP_SUPPORT}/Google/Chrome`, `${APP_SUPPORT}/Chromium`, `${APP_SUPPORT}/BraveSoftware`, `${APP_SUPPORT}/Microsoft Edge`, `${APP_SUPPORT}/Arc`, `${APP_SUPPORT}/Firefox`,
   '~/.mozilla', '~/.config/google-chrome', '~/.config/chromium', '~/.config/BraveSoftware', '~/.config/microsoft-edge', '~/.config/Code', '~/.config/Code - Insiders', '~/.config/VSCodium'];
 
-// The stores whose place depends on this machine (#910), so DENY_READ can't name them: podman's login in the runtime
-// dir (the file only: rootless podman keeps its run state in that folder), which a worker can find whether or not
-// XDG_RUNTIME_DIR reaches it, and the zsh startup files and history in a ZDOTDIR away from home. Absolute paths only:
-// a sandbox path can't be relative. A runner started without ZDOTDIR in its environment can't see that one.
+// The stores whose place depends on this machine (#910), so DENY_READ can't name them: podman's login in the
+// runtime dir, or in /run/containers/<uid> when XDG_RUNTIME_DIR is unset (the file only: rootless podman keeps its run
+// state in that folder), which a worker can find whether or not XDG_RUNTIME_DIR reaches it, and the zsh startup files
+// and history in a ZDOTDIR away from home. Absolute paths only: a sandbox path can't be relative. A runner started
+// without ZDOTDIR in its environment can't see that one.
 const ZDOT_FILES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zsh_history', '.zsh_sessions'];
 export function machineDenies(env = process.env, { platform = process.platform, uid = process.getuid?.() } = {}) {
-  const runtime = [env.XDG_RUNTIME_DIR, platform === 'linux' && uid !== undefined ? `/run/user/${uid}` : null];
+  const linuxUid = platform === 'linux' && uid !== undefined;
+  const runtime = [env.XDG_RUNTIME_DIR, linuxUid ? `/run/user/${uid}` : null];
   return [...new Set([
     ...runtime.filter((d) => d?.startsWith('/')).map((d) => join(d, 'containers', 'auth.json')),
+    ...(linuxUid ? [`/run/containers/${uid}/auth.json`] : []),
     ...(env.ZDOTDIR?.startsWith('/') ? ZDOT_FILES.map((f) => join(env.ZDOTDIR, f)) : []),
   ])];
 }

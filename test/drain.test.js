@@ -49,7 +49,7 @@ describe('the hub drains on shutdown (#545)', () => {
 
   test('a pending wait answers at once, empty', async () => {
     const { server, port } = await hub();
-    const r = request(port, 'GET', '/api/wait?for=operator&project=o', { 'x-nuworq-agent': 'op' });
+    const r = request(port, 'GET', '/api/wait?for=operator&project=o', { 'x-nuworq-agent': 'op', authorization: `Bearer ${server.personKey}` });
     r.req.end();
     await until(50);
     const t = Date.now();
