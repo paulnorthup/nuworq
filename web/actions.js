@@ -380,7 +380,7 @@ function appStatus(st) {
     ? [`Installed${st.repositories == null ? '' : ` on ${plural(st.repositories, 'repository', 'repositories')}`}${st.slug ? ` as <code>${esc(st.slug)}</code>` : ''}: workers push there with a token for one repository, for an hour.`,
       st.install_url ? `<a class="btn small" href="${esc(st.install_url)}" target="_blank" rel="noopener">Manage on GitHub</a>` : '']
     : st.state === 'created'
-      ? [`Created${st.slug ? ` as <code>${esc(st.slug)}</code>` : ''}, not installed: it can't reach any repository yet. GitHub asks which ones it may use.`, '<a class="btn primary small" href="api/github/install">Install</a>']
+      ? [`Created${st.slug ? ` as <code>${esc(st.slug)}</code>` : ''}, not installed: it can't reach any repository yet. GitHub asks which ones it may use.`, `<a class="btn primary small" href="${esc(S.info?.auth === 'local' && st.install_url || 'api/github/install')}">Install</a>`]
       : ['No GitHub App yet. Workers push through it: a token for one repository, for an hour, and nobody holds a lasting GitHub credential. GitHub asks you to confirm it, then where to install it.', '<a class="btn primary small" href="api/github/app/new">Create</a>'];
   return `<div class="app-status ${st.state}"><span class="dot"></span><p>${line}</p>${act}</div>`;
 }
@@ -515,7 +515,7 @@ export function drawLauncher({ keep = false } = {}) {
   if (!L.index) { list.innerHTML = placeholder(3, { head: false }); return; }
   if (L.confirming) { list.innerHTML = confirmHtml(L.confirming, { esc }); return; }
   // Moving through the list keeps it as it is; typing (or the index arriving) ranks it again.
-  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { theme: themeNow(), current: S.slug, view: S.view, zoom: S.zoom, role: S.person?.role ?? 'owner', billingOwner: wsOwner(), feedback: !!S.feedback?.on, signOut: S.me?.auth === 'required', recent: recent() });
+  if (!keep || !L.results.length) L.results = rank(L.index, $('#ln-q').value, { theme: themeNow(), current: S.slug, view: S.view, zoom: S.zoom, role: S.person ? S.person.role : 'owner', billingOwner: wsOwner(), feedback: !!S.feedback?.on, signOut: S.me?.auth === 'required', recent: recent() });
   L.sel = Math.min(L.sel, Math.max(0, L.results.length - 1));
   list.innerHTML = resultsHtml(L.results, { sel: L.sel, stages: L.index.stages, esc });
   list.querySelector('.ln-row.on')?.scrollIntoView({ block: 'nearest' });

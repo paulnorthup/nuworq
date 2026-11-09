@@ -272,6 +272,50 @@ describe('a GitHub App mints one-repo, one-hour tokens per claim', () => {
 });
 
 describe('an owner creates the hub\'s GitHub App in one click', () => {
+  test("a tokenless caller can't replace the hub's GitHub App (#915)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nuworq-app-'));
+    const server = createServer(new Hub(), { appFile: join(dir, 'github-app.json'), publicUrl: 'http://hub.test' });
+    const port = await listen(server);
+    const at = (path, init = {}) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual', ...init });
+    const key = { authorization: `Bearer ${server.personKey}` };
+    const start = () => at('/api/github/app/start', { method: 'POST', headers: { ...key, 'content-type': 'application/json' }, body: '{}' });
+    try {
+      for (const path of ['/api/github/app/new', '/api/github/app/new?state=guessed', '/api/github/app/new?org=evil']) {
+        const r = await at(path);
+        assert.equal(r.status, 403, path);
+        assert.match((await r.json()).hint, /nuworq serve printed/, path);
+      }
+      assert.equal((await at('/api/github/app/start', { method: 'POST', body: '{}' })).status, 403, 'nor asks for a state');
+
+      // The person's page: its header gets a state, and a link with that state opens the setup.
+      const { state } = await (await start()).json();
+      const page = await at(`/api/github/app/new?state=${state}`);
+      assert.equal(page.status, 200);
+      assert.ok((await page.text()).includes(`settings/apps/new?state=${state}`), 'the same state goes to GitHub, for the callback');
+      assert.equal((await at('/api/github/app/new', { headers: key })).status, 200, 'the key as a bearer token needs no state');
+    } finally { server.close(); server.closeAllConnections(); }
+  });
+
+  test("a tokenless caller can't install or list through the hub's app (#915)", async () => {
+    const gh = github();
+    const stub = `http://127.0.0.1:${await listen(gh.server)}`;
+    const server = createServer(new Hub(), { githubApp: { id: '7', key: PEM, slug: 'nuworq-hub' }, github: { web: stub, api: stub } });
+    const port = await listen(server);
+    const at = (path, headers = {}) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual', headers });
+    try {
+      for (const path of ['/api/github/install', '/api/github/repos']) assert.equal((await at(path)).status, 403, path);
+      const key = { authorization: `Bearer ${server.personKey}` };
+      const stateOf = async (path, headers) => (await (await at(path, headers)).json()).state;
+      assert.equal(await stateOf('/api/github/app'), 'installed');
+      gh.state.installed = new Set();
+      assert.equal(await stateOf('/api/github/app?fresh'), 'installed', '?fresh does nothing for it: the last minute\'s answer stands');
+      assert.equal(await stateOf('/api/github/app?fresh', key), 'created', 'for the person it asks GitHub again');
+      gh.state.installed = new Set(['acme/api']);
+      assert.equal((await at('/api/github/install', key)).status, 302, "the person's key still installs");
+      assert.equal((await at('/api/github/repos', key)).status, 200);
+    } finally { for (const s of [server, gh.server]) { s.close(); s.closeAllConnections(); } }
+  });
+
   test('the page posts the manifest to GitHub; the callback trades the code, saves the app 0600, and the hub uses it', async () => {
     const gh = github();
     const stub = `http://127.0.0.1:${await listen(gh.server)}`;
@@ -283,7 +327,8 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
     hub.humanOp('api', 'create', { title: 'api work', acceptance: 'done' });
     const server = createServer(hub, { appFile, github: { web: stub, api: stub }, publicUrl: 'http://hub.test' });
     const port = await listen(server);
-    const get = (path) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual' });
+    const get = (path) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual', headers: { authorization: `Bearer ${server.personKey}` } });
+    const fromGitHub = (path) => fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual' }); // no key, no cookie: its state is the proof
     try {
       assert.deepEqual(await (await get('/api/github/app')).json(), { configured: false, slug: null, can_create: true, state: 'none', repositories: null, install_url: null });
       const page = await get('/api/github/app/new');
@@ -300,10 +345,10 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       assert.equal(m.hook_attributes.url, 'http://hub.test/api/hooks/github-app');
       const state = new URL(action).searchParams.get('state');
 
-      assert.equal((await get(`/api/github/app/callback?code=good&state=forged`)).status, 400, 'a state the hub never made is refused');
+      assert.equal((await fromGitHub(`/api/github/app/callback?code=good&state=forged`)).status, 400, 'a state the hub never made is refused');
       const installed = gh.state.installed;
       gh.state.installed = new Set(); // made, and installed nowhere yet
-      const back = await get(`/api/github/app/callback?code=good&state=${state}`);
+      const back = await fromGitHub(`/api/github/app/callback?code=good&state=${state}`);
       assert.equal(back.status, 200, 'a page of nuworq\'s on the way to GitHub, saying what comes next');
       const INSTALL = 'https://github.com/apps/nuworq-hub/installations/new';
       assert.equal(back.headers.get('refresh'), `3;url=${INSTALL}`, 'and on to GitHub\'s install page by itself');
@@ -312,7 +357,7 @@ describe('an owner creates the hub\'s GitHub App in one click', () => {
       assert.ok(made.includes(`href="${INSTALL}"`), 'with a button, if the browser doesn\'t follow');
       assert.equal((statSync(appFile).mode & 0o777).toString(8), '600');
       assert.deepEqual(JSON.parse(readFileSync(appFile, 'utf8')), { id: '999', slug: 'nuworq-hub', key: PEM, webhook_secret: 'whs', client_id: 'cid', client_secret: 'csec', owner: 'remy' });
-      assert.equal((await get(`/api/github/app/callback?code=good&state=${state}`)).status, 400, 'a state works once');
+      assert.equal((await fromGitHub(`/api/github/app/callback?code=good&state=${state}`)).status, 400, 'a state works once');
       assert.deepEqual(await (await get('/api/github/app')).json(), { configured: true, slug: 'nuworq-hub', can_create: true, state: 'created', repositories: null, install_url: INSTALL });
       gh.state.installed = new Set([...installed, 'acme/web']); // the person installs it on GitHub and comes back
       assert.equal((await (await get('/api/github/app')).json()).state, 'created', 'asked of GitHub at most once a minute');

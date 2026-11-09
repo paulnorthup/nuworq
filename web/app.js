@@ -12,9 +12,9 @@ import { bootData } from './boot.js';
 import { S, setState, putIn } from './store.js';
 import { ACTIONS, KEYS, L, backFromGitHub, closeLauncher, closeRailMenu, drawLauncher, runLauncher, setTheme, workspaceSettings } from './actions.js';
 import { store } from './prefs.js';
-import { signInFromAddress, noteSignIn } from './person.js';
+import { signInFromAddress, noteSignIn, personHeaders } from './person.js';
 import { go, openTarget, prefetch, projectTarget, route } from './router.js';
-import { $, api, closeModal, data, live, offline, online, prefetchView, render, scheduleRefresh, typing, views } from './ui.js';
+import { $, api, closeModal, data, live, offline, online, prefetchView, render, scheduleRefresh, toastError, typing, views } from './ui.js';
 import { WIDE } from './views/html.js';
 
 // Crossing the two-column width lays the page out again.
@@ -80,6 +80,13 @@ document.addEventListener('keydown', (e) => {
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 // Using a feature tagged "new" (#130) retires its tag for this viewer, and so does tapping the tag itself (#314).
 document.addEventListener('click', (e) => dismissNew(e), true);
+// Create the GitHub App: on a hub without logins, the person's link needs what a link can't carry (#915).
+document.addEventListener('click', (e) => {
+  const a = e.target.closest?.('a[href^="api/github/app/new"]');
+  if (!a || !personHeaders()['x-nuworq-person']) return;
+  e.preventDefault();
+  api('/api/github/app/start', { method: 'POST', body: '{}' }).then(({ state }) => { location.href = `api/github/app/new?state=${encodeURIComponent(state)}`; }, (err) => toastError(err));
+});
 for (const type of ['click', 'focusin']) {
   document.addEventListener(type, (e) => {
     const el = e.target.closest?.('.is-new');

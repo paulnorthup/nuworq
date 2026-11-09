@@ -1518,11 +1518,12 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         // it (#908). One that doesn't match (a rotated key) is simply not the person: this browser can still look.
         if (browserMatches(req.headers['x-nuworq-person'])) who = { role: 'human', name: 'you', via: 'local-browser' };
       }
+      const keyless = () => deny(403, 'this hub without logins acts only for its person', 'Open the address nuworq serve printed (it carries your key once), or send the key in ~/.nuworq/tokens/person.token as a bearer token. Workers send an agent token: nuworq token create <name> --role agent.');
       // The anonymous public of this machine reads; the person's key acts (#900). Two self-routes stay open
       // tokenless: revoking nothing, and the runner-token mint (#892), whose answer is an agent token and so the
       // least a worker may carry — never person power.
       if (who.via === 'anon' && unsafe && !['/api/me/revoke', '/api/me/runner-token'].includes(path)) {
-        return deny(403, 'this hub without logins acts only for its person', 'Open the address nuworq serve printed (it carries your key once), or send the key in ~/.nuworq/tokens/person.token as a bearer token. Workers send an agent token: nuworq token create <name> --role agent.');
+        return keyless();
       }
       // A token revokes itself (nuworq disconnect). Bearer only: a browser session logs out instead.
       if (req.method === 'POST' && path === '/api/me/revoke') {
@@ -1592,9 +1593,11 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Who may act as an operator (#609): an agent by its token (Auth.identity), a person if a steward or owner —
       // on a hub without logins the person by their key (#900), never the anonymous public of the machine.
       caller.operate = who.role === 'agent' ? !!who.operator : who.person ? PERSON_AGENT_CAN[who.person.role] === null : who.role === 'human';
-      // A person acts as "@handle" with their role; without accounts the one human is "you", an owner.
+      // A person acts as "@handle" with their role; without accounts the one human is "you", an owner. The anonymous
+      // public of a hub without logins has no role at all (#915): a GET isn't behind the refusal above, so a default
+      // here would pass its owner checks.
       const by = who.person ? `@${who.person.handle}` : HUMAN;
-      const personRole = who.person?.role ?? 'owner';
+      const personRole = who.via === 'anon' ? null : who.person?.role ?? 'owner';
       // A person on an agent route acts with their role (#469): a viewer with none, a member only as on the human routes.
       // An agent token acts with its minter's role as it is now (#629, Auth.identity), so a member's machine can't do
       // what the member can't.
@@ -1654,7 +1657,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         server.personKey = fresh;
         return sendSecret(200, { ok: true, key: fresh });
       }
-      if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: by, role: personRole });
+      if (req.method === 'GET' && path === '/api/people/me') return send(200, { person: who.via === 'anon' ? null : by, role: personRole });
       // A write sent again with the same idempotency key (#524: the client retries writes through a proxy's 502 or
       // a dropped connection) gets the answer the first one got, and is applied once. One still being applied is
       // a 409 the client waits out. Keys are per caller and agent, so nobody replays someone else's answer.
@@ -1682,16 +1685,31 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Install the app for this organization: on a shared hub, the installation is bound to it on the way back.
       if (req.method === 'GET' && path === '/api/github/install') {
         if (!app?.slug) return deny(404, 'this hub has no GitHub App to install', 'The hub host sets one up (docs/GITHUB.md).');
+        if (who.via === 'anon') return keyless();
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't install the app for this workspace`, 'Ask an owner.');
         return redirect(res, spaces ? `${app.installUrl()}?state=${encodeURIComponent(installState(app, hub.workspace))}` : app.installUrl());
       }
-      if (req.method === 'GET' && path === '/api/github/app/new') {
-        if (spaces) return deny(403, 'on a hub with workspaces, the host sets up the GitHub App', 'See docs/GITHUB.md: NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE.');
-        if (personRole !== 'owner') return deny(403, 'only an owner creates the GitHub App', 'Ask an owner of this hub.');
-        const site = publicUrl || origin(req);
+      const newAppState = () => {
         const state = randomBytes(24).toString('base64url');
         for (const [k, exp] of appStates) if (exp < Date.now()) appStates.delete(k);
         appStates.set(state, Date.now() + 3600_000);
+        return state;
+      };
+      // A link can't carry the browser's credential, a header (#908), so on a hub without logins the page asks for the
+      // state first and opens /api/github/app/new with it (#915, web/app.js).
+      if (req.method === 'POST' && path === '/api/github/app/start') {
+        if (spaces) return deny(403, 'on a hub with workspaces, the host sets up the GitHub App', 'See docs/GITHUB.md: NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE.');
+        if (personRole !== 'owner') return deny(403, 'only an owner creates the GitHub App', 'Ask an owner of this hub.');
+        return sendSecret(200, { ok: true, state: newAppState() });
+      }
+      if (req.method === 'GET' && path === '/api/github/app/new') {
+        if (spaces) return deny(403, 'on a hub with workspaces, the host sets up the GitHub App', 'See docs/GITHUB.md: NUWORQ_GITHUB_APP_ID and NUWORQ_GITHUB_APP_KEY_FILE.');
+        const given = !required && url.searchParams.get('state');
+        const held = !!given && appStates.get(given) > Date.now();
+        if (who.via === 'anon' && !held) return keyless();
+        if (personRole !== 'owner' && !held) return deny(403, 'only an owner creates the GitHub App', 'Ask an owner of this hub.');
+        const site = publicUrl || origin(req);
+        const state = held ? given : newAppState();
         const org = String(url.searchParams.get('org') ?? '').replace(/[^\w.-]/g, '');
         const action = `${gh.web}/${org ? `organizations/${org}/` : ''}settings/apps/new?state=${state}`;
         const m = JSON.stringify(manifest(site, `nuworq ${hostname(new URL(site).host)}`));
@@ -1702,9 +1720,10 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
 <p class="lead">Workers push through this app: a token for one repository, for an hour, so nobody holds a lasting GitHub credential. It can push branches, open pull requests, and read CI and issues on the repositories you install it on, and nothing else.</p>
 <p class="lead">Next, GitHub shows the app${org ? ` for <b>${q(org)}</b>` : ' on your account'} with its name and permissions filled in, and asks you to confirm. Then it asks which repositories it may use, and you come back here with <b>+ Project</b> open on them.</p>
 <form method="post" action="${q(action)}" class="flow-form"><input type="hidden" name="manifest" value="${q(m)}"><button class="btn primary" type="submit">Create GitHub App</button></form>
-<p class="hint">${org ? `For your account instead, open this page without ?org.` : 'For a GitHub organization, open this page with ?org=&lt;name&gt;.'} <a href="${base}/#/">Back to nuworq</a></p>`), 'text/html; charset=utf-8');
+<p class="hint">${org ? "For your account instead, take org out of this page's address." : "For a GitHub organization, add org=&lt;name&gt; to this page's address."} <a href="${base}/#/">Back to nuworq</a></p>`), 'text/html; charset=utf-8');
       }
       if (path === '/api/invites' || path === '/api/invites/revoke') {
+        if (who.via === 'anon') return keyless();
         if (personRole !== 'owner') return deny(403, 'only an owner invites people', 'Ask an owner of this workspace.');
         if (req.method === 'GET' && path === '/api/invites') return send(200, authz.listInvites());
         if (req.method !== 'POST') return deny(405, 'use GET or POST');
@@ -1938,6 +1957,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // the app is shared, and its installations would show other organizations' repository names.
       if (req.method === 'GET' && path === '/api/github/repos') {
         if (spaces) return deny(403, 'on a hub with workspaces, projects are added by name and remote for now', 'The shared GitHub App would list other workspaces\' repositories.');
+        if (who.via === 'anon') return keyless();
         if (!['owner', 'steward'].includes(personRole)) return deny(403, `a ${personRole} can't add projects`, 'Ask an owner or steward.');
         if (!app) return deny(404, 'this hub has no GitHub App, so it can\'t list repositories', 'An owner creates one in one click: /api/github/app/new (Connect an agent → GitHub App). Or add the project by name and remote.');
         const q = String(url.searchParams.get('q') ?? '').trim().toLowerCase();
@@ -2146,7 +2166,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         // One of the hub's owners: which channels here hear about early-access requests (#251), maybe none.
         const email = who.person && spaces && hub.db.prepare('SELECT email FROM people WHERE handle = ? AND verified_at IS NOT NULL').get(who.person.handle)?.email?.toLowerCase();
         const requests = email && earlyAccess?.owners?.includes(email) ? requestChannels(hub.db, who.person.handle).map((c) => c.id) : null;
-        return send(200, { channels: listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null, requests });
+        return send(200, { channels: who.via === 'anon' ? [] : listChannels(hub.db, { person: own }), kinds: KINDS, person: who.person ? by : null, requests });
       }
       if (req.method === 'POST' && path.startsWith('/api/notify') && personRole !== 'owner' && !(own && ['/api/notify', '/api/notify/remove', '/api/notify/weekly'].includes(path))) {
         return deny(403, 'only an owner manages hub-wide push channels', 'Add one for yourself instead: it gets only what needs you.');

@@ -289,7 +289,7 @@ describe('push notifications', () => {
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
     // Notification channels are the person's to change: their key acts, a tokenless call may not (#900).
-    const call = (path, body) => fetch(base + path, body ? { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify(body) } : {}).then((r) => r.json());
+    const call = (path, body) => fetch(base + path, body ? { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${server.personKey}` }, body: JSON.stringify(body) } : { headers: { authorization: `Bearer ${server.personKey}` } }).then((r) => r.json());
     try {
       assert.equal((await call('/api/notify', { kind: 'webhook', url: sinkUrl + '/secret-path-1234' })).ok, true);
       const listed = await call('/api/notify');

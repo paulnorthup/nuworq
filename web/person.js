@@ -15,17 +15,17 @@ export async function signInFromAddress() {
   if (me?.role === 'human') store.set('person', sent);
 }
 
-// A hub that really stopped no longer takes what this browser holds (#920): the page still reads, so say why nothing
-// it does will work, and where to fix that. me: /api/me's answer, null when the hub didn't give one.
+// Without the key the page still reads (#915), and a hub that really stopped no longer takes what this browser holds
+// (#920): say why nothing it does will work, and where to fix that. me: /api/me's answer, null when the hub didn't give one.
 export function noteSignIn(me) {
   if (!me) return;
-  const lost = me.auth === 'local' && me.role !== 'human' && !!store.get('person', '');
+  const lost = me.auth === 'local' && me.role !== 'human';
   let bar = document.getElementById('signed-out');
   if (!lost) return void bar?.remove();
   if (bar) return;
   bar = document.createElement('div');
   bar.id = 'signed-out';
   bar.setAttribute('role', 'status');
-  bar.textContent = 'This hub restarted, so this browser can only look. To act, open the address nuworq serve printed in its terminal.';
+  bar.textContent = `${store.get('person', '') ? 'This hub restarted, so this browser' : 'This browser'} can only look. To act, open the address nuworq serve printed in its terminal.`;
   document.body.prepend(bar);
 }

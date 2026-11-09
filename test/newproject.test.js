@@ -110,7 +110,7 @@ describe('"+ Project" from the repositories the GitHub App can see', () => {
     const plain = createServer(hub);
     const base = `http://127.0.0.1:${await listen(plain)}`;
     try {
-      const r = await fetch(`${base}/api/github/repos`);
+      const r = await fetch(`${base}/api/github/repos`, { headers: { authorization: `Bearer ${plain.personKey}` } });
       assert.equal(r.status, 404);
       assert.match((await r.json()).hint, /Create|api\/github\/app\/new/);
     } finally { plain.close(); }
