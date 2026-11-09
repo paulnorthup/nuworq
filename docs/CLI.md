@@ -495,6 +495,7 @@ Usage
   nuworq token create <name> --role human|agent [flags]
   nuworq token list
   nuworq token revoke <name|id>
+  nuworq token rotate-person
 
 Flags
   --role <role>         human or agent (default: agent)
@@ -513,6 +514,9 @@ Example
   nuworq token create box --role agent --project acme
 
 A new token is shown only once. Revoking one logs out its sessions.
+
+rotate-person replaces the key of a hub without logins: the old one stops at
+once, and it prints the new address to open.
 ```
 
 ### nuworq notify

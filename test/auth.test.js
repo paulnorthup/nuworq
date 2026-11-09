@@ -1,8 +1,17 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { execFile } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { Hub } from '../src/core.js';
 import { createServer } from '../src/server.js';
+
+const run = promisify(execFile);
+const BIN = fileURLToPath(new URL('../bin/nuworq.js', import.meta.url));
 
 function start(opts) {
   const hub = new Hub();
@@ -122,23 +131,108 @@ describe('local mode', () => {
     assert.match(bad.json.error, /invalid or revoked token/);
   });
 
-  test('one open of the address with ?person= sets the cookie, and the browser keeps acting', async () => {
+  const credentialOf = (location) => location.match(/#person=([0-9a-f]{64})$/)?.[1];
+  const signIn = async () => credentialOf((await request(ctx.port, 'GET', `/?person=${ctx.server.personKey}`)).headers.location);
+
+  test('one open of the address with ?person= hands the page its credential, and the browser keeps acting', async () => {
     const open = await request(ctx.port, 'GET', '/?person=notit');
     assert.equal(open.status, 200); // a wrong key is just the plain page
     assert.equal(open.headers['set-cookie'], undefined);
     const first = await request(ctx.port, 'GET', `/?person=${ctx.server.personKey}`);
     assert.equal(first.status, 303);
-    assert.match(first.headers.location, /^\/$/);
-    const cookie = first.headers['set-cookie'].join('\n');
-    assert.match(cookie, /nuworq_person=/);
-    assert.match(cookie, /HttpOnly/);
-    assert.doesNotMatch(cookie, new RegExp(ctx.server.personKey));
-    // Cookies ride along, so an unsafe request proves it's this site (the browser's fetch sends Origin).
-    const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'from the browser' }, headers: { cookie, origin: `http://127.0.0.1:${ctx.port}` } });
+    assert.doesNotMatch(first.headers.location, new RegExp(ctx.server.personKey));
+    const credential = credentialOf(first.headers.location);
+    assert.ok(credential, first.headers.location);
+    const headers = { 'x-nuworq-person': credential };
+    assert.equal((await request(ctx.port, 'GET', '/api/me', { headers })).json.role, 'human');
+    const steer = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'from the browser' }, headers });
     assert.equal(steer.status, 200);
-    // Cookies ride along, so an unsafe request must be same-origin.
-    const evil = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'csrf' }, headers: { cookie, origin: 'https://evil.example' } });
-    assert.equal(evil.status, 403);
+    const wrong = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'guess' }, headers: { 'x-nuworq-person': 'a'.repeat(64) } });
+    assert.equal(wrong.status, 403);
+  });
+
+  test('a person\'s browser credential sent to another loopback port can\'t act on the hub', async () => {
+    // What a browser hands any listener on 127.0.0.1, whatever its port: the cookies of that host. Replayed here.
+    const credential = await signIn();
+    const replayed = await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'replayed' }, headers: { cookie: `nuworq_person=${credential}`, origin: `http://127.0.0.1:${ctx.port}` } });
+    assert.equal(replayed.status, 403);
+    assert.match(replayed.json.error, /acts only for its person/);
+    const me = await request(ctx.port, 'GET', '/api/me', { headers: { cookie: `nuworq_person=${credential}` } });
+    assert.equal(me.json.role, 'anon');
+    // And signing in leaves nothing for a browser to send on: the only cookie is the old one being retired.
+    const first = await request(ctx.port, 'GET', `/?person=${ctx.server.personKey}`);
+    assert.deepEqual(first.headers['set-cookie'].map((c) => c.match(/^[^;]*/)[0]), ['nuworq_person=']);
+    assert.match(first.headers['set-cookie'][0], /Max-Age=0/);
+  });
+
+  test('another local hub\'s cookie doesn\'t block signing in', async () => {
+    const r = await request(ctx.port, 'GET', `/?person=${ctx.server.personKey}`, { headers: { cookie: `nuworq_person=${'b'.repeat(64)}` } });
+    assert.equal(r.status, 303);
+    assert.doesNotMatch(r.headers.location, /\?/); // the key has left the address bar
+    assert.equal((await request(ctx.port, 'GET', '/api/me', { headers: { 'x-nuworq-person': credentialOf(r.headers.location) } })).json.role, 'human');
+  });
+
+  test('the person rotates the key: the old key and browser credential stop at once, and only the person can', async () => {
+    const before = ctx.server.personKey;
+    const browser = { 'x-nuworq-person': await signIn() };
+    const anon = await request(ctx.port, 'POST', '/api/me/person-key', { body: {} });
+    assert.equal(anon.status, 403);
+    const agent = ctx.server.auth.createToken('rotator', 'agent');
+    const refused = await request(ctx.port, 'POST', '/api/me/person-key', { body: {}, headers: { authorization: `Bearer ${agent}` } });
+    assert.equal(refused.status, 403);
+    assert.equal(ctx.server.personKey, before);
+    const r = await request(ctx.port, 'POST', '/api/me/person-key', { body: {}, headers: { authorization: `Bearer ${before}` } });
+    assert.equal(r.status, 200);
+    assert.notEqual(r.json.key, before);
+    assert.equal(ctx.server.personKey, r.json.key);
+    assert.equal((await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${before}` } })).status, 200);
+    assert.equal((await request(ctx.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${before}` } })).json.role, null);
+    assert.equal((await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'old key' }, headers: { authorization: `Bearer ${before}` } })).status, 401);
+    // The old browser falls back to looking; it isn't locked out of the page.
+    assert.equal((await request(ctx.port, 'GET', '/api/me', { headers: browser })).json.role, 'anon');
+    assert.equal((await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'old browser' }, headers: browser })).status, 403);
+    assert.equal((await request(ctx.port, 'GET', `/?person=${before}`)).status, 200); // the old address no longer signs in
+    assert.equal((await request(ctx.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'new key' }, headers: { authorization: `Bearer ${r.json.key}` } })).status, 200);
+  });
+
+  test('nuworq token rotate-person replaces the running hub\'s key, or the file with no hub up', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'nuworq-rotate-'));
+    const file = join(home, '.nuworq', 'tokens', 'person.token');
+    mkdirSync(dirname(file), { recursive: true });
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NUWORQ_/.test(k))), HOME: home, NUWORQ_NO_UPDATE: '1' };
+    const rotate = () => run(process.execPath, [BIN, 'token', 'rotate-person'], { env });
+    try {
+      const running = await start({ savePersonKey: (k) => writeFileSync(file, `${k}\n`) });
+      try {
+        const before = running.server.personKey;
+        const url = `http://127.0.0.1:${running.port}`;
+        writeFileSync(file, `${before}\n`);
+        writeFileSync(join(home, '.nuworq', 'hub.json'), JSON.stringify({ url, auth: 'local' }));
+        const { stdout } = await rotate();
+        assert.notEqual(running.server.personKey, before);
+        assert.equal(readFileSync(file, 'utf8').trim(), running.server.personKey);
+        assert.ok(stdout.includes(`${url}/?person=${running.server.personKey}`), stdout);
+        assert.equal((await request(running.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${before}` } })).json.role, null);
+      } finally { running.server.close(); running.server.closeAllConnections(); }
+      // The hub in hub.json is gone now: the file changes, and no key is printed.
+      const kept = readFileSync(file, 'utf8').trim();
+      const { stdout } = await rotate();
+      const next = readFileSync(file, 'utf8').trim();
+      assert.notEqual(next, kept);
+      assert.ok(!stdout.includes(next), stdout);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  test('a new key that can\'t be kept never takes over', async () => {
+    const stuck = await start({ savePersonKey: () => { throw new Error('read-only'); } });
+    try {
+      const before = stuck.server.personKey;
+      const r = await request(stuck.port, 'POST', '/api/me/person-key', { body: {}, headers: { authorization: `Bearer ${before}` } });
+      assert.equal(r.status, 500);
+      assert.match(r.json.hint, /old key still works/);
+      assert.equal(stuck.server.personKey, before);
+      assert.equal((await request(stuck.port, 'GET', '/api/me', { headers: { authorization: `Bearer ${before}` } })).json.role, 'human');
+    } finally { stuck.server.close(); stuck.server.closeAllConnections(); }
   });
 
   test('the hub mints the machine\'s runner token for nuworq run, and minting again replaces the last one', async () => {
