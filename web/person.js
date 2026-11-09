@@ -14,3 +14,18 @@ export async function signInFromAddress() {
   const me = await fetch('api/me', { headers: { [HEADER]: sent } }).then((r) => r.json()).catch(() => null);
   if (me?.role === 'human') store.set('person', sent);
 }
+
+// A hub that really stopped no longer takes what this browser holds (#920): the page still reads, so say why nothing
+// it does will work, and where to fix that. me: /api/me's answer, null when the hub didn't give one.
+export function noteSignIn(me) {
+  if (!me) return;
+  const lost = me.auth === 'local' && me.role !== 'human' && !!store.get('person', '');
+  let bar = document.getElementById('signed-out');
+  if (!lost) return void bar?.remove();
+  if (bar) return;
+  bar = document.createElement('div');
+  bar.id = 'signed-out';
+  bar.setAttribute('role', 'status');
+  bar.textContent = 'This hub restarted, so this browser can only look. To act, open the address nuworq serve printed in its terminal.';
+  document.body.prepend(bar);
+}

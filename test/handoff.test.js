@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, cpSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, cpSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname as dir } from 'node:path';
 import { Hub } from '../src/core.js';
@@ -214,6 +214,33 @@ describe('a deploy with no gap (#523)', () => {
     assert.deepEqual(p.seen.bad, [], 'nothing refused, reset or failed');
     assert.ok(p.seen.ok >= 10, `${p.seen.ok} requests answered`);
     assert.equal(sys.alive(), true);
+  });
+
+  test('a browser signed in before a deploy with no gap stays signed in (#920)', async (t) => {
+    const w = repo();
+    const home = process.env.HOME;
+    process.env.HOME = w.root; // the person's key lives under the home; this hub's must not be the real one
+    t.after(() => { process.env.HOME = home; rmSync(w.root, { recursive: true, force: true }); });
+    const port = await freePort();
+    const sys = system({
+      repo: w.repo, dir: join(w.root, 'hub-src'), args: ['--db', join(w.root, 'hub.db'), '--host', '127.0.0.1', '--port', String(port)],
+      url: `http://127.0.0.1:${port}`, listen: { host: '127.0.0.1', port },
+    });
+    t.after(() => sys.close());
+    sys.checkout(w.one);
+    await sys.start();
+    assert.equal(await sys.healthy(30_000), true);
+    const get = (path, headers = {}) => new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path, headers, agent: false }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ headers: res.headers, body }));
+    }).on('error', reject));
+    const key = readFileSync(join(w.root, '.nuworq', 'tokens', 'person.token'), 'utf8').trim();
+    const credential = (await get(`/?person=${key}`)).headers.location.match(/#person=(\w+)$/)[1];
+    const role = async () => JSON.parse((await get('/api/me', { 'x-nuworq-person': credential })).body).role;
+    assert.equal(await role(), 'human');
+    assert.deepEqual(await sys.swap(w.two), { ok: true });
+    assert.equal(await role(), 'human');
   });
 
   test('a hub that does not come up leaves the old one serving, and nothing is dropped', async (t) => {

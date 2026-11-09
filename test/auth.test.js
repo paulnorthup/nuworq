@@ -151,6 +151,41 @@ describe('local mode', () => {
     assert.equal(wrong.status, 403);
   });
 
+  test('a browser credential taken while the hub was down can\'t act when it returns', async () => {
+    const personKey = 'the-persons-key';
+    const credentialFrom = async (port) => credentialOf((await request(port, 'GET', `/?person=${personKey}`)).headers.location);
+    const stop = (s) => { s.server.close(); s.server.closeAllConnections(); };
+    const before = await start({ personKey });
+    const taken = await credentialFrom(before.port);
+    assert.equal((await request(before.port, 'GET', '/api/me', { headers: { 'x-nuworq-person': taken } })).json.role, 'human');
+    stop(before);
+
+    const back = await start({ personKey });
+    try {
+      back.hub.tx(() => back.hub.project('demo', { create: true }));
+      const headers = { 'x-nuworq-person': taken };
+      assert.equal((await request(back.port, 'GET', '/api/me', { headers })).json.role, 'anon');
+      assert.equal((await request(back.port, 'GET', '/api/projects', { headers })).status, 200, 'it can still look');
+      const refused = await request(back.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'taken' }, headers });
+      assert.equal(refused.status, 403);
+      assert.match(refused.json.hint, /address nuworq serve printed/);
+      // Opening the address again is all it takes.
+      const fresh = await credentialFrom(back.port);
+      assert.notEqual(fresh, taken);
+      assert.equal((await request(back.port, 'POST', '/api/p/demo/human/steer', { body: { body: 'mine' }, headers: { 'x-nuworq-person': fresh } })).status, 200);
+    } finally { stop(back); }
+  });
+
+  test('hubs handed the port without a gap take each other\'s browser credentials', async () => {
+    const personKey = 'the-persons-key';
+    const old = await start({ personKey, hubRun: 'held-port' });
+    const beside = await start({ personKey, hubRun: 'held-port' });
+    try {
+      const credential = credentialOf((await request(old.port, 'GET', `/?person=${personKey}`)).headers.location);
+      assert.equal((await request(beside.port, 'GET', '/api/me', { headers: { 'x-nuworq-person': credential } })).json.role, 'human');
+    } finally { for (const s of [old, beside]) { s.server.close(); s.server.closeAllConnections(); } }
+  });
+
   test('a person\'s browser credential sent to another loopback port can\'t act on the hub', async () => {
     // What a browser hands any listener on 127.0.0.1, whatever its port: the cookies of that host. Replayed here.
     const credential = await signIn();
