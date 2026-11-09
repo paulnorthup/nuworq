@@ -2,9 +2,10 @@
 import { readFileSync, existsSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join, dirname, basename, resolve, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { slugify, normRemote } from './text.js';
 import { mirrorSource } from './git.js';
+import { personProof } from './auth.js';
 import { envVar, dataDir, CONFIG_FILE } from './names.js';
 
 export const DEFAULT_URL = 'http://127.0.0.1:4747';
@@ -126,15 +127,38 @@ export function resolveSettings({ url, project, token, cwd = process.cwd(), conn
   const hubUrl = (url || envVar('URL') || config?.url || conn?.url || disc?.url || DEFAULT_URL).replace(/\/+$/, '');
   const named = project || envVar('PROJECT') || config?.project;
   const fromFile = () => { const f = envVar('TOKEN_FILE'); try { return f ? readFileSync(f, 'utf8').trim() || null : null; } catch { return null; } };
-  // Last of all, so any agent token wins over it: the person's key, sent only to the local hub this machine
-  // serves (the hub.json serve wrote says auth: local) (#900).
+  // Last of all, so any agent token wins over it: the person's key, only for the local hub this machine serves
+  // (the hub.json serve wrote says auth: local) (#900). Kept apart from token: it goes out only through
+  // provenPersonKey (#911), since workers may listen on loopback and hub.json can't say who answers there now.
   let host = '';
   try { host = new URL(hubUrl).hostname; } catch { /* a junk address sends no key */ }
   const person = !disc || disc.url !== hubUrl || disc.auth !== 'local' || !LOOPBACK_HOST.test(host) ? null : personToken();
+  const given = token ?? envVar('TOKEN') ?? fromFile();
+  const chosen = given ?? (conn?.url === hubUrl ? conn.token : '');
   return {
     url: hubUrl, project: named ? slugify(named) : null, root: repoRoot(cwd), remote: repoRemote(cwd),
-    token: token ?? envVar('TOKEN') ?? fromFile() ?? ((conn?.url === hubUrl ? conn.token : '') || person || ''), config,
+    token: chosen, personKey: given == null && !chosen ? person : null, config,
   };
+}
+
+// Listeners already told their key wasn't sent: one line per process, however often a runner calls.
+const told = new Set();
+
+// The person's key, if whoever listens at the address proves it holds it (#911), else ''. Asked before every send,
+// never remembered: the hub can stop while a runner lives, and a worker can take its port. Nothing goes with the
+// question. A listener that isn't there fails like any call to it, for the caller to retry.
+export async function provenPersonKey(s, notice = console.error) {
+  if (!s.personKey) return '';
+  const nonce = randomBytes(32).toString('base64url');
+  const at = new URL(s.url);
+  const res = await fetch(`${s.url}/api/person-proof?nonce=${nonce}`, { redirect: 'manual', signal: AbortSignal.timeout(PROOF_MS) });
+  const proof = res.ok && isJson(res) ? (await res.json().catch(() => null))?.proof : (await res.body?.cancel(), null);
+  if (proof === personProof(s.personKey, nonce, at.port || (at.protocol === 'https:' ? 443 : 80))) return s.personKey;
+  if (!told.has(s.url)) {
+    told.add(s.url);
+    notice(`nuworq: ${s.url} didn't prove it holds this machine's person key, so the key wasn't sent. If that's your hub, it's older than this CLI: update it and restart nuworq serve.`);
+  }
+  return '';
 }
 
 export class HubError extends Error {
@@ -160,6 +184,7 @@ const RESTART_MS = 60_000;
 // grace, nothing is coming on that request.
 const WAIT_MS = 90_000;
 const WAIT_GRACE_MS = 30_000;
+const PROOF_MS = 10_000;
 const LOOPBACK_HOST = /^(localhost|127(\.\d+){3}|\[::1\])$/i;
 const sameSite = (a, b) => a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
 const isJson = (res) => /json/i.test(res.headers.get('content-type') ?? '');
@@ -179,10 +204,10 @@ export function createClient(opts = {}) {
   const named = (h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [`x-nuworq-${k}`, v]));
   // The cursor of the last reply this session got (#539): the hub counts as sent only what it names.
   let cursor = '';
-  const headers = (extra = {}) => ({
+  const headers = (extra, token) => ({
     'content-type': 'application/json',
     ...named({ root: encodeURIComponent(settings.root), ...(settings.remote ? { remote: encodeURIComponent(settings.remote) } : {}), ...(opts.session?.length ? { session: opts.session.join(',') } : {}), ...(opts.session?.length && cursor ? { cursor } : {}), ...extra }),
-    ...(settings.token ? { authorization: `Bearer ${settings.token}` } : {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
   });
 
   // A hub restarting (e.g. serve --follow moving onto a new main) refuses or drops connections, and the
@@ -198,7 +223,7 @@ export function createClient(opts = {}) {
     for (let wait = 100; ; wait = Math.min(wait * 2, 5000)) {
       let res;
       try {
-        res = await fetch(settings.url + path, { ...init(), redirect: 'manual' });
+        res = await fetch(settings.url + path, { ...await init(), redirect: 'manual' });
       } catch (e) {
         if (!RETRY_CODES.has(e?.cause?.code) || Date.now() + wait > until) throw e;
       }
@@ -259,9 +284,9 @@ export function createClient(opts = {}) {
   async function once(method, path, { body, agent, read = method === 'GET', deadline, key = '', signal } = {}, hops = 0) {
     let res;
     try {
-      res = await send(path, () => ({
+      res = await send(path, async () => ({
         method,
-        headers: { ...headers(agent ? { agent } : {}), ...(key ? { 'idempotency-key': key } : {}) },
+        headers: { ...headers(agent ? { agent } : {}, settings.token || await provenPersonKey(settings, opts.notice)), ...(key ? { 'idempotency-key': key } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
         ...(deadline || signal ? { signal: AbortSignal.any([deadline && AbortSignal.timeout(deadline), signal].filter(Boolean)) } : {}),
       }), { read, key });
