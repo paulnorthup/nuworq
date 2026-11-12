@@ -3425,7 +3425,7 @@ function movedHint(p, agent, item) {
 // a review of them, and the lander says so.
 function heldHint(p, agent, item, gap) {
   const review = holdRelease(this, p, item, gap);
-  this.setStatus(p, agent, `Held #${item.seq}: changes landed after its security review`);
+  this.setStatus(p, agent, `Held #${item.seq}: changes landed after its security audit`);
   return { ok: true, hint: `${item.branch} holds changes that landed after #${gap.review.seq} read main, so #${item.seq} isn't landed: it waits for #${review.seq} to review them, then it is built again on main. Call next.` };
 }
 
