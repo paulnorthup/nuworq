@@ -2597,9 +2597,9 @@ export class Hub extends EventEmitter {
         });
       }
       if (op === 'claim' || (op === 'next' && args?.claim !== false)) this.checkPlan(agent, p);
-      // What it builds under (#937), on a hub without logins: there anyone on the machine gets a runner token. A hub with
-      // logins doesn't check it yet, since its workers have no tokens of their own to tell them apart (Q311).
-      this.caller = { powers, remote, under: identity ? '' : underOf(token) };
+      // What it builds under (#937): code a worker runs holds its machine's runner token, which speaks for any unbound
+      // name. On both hub types the runner gives each worker a token of its own (#919, #941), which tells them apart.
+      this.caller = { powers, remote, under: underOf(token) };
       // Checked before the op runs, so a malformed usage changes nothing.
       const usage = USAGE_OPS.includes(op) ? normUsage(args?.usage) : null;
       let r;

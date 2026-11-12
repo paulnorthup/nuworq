@@ -198,10 +198,10 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.ok(hub.claimable(hub.project('api'), 'other-reviewer').some((o) => o.mode === 'review' && `#${o.item.seq}` === mine), 'another token is offered it');
     // Another token reviews it.
     assert.equal((await review(tok.other, 'other-reviewer', mine)).status, 200);
-    // A runner's workers share its token by design: one may review another's work.
-    const runner = auth.createToken('ci-runner-2', 'agent', { runner: 'ci2' });
-    const theirs = await build(runner, 'ci-builder', 'Built by a runner worker');
-    assert.equal((await review(runner, 'ci-reviewer', theirs)).status, 200);
+    // A runner's workers each carry a token of their own from it (#941): one may review another's work.
+    const runner = auth.verifyToken(auth.createToken('ci-runner-2', 'agent', { runner: 'ci2' })).id;
+    const theirs = await build(auth.workerToken(runner, 'ci-builder').token, 'ci-builder', 'Built by a runner worker');
+    assert.equal((await review(auth.workerToken(runner, 'ci-reviewer').token, 'ci-reviewer', theirs)).status, 200);
   });
 
   test("a machine's workers review each other's work with the runner token its device login mints (#656)", async () => {
@@ -226,17 +226,22 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     const { item: theirs } = hub.humanOp('api', 'create', { title: 'Not for a member', acceptance: 'x' });
     assert.match((await op('claim', { token: members.json.token, agent: 'mo-worker', body: { item: theirs } })).json.error, /minted by a member/);
 
-    // Worker A builds, worker B's next offers the review, and B's review is accepted. Earlier tests' reviews go first.
+    // Worker A builds, worker B's next offers the review, and B's review is accepted, each on a token of its own the
+    // device login mints from the runner token (#941). Earlier tests' reviews go first.
     const clearer = auth.createToken('clearer', 'agent');
     for (const { id } of hub.q("SELECT id FROM items WHERE stage = 'verifying'").all()) {
       assert.equal((await op('review', { token: clearer, agent: 'clearer', body: { item: `#${id}`, verdict: 'accept', headline: 'ok' } })).status, 200);
     }
+    const ownToken = async (name) => (await call('/api/me/worker-token', { token: device, body: { name, from: runner } })).json.token;
+    const [a, b] = [await ownToken('worker-a'), await ownToken('worker-b')];
     const { item } = hub.humanOp('api', 'create', { title: 'Built by worker A', acceptance: 'x', priority: 'now' });
-    assert.equal((await op('claim', { token: runner, agent: 'worker-a', body: { item } })).status, 200);
-    assert.equal((await op('submit', { token: runner, agent: 'worker-a', body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
-    const next = await op('next', { token: runner, agent: 'worker-b', body: { claim: false } });
+    assert.equal((await op('claim', { token: a, agent: 'worker-a', body: { item } })).status, 200);
+    assert.equal((await op('submit', { token: a, agent: 'worker-a', body: { item, headline: 'done', evidence: [{ label: 'tests pass' }] } })).status, 200);
+    // The runner token, which code worker A runs can reach, can't review it under another name (#937).
+    assert.match((await op('review', { token: runner, agent: 'worker-a-alias', body: { item, verdict: 'accept', headline: 'x' } })).json.error, /can't review your own work/);
+    const next = await op('next', { token: b, agent: 'worker-b', body: { claim: false } });
     assert.deepEqual([next.json.mode, next.json.item], ['review', item], JSON.stringify(next.json));
-    assert.equal((await op('review', { token: runner, agent: 'worker-b', body: { item, verdict: 'accept', headline: 'looks right' } })).status, 200);
+    assert.equal((await op('review', { token: b, agent: 'worker-b', body: { item, verdict: 'accept', headline: 'looks right' } })).status, 200);
 
     // The person's own token still can't review what it built under another name.
     const { item: own } = hub.humanOp('api', 'create', { title: 'Built on the connect token', acceptance: 'x' });
@@ -334,12 +339,13 @@ describe('agent operations are for agents, and each agent acts only as itself', 
     assert.equal(hub.item(hub.project('api'), mine).stage, 'verifying', 'the review waits for someone else');
     await clear();
 
-    // #658's rule: two runner workers on one runner token can each be offered the other's review.
-    const runner = auth.createToken('loop-runner', 'agent', { runner: 'loop-box' });
-    const a = await build(runner, 'loop-worker-a', 'Built by runner worker A');
-    const b = await build(runner, 'loop-worker-b', 'Built by runner worker B');
+    // #658's rule: two workers of one runner, each on its own token from it (#941), can each be offered the other's review.
+    const runner = auth.verifyToken(auth.createToken('loop-runner', 'agent', { runner: 'loop-box' })).id;
+    const own = { 'loop-worker-a': auth.workerToken(runner, 'loop-worker-a').token, 'loop-worker-b': auth.workerToken(runner, 'loop-worker-b').token };
+    const a = await build(own['loop-worker-a'], 'loop-worker-a', 'Built by runner worker A');
+    const b = await build(own['loop-worker-b'], 'loop-worker-b', 'Built by runner worker B');
     for (const [agent, theirs] of [['loop-worker-a', b], ['loop-worker-b', a]]) {
-      const r = await op('next', { token: runner, agent, body: { claim: false } });
+      const r = await op('next', { token: own[agent], agent, body: { claim: false } });
       assert.deepEqual([r.json.mode, r.json.item], ['review', theirs], `${agent}: ${JSON.stringify(r.json)}`);
     }
   });
