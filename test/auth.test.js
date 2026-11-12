@@ -460,6 +460,80 @@ describe("a runner token and a name with no worker token, on a hub without login
   });
 });
 
+describe('review and the runner a build was submitted under (#937)', () => {
+  const as = (port, agent, token, op, body = {}) => request(port, 'POST', `/api/p/api/agent/${op}`, { body, headers: { authorization: `Bearer ${token}`, 'x-nuworq-agent': agent } });
+  const review = (port, agent, token, item) => as(port, agent, token, 'review', { item, verdict: 'accept', headline: 'looks right' });
+  const build = async (port, agent, token, item) => {
+    assert.equal((await as(port, agent, token, 'claim', { item })).status, 200, `${agent} claims ${item}`);
+    assert.equal((await as(port, agent, token, 'submit', { item, headline: 'done', evidence: [{ label: 'tests pass' }] })).status, 200);
+  };
+
+  describe('on a hub without logins', () => {
+    let ctx;
+    const mint = async () => (await request(ctx.port, 'POST', '/api/me/runner-token', { body: {} })).json.token; // any code on this machine can
+    const stageOf = (item) => ctx.hub.item(ctx.hub.project('api'), item).stage;
+    const offered = async (agent, token) => (await as(ctx.port, agent, token, 'next', { claim: false })).json;
+    before(async () => {
+      ctx = await start();
+      ctx.hub.agentOp('api', 'checkin', 'starter', {});
+      ctx.hub.humanOp('api', 'settings', { autonomy: 'full' }); // agents peer-review
+      for (const title of ['first', 'second', 'third']) ctx.hub.humanOp('api', 'create', { title, acceptance: 'done' });
+    });
+    after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
+
+    test('a runner token can\'t review work built under the same runner token by another name', async () => {
+      const runner = await mint();
+      await build(ctx.port, 'w-builder', runner, '#1');
+      const parent = ctx.server.auth.verifyToken(runner).id;
+      const asked = [
+        ['the same runner token', 'w-fresh', runner],
+        ['a fresh tokenless mint', 'w-minted', await mint()],
+        ['a worker token of its own, when the builder had none', 'w-own', ctx.server.auth.workerToken(parent, 'w-own').token],
+      ];
+      for (const [what, name, token] of asked) {
+        const r = await review(ctx.port, name, token, '#1');
+        assert.equal(r.status, 403, `${what}: ${JSON.stringify(r.json)}`);
+        assert.match(r.json.error, /can't review your own work/, what);
+        const next = await offered(name, token);
+        assert.ok(!(next.mode === 'review' && next.item === '#1'), `${what}: next doesn't offer the review it would refuse`);
+      }
+      assert.equal(stageOf('#1'), 'verifying', 'still waiting for someone else');
+      // The person's key reviews it.
+      assert.equal((await review(ctx.port, 'session', ctx.server.personKey, '#1')).status, 200);
+    });
+
+    test('workers on one runner with worker tokens of their own still review each other (#658)', async () => {
+      const runner = await mint();
+      const parent = ctx.server.auth.verifyToken(runner).id;
+      const own = { a: ctx.server.auth.workerToken(parent, 'own-a').token, b: ctx.server.auth.workerToken(parent, 'own-b').token };
+      await build(ctx.port, 'own-a', own.a, '#2');
+      // Its runner's token, which code worker A runs may reach, still can't review it under a fresh name.
+      assert.match((await review(ctx.port, 'own-a-alias', runner, '#2')).json.error, /can't review your own work/);
+      assert.deepEqual(await offered('own-b', own.b).then((r) => [r.mode, r.item]), ['review', '#2']);
+      assert.equal((await review(ctx.port, 'own-b', own.b, '#2')).status, 200);
+      assert.equal(stageOf('#2'), 'done');
+    });
+  });
+
+  describe('on a hub with logins', () => {
+    let ctx;
+    before(async () => {
+      ctx = await start({ auth: 'required' });
+      ctx.hub.agentOp('api', 'checkin', 'starter', {});
+      ctx.hub.humanOp('api', 'settings', { autonomy: 'full' });
+      ctx.hub.humanOp('api', 'create', { title: 'first', acceptance: 'done' });
+    });
+    after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
+
+    // Its workers have no tokens of their own here to tell them apart, so the check waits for them (Q311).
+    test("one runner's workers still review each other's work, until they have tokens of their own", async () => {
+      const runner = ctx.server.auth.createToken('ci-runner', 'agent', { runner: 'ci' });
+      await build(ctx.port, 'ci-a', runner, '#1');
+      assert.equal((await review(ctx.port, 'ci-b', runner, '#1')).status, 200);
+    });
+  });
+});
+
 describe('required mode', () => {
   let ctx, human, agent;
   const H = () => ({ authorization: `Bearer ${human}` });

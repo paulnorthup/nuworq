@@ -689,6 +689,15 @@ export const MIGRATIONS = [
     name: 'an agent last active with a credential no runner shares',
     up(db) { addColumn(db, 'ALTER TABLE agents ADD COLUMN by_person INTEGER NOT NULL DEFAULT 0'); },
   },
+  {
+    // Never your own work, by credential (#937): the runner a build was submitted under, and whether its worker
+    // called with a token of its own (JSON, src/core.js underOf). '': not under a runner token, or before this.
+    name: 'the runner a build was submitted under',
+    up(db) {
+      addColumn(db, "ALTER TABLE items ADD COLUMN built_under TEXT NOT NULL DEFAULT ''");
+      addColumn(db, "ALTER TABLE attempts ADD COLUMN built_under TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
