@@ -14,7 +14,7 @@ import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease, settleTags } from './releases.js';
-import { builtWhatItReviews, reviewRelease } from './security.js';
+import { builtWhatItReviews, coverReview, holdRelease, reviewDone, reviewRange, reviewRelease, unreviewed } from './security.js';
 import { sandboxHosts, workerCommands, testsLine, kindsOf } from './sandbox.js';
 import { BUDGET as DEFAULT_BUDGET } from './setup.js';
 import { AGENTS, DEFAULT_TIERS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, tiersOf, trialEligible } from './models.js';
@@ -413,7 +413,7 @@ function itemColumns(hub, fields) {
 // A question its work closed (#182) can't be answered, confirmed or overridden any more.
 const settled = (q) => {
   if (['shipped', 'withdrawn'].includes(q.status)) {
-    throw new UserError(`Question ${q.id} is already ${q.status}${q.closed_reason ? ` (${q.closed_reason})` : ''}`, { status: 409, hint: 'To change course now, steer or propose new work.' });
+    throw new UserError(`Question ${q.id} is already ${q.status}${q.closed_reason ? ` (${q.closed_reason})` : ''}`, { status: 409, hint: 'It needs no answer now: pick another open question with look, or steer or propose new work to change course.' });
   }
 };
 
@@ -855,7 +855,14 @@ export class Hub extends EventEmitter {
     try {
       const p = slug ? this.project(slug) : this.projectByRemote(normRemote(remote), scope) ?? this.projectByPath(root, scope);
       const item = p && args.item ? this.item(p, args.item) : null;
-      if (!p || this.localFor(p, item)) return;
+      if (p) await this.fetchRepo(p, item);
+    } catch { /* the op says what's wrong */ }
+  }
+
+  // Fetch the mirror of p's (or item's) repository now. Outside any transaction; never throws.
+  async fetchRepo(p, item = null) {
+    if (!this.repos || this.localFor(p, item)) return;
+    try {
       const repo = this.repoOf(p, item);
       if (!repo) return;
       // A read token being minted is worth the wait: without it the fetch goes over SSH.
@@ -865,7 +872,7 @@ export class Hub extends EventEmitter {
       }
       const r = await fetchMirror(this.repos, repo, { keys: this.keys, https: this.mirrorHttps(repo), hosted: this.hosted });
       if (r.changed) this.remoteChanged(repo);
-    } catch { /* the op says what's wrong */ }
+    } catch { /* whoever reads the mirror next says what's wrong */ }
   }
 
   // The plan's limit on agents working at once (planLimit, set per organization by Workspaces; null or
@@ -1474,6 +1481,7 @@ export class Hub extends EventEmitter {
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
     if (['done', 'dropped'].includes(stage)) { this.settleQuestions(item, stage); this.retireSteers(item, stage); }
     if (stage === 'done') { landed(this, item); deleteBranch.call(this, item); } // a finished milestone drafts the release (#399)
+    if (stage === 'done') reviewDone(this, item); // a pre-release review records what it read; a held tag is made (#936)
     if (unmet?.kind === 'ask') this.askPrecondition(item, actor);
   }
 
@@ -1576,8 +1584,8 @@ export class Hub extends EventEmitter {
   requireAgent(name) {
     const n = str(name);
     if (!n) throw new UserError('agent name is required', { hint: 'Identify yourself: a short unique name such as "claude-1" or "codex-api".' });
-    if (n.length > 60) throw new UserError('agent name is too long (max 60 characters)');
-    if (n.toLowerCase() === HUMAN || isSystem(n.toLowerCase())) throw new UserError(`"${n}" is reserved; pick another agent name`);
+    if (n.length > 60) throw new UserError('agent name is too long (max 60 characters)', { hint: 'Use 60 characters or fewer, e.g. "claude-1".' });
+    if (n.toLowerCase() === HUMAN || isSystem(n.toLowerCase())) throw new UserError(`"${n}" is reserved; pick another agent name`, { hint: 'Pick a name such as "claude-1".' });
     if (n.startsWith('@')) throw new UserError(`Agent names can't start with "@": that is how people appear on the record`, { hint: 'Pick a name such as "claude-1".' });
     return n;
   }
@@ -2060,7 +2068,7 @@ export class Hub extends EventEmitter {
     }
     const k = subs.find((s) => String(s.n) === str(choice).replace(/^#/, '') || s.agent === str(choice));
     if (!k) throw new UserError(`No submitted attempt "${choice}" on #${item.seq}`, { status: 404, hint: which });
-    if (k.agent === actor) throw new UserError("You can't pick your own attempt", { status: 403 });
+    if (k.agent === actor) throw new UserError("You can't pick your own attempt", { status: 403, hint: 'Choose an attempt another agent submitted; look at the item to see them.' });
     return k;
   }
 
@@ -2937,12 +2945,13 @@ export class Hub extends EventEmitter {
       const last = json(item.last_check, null);
       throw new UserError(`#${item.seq} waits on something outside this hub: ${describePrecondition(JSON.parse(item.precondition))}${last ? ` (last check: ${last.detail})` : ' (not checked yet)'}`, { status: 409, hint: 'The hub checks it and makes the work ready when it passes. Pick other work with next.' });
     }
-    if (item.stage !== 'ready') throw new UserError(`#${item.seq} is ${item.stage}`, { status: 409 });
+    if (item.stage !== 'ready') throw new UserError(`#${item.seq} is ${item.stage}`, { status: 409, hint: 'Only ready work can be claimed. Pick other work with next.' });
     // A pre-release security review is read by someone who built none of what the release ships (#480).
     if (builtWhatItReviews(this, item, agent)) throw new UserError(`#${item.seq} audits changes you built`, { status: 403, hint: 'A security audit before a release goes to an agent that built none of what it ships. Pick other work with next.' });
     const unmet = this.unmetDeps(item);
     if (unmet.length) throw new UserError(`#${item.seq} depends on unfinished work: ${unmet.map((d) => `#${d.seq}`).join(', ')}`, { status: 409, hint: 'Work on a dependency, or pick other work with next.' });
     this.move(item, 'active', agent, { holder: agent, lease_until: t + LEASE_MS, last_worker: agent, attempts: item.attempts + 1, branch: item.branch || itemBranch(item) });
+    coverReview(this, item); // a pre-release review reads main as it is now (#936)
     this.event(p, {
       item, actor: agent, type: 'claimed',
       headline: `${agent} picked up #${item.seq}${item.attempts > 1 ? ` (attempt ${item.attempts})` : ''}`,
@@ -3034,7 +3043,7 @@ export class Hub extends EventEmitter {
     const release = version ? ` This is a release: set the version file to ${version} (package.json's version, else VERSION) and put the summary at the top of CHANGELOG.md under "## ${version} (${new Date(this.now()).toISOString().slice(0, 10)})". Nothing else changes. ${MODE_RULES.release}` : '';
     // The weekly freshness sweep (#181): how to do it.
     const sweep = item.sweep ? ` ${MODE_RULES.fresh}` : '';
-    const security = item.security ? ` ${MODE_RULES.security}` : ''; // a security audit (#480)
+    const security = item.security ? ` ${MODE_RULES.security}${spaced(reviewRange(this, p, item))}` : ''; // a security audit (#480), and what it reads (#936)
     // Operator-only work (only an operator builds it): it builds only its live step.
     const live = operatorOnly(item) ? ` ${MODE_RULES.operator}` : '';
     // Tests (#532): where CI checks the pull request, the whole suite is CI's; elsewhere it's the builder's.
@@ -3443,6 +3452,14 @@ function movedHint(p, agent, item) {
   return { ok: true, hint: `${item.branch} ${why}, so it is verifying again. ${reviewer}, then it lands. Call next.` };
 }
 
+// A release's land job whose branch holds changes its security review didn't read (#936): back to ready, waiting on
+// a review of them, and the lander says so.
+function heldHint(p, agent, item, gap) {
+  const review = holdRelease(this, p, item, gap);
+  this.setStatus(p, agent, `Held #${item.seq}: changes landed after its security audit`);
+  return { ok: true, hint: `${item.branch} holds changes that landed after #${gap.review.seq} read main, so #${item.seq} isn't landed: it waits for #${review.seq} to review them, then it is built again on main. Call next.` };
+}
+
 // Submit on a land job: done when git shows main has the branch; back to review when the rebase changed it.
 function finishLanding(p, agent, item, { headline, summary, detail, conflicts }) {
   const reviewer = p.autonomy === 'full' ? 'Another agent reviews it again' : 'The human verifies it again';
@@ -3497,12 +3514,17 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   if (land.pending && this.prMode(p, item) && !this.prFailed(item)) {
     // The hub opens a PR only for the head a review accepted (#605): one it never saw, or one that moved, is reviewed first.
     if (!item.reviewed_sha || reviewedHead.call(this, p, item) === 'moved') return movedHint.call(this, p, agent, item);
+    // A release ships only what its security review read (#936): changes past it are reviewed first.
+    const gap = item.release && unreviewed(this, p, item, shaOf(this.repoFor(p, item)?.path, item.branch));
+    if (gap) return heldHint.call(this, p, agent, item, gap);
     this.event(p, { item, actor: agent, type: 'pushed', headline: `${agent} pushed ${item.branch} for #${item.seq}; the hub opens its pull request`, summary, detail });
     this.openPr(p, item);
     this.setStatus(p, agent, `Pushed #${item.seq} for its pull request`);
     return { ok: true, hint: `${item.branch} is on origin. The hub opens a pull request with auto-merge on; GitHub's merge marks #${item.seq} done. Call next.` };
   }
   if (land.pending) {
+    const gap = item.release && unreviewed(this, p, item, shaOf(this.repoFor(p, item)?.path, item.branch));
+    if (gap) return heldHint.call(this, p, agent, item, gap);
     throw new UserError(`${land.base} doesn't contain ${item.branch} yet`, { status: 409, hint: LAND_HINT(item, p, land.base, remote, false, this.testsHint(p, item)) });
   }
   this.move(item, 'done', agent, { holder: null, lease_until: null, touching: '[]' });
@@ -3947,7 +3969,7 @@ const AGENT_OPS = {
     const item = this.heldItem(p, agent, args.item, 'submit');
     if (item.stage === 'proposed') return finishShaping.call(this, p, agent, item, { headline, summary, detail, acceptance: args.acceptance, difficulty: args.difficulty, difficulty_why: args.difficulty_why });
     if (item.stage === 'landing') return finishLanding.call(this, p, agent, item, { headline, summary, detail, conflicts: str(args.conflicts) });
-    if (item.stage !== 'active') throw new UserError(`#${item.seq} is ${item.stage}; only active work can be submitted`, { status: 409 });
+    if (item.stage !== 'active') throw new UserError(`#${item.seq} is ${item.stage}; only active work can be submitted`, { status: 409, hint: item.stage === 'verifying' ? 'You hold it to review it: finish with review (verdict accept or reject), not submit.' : 'Only active work, shaping and landing are submitted. Call next for what to do with it.' });
     const evidence = evidenceList(args.evidence);
     // A tidy job (#202) is bookkeeping, already on the record change by change: submitting finishes it.
     if (item.tidy) {
@@ -4077,11 +4099,11 @@ const AGENT_OPS = {
   review(p, agent, args) {
     const item = this.item(p, args.item);
     if (p.autonomy !== 'full') throw new UserError('In this project the human verifies finished work', { status: 403, hint: 'Leave a comment with what you noticed instead.' });
-    if (item.stage !== 'verifying') throw new UserError(`#${item.seq} is ${item.stage}, not verifying`, { status: 409 });
-    if (this.implementedBy(item, agent)) throw new UserError("You can't review your own work", { status: 403 });
-    if (item.holder && item.holder !== agent) throw new UserError(`${item.holder} is reviewing #${item.seq}`, { status: 409 });
+    if (item.stage !== 'verifying') throw new UserError(`#${item.seq} is ${item.stage}, not verifying`, { status: 409, hint: 'Only work that is verifying can be reviewed. Call next for work that is.' });
+    if (this.implementedBy(item, agent)) throw new UserError("You can't review your own work", { status: 403, hint: 'Another agent or the human will review it. Pick other work with next.' });
+    if (item.holder && item.holder !== agent) throw new UserError(`${item.holder} is reviewing #${item.seq}`, { status: 409, hint: 'Another reviewer holds it. Pick other work with next.' });
     const verdict = str(args.verdict).toLowerCase();
-    if (!['accept', 'reject'].includes(verdict)) throw new UserError('verdict must be "accept" or "reject"');
+    if (!['accept', 'reject'].includes(verdict)) throw new UserError('verdict must be "accept" or "reject"', { hint: 'Pass verdict "accept" or "reject".' });
     const { headline, summary, detail } = layered(args.headline, args.summary, args.detail);
     const r = this.verdict(p, agent, item, verdict, { headline, summary, detail, attempt: args.attempt });
     this.setStatus(p, agent, `Reviewed #${item.seq}`);
@@ -4195,7 +4217,7 @@ const AGENT_OPS = {
     const note = (id) => this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(id, p.id);
     const into = args.into != null ? note(Number(args.into)) : null;
     if (args.into != null && (!into || !into.active || ids.includes(into.id))) throw new UserError(`No active field note ${args.into} to merge into`, { status: 404, hint: 'learn the combined note first, then pass its id as into.' });
-    const rows = ids.map((id) => note(id) ?? (() => { throw new UserError(`No field note ${id}`, { status: 404 }); })());
+    const rows = ids.map((id) => note(id) ?? (() => { throw new UserError(`No field note ${id}`, { status: 404, hint: 'Call look with notes: "all" to list field notes and their ids.' }); })());
     // Only the notes this review lists (#611): it was opened for those, and a person sees them in its summary. A merge
     // may take a duplicate from elsewhere, since its lesson lives on in the note it merges into.
     const listed = new Set(json(review.tidy, []));
@@ -4308,7 +4330,7 @@ Object.assign(Hub.prototype, {
       }
       if (dup) {
         const target = this.item(p, dup);
-        if (target.id === item.id) throw new UserError(`#${item.seq} can't duplicate itself`);
+        if (target.id === item.id) throw new UserError(`#${item.seq} can't duplicate itself`, { hint: 'Name another item that this one duplicates.' });
         if (target.stage === 'dropped') throw new UserError(`#${target.seq} is dropped`, { hint: 'Point duplicate_of at the item that carries on.' });
         markDuplicate(this, p, item, target, actor);
         return [`duplicate of #${target.seq}`];
@@ -4335,7 +4357,7 @@ Object.assign(Hub.prototype, {
       const n = Number(args.race);
       if (!Number.isInteger(n) || n < 1 || n > MAX_RACE) throw new UserError(`race must be a whole number from 1 to ${MAX_RACE}`, { hint: '1 means one agent at a time (the usual); 2 or more lets that many agents attempt it at once.' });
       if (n !== item.race) {
-        if (item.stage === 'active') throw new UserError(`#${item.seq} is being worked on; change its race count while it is ready`, { status: 409 });
+        if (item.stage === 'active') throw new UserError(`#${item.seq} is being worked on; change its race count while it is ready`, { status: 409, hint: 'Change it once the item is ready again, after its holder submits or hands it back. To change course now, steer the holder.' });
         set.race = n;
         changed.push(n > 1 ? `race → ${n} agents` : 'no longer a race');
       }
@@ -4410,7 +4432,7 @@ Object.assign(Hub.prototype, {
       const pre = normPrecondition(args.precondition);
       const val = pre ? JSON.stringify(pre) : '';
       if (val !== item.precondition) {
-        if (['active', 'verifying', 'landing', 'done', 'dropped'].includes(item.stage)) throw new UserError(`#${item.seq} is ${item.stage}; a precondition only holds work that hasn't started`, { status: 409 });
+        if (['active', 'verifying', 'landing', 'done', 'dropped'].includes(item.stage)) throw new UserError(`#${item.seq} is ${item.stage}; a precondition only holds work that hasn't started`, { status: 409, hint: 'Set a precondition before the work starts, while it is proposed or ready.' });
         // The question an earlier 'ask' precondition put to the human no longer stands.
         const asked = json(item.last_check, {}).question;
         if (asked) this.q(`UPDATE questions SET status = 'withdrawn' WHERE id = ? AND status = 'open'`).run(asked);
@@ -4523,10 +4545,10 @@ const HUMAN_OPS = {
   // keep_parked: answered, but not yet: the work stays waiting (parked by whoever answered) until unpark.
   answer(p, { question, answer, decide, keep_parked }, by) {
     const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
-    if (!q) throw new UserError(`No question ${question}`, { status: 404 });
+    if (!q) throw new UserError(`No question ${question}`, { status: 404, hint: 'Call look to see open questions and their ids.' });
     settled(q);
     let text = str(answer);
-    if (!text) throw new UserError('answer is required');
+    if (!text) throw new UserError('answer is required', { hint: "Pass answer: your reply as text, or one of the question's options." });
     // An outsider's held reply (#471), passed on by a person: the asker gets it as their words, quoted.
     const passed = !!q.held_reply && text === PASS_ON;
     if (passed) text = quotedFrom(`@${q.reporter} replied on GitHub, and ${by === HUMAN ? 'a person' : by} passed it on`, q.held_reply);
@@ -4582,7 +4604,7 @@ const HUMAN_OPS = {
   // without options answers it; with options, the person still picks one.
   step(p, { question, step, done = true }, by) {
     const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
-    if (!q) throw new UserError(`No question ${question}`, { status: 404 });
+    if (!q) throw new UserError(`No question ${question}`, { status: 404, hint: 'Call look to see open questions and their ids.' });
     if (q.status !== 'open') throw new UserError(`Question ${q.id} is already ${q.status}`, { status: 409, hint: 'Its card has left Needs you; reload to see what is there now.' });
     const steps = json(q.steps, []);
     const n = Number(step);
@@ -4609,7 +4631,7 @@ const HUMAN_OPS = {
 
   confirm(p, { question }, by) {
     const q = this.q('SELECT * FROM questions WHERE id = ? AND project_id = ?').get(Number(question), p.id);
-    if (!q) throw new UserError(`No question ${question}`, { status: 404 });
+    if (!q) throw new UserError(`No question ${question}`, { status: 404, hint: 'Call look to see open questions and their ids.' });
     settled(q);
     this.q(`UPDATE questions SET status = 'confirmed', answered_by = ?, answered_at = ?, seen_by_asker = 0 WHERE id = ?`).run(by, this.now(), q.id);
     this.event(p, { item: this.itemById(q.item_id), actor: by, type: 'assumption_confirmed', headline: `${You(by)} confirmed ${q.asked_by}'s assumption: ${q.assumption}` });
@@ -4617,14 +4639,14 @@ const HUMAN_OPS = {
 
   accept(p, { item, note, attempt }, by) {
     const it = this.item(p, item);
-    if (it.stage !== 'verifying') throw new UserError(`#${it.seq} is ${it.stage}, not verifying`, { status: 409 });
+    if (it.stage !== 'verifying') throw new UserError(`#${it.seq} is ${it.stage}, not verifying`, { status: 409, hint: 'Accept it once it is submitted and verifying. To shape what gets built meanwhile, steer it.' });
     return this.verdict(p, by, it, 'accept', { headline: str(note), attempt });
   },
 
   sendback(p, { item, note }, by) {
     const it = this.item(p, item);
     const { headline, summary } = layered(note, '', '', 'A reason for sending it back');
-    if (!['verifying', 'landing', 'done'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409 });
+    if (!['verifying', 'landing', 'done'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409, hint: 'Only submitted work (verifying, landing or done) can be sent back. To change course before then, steer it.' });
     this.verdict(p, by, it, 'reject', { headline, summary });
   },
 
@@ -4638,7 +4660,7 @@ const HUMAN_OPS = {
 
   retire(p, { note }, by) {
     const n = this.q('SELECT * FROM notes WHERE id = ? AND project_id = ?').get(Number(note), p.id);
-    if (!n) throw new UserError(`No note ${note}`, { status: 404 });
+    if (!n) throw new UserError(`No note ${note}`, { status: 404, hint: 'Call look to see the notes and their ids.' });
     this.q('UPDATE notes SET active = 0 WHERE id = ?').run(n.id);
     this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'retired', headline: `${You(by)} retired a ${n.kind === 'learning' ? 'field note' : n.kind}: ${clip(n.body, 100)}` });
   },
@@ -4646,7 +4668,7 @@ const HUMAN_OPS = {
   // Undo a retire (#146): the same note, delivered again as before.
   unretire(p, { note }, by) {
     const n = this.q('SELECT * FROM notes WHERE id = ? AND project_id = ?').get(Number(note), p.id);
-    if (!n) throw new UserError(`No note ${note}`, { status: 404 });
+    if (!n) throw new UserError(`No note ${note}`, { status: 404, hint: 'Call look to see the notes and their ids.' });
     if (n.active) return;
     this.q('UPDATE notes SET active = 1 WHERE id = ?').run(n.id);
     this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'restored', headline: `${You(by)} brought back a ${n.kind === 'learning' ? 'field note' : n.kind}: ${clip(n.body, 100)}` });
@@ -4655,7 +4677,7 @@ const HUMAN_OPS = {
   // Always show a field note, whatever an agent works on (#443): a safety rule, say. At most ALWAYS_MAX are.
   always(p, { note, on = true }, by) {
     const n = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(Number(note), p.id);
-    if (!n) throw new UserError(`No field note ${note}`, { status: 404 });
+    if (!n) throw new UserError(`No field note ${note}`, { status: 404, hint: 'Call look with notes: "all" to list field notes and their ids.' });
     if (!!n.always === !!on) return;
     if (!setAlways(this, n, on)) throw new UserError(`At most ${ALWAYS_MAX} field notes are always shown`, { status: 409, hint: 'Stop always showing one of them first.' });
     this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'always', headline: `${You(by)} ${on ? 'always shows' : 'stopped always showing'} a field note: ${clip(n.body, 100)}` });
@@ -4665,14 +4687,14 @@ const HUMAN_OPS = {
   // decision (promote: the draft, or the person's edit of it, becomes a decision and the note retires).
   keep(p, { note }, by) {
     const n = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning'`).get(Number(note), p.id);
-    if (!n) throw new UserError(`No field note ${note}`, { status: 404 });
+    if (!n) throw new UserError(`No field note ${note}`, { status: 404, hint: 'Call look with notes: "all" to list field notes and their ids.' });
     this.q('UPDATE notes SET advice = ? WHERE id = ?').run(JSON.stringify({ do: 'keep', why: 'kept by a person', by }), n.id);
     this.event(p, { item: this.itemById(n.item_id), actor: by, type: 'kept', headline: `${You(by)} kept a field note: ${clip(n.gist || n.body, 100)}` });
   },
 
   promote(p, { note, body }, by) {
     const n = this.q(`SELECT * FROM notes WHERE id = ? AND project_id = ? AND kind = 'learning' AND active = 1`).get(Number(note), p.id);
-    if (!n) throw new UserError(`No active field note ${note}`, { status: 404 });
+    if (!n) throw new UserError(`No active field note ${note}`, { status: 404, hint: 'Call look with notes: "all" to list field notes and their ids.' });
     let draft = '';
     try { draft = JSON.parse(n.advice || '{}').draft ?? ''; } catch { /* no advice */ }
     const text = str(body) || draft;
@@ -4695,7 +4717,7 @@ const HUMAN_OPS = {
     const it = this.item(p, args.item);
     this.refineItem(p, by, it, args);
     if (args.stage && args.stage !== it.stage) {
-      if (!['proposed', 'ready', 'dropped', 'done'].includes(args.stage)) throw new UserError(`You can move work to proposed, ready, done or dropped (not ${args.stage})`);
+      if (!['proposed', 'ready', 'dropped', 'done'].includes(args.stage)) throw new UserError(`You can move work to proposed, ready, done or dropped (not ${args.stage})`, { hint: 'Use stage proposed, ready, done or dropped.' });
       const holders = [it.holder, ...(this.racing(it) ? this.attemptsOf(it).filter((a) => a.stage === 'active').map((a) => a.agent) : [])].filter(Boolean);
       this.move(it, args.stage, by, { holder: null, lease_until: null });
       const verb = { ready: 'moved', proposed: 'moved', done: 'marked', dropped: 'dropped' }[args.stage];
@@ -4724,14 +4746,14 @@ const HUMAN_OPS = {
   // "Check now": forget the backoff, so the next sweep checks it.
   check(p, { item }, by) {
     const it = this.item(p, item);
-    if (it.stage !== 'outside' || !this.unmetPrecondition(it)) throw new UserError(`#${it.seq} isn't waiting on anything outside`, { status: 409 });
+    if (it.stage !== 'outside' || !this.unmetPrecondition(it)) throw new UserError(`#${it.seq} isn't waiting on anything outside`, { status: 409, hint: 'Only work waiting on something outside can be checked now; this one needs no check. If it seems stuck, steer it.' });
     this.patch(it, { check_fails: 0, next_check: this.now() });
     this.event(p, { item: it, actor: by, type: 'check_now', headline: `${You(by)} asked the hub to check #${it.seq}'s precondition now` });
   },
 
   pick(p, { item }, by) {
     const it = this.item(p, item);
-    if (!['proposed', 'ready'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409 });
+    if (!['proposed', 'ready'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409, hint: 'Only proposed or ready work can be picked; this one is under way or finished. Pick another proposed or ready item.' });
     this.patch(it, { priority: 'now' });
     this.event(p, {
       item: it, actor: by, type: 'picked',
@@ -4742,7 +4764,7 @@ const HUMAN_OPS = {
 
   // Who looks after this project: its "needs you" go to them. An empty list falls back to owners and stewards.
   stewards(p, { set }, by) {
-    if (!Array.isArray(set)) throw new UserError('set is required: a list of people, e.g. ["@sam"]');
+    if (!Array.isArray(set)) throw new UserError('set is required: a list of people, e.g. ["@sam"]', { hint: 'Pass set as a list of handles, e.g. ["@sam"].' });
     const handles = [...new Set(set.map((h) => str(h).replace(/^@/, '').toLowerCase()).filter(Boolean))];
     for (const h of handles) {
       if (!this.q('SELECT 1 FROM people WHERE handle = ?').get(h)) throw new UserError(`No person @${h}`, { status: 404, hint: 'Add them first: nuworq person add <handle>.' });
@@ -4759,7 +4781,7 @@ const HUMAN_OPS = {
     if (add) this.addRemote(p, add, by);
     if (remove) {
       const r = normRemote(remove);
-      if (!this.q('DELETE FROM project_remotes WHERE project_id = ? AND remote = ?').run(p.id, r).changes) throw new UserError(`${p.name} has no remote ${r}`, { status: 404 });
+      if (!this.q('DELETE FROM project_remotes WHERE project_id = ? AND remote = ?').run(p.id, r).changes) throw new UserError(`${p.name} has no remote ${r}`, { status: 404, hint: 'Check the remote name in the project settings.' });
       this.event(p, { actor: by, type: 'remote', headline: `${You(by)} unlinked ${r} from ${p.name}` });
     }
   },
@@ -4934,7 +4956,7 @@ const HUMAN_OPS = {
     }
     if (reporter_wait != null && Number(reporter_wait) !== p.reporter_wait) {
       const hours = Number(reporter_wait);
-      if (!Number.isInteger(hours) || hours < 1) throw new UserError('reporter_wait is a whole number of hours, at least 1');
+      if (!Number.isInteger(hours) || hours < 1) throw new UserError('reporter_wait is a whole number of hours, at least 1', { hint: 'Pass a whole number of hours, e.g. 24.' });
       this.q('UPDATE projects SET reporter_wait = ? WHERE id = ?').run(hours, p.id);
       this.event(p, { actor: by, type: 'github', headline: `${You(by)} gave issue reporters ${hours}h to answer a question before it comes to you` });
     }
@@ -4987,7 +5009,7 @@ const HUMAN_OPS = {
     if (name != null && str(name) && str(name) !== p.name) { this.q('UPDATE projects SET name = ? WHERE id = ?').run(str(name), p.id); changes.push('name'); }
     if (mission != null && str(mission) !== p.mission) { this.q('UPDATE projects SET mission = ? WHERE id = ?').run(str(mission), p.id); changes.push('mission'); }
     if (autonomy && autonomy !== p.autonomy) {
-      if (!AUTONOMY[autonomy]) throw new UserError('autonomy must be ask, balanced or full');
+      if (!AUTONOMY[autonomy]) throw new UserError('autonomy must be ask, balanced or full', { hint: 'Pass "ask", "balanced" or "full".' });
       this.q('UPDATE projects SET autonomy = ? WHERE id = ?').run(autonomy, p.id);
       changes.push('autonomy');
       this.event(p, { actor: by, type: 'autonomy', headline: `${You(by)} set autonomy to "${AUTONOMY[autonomy].label}"` });
@@ -5002,7 +5024,7 @@ Object.assign(Hub.prototype, {
   // follows (dropped, parked, autonomy), so it adds no "steered" event of its own.
   addNote(p, kind, body, item = null, target = null, author = HUMAN, { notice = false } = {}) {
     const text = str(body);
-    if (!text) throw new UserError(`${kind} text is required`);
+    if (!text) throw new UserError(`${kind} text is required`, { hint: 'Write the text and send it again.' });
     const r = this.q('INSERT INTO notes (project_id, item_id, kind, target, author, body, at, notice) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(p.id, item?.id ?? null, kind, target, author, text, this.now(), notice ? 1 : 0);
     if (notice) return Number(r.lastInsertRowid);
@@ -5018,7 +5040,7 @@ Object.assign(Hub.prototype, {
   // by: who is acting. "you" without accounts; "@handle" for a person.
   humanOp(slug, action, args = {}, by = HUMAN) {
     const fn = HUMAN_OPS[action];
-    if (!fn) throw new UserError(`Unknown action "${action}"`, { status: 404 });
+    if (!fn) throw new UserError(`Unknown action "${action}"`, { status: 404, hint: 'Use one of the actions the app offers.' });
     refuseSecrets(args);
     refuseLong(args ?? {});
     this.sweep();

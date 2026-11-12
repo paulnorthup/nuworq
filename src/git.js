@@ -156,6 +156,26 @@ export function changedUnder(repo, from, to, paths) {
   return { files: files.split('\n').filter(Boolean), subjects: subjects.split('\n').filter(Boolean) };
 }
 
+// What `to` adds over `from` beyond a release's own edit (#936): the files, and the commits that changed them as
+// "<short sha> <subject>" (newest first). Only what `to` adds counts, measured from where the two meet: what `from`
+// has that `to` doesn't (main moved on after it) isn't `to`'s, so a `to` that `from` contains adds nothing. A
+// release's edit is CHANGELOG.md, VERSION and package.json's version, so package.json counts only when something
+// else in it changed. null when git can't say (`from` isn't in the repository, or the two share no history).
+export function changedPast(repo, from, to) {
+  if (!shaOf(repo, from) || !shaOf(repo, to)) return null;
+  const base = git(repo, 'merge-base', from, to);
+  if (!base) return null;
+  const names = git(repo, 'diff', '--name-only', base, to);
+  if (names === null) return null;
+  const pkg = (ref) => {
+    const text = git(repo, 'show', `${ref}:package.json`);
+    try { const j = JSON.parse(text ?? 'null'); if (j) delete j.version; return JSON.stringify(j); } catch { return text; }
+  };
+  const files = names.split('\n').filter((f) => f && f !== 'CHANGELOG.md' && f !== 'VERSION' && (f !== 'package.json' || pkg(base) !== pkg(to)));
+  const commits = files.length ? git(repo, 'log', '--format=%h %s', `${from}..${to}`, '--', ...files) ?? '' : '';
+  return { files, commits: commits.split('\n').filter(Boolean) };
+}
+
 // The last release (#399): the highest vX.Y.Z tag, with when its commit was made; else the version file on
 // main (package.json's version, or a VERSION file), with at 0. null when the repository says neither.
 const SEMVER = /^v?(\d+)\.(\d+)\.(\d+)$/;

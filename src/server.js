@@ -9,7 +9,7 @@ import { UserError, HUMAN_OP_NAMES, HUMAN, SYSTEM, AUTONOMY, PERSON_CAN, PERSON_
 import { checkLocalModels } from './llmproxy.js';
 import { view, itemView, projectList, homeView, withEntry, liveOperators } from './insight.js';
 import { tools, guide, LISTENER, protocolVersion } from './protocol.js';
-import { Auth, SESSION_MS, personProof } from './auth.js';
+import { Auth, SESSION_MS, PERSON_ROLES, personProof } from './auth.js';
 import { Devices } from './device.js';
 import { Workspaces, IDLE_MS, WAKE_MS } from './workspaces.js';
 import { KINDS, addChannel, listChannels, removeChannel, testChannels, channelOwner, notifyOwners, notifyFeedback, composeFixed, deliver, workspaceUrl, requestChannels, setWeekly } from './notify.js';
@@ -1739,7 +1739,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           // The link is shown this once; only its hash is kept.
           return sendSecret(200, { ok: true, id: inv.id, role: inv.role, link: `${origin(req)}${base}/invite.html#${inv.token}`, expires_in: '7 days' });
         } catch (e) {
-          throw new UserError(e.message);
+          throw new UserError(e.message, { hint: `To invite, send role: one of ${PERSON_ROLES.join(', ')}. To revoke, send the id of an open invite from GET /api/invites.` });
         }
       }
       if (path === '/api/people' || path === '/api/people/role') {
@@ -1756,7 +1756,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           const person = path === '/api/people' ? authz.addPerson(b.handle, b.role, { name: b.name, email: b.email }) : authz.setRole(b.handle, b.role);
           return send(200, { ok: true, person });
         } catch (e) {
-          throw new UserError(e.message);
+          throw new UserError(e.message, { hint: `Send the handle of a person GET /api/people lists (a new one: 1–40 lowercase letters, digits, ., _ or -) and role: one of ${PERSON_ROLES.join(', ')}.` });
         }
       }
       // Device login, the person's side: see which machine asks, then approve or deny it.
@@ -1772,7 +1772,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (approve && personRole === 'viewer') return deny(403, "a viewer can't connect machines", 'Ask an owner for a member role.');
         if (approve && staff && !PERSON_CAN[personRole]?.includes('settings')) return deny(403, `a ${personRole} can't staff projects`, 'Ask an owner of this workspace to approve it.');
         let d;
-        try { d = devices.decide(b.user_code, who.person.handle, approve); } catch (e) { throw new UserError(e.message); }
+        try { d = devices.decide(b.user_code, who.person.handle, approve); } catch (e) { throw new UserError(e.message, { hint: 'Check the code the CLI shows, or start the device login again. A role that may not approve: ask an owner.' }); }
         // A staffing request (#490): the approver's yes turns staffing on, with the daily budget the machine asked for.
         if (approve && staff) {
           hub.humanOp(staff.project, 'settings', { runner: true, run_budget: staff.budget }, by);
@@ -2057,7 +2057,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         return send(200, { app: true, alerts: accessOf(hub, p) });
       }
       if ((m = path.match(/^\/api\/p\/([^/]+)\/human\/([a-z]+)$/)) && req.method === 'POST') {
-        if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404 });
+        if (!HUMAN_OP_NAMES.includes(m[2])) throw new UserError(`Unknown action "${m[2]}"`, { status: 404, hint: 'Use one of the actions the app offers.' });
         if (!PERSON_CAN[personRole]?.includes(m[2])) return deny(403, `a ${personRole} can't ${m[2]} here`, 'Ask an owner of this workspace for a different role.');
         const args = await body(req);
         if (personRole === 'member' && m[2] === 'create') args.stage = 'proposed'; // members propose; stewards decide

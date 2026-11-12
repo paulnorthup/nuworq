@@ -89,6 +89,33 @@ describe('numbered migrations', () => {
   });
 });
 
+describe('names bound before #923 (#939)', () => {
+  test("a session active before #923's migration stays closed to runner tokens", () => {
+    const file = fileDb();
+    const hub = new Hub({ file });
+    hub.tx(() => hub.project('old', { create: true }));
+    const add = (name, role, runner) => hub.db.prepare(`INSERT INTO agents (project_id, name, role, runner, first_seen, last_seen) VALUES (1, ?, ?, ?, 0, 0)`).run(name, role, runner);
+    add('session', 'session', '');
+    add('shaper', 'shaper', '');
+    add('op', 'operator', '');
+    add('worker', 'worker', 'mac');
+    add('said-worker', 'worker', '');
+    hub.db.close();
+    // As a hub from before #923 left it: no by_person column, at the migration before it.
+    const d = new DatabaseSync(file);
+    d.exec('ALTER TABLE agents DROP COLUMN by_person');
+    d.exec(`PRAGMA user_version = ${MIGRATIONS.findIndex((m) => m.name === 'an agent last active with a credential no runner shares')}`);
+    d.close();
+    const after = new Hub({ file });
+    const marked = Object.fromEntries(after.q('SELECT name, by_person FROM agents').all().map((r) => [r.name, r.by_person]));
+    assert.deepEqual(marked, { session: 1, shaper: 1, op: 1, worker: 0, 'said-worker': 0 });
+    const runner = { name: 'runner:mac', runner: 'mac' };
+    assert.throws(() => after.speaksAs('session', runner, null), /another agent's name/);
+    assert.doesNotThrow(() => after.speaksAs('worker', runner, null), 'workers keep sharing the runner token');
+    after.db.close();
+  });
+});
+
 describe('model routing on by default (#723)', () => {
   test('the migration turns it on only where nobody turned it on or off', () => {
     const file = fileDb();
