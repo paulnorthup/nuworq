@@ -278,6 +278,22 @@ describe('a release ships only what its review read (#936)', () => {
     assert.equal(git(dir, 'rev-parse', `v${version}^{commit}`), git(dir, 'rev-parse', branch), 'tagged once reviewed');
   });
 
+  test('a held tag is made once its range review is done, though main moved on before that review was claimed', () => {
+    const { w, dir, rel, version, branch, land } = reviewed();
+    git(dir, 'merge', '-q', '--ff-only', branch);
+    land();
+    const gap = w.reviews('release').at(-1);
+    // Main moves on after the hold: a change the release doesn't ship.
+    writeFileSync(join(dir, 'later.js'), 'export const later = 1;\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'Later change');
+    assert.equal(w.next('a4').item, `#${gap.seq}`);
+    assert.equal(w.item(`#${gap.seq}`).security_sha, git(dir, 'rev-parse', 'main'), 'the review reads main past the release');
+    w.hub.humanOp('p', 'update', { item: `#${gap.seq}`, stage: 'done' });
+    assert.equal(git(dir, 'rev-parse', `v${version}^{commit}`), git(dir, 'rev-parse', branch), 'tagged on the release commit');
+    assert.equal(w.reviews('release').length, 2, 'no third review for what the release doesn\'t ship');
+  });
+
   test("GitHub's merge of a release the mirror hasn't fetched yet is tagged, with no range review, when nothing landed late", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-security-gh-')));
     const origin = join(root, 'origin.git'), seed = join(root, 'seed');
