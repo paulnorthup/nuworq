@@ -696,6 +696,15 @@ export const MIGRATIONS = [
     name: 'agents that never acted with a runner token count as last active with the person',
     up(db) { db.exec("UPDATE agents SET by_person = 1 WHERE runner = '' AND role != 'worker' AND by_person = 0"); },
   },
+  {
+    // Never your own work, by credential (#937): the runner a build was submitted under, and whether its worker
+    // called with a token of its own (JSON, src/core.js underOf). '': not under a runner token, or before this.
+    name: 'the runner a build was submitted under',
+    up(db) {
+      addColumn(db, "ALTER TABLE items ADD COLUMN built_under TEXT NOT NULL DEFAULT ''");
+      addColumn(db, "ALTER TABLE attempts ADD COLUMN built_under TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {

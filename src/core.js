@@ -396,6 +396,9 @@ export function layeredNote(op, args = {}) {
 const str = (v) => (v == null ? '' : String(v).trim());
 const clip = (v, n = 120) => { const line = str(v).split('\n')[0]; return line.length > n ? line.slice(0, n - 1).trimEnd() + '…' : line; };
 const json = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+// What a call is made under, for "never your own work" (#937): a runner token's runner (on a hub without logins the
+// machine's, however many tokens were minted), and whether it is one worker's own token (#919). '': no runner token.
+const underOf = (token) => (token?.runner ? JSON.stringify({ runner: token.runner, own: !!token.worker }) : '');
 // The keys of an items update, each a column the items table has: patch() and move() build SQL from them, so
 // a key from anywhere else (a caller passing args through) is refused, never spliced in. Read once per database.
 const COLUMNS = new WeakMap();
@@ -1946,14 +1949,29 @@ export class Hub extends EventEmitter {
   }
 
   // Racers can't review the race they ran, nor an agent the conflicts it resolved while landing (#264), nor a token
-  // the work it built under another of its names (#622).
+  // the work it built under another of its names (#622), nor a runner token what was built under it by any name (#937).
   implementedBy(item, agent) {
     const names = this.namesOf(item.project_id, agent);
     const marks = names.map(() => '?').join(',');
     return names.includes(item.implementer) ||
       !!this.q(`SELECT 1 FROM attempts WHERE item_id = ? AND agent IN (${marks}) AND stage = 'submitted' AND closed = 0`).get(item.id, ...names) ||
       !!this.q(`SELECT 1 FROM events WHERE item_id = ? AND actor IN (${marks}) AND type = 'rebased' AND at >= ? AND json_extract(data, '$.conflicts') = 1`)
-        .get(item.id, ...names, item.stage_since);
+        .get(item.id, ...names, item.stage_since) ||
+      this.builtUnder(item, this.caller?.under);
+  }
+
+  // Was the item built under the runner the caller speaks with (#937)? Names don't tell: a runner token speaks for any
+  // unbound name, and on a hub without logins anyone on the machine gets one, so code a worker runs could review that
+  // worker's build under a fresh name. Only two workers that each called with a worker token of their own (#919)
+  // are told apart; their names differ, or implementedBy's name rule refuses already.
+  builtUnder(item, under) {
+    if (!under) return false;
+    const by = [item.implementer ? item.built_under : '',
+      ...this.q(`SELECT built_under FROM attempts WHERE item_id = ? AND stage = 'submitted' AND closed = 0`).all(item.id).map((a) => a.built_under),
+      ...this.q(`SELECT json_extract(data, '$.under') AS u FROM events WHERE item_id = ? AND type = 'rebased' AND at >= ? AND json_extract(data, '$.conflicts') = 1`)
+        .all(item.id, item.stage_since).map((e) => e.u)];
+    const me = json(under, {});
+    return by.map((b) => json(b, null)).some((them) => them?.runner === me.runner && !(them.own && me.own));
   }
 
   leaseOf(item, agent) {
@@ -2001,8 +2019,8 @@ export class Hub extends EventEmitter {
   }
 
   endAttempt(item, agent, stage, submission = null) {
-    this.q(`UPDATE attempts SET stage = ?, lease_until = NULL, touching = '[]', submission = ? WHERE id = ?`)
-      .run(stage, submission, this.attemptOf(item, agent).id);
+    this.q(`UPDATE attempts SET stage = ?, lease_until = NULL, touching = '[]', submission = ?, built_under = ? WHERE id = ?`)
+      .run(stage, submission, stage === 'submitted' ? this.caller?.under ?? '' : '', this.attemptOf(item, agent).id);
   }
 
   // A race's submissions, numbered for the reviewer (1-based, in the order the attempts started).
@@ -2043,7 +2061,7 @@ export class Hub extends EventEmitter {
     if (all.some((a) => a.stage === 'active')) return;
     const subs = all.filter((a) => a.stage === 'submitted');
     if (subs.length) {
-      this.move(item, 'verifying', actor, { holder: null, lease_until: null, implementer: subs.at(-1).agent, touching: '[]' });
+      this.move(item, 'verifying', actor, { holder: null, lease_until: null, implementer: subs.at(-1).agent, built_under: subs.at(-1).built_under, touching: '[]' });
       this.event(p, {
         item, actor: SYSTEM, type: 'race_finished',
         headline: `The race on #${item.seq} is over: ${subs.length === 1 ? '1 submission' : `${subs.length} submissions`} to review (${subs.map((a) => a.agent).join(', ')})`,
@@ -2569,7 +2587,9 @@ export class Hub extends EventEmitter {
         });
       }
       if (op === 'claim' || (op === 'next' && args?.claim !== false)) this.checkPlan(agent, p);
-      this.caller = { powers, remote };
+      // What it builds under (#937), on a hub without logins: there anyone on the machine gets a runner token. A hub with
+      // logins doesn't check it yet, since its workers have no tokens of their own to tell them apart (Q311).
+      this.caller = { powers, remote, under: identity ? '' : underOf(token) };
       // Checked before the op runs, so a malformed usage changes nothing.
       const usage = USAGE_OPS.includes(op) ? normUsage(args?.usage) : null;
       let r;
@@ -2784,7 +2804,8 @@ export class Hub extends EventEmitter {
         AND NOT EXISTS (SELECT 1 FROM events h WHERE h.item_id = items.id AND h.actor = ? AND h.type = 'handoff' AND h.at >= items.stage_since
           AND NOT EXISTS (SELECT 1 FROM events n WHERE n.item_id = items.id AND n.at > h.at AND n.actor != h.actor
             AND n.type IN ('answered', 'assumption_confirmed', 'question_withdrawn', 'submitted', 'comment')))
-      ORDER BY stage_since`).all(p.id, ...names, ...names, ...names, operator ? 1 : 0, agent ?? '').filter(reviewable).map((item) => ({ mode: 'review', item }));
+      ORDER BY stage_since`).all(p.id, ...names, ...names, ...names, operator ? 1 : 0, agent ?? '')
+      .filter((i) => reviewable(i) && !this.builtUnder(i, this.caller?.under)).map((item) => ({ mode: 'review', item }));
     // Accepted work waiting to land: its builder first, then anyone after LAND_GRACE. Landing even in a
     // parked project: it finishes work, it doesn't start any.
     // An open pull request lands it: GitHub's merge marks it done. Unless it conflicts with main: then an
@@ -3418,7 +3439,7 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   if (conflicts) {
     // The resolution is this agent's work now: it doesn't review it (#264), and the review sees the branch it pushed.
     this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent });
-    const event = this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased #${item.seq} and had to resolve conflicts; it needs another look`, summary: conflicts, detail, data: { conflicts: true } });
+    const event = this.event(p, { item, actor: agent, type: 'rebased', headline: `${agent} rebased #${item.seq} and had to resolve conflicts; it needs another look`, summary: conflicts, detail, data: { conflicts: true, ...(this.caller?.under ? { under: this.caller.under } : {}) } });
     this.setStatus(p, agent, `Sent #${item.seq} back for review after a rebase`);
     return {
       ok: true, hint: `#${item.seq} is verifying again with your note on the conflicts. ${reviewer}, then it lands. Call next.`,
@@ -3939,7 +3960,7 @@ const AGENT_OPS = {
         [GIT_CHECK]: { event: id, about: item.id, claim: { headline, summary, evidence } }, // the race review shows each attempt's branch
       };
     }
-    this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, touching: '[]' });
+    this.move(item, 'verifying', agent, { holder: null, lease_until: null, last_worker: agent, implementer: agent, built_under: this.caller?.under ?? '', touching: '[]' });
     const event = this.event(p, { item, actor: agent, type: 'submitted', headline, summary, detail, data: { evidence } });
     this.setStatus(p, agent, `Submitted #${item.seq}`);
     return {
@@ -4428,6 +4449,7 @@ Object.assign(Hub.prototype, {
       if (kept) {
         for (const a of this.attemptsOf(item).filter((x) => x.stage === 'submitted')) {
           const chosen = a.agent === kept.agent;
+          if (chosen) kept.built_under = a.built_under;
           this.q('UPDATE attempts SET stage = ? WHERE id = ?').run(chosen ? 'chosen' : 'not_chosen', a.id);
           if (!chosen) this.event(p, { item, actor, type: 'not_chosen', headline: `${a.agent}'s attempt on #${item.seq} was not chosen`, data: { agent: a.agent } });
         }
@@ -4445,7 +4467,7 @@ Object.assign(Hub.prototype, {
       // or the same change rebased. '' when the hub can't see the branch: whatever is pushed later gets a review.
       const reviewed = land ? shaOf(this.repoFor(p, item).path, branch) ?? '' : '';
       this.move(item, landing ? 'landing' : 'done', actor, {
-        holder: null, lease_until: null, reviewed_sha: reviewed, ...(kept ? { implementer: kept.agent } : {}), ...(branch ? { branch } : {}),
+        holder: null, lease_until: null, reviewed_sha: reviewed, ...(kept ? { implementer: kept.agent, built_under: kept.built_under ?? '' } : {}), ...(branch ? { branch } : {}),
       });
       const viaPr = landing && this.prMode(p, item);
       this.event(p, {
