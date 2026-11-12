@@ -156,12 +156,20 @@ const tagging = new WeakMap(); // hub → its tags being made on GitHub
 // on GitHub, as the hub's GitHub App. Otherwise the hub can't write to the repository, and says how to tag it by
 // hand. sha: the commit main got (its pull request's merge, or its branch's head). In a transaction; returns a
 // sentence for whoever landed it ('' when there is nothing for them to do).
-export function tagRelease(hub, p, item, sha) {
+// fetched: the mirror was fetched for it already.
+export function tagRelease(hub, p, item, sha, { fetched = false } = {}) {
   const version = releaseVersion(item);
   if (!item.release || !version) return '';
   const tag = `v${version}`, short = String(sha ?? '').slice(0, 7);
   // Not a commit holding changes its security review didn't read (#936): it is tagged once they are reviewed.
+  // A commit the mirror hasn't fetched yet (GitHub's merge) is judged once it has.
   const gap = unreviewed(hub, p, item, sha);
+  if (gap?.unseen && !fetched) {
+    track(hub, hub.fetchRepo(p, item)
+      .then(() => hub.tx(() => tagRelease(hub, p, hub.itemById(item.id), sha, { fetched: true })))
+      .then(() => hub.changed(p), (e) => console.error('tagging a release failed', e)));
+    return '';
+  }
   if (gap) return holdTag(hub, p, item, gap, { tag, sha });
   const byHand = `Tag it: git fetch origin, then git tag ${tag} ${sha || 'origin/main'}, then git push origin ${tag}.`;
   // tagged, or tag_failed: someone tags it by hand, and an operator is asked to (#760).
@@ -182,10 +190,15 @@ export function tagRelease(hub, p, item, sha) {
     () => hub.tx(() => record(`nuworq tagged ${short} ${tag} on ${repo}`)),
     (e) => hub.tx(() => failed(`The hub couldn't tag ${short} ${tag} on ${repo}: ${e.message}`, `GitHub refused the hub's tag: ${e.message}`, repo)),
   ).then(() => hub.changed(p), (e) => console.error('tagging a release failed', e));
+  track(hub, run);
+  return '';
+}
+
+// A tag being made (or judged) in the background, so tagsSettled waits for it.
+function track(hub, run) {
   const all = tagging.get(hub) ?? new Set();
   tagging.set(hub, all.add(run));
   run.finally(() => all.delete(run));
-  return '';
 }
 
 // A release tag the hub couldn't make (#760) is an operator question on the release item, so next hands it to an

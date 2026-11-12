@@ -9,6 +9,8 @@ import { view } from '../src/insight.js';
 import { MODE_RULES } from '../src/protocol.js';
 import { AREAS, SECURITY_EVERY, securityUp } from '../src/security.js';
 import { drift } from '../src/tidy.js';
+import { prMerged } from '../src/github.js';
+import { tagsSettled } from '../src/releases.js';
 
 // Security stays checked (#480): a review before each release that the release waits for, read by someone who built
 // none of it, and one area each month.
@@ -274,6 +276,50 @@ describe('a release ships only what its review read (#936)', () => {
     w.next('a4');
     w.hub.humanOp('p', 'update', { item: `#${gap.seq}`, stage: 'done' });
     assert.equal(git(dir, 'rev-parse', `v${version}^{commit}`), git(dir, 'rev-parse', branch), 'tagged once reviewed');
+  });
+
+  test("GitHub's merge of a release the mirror hasn't fetched yet is tagged, with no range review, when nothing landed late", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-security-gh-')));
+    const origin = join(root, 'origin.git'), seed = join(root, 'seed');
+    git(root, 'init', '-q', '--bare', '-b', 'main', origin);
+    git(root, 'clone', '-q', origin, seed);
+    writeFileSync(join(seed, 'package.json'), JSON.stringify({ name: 'x', version: '0.1.0' }));
+    git(seed, 'add', '.');
+    git(seed, 'commit', '-qm', 'init');
+    git(seed, 'push', '-q', 'origin', 'main');
+    const read = git(seed, 'rev-parse', 'HEAD');
+
+    const hub = new Hub({ repos: join(root, 'repos') });
+    hub.tx(() => hub.project('g', { create: true }));
+    hub.humanOp('g', 'remote', { add: origin });
+    hub.humanOp('g', 'settings', { security: true });
+    const tags = [];
+    hub.github = { covers: () => true, async tag(a) { tags.push(a); return { sha: a.sha }; } };
+    const p = hub.project('g');
+    assert.ok(hub.repoFor(p)?.path, 'the mirror is cloned, as of the review');
+    const rel = hub.item(p, hub.humanOp('g', 'create', { title: 'Release v0.2.0', acceptance: 'x' }).item);
+    const rev = hub.item(p, hub.humanOp('g', 'create', { title: 'Security audit before the next release', acceptance: 'x' }).item);
+    hub.patch(rev, { security: 'release', security_sha: read, stage: 'done' });
+    hub.patch(rel, { release: 1, stage: 'landing', branch: 'nuworq/9-release-v0-2-0' });
+    hub.q('INSERT INTO deps (item_id, depends_on) VALUES (?, ?)').run(rel.id, rev.id);
+    hub.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, 9, ?, '', 'Release v0.2.0', 'open', ?, '', 0)`)
+      .run(p.id, origin, rel.id, rel.branch);
+
+    // GitHub merges the release: its version and CHANGELOG.md only. The mirror hasn't fetched it.
+    writeFileSync(join(seed, 'package.json'), JSON.stringify({ name: 'x', version: '0.2.0' }));
+    writeFileSync(join(seed, 'CHANGELOG.md'), '## 0.2.0\n');
+    git(seed, 'add', '.');
+    git(seed, 'commit', '-qm', 'Release v0.2.0');
+    git(seed, 'push', '-q', 'origin', 'main');
+    const sha = git(seed, 'rev-parse', 'HEAD');
+    assert.throws(() => git(hub.repoFor(p).path, 'cat-file', '-e', `${sha}^{commit}`), 'the mirror lacks the merge');
+    hub.tx(() => prMerged(hub, p, hub.q('SELECT * FROM prs WHERE number = 9').get(), { sha }));
+    await tagsSettled(hub);
+
+    assert.equal(hub.item(p, `#${rel.seq}`).stage, 'done');
+    assert.deepEqual(tags, [{ repo: hub.repoOf(p), tag: 'v0.2.0', sha }], 'tagged once the mirror has it');
+    assert.equal(hub.q(`SELECT COUNT(*) AS n FROM items WHERE security = 'release'`).get().n, 1, 'no range review opened');
+    assert.equal(hub.q(`SELECT 1 FROM events WHERE item_id = ? AND type = 'tag_held'`).get(rel.id), undefined);
   });
 });
 

@@ -852,7 +852,14 @@ export class Hub extends EventEmitter {
     try {
       const p = slug ? this.project(slug) : this.projectByRemote(normRemote(remote), scope) ?? this.projectByPath(root, scope);
       const item = p && args.item ? this.item(p, args.item) : null;
-      if (!p || this.localFor(p, item)) return;
+      if (p) await this.fetchRepo(p, item);
+    } catch { /* the op says what's wrong */ }
+  }
+
+  // Fetch the mirror of p's (or item's) repository now. Outside any transaction; never throws.
+  async fetchRepo(p, item = null) {
+    if (!this.repos || this.localFor(p, item)) return;
+    try {
       const repo = this.repoOf(p, item);
       if (!repo) return;
       // A read token being minted is worth the wait: without it the fetch goes over SSH.
@@ -862,7 +869,7 @@ export class Hub extends EventEmitter {
       }
       const r = await fetchMirror(this.repos, repo, { keys: this.keys, https: this.mirrorHttps(repo), hosted: this.hosted });
       if (r.changed) this.remoteChanged(repo);
-    } catch { /* the op says what's wrong */ }
+    } catch { /* whoever reads the mirror next says what's wrong */ }
   }
 
   // The plan's limit on agents working at once (planLimit, set per organization by Workspaces; null or

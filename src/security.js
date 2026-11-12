@@ -94,16 +94,19 @@ export function reviewRange(hub, p, item) {
 
 // What a release at sha would ship that no pre-release review read (#936): null when nothing (or the project has
 // no reviews, or its review is from before #936), else { review, from, to, commits }. A review whose commit the
-// repository lacks can't vouch for anything, so everything counts.
+// repository lacks can't vouch for anything, so everything counts. A sha the repository lacks (GitHub just merged
+// it, and the mirror hasn't fetched it) isn't known yet: the gap says unseen, with no commits.
 export function unreviewed(hub, p, release, sha) {
   if (!p.security || !release.release || !sha) return null;
   const review = hub.q(`SELECT i.* FROM deps d JOIN items i ON i.id = d.depends_on WHERE d.item_id = ? AND i.security = 'release' AND i.stage = 'done'
     ORDER BY i.stage_since DESC, i.seq DESC LIMIT 1`).get(release.id);
   const path = hub.repoFor(p, release)?.path;
   if (!review?.security_sha || !path) return null;
+  const gap = { review, from: review.security_sha, to: sha, commits: [] };
+  if (!shaOf(path, sha)) return { ...gap, unseen: true };
   const past = changedPast(path, review.security_sha, sha);
   if (past && !past.files.length) return null;
-  return { review, from: review.security_sha, to: sha, commits: past?.commits ?? [] };
+  return { ...gap, commits: past?.commits ?? [] };
 }
 
 // A release about to land holds changes its review didn't read (#936): it goes back to ready, redrafted so its
@@ -129,7 +132,7 @@ export function holdTag(hub, p, release, gap, { tag, sha }) {
   hub.event(p, {
     item: release, actor: SYSTEM, type: 'tag_held',
     headline: `${tag} waits for #${it.seq}: main got ${changes(gap.commits)} after #${gap.review.seq} read it, and the hub tags it once they are reviewed`,
-    summary: `#${gap.review.seq} read main up to ${gap.from.slice(0, 7)}.${list(gap.commits)}`,
+    summary: `#${gap.review.seq} read main up to ${gap.from.slice(0, 7)}.${gap.unseen ? ` The hub's copy of the repository doesn't have ${sha.slice(0, 7)}, so it can't tell what changed past that.` : ''}${list(gap.commits)}`,
     data: { tag, sha, review: it.seq },
   });
   return `${tag} isn't tagged yet: main got changes after #${gap.review.seq} read it, so #${it.seq} reviews them first and the hub tags it then.`;
