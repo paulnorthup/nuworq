@@ -7,7 +7,7 @@
 // it doesn't mention, and keeps a higher version a person set.
 import { SYSTEM, UserError } from './core.js';
 import { lastRelease, shaOf, tagAt } from './git.js';
-import { reviewRelease } from './security.js';
+import { holdTag, reviewRelease, unreviewed } from './security.js';
 
 export const RELEASES = { milestone: 'per milestone', off: 'off' };
 
@@ -160,6 +160,9 @@ export function tagRelease(hub, p, item, sha) {
   const version = releaseVersion(item);
   if (!item.release || !version) return '';
   const tag = `v${version}`, short = String(sha ?? '').slice(0, 7);
+  // Not a commit holding changes its security review didn't read (#936): it is tagged once they are reviewed.
+  const gap = unreviewed(hub, p, item, sha);
+  if (gap) return holdTag(hub, p, item, gap, { tag, sha });
   const byHand = `Tag it: git fetch origin, then git tag ${tag} ${sha || 'origin/main'}, then git push origin ${tag}.`;
   // tagged, or tag_failed: someone tags it by hand, and an operator is asked to (#760).
   const record = (headline, summary = '', type = 'tagged') => hub.event(p, { item, actor: SYSTEM, type, headline, summary, data: { tag, sha } });

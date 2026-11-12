@@ -196,6 +196,87 @@ describe('one area a month (#480)', () => {
   });
 });
 
+describe('a release ships only what its review read (#936)', () => {
+  const git = (dir, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', dir, ...a], { encoding: 'utf8' }).trim();
+  // A release with its review read and done; then, optionally, a change lands on main.
+  const reviewed = ({ late = true } = {}) => {
+    const w = world();
+    w.ship(['a1']);
+    const dir = w.p().path, rel = w.release(), [rev] = w.reviews('release');
+    const job = w.next('a2');
+    assert.equal(job.item, `#${rev.seq}`);
+    const read = git(dir, 'rev-parse', 'main');
+    assert.equal(w.item(job.item).security_sha, read, 'the review records the main commit it read');
+    assert.ok(job.hint.includes(`main up to ${read.slice(0, 7)}`), 'and its hint names it');
+    w.hub.humanOp('p', 'update', { item: `#${rev.seq}`, stage: 'done' });
+    assert.equal(w.item(`#${rev.seq}`).security_sha, read, 'done, it still names what it read');
+    let lateItem = null;
+    if (late) {
+      writeFileSync(join(dir, 'exports.js'), 'export const retries = 3;\n');
+      git(dir, 'add', '.');
+      git(dir, 'commit', '-qm', 'Exports retry three times');
+      lateItem = w.add('Exports retry three times');
+      w.hub.humanOp('p', 'update', { item: lateItem, stage: 'done' });
+    }
+    // The release, built on main as it is now: its version and CHANGELOG.md.
+    const version = /v(\S+)$/.exec(rel.title)[1], branch = `nuworq/${rel.seq}-release`;
+    git(dir, 'switch', '-q', '-c', branch);
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x', version }));
+    writeFileSync(join(dir, 'CHANGELOG.md'), `## ${version}\n\n${rel.summary}\n`);
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', `Release v${version}`);
+    git(dir, 'switch', '-q', 'main');
+    w.hub.agentOp('p', 'checkin', 'a3', {});
+    w.hub.patch(w.item(`#${rel.seq}`), { stage: 'landing', branch, holder: 'a3', lease_until: w.hub.now() + 600_000, reviewed_sha: git(dir, 'rev-parse', branch) });
+    const land = () => w.hub.agentOp('p', 'submit', 'a3', { item: `#${rel.seq}`, headline: 'Landed' });
+    return { w, dir, rel, rev, read, lateItem, version, branch, land };
+  };
+
+  test('a change landed after the pre-release review holds the release until it is reviewed', () => {
+    const { w, rel, rev, read, lateItem, land } = reviewed();
+    const res = land();
+    assert.match(res.hint, /holds changes that landed after/);
+    const held = w.item(`#${rel.seq}`);
+    assert.equal(held.stage, 'ready', 'not landed: back to be built again on main');
+    const gap = w.reviews('release').at(-1);
+    assert.notEqual(gap.seq, rev.seq);
+    assert.match(gap.title, new RegExp(`Security audit of what landed after #${rev.seq} \\(#${rel.seq}\\)`));
+    assert.equal(gap.security_from, read, 'it reads just the new range');
+    assert.match(gap.summary, /Exports retry three times/, 'listing what landed');
+    assert.deepEqual(w.hub.unmetDeps(held).map((d) => d.seq), [gap.seq], 'the release depends on it');
+    assert.ok(held.summary.includes(`(${lateItem})`), "the release's summary lists the change");
+    assert.ok(w.hub.q(`SELECT 1 FROM events WHERE item_id = ? AND type = 'release_held'`).get(rel.id));
+    // Read by someone who built none of it, the range is reviewed; then the release lands as usual.
+    const job = w.next('a4');
+    assert.equal(job.item, `#${gap.seq}`);
+    assert.ok(job.hint.includes(`git diff ${read.slice(0, 7)} `), 'its hint names the range');
+    w.hub.humanOp('p', 'update', { item: `#${gap.seq}`, stage: 'done' });
+    assert.deepEqual(w.hub.unmetDeps(w.item(`#${rel.seq}`)), []);
+  });
+
+  test("the release's own version and CHANGELOG.md edit doesn't hold it", () => {
+    const { w, rel, land } = reviewed({ late: false });
+    assert.throws(land, /doesn't contain/, 'only told to put it on main');
+    assert.equal(w.item(`#${rel.seq}`).stage, 'landing');
+    assert.equal(w.reviews('release').length, 1);
+  });
+
+  test('a release on main holding unreviewed changes is tagged only once a review reads them', () => {
+    const { w, dir, rel, version, branch, land } = reviewed();
+    git(dir, 'merge', '-q', '--ff-only', branch);
+    const res = land();
+    assert.match(res.hint, new RegExp(`v${version.replace(/\./g, '\\.')} isn't tagged yet`));
+    assert.equal(w.item(`#${rel.seq}`).stage, 'done');
+    assert.equal(git(dir, 'tag', '--list', `v${version}`), '', 'not tagged, so not signed');
+    const gap = w.reviews('release').at(-1);
+    assert.match(gap.title, /Security audit of what landed after/);
+    assert.ok(w.hub.q(`SELECT 1 FROM events WHERE item_id = ? AND type = 'tag_held'`).get(rel.id));
+    w.next('a4');
+    w.hub.humanOp('p', 'update', { item: `#${gap.seq}`, stage: 'done' });
+    assert.equal(git(dir, 'rev-parse', `v${version}^{commit}`), git(dir, 'rev-parse', branch), 'tagged once reviewed');
+  });
+});
+
 describe('the threat model (#480)', () => {
   const model = readFileSync(new URL('../docs/SECURITY-MODEL.md', import.meta.url), 'utf8');
   test('names the attackers, the trust boundaries, the areas and the maintainer\'s three calls; SECURITY.md links it', () => {

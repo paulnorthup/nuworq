@@ -696,6 +696,15 @@ export const MIGRATIONS = [
     name: 'agents that never acted with a runner token count as last active with the person',
     up(db) { db.exec("UPDATE agents SET by_person = 1 WHERE runner = '' AND role != 'worker' AND by_person = 0"); },
   },
+  {
+    // A pre-release security review reads a range of main (#936): from security_from ('' for the last release tag)
+    // to security_sha, main's commit when it was claimed. A release ships nothing past it unreviewed.
+    name: 'the main commits a pre-release review read',
+    up(db) {
+      addColumn(db, "ALTER TABLE items ADD COLUMN security_sha TEXT NOT NULL DEFAULT ''");
+      addColumn(db, "ALTER TABLE items ADD COLUMN security_from TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
