@@ -410,7 +410,7 @@ function itemColumns(hub, fields) {
 // A question its work closed (#182) can't be answered, confirmed or overridden any more.
 const settled = (q) => {
   if (['shipped', 'withdrawn'].includes(q.status)) {
-    throw new UserError(`Question ${q.id} is already ${q.status}${q.closed_reason ? ` (${q.closed_reason})` : ''}`, { status: 409, hint: 'To change course now, steer or propose new work.' });
+    throw new UserError(`Question ${q.id} is already ${q.status}${q.closed_reason ? ` (${q.closed_reason})` : ''}`, { status: 409, hint: 'It needs no answer now: pick another open question with look, or steer or propose new work to change course.' });
   }
 };
 
@@ -3916,7 +3916,7 @@ const AGENT_OPS = {
     const item = this.heldItem(p, agent, args.item, 'submit');
     if (item.stage === 'proposed') return finishShaping.call(this, p, agent, item, { headline, summary, detail, acceptance: args.acceptance, difficulty: args.difficulty, difficulty_why: args.difficulty_why });
     if (item.stage === 'landing') return finishLanding.call(this, p, agent, item, { headline, summary, detail, conflicts: str(args.conflicts) });
-    if (item.stage !== 'active') throw new UserError(`#${item.seq} is ${item.stage}; only active work can be submitted`, { status: 409, hint: 'Only active work you hold can be submitted. Call look on the item to see its stage.' });
+    if (item.stage !== 'active') throw new UserError(`#${item.seq} is ${item.stage}; only active work can be submitted`, { status: 409, hint: item.stage === 'verifying' ? 'You hold it to review it: finish with review (verdict accept or reject), not submit.' : 'Only active work, shaping and landing are submitted. Call next for what to do with it.' });
     const evidence = evidenceList(args.evidence);
     // A tidy job (#202) is bookkeeping, already on the record change by change: submitting finishes it.
     if (item.tidy) {
@@ -4304,7 +4304,7 @@ Object.assign(Hub.prototype, {
       const n = Number(args.race);
       if (!Number.isInteger(n) || n < 1 || n > MAX_RACE) throw new UserError(`race must be a whole number from 1 to ${MAX_RACE}`, { hint: '1 means one agent at a time (the usual); 2 or more lets that many agents attempt it at once.' });
       if (n !== item.race) {
-        if (item.stage === 'active') throw new UserError(`#${item.seq} is being worked on; change its race count while it is ready`, { status: 409, hint: 'Change it while the item is ready. Call look on the item to see its stage.' });
+        if (item.stage === 'active') throw new UserError(`#${item.seq} is being worked on; change its race count while it is ready`, { status: 409, hint: 'Change it once the item is ready again, after its holder submits or hands it back. To change course now, steer the holder.' });
         set.race = n;
         changed.push(n > 1 ? `race → ${n} agents` : 'no longer a race');
       }
@@ -4494,7 +4494,7 @@ const HUMAN_OPS = {
     if (!q) throw new UserError(`No question ${question}`, { status: 404, hint: 'Call look to see open questions and their ids.' });
     settled(q);
     let text = str(answer);
-    if (!text) throw new UserError('answer is required', { hint: 'Pass the answer as text.' });
+    if (!text) throw new UserError('answer is required', { hint: "Pass answer: your reply as text, or one of the question's options." });
     // An outsider's held reply (#471), passed on by a person: the asker gets it as their words, quoted.
     const passed = !!q.held_reply && text === PASS_ON;
     if (passed) text = quotedFrom(`@${q.reporter} replied on GitHub, and ${by === HUMAN ? 'a person' : by} passed it on`, q.held_reply);
@@ -4585,14 +4585,14 @@ const HUMAN_OPS = {
 
   accept(p, { item, note, attempt }, by) {
     const it = this.item(p, item);
-    if (it.stage !== 'verifying') throw new UserError(`#${it.seq} is ${it.stage}, not verifying`, { status: 409, hint: 'Call look on the item to see its stage.' });
+    if (it.stage !== 'verifying') throw new UserError(`#${it.seq} is ${it.stage}, not verifying`, { status: 409, hint: 'Accept it once it is submitted and verifying. To shape what gets built meanwhile, steer it.' });
     return this.verdict(p, by, it, 'accept', { headline: str(note), attempt });
   },
 
   sendback(p, { item, note }, by) {
     const it = this.item(p, item);
     const { headline, summary } = layered(note, '', '', 'A reason for sending it back');
-    if (!['verifying', 'landing', 'done'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409, hint: 'Call look on the item to see its stage.' });
+    if (!['verifying', 'landing', 'done'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409, hint: 'Only submitted work (verifying, landing or done) can be sent back. To change course before then, steer it.' });
     this.verdict(p, by, it, 'reject', { headline, summary });
   },
 
@@ -4692,14 +4692,14 @@ const HUMAN_OPS = {
   // "Check now": forget the backoff, so the next sweep checks it.
   check(p, { item }, by) {
     const it = this.item(p, item);
-    if (it.stage !== 'outside' || !this.unmetPrecondition(it)) throw new UserError(`#${it.seq} isn't waiting on anything outside`, { status: 409, hint: 'Only work waiting on something outside can be checked. Call look on the item to see its stage.' });
+    if (it.stage !== 'outside' || !this.unmetPrecondition(it)) throw new UserError(`#${it.seq} isn't waiting on anything outside`, { status: 409, hint: 'Only work waiting on something outside can be checked now; this one needs no check. If it seems stuck, steer it.' });
     this.patch(it, { check_fails: 0, next_check: this.now() });
     this.event(p, { item: it, actor: by, type: 'check_now', headline: `${You(by)} asked the hub to check #${it.seq}'s precondition now` });
   },
 
   pick(p, { item }, by) {
     const it = this.item(p, item);
-    if (!['proposed', 'ready'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409, hint: 'Call look on the item to see its stage.' });
+    if (!['proposed', 'ready'].includes(it.stage)) throw new UserError(`#${it.seq} is ${it.stage}`, { status: 409, hint: 'Only proposed or ready work can be picked; this one is under way or finished. Pick another proposed or ready item.' });
     this.patch(it, { priority: 'now' });
     this.event(p, {
       item: it, actor: by, type: 'picked',

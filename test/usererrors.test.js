@@ -15,8 +15,8 @@ describe('every UserError in src carries a hint', () => {
     assert.deepEqual(bare.map((e) => `${e.file}:${e.line} ${e.call}`), [], 'add { hint: "what to do instead" }');
   });
 
-  test('the scanner sees a hintless call, one in a nested template, and a hinted one', async () => {
-    const { mkdtempSync, writeFileSync } = await import('node:fs');
+  test('the scanner sees a hintless call, one in a nested template, "hint" only in the text, and one in a subfolder', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const dir = mkdtempSync(join(tmpdir(), 'usererrors-'));
@@ -24,8 +24,13 @@ describe('every UserError in src carries a hint', () => {
       'throw new UserError("bare");',
       'throw new UserError(`x ${a ? `y ${b}` : ""} ")`);',
       'throw new UserError("ok", { hint: "do this" });',
+      'throw new UserError("no hint here, hint: none");',
+      'throw new UserError("ok", { status: 404, hint });',
+      'throw new UserError("ok", {\n  hint: how,\n});',
     ].join('\n'));
-    assert.deepEqual(hintlessUserErrors(dir).map((e) => e.line), [1, 2]);
+    mkdirSync(join(dir, 'sub'));
+    writeFileSync(join(dir, 'sub', 'b.js'), 'throw new UserError("nested");');
+    assert.deepEqual(hintlessUserErrors(dir).map((e) => `${e.file}:${e.line}`), ['a.js:1', 'a.js:2', 'a.js:4', join('sub', 'b.js') + ':1']);
   });
 });
 
@@ -44,12 +49,58 @@ describe('refusals an agent hits in ordinary work say what to do', () => {
     assert.ok(own.hint);
   });
 
-  test('submit: work that is not active, and an item in no state to be claimed', () => {
+  test('submit: work not yet claimed, and a review someone tries to submit', () => {
+    const hub = single();
+    hub.agentOp('demo', 'checkin', 'w1', {});
+    hub.humanOp('demo', 'settings', { autonomy: 'full' });
+    hub.agentOp('demo', 'propose', 'w1', { title: 'T', acceptance: 'it works' });
+    const early = refused(() => hub.agentOp('demo', 'submit', 'w1', { item: '#1', headline: 'done' }));
+    assert.equal(early.status, 409);
+    assert.match(early.hint, /Claim it first/);
+    hub.agentOp('demo', 'claim', 'w1', { item: '#1' });
+    hub.agentOp('demo', 'submit', 'w1', { item: '#1', headline: 'done' });
+    hub.agentOp('demo', 'checkin', 'w2', {});
+    const job = hub.agentOp('demo', 'next', 'w2', {});
+    assert.equal(job.item, '#1', JSON.stringify(job).slice(0, 300));
+    const review = refused(() => hub.agentOp('demo', 'submit', 'w2', { item: '#1', headline: 'looks good' }));
+    assert.equal(review.status, 409);
+    assert.match(review.message, /only active work can be submitted/);
+    assert.match(review.hint, /finish with review/);
+  });
+
+  test('claim: an item in no state to be claimed', () => {
     const hub = single();
     hub.agentOp('demo', 'checkin', 'w1', {});
     hub.agentOp('demo', 'propose', 'w1', { title: 'T', acceptance: 'it works' });
-    const e = refused(() => hub.agentOp('demo', 'submit', 'w1', { item: '#1', headline: 'done' }));
-    assert.ok(e.hint, e.message);
+    hub.tx(() => hub.move(hub.item(hub.project('demo'), '#1'), 'dropped', 'w1'));
+    const e = refused(() => hub.agentOp('demo', 'claim', 'w1', { item: '#1' }));
+    assert.equal(e.status, 409, e.message);
+    assert.match(e.message, /is dropped/);
+    assert.match(e.hint, /Only ready work can be claimed/);
+  });
+
+  test('answer: an empty answer, and a question that is settled', () => {
+    const hub = single();
+    hub.agentOp('demo', 'checkin', 'w1', {});
+    const { question } = hub.agentOp('demo', 'ask', 'w1', { question: 'Which way?', options: ['a', 'b'] });
+    const empty = refused(() => hub.humanOp('demo', 'answer', { question, answer: '' }));
+    assert.match(empty.message, /answer is required/);
+    assert.match(empty.hint, /answer/);
+    hub.agentOp('demo', 'withdraw', 'w1', { question, reason: 'moot' });
+    const gone = refused(() => hub.humanOp('demo', 'answer', { question, answer: 'a' }));
+    assert.equal(gone.status, 409);
+    assert.match(gone.hint, /another open question/);
+  });
+
+  test('question: an unknown one is a 404 with a hint, for the person and for the asker', () => {
+    const hub = single();
+    hub.agentOp('demo', 'checkin', 'w1', {});
+    for (const fn of [() => hub.humanOp('demo', 'answer', { question: 4242, answer: 'yes' }), () => hub.agentOp('demo', 'withdraw', 'w1', { question: 4242, reason: 'moot' })]) {
+      const e = refused(fn);
+      assert.equal(e.status, 404);
+      assert.match(e.message, /No question 4242/);
+      assert.ok(e.hint, e.message);
+    }
   });
 
   test('field notes: an unknown one is a 404 with a hint', () => {
@@ -89,6 +140,14 @@ describe('refusals an agent hits in ordinary work say what to do', () => {
       assert.equal(r.status, 400);
       assert.match(json.error, /too long/);
       assert.ok(json.hint);
+      const base = `http://127.0.0.1:${server.address().port}`;
+      const a = await fetch(`${base}/api/p/demo/human/answer`, {
+        method: 'POST', headers: { 'content-type': 'application/json', origin: base, authorization: `Bearer ${server.personKey}` }, body: JSON.stringify({ question: 4242, answer: 'yes' }),
+      });
+      const aj = await a.json();
+      assert.equal(a.status, 404);
+      assert.match(aj.error, /No question 4242/);
+      assert.match(aj.hint, /open questions/);
     } finally { server.close(); }
   });
 });

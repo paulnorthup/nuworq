@@ -24,9 +24,22 @@ function skipBraces(s, i) {
   return i;
 }
 
+// The call with every string and template literal emptied, so only code is left: "no hint here" isn't a hint.
+function codeOnly(call) {
+  let out = '';
+  for (let i = 0; i < call.length; i++) {
+    const c = call[i];
+    if (c === '"' || c === "'" || c === '`') { const end = skipQuoted(call, i); out += c + c; i = end - 1; } else out += c;
+  }
+  return out;
+}
+
+// Every .js file under dir, subfolders included, as paths relative to dir.
+const sources = (dir) => fs.readdirSync(dir, { recursive: true }).filter((x) => x.endsWith('.js')).sort();
+
 export function hintlessUserErrors(dir) {
   const out = [];
-  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) {
+  for (const f of sources(dir)) {
     const s = fs.readFileSync(path.join(dir, f), 'utf8');
     let i = 0;
     while ((i = s.indexOf('new UserError(', i)) >= 0) {
@@ -38,7 +51,8 @@ export function hintlessUserErrors(dir) {
         else if (c === ')') depth--;
       }
       const call = s.slice(i, j);
-      if (!/hint/.test(call)) {
+      // A hint key: `hint: ...`, or the shorthand `{ hint }` / `{ hint, ... }`.
+      if (!/\bhint\b\s*[:,}]/.test(codeOnly(call))) {
         out.push({ file: f, line: s.slice(0, i).split('\n').length, call: call.replace(/\s+/g, ' ') });
       }
       i = j;
