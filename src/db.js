@@ -689,6 +689,13 @@ export const MIGRATIONS = [
     name: 'an agent last active with a credential no runner shares',
     up(db) { addColumn(db, 'ALTER TABLE agents ADD COLUMN by_person INTEGER NOT NULL DEFAULT 0'); },
   },
+  {
+    // Sessions active before that (#939) start marked: a runner token always makes its agent a worker with its runner
+    // (src/core.js claimedRole), so a name with neither never acted with one. Its own run here, so a hub that already
+    // ran the one above gets it too.
+    name: 'agents that never acted with a runner token count as last active with the person',
+    up(db) { db.exec("UPDATE agents SET by_person = 1 WHERE runner = '' AND role != 'worker' AND by_person = 0"); },
+  },
 ];
 
 export function migrate(db, migrations = MIGRATIONS) {
