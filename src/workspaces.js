@@ -142,7 +142,7 @@ export class Workspaces {
   // bind the name in the directory, and throws to refuse.
   create(slug, { claim } = {}) {
     const s = Workspaces.check(slug);
-    if (existsSync(this.file(s))) throw new UserError(`Workspace "${s}" already exists`, { status: 409 });
+    if (existsSync(this.file(s))) throw new UserError(`Workspace "${s}" already exists`, { status: 409, hint: 'Pick another workspace name.' });
     this.forgetName(s);
     claim?.(s);
     new Hub({ file: this.file(s) }).db.close();
@@ -297,7 +297,7 @@ export class Workspaces {
 
   setPlan(slug, plan, by = '') {
     const s = Workspaces.check(slug);
-    if (!this.has(s)) throw new UserError(`No workspace "${s}"`, { status: 404 });
+    if (!this.has(s)) throw new UserError(`No workspace "${s}"`, { status: 404, hint: 'Check the spelling of the workspace name.' });
     this.directory.setPlan(s, Workspaces.checkPlan(plan), by);
   }
 
@@ -316,7 +316,7 @@ export class Workspaces {
 
   remove(slug) {
     const s = Workspaces.check(slug);
-    if (!existsSync(this.file(s))) throw new UserError(`No workspace "${s}"`, { status: 404 });
+    if (!existsSync(this.file(s))) throw new UserError(`No workspace "${s}"`, { status: 404, hint: 'Check the spelling of the workspace name.' });
     this.evict(s);
     for (const f of [this.file(s), `${this.file(s)}-wal`, `${this.file(s)}-shm`]) rmSync(f, { force: true });
     // And every copy of it: follow's, and the dated copy of the single hub it was adopted from (#479).
