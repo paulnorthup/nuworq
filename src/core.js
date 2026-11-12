@@ -1999,12 +1999,22 @@ export class Hub extends EventEmitter {
       if (scope && !scope.includes(p.slug)) continue;
       for (const name of list) {
         const a = this.q('SELECT token_id, last_seen FROM agents WHERE project_id = ? AND name = ?').get(p.id, name);
-        if (identity && a?.token_id !== identity.id) continue;
+        if (identity && a?.token_id !== identity.id && !this.workerOf(a?.token_id, identity.id)) continue;
         if (!a || this.now() - a.last_seen >= VOUCH_IDLE_MS) continue; // quiet too long: its lease runs out (#736)
         n += this.renewHeld(p, name);
       }
     }
     return n;
+  }
+
+  // Is token id one worker's own, minted from the runner token runnerId (#941)? Its runner vouches for that worker.
+  workerOf(id, runnerId) {
+    if (id == null) return false;
+    try {
+      return !!this.q('SELECT 1 FROM tokens WHERE id = ? AND from_token = ? AND worker IS NOT NULL AND revoked_at IS NULL').get(id, runnerId);
+    } catch {
+      return false; // no tokens table: no worker has a token
+    }
   }
 
   // The agent did something outside its calls, a push through the hub (#736): it counts as heard from.
@@ -2595,9 +2605,9 @@ export class Hub extends EventEmitter {
         });
       }
       if (op === 'claim' || (op === 'next' && args?.claim !== false)) this.checkPlan(agent, p);
-      // What it builds under (#937), on a hub without logins: there anyone on the machine gets a runner token. A hub with
-      // logins doesn't check it yet, since its workers have no tokens of their own to tell them apart (Q311).
-      this.caller = { powers, remote, under: identity ? '' : underOf(token) };
+      // What it builds under (#937): code a worker runs holds its machine's runner token, which speaks for any unbound
+      // name. On both hub types the runner gives each worker a token of its own (#919, #941), which tells them apart.
+      this.caller = { powers, remote, under: underOf(token) };
       // Checked before the op runs, so a malformed usage changes nothing.
       const usage = USAGE_OPS.includes(op) ? normUsage(args?.usage) : null;
       let r;
