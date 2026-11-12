@@ -744,3 +744,61 @@ describe('agent tokens limited to projects', () => {
     assert.deepEqual(view(ctx.hub, 'alpha').agents.find((x) => x.name === 'w1').tokens, ['alpha-box']);
   });
 });
+
+describe("a machine's workers on a hub with logins (#941)", () => {
+  let ctx, device, runner, other;
+  const post = (path, token, body = {}, agent) => request(ctx.port, 'POST', path, { body, headers: { authorization: `Bearer ${token}`, ...(agent ? { 'x-nuworq-agent': agent } : {}) } });
+  const op = (name, token, agent, body = {}) => post(`/api/p/api/agent/${name}`, token, body, agent);
+  before(async () => {
+    ctx = await start({ auth: 'required' });
+    ctx.hub.tx(() => ctx.hub.project('api', { create: true }));
+    ctx.hub.humanOp('api', 'settings', { path: '/code/api', autonomy: 'full' });
+    ctx.server.auth.addPerson('rita', 'steward');
+    ctx.server.auth.addPerson('sam', 'steward');
+    device = ctx.server.auth.createToken('rita@laptop', 'agent', { mintedBy: 'rita' }); // what nuworq connect saved
+    runner = (await post('/api/me/runner-token', device)).json.token;
+    const otherDevice = ctx.server.auth.createToken('sam@desk', 'agent', { mintedBy: 'sam' });
+    other = { device: otherDevice, runner: (await post('/api/me/runner-token', otherDevice)).json.token };
+  });
+  after(() => { ctx.server.close(); ctx.server.closeAllConnections(); });
+
+  test("only the machine's device login makes its workers' tokens, from the runner token it minted", async () => {
+    const mint = (token, from = runner, name = 'w1') => post('/api/me/worker-token', token, { name, from });
+    for (const [what, token] of Object.entries({ 'the runner token its workers carry': runner, "another machine's runner token": other.runner })) {
+      const r = await mint(token);
+      assert.equal(r.status, 403, what);
+      assert.match(r.json.error, /only the machine's device login/, what);
+    }
+    const human = ctx.server.auth.createToken('rita-browser', 'human', { person: 'rita' });
+    assert.equal((await mint(human)).status, 403, "a person's token isn't the machine's device login");
+    assert.equal((await mint(device, other.runner)).status, 400, "another machine's runner token isn't this login's to hand out");
+    const made = await mint(device);
+    assert.equal(made.status, 200, JSON.stringify(made.json));
+    const own = ctx.server.auth.verifyToken(made.json.token);
+    assert.deepEqual([own.worker, own.runner, own.operator], ['w1', 'rita@laptop', false]);
+    assert.equal((await mint(made.json.token, made.json.token, 'w2')).status, 403, "a worker's token can't make another");
+    // Another machine's login can't drop this machine's worker's token, even under the same name.
+    assert.equal((await post('/api/me/worker-token', other.device, { name: 'w1', drop: true })).json.dropped, 0);
+    assert.ok(ctx.server.auth.verifyToken(made.json.token), 'still live');
+    assert.equal((await post('/api/me/worker-token', device, { name: 'w1', drop: true })).json.dropped, 1);
+    assert.equal(ctx.server.auth.verifyToken(made.json.token), null, 'gone once its runner drops it');
+  });
+
+  test("one machine's workers review each other's work with their own tokens, and the runner still renews their leases (#656)", async () => {
+    const own = async (name) => (await post('/api/me/worker-token', device, { name, from: runner })).json.token;
+    const [a, b] = [await own('worker-a'), await own('worker-b')];
+    const { item } = ctx.hub.humanOp('api', 'create', { title: 'Built by worker A', acceptance: 'x', priority: 'now' });
+    assert.equal((await op('claim', a, 'worker-a', { item })).status, 200);
+    // The runner token its workers came from vouches for them (#540).
+    const report = await post('/api/runner', runner, { live: ['worker-a'] });
+    assert.equal(report.json.renewed, 1, JSON.stringify(report.json));
+    assert.equal((await post('/api/runner', other.runner, { live: ['worker-a'] })).json.renewed, 0, "another machine's runner doesn't");
+    assert.equal((await op('submit', a, 'worker-a', { item, headline: 'done', evidence: [{ label: 'tests pass' }] })).status, 200);
+    assert.equal((await op('checkin', b, 'worker-a')).status, 403, "worker B's token can't act as worker A");
+    const r = await op('review', b, 'worker-b', { item, verdict: 'accept', headline: 'looks right' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    // A worker's name is freed once its token goes, so the runner can still post its usage and sign it off.
+    for (const name of ['worker-a', 'worker-b']) await post('/api/me/worker-token', device, { name, drop: true });
+    assert.equal((await op('signoff', runner, 'worker-a')).status, 200);
+  });
+});

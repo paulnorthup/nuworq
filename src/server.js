@@ -1567,17 +1567,22 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
           return deny(400, e.message, 'See: nuworq token list.');
         }
       }
-      // One worker's own token on a hub without logins (#919), minted as the runner starts it and dropped as it ends.
-      // Only the person's key asks: anyone can mint a runner token here, so holding one proves nothing.
+      // One worker's own token (#919), minted as the runner starts it and dropped as it ends. Only what the runner
+      // holds and its workers don't asks: without logins the person's key (anyone can mint a runner token there, so
+      // holding one proves nothing); with logins the machine's device login, for the runner token minted from it
+      // (#941), since its workers carry that runner token.
       if (req.method === 'POST' && path === '/api/me/worker-token') {
-        if (required) return deny(404, 'a hub with logins ties each name to its token already', 'Workers use the runner token.');
-        if (who.role !== 'human' || who.via !== 'bearer') return deny(403, "only the person's key makes a worker's token", 'nuworq run sends it from ~/.nuworq/tokens/person.token. A worker gets its token from the runner that starts it.');
+        const login = required && who.via === 'bearer' && who.role === 'agent' && !who.runner;
+        if (required && !login) return deny(403, "only the machine's device login makes a worker's token", 'nuworq run sends the token nuworq connect saved. A worker gets its token from the runner that starts it.');
+        if (!required && (who.role !== 'human' || who.via !== 'bearer')) return deny(403, "only the person's key makes a worker's token", 'nuworq run sends it from ~/.nuworq/tokens/person.token. A worker gets its token from the runner that starts it.');
         const b = await body(req);
         const name = String(b.name ?? '');
         if (!/^[a-z0-9._-]{1,80}$/.test(name)) return deny(400, "a worker's name is plain: a-z, 0-9, ., _ or -");
-        if (b.drop) return send(200, { ok: true, dropped: authz.dropWorkerToken(name) });
+        // With logins the hub serves many machines: a device login drops only its own runner's workers' tokens.
+        if (b.drop) return send(200, { ok: true, dropped: authz.dropWorkerToken(name, login ? { runner: who.name } : {}) });
         const from = authz.verifyToken(b.from);
         if (from?.role !== 'agent') return deny(400, 'from must be the live agent token the runner holds', 'See: nuworq token list.');
+        if (login && !authz.mintedFrom(from.id, who.id)) return deny(400, 'from must be the runner token minted from this device login', 'nuworq run mints it (POST /api/me/runner-token) and hands it to its workers.');
         try {
           return sendSecret(200, { ok: true, ...authz.workerToken(from.id, name) });
         } catch (e) {

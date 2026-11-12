@@ -1999,12 +1999,22 @@ export class Hub extends EventEmitter {
       if (scope && !scope.includes(p.slug)) continue;
       for (const name of list) {
         const a = this.q('SELECT token_id, last_seen FROM agents WHERE project_id = ? AND name = ?').get(p.id, name);
-        if (identity && a?.token_id !== identity.id) continue;
+        if (identity && a?.token_id !== identity.id && !this.workerOf(a?.token_id, identity.id)) continue;
         if (!a || this.now() - a.last_seen >= VOUCH_IDLE_MS) continue; // quiet too long: its lease runs out (#736)
         n += this.renewHeld(p, name);
       }
     }
     return n;
+  }
+
+  // Is token id one worker's own, minted from the runner token runnerId (#941)? Its runner vouches for that worker.
+  workerOf(id, runnerId) {
+    if (id == null) return false;
+    try {
+      return !!this.q('SELECT 1 FROM tokens WHERE id = ? AND from_token = ? AND worker IS NOT NULL AND revoked_at IS NULL').get(id, runnerId);
+    } catch {
+      return false; // no tokens table: no worker has a token
+    }
   }
 
   // The agent did something outside its calls, a push through the hub (#736): it counts as heard from.

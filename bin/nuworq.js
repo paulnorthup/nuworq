@@ -886,20 +886,22 @@ async function setupOrClone(target, agent, flags, s, client, token) {
     await cloneHome(target, flags, s, client, token, e);
     setup = workerSetup(target, agent, flags, s, token);
   }
-  return { ...setup, retire: setup.tokenAt ? await ownToken(client, setup, token) : async () => {} };
+  return { ...setup, retire: setup.tokenAt ? await ownToken(client, setup, token, s) : async () => {} };
 }
 
-// A hub without logins can't tell a machine's workers apart by the runner token they share (#919), so each gets a
-// token of its own in its token file, and the hub takes its pushes under that name only. Asked with the person's key,
-// which a worker can't read. A hub with logins, or one too old for this, answers 404 and the shared token stands.
+// The hub can't tell a machine's workers apart by the runner token they share (#919), so each gets a token of its
+// own in its token file: the hub takes its pushes, and its reviews of a sibling's work, under that name only. Asked
+// with what the runner holds and a worker can't read: the person's key on a hub without logins, the device login on
+// one with logins (#941). A hub too old for this answers 404 and the shared token stands.
 // Returns what drops the token when the worker ends.
-async function ownToken(client, { name, origin }, token) {
+async function ownToken(client, { name, origin }, token, s) {
   try {
     const r = await client.post('/api/me/worker-token', { name, from: token });
     tokenFile(dirname(HUB_FILE), name, r.token);
     return () => client.post('/api/me/worker-token', { name, drop: true }).catch(() => {});
   } catch (e) {
-    if (e.status !== 404 && origin) console.log(amber(`! ${name} shares this machine's runner token, so the hub won't take its pushes (${e.message}). Start nuworq run on the machine that serves this hub, where ~/.nuworq/tokens/person.token is.`));
+    // Without one, the hub takes no pushes from it without logins, and no review of a sibling's work with them.
+    if (e.status !== 404 && (origin || s.token)) console.log(amber(`! ${name} shares this machine's runner token, so the hub can't tell it from the other workers here (${e.message}). ${s.token ? e.hint ?? '' : 'Start nuworq run on the machine that serves this hub, where ~/.nuworq/tokens/person.token is.'}`.trim()));
     return async () => {};
   }
 }

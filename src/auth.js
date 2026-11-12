@@ -334,10 +334,11 @@ export class Auth {
     }
   }
 
-  // One worker's own token on a hub without logins (#919): nothing else ties a name to a token there, and a machine's
-  // workers share its runner token, so that token can't tell them apart. A child of the token the runner holds: the
-  // same runner, projects and powers, never operating, revoked with it. Minted only for the person's key (the runner
-  // has it, a worker doesn't). Minting for a name again replaces its token, and a crash's leftovers go at each mint.
+  // One worker's own token (#919): a machine's workers share its runner token, so that token can't tell them apart.
+  // A child of the token the runner holds: the same runner, projects and powers, never operating, revoked with it.
+  // Minted only for what the runner holds and its workers don't: the person's key on a hub without logins, the
+  // machine's device login on one with logins (#941). Minting for a name again replaces that runner's token for it,
+  // and a crash's leftovers go at each mint.
   workerToken(fromId, worker) {
     const from = this.db.prepare('SELECT * FROM tokens WHERE id = ? AND revoked_at IS NULL').get(fromId);
     if (!from || from.role !== 'agent') throw new Error('only an agent token can have workers');
@@ -347,11 +348,12 @@ export class Auth {
     const token = TOKEN_PREFIX + randomBytes(32).toString('base64url');
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      this.db.prepare('DELETE FROM tokens WHERE worker IS NOT NULL AND (worker = ? OR created_at < ?)').run(worker, this.now() - WORKER_TOKEN_MS);
+      const runner = from.runner ?? from.name;
+      this.db.prepare('DELETE FROM tokens WHERE worker IS NOT NULL AND ((worker = ? AND runner = ?) OR created_at < ?)').run(worker, runner, this.now() - WORKER_TOKEN_MS);
       let name = `${worker.slice(0, 50)}.worker`;
       if (this.db.prepare('SELECT 1 FROM tokens WHERE name = ?').get(name)) name += `-${randomBytes(3).toString('hex')}`;
       this.db.prepare('INSERT INTO tokens (name, role, hash, prefix, minted_by, runner, powers, created_at, projects, from_token, worker) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(name, 'agent', sha(token), token.slice(0, 8), from.minted_by, from.runner ?? from.name, powers ? JSON.stringify(powers) : null, this.now(), from.projects, from.id, worker);
+        .run(name, 'agent', sha(token), token.slice(0, 8), from.minted_by, runner, powers ? JSON.stringify(powers) : null, this.now(), from.projects, from.id, worker);
       this.db.exec('COMMIT');
       return { token, name, worker };
     } catch (e) {
@@ -360,9 +362,15 @@ export class Auth {
     }
   }
 
-  // The worker is done: its token goes with it.
-  dropWorkerToken(worker) {
-    return this.db.prepare('DELETE FROM tokens WHERE worker = ?').run(worker).changes;
+  // Was token id minted from token parent (a device login's runner token, a runner token's worker)?
+  mintedFrom(id, parent) {
+    return this.db.prepare('SELECT from_token FROM tokens WHERE id = ? AND revoked_at IS NULL').get(id)?.from_token === parent;
+  }
+
+  // The worker is done: its token goes with it. runner: only that runner's (a hub with logins serves many machines).
+  dropWorkerToken(worker, { runner = null } = {}) {
+    if (runner == null) return this.db.prepare('DELETE FROM tokens WHERE worker = ?').run(worker).changes;
+    return this.db.prepare('DELETE FROM tokens WHERE worker = ? AND runner = ?').run(worker, String(runner)).changes;
   }
 
   listTokens() {
