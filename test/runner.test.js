@@ -668,7 +668,7 @@ describe('workers on a hub that requires login', () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-rtok-')));
     const bin = join(dir, 'bin');
     execFileSync('mkdir', [bin]);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho ran\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "OWN: $(cat "$HOME/.nuworq/tokens/w.token")"\n', { mode: 0o755 });
     const hub = new Hub();
     hub.tx(() => hub.project('lock', { create: true }));
     hub.humanOp('lock', 'settings', { path: dir });
@@ -681,8 +681,14 @@ describe('workers on a hub that requires login', () => {
     const cli = () => promisify(execFile)(process.execPath, [BIN, 'worker', '--url', `http://127.0.0.1:${server.address().port}`, '--project', 'lock', '--here', '--as', 'w', '--run'], { env, cwd: dir });
     const runners = () => server.auth.listTokens().filter((t) => t.runner && !t.revoked_at);
     try {
-      assert.match((await cli()).stdout, /carry the runner token pat@box\.runner/);
+      const first = (await cli()).stdout;
+      assert.match(first, /carry the runner token pat@box\.runner/);
       const kept = readFileSync(join(home, '.nuworq', 'tokens', 'runner.token'), 'utf8').trim();
+      // Each worker gets a token of its own from the device login (#941), dropped once it ends.
+      const own = first.match(/^OWN: (\S+)$/m)[1];
+      assert.notEqual(own, kept, "not the token the machine's workers share");
+      assert.equal(server.auth.verifyToken(own), null, 'dropped when the worker ended');
+      assert.deepEqual(server.auth.listTokens().filter((t) => t.name === 'w.worker'), [], 'its row too');
       assert.deepEqual([server.auth.verifyToken(kept).runner, runners().length], ['pat@box', 1]);
       assert.doesNotMatch((await cli()).stdout, /carry the runner token/, 'the next start uses the kept one');
       assert.deepEqual(runners().map((t) => t.name), ['pat@box.runner'], 'and mints no other');
