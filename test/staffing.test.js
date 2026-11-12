@@ -106,10 +106,12 @@ describe('staffing', () => {
   test("a spent budget stops a runner worker's next claiming work; reviews still come, and a session only hears it", () => {
     const { hub, p, set } = world();
     set({ run_budget: 5, autonomy: 'full' });
-    const RUNNER = { token: { name: 'mac-runner', runner: 'mac' } };
-    hub.agentOp('p', 'checkin', 'w0', {}, RUNNER);
-    hub.agentOp('p', 'next', 'w0', {}, RUNNER);
-    hub.agentOp('p', 'submit', 'w0', { item: '#1', headline: 'Done', evidence: [{ label: 'tests pass' }] }, RUNNER);
+    // Each worker calls with a worker token of its own: with only the runner's, w1 couldn't review w0's build (#937).
+    const RUNNER = { token: { name: 'w1.worker', runner: 'mac', worker: 'w1' } };
+    const W0 = { token: { name: 'w0.worker', runner: 'mac', worker: 'w0' } };
+    hub.agentOp('p', 'checkin', 'w0', {}, W0);
+    hub.agentOp('p', 'next', 'w0', {}, W0);
+    hub.agentOp('p', 'submit', 'w0', { item: '#1', headline: 'Done', evidence: [{ label: 'tests pass' }] }, W0);
     hub.recordUsage(p(), null, 'w0', { input_tokens: 1, output_tokens: 1, cost_usd: 6 }, 'runner');
     hub.agentOp('p', 'checkin', 'w1', {}, RUNNER);
     const review = hub.agentOp('p', 'next', 'w1', {}, RUNNER);
