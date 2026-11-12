@@ -697,6 +697,15 @@ export const MIGRATIONS = [
     up(db) { db.exec("UPDATE agents SET by_person = 1 WHERE runner = '' AND role != 'worker' AND by_person = 0"); },
   },
   {
+    // A pre-release security review reads a range of main (#936): from security_from ('' for the last release tag)
+    // to security_sha, main's commit when it was claimed. A release ships nothing past it unreviewed.
+    name: 'the main commits a pre-release review read',
+    up(db) {
+      addColumn(db, "ALTER TABLE items ADD COLUMN security_sha TEXT NOT NULL DEFAULT ''");
+      addColumn(db, "ALTER TABLE items ADD COLUMN security_from TEXT NOT NULL DEFAULT ''");
+    },
+  },
+  {
     // Never your own work, by credential (#937): the runner a build was submitted under, and whether its worker
     // called with a token of its own (JSON, src/core.js underOf). '': not under a runner token, or before this.
     name: 'the runner a build was submitted under',

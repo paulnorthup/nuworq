@@ -14,7 +14,7 @@ import { defaultAudience, needsSteps } from './audience.js';
 import { tidyUp } from './tidy.js';
 import { fieldNotesFor, reviewUp, reviewed, setAlways, distill, ALWAYS_MAX } from './fieldnotes.js';
 import { RELEASES, landed, askRelease, tagRelease, releaseVersion, openRelease, settleTags } from './releases.js';
-import { builtWhatItReviews, reviewRelease } from './security.js';
+import { builtWhatItReviews, coverReview, holdRelease, reviewDone, reviewRange, reviewRelease, unreviewed } from './security.js';
 import { sandboxHosts, workerCommands, testsLine, kindsOf } from './sandbox.js';
 import { BUDGET as DEFAULT_BUDGET } from './setup.js';
 import { AGENTS, DEFAULT_TIERS, DIFFICULTIES, QUALITY, candidates, difficultyOf, modelAt, modeAt, nextTrial, parseShare, parseTiers, pickModel, tiersOf, trialEligible } from './models.js';
@@ -855,7 +855,14 @@ export class Hub extends EventEmitter {
     try {
       const p = slug ? this.project(slug) : this.projectByRemote(normRemote(remote), scope) ?? this.projectByPath(root, scope);
       const item = p && args.item ? this.item(p, args.item) : null;
-      if (!p || this.localFor(p, item)) return;
+      if (p) await this.fetchRepo(p, item);
+    } catch { /* the op says what's wrong */ }
+  }
+
+  // Fetch the mirror of p's (or item's) repository now. Outside any transaction; never throws.
+  async fetchRepo(p, item = null) {
+    if (!this.repos || this.localFor(p, item)) return;
+    try {
       const repo = this.repoOf(p, item);
       if (!repo) return;
       // A read token being minted is worth the wait: without it the fetch goes over SSH.
@@ -865,7 +872,7 @@ export class Hub extends EventEmitter {
       }
       const r = await fetchMirror(this.repos, repo, { keys: this.keys, https: this.mirrorHttps(repo), hosted: this.hosted });
       if (r.changed) this.remoteChanged(repo);
-    } catch { /* the op says what's wrong */ }
+    } catch { /* whoever reads the mirror next says what's wrong */ }
   }
 
   // The plan's limit on agents working at once (planLimit, set per organization by Workspaces; null or
@@ -1474,6 +1481,7 @@ export class Hub extends EventEmitter {
     if (['verifying', 'done'].includes(stage)) this.measureUsage(item);
     if (['done', 'dropped'].includes(stage)) { this.settleQuestions(item, stage); this.retireSteers(item, stage); }
     if (stage === 'done') { landed(this, item); deleteBranch.call(this, item); } // a finished milestone drafts the release (#399)
+    if (stage === 'done') reviewDone(this, item); // a pre-release review records what it read; a held tag is made (#936)
     if (unmet?.kind === 'ask') this.askPrecondition(item, actor);
   }
 
@@ -2933,6 +2941,7 @@ export class Hub extends EventEmitter {
     const unmet = this.unmetDeps(item);
     if (unmet.length) throw new UserError(`#${item.seq} depends on unfinished work: ${unmet.map((d) => `#${d.seq}`).join(', ')}`, { status: 409, hint: 'Work on a dependency, or pick other work with next.' });
     this.move(item, 'active', agent, { holder: agent, lease_until: t + LEASE_MS, last_worker: agent, attempts: item.attempts + 1, branch: item.branch || itemBranch(item) });
+    coverReview(this, item); // a pre-release review reads main as it is now (#936)
     this.event(p, {
       item, actor: agent, type: 'claimed',
       headline: `${agent} picked up #${item.seq}${item.attempts > 1 ? ` (attempt ${item.attempts})` : ''}`,
@@ -3024,7 +3033,7 @@ export class Hub extends EventEmitter {
     const release = version ? ` This is a release: set the version file to ${version} (package.json's version, else VERSION) and put the summary at the top of CHANGELOG.md under "## ${version} (${new Date(this.now()).toISOString().slice(0, 10)})". Nothing else changes. ${MODE_RULES.release}` : '';
     // The weekly freshness sweep (#181): how to do it.
     const sweep = item.sweep ? ` ${MODE_RULES.fresh}` : '';
-    const security = item.security ? ` ${MODE_RULES.security}` : ''; // a security audit (#480)
+    const security = item.security ? ` ${MODE_RULES.security}${spaced(reviewRange(this, p, item))}` : ''; // a security audit (#480), and what it reads (#936)
     // Operator-only work (only an operator builds it): it builds only its live step.
     const live = operatorOnly(item) ? ` ${MODE_RULES.operator}` : '';
     // Tests (#532): where CI checks the pull request, the whole suite is CI's; elsewhere it's the builder's.
@@ -3433,6 +3442,14 @@ function movedHint(p, agent, item) {
   return { ok: true, hint: `${item.branch} ${why}, so it is verifying again. ${reviewer}, then it lands. Call next.` };
 }
 
+// A release's land job whose branch holds changes its security review didn't read (#936): back to ready, waiting on
+// a review of them, and the lander says so.
+function heldHint(p, agent, item, gap) {
+  const review = holdRelease(this, p, item, gap);
+  this.setStatus(p, agent, `Held #${item.seq}: changes landed after its security audit`);
+  return { ok: true, hint: `${item.branch} holds changes that landed after #${gap.review.seq} read main, so #${item.seq} isn't landed: it waits for #${review.seq} to review them, then it is built again on main. Call next.` };
+}
+
 // Submit on a land job: done when git shows main has the branch; back to review when the rebase changed it.
 function finishLanding(p, agent, item, { headline, summary, detail, conflicts }) {
   const reviewer = p.autonomy === 'full' ? 'Another agent reviews it again' : 'The human verifies it again';
@@ -3487,12 +3504,17 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
   if (land.pending && this.prMode(p, item) && !this.prFailed(item)) {
     // The hub opens a PR only for the head a review accepted (#605): one it never saw, or one that moved, is reviewed first.
     if (!item.reviewed_sha || reviewedHead.call(this, p, item) === 'moved') return movedHint.call(this, p, agent, item);
+    // A release ships only what its security review read (#936): changes past it are reviewed first.
+    const gap = item.release && unreviewed(this, p, item, shaOf(this.repoFor(p, item)?.path, item.branch));
+    if (gap) return heldHint.call(this, p, agent, item, gap);
     this.event(p, { item, actor: agent, type: 'pushed', headline: `${agent} pushed ${item.branch} for #${item.seq}; the hub opens its pull request`, summary, detail });
     this.openPr(p, item);
     this.setStatus(p, agent, `Pushed #${item.seq} for its pull request`);
     return { ok: true, hint: `${item.branch} is on origin. The hub opens a pull request with auto-merge on; GitHub's merge marks #${item.seq} done. Call next.` };
   }
   if (land.pending) {
+    const gap = item.release && unreviewed(this, p, item, shaOf(this.repoFor(p, item)?.path, item.branch));
+    if (gap) return heldHint.call(this, p, agent, item, gap);
     throw new UserError(`${land.base} doesn't contain ${item.branch} yet`, { status: 409, hint: LAND_HINT(item, p, land.base, remote, false, this.testsHint(p, item)) });
   }
   this.move(item, 'done', agent, { holder: null, lease_until: null, touching: '[]' });
