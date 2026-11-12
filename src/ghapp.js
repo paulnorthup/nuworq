@@ -214,7 +214,7 @@ export class GitHubApp {
     const have = this._inst.get(id);
     if (have && Date.parse(have.expires_at) - 5 * 60_000 > this.now()) return have.token;
     const tok = await this.call('POST', `/app/installations/${id}/access_tokens`, { permissions: { metadata: 'read' } });
-    if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for installation ${id} (${tok.status})`, { status: 502 });
+    if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for installation ${id} (${tok.status})`, { status: 502, hint: 'Check the GitHub App is installed with the needed permission, then retry.' });
     this._inst.set(id, { token: tok.json.token, expires_at: tok.json.expires_at });
     this.ownToken(tok.json.token, id, tok.json.expires_at);
     return tok.json.token;
@@ -290,7 +290,7 @@ export class GitHubApp {
         status: 424, hint: `An owner of ${owner} re-enables it: ${this.installUrl()}.`,
       });
     }
-    if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for ${owner}/${name} (${tok.status}${tok.json.message ? `: ${tok.json.message}` : ''})`, { status: 502 });
+    if (tok.status !== 201 || !tok.json.token) throw new UserError(`GitHub didn't issue a token for ${owner}/${name} (${tok.status}${tok.json.message ? `: ${tok.json.message}` : ''})`, { status: 502, hint: 'Check the GitHub App is installed on the repository with the needed permission, then retry.' });
     this.ownToken(tok.json.token, inst.json.id, tok.json.expires_at);
     return { token: tok.json.token, expires_at: tok.json.expires_at, repo: `github.com/${owner}/${name}` };
   }

@@ -192,7 +192,7 @@ export function distill(hub, p, agent, review, args) {
     let advice = '';
     if (n.kind === 'learning') {
       const rec = g.recommend ?? 'keep';
-      if (!ADVICE.includes(rec)) throw new UserError(`recommend is keep, retire or decide, not "${rec}"`);
+      if (!ADVICE.includes(rec)) throw new UserError(`recommend is keep, retire or decide, not "${rec}"`, { hint: 'Pass recommend: "keep", "retire" or "decide".' });
       const why = clip(String(g.why ?? '').trim(), 240);
       const draft = clip(String(g.draft ?? '').trim(), 600);
       if (rec !== 'keep' && !why) throw new UserError(`Say why to ${rec} note ${n.id}`, { hint: rec === 'retire' ? 'Where the lesson lives now (a file, a test, the guide), or what supersedes it.' : 'Why it should bind every agent as a standing rule.' });
