@@ -106,15 +106,15 @@ export function stallSection(list) {
 const JOBS = { work: 'Building', land: 'Landing', tidy: 'Tidying', review: 'Reviewing', shape: 'Shaping' };
 
 // Model routing (#349): each model's results per kind of job, the figures routing picks from. What it saved comes
-// first, in words; then per kind of job, each model's clean rate as a bar (an amount: no state color), its attempts
-// and its full cost per clean job beside it. Routing counts a model in a kind from 20 attempts: fewer are faint.
+// first, in words; then per kind of job, each model's clean rate as a bar (an amount: no state color), its attempts,
+// its full cost per clean job and, once any escaped, its escape rate beside it. Routing counts a model in a kind from 20 attempts: fewer are faint.
 export function routingSection(r, { esc }) {
   if (!r?.cells?.length) return '';
   const saved = r.saved_usd == null ? 'Nothing priced to compare yet: savings show once jobs on different models report their cost.'
     : r.saved_usd >= 0 ? `Routing saved ${money(r.saved_usd)} against running each job on its dearest model.`
       : `Routing cost ${money(-r.saved_usd)} more than running each job on its dearest model: the cheaper models needed rework.`;
   const cell = (c) => `<div class="an-line"><span class="an-name">${esc(JOBS[c.job] ?? c.job)} <span class="s">${esc(c.difficulty)} items</span></span>
-    <dl class="funnel an-cal">${c.models.map((m) => `<div class="step${m.attempts < 20 ? ' faint' : ''}"><dt>${esc(m.model)} <span class="s">${m.attempts}${m.cost_per_clean == null ? '' : ` · ${money(m.cost_per_clean)}`}</span></dt>
+    <dl class="funnel an-cal">${c.models.map((m) => `<div class="step${m.attempts < 20 ? ' faint' : ''}"><dt>${esc(m.model)} <span class="s">${m.attempts}${m.cost_per_clean == null ? '' : ` · ${money(m.cost_per_clean)}`}${m.escaped ? ` · <span data-new="routing-escapes">${pct(m.escape_rate)} escaped</span>` : ''}</span></dt>
       <dd><span class="bar" style="width:${Math.max(m.rate ? 2 : 0, Math.round(m.rate * 100))}%"></span></dd>
       <dd class="n">${pct(m.rate)}</dd></div>`).join('')}</dl></div>`;
   return `<section class="sec"><header><h2 data-new="model-routing-results">Model routing</h2><span class="hint">clean rate per model, by kind of job</span></header>

@@ -400,16 +400,18 @@ export function pricedJobs(hub, p, from, to, taken = jobsTaken(hub, p, from, to)
 }
 
 // Per cell, each model's attempts, clean ones, clean rate and full cost per clean job (everything its attempts
-// cost, rework included, over the clean ones; null unless every attempt is priced), best rate first. saved_usd:
+// cost, rework included, over the clean ones; null unless every attempt is priced), and its escape rate: of its
+// work that landed, the share a later item repairs (#344; null when none landed), best rate first. saved_usd:
 // against running each cell's clean jobs on its dearest model per clean job, what the cheaper ones saved.
 export function routingResults(jobs) {
   const cells = new Map();
   for (const j of jobs) {
     const key = `${j.job} ${j.difficulty}`;
     const models = cells.get(key) ?? new Map();
-    const m = models.get(j.model) ?? { model: j.model, attempts: 0, clean: 0, usd: 0, priced: true };
+    const m = models.get(j.model) ?? { model: j.model, attempts: 0, clean: 0, escaped: 0, usd: 0, priced: true };
     m.attempts++;
     if (j.clean) m.clean++;
+    if (j.result === 'escaped') m.escaped++;
     if (j.cost_usd == null) m.priced = false; else m.usd += j.cost_usd;
     models.set(j.model, m);
     cells.set(key, models);
@@ -420,6 +422,7 @@ export function routingResults(jobs) {
     const rows = [...models.values()].map((m) => ({
       model: m.model, attempts: m.attempts, clean: m.clean, rate: Math.round((100 * m.clean) / m.attempts) / 100,
       cost_per_clean: m.priced && m.clean ? Math.round((100 * m.usd) / m.clean) / 100 : null,
+      escaped: m.escaped, escape_rate: m.clean + m.escaped ? Math.round((100 * m.escaped) / (m.clean + m.escaped)) / 100 : null,
     })).sort((a, b) => b.rate - a.rate || b.attempts - a.attempts);
     const known = rows.filter((r) => r.cost_per_clean != null);
     const dear = known.reduce((a, r) => (!a || r.cost_per_clean > a.cost_per_clean ? r : a), null);
