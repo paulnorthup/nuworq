@@ -184,6 +184,34 @@ describe('routing on real results', () => {
     const { hub, builds } = world();
     builds(OPUS, 3, 3);
     const o = workspaceOutcomes(hub, { period: '14d' });
-    assert.deepEqual(o.routing.cells[0].models[0], { model: OPUS, attempts: 3, clean: 3, rate: 1, cost_per_clean: null, escaped: 0, escape_rate: 0 });
+    assert.deepEqual(o.routing.cells[0].models[0], { model: OPUS, attempts: 3, clean: 3, rate: 1, cost_per_clean: null, unpriced: 3, unpriced_why: { none: 3 }, escaped: 0, escape_rate: 0 });
+  });
+
+  // #944: a few unpriced attempts no longer blank a model's cost per clean job, nor leave it out of what routing saved.
+  test('a model with some unpriced attempts still has a cost per clean job, estimated and marked, and counts in what routing saved', () => {
+    const r = routingResults([
+      ...Array.from({ length: 3 }, () => ({ job: 'work', difficulty: 'standard', model: OPUS, clean: true, cost_usd: 2 })),
+      { job: 'work', difficulty: 'standard', model: OPUS, clean: true, cost_usd: null, unpriced: 'none' },
+      ...Array.from({ length: 4 }, (_, k) => ({ job: 'work', difficulty: 'standard', model: SONNET, clean: k < 3, cost_usd: 0.5 })),
+    ]);
+    const [opus, sonnet] = r.cells[0].models;
+    assert.deepEqual([opus.cost_per_clean, opus.estimated, opus.unpriced, opus.unpriced_why], [2, true, 1, { none: 1 }], 'the unpriced one counts at the mean of the three priced');
+    assert.deepEqual([sonnet.cost_per_clean, sonnet.estimated, sonnet.unpriced, sonnet.unpriced_why], [0.67, undefined, 0, undefined]);
+    assert.equal(r.saved_usd, 3.99, 'Opus, the dearest, is in the comparison');
+    const html = routingSection(r, { esc: String });
+    assert.match(html, /<span data-new="routing-unpriced" title="1 of 4 attempts unpriced: estimated from the priced ones">~\$2\.00<\/span>/);
+    assert.match(html, /Costs marked ~ are estimated/);
+    assert.doesNotMatch(routingSection(routingResults([{ job: 'work', difficulty: 'standard', model: OPUS, clean: true, cost_usd: 1 }]), { esc: String }), /~|estimated/);
+    const none = routingResults([{ job: 'work', difficulty: 'standard', model: OPUS, clean: true, cost_usd: null, unpriced: 'reported' }]);
+    assert.deepEqual([none.cells[0].models[0].cost_per_clean, none.saved_usd], [null, null], 'nothing priced: nothing to estimate from');
+  });
+
+  test('the hub says why an attempt went unpriced: no usage recorded, or usage without a cost', () => {
+    const { hub, builds } = world();
+    builds(OPUS, 3, 3);
+    hub.agentOp('p', 'usage', `w-${OPUS}-0`, { usage: { input_tokens: 1000, output_tokens: 100, cost_usd: 1.5, model: OPUS } });
+    hub.agentOp('p', 'usage', `w-${OPUS}-1`, { usage: { input_tokens: 1000, output_tokens: 100, model: OPUS } });
+    const [m] = workspaceOutcomes(hub, { period: '14d' }).routing.cells[0].models;
+    assert.deepEqual([m.cost_per_clean, m.estimated, m.unpriced, m.unpriced_why], [1.5, true, 2, { reported: 1, none: 1 }]);
   });
 });
