@@ -59,6 +59,7 @@ export const NEW = {
   'spend-alerts': '2026-11-02', // #767: Needs you at 80% of the daily budget (Raise budget, Pause runners) and for a worker past $50 or an hour (Stop it)
   'workspace-delete': '2026-11-02', // #799: Workspace settings → Delete workspace, for its owners
   'routing-escapes': '2026-11-14', // #344: analytics' Model routing, each model's escape rate per kind of job
+  'routing-unpriced': '2026-11-14', // #944: analytics' Model routing, a ~cost per clean job estimated where some attempts went unpriced
 };
 
 const DAYS = 7;

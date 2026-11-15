@@ -377,7 +377,9 @@ export function workspaceOutcomes(hub, { period = '14d', scope = null } = {}) {
 // ── Model routing (#349): each model's results per cell (job and difficulty), and what routing saved ──
 
 // Every finished job in [from, to] that names its model, with what it cost: the usage its agent recorded on the
-// item, shared evenly among that agent's jobs there. cost_usd null: not known (a local model, or nothing recorded).
+// item, shared evenly among that agent's jobs there. cost_usd null: not known, and unpriced says why (#944): 'none'
+// (its agent recorded no usage there), 'llm-proxy' (llm-proxy measured it but left some unpriced) or 'reported' (its
+// agent reported usage without a cost: a local model, or a CLI that doesn't price it).
 export function pricedJobs(hub, p, from, to, taken = jobsTaken(hub, p, from, to)) {
   const jobs = taken.filter((j) => j.model && j.result !== 'open' && j.result !== 'not_chosen');
   // Where llm-proxy measured an agent on an item, its rows stand in for what was reported, so nothing counts twice.
@@ -390,40 +392,49 @@ export function pricedJobs(hub, p, from, to, taken = jobsTaken(hub, p, from, to)
     if (r.cost_usd == null) to.known = false; else to.usd += r.cost_usd;
     spent.set(k, s);
   }
-  for (const [k, s] of spent) spent.set(k, s.measured.any ? s.measured : s.reported);
+  for (const [k, s] of spent) spent.set(k, s.measured.any ? { ...s.measured, from: 'llm-proxy' } : { ...s.reported, from: 'reported' });
   const share = new Map();
   for (const j of jobs) share.set(`${j.item} ${j.agent}`, (share.get(`${j.item} ${j.agent}`) ?? 0) + 1);
   return jobs.map((j) => {
     const s = spent.get(`${j.item} ${j.agent}`);
-    return { ...j, clean: j.result === 'landed' || j.result === 'done', cost_usd: s?.known ? s.usd / share.get(`${j.item} ${j.agent}`) : null };
+    return {
+      ...j, clean: j.result === 'landed' || j.result === 'done',
+      cost_usd: s?.known ? s.usd / share.get(`${j.item} ${j.agent}`) : null, unpriced: s?.known ? null : s?.from ?? 'none',
+    };
   });
 }
 
 // Per cell, each model's attempts, clean ones, clean rate and full cost per clean job (everything its attempts
-// cost, rework included, over the clean ones; null unless every attempt is priced), and its escape rate: of its
-// work that landed, the share a later item repairs (#344; null when none landed), best rate first. saved_usd:
-// against running each cell's clean jobs on its dearest model per clean job, what the cheaper ones saved.
+// cost, rework included, over the clean ones), and its escape rate: of its work that landed, the share a later item
+// repairs (#344; null when none landed), best rate first. Where some attempts went unpriced (#944), the cost per
+// clean job prices each of them at the mean of its priced ones and says so (estimated: true); unpriced counts them
+// and unpriced_why says why (pricedJobs). Null only with nothing clean or nothing priced. saved_usd: against running
+// each cell's clean jobs on its dearest model per clean job, what the cheaper ones saved.
 export function routingResults(jobs) {
   const cells = new Map();
   for (const j of jobs) {
     const key = `${j.job} ${j.difficulty}`;
     const models = cells.get(key) ?? new Map();
-    const m = models.get(j.model) ?? { model: j.model, attempts: 0, clean: 0, escaped: 0, usd: 0, priced: true };
+    const m = models.get(j.model) ?? { model: j.model, attempts: 0, clean: 0, escaped: 0, usd: 0, priced: 0, why: {} };
     m.attempts++;
     if (j.clean) m.clean++;
     if (j.result === 'escaped') m.escaped++;
-    if (j.cost_usd == null) m.priced = false; else m.usd += j.cost_usd;
+    if (j.cost_usd != null) { m.usd += j.cost_usd; m.priced++; } else m.why[j.unpriced ?? 'none'] = (m.why[j.unpriced ?? 'none'] ?? 0) + 1;
     models.set(j.model, m);
     cells.set(key, models);
   }
   let saved = 0, priced = false;
   const out = [...cells].map(([key, models]) => {
     const [job, difficulty] = key.split(' ');
-    const rows = [...models.values()].map((m) => ({
-      model: m.model, attempts: m.attempts, clean: m.clean, rate: Math.round((100 * m.clean) / m.attempts) / 100,
-      cost_per_clean: m.priced && m.clean ? Math.round((100 * m.usd) / m.clean) / 100 : null,
-      escaped: m.escaped, escape_rate: m.clean + m.escaped ? Math.round((100 * m.escaped) / (m.clean + m.escaped)) / 100 : null,
-    })).sort((a, b) => b.rate - a.rate || b.attempts - a.attempts);
+    const rows = [...models.values()].map((m) => {
+      const unpriced = m.attempts - m.priced;
+      const cost = m.priced && m.clean ? Math.round((100 * m.usd * m.attempts) / m.priced / m.clean) / 100 : null;
+      return {
+        model: m.model, attempts: m.attempts, clean: m.clean, rate: Math.round((100 * m.clean) / m.attempts) / 100,
+        cost_per_clean: cost, ...(cost != null && unpriced ? { estimated: true } : {}), unpriced, ...(unpriced ? { unpriced_why: m.why } : {}),
+        escaped: m.escaped, escape_rate: m.clean + m.escaped ? Math.round((100 * m.escaped) / (m.clean + m.escaped)) / 100 : null,
+      };
+    }).sort((a, b) => b.rate - a.rate || b.attempts - a.attempts);
     const known = rows.filter((r) => r.cost_per_clean != null);
     const dear = known.reduce((a, r) => (!a || r.cost_per_clean > a.cost_per_clean ? r : a), null);
     for (const r of known) if (r !== dear) { saved += r.clean * (dear.cost_per_clean - r.cost_per_clean); priced = true; }
