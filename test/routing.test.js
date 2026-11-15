@@ -165,10 +165,25 @@ describe('routing on real results', () => {
     assert.equal(routingSection({ cells: [] }, { esc: String }), '');
   });
 
+  test('analytics shows each model\'s escape rate per cell, of its work that landed', () => {
+    const r = routingResults([
+      ...Array.from({ length: 3 }, () => ({ job: 'work', difficulty: 'rote', model: SONNET, result: 'landed', clean: true, cost_usd: 1 })),
+      { job: 'work', difficulty: 'rote', model: SONNET, result: 'escaped', clean: false, cost_usd: 1 },
+      { job: 'work', difficulty: 'rote', model: SONNET, result: 'sent_back', clean: false, cost_usd: 1 },
+      { job: 'work', difficulty: 'rote', model: OPUS, result: 'sent_back', clean: false, cost_usd: 2 },
+    ]);
+    const [sonnet, opus] = r.cells[0].models;
+    assert.deepEqual([sonnet.escaped, sonnet.escape_rate], [1, 0.25], 'one of four landed escaped');
+    assert.deepEqual([opus.escaped, opus.escape_rate], [0, null], 'nothing landed: no rate');
+    const html = routingSection(r, { esc: String });
+    assert.match(html, /<span data-new="routing-escapes">25% escaped<\/span>/);
+    assert.equal(html.match(/escaped</g).length, 1, 'a model with no escapes shows none');
+  });
+
   test('workspace outcomes carry the routing results', () => {
     const { hub, builds } = world();
     builds(OPUS, 3, 3);
     const o = workspaceOutcomes(hub, { period: '14d' });
-    assert.deepEqual(o.routing.cells[0].models[0], { model: OPUS, attempts: 3, clean: 3, rate: 1, cost_per_clean: null });
+    assert.deepEqual(o.routing.cells[0].models[0], { model: OPUS, attempts: 3, clean: 3, rate: 1, cost_per_clean: null, escaped: 0, escape_rate: 0 });
   });
 });
