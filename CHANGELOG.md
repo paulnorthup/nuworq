@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.1 (2026-11-16)
+
+What landed since v2.0.0.
+
+2.0.1: patch, for 1 fix (#923).
+
+- On a hub without logins, a runner token can't act under the name of an agent that has no worker token (#923)
+
 ## 2.0.0 (2026-11-09)
 
 What landed since v1.1.0.
