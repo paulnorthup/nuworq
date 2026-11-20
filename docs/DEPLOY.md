@@ -142,6 +142,20 @@ GitHub must be able to reach the hub:
 
 Deliveries need no token: the HMAC-SHA256 signature (`X-Hub-Signature-256`) is the credential. A missing or wrong signature, an unknown project, or a project without a secret all get the same 401, and nothing is recorded.
 
+### A git server without GitHub: plain SSH hosts
+A project's repository can live on a self-hosted git server that speaks only SSH: bare repositories in a `git` user's home (`git@git.example.internal:api.git`), Gitolite, or Gitea or Forgejo over SSH. The hub relays it for its workers the way it relays GitHub:
+
+```bash
+NUWORQ_GIT_SSH_HOSTS=git.example.internal nuworq serve
+```
+
+- **The hub's mirror** is fetched over SSH as `git`, with the identity of the OS user that runs the hub. Give that user read access to the repositories, and put the host's key in its `~/.ssh/known_hosts`: nothing prompts.
+- **Workers** fetch and push it through the hub, at `/api/git/<host>/<repo>`. Their sandbox has no SSH, so the runner routes every form of the host's address there, and the hub sends `git_relay` with the project. A fetch is served from the hub's mirror. A push is checked like a GitHub one (only the `nuworq/` branch of the item the worker holds), then passed on as `git-receive-pack` over SSH.
+- **Landing.** The hub lands accepted work itself. When a land job is submitted, it fast-forwards the base on the git server to the reviewed branch head, and never forces. Workers can take those land jobs.
+- **The hub's identity needs push access.** Limit it on the git server: let it push only `nuworq/*` branches and fast-forward main (a pre-receive hook does it), and log what it pushes.
+- **Repository addresses** are `host/repo`, one level with no owner, as in `git.example.internal/api`.
+- **A hub with workspaces never relays:** it never lends its own identity.
+
 ---
 
 ## 30 minutes: details
