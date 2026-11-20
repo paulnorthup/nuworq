@@ -725,9 +725,11 @@ export class Hub extends EventEmitter {
     return [...new Set(this.remotesOf(p).filter((r) => this.relayed(r)).map((r) => r.split('/')[0]))];
   }
 
-  // The mirror of a relayed repository, fetched now (a worker is about to read it). Its path, or null.
-  async freshMirror(repo) {
+  // The mirror of a relayed repository, fetched now (a worker is about to read it). Its path, or null. settled: from a
+  // fetch that starts after this call, not one already under way, which may predate a push (landing reads the head).
+  async freshMirror(repo, { settled = false } = {}) {
     if (!this.repos || !this.relayed(repo)) return null;
+    if (settled) await fetchMirror(this.repos, repo, { keys: this.keys, hosted: this.hosted });
     const r = await fetchMirror(this.repos, repo, { keys: this.keys, hosted: this.hosted });
     if (r?.changed) this.remoteChanged(repo);
     const path = mirrorPath(this.repos, repo);
@@ -754,7 +756,7 @@ export class Hub extends EventEmitter {
       if (!item || item.stage !== 'landing' || !item.branch || args.conflicts || this.localFor(p, item)) return;
       const repo = this.repoOf(p, item);
       if (!repo || !this.relayed(repo)) return;
-      const path = await this.freshMirror(repo);
+      const path = await this.freshMirror(repo, { settled: true });
       if (!path || !branchExists(path, item.branch)) return;
       const base = baseOf(path);
       if (!base || contains(path, base, item.branch)) return; // already on it
@@ -773,7 +775,13 @@ export class Hub extends EventEmitter {
         }
         this.patch(item, { reviewed_sha: head });
         this.event(p, { item, actor: SYSTEM, type: 'head_pinned', headline: `${item.branch} is at ${head.slice(0, 7)}, the commit #${item.seq}'s accepted submission named: that is what lands`, data: { head } });
-      } else if (reviewedHead.call(this, p, item) === 'moved') return; // reviewed first (#605)
+      } else if (reviewedHead.call(this, p, item) === 'moved') {
+        // The branch moved past what its review accepted (#605): back to review now. Returning quietly would leave the
+        // item in landing, and every land job would hand it back unlanded.
+        headMovedBack.call(this, p, item, { head: head ?? '' });
+        this.changed(p);
+        return;
+      }
       const error = await pushMirror(this.repos, repo, `${head}:refs/heads/${base}`, { keys: this.keys, hosted: this.hosted });
       if (error) {
         this.event(p, { item, actor: SYSTEM, type: 'land_failed', headline: `The hub couldn't put ${item.branch} on ${base} in ${repo}: ${error}`, data: { repo, branch: item.branch, base, error } });
@@ -937,6 +945,8 @@ export class Hub extends EventEmitter {
         this.mirrorHttps(repo);
         await this._mirrorTokens.get(repo)?.pending;
       }
+      // A relayed repository: a fetch that starts now, not one under way since before a push through the hub.
+      if (this.relayed(repo)) return void await this.freshMirror(repo, { settled: true });
       const r = await fetchMirror(this.repos, repo, { keys: this.keys, https: this.mirrorHttps(repo), hosted: this.hosted });
       if (r.changed) this.remoteChanged(repo);
     } catch { /* the op says what's wrong */ }
