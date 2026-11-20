@@ -2,13 +2,14 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, chmodSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mirrorSource, mirrorPath, sshHosts, relayTarget, pushMirror, fetchMirror } from '../src/git.js';
 import { relayPush, serveFetch, receivePack } from '../src/gitproxy.js';
+import { Hub, LAND_GRACE } from '../src/core.js';
 
 const run = promisify(execFile);
 const HOST = 'git.example.test';
@@ -116,5 +117,91 @@ describe('a worker fetches and pushes a relayed repository through the hub', () 
     assert.equal(await pushMirror(mirrors, `${HOST}/r`, `+${head}:refs/heads/main`), 'the hub never force-pushes');
     assert.equal(await pushMirror(mirrors, `${HOST}/r`, `${head}:refs/heads/main`), null);
     assert.equal((await git(join(host, 'r.git'), 'rev-parse', 'main')).stdout.trim(), head);
+  });
+});
+
+// The hub lands relayed work itself (landRelayed): a reviewed branch is fast-forwarded onto main on the git host; a
+// branch that moved past its review goes back to review instead of waiting in landing for land jobs that can't land it.
+describe('the hub lands work on a relayed git host', () => {
+  let root, oldPath;
+  const git = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+  before(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'nuworq-relay-land-')));
+    mkdirSync(join(root, 'bin'));
+    mkdirSync(join(root, 'host'));
+    writeFileSync(join(root, 'bin', 'ssh'), `#!/bin/sh\nfor last; do :; done\ncd '${join(root, 'host')}' && exec sh -c "$last"\n`);
+    chmodSync(join(root, 'bin', 'ssh'), 0o755);
+    oldPath = process.env.PATH;
+    process.env.PATH = `${join(root, 'bin')}:${oldPath}`;
+  });
+  after(() => {
+    process.env.PATH = oldPath;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function setup(name) {
+    const origin = join(root, 'host', `${name}.git`);
+    git(join(root, 'host'), 'init', '-q', '--bare', '-b', 'main', `${name}.git`);
+    const seed = join(root, `${name}-seed`);
+    git(root, 'clone', '-q', origin, seed);
+    writeFileSync(join(seed, 'README'), 'hi\n');
+    git(seed, 'add', '.');
+    git(seed, 'commit', '-q', '-m', 'init');
+    git(seed, 'push', '-q', 'origin', 'main');
+    let now = Date.UTC(2026, 10, 20, 9);
+    const hub = new Hub({ clock: () => now, repos: join(root, `${name}-repos`), sshHosts: sshHosts(HOST) });
+    hub.tx(() => hub.project('demo', { create: true }));
+    hub.agentOp('demo', 'checkin', 'a1', {}, { root: '/elsewhere', remote: `git@${HOST}:${name}.git` });
+    const op = (agent, n, args = {}) => hub.agentOp('demo', n, agent, args);
+    const item = (n) => hub.item(hub.project('demo'), `#${n}`);
+    // A worker's clone: straight from the bare repository (the relay itself is tested above).
+    const mac = join(root, `${name}-mac`);
+    git(root, 'clone', '-q', origin, mac);
+    const commit = (file) => { writeFileSync(join(mac, file), `${file}\n`); git(mac, 'add', '.'); git(mac, 'commit', '-q', '-m', `add ${file}`); };
+    return { hub, origin, mac, op, item, commit, tick: (ms) => { now += ms; } };
+  }
+
+  test('accepted work is fast-forwarded onto main by the hub when the land job submits; workers may land it', async () => {
+    const { hub, origin, mac, op, item, commit, tick } = setup('a');
+    assert.deepEqual(hub.relayHosts(hub.project('demo')), [HOST]);
+    hub.humanOp('demo', 'create', { title: 'Add a greeting file', acceptance: 'greeting exists' });
+    const job = op('a1', 'next');
+    git(mac, 'switch', '-q', '--no-track', '-c', job.branch, 'origin/main');
+    commit('greeting');
+    git(mac, 'push', '-q', 'origin', job.branch);
+    tick(60_000);
+    await hub.prefetch('demo', { item: '#1' });
+    op('a1', 'submit', { item: '#1', headline: 'Greeting added', evidence: [{ label: 'ls: greeting' }] });
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    assert.equal(item(1).stage, 'landing');
+    tick(LAND_GRACE + 1000);
+    op('w1', 'checkin', { role: 'worker', runner: 'mac' });
+    const land = op('w1', 'next');
+    assert.equal(land.mode, 'land', 'a worker may land relayed work: it never pushes main');
+    assert.match(land.hint, /the hub puts nuworq\/1-add-a-greeting-file on main itself/);
+    await hub.landRelayed('demo', { item: '#1' });
+    assert.equal(git(origin, 'rev-parse', 'main'), git(mac, 'rev-parse', job.branch), 'main on the git host is the branch');
+    op('w1', 'submit', { item: '#1', headline: 'Landed' });
+    assert.equal(item(1).stage, 'done');
+  });
+
+  test('a branch that moved past its review goes back to review; main is untouched', async () => {
+    const { hub, origin, mac, op, item, commit, tick } = setup('b');
+    hub.humanOp('demo', 'create', { title: 'Add a file', acceptance: 'x' });
+    const job = op('a1', 'next');
+    git(mac, 'switch', '-q', '--no-track', '-c', job.branch, 'origin/main');
+    commit('one');
+    git(mac, 'push', '-q', 'origin', job.branch);
+    tick(60_000);
+    await hub.prefetch('demo', { item: '#1' });
+    op('a1', 'submit', { item: '#1', headline: 'One', evidence: [{ label: 'ok' }] });
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    const main = git(origin, 'rev-parse', 'main');
+    commit('two'); // after the review: not what was accepted
+    git(mac, 'push', '-q', 'origin', job.branch);
+    await hub.landRelayed('demo', { item: '#1' });
+    assert.equal(item(1).stage, 'verifying', 'back to review, not left in landing');
+    assert.equal(git(origin, 'rev-parse', 'main'), main, 'nothing unreviewed reached main');
   });
 });
