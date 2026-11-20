@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, takenBranch, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange, mergesBase, mirrorPath, relayTarget, pushMirror } from './git.js';
+import { gitFacts, takenBranch, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange, mergesBase, mirrorPath, relayTarget, pushMirror, claimedHashes } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -762,18 +762,31 @@ export class Hub extends EventEmitter {
       const base = baseOf(path);
       if (!base || contains(path, base, item.branch)) return; // already on it
       if (!contains(path, item.branch, base)) return; // not a fast-forward: the lander rebases first
-      if (!item.reviewed_sha || reviewedHead.call(this, p, item) === 'moved') return; // reviewed first (#605)
-      if (item.release && unreviewed(this, p, item, shaOf(path, item.branch))) return; // a release waits on its gap
       const head = shaOf(path, item.branch);
+      if (!item.reviewed_sha) {
+        // Accepted while the hub couldn't read the repository (it had no mirror yet), so no head was pinned. The
+        // submission the review accepted names its commit: when that is the branch's head, it is the reviewed one.
+        // Anything else goes back to review, which pins what it sees (#605).
+        const sub = this.q(`SELECT headline, summary, data FROM events WHERE item_id = ? AND type = 'submitted' ORDER BY id DESC LIMIT 1`).get(item.id);
+        const named = sub ? claimedHashes({ evidence: json(sub.data, {}).evidence ?? [], headline: sub.headline ?? '', summary: sub.summary ?? '' }) : [];
+        if (!head || !named.some((h) => h.length >= 7 && head.startsWith(h))) {
+          headMovedBack.call(this, p, item, { head: head ?? '' });
+          this.changed(p);
+          return;
+        }
+        this.patch(item, { reviewed_sha: head });
+        this.event(p, { item, actor: SYSTEM, type: 'head_pinned', headline: `${item.branch} is at ${head.slice(0, 7)}, the commit #${item.seq}'s accepted submission named: that is what lands`, data: { head } });
+      } else if (reviewedHead.call(this, p, item) === 'moved') return; // reviewed first (#605)
+      if (item.release && unreviewed(this, p, item, head)) return; // a release waits on its gap
       const error = await pushMirror(this.repos, repo, `${head}:refs/heads/${base}`, { keys: this.keys, hosted: this.hosted });
       if (error) {
-        this.event(p, { item, actor: 'hub', type: 'land_failed', headline: `The hub couldn't put ${item.branch} on ${base} in ${repo}: ${error}`, data: { repo, branch: item.branch, base, error } });
+        this.event(p, { item, actor: SYSTEM, type: 'land_failed', headline: `The hub couldn't put ${item.branch} on ${base} in ${repo}: ${error}`, data: { repo, branch: item.branch, base, error } });
         return;
       }
       refetch(this.repos, repo);
       const r = await fetchMirror(this.repos, repo, { keys: this.keys, hosted: this.hosted });
       if (r?.changed) this.remoteChanged(repo);
-      this.event(p, { item, actor: 'hub', type: 'landed_by_hub', headline: `The hub fast-forwarded ${base} in ${repo} to ${item.branch} (${String(head).slice(0, 7)})`, data: { repo, branch: item.branch, base, head } });
+      this.event(p, { item, actor: SYSTEM, type: 'landed_by_hub', headline: `The hub fast-forwarded ${base} in ${repo} to ${item.branch} (${String(head).slice(0, 7)})`, data: { repo, branch: item.branch, base, head } });
     } catch (e) {
       if (!(e instanceof UserError)) console.error('landing on a relayed git host failed', e);
     }
