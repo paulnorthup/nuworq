@@ -153,7 +153,7 @@ export const releaseVersion = (item) => /^Release v(\d+\.\d+\.\d+)$/.exec(String
 const tagging = new WeakMap(); // hub → its tags being made on GitHub
 
 // A release item landed (#400): the hub tags the commit main got as vX.Y.Z. In a checkout on this machine, there;
-// on GitHub, as the hub's GitHub App. Otherwise the hub can't write to the repository, and says how to tag it by
+// on GitHub, as the hub's GitHub App; on a relayed git host, over SSH as the hub (tagRelayed). Otherwise the hub can't write to the repository, and says how to tag it by
 // hand. sha: the commit main got (its pull request's merge, or its branch's head). In a transaction; returns a
 // sentence for whoever landed it ('' when there is nothing for them to do).
 // fetched: the mirror was fetched for it already.
@@ -181,6 +181,15 @@ export function tagRelease(hub, p, item, sha, { fetched = false } = {}) {
     return byHand;
   }
   const repo = hub.repoOf(p, item);
+  // A relayed git host (NUWORQ_GIT_SSH_HOSTS): the hub pushes the tag there over SSH, as it landed main there.
+  if (sha && repo && hub.relayed?.(repo)) {
+    const why = (error) => [`The hub couldn't tag ${short} ${tag} on ${repo}: ${error}`, `The hub couldn't push ${tag} to ${repo}: ${error}`, repo];
+    track(hub, hub.tagRelayed(repo, tag, sha).then(
+      (r) => hub.tx(() => (r.error ? failed(...why(r.error)) : record(r.already ? `${tag} was already on ${short} in ${repo}` : `nuworq tagged ${short} ${tag} on ${repo}`))),
+      (e) => hub.tx(() => failed(...why(e.message))),
+    ).then(() => hub.changed(p), (e) => console.error('tagging a release failed', e)));
+    return '';
+  }
   if (!sha || !hub.github?.tag || !hub.github.covers(repo)) {
     record(`#${item.seq} landed; ${tag} needs tagging by hand`, `The hub can't write tags to ${repo || 'its repository'}. ${byHand}`, 'tag_failed');
     askToTag(hub, p, item, { tag, sha, why: `The hub can't write tags to ${repo || 'its repository'}${sha ? '' : `, and doesn't know which commit main got`}.`, where: repo });

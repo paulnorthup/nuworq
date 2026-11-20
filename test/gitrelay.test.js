@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { mirrorSource, mirrorPath, sshHosts, relayTarget, pushMirror, fetchMirror } from '../src/git.js';
 import { relayPush, serveFetch, receivePack } from '../src/gitproxy.js';
 import { Hub, LAND_GRACE } from '../src/core.js';
+import { tagRelease, tagsSettled } from '../src/releases.js';
 
 const run = promisify(execFile);
 const HOST = 'git.example.test';
@@ -203,5 +204,82 @@ describe('the hub lands work on a relayed git host', () => {
     await hub.landRelayed('demo', { item: '#1' });
     assert.equal(item(1).stage, 'verifying', 'back to review, not left in landing');
     assert.equal(git(origin, 'rev-parse', 'main'), main, 'nothing unreviewed reached main');
+  });
+
+  // A release that lands there is tagged there by the hub, as the GitHub App tags one on GitHub: no hand step.
+  const tagEvents = (hub, id) => hub.q(`SELECT type, headline FROM events WHERE item_id = ? AND type IN ('tagged', 'tag_failed') ORDER BY id`).all(id).map((e) => ({ ...e }));
+  const tagQuestions = (hub, id) => hub.q(`SELECT * FROM questions WHERE item_id = ? AND audience = 'operator' AND status = 'open'`).all(id);
+
+  test('a release that lands is tagged on the git host by the hub, on the commit main got; a tag is never moved', async () => {
+    const { hub, origin, mac, op, item, commit, tick } = setup('c');
+    const p = hub.project('demo');
+    hub.humanOp('demo', 'create', { title: 'Release v0.3.0', acceptance: 'x' });
+    hub.patch(item(1), { release: 1 });
+    const job = op('a1', 'next');
+    assert.equal(job.item, '#1');
+    git(mac, 'switch', '-q', '--no-track', '-c', job.branch, 'origin/main');
+    commit('VERSION');
+    git(mac, 'push', '-q', 'origin', job.branch);
+    tick(60_000);
+    await hub.prefetch('demo', { item: '#1' });
+    op('a1', 'submit', { item: '#1', headline: 'v0.3.0', evidence: [{ label: 'ok' }] });
+    hub.humanOp('demo', 'accept', { item: '#1' });
+    tick(LAND_GRACE + 1000);
+    op('w1', 'checkin', { role: 'worker', runner: 'mac' });
+    assert.equal(op('w1', 'next').mode, 'land');
+    await hub.landRelayed('demo', { item: '#1' });
+    const res = op('w1', 'submit', { item: '#1', headline: 'Landed' });
+    assert.doesNotMatch(res.hint, /Tag it/, 'the hub tags it; nothing for the lander to do');
+    await tagsSettled(hub);
+    const main = git(origin, 'rev-parse', 'main');
+    assert.equal(main, git(mac, 'rev-parse', job.branch));
+    assert.equal(git(origin, 'rev-parse', 'v0.3.0^{commit}'), main, 'v0.3.0 is on the git host, on the commit main got');
+    assert.equal(git(origin, 'cat-file', '-t', 'v0.3.0'), 'commit', 'a lightweight tag, as on GitHub');
+    assert.deepEqual(tagEvents(hub, item(1).id), [{ type: 'tagged', headline: `nuworq tagged ${main.slice(0, 7)} v0.3.0 on ${HOST}/c` }]);
+    assert.equal(tagQuestions(hub, item(1).id).length, 0);
+
+    // Tagged again (a retry, a second lander): it is there on that commit already, so that is done, with no push.
+    hub.tx(() => tagRelease(hub, p, item(1), main));
+    await tagsSettled(hub);
+    assert.equal(tagEvents(hub, item(1).id).at(-1).headline, `v0.3.0 was already on ${main.slice(0, 7)} in ${HOST}/c`);
+
+    // Asked to tag another commit: the tag stays where it is, and an operator is asked, not forced.
+    const before = git(origin, 'rev-parse', 'main~1');
+    hub.tx(() => tagRelease(hub, p, item(1), before));
+    await tagsSettled(hub);
+    assert.equal(git(origin, 'rev-parse', 'v0.3.0^{commit}'), main, 'never moved');
+    assert.deepEqual(tagEvents(hub, item(1).id).at(-1), { type: 'tag_failed', headline: `The hub couldn't tag ${before.slice(0, 7)} v0.3.0 on ${HOST}/c: v0.3.0 is already on ${HOST}/c at ${main.slice(0, 7)}` });
+    const [q] = tagQuestions(hub, item(1).id);
+    assert.match(q.question, /^Tag the release v0\.3\.0/);
+  });
+
+  test('a git server that refuses the hub\'s tag: tag_failed, and an operator gets the command to tag it by hand', async () => {
+    const { hub, origin, item } = setup('d');
+    // The git server lets the hub push branches but no tags.
+    writeFileSync(join(origin, 'hooks', 'pre-receive'), '#!/bin/sh\nwhile read old new ref; do case "$ref" in refs/tags/*) echo "refused: no tags from the hub" >&2; exit 1;; esac; done\n');
+    chmodSync(join(origin, 'hooks', 'pre-receive'), 0o755);
+    const p = hub.project('demo');
+    hub.humanOp('demo', 'create', { title: 'Release v1.0.0', acceptance: 'x' });
+    hub.patch(item(1), { release: 1, stage: 'done' });
+    const main = git(origin, 'rev-parse', 'main');
+    assert.equal(hub.tx(() => tagRelease(hub, p, item(1), main)), '');
+    await tagsSettled(hub);
+    assert.equal(git(origin, 'tag', '--list'), '', 'no tag on the git server');
+    const [ev] = tagEvents(hub, item(1).id);
+    assert.equal(ev.type, 'tag_failed');
+    assert.match(ev.headline, new RegExp(`^The hub couldn't tag ${main.slice(0, 7)} v1\\.0\\.0 on ${HOST}/d: `));
+    const [q] = tagQuestions(hub, item(1).id);
+    assert.ok(q.context.includes(`git tag v1.0.0 ${main} && git push origin refs/tags/v1.0.0`), 'the operator gets the exact command');
+  });
+
+  test('tagRelayed pushes only a vX.Y.Z tag at a full commit id', async () => {
+    const { hub, origin } = setup('e');
+    const main = git(origin, 'rev-parse', 'main');
+    assert.match((await hub.tagRelayed(`${HOST}/e`, 'v1.0', main)).error, /isn't a release tag the hub pushes/);
+    assert.match((await hub.tagRelayed(`${HOST}/e`, 'v1.0.0', 'main')).error, /isn't a release tag the hub pushes/);
+    assert.match((await hub.tagRelayed(`${HOST}/e`, 'v1.0.0', '+'.padEnd(40, 'a'))).error, /isn't a release tag the hub pushes/);
+    assert.match((await hub.tagRelayed(`${HOST}/e`, 'v1.0.0', 'f'.repeat(40))).error, /doesn't have fffffff/);
+    assert.deepEqual(await hub.tagRelayed(`${HOST}/e`, 'v1.0.0', main), { tagged: true });
+    assert.equal(git(origin, 'rev-parse', 'v1.0.0'), main);
   });
 });
