@@ -9,6 +9,7 @@ import { homedir, hostname, tmpdir } from 'node:os';
 import { createClient, resolveSettings, provenPersonKey, repoRoot, repoRemote, checkoutOf, cloneDir, besideOf, HubError, GATEWAY, DEFAULT_URL, HUB_FILE, CONNECT_FILE } from '../src/client.js';
 import { tools, guide, userSkills, operatorStart, TAG_ALIASES, LISTENER } from '../src/protocol.js';
 import { envVar, dataDir, defaultDb, CONFIG_FILE } from '../src/names.js';
+import { sshHosts } from '../src/git.js';
 import { checkName, sq, safe, redact, lockDown, tokenFile, dropTokenFile, withoutTokens, workerEnv, gitConfigEnv, harnessKeys, namedEnv, chosenFolders, chooseFolders, inChosen, toOffer, loopback } from '../src/runtrust.js';
 import { sandboxSettings, filePermissions, projectCommands, sandboxHosts, testsLine, workerCommands, workerGitDenies } from '../src/sandbox.js';
 import { update, describeUpdate, staleListener, takeNews, describeNews, installedChanges, installed, differs } from '../src/update.js';
@@ -1023,14 +1024,18 @@ function workerSettings(sandbox, { own = false } = {}) {
 // SSH agent is unset, so no SSH key of the person's is ever used. No branch it makes tracks another (#724): git
 // would write that into the checkout's .git/config, which its sandbox denies (#606), for `git switch -c <b>
 // origin/main` and for `git switch <b>` when only origin has <b>. Its pushes name the branch, so it needs no upstream.
-function gitEnv({ hub, tokenAt, name, project, identity = [] }) {
+// relay: the project's relayed git hosts (the hub's NUWORQ_GIT_SSH_HOSTS, sent as git_relay): plain SSH git servers
+// whose repositories the worker fetches and pushes through the hub (/api/git/<host>/), every address form of them.
+function gitEnv({ hub, tokenAt, name, project, identity = [], relay = [] }) {
   // Every value quoted, and the token only as the path of its 0600 file (#477).
   const helper = `!NUWORQ_URL=${sq(hub)}${tokenAt ? ` NUWORQ_TOKEN_FILE=${sq(tokenAt)}` : ''} node ${sq(BIN)} git-credential --project ${sq(project)} --as ${sq(name)}`;
-  const through = `${hub.replace(/\/+$/, '')}/api/git/github.com/`;
+  const base = hub.replace(/\/+$/, '');
+  const through = `${base}/api/git/github.com/`;
   const config = [
     ['credential.helper', ''], ['credential.https://github.com.helper', ''], ['credential.helper', helper], ['credential.useHttpPath', 'true'],
     ['url.https://github.com/.insteadOf', 'git@github.com:'], ['url.https://github.com/.insteadOf', 'ssh://git@github.com/'],
     [`url.${through}.pushInsteadOf`, 'https://github.com/'], [`url.${through}.pushInsteadOf`, 'git@github.com:'], [`url.${through}.pushInsteadOf`, 'ssh://git@github.com/'],
+    ...relay.flatMap((h) => ['git@{h}:', '{h}:', 'ssh://git@{h}/', 'ssh://{h}/', 'https://{h}/'].map((from) => [`url.${base}/api/git/${h}/.insteadOf`, from.replaceAll('{h}', h)])),
     ['branch.autoSetupMerge', 'false'],
   ];
   return `unset SSH_AUTH_SOCK && ${gitConfigEnv([...config, ...identity])}`;
@@ -1156,10 +1161,16 @@ function workerSetup(target, agent, flags, s, token = null) {
   // (the person's keychain, gh and any other are reset), answering GitHub with a read-only token for the project's
   // repository and the hub with the worker's name. Pushes to GitHub go to the hub instead (#472), which passes
   // nuworq/ branches on with its own token. SSH remotes go over HTTPS, without the person's SSH agent.
+  // Relayed git hosts, as the hub sends them: host names only, or the runner starts nothing. They only route this
+  // worker's git to the hub, which its sandbox reaches already: nothing wider.
+  const relay = Array.isArray(target.git_relay) ? target.git_relay : [];
+  if (relay.some((h) => typeof h !== 'string' || !/^[a-z0-9][a-z0-9.-]*\.[a-z0-9.-]*[a-z0-9]$/.test(h) || h === 'github.com')) {
+    throw new HubError(`Not starting a worker for ${target.name ?? target.slug}: the hub sent relayed git hosts the runner refuses`, { hint: 'The hub host sets them (NUWORQ_GIT_SSH_HOSTS), as host names.' });
+  }
   // With a remote, gitEnv is the worker's whole git wiring; without one it still gets the commit identity
   // (#899), or its commits would fall back to an auto-detected name@hostname.
   const identity = gitIdentity();
-  if (origin) lines.push(gitEnv({ hub: s.url, tokenAt, name, project: target.slug, identity }));
+  if (origin) lines.push(gitEnv({ hub: s.url, tokenAt, name, project: target.slug, identity, relay }));
   else if (identity.length) lines.push(gitConfigEnv(identity));
   // Node's fetch goes through the sandbox's proxy, as git and curl do (the credential helper reaches the hub).
   if (agent === 'claude') lines.push('export NODE_USE_ENV_PROXY=1');
@@ -1862,7 +1873,10 @@ async function serve(flags) {
   const trustProxy = !!flags['trust-proxy'];
   if (flags.workspaces) return serveWorkspaces(flags, { host, port, trustProxy });
   const db = flags.demo ? ':memory:' : dbPath(flags);
-  const hub = new Hub({ file: db, repos: flags.demo ? null : reposDir(flags), keys: flags.demo ? null : keysDir(flags) });
+  // Plain SSH git hosts this hub relays for its workers (src/git.js sshHosts): a self-hosted git server with no API.
+  let relayed;
+  try { relayed = sshHosts(envVar('GIT_SSH_HOSTS')); } catch (e) { throw new HubError(e.message, { hint: 'NUWORQ_GIT_SSH_HOSTS: comma-separated host names, e.g. git.example.internal (reached over SSH as git).' }); }
+  const hub = new Hub({ file: db, repos: flags.demo ? null : reposDir(flags), keys: flags.demo ? null : keysDir(flags), sshHosts: relayed });
   if (flags.demo) {
     try {
       const { seed } = await import('../src/seed.js');
