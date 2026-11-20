@@ -820,6 +820,26 @@ export class Hub extends EventEmitter {
     }
   }
 
+  // A release that landed on a relayed host is tagged there by the hub (tagRelease), as the GitHub App tags one on
+  // GitHub: refs/tags/<tag> at sha, pushed from the mirror over SSH as the hub, after main got it (landRelayed). It
+  // only ever creates the tag, never forced. A tag already on that commit counts as done without a push, since a git
+  // server that lets the hub create tags may refuse any update to one, even a no-op; a tag on another commit is left
+  // as it is. Resolves { tagged }, { already } or { error }.
+  async tagRelayed(repo, tag, sha) {
+    if (!/^v\d+\.\d+\.\d+$/.test(tag) || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha)) return { error: `${tag} at ${sha} isn't a release tag the hub pushes` };
+    const path = await this.freshMirror(repo, { settled: true });
+    if (!path) return { error: `the hub has no copy of ${repo} to push from` };
+    const at = shaOf(path, `refs/tags/${tag}`);
+    if (at) return at === sha ? { already: true } : { error: `${tag} is already on ${repo} at ${at.slice(0, 7)}` };
+    if (shaOf(path, sha) !== sha) return { error: `${repo} doesn't have ${sha.slice(0, 7)}` };
+    const error = await pushMirror(this.repos, repo, `${sha}:refs/tags/${tag}`, { keys: this.keys, hosted: this.hosted });
+    if (error) return { error };
+    refetch(this.repos, repo);
+    const r = await fetchMirror(this.repos, repo, { keys: this.keys, hosted: this.hosted });
+    if (r?.changed) this.remoteChanged(repo);
+    return { tagged: true };
+  }
+
   // Whether CI checks the item's pull request before it merges (#532): it lands through one, and the project says
   // so (ci 'on') or the hub recorded checks for its commits lately. Then CI runs the whole suite and workers run
   // only the tests near their change; elsewhere they run it themselves before submitting. Any recorded check counts:

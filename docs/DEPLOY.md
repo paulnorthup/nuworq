@@ -152,7 +152,8 @@ NUWORQ_GIT_SSH_HOSTS=git.example.internal nuworq serve
 - **The hub's mirror** is fetched over SSH as `git`, with the identity of the OS user that runs the hub. Give that user read access to the repositories, and put the host's key in its `~/.ssh/known_hosts`: nothing prompts.
 - **Workers** fetch and push it through the hub, at `/api/git/<host>/<repo>`. Their sandbox has no SSH, so the runner routes every form of the host's address there, and the hub sends `git_relay` with the project. A fetch is served from the hub's mirror. A push is checked like a GitHub one (only the `nuworq/` branch of the item the worker holds), then passed on as `git-receive-pack` over SSH.
 - **Landing.** The hub lands accepted work itself. When a land job is submitted, it fast-forwards the base on the git server to the reviewed branch head, and never forces. Workers can take those land jobs.
-- **The hub's identity needs push access.** Limit it on the git server: let it push only `nuworq/*` branches and fast-forward main (a pre-receive hook does it), and log what it pushes.
+- **Release tags.** When a release item lands, the hub pushes its `vX.Y.Z` tag to the commit main got, as a lightweight tag, the way the GitHub App tags one on GitHub. It only creates tags: a tag already on that commit counts as done, and a tag on another commit is left alone and goes to an operator as a question, with the command to tag it by hand.
+- **The hub's identity needs push access.** Limit it on the git server: let it push only `nuworq/*` branches, fast-forward main, and create (never move or delete) `v<semver>` tags. A pre-receive hook does it. Log what it pushes.
 - **Repository addresses** are `host/repo`, one level with no owner, as in `git.example.internal/api`.
 - **A hub with workspaces never relays:** it never lends its own identity.
 
