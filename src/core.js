@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { openDb, PR_TWINS } from './db.js';
-import { gitFacts, takenBranch, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange, mergesBase } from './git.js';
+import { gitFacts, takenBranch, gitWarning, isRepo, baseOf, branchExists, hasFile, headOf, contains, itemBranch, mirror, fetchMirror, originOf, refetch, removeMirror, shaOf, behindBase, sameChange, mergesBase, mirrorPath, relayTarget, pushMirror } from './git.js';
 import { findSecret } from './secrets.js';
 import { normUsage, split } from './usage.js';
 import { measure } from './llmproxy.js';
@@ -506,7 +506,9 @@ export class Hub extends EventEmitter {
   // them, <keys>/<host>/<owner>/<repo> (null: the default key only; see sshCommandFor in git.js).
   // hosted: one organization on a shared hub (workspaces mode): it reaches only repositories it was
   // granted, never a path on the hub's disk or the hub's own SSH identity (see mirror in git.js).
-  constructor({ file = ':memory:', clock = () => Date.now(), repos = null, keys = null, hosted = false } = {}) {
+  // sshHosts: plain SSH git hosts the hub relays (sshHosts in git.js, NUWORQ_GIT_SSH_HOSTS); never on a hosted hub,
+  // which never lends its own identity.
+  constructor({ file = ':memory:', clock = () => Date.now(), repos = null, keys = null, hosted = false, sshHosts = null } = {}) {
     super();
     this.setMaxListeners(200);
     this.db = openDb(file);
@@ -515,6 +517,7 @@ export class Hub extends EventEmitter {
     this.repos = repos;
     this.keys = keys;
     this.hosted = hosted;
+    this.sshHosts = hosted || !repos ? new Set() : new Set(sshHosts ?? []);
     this._stmts = new Map();
     this._snaps = new Map(); // project id → its snapshot (snap)
     // One counter per hub (a workspace) that goes up with every change, for what caches on it (#517).
@@ -709,6 +712,67 @@ export class Hub extends EventEmitter {
     const repo = this.repoOf(p, item);
     if (!this.github.covers(repo)) return false;
     return !this.appTrouble(p, item) || !!this.q(`SELECT 1 FROM prs WHERE item_id = ? AND state = 'open'`).get(item.id);
+  }
+
+  // A repository on a relayed git host (NUWORQ_GIT_SSH_HOSTS): workers fetch and push it through the hub, and the
+  // hub lands accepted work on its main itself. relayTarget's { target, path }, or null.
+  relayed(repo) {
+    return this.sshHosts.size ? relayTarget(repo, this.sshHosts) : null;
+  }
+
+  // The relayed hosts among p's repositories, for its runners (they route those addresses through the hub).
+  relayHosts(p) {
+    return [...new Set(this.remotesOf(p).filter((r) => this.relayed(r)).map((r) => r.split('/')[0]))];
+  }
+
+  // The mirror of a relayed repository, fetched now (a worker is about to read it). Its path, or null.
+  async freshMirror(repo) {
+    if (!this.repos || !this.relayed(repo)) return null;
+    const r = await fetchMirror(this.repos, repo, { keys: this.keys, hosted: this.hosted });
+    if (r?.changed) this.remoteChanged(repo);
+    const path = mirrorPath(this.repos, repo);
+    return path && isRepo(path) ? path : null;
+  }
+
+  // A relayed repository changed on its host (a push through the hub): fetch its mirror at the next ask.
+  pushedTo(repo) {
+    if (this.repos) refetch(this.repos, repo);
+  }
+
+  // The hub lands accepted work on a relayed host itself, as GitHub's merge would: before a land job's submit is
+  // decided, it fast-forwards the base on the git host to the item's branch, over SSH as the hub. Only the head a
+  // review accepted (or that head rebased: reviewedHead), only a fast-forward (the lander rebases first), never
+  // forced. The submit then finds the base containing the branch and marks the item done. Best effort: anything
+  // that doesn't fit leaves the submit to say what's missing, as before. Awaited by the server, outside any
+  // transaction, like prefetch.
+  async landRelayed(slug, args = {}, { scope = null, remote = '', root = '' } = {}) {
+    if (!this.sshHosts.size || !this.repos) return;
+    try {
+      const p = slug ? this.project(slug) : this.projectByRemote(normRemote(remote), scope) ?? this.projectByPath(root, scope);
+      if (!p || (scope && !scope.includes(p.slug))) return;
+      const item = args.item ? this.item(p, args.item) : null;
+      if (!item || item.stage !== 'landing' || !item.branch || args.conflicts || this.localFor(p, item)) return;
+      const repo = this.repoOf(p, item);
+      if (!repo || !this.relayed(repo)) return;
+      const path = await this.freshMirror(repo);
+      if (!path || !branchExists(path, item.branch)) return;
+      const base = baseOf(path);
+      if (!base || contains(path, base, item.branch)) return; // already on it
+      if (!contains(path, item.branch, base)) return; // not a fast-forward: the lander rebases first
+      if (!item.reviewed_sha || reviewedHead.call(this, p, item) === 'moved') return; // reviewed first (#605)
+      const head = shaOf(path, item.branch);
+      const error = await pushMirror(this.repos, repo, `${head}:refs/heads/${base}`, { keys: this.keys, hosted: this.hosted });
+      if (error) {
+        this.event(p, { item, actor: 'hub', type: 'land_failed', headline: `The hub couldn't put ${item.branch} on ${base} in ${repo}: ${error}`, data: { repo, branch: item.branch, base, error } });
+        return;
+      }
+      refetch(this.repos, repo);
+      const r = await fetchMirror(this.repos, repo, { keys: this.keys, hosted: this.hosted });
+      if (r?.changed) this.remoteChanged(repo);
+      this.event(p, { item, actor: 'hub', type: 'landed_by_hub', headline: `The hub fast-forwarded ${base} in ${repo} to ${item.branch} (${String(head).slice(0, 7)})`, data: { repo, branch: item.branch, base, head } });
+    } catch (e) {
+      if (!(e instanceof UserError)) console.error('landing on a relayed git host failed', e);
+    }
   }
 
   // Whether CI checks the item's pull request before it merges (#532): it lands through one, and the project says
@@ -2775,7 +2839,8 @@ export class Hub extends EventEmitter {
       .filter((i) => !gave.has(i.id) && inRepo(i) && (i.implementer === agent || this.now() - i.stage_since >= LAND_GRACE))
       // A runner's worker pushes only nuworq/ branches, through the hub (#472): work on origin that can't land
       // through the hub's pull request (no GitHub App for it) needs a session or the operator to push main.
-      .filter((i) => !(role === 'worker' && this.remoteMode(p, i) && !this.prMode(p, i)))
+      // On a relayed git host they can: the hub lands it (landRelayed).
+      .filter((i) => !(role === 'worker' && this.remoteMode(p, i) && !this.prMode(p, i) && !this.relayed(this.repoOf(p, i))))
       .map((item) => ({ mode: 'land', item }));
     if (p.parked) return [...lands.map(ranked), ...reviews.map(ranked)];
     const open = this.q(`SELECT * FROM items WHERE project_id = ? AND stage = 'ready' AND holder IS NULL`).all(p.id);
@@ -2966,6 +3031,7 @@ export class Hub extends EventEmitter {
       // On origin with no pull request yet (the hub stopped while opening it): submit, and the hub opens it.
       return where + PR_OPEN_HINT(item);
     }
+    if (remote && this.relayed(this.repoOf(p, item))) return where + RELAY_LAND_HINT(item, base, tests);
     const trouble = this.appTrouble(p, item);
     if (trouble) return `${where}It lands by hand: the hub can't open a pull request because ${trouble.error.replace(/^The /, 'the ')}. ${LAND_HINT(item, p, base, remote, unseen, tests)}`;
     return where + LAND_HINT(item, p, base, remote, unseen, tests);
@@ -3095,6 +3161,16 @@ const spaced = (s) => (s ? ` ${s}` : '');
 // The testing rule a work job's hint carries (#532): CI's suite where it checks the pull request, else the builder's.
 const CI_TESTS = 'Tests: run the ones near your change. Not the whole suite: CI runs it on the pull request, and a failing check sends the work back naming it.';
 const OWN_TESTS = 'Tests: run the ones near your change as you work, and the whole suite once, just before you submit.';
+
+// Remote work on a relayed git host (NUWORQ_GIT_SSH_HOSTS): the lander rebases and pushes the branch through the hub;
+// the hub fast-forwards the base itself when the submit comes (landRelayed). Workers can do it: no main push.
+const RELAY_LAND_HINT = (item, base = 'main', tests = '') => [
+  `Land #${item.seq}: the hub puts ${item.branch} on ${base} itself, once the branch is ${base} plus this work.`,
+  `1. In your worktree: git fetch origin, then git switch ${item.branch}, then git rebase origin/${base} (commit or stash anything uncommitted first). Conflicts: resolve them keeping both intents. If resolving changed what the reviewer approved, don't land: submit with conflicts (what you changed and why), and it goes back for review.`,
+  `2. Run the project's checks and fix anything the rebase broke.${spaced(tests)}`,
+  `3. git push origin ${item.branch} --force-with-lease (through the hub: the branch only, never ${base}).`,
+  `4. submit #${item.seq}. The hub fast-forwards ${base} on origin to the branch, checks it, and marks it done. If ${base} moved meanwhile, go back to step 1.`,
+].join(' ');
 
 // Remote work that lands through a pull request: the lander only pushes; the hub opens the PR.
 const PR_LAND_HINT = (item) => `Push it: git push origin ${item.branch} (the hub can't see it on origin yet). Then submit #${item.seq}: it is reviewed as pushed, then the hub opens a pull request with auto-merge on, and GitHub's merge marks it done.`;
@@ -3453,7 +3529,8 @@ function finishLanding(p, agent, item, { headline, summary, detail, conflicts })
     return { ok: true, hint: `${item.branch} is on origin. The hub opens a pull request with auto-merge on; GitHub's merge marks #${item.seq} done. Call next.` };
   }
   if (land.pending) {
-    throw new UserError(`${land.base} doesn't contain ${item.branch} yet`, { status: 409, hint: LAND_HINT(item, p, land.base, remote, false, this.testsHint(p, item)) });
+    const relayed = remote && this.relayed(this.repoOf(p, item));
+    throw new UserError(`${land.base} doesn't contain ${item.branch} yet`, { status: 409, hint: relayed ? RELAY_LAND_HINT(item, land.base, this.testsHint(p, item)) : LAND_HINT(item, p, land.base, remote, false, this.testsHint(p, item)) });
   }
   this.move(item, 'done', agent, { holder: null, lease_until: null, touching: '[]' });
   this.event(p, {

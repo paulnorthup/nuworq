@@ -238,13 +238,34 @@ const CLONE_MS = 120_000, FETCH_MS = 30_000;
 const fetched = new Map(); // mirror path → { at, error }: shared by every hub in this process
 
 // Where to fetch from. github.com (and any host/owner/repo) over SSH, so a read-only deploy key is
-// enough; a path (a repository on this machine) as it is. null for anything else.
+// enough; a path (a repository on this machine) as it is. null for anything else. A plain SSH git host
+// with no owner level (host/repo: bare repositories in the git user's home, like git@host:repo.git) is
+// fetched the same way; github.com always needs an owner.
 export function mirrorSource(remote) {
   const r = String(remote ?? '');
   if (r.startsWith('/')) return r.split('/').some((s) => s === '..') ? null : r;
   const [host, ...rest] = r.split('/');
-  if (!/^[a-z0-9][a-z0-9.-]*$/.test(host) || rest.length < 2 || !rest.every((s) => /^[\w.-]+$/.test(s) && !/^\.+$/.test(s))) return null;
+  if (!/^[a-z0-9][a-z0-9.-]*$/.test(host) || rest.length < (host === 'github.com' ? 2 : 1) || !rest.every((s) => /^[\w.-]+$/.test(s) && !/^\.+$/.test(s))) return null;
   return `git@${host}:${rest.join('/')}.git`;
+}
+
+// Plain SSH git hosts the hub relays for its workers (NUWORQ_GIT_SSH_HOSTS, comma-separated host names): a
+// self-hosted git server with no API, reached over SSH as git with the hub's own identity. Workers, whose
+// sandbox has no SSH, fetch and push such a repository through the hub (/api/git/<host>/<repo>), and the hub
+// lands accepted work on its main itself. A Set of host names; throws on anything else.
+export function sshHosts(value) {
+  const hosts = String(value ?? '').split(',').map((h) => h.trim().toLowerCase().replace(/^git@/, '')).filter(Boolean);
+  for (const h of hosts) if (!/^[a-z0-9][a-z0-9.-]*\.[a-z0-9.-]*[a-z0-9]$/.test(h) || h === 'github.com') throw new Error(`NUWORQ_GIT_SSH_HOSTS: ${h} isn't a host name the hub can relay`);
+  return new Set(hosts);
+}
+
+// The SSH side of a relayed repository (host/repo on a host in hosts): { target: 'git@host', path: 'repo.git' },
+// or null. Strict, since both go through the git host's login shell: a host name, and a repository name of
+// letters, digits, '_', '.' and '-' that doesn't start with '-' or '.'.
+export function relayTarget(remote, hosts) {
+  const [host, name, ...more] = String(remote ?? '').split('/');
+  if (!hosts?.has?.(host) || more.length || !/^[A-Za-z0-9_][\w.-]*$/.test(name ?? '') || name.endsWith('.git')) return null;
+  return { target: `git@${host}`, path: `${name}.git` };
 }
 
 export function mirrorPath(dir, remote) {
@@ -309,6 +330,16 @@ function diskGit(args, timeout) {
   } catch (e) {
     return failure(e, e.stderr);
   }
+}
+
+// Push refspec from remote's mirror to the remote itself, over SSH as the hub (a relayed host's main, when the hub
+// lands accepted work there). Never forced: a refspec with '+' is refused here, and git refuses a non-fast-forward.
+// Resolves null, or the last line git said about the failure.
+export function pushMirror(dir, remote, refspec, { keys = null, hosted = false } = {}) {
+  const path = mirrorPath(dir, remote), source = mirrorSource(remote);
+  if (!path || !source || source.startsWith('/') || !isRepo(path)) return Promise.resolve(`${remote} has no mirror the hub can push from`);
+  if (String(refspec).startsWith('+')) return Promise.resolve('the hub never force-pushes');
+  return netGit(['-C', path, 'push', '-q', '--', source, refspec], FETCH_MS, sshCommandFor(keys, remote) || null, {}, hosted);
 }
 
 // Fetch remote's mirror at the next ask, however recently it was fetched (the hub just got a way in).

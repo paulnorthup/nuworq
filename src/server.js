@@ -27,7 +27,7 @@ import { features, merge, knownFor, knownLine, suggest } from './feedbackgroups.
 import { getStarted, facts, finished, finish } from './getstarted.js';
 import { guidePage } from './userguide.js';
 import { GitHubApp, manifest, convert, prClient, CLONE_PERMISSIONS, WORK_PERMISSIONS, installState, readInstallState } from './ghapp.js';
-import { proxyPush } from './gitproxy.js';
+import { proxyPush, relayPush, serveFetch } from './gitproxy.js';
 import { writeFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { outcomes, workspaceOutcomes } from './outcomes.js';
@@ -1661,7 +1661,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
       // Agents get only what a worker needs to find its checkout, for the projects their token may reach.
       if (req.method === 'GET' && path === '/api/projects' && who.role === 'agent') {
         return send(200, hub.projects().filter((p) => !caller.scope || caller.scope.includes(p.slug))
-          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner, run_budget: p.run_budget ?? null, sandbox_hosts: JSON.parse(p.sandbox_hosts || '[]'), worker_commands: JSON.parse(p.worker_commands || '[]'), operators: liveOperators(hub, p) })));
+          .map((p) => ({ slug: p.slug, name: p.name, path: p.path, remotes: hub.remotesOf(p), parked: !!p.parked, runner: !!p.runner, run_budget: p.run_budget ?? null, sandbox_hosts: JSON.parse(p.sandbox_hosts || '[]'), git_relay: hub.relayHosts(p), worker_commands: JSON.parse(p.worker_commands || '[]'), operators: liveOperators(hub, p) })));
       }
       if (req.method === 'GET' && path === '/api/projects' && url.searchParams.get('archived')) {
         return send(200, hub.projects({ archived: true }).map((p) => ({ slug: p.slug, name: p.name, archived_at: p.archived_at, remotes: hub.remotesOf(p) })));
@@ -1924,7 +1924,49 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (agentRefused(m[2])) return;
         if (m[2] === 'feedback') return send(200, agentFeedback(req, hub, ws, decodeURIComponent(m[1]), agent, b, caller));
         if (DECIDES.agent.includes(m[2])) await hub.prefetch(decodeURIComponent(m[1]), b, { scope: caller.scope });
+        if (m[2] === 'submit') await hub.landRelayed(decodeURIComponent(m[1]), b, { scope: caller.scope }); // a relayed host's land job: the hub lands it
         return send(200, withFeedback(m[2], agent, await askedReporter(hub, req, hub.agentOp(decodeURIComponent(m[1]), m[2], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), cursor: cursorOf(req), ...caller }))));
+      }
+      // A relayed git host's repository (NUWORQ_GIT_SSH_HOSTS: a plain SSH git server, no API). Workers can't use
+      // SSH, so they fetch and push it here. A fetch: any agent of a project with that repository, served from the
+      // hub's mirror, fetched first. A push: as for GitHub below, only the held item's nuworq/ branch, passed on over
+      // SSH as the hub (relayPush); the hub lands main itself (landRelayed). On the record either way.
+      if ((m = path.match(/^\/api\/git\/([a-z0-9][a-z0-9.-]*)\/([A-Za-z0-9_][\w.-]*?)(?:\.git)?\/(info\/refs|git-receive-pack|git-upload-pack)$/)) && hub.relayed(`${m[1]}/${m[2]}`.toLowerCase())) {
+        const text = (status, msg) => { res.writeHead(status, { 'content-type': 'text/plain' }); return res.end(`nuworq: ${msg}\n`); };
+        const [, host, name, service] = m;
+        const repo = `${host}/${name}`.toLowerCase();
+        const relay = hub.relayed(repo);
+        const pushing = service === 'git-receive-pack' || (service === 'info/refs' && url.searchParams.get('service') === 'git-receive-pack');
+        if (service !== 'info/refs' && req.method !== 'POST') return text(405, `${service} takes a POST`);
+        if (!pushing) {
+          if (service === 'info/refs' && url.searchParams.get('service') !== 'git-upload-pack') return text(403, 'the hub serves smart HTTP only');
+          const p = hub.projectByRemote(repo, caller.scope);
+          if (!p) return text(403, `${repo} isn't a repository of a project this token reaches`);
+          const mirror = await hub.freshMirror(repo);
+          if (!mirror) return text(503, `the hub can't read ${repo} right now: try again in a minute`);
+          return await serveFetch(req, res, { mirror, service, query: url.search.slice(1) });
+        }
+        if (agentRefused('credential')) return;
+        const { held, other } = heldBy(hub, gitAgent, caller);
+        if (other) return text(403, `${gitAgent} is another agent's name here: pushes go only through the token the agent holding the item uses`);
+        if (!held) return text(403, `${gitAgent} holds no item to push for: claim one (next), then push`);
+        const { it, p } = held;
+        const want = it.repo || hub.remotesOf(p)[0] || '';
+        if (repo !== want.toLowerCase()) return text(403, `#${it.seq} lands in ${want}, not ${repo}`);
+        const names = (cmds) => cmds.map((c) => c.ref.replace(/^refs\/heads\//, '')).join(', ');
+        if (service === 'git-receive-pack') hub.heard(p, gitAgent);
+        const holder = hub.branchHolder(p, it.branch, it);
+        return await relayPush(req, res, {
+          ...relay, service, branch: it.branch, holder: holder ? `#${holder.seq}` : '',
+          onRefused: (cmds, reasons) => { hub.event(p, { item: it, actor: gitAgent, type: 'push_refused', headline: `The hub refused ${gitAgent}'s push of ${names(cmds)} to ${want}: ${[...new Set(reasons.filter(Boolean))].join('; ')}`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } }); hub.changed(p); },
+          onPushed: (cmds) => {
+            hub.pushedTo(repo);
+            if (!cmds.length) return;
+            hub.event(p, { item: it, actor: gitAgent, type: 'pushed_via_hub', headline: `${gitAgent} pushed ${names(cmds)} to ${want} through the hub`, data: { agent: gitAgent, repo: want, refs: cmds.map((c) => c.ref) } });
+            hub.changed(p);
+            if (it.stage === 'landing') hub.headMoved(p, it.id).catch((e) => console.error('checking a pushed branch failed', e));
+          },
+        });
       }
       // A worker's push (#472): only to the repository of the item it holds, only nuworq/ branches (src/gitproxy.js),
       // with the hub's token for that one repository, which the worker never sees. On the record either way.
@@ -2012,6 +2054,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
         if (agentRefused(m[1])) return;
         if (m[1] === 'feedback') return send(200, agentFeedback(req, hub, ws, '', agent, b, caller));
         if (DECIDES.agent.includes(m[1])) await hub.prefetch('', b, { remote: remoteOf(req), root: rootOf(req), scope: caller.scope });
+        if (m[1] === 'submit') await hub.landRelayed('', b, { remote: remoteOf(req), root: rootOf(req), scope: caller.scope });
         return send(200, withFeedback(m[1], agent, await askedReporter(hub, req, hub.agentOp('', m[1], agent, b, { root: rootOf(req), remote: remoteOf(req), session: sessionOf(req), cursor: cursorOf(req), ...caller }))));
       }
       // Push channels: hub-wide (or workspace-wide) ones, and personal ones that get only what that person owns.
