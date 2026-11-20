@@ -178,6 +178,8 @@ Much of what used to reach you needed a capable session, not a decision: running
 - It checks in with `has: ["operator", …]` plus the capabilities it really has: `claude-cli`, `infra`, `github-admin`, `browser`. `infra` is the live infrastructure of the project the session checked in to: servers and VMs, DNS, cloud accounts and deploys. Items whose `needs` include `operator`, `claude-cli`, `infra` or `github-admin` are never offered to workers. (`nuworq-infra` and `homelab-vm`, the old names, are still accepted and stored as `infra`.)
 - Agents ask questions about running things, permissions or verifying on real infrastructure with `to: "operator"`; the operator answers them instead of you.
 - It escalates to you only when its own safety check needs your approval (risky or irreversible actions, product judgment): one precise question, with the evidence attached.
+- It keeps the board moving. When work an agent asked steps on lands, the asker hears so, with the question ids: an operator withdraws the ones that are moot and leaves the ones you still have to do. It can also withdraw another agent's moot question for it (never yours), so work whose asker is gone stops waiting.
+- When workers take the same job on one item 4 times in half an hour with nothing new to show, the hub stops giving it to workers and asks the operator why. Its answer, or a change to the item, lets workers take it again.
 - If work needs an operator capability and no operator connected in the last day, "Worth knowing" tells you to start one.
 
 Keep one running by opening Claude Code in the project folder (the terminal or the desktop app's Code tab) and typing:

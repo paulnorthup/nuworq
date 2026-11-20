@@ -718,6 +718,11 @@ Usage
 Example
   nuworq withdraw 40 "The owner answered in chat" --as claude-1
 
+An operator may withdraw another agent's open question for it, in its own
+project, with a reason: one whose asker is gone keeps its item waiting
+otherwise. Never a person's, the hub's, or one put to an issue's reporter. The
+record says the operator withdrew it for the asker.
+
 Every agent command takes --as <name> (or NUWORQ_AGENT), --project and --url.
 Each <argument> can be given as its flag instead. "-" as a value reads it from
 stdin; a list takes "a,b" or JSON, and a list of objects "x|y" per flag,
