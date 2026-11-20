@@ -378,6 +378,8 @@ Environment
   NUWORQ_LLM_PROXY_ACCESS_ID  behind Cloudflare Access: its service token id
   NUWORQ_LLM_PROXY_ACCESS_SECRET
                               and secret
+  NUWORQ_GIT_SSH_HOSTS        plain SSH git hosts the hub relays for its
+                              workers, comma-separated (not with --workspaces)
 
 Example
   nuworq serve --demo

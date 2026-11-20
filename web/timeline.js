@@ -17,7 +17,7 @@ export const DOT = {
   // depends on the project's autonomy
   submitted: 'verifying', shaped: 'proposed',
   // finished, at risk, failed
-  landed: 'ok', tagged: 'ok', tag_failed: 'warn', branch_deleted: 'ok', branch_delete_failed: 'warn', lease_expired: 'warn', pr_failed: 'bad', pr_merge_failed: 'bad', issue_close_failed: 'bad', credential_refused: 'bad', push_refused: 'warn',
+  landed: 'ok', landed_by_hub: 'ok', land_failed: 'bad', head_pinned: '', tagged: 'ok', tag_failed: 'warn', branch_deleted: 'ok', branch_delete_failed: 'warn', lease_expired: 'warn', pr_failed: 'bad', pr_merge_failed: 'bad', issue_close_failed: 'bad', credential_refused: 'bad', push_refused: 'warn',
   // notes and bookkeeping: nobody's move changes
   comment: '', created: '', refined: '', regrouped: '', tidied: '', not_chosen: '', question_withdrawn: '', staged: '', check_now: '',
   alert: '', issue: '', duplicate: '', stale: '', ci: '', retired: '', restored: '', always: '', kept: '', distilled: '', learned: '', ack: '', picked: '', stewards: '',
