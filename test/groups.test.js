@@ -35,7 +35,7 @@ describe('groups at a glance (#200)', () => {
     op('a1', 'checkin', { has: [] });
     op('a1', 'claim', { item: '#5' });
     op('a2', 'claim', { item: '#8' });
-    op('a2', 'ask', { item: '#8', question: 'Which questions go in?', blocking: true });
+    op('a2', 'ask', { only_person: 'call', item: '#8', question: 'Which questions go in?', blocking: true });
 
     const v = view(hub, 'p');
     assert.deepEqual(v.groups.map((g) => [g.item, g.effective, g.state, g.done, g.total]), [
@@ -86,7 +86,7 @@ describe('groups at a glance (#200)', () => {
     create({ title: 'Switch plans', parent: '#1' }); // #3
     create({ title: 'The confirm dialog', parent: '#3', depends_on: ['#2'] }); // #4
     op('a1', 'claim', { item: '#2' });
-    op('a1', 'ask', { item: '#2', question: 'Sort by name or activity?', assumption: 'activity' });
+    op('a1', 'ask', { only_person: 'call', item: '#2', question: 'Sort by name or activity?', assumption: 'activity' });
     const p = hub.project('p');
     hub.q(`INSERT INTO prs (project_id, repo, number, item_id, url, title, state, head_ref, head_sha, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', 'b', 'abc1234def', ?)`)
       .run(p.id, 'github.com/acme/api', 42, hub.item(p, '#2').id, 'https://github.com/acme/api/pull/42', 'List workspaces', hub.now());

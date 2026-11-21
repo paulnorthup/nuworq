@@ -47,7 +47,7 @@ describe('a bouncing item says why, and asks a person only when they can help (#
     const { hub, add, sendBack, lapse, cards } = world();
     const k = add('Releases need Remy');
     hub.agentOp('p', 'claim', 'claude-w', { item: k });
-    const { question } = hub.agentOp('p', 'ask', 'claude-w', { item: k, question: 'Is the second ruleset already there?', assumption: 'it already exists' });
+    const { question } = hub.agentOp('p', 'ask', 'claude-w', { only_person: 'call', item: k, question: 'Is the second ruleset already there?', assumption: 'it already exists' });
     sendBack(k, 'github', 'it conflicts with main');
     sendBack(k, 'github', 'its checks failed');
     lapse(k, 'claude-x', 'restart');
@@ -67,7 +67,7 @@ describe('a bouncing item says why, and asks a person only when they can help (#
     sendBack(k, 'claude-r1', 'the old key still works');
     sendBack(k, 'claude-r2', 'no rollback plan');
     hub.agentOp('p', 'claim', 'claude-w', { item: k });
-    hub.agentOp('p', 'ask', 'claude-w', { item: k, question: 'Which key store is the source of truth?', blocking: true });
+    hub.agentOp('p', 'ask', 'claude-w', { only_person: 'call', item: k, question: 'Which key store is the source of truth?', blocking: true });
     assert.deepEqual(cards(), []);
     const q = view(hub, 'p').attention.find((a) => a.kind === 'question');
     assert.match(q.why, new RegExp(`^${k} keeps bouncing\\. Bounced twice: claude-r2 sent it back \\(twice in all\\): "no rollback plan"\\.`));

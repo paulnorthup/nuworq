@@ -19,6 +19,7 @@ import { freshen } from './freshness.js';
 import { securityUp } from './security.js';
 import { sweepMirrors } from './git.js';
 import { walkthrough } from './walkthrough.js';
+import { operatorFirst } from './operatorfirst.js';
 import { syncIssues, commentIssues, closeLanded, closeStale, askReporters } from './issues.js';
 import { syncAlerts, accessOf, installationUrl } from './alerts.js';
 import { checkWiring, wiringEntry } from './appwiring.js';
@@ -465,6 +466,7 @@ export function createServer(target, { auth = 'local', trustProxy = false, baseD
     }
     for (const hub of hubs()) {
       try { hub.sweep(); hub.refreshMirrorTokens(); freshen(hub); securityUp(hub); walkthrough(hub); } catch (e) { console.error('sweep failed', e); }
+      try { operatorFirst(hub); } catch (e) { console.error('asking the operator first failed', e); } // a card it settles before a person hears
       try { hub.tidyAll(); } catch (e) { console.error('checking milestones and field notes failed', e); } // #536
       // Which branches being built lack what landed (#535), so heartbeats tell them to rebase without running git.
       hub.refreshBehind().catch((e) => console.error('checking branches against main failed', e));

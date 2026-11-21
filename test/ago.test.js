@@ -58,19 +58,19 @@ describe('relative times tick in the page', () => {
     hub.agentOp('p', 'checkin', 'w1', {});
     hub.agentOp('p', 'next', 'w1', {});
     const asked = now;
-    hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Which way?', blocking: true });
-    hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Tabs?', assumption: 'spaces' });
+    hub.agentOp('p', 'ask', 'w1', { only_person: 'call', item: '#1', question: 'Which way?', blocking: true });
+    hub.agentOp('p', 'ask', 'w1', { only_person: 'call', item: '#1', question: 'Tabs?', assumption: 'spaces' });
     now += 2 * MIN;
     const v = view(hub, 'p');
     const q = v.attention.find((a) => a.kind === 'question');
-    assert.equal(q.sub, 'A · w1 asked 2m ago · work is parked until you answer', 'the sentence reads as before');
+    assert.equal(q.sub, 'A · w1 asked 2m ago · only a person: a product call · work is parked until you answer', 'the sentence reads as before');
     assert.deepEqual(q.sub_at, [[asked, '2m']]);
     const as = v.attention.find((a) => a.kind === 'assumption');
     assert.deepEqual(as.sub_at, [[asked, '2m']]);
     for (const a of v.attention) assert.ok(!/[\u0001-\u0003]/.test(a.headline + (a.sub ?? '')), 'no marks reach the page');
 
     const html = timed(q.sub, q.sub_at, (s) => s.replace('&', '&amp;'), now + MIN);
-    assert.equal(html, `A · w1 asked <span data-at="${asked}">3m</span> ago · work is parked until you answer`);
+    assert.equal(html, `A · w1 asked <span data-at="${asked}">3m</span> ago · only a person: a product call · work is parked until you answer`);
     assert.equal(timed('3m · 3m', [[asked, '3m']], String, now), `3m · <span data-at="${asked}">2m</span>`, 'the last one said is the time');
     assert.equal(timed('<b>', undefined, (s) => s.replace('<', '&lt;')), '&lt;b>', 'no times: just rendered');
   });

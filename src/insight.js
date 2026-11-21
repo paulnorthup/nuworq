@@ -13,6 +13,7 @@ import { humanCost, verification } from './outcomes.js';
 import { OPERATOR_TAGS } from './protocol.js';
 import { wiringEntry } from './appwiring.js';
 import { bounceOf, sentence as endSentence } from './bounce.js';
+import { PERSON_SHORT, personReason } from './audience.js';
 
 const FLOW_WINDOW = 14 * DAY;
 const CHURN_WINDOW = 15 * MIN;
@@ -49,6 +50,10 @@ export function projectList(hub, { viewer } = {}) {
 }
 
 const projectLine = (hub, p, v) => ({ slug: p.slug, name: p.name, mission: p.mission, parked: !!p.parked, path: p.path || null, remotes: hub.remotesOf(p), runner: !!p.runner, sandbox_hosts: json(p.sandbox_hosts, []), worker_commands: json(p.worker_commands, []), operators: liveOperators(hub, p), pulse: v.pulse, needs: v.attention.filter((a) => a.level === 'act').length });
+
+// Whether an operator is here for the cards it settles first (#712): one checked in with operator in has, seen in
+// the last day. agents: the project's rows.
+export const operatorIsHere = (agents, t) => agents.some((a) => t - a.last_seen < DAY && json(a.has, []).includes('operator'));
 
 // The operator sessions a project has (#559), for nuworq up: checked in as operators, not signed off, and seen in the
 // last day. An idle operator only listens, which leaves last_seen alone, and one that ends signs itself off (#558).
@@ -188,10 +193,12 @@ export const VIEW_TTL = 15_000;
 export const DEPTHS = ['30s', '5m', '30m'];
 export const PAGE = { all: 100, agents: 50 };
 
-export function view(hub, slug, { light = false, viewer, depth, pages = {} } = {}) {
+// operator: keep the cards an operator settles first (to: 'operator'), as operatorfirst.js reads them; a person's
+// page leaves them out, since the operator has each as a question and escalates what only a person can do.
+export function view(hub, slug, { light = false, viewer, depth, pages = {}, operator = false } = {}) {
   const p = hub.project(slug);
   const built = cachedBase(hub, p, light);
-  const v = personalize(hub, p, built, viewer);
+  const v = personalize(hub, p, built, viewer, operator);
   if (light) return { pulse: v.pulse, attention: v.attention, since: v.since };
   return DEPTHS.includes(depth) ? atDepth(v, depth, pages) : v;
 }
@@ -211,8 +218,8 @@ function cachedBase(hub, p, light) {
 
 // The viewer's own page from the shared one: the GitHub App card for those it's for, the steps they ticked, and
 // everyone else's "needs you" as worth knowing, then ranked and counted again for the pulse.
-function personalize(hub, p, { v, priv }, viewer) {
-  const attention = v.attention.map((a) => {
+function personalize(hub, p, { v, priv }, viewer, operator = false) {
+  const attention = v.attention.filter((a) => operator || a.to !== 'operator').map((a) => {
     if (!a._ticks) return a;
     return Object.fromEntries(Object.entries(a).map(([k, x]) => (k === '_ticks' ? ['ticked', x[viewer ?? HUMAN] ?? []] : [k, x])));
   });
@@ -372,7 +379,7 @@ function build(hub, p, t, { light = false } = {}) {
   // A question to an operator is an operator session's to answer (next mode "answer"); with no operator here for a
   // day it's yours too (#712): its steps to tick and its answer box, as if asked of you, and the guide's operator part.
   // A reply held from someone outside the project (#471) comes to you at once, to pass on or answer yourself.
-  const operatorHere = agents.some((a) => t - a.last_seen < DAY && json(a.has, []).includes('operator'));
+  const operatorHere = operatorIsHere(agents, t);
   const carded = (q) => (q.audience === 'operator'
     ? !operatorHere && (q.blocking || landedSteps(q) || json(q.steps, []).length > 0) // steps wait for someone even when the asker went on
     : (q.blocking || landedSteps(q)) && !(q.reporter && !q.held_reply && t - q.at < wait));
@@ -387,13 +394,14 @@ function build(hub, p, t, { light = false } = {}) {
       headline: q.question,
       sub: [it?.title, orig ? `${q.asked_by} (operator) escalated ${orig.asked_by}'s question ${timeIn(q.at)} ago` : `${q.asked_by} asked ${q.reporter ? `@${q.reporter} on GitHub ` : ''}${timeIn(q.at)} ago`,
         held ? `@${q.reporter} replied; they have no write access, so it waits for you to pass it on` : q.reporter && 'no reply yet',
-        forOperator && 'no operator connected, so you can do it',
+        forOperator && 'no operator connected, so you can do it', personReason(q.audience) && `only a person: ${PERSON_SHORT[personReason(q.audience)] ?? personReason(q.audience)}`,
         it?.stage === 'waiting' && 'work is parked until you answer', landedSteps(q) && `${ref(it)} landed; ${orig ? 'its' : 'these'} steps are still to do`].filter(Boolean).join(' · '),
       why: [held && `@${q.reporter} replied on GitHub (${q.held_url}):\n\n${q.held_reply.split('\n').map((l) => `> ${l}`).join('\n')}`,
         orig && `${orig.asked_by} asked an operator: "${orig.question}"`,
-        forOperator && `${q.asked_by} asked an operator: a Claude Code session someone keeps open, acting with their access, for the work workers aren't allowed to do. None has checked in here in the last day, so it's yours: do the steps and answer, and ${q.asked_by} gets your answer as an operator's. Or start an operator and leave it to them.`,
+        forOperator && `${q.asked_by} asked an operator: a Claude Code session someone keeps open, acting with their access, for what doesn't need a person. None has checked in here in the last day, so it's yours: do the steps and answer, and ${q.asked_by} gets your answer as an operator's. Or start an operator and leave it to them.`,
         q.context].filter(Boolean).join('\n\n'), detail: q.detail,
       ...(forOperator ? { operator: true, guide: OPERATOR_GUIDE } : {}),
+      ...(personReason(q.audience) ? { only_person: personReason(q.audience) } : {}),
       item: it ? ref(it) : null, parked: it?.stage === 'waiting', // answering can keep it parked
       question: { id: q.id, options: [...(held ? [PASS_ON] : []), ...json(q.options, [])], asked_by: q.asked_by },
       agent: q.asked_by, presence: presence(q.asked_by),
@@ -421,11 +429,12 @@ function build(hub, p, t, { light = false } = {}) {
   // Tidy results and field-note reviews never show here (#497): they stay in their items' history.
 
   // Unless no operator has been here for a day: those with steps or blocking work are cards above; the rest, one
-  // line, so they don't wait forever.
+  // line, so they don't wait forever. Worth knowing, not Needs you: their askers went on with an assumption, and
+  // nothing waits on starting an operator.
   const forOperator = operatorHere ? [] : openQs.filter((q) => q.audience === 'operator' && !carded(q));
   if (forOperator.length) {
     push({
-      key: `operator:${forOperator[0].id}`, level: 'act', kind: 'operator-missing', at: forOperator[0].at,
+      key: `operator:${forOperator[0].id}`, level: 'know', kind: 'operator-missing', at: forOperator[0].at,
       headline: `${plural(forOperator.length, 'question')} ${forOperator.length === 1 ? 'waits' : 'wait'} for an operator; none connected`,
       sub: forOperator.map((q) => `Q${q.id}: ${q.question}`).slice(0, 3).join(' · '),
       questions: forOperator.map((q) => q.id), // by number (#710): ⌘K's "q207" lands on this card
@@ -734,11 +743,14 @@ function build(hub, p, t, { light = false } = {}) {
   const anyoneReady = readyFree.filter(generic).length;
   if (!p.parked && !direction && anyoneReady + shapeable.filter(generic).length && !capacity) {
     const idle = idleCause(hub, p, t);
+    // An operator here starts or fixes runners itself (operatorfirst.js asks it); a runner out of budget is money,
+    // and only a person raises that.
+    const theirs = operatorHere && idle.cause !== 'budget';
     push({
-      key: `no-agents:${Math.floor(t / (6 * HOUR))}`, level: inFlight ? 'know' : 'act', kind: 'no-agents', at: lastAgentSeen || t,
+      key: `no-agents:${Math.floor(t / (6 * HOUR))}`, level: inFlight || theirs ? 'know' : 'act', kind: 'no-agents', at: lastAgentSeen || t,
       headline: anyoneReady ? `${plural(anyoneReady, 'item')} ready, but no agent is working` : `Work is waiting to be shaped, but no agent is working`,
       sub: idle.sub, why: idle.why, cause: idle.cause, how: idle.how, staff: idle.staff,
-      start: true,
+      start: true, ...(theirs ? { to: 'operator' } : {}),
     });
   }
   // Agents out of work because the rest waits on you isn't news (#497): what waits on you is already in Needs you.
@@ -765,6 +777,8 @@ function build(hub, p, t, { light = false } = {}) {
       a.owners ??= a.parked_by?.startsWith('@') ? [a.parked_by] : hub.ownersOf(p, a.item ? bySeq.get(a.item) : null);
     }
   }
+  // Who each card is for: a person, unless it says to: 'operator' (an operator settles it first, and people's pages
+  // leave it out: view). Push channels send only a person's (notify.js).
   prioritize(hub, p, attention, items);
 
   // ── since you last looked ──
@@ -1159,7 +1173,7 @@ function mapOf(hub, p, root) {
       item: `#${i.seq}`, title: i.title, stage: i.stage, priority: i.priority, holder: i.holder || null,
       depends_on: hub.deps(i).map((d) => `#${d.seq}`),
       prs: prsOf(hub, p, i).map((pr) => ({ url: pr.url, number: pr.number, repo: pr.repo, state: pr.state, ci: pr.ci })),
-      questions: openQs.filter((q) => q.item_id === i.id).map((q) => ({ id: q.id, question: q.question, blocking: !!q.blocking, to: q.audience || 'human' })),
+      questions: openQs.filter((q) => q.item_id === i.id).map((q) => ({ id: q.id, question: q.question, blocking: !!q.blocking, to: q.audience === 'operator' ? 'operator' : 'human', ...(personReason(q.audience) ? { only_person: personReason(q.audience) } : {}) })),
       needs_you: waitsOnYou(p, i, openQs),
       children: kids.map(node),
     };

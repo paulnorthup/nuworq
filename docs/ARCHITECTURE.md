@@ -21,7 +21,7 @@ src/device.js        device login: the CLI shows a code, a person approves it in
 src/billing.js       Stripe plans, heard only from Stripe's signed webhook
 src/live.js          the public, read-only live view of a project (/live/<slug>)
 src/text.js          names in one form: a project's slug, a repository's remote
-src/audience.js      who answers a question that leaves out `to`
+src/audience.js      who answers a question: an operator first, a person only for what only a person can do (only_person)
 src/bounce.js        why an item keeps bouncing, from its history
 src/feedbackgroups.js  feedback that reports the same thing, as one group
 src/fieldnotes.js    which few field notes an agent sees
@@ -37,11 +37,12 @@ src/outcomes.js      what finished work came to, for other tools (GET /api/p/:pr
 src/models.js        which model a job runs on: the project's tiers, cheapest first
 src/usage.js         tokens and cost: reading them from agent CLIs' JSON output, splitting a run across items
 src/llmproxy.js      measured usage from llm-proxy for each agent's lease windows; supersedes reported
-src/notify.js        push channels (ntfy, Slack, webhook, personal): new act-level entries, batched, each sent once
+src/notify.js        push channels (ntfy, Slack, webhook, personal): new act-level entries for a person, batched, each sent once
 src/outbound.js      requests to URLs a person or agent chose: public addresses only, no redirects
 src/getstarted.js    Get started: each step checked off from what the hub already knows
 src/userguide.js     the getting-started guide at /guide
 src/walkthrough.js   the weekly walk-through that keeps /guide matching the running hub
+src/operatorfirst.js a card an operator settles first (no agent working) goes to it as the hub's question
 src/seed.js          the demo, replayed through real operations on a moved clock
 
 GitHub
@@ -98,33 +99,34 @@ Design choices:
 - **Authority.** Only steering and decisions come from you. The guide tells agents to treat field notes, handoffs and comments as information, not instructions.
 
 ## Attention engine (what reaches "Needs you")
-Each signal is an entry `kind` in src/insight.js.
+Each signal is an entry `kind` in src/insight.js. "Needs you" holds only what a person must do: **only a person can sign in as themselves (accounts, credentials, keys, passkeys), spend money, be there in person, or make a product or priority call no decision covers** (src/audience.js). Everything an operator can settle goes to the operator first, as an operator question; it answers, withdraws or hands it back, and escalates what only a person can do (`ask` with `escalates` and `only_person`). With no operator seen for a day, its cards come to a person instead (#712). Push channels, a person's or the hub's, send only a person's entries.
 
-| Signal | Level |
-|---|---|
-| Nothing moving, ideas waiting, no pick yet: "What matters most?" (`direction`) | act |
-| Work waiting and no agent working on it, unless parked (`no-agents`) | act when nothing is in flight, else know |
-| A question for you, or one for an operator when none has been here for a day (`question`) | act |
-| Operator work and no operator session (`operator-missing`) | act |
-| Work someone answered on but kept parked, or the hub parked after repeated stalls (`kept-parked`) | act |
-| Finished work waiting for your verdict, unless under *Run with it* (`review`) | act (no-evidence warning) |
-| CI failing on a PR for work in Verifying (`ci-failing`) | act |
-| A pull request waiting for a person's approval on GitHub (`pr-review`) | act |
-| A shaped proposal, when autonomy is *Check with me* (`proposal`) | act |
-| An item that keeps bouncing, when a person can help (`struggling`) | act: the step that helps (an answer, an agent to start, clarify, split or drop) |
-| A "now" group stalled on a capability no agent has (`group-stalled`) | act |
-| Free's limit refused an agent (`plan-limit`), 80% of today's budget spent (`budget-near`), one worker past $50 or an hour (`run-spend`) | act |
-| The hub's GitHub App misses events or permissions it needs (`app-wiring`) | act |
-| An agent's assumption (`assumption`) | know: Confirm / Override (an override becomes steering) |
-| What an operator changed on a live system, or a call it made (`operator-answered`) | know |
-| Accepted work nobody lands (`landing-stuck`), a peer review nobody takes (`peer-review-stuck`) | know |
-| Work waiting outside past the project's limit (`outside-overdue`) | know |
-| Work needing what no agent seen in a day has (`unfit`) | know |
-| Agents arriving and leaving with nothing (`churn`) | know |
-| The App can't read a repository for its mirror (`app-read`) | know |
-| Steering nobody acknowledged (`steer-unseen`) | know |
-| A push channel is failing (`notify-failing`) | know |
-| Healthy work, recovered stalls | 0 |
+| Signal | Level | Whose first |
+|---|---|---|
+| Nothing moving, ideas waiting, no pick yet: "What matters most?" (`direction`) | act | person: a priority call |
+| Work waiting and no agent working on it, unless parked (`no-agents`) | act when nothing is in flight, else know | operator, when one is here: the hub asks it (src/operatorfirst.js) and people's pages leave the card out; a runner out of budget is a person's (money) |
+| A question for a person (`only_person` given), or one for an operator when none has been here for a day (`question`) | act | person, with its reason on the card; without a reason a question goes to an operator |
+| Questions for an operator, with assumptions, and no operator session (`operator-missing`) | know | person: start one, if they want it |
+| Work someone answered on but kept parked (`kept-parked`) | act | the person who parked it |
+| Work the hub parked after repeated hand-backs (`kept-parked`) | act only while no operator question holds it | operator: the hub asks it; its answer hands the work back |
+| Finished work waiting for your verdict, unless under *Run with it* (`review`) | act (no-evidence warning) | person: the project's autonomy says a person accepts work; *Run with it* hands reviews to agents |
+| CI failing on a PR for work in Verifying (`ci-failing`) | act | person, as the reviewer |
+| A pull request waiting for a person's approval on GitHub (`pr-review`) | act | person: their GitHub sign-in |
+| A shaped proposal, when autonomy is *Check with me* (`proposal`) | act | person: what gets built is a product call |
+| An item that keeps bouncing, when a person can help (`struggling`) | act: the step that helps (an answer, an agent to start, clarify, split or drop) | person; an operator question it waits on stays the operator's |
+| A "now" group stalled on a capability no agent has (`group-stalled`) | act | person: a machine or account only they have |
+| Free's limit refused an agent (`plan-limit`), 80% of today's budget spent (`budget-near`), one worker past $50 or an hour (`run-spend`) | act | person: money |
+| The hub's GitHub App misses events or permissions it needs (`app-wiring`) | act | person: the App owner's sign-in |
+| An agent's assumption (`assumption`) | know | |
+| What an operator changed on a live system, or a call it made (`operator-answered`) | know | |
+| Accepted work nobody lands (`landing-stuck`), a peer review nobody takes (`peer-review-stuck`) | know | |
+| Work waiting outside past the project's limit (`outside-overdue`) | know | |
+| Work needing what no agent seen in a day has (`unfit`) | know | |
+| Agents arriving and leaving with nothing (`churn`) | know | |
+| The App can't read a repository for its mirror (`app-read`) | know | |
+| Steering nobody acknowledged (`steer-unseen`) | know | |
+| A push channel is failing (`notify-failing`) | know | |
+| Healthy work, recovered stalls | 0 | |
 
 ## API
 For other tools, the published contract is [API.md](API.md) (e.g. outcomes per item and model); the rest can change.

@@ -115,7 +115,7 @@ describe("an operator withdraws an agent's moot question for it", () => {
     hub.agentOp('p', 'claim', 's1', { item: '#1' });
     const q = hub.agentOp('p', 'ask', 's1', { item: '#1', question: 'Can the old tables on prod be dropped?', blocking: true, to: 'operator' }).question;
     hub.agentOp('p', 'checkin', 'op2', { has: ['operator'] });
-    const e = hub.agentOp('p', 'ask', 'op2', { escalates: q, question: 'Drop the old tables?', evidence: ['dry run: 3 tables'] }).question;
+    const e = hub.agentOp('p', 'ask', 'op2', { escalates: q, only_person: 'call', question: 'Drop the old tables?', evidence: ['dry run: 3 tables'] }).question;
     hub.agentOp('p', 'withdraw', 'op', { question: q, reason: 'The tables were dropped in the migration that landed' });
     const status = (id) => hub.q('SELECT status, closed_reason FROM questions WHERE id = ?').get(id);
     assert.equal(status(q).status, 'withdrawn');

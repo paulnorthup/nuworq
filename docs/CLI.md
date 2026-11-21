@@ -649,7 +649,7 @@ repeated.
 ### nuworq ask
 
 ```text
-nuworq ask: ask a question
+nuworq ask: ask
 
 Usage
   nuworq ask [<item>] <question> [flags]
@@ -659,17 +659,17 @@ Flags
                               characters
   --detail <detail>           the 30-minute version: logs, reasoning,
                               alternatives, at most 32,000 characters
-  --options <x>               likely answers, one click each, at most 200
-                              characters each
+  --options <x>               likely answers, at most 200 characters each
   --steps <do|where|check>    required when a person must do something, in order
-  --assumption <assumption>   what you proceed with unless told otherwise, at
-                              most 2,000 characters
-  --blocking                  only if you cannot go on without an answer
+  --assumption <assumption>   what you do unless told otherwise, at most 2,000
+                              characters
+  --blocking                  only if you can't go on without it
   --to <human|reporter|operator>
-                              "reporter": an issue's author; left out, the hub
-                              picks
-  --escalates <n>             the operator question needing the human's
-                              approval; their answer answers it too
+                              "reporter": the issue author
+  --only-person <person>      sign-in, money, physical, call: why only a person
+                              can
+  --escalates <n>             the operator question only a person can settle
+                              (with only_person); their answer answers it too
   --evidence <label|url>      with escalates: what you ran or checked
   --assume <a>                the same as --assumption
   --option <x>                one likely answer; repeat it for more
@@ -688,7 +688,7 @@ repeated.
 
 ```text
 nuworq answer: answer a question asked to: "operator" (next hands it to you as
-  mode "answer")
+  mode "answer"), or a person's with no only_person
 
 Usage
   nuworq answer <question-id> <answer> [flags]

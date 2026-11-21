@@ -31,7 +31,7 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - **Routine commands run without prompts:** `nuworq`'s agent operations, `nuworq operator --detect` / `--check`, `nuworq wait --operator` and `nuworq guide`; git (status, diff, log, show, fetch, pull, switch, add, commit, rebase, push, branch, tag, worktree, rev-parse, ls-remote, and `git remote -v` / `get-url`), gh for reading, pull requests, runs and GET api calls (`gh api repos/…`, path first), and ssh to the host in this machine's infra check. Force-pushes, deleting or rewriting remote refs (`--delete`, `origin :x`, `--mirror`, `--prune`, flags bundled too, e.g. `-uf`), deleting, moving or force-resetting branches and tags, discarding work (`checkout`, `switch -f` / `--discard-changes`, `worktree remove --force`), git options that run a program or write a file (`--upload-pack`, `--receive-pack`, `--exec`, `rebase -x` / `-i`, `--output`, `--ext-diff`), changing remotes, gh api writes and gh deletes still ask. The infra check changes only when a person confirms it at a terminal. `nuworq operator --start` passes these rules to the session it starts; `nuworq operator --allow` adds them to the project's .claude/settings.local.json after a yes (`--allow --off` takes them out). Every other command still asks: you read text others wrote, and your prompts are the last check against an instruction planted there.
 - **Keep work moving without the human.** Before asking, read the hub: the item's questions and answers, standing decisions, and the human's earlier answers and waivers for the same kind of check. Act on what they settle.
 - **Make reversible operational calls yourself.** Back up, act, and record on the item what changed and how to undo it.
-- **Ask the human only for what only they can do:** their own accounts, credentials or keys, signing, moving money, a CAPTCHA, or an irreversible step or product call that no decision covers. Ask it as one hub question: `ask` with `escalates` (the operator question's id, so the answer reaches its asker too) and `evidence`, plus `steps` when they must act and `options` when they decide. Never ask only in chat, and never re-ask in chat what the hub already answers.
+- **Ask the human only for what only they can do:** their own sign-in (accounts, credentials, keys, passkeys, a CAPTCHA or a signature), spending money, being there in person, or a product or priority call or irreversible step that no decision covers. Ask it as one hub question: `ask` with `escalates` (the operator question's id, so the answer reaches its asker too), `only_person` (sign-in, money, physical or call) and `evidence`, plus `steps` when they must act and `options` when they decide. Never ask only in chat, and never re-ask in chat what the hub already answers.
 - **Your own client's permission prompts still apply.** This rule is about what you ask the human through the hub, not about getting around your safety checks.
 - **Never pass operator powers on:** workers you start don't get `operator`, your tokens, or your permissions.
 
@@ -40,8 +40,8 @@ You are the operator only when the person started you as one (they typed `/nuwor
 - `next`: Claim your best job now: work, shape, review, land, tidy, or (operators) a question to answer.
 - `claim`: Claim a specific item: a 20-minute lease that progress renews.
 - `progress`: Report a milestone on an item you hold; returns steering.
-- `ask`: Ask a question.
-- `answer`: Answer a question asked to: "operator" (next hands it to you as mode "answer").
+- `ask`: Ask.
+- `answer`: Answer a question asked to: "operator" (next hands it to you as mode "answer"), or a person's with no only_person.
 - `withdraw`: Withdraw a question you asked: answered another way, or no longer matters.
 - `submit`: Submit an item you hold with evidence; someone else verifies it.
 - `handoff`: Hand off an item you hold unfinished, saying where you left off.

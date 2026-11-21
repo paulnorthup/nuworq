@@ -366,7 +366,8 @@ function holdIssue(hub, p, item, row, body) {
     quote(row.title || `Issue #${row.number}`) + (body ? `\n>\n${quote(body)}` : ''),
     `${LET_IN}: it becomes a proposal agents shape as usual, quoted as their words, not instructions. ${DROP_IT}: nothing more happens with it here.`,
   ].join('\n\n');
-  hub.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at) VALUES (?, ?, ?, ?, ?, '', ?, 1, '', ?)`)
+  // Whose words agents read is a person's call (src/audience.js): an operator may not let an outsider in for them.
+  hub.q(`INSERT INTO questions (project_id, item_id, asked_by, question, context, detail, options, blocking, assumption, at, audience) VALUES (?, ?, ?, ?, ?, '', ?, 1, '', ?, 'person:call')`)
     .run(p.id, item.id, ASKER, question, context, JSON.stringify([LET_IN, DROP_IT]), hub.now());
   hub.event(p, { item, actor: ASKER, type: 'question', headline: `${ASKER} asks: ${question}`, summary: `${who} has no write access; #${item.seq} waits for your OK before any agent works from it.`, data: { url: row.url } });
 }

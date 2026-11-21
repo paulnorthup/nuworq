@@ -15,7 +15,7 @@ function setup() {
   const q = hub.agentOp('o', 'ask', 'w1', { item: '#1', question: 'Can the orphaned tables on prod be dropped?', blocking: true, to: 'operator' }).question;
   hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
   const evidence = [{ label: 'dry run: 3 tables, 0 rows referenced', url: 'https://example.com/run/1' }, 'backup taken'];
-  const escalate = (args = {}) => hub.agentOp('o', 'ask', 'op', { escalates: q, question: 'Drop the 3 orphaned tables on prod?', evidence, ...args });
+  const escalate = (args = {}) => hub.agentOp('o', 'ask', 'op', { escalates: q, question: 'Drop the 3 orphaned tables on prod?', evidence, only_person: 'call', ...args });
   return {
     hub, q, escalate,
     item: (n) => hub.item(hub.project('o'), `#${n}`),
@@ -37,6 +37,9 @@ describe('an operator escalates to the human', () => {
     assert.deepEqual(a.escalation, { question: 'Can the orphaned tables on prod be dropped?', asked_by: 'w1' });
     assert.deepEqual(a.evidence, [{ label: 'dry run: 3 tables, 0 rows referenced', url: 'https://example.com/run/1' }, { label: 'backup taken' }]);
     assert.match(a.sub, /op \(operator\) escalated w1's question/);
+    assert.match(a.sub, /only a person: a product call/);
+    assert.equal(a.only_person, 'call');
+    assert.equal(hub.q('SELECT audience FROM questions WHERE id = ?').get(r.question).audience, 'person:call');
     assert.match(a.why, /w1 asked an operator: "Can the orphaned tables/);
     assert.equal(a.item, '#1');
     assert.equal(a.question.id, r.question);
@@ -79,9 +82,12 @@ describe('an operator escalates to the human', () => {
     assert.throws(() => escalate({ escalates: 999 }), (e) => e.status === 404 && /escalates takes/.test(e.hint));
     hub.humanOp('o', 'create', { title: 'Other', acceptance: 'x' });
     hub.agentOp('o', 'claim', 'w1', { item: '#2' });
-    const human = hub.agentOp('o', 'ask', 'w1', { item: '#2', question: 'Which region?', blocking: true }).question;
+    const human = hub.agentOp('o', 'ask', 'w1', { item: '#2', question: 'Which region?', blocking: true, only_person: 'call' }).question;
     assert.throws(() => escalate({ escalates: human }), (e) => e.status === 403 && /wasn't asked to an operator/.test(e.message) && /to: "operator"/.test(e.hint));
     assert.throws(() => escalate({ evidence: [] }), (e) => /needs evidence/.test(e.message) && /evidence/.test(e.hint));
+    // It says why only a person can: the card shows it, and the hub refuses an escalation without it.
+    assert.throws(() => escalate({ only_person: '' }), (e) => /says why only a person can settle it/.test(e.message) && /settle it yourself and answer/.test(e.hint));
+    assert.throws(() => escalate({ only_person: 'busy' }), (e) => e.status === 400 && /only_person must be one of/.test(e.message));
     escalate();
     assert.throws(() => escalate(), (e) => e.status === 409 && /already escalated/.test(e.message));
     hub.agentOp('o', 'answer', 'op', { question: q, answer: 'Checked again: safe, dropped.' });

@@ -27,7 +27,7 @@ describe('scripts/effective.js', () => {
     hub.agentOp('p', 'review', 'r1', { item: a, verdict: 'accept', headline: 'ok' });
     // b: a blocking question a person answers after 2 hours, then sent back by a peer once, then accepted.
     hub.agentOp('p', 'claim', 'w3', { item: b });
-    const q = hub.agentOp('p', 'ask', 'w3', { item: b, question: 'Which ZZQ region?', blocking: true, to: 'human' }).question;
+    const q = hub.agentOp('p', 'ask', 'w3', { only_person: 'call', item: b, question: 'Which ZZQ region?', blocking: true, to: 'human' }).question;
     t += 2 * HOUR;
     hub.humanOp('p', 'answer', { question: q, answer: 'SECRET-ANSWER' });
     hub.agentOp('p', 'claim', 'w3', { item: b });
