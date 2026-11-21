@@ -206,7 +206,7 @@ describe('fit hints: what items need and what agents have', () => {
     for (const tag of ['operator', 'claude-cli', 'infra', 'github-admin', 'browser']) {
       assert.match(tools().find((t) => t.name === 'checkin').inputSchema.properties.has.description, new RegExp(tag));
     }
-    assert.match(ops, /to: "operator"/);
+    assert.match(ops, /An operator answers, unless only a person can: then pass `only_person`/);
     const readme = readFileSync(new URL('../docs/USAGE.md', import.meta.url), 'utf8'); // the README's usage, since #808
     assert.match(readme, /### Operators/);
     assert.match(readme, /\n\/nuworq:operator\n```\nCapabilities are optional/);

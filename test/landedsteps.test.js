@@ -36,11 +36,11 @@ function setup(file) {
 describe('the agent that asked steps on work that landed hears it', () => {
   test('the operator asked the human three steps; the hub lands the item: its listener wakes, next carries the notice, and it settles each', () => {
     const { hub, tick, land, qs, item } = setup();
-    const ask = (question, what) => hub.agentOp('p', 'ask', 'op', { item: '#1', question, steps: STEPS(what), to: 'human', assumption: 'done before the release' }).question;
+    const ask = (question, what) => hub.agentOp('p', 'ask', 'op', { item: '#1', question, steps: STEPS(what), to: 'human', only_person: 'physical', assumption: 'done before the release' }).question;
     const ff = ask('Can you fast-forward main to the release commit?', 'git push origin <sha>:main');
     const loop = ask('Can you stop the runner loop on the build machine?', 'nuworq down');
     const tags = ask('Can you create the release tags?', 'git tag vX.Y.Z && git push origin vX.Y.Z');
-    const plain = hub.agentOp('p', 'ask', 'op', { item: '#1', question: 'Changelog first?', assumption: 'yes' }).question;
+    const plain = hub.agentOp('p', 'ask', 'op', { item: '#1', question: 'Changelog first?', assumption: 'yes', only_person: 'call' }).question;
     tick(1000);
     const since = hub.now();
     tick(1000);
@@ -89,7 +89,7 @@ describe('the agent that asked steps on work that landed hears it', () => {
   test('each asker gets one notice naming only its own questions, its escalation included', () => {
     const { hub, land, notices } = setup();
     const mine = hub.agentOp('p', 'ask', 'w1', { item: '#1', question: 'Can you grant the app Actions: Read?', steps: STEPS('grant it'), to: 'operator' }).question;
-    const up = hub.agentOp('p', 'ask', 'op', { escalates: mine, question: 'May I grant the app Actions: Read?', options: ['yes', 'no'], evidence: ['checked its permissions'] }).question;
+    const up = hub.agentOp('p', 'ask', 'op', { escalates: mine, only_person: 'sign-in', question: 'May I grant the app Actions: Read?', options: ['yes', 'no'], evidence: ['checked its permissions'] }).question;
     land(1);
     assert.deepEqual(notices().map((n) => n.target), ['w1', 'op']);
     assert.match(notices()[0].body, new RegExp(`your question ${mine} on it`));

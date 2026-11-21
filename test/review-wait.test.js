@@ -51,7 +51,7 @@ describe('reviews waiting on a question (#259)', () => {
     const first = agent('r0');
     first('checkin');
     first('next');
-    const asked = first('ask', { item: '#1', to: 'human', question: 'Is 22 still the floor?', assumption: 'Yes' });
+    const asked = first('ask', { only_person: 'call', item: '#1', to: 'human', question: 'Is 22 still the floor?', assumption: 'Yes' });
     first('handoff', { item: '#1', headline: 'Waiting on Remy' });
     const op = agent('op');
     op('checkin', { has: ['operator'] });
@@ -62,7 +62,7 @@ describe('reviews waiting on a question (#259)', () => {
 
   test("the builder's own open question doesn't hold up review", () => {
     const { hub, agent } = setup();
-    hub.agentOp('demo', 'ask', 'builder', { item: '#1', question: 'Raise the floor?', assumption: 'No' });
+    hub.agentOp('demo', 'ask', 'builder', { only_person: 'call', item: '#1', question: 'Raise the floor?', assumption: 'No' });
     const r = agent('r1');
     r('checkin');
     assert.equal(r('next', { claim: false }).item, '#1');

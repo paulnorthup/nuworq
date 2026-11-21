@@ -15,7 +15,7 @@ function setup() {
 const acts = (v) => v.attention.filter((a) => a.level === 'act');
 const ask = (hub, slug, agent, item, question) => {
   hub.agentOp(slug, 'claim', agent, { item });
-  hub.agentOp(slug, 'ask', agent, { item, question, blocking: true });
+  hub.agentOp(slug, 'ask', agent, { only_person: 'call', item, question, blocking: true });
 };
 
 describe('each Needs you card carries the priority of the work it holds up', () => {
@@ -56,25 +56,25 @@ describe('each Needs you card carries the priority of the work it holds up', () 
     const { hub, advance } = setup();
     hub.humanOp('x', 'create', { title: 'Urgent', acceptance: 'x', priority: 'now' }); // #1
     hub.humanOp('x', 'create', { title: 'Later', acceptance: 'x', priority: 'later' }); // #2
-    hub.agentOp('x', 'ask', 'a0', { question: 'Can you open port 22?', assumption: 'I test locally', to: 'operator' }); // no operator here: a card for the person
+    hub.agentOp('x', 'ask', 'a0', { question: 'Can you open port 22?', assumption: 'I test locally', to: 'operator' }); // no operator here: worth knowing
     advance(MIN);
     ask(hub, 'x', 'a2', '#2', 'Later?');
     ask(hub, 'x', 'a1', '#1', 'Urgent?');
     const cards = acts(view(hub, 'x'));
-    const missing = cards.find((c) => c.kind === 'operator-missing');
-    assert.ok(missing, cards.map((c) => c.kind).join());
-    assert.deepEqual([missing.priority, missing.priority_why], ['now', "now: it holds up all of x's work"]);
-    assert.deepEqual(cards.map((c) => c.headline.split(';')[0]), ['Urgent?', '1 question waits for an operator', 'Later?'],
-      'the parked question before the hub-wide card, though newer; both before later work');
+    // A question with an assumption waits on nobody: "no operator connected" is worth knowing, not a card.
+    assert.ok(!cards.some((c) => c.kind === 'operator-missing'), cards.map((c) => c.kind).join());
+    const missing = view(hub, 'x').attention.find((c) => c.kind === 'operator-missing');
+    assert.equal(missing.level, 'know');
+    assert.deepEqual(cards.map((c) => c.headline.split(';')[0]), ['Urgent?', 'Later?'], 'the parked question first, though newer');
   });
 
   test('a question about no item takes the highest priority of the items it names, else soon', () => {
     const { hub, advance } = setup();
     hub.humanOp('x', 'create', { title: 'A', acceptance: 'x', priority: 'later' }); // #1
     hub.humanOp('x', 'create', { title: 'B', acceptance: 'x', priority: 'now' }); // #2
-    hub.agentOp('x', 'ask', 'a', { question: 'Drop #1 and #2?', blocking: true });
+    hub.agentOp('x', 'ask', 'a', { only_person: 'call', question: 'Drop #1 and #2?', blocking: true });
     advance(MIN);
-    hub.agentOp('x', 'ask', 'b', { question: 'Rename the project?', blocking: true });
+    hub.agentOp('x', 'ask', 'b', { only_person: 'call', question: 'Rename the project?', blocking: true });
     const cards = acts(view(hub, 'x')).filter((c) => c.kind === 'question');
     assert.deepEqual(cards.map((c) => [c.headline, c.priority, c.priority_why]), [
       ['Drop #1 and #2?', 'now', "now: #2's own priority"],
@@ -117,7 +117,7 @@ describe('each Needs you card carries the priority of the work it holds up', () 
     hub.humanOp('x', 'create', { title: 'C', acceptance: 'x', priority: 'now' }); // #3
     const line = () => view(hub, 'x').pulse.sentence.split(/(?<=\.) /)[0];
     hub.agentOp('x', 'claim', 'a2', { item: '#2' });
-    const { question } = hub.agentOp('x', 'ask', 'a2', { item: '#2', question: 'B?', blocking: true });
+    const { question } = hub.agentOp('x', 'ask', 'a2', { only_person: 'call', item: '#2', question: 'B?', blocking: true });
     assert.equal(line(), '1 thing needs you.', 'nothing now: no count');
     ask(hub, 'x', 'a1', '#1', 'A?');
     assert.equal(line(), '2 things need you, 1 now.');
@@ -139,9 +139,9 @@ describe('each Needs you card carries the priority of the work it holds up', () 
     const { hub, advance } = setup();
     hub.humanOp('x', 'create', { title: 'Later', acceptance: 'x', priority: 'later' });
     hub.humanOp('x', 'create', { title: 'Now', acceptance: 'x', priority: 'now' });
-    hub.agentOp('x', 'ask', 'a', { item: '#1', question: 'Q1', assumption: 'yes' });
+    hub.agentOp('x', 'ask', 'a', { only_person: 'call', item: '#1', question: 'Q1', assumption: 'yes' });
     advance(MIN);
-    hub.agentOp('x', 'ask', 'b', { item: '#2', question: 'Q2', assumption: 'yes' });
+    hub.agentOp('x', 'ask', 'b', { only_person: 'call', item: '#2', question: 'Q2', assumption: 'yes' });
     const know = view(hub, 'x').attention.filter((a) => a.kind === 'assumption');
     assert.deepEqual(know.map((a) => a.headline), ['a assumed: yes', 'b assumed: yes']);
   });

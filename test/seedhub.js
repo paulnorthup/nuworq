@@ -52,7 +52,7 @@ export function seedHub({ items: total = 500, agents: crowd = 450, progress = 20
     }
     op('progress', agent, { item: ref, headline: `Started ${ref}`, touching: [`src/${s % 9}.js`] });
     for (let k = 0; k < progress; k++) op('progress', agent, { item: ref, headline: `Step ${k} on ${ref}` });
-    if (s % 23 === 0) op('ask', agent, { item: ref, question: `Which way for ${ref}?`, blocking: s % 2 === 0, assumption: s % 2 ? 'the simple one' : undefined });
+    if (s % 23 === 0) op('ask', agent, { item: ref, only_person: 'call', question: `Which way for ${ref}?`, blocking: s % 2 === 0, assumption: s % 2 ? 'the simple one' : undefined });
     if (s % 29 === 0) op('learn', agent, { note: `Field note ${s}: run npm test first`, item: ref });
     if (s % 31 === 0) op('comment', agent, { item: ref, body: `A comment on ${ref}` });
     if (s % 9 === 0) { op('handoff', agent, { item: ref, headline: `Handing off ${ref}` }); continue; }

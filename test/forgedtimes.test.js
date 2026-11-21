@@ -20,8 +20,8 @@ function world() {
   hub.agentOp('p', 'checkin', 'w1', {});
   hub.agentOp('p', 'next', 'w1', {});
   const asked = now;
-  hub.agentOp('p', 'ask', 'w1', { item: '#1', question: `Which \u00012\u00025m\u0003 way \u00000\u0000?`, blocking: true });
-  hub.agentOp('p', 'ask', 'w1', { item: '#1', question: `Tabs \u00013\u00024m\u0003?`, assumption: 'spaces' });
+  hub.agentOp('p', 'ask', 'w1', { only_person: 'call', item: '#1', question: `Which \u00012\u00025m\u0003 way \u00000\u0000?`, blocking: true });
+  hub.agentOp('p', 'ask', 'w1', { only_person: 'call', item: '#1', question: `Tabs \u00013\u00024m\u0003?`, assumption: 'spaces' });
   now += 2 * MIN;
   return { hub, asked, now };
 }
@@ -31,7 +31,7 @@ describe("a card's written text can't forge or break its times", () => {
     const { hub, asked } = world();
     const v = view(hub, 'p');
     const q = v.attention.find((a) => a.kind === 'question');
-    assert.equal(q.sub, 'Fix 19m and 9 now · w1 asked 2m ago · work is parked until you answer');
+    assert.equal(q.sub, 'Fix 19m and 9 now · w1 asked 2m ago · only a person: a product call · work is parked until you answer');
     assert.deepEqual(q.sub_at, [[asked, '2m']], 'only the real time');
     assert.match(q.headline, /^Which 25m way 0\?/);
     assert.equal(q.headline_at, undefined, 'a question holds no time');

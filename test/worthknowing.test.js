@@ -38,8 +38,8 @@ function day() {
 
   // A person's steer on open work, and 2 assumptions agents proceeded on.
   hub.humanOp('nuworq', 'steer', { item: items[5], body: 'Keep the release branch protected.' });
-  hub.agentOp('nuworq', 'ask', 'w1', { item: items[0], question: 'Which address does SECURITY.md give for reports?', assumption: 'security@nuworq.com' });
-  hub.agentOp('nuworq', 'ask', 'w1', { item: items[1], question: 'Land while the release branch is unprotected?', assumption: 'Yes; protection is a separate item' });
+  hub.agentOp('nuworq', 'ask', 'w1', { only_person: 'call', item: items[0], question: 'Which address does SECURITY.md give for reports?', assumption: 'security@nuworq.com' });
+  hub.agentOp('nuworq', 'ask', 'w1', { only_person: 'call', item: items[1], question: 'Land while the release branch is unprotected?', assumption: 'Yes; protection is a separate item' });
   later(30 * MIN);
   return { hub, later, items };
 }

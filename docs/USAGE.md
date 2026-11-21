@@ -150,7 +150,7 @@ Everything agents write follows the same layers: a `headline` (one line), a `sum
 - **Push**: when something new needs you, the hub sends one message to your phone or chat. Otherwise it stays silent (see below).
 
 ### Getting pinged (ntfy, Slack, or any webhook)
-The 30-second view only helps if you look. Add a channel and the hub pushes to it when a new *act*-level entry appears in a project that isn't parked: a blocking question, work to verify, "What matters most?". The first new entry opens a 2-minute window, so a burst arrives as one message with one line per entry and a link to the project. Each entry is pushed once. Entries you dismiss or resolve inside the window are dropped. Progress, claims and *know*-level entries send nothing.
+The 30-second view only helps if you look. Add a channel and the hub pushes to it when a new *act*-level entry for a person appears in a project that isn't parked: a question only a person can settle, work to verify, "What matters most?". What an operator settles first never pushes. The first new entry opens a 2-minute window, so a burst arrives as one message with one line per entry and a link to the project. Each entry is pushed once. Entries you dismiss or resolve inside the window are dropped. Progress, claims and *know*-level entries send nothing.
 
 Once a week, each channel also gets one line per unparked project where anything happened, e.g. `app: 23 landed, 31 of your actions, $38, 1 escape → <link>`. The numbers match `GET /api/p/<project>/outcomes` for that week. A quiet week sends nothing. Turn it off per channel under **Notifications** (or `POST /api/notify/weekly {id, weekly: false}`).
 ```
@@ -173,11 +173,18 @@ You can also set channels up in the UI, under **Notifications** in the left rail
 
 The MCP server delivers the agent guide as its instructions, so an agent knows the protocol without being told. Read it with `nuworq guide`, or at `/agents.md`.
 
-### Operators (so "Needs you" is only decisions)
+### Operators (so "Needs you" is only what needs you)
 Much of what used to reach you needed a capable session, not a decision: running `claude`, the project's live infrastructure, GitHub admin, a real browser. An **operator** does that: a Claude Code session you keep open in the project folder, acting with your access and safety checks.
+
+Only a person can sign in as themselves (accounts, credentials, keys, passkeys), spend money, be there in person, or make a product or priority call no decision covers. Everything else goes to an operator first:
+- A question goes to an operator unless its asker says which of those it is (`only_person`: `sign-in`, `money`, `physical` or `call`); the card says why. The operator answers it, withdraws it, or escalates it with the reason.
+- Work the hub parks after 3 hand-backs goes to the operator, whose answer hands it back to agents.
+- While an operator is here, "no agent working" is its to fix (a runner out of budget is still yours).
+- Reviews and proposals stay yours: the autonomy dial is your standing answer to who accepts work and approves what gets built. Under *Run with it*, agents review.
+- With no operator seen for a day, its cards come to you, since nobody else can.
 - It checks in with `has: ["operator", …]` plus the capabilities it really has: `claude-cli`, `infra`, `github-admin`, `browser`. `infra` is the live infrastructure of the project the session checked in to: servers and VMs, DNS, cloud accounts and deploys. Items whose `needs` include `operator`, `claude-cli`, `infra` or `github-admin` are never offered to workers. (`nuworq-infra` and `homelab-vm`, the old names, are still accepted and stored as `infra`.)
-- Agents ask questions about running things, permissions or verifying on real infrastructure with `to: "operator"`; the operator answers them instead of you.
-- It escalates to you only when its own safety check needs your approval (risky or irreversible actions, product judgment): one precise question, with the evidence attached.
+- Agents' questions go to it, not you, unless only a person can settle them; it answers them instead of you. It may also answer or withdraw a question asked of you without a reason.
+- It escalates to you only what only you can do (an irreversible step or a product call counts): one precise question, with the reason and the evidence attached.
 - It keeps the board moving. When work an agent asked steps on lands, the asker hears so, with the question ids: an operator withdraws the ones that are moot and leaves the ones you still have to do. It can also withdraw another agent's moot question for it (never yours), so work whose asker is gone stops waiting.
 - When workers take the same job on one item 4 times in half an hour with nothing new to show, the hub stops giving it to workers and asks the operator why. Its answer, or a change to the item, lets workers take it again.
 - If work needs an operator capability and no operator connected in the last day, "Worth knowing" tells you to start one.

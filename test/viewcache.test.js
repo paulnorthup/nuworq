@@ -23,7 +23,7 @@ function setup() {
     hub.humanOp(slug, 'stewards', { set: [steward] });
     hub.humanOp(slug, 'create', { title: `Build ${slug}`, acceptance: 'x' });
     hub.agentOp(slug, 'claim', `bot-${slug}`, { item: '#1' });
-    hub.agentOp(slug, 'ask', `bot-${slug}`, { item: '#1', question: `Which way for ${slug}?`, blocking: true });
+    hub.agentOp(slug, 'ask', `bot-${slug}`, { item: '#1', question: `Which way for ${slug}?`, blocking: true, only_person: 'call' });
   }
   hub.cacheViews = true; // as the server runs it
   const built = (slug) => hub._views.get(hub.project(slug).id);

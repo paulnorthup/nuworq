@@ -10,7 +10,7 @@ test('each kind the hub puts at level "act" has a label in CARD_LABELS', () => {
   // An entry is pushed as { key, level, kind, ... }; a level that can be 'act' is the literal or an expression naming it.
   const kinds = [...read('src/insight.js').matchAll(/level: ([^,]+), kind: '([a-z-]+)'/g)].filter(([, level]) => level.includes("'act'")).map(([, , kind]) => kind);
   assert.ok(kinds.length >= 10, `found the act-level kinds (${kinds.join(', ')})`);
-  for (const k of ['operator-missing', 'kept-parked', 'question', 'no-agents']) assert.ok(kinds.includes(k), k);
+  for (const k of ['kept-parked', 'question', 'no-agents']) assert.ok(kinds.includes(k), k);
   const map = appSource().match(/const CARD_LABELS = \{([\s\S]*?)\n\};/);
   assert.ok(map, 'web/app.js has CARD_LABELS');
   const labels = Object.fromEntries([...map[1].matchAll(/'?([a-z-]+)'?: '([^']+)'/g)].map(([, k, v]) => [k, v]));

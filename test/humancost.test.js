@@ -17,7 +17,7 @@ function fortnight() {
 
   // #1: a blocking question waits 2h for its answer (1), then waits 1h to be accepted (2).
   agent('next');
-  agent('ask', { item: '#1', question: 'Which database?', blocking: true });
+  agent('ask', { only_person: 'call', item: '#1', question: 'Which database?', blocking: true });
   tick(2 * HOUR);
   human('answer', { question: 1, answer: 'Postgres' });
   agent('next');
@@ -40,7 +40,7 @@ function fortnight() {
   human('comment', { item: '#3', body: 'Looks right' });
   human('decide', { body: 'Postgres everywhere' });
   agent('next');
-  agent('ask', { item: '#3', question: 'Tabs or spaces?', assumption: 'tabs' });
+  agent('ask', { only_person: 'call', item: '#3', question: 'Tabs or spaces?', assumption: 'tabs' });
   human('answer', { question: 2, answer: 'spaces' });
   // Agents' own comments and creating work aren't counted.
   agent('comment', { item: '#3', headline: 'noted' });
@@ -115,7 +115,7 @@ describe('how long what needed you waited (#175)', () => {
   test("a blocking question that parks nothing still waited for you: one with no item", () => {
     const { tick, cost, human, agent } = hubAt('full');
     agent('checkin', 'w1');
-    agent('ask', 'w1', { question: 'Which region do we deploy to?', blocking: true });
+    agent('ask', 'w1', { only_person: 'call', question: 'Which region do we deploy to?', blocking: true });
     tick(2 * HOUR);
     human('answer', { question: 1, answer: 'eu-west' });
     assert.deepEqual([cost().waits, cost().median_wait_ms], [1, 2 * HOUR]);
@@ -142,7 +142,7 @@ describe('how long what needed you waited (#175)', () => {
     agent('ask', 'w1', { item: '#1', question: 'May I drop the old table?', to: 'operator', blocking: true });
     agent('checkin', 'op', { has: ['operator'] });
     tick(3 * HOUR);
-    agent('ask', 'op', { escalates: 1, question: 'Drop the old orders table?', evidence: [{ label: 'dry run: 1 table dropped' }] });
+    agent('ask', 'op', { escalates: 1, only_person: 'call', question: 'Drop the old orders table?', evidence: [{ label: 'dry run: 1 table dropped' }] });
     tick(HOUR);
     human('answer', { question: 2, answer: 'yes' });
     const c = cost();

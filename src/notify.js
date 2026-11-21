@@ -1,5 +1,6 @@
 // Push: when something new needs the human, send one batched message over plain HTTP
-// (ntfy, a Slack incoming webhook, or any JSON webhook). Healthy work sends nothing.
+// (ntfy, a Slack incoming webhook, or any JSON webhook). Healthy work sends nothing, and neither does what an
+// operator settles first: every channel, a person's or the hub's, gets only entries for a person (forPerson).
 import { view, byNeed } from './insight.js';
 import { outcomes } from './outcomes.js';
 import { MIN, HOUR, DAY, SYSTEM, UserError } from './core.js';
@@ -12,7 +13,10 @@ export const KINDS = {
   slack: 'Slack incoming webhook URL, e.g. https://hooks.slack.com/services/…',
   webhook: 'any URL that accepts a JSON POST: { text, title, url, entries }',
 };
-const LABEL = { question: 'question', review: 'verify', proposal: 'approve', struggling: 'struggling', direction: 'pick what matters', 'no-agents': 'no agent working', 'group-stalled': 'stalled on a capability', 'budget-near': 'budget', 'run-spend': 'worker spend' };
+const LABEL = { question: 'question', review: 'verify', proposal: 'approve', struggling: 'struggling', 'kept-parked': 'parked', direction: 'pick what matters', 'no-agents': 'no agent working', 'group-stalled': 'stalled on a capability', 'budget-near': 'budget', 'run-spend': 'worker spend' };
+// A "needs you" entry a person must see: act-level and not an operator's to settle first (to: 'operator', which
+// people's views already leave out: insight.js).
+export const forPerson = (entry) => entry.level === 'act' && (entry.to ?? 'person') === 'person';
 const FORGET = HOUR; // an entry gone this long may be pushed again if it comes back (e.g. "What matters most?")
 // Spend alerts (#767) go once per day or worker run, gone or not: their keys name the day or the run, and are
 // remembered past both.
@@ -201,14 +205,14 @@ export class Notifier {
     }, this.debounce);
   }
 
-  // What needs the human right now, everywhere it's allowed to ask; only: just these projects (slugs).
+  // What needs a person right now, everywhere it's allowed to ask; only: just these projects (slugs).
   current(only = null) {
     const entries = new Map(), looked = [];
     for (const p of this.hub.projects()) {
       if (p.parked || (only && !only.has(p.slug))) continue;
       looked.push(p.id);
       for (const entry of view(this.hub, p.slug, { light: true }).attention) {
-        if (entry.level === 'act') entries.set(`${p.id}\t${entry.key}`, { project_id: p.id, project: p.slug, name: p.name, entry });
+        if (forPerson(entry)) entries.set(`${p.id}\t${entry.key}`, { project_id: p.id, project: p.slug, name: p.name, entry });
       }
     }
     return { entries, looked };

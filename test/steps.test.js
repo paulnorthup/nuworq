@@ -26,7 +26,7 @@ const ACT = 'Can you add the NPM_TOKEN secret in GitHub?';
 describe('steps on a question', () => {
   test('a question asking a person to act is refused without steps, with a hint showing the shape', () => {
     const { ask } = setup();
-    assert.throws(() => ask({ question: ACT, to: 'human' }), (e) => {
+    assert.throws(() => ask({ question: ACT, to: 'human', only_person: 'sign-in' }), (e) => {
       assert.match(e.message, /needs steps/);
       assert.match(e.hint, /"do": "Open the repository's Actions secrets", "where": "https:\/\/github\.com/);
       assert.match(e.hint, /"check":/);
@@ -36,7 +36,7 @@ describe('steps on a question', () => {
 
   test('with steps it is stored, in order, and Needs you and the item page carry them', () => {
     const { hub, ask, attention } = setup();
-    const r = ask({ question: ACT, to: 'human', steps: STEPS });
+    const r = ask({ question: ACT, to: 'human', only_person: 'sign-in', steps: STEPS });
     assert.equal(r.ok, true);
     const want = [STEPS[0], STEPS[1], { do: 'Tell me when it is there' }];
     assert.deepEqual(attention()[0].steps, want);
@@ -45,14 +45,15 @@ describe('steps on a question', () => {
 
   test('a decision, and questions to an operator or a reporter, need no steps', () => {
     const { ask, attention } = setup();
-    assert.equal(ask({ question: 'Should the export be CSV or JSON?', to: 'human' }).ok, true);
+    assert.equal(ask({ question: 'Should the export be CSV or JSON?', to: 'human', only_person: 'call' }).ok, true);
     assert.equal(ask({ question: 'Can you run `npm publish` with the real token?', to: 'operator' }).ok, true);
     assert.deepEqual(attention()[0].steps, []);
   });
 
-  test('left out, `to` still checks a question that goes to the human', () => {
+  test('left out, `to` still checks a question that goes to a person; one that goes to an operator needs none', () => {
     const { ask } = setup();
-    assert.throws(() => ask({ question: 'Please invite agent-bot to the workspace' }), /needs steps/);
+    assert.throws(() => ask({ question: 'Please invite agent-bot to the workspace', only_person: 'sign-in' }), /needs steps/);
+    assert.equal(ask({ question: 'Please invite agent-bot to the workspace' }).to, 'operator');
   });
 
   test('malformed steps are refused with a hint', () => {
@@ -66,7 +67,7 @@ describe('steps on a question', () => {
     const { hub, ask, attention } = setup();
     const q = ask({ question: 'Can the npm token be created?', to: 'operator' }).question;
     hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
-    const escalate = (args) => hub.agentOp('o', 'ask', 'op', { escalates: q, question: 'Could you create an npm automation token?', evidence: ['no token in the keychain'], ...args });
+    const escalate = (args) => hub.agentOp('o', 'ask', 'op', { escalates: q, only_person: 'sign-in', question: 'Could you create an npm automation token?', evidence: ['no token in the keychain'], ...args });
     assert.throws(() => escalate(), /needs steps/);
     assert.equal(escalate({ steps: [{ do: 'Create an Automation token', where: 'https://www.npmjs.com/settings/~/tokens' }] }).ok, true);
     assert.deepEqual(attention().find((a) => a.escalation).steps, [{ do: 'Create an Automation token', where: 'https://www.npmjs.com/settings/~/tokens' }]);

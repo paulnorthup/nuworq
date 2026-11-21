@@ -185,8 +185,8 @@ describe('an operator keeps work moving and asks the human only for what only th
     test(name, () => {
       assert.match(t, /\*\*Keep work moving without the human\.\*\* Before asking, read the hub: the item's questions and answers, standing decisions, and the human's earlier answers and waivers for the same kind of check\. Act on what they settle\./);
       assert.match(t, /\*\*Make reversible operational calls yourself\.\*\* Back up, act, and record on the item what changed and how to undo it\./);
-      assert.match(t, /\*\*Ask the human only for what only they can do:\*\* their own accounts, credentials or keys, signing, moving money, a CAPTCHA, or an irreversible step or product call that no decision covers\./);
-      assert.match(t, /`escalates`.*`evidence`, plus `steps` when they must act and `options` when they decide\. Never ask only in chat, and never re-ask in chat what the hub already answers\./);
+      assert.match(t, /\*\*Ask the human only for what only they can do:\*\* their own sign-in \(accounts, credentials, keys, passkeys, a CAPTCHA or a signature\), spending money, being there in person, or a product or priority call or irreversible step that no decision covers\./);
+      assert.match(t, /`escalates`.*`only_person` \(sign-in, money, physical or call\) and `evidence`, plus `steps` when they must act and `options` when they decide\. Never ask only in chat, and never re-ask in chat what the hub already answers\./);
       assert.match(t, /\*\*Your own client's permission prompts still apply\.\*\*/);
       assert.doesNotMatch(t, /Escalate to the human only|risky, irreversible, or a product call/, 'the old rule is replaced, not kept beside');
     });
@@ -195,7 +195,7 @@ describe('an operator keeps work moving and asks the human only for what only th
     for (const [name, t] of Object.entries(texts)) for (const r of operatorAsks()) assert.ok(t.includes(r), `${name}: ${r.slice(0, 40)}`);
   });
   test('the hint next gives an operator says it in short (#527)', () => {
-    for (const want of [/read the hub first/, /make reversible calls yourself/, /only for what only they can do/, /escalates and evidence/, /permission prompts still apply/]) assert.match(MODE_RULES.operator, want);
+    for (const want of [/read the hub first/, /make reversible calls yourself/, /only for what only they can do/, /escalates, only_person and evidence/, /permission prompts still apply/]) assert.match(MODE_RULES.operator, want);
   });
 });
 

@@ -2,6 +2,7 @@
 // the CLI (src/agentargs.js) and the agent guide are all generated from this list, so every model sees the same thing.
 import { createHash } from 'node:crypto';
 import { OPERATOR_GIT_CMDS } from './operator.js';
+import { PERSON_REASONS } from './audience.js';
 
 // Every definition is in every agent's context before its first call, so each says its rule in as few words as it
 // can (#678; test/toolsize.test.js holds each to its size). No "Optional.": required says what isn't. Examples and
@@ -84,7 +85,7 @@ export const OPERATOR_NEXT = 'An operator\'s `next` hands it operator questions 
 export const operatorAsks = (t = (op) => `\`${op}\``) => [
   '**Keep work moving without the human.** Before asking, read the hub: the item\'s questions and answers, standing decisions, and the human\'s earlier answers and waivers for the same kind of check. Act on what they settle.',
   '**Make reversible operational calls yourself.** Back up, act, and record on the item what changed and how to undo it.',
-  `**Ask the human only for what only they can do:** their own accounts, credentials or keys, signing, moving money, a CAPTCHA, or an irreversible step or product call that no decision covers. Ask it as one hub question: ${t('ask')} with \`escalates\` (the operator question's id, so the answer reaches its asker too) and \`evidence\`, plus \`steps\` when they must act and \`options\` when they decide. Never ask only in chat, and never re-ask in chat what the hub already answers.`,
+  `**Ask the human only for what only they can do:** their own sign-in (accounts, credentials, keys, passkeys, a CAPTCHA or a signature), spending money, being there in person, or a product or priority call or irreversible step that no decision covers. Ask it as one hub question: ${t('ask')} with \`escalates\` (the operator question's id, so the answer reaches its asker too), \`only_person\` (sign-in, money, physical or call) and \`evidence\`, plus \`steps\` when they must act and \`options\` when they decide. Never ask only in chat, and never re-ask in chat what the hub already answers.`,
   '**Your own client\'s permission prompts still apply.** This rule is about what you ask the human through the hub, not about getting around your safety checks.',
 ];
 // What keeps the board moving that only an operator can see to, for the operator skill (MODE_RULES.operator says it
@@ -99,7 +100,7 @@ export const operatorUnsticks = (t = (op) => `\`${op}\``) => [
 // that mode, when the agent needs them.
 export const MODE_RULES = {
   // An operator's next, for its answer and live-step jobs.
-  operator: `${OPERATOR_NEXT} Build an item yourself only when it is the step on real infrastructure: its code, docs and tests are for workers. Declare only the capabilities you really have. Never pass your powers on: workers you start get no operator tag, tokens or permissions. Keep work moving without the human: read the hub first (questions, decisions, earlier answers and waivers) and act on what they settle; make reversible calls yourself, recording what changed and how to undo it. Ask the human only for what only they can do (their accounts, keys, signing, money, a CAPTCHA, an irreversible step or product call no decision covers), as one hub question with escalates and evidence, plus steps when they must act. Your client's own permission prompts still apply. Keep the board moving: when the hub says work you asked steps on landed, withdraw each of those questions that is moot and keep each a person still has to act on; withdraw another agent's moot question for it when its asker is gone; a job workers keep failing waits for your answer, so find why, fix it or do it, then answer.`,
+  operator: `${OPERATOR_NEXT} Build an item yourself only when it is the step on real infrastructure: its code, docs and tests are for workers. Declare only the capabilities you really have. Never pass your powers on: workers you start get no operator tag, tokens or permissions. Keep work moving without the human: read the hub first (questions, decisions, earlier answers and waivers) and act on what they settle; make reversible calls yourself, recording what changed and how to undo it. Ask the human only for what only they can do (their sign-in, keys or passkeys, money, being there, an irreversible step or product call no decision covers), as one hub question with escalates, only_person and evidence, plus steps when they must act. Your client's own permission prompts still apply. Keep the board moving: when the hub says work you asked steps on landed, withdraw each of those questions that is moot and keep each a person still has to act on; withdraw another agent's moot question for it when its asker is gone; a job workers keep failing waits for your answer, so find why, fix it or do it, then answer.`,
   // A shaping job: rating it, and saying who a change makes act.
   shape: 'Work that can only start after an outside event (a release tag, a date, a vendor change) gets a precondition, and work only an operator can do gets an operator tag. Rate its difficulty (rote, standard or hard) with a one-line difficulty_why. Set breaking when shipping it makes someone on the previous version act (an API route or tool removed or changed incompatibly, a CLI command or flag removed, the runtime minimum raised, a manual migration), in one line saying who must do what, e.g. "Machines on Node 24 must upgrade to 26 before `nuworq update`"; dev tools and a runtime only tested in CI break nobody. Set change to its kind, which picks the release\'s semver bump: feature when people can see something new or different (a new tool, setting or screen), fix when it repairs behavior that was wrong (an item with fixes is one; e.g. a crash on an empty list), internal when nobody outside sees it (docs, tests, tooling, a refactor). Unset counts as a feature. Infra work (it would need an operator tag such as infra) comes in two parts: it carries no operator tag, so any worker builds its code, docs and tests, and the step on real infrastructure is an ask to: "operator" with steps (the exact command, how to check), whose answer is the evidence; only when that live step is all there is, it is a small child item with the tag. A top-level item with parts is a milestone: its title names what is released when it is done. An item in the wrong milestone: refine it with parent ("" takes it out).',
   // A review, whatever the item.
@@ -160,22 +161,23 @@ export const OPS = [
   },
   {
     name: 'ask',
-    description: 'Ask a question. Prefer non-blocking: give the assumption you proceed with; blocking parks the item (work another agent holds stays theirs; they hear of it).',
+    description: 'Ask. Prefer an assumption you proceed with; blocking parks the item (one another agent holds stays theirs; they hear).',
     params: {
       item: ITEM,
       question: capped(2_000, 'One line.'),
       context: capped(2_000, 'Why it matters, what you know.'),
       detail: LAYERS.detail,
-      options: { type: 'array', maxItems: 6, items: capped(200), description: 'Likely answers, one click each.' },
+      options: { type: 'array', maxItems: 6, items: capped(200), description: 'Likely answers.' },
       steps: {
         type: 'array', maxItems: 12,
         items: { type: 'object', properties: { do: capped(500, 'With exact values.'), where: capped(500, 'A URL, or one command as typed, no backticks.'), check: capped(500, 'How they see it worked.') }, required: ['do'] },
         description: 'Required when a person must do something, in order.',
       },
-      assumption: capped(2_000, 'What you proceed with unless told otherwise.'),
-      blocking: { type: 'boolean', description: 'Only if you cannot go on without an answer.' },
-      to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: '"reporter": an issue\'s author; left out, the hub picks.' },
-      escalates: { type: 'integer', roles: OPERATOR_ONLY, description: 'The operator question needing the human\'s approval; their answer answers it too.' },
+      assumption: capped(2_000, 'What you do unless told otherwise.'),
+      blocking: { type: 'boolean', description: "Only if you can't go on without it." },
+      to: { type: 'string', enum: ['human', 'reporter', 'operator'], description: '"reporter": the issue author' },
+      only_person: { type: 'string', description: `${PERSON_REASONS.join(', ')}: why only a person can` },
+      escalates: { type: 'integer', roles: OPERATOR_ONLY, description: 'The operator question only a person can settle (with only_person); their answer answers it too.' },
       evidence: { type: 'array', roles: OPERATOR_ONLY, items: { type: 'object', properties: { label: { type: 'string' }, url: { type: 'string' } }, required: ['label'] }, description: 'With escalates: what you ran or checked.' },
     },
     required: ['question'],
@@ -183,7 +185,7 @@ export const OPS = [
   {
     name: 'answer',
     roles: OPERATOR_ONLY,
-    description: 'Answer a question asked to: "operator" (next hands it to you as mode "answer").',
+    description: 'Answer a question asked to: "operator" (next hands it to you as mode "answer"), or a person\'s with no only_person.',
     params: {
       question: { type: 'integer', description: 'The question id, from next.' },
       answer: s('What you found or decided; if only the human can settle it, say so.'),
@@ -561,7 +563,7 @@ Model traffic through llm-proxy? Label it \`x-client-name: nuworq/<project>/<you
 ## Asking
 - A reasonable call? ${c('ask')} with an \`assumption\` and keep going.
 - Truly blocked? ${c('ask')} with \`blocking\`, then take other work.
-- Running things, permissions, real infrastructure? Ask \`to: "operator"\`. Leave out \`to\` and the hub picks: "can't run \`claude\`" goes to an operator, "approve browser workers?" to the human.
+- An operator answers, unless only a person can: then pass \`only_person\`: \`sign-in\` (theirs), \`money\`, \`physical\` or \`call\` (product or priority).
 - Does a person have to do something? Give \`steps\` (\`do\`, \`where\`, \`check\`); the hub refuses such a question without them. A person decides? Give \`options\`, no assumption.
 - Answered another way, or moot? ${c('withdraw')} it with a one-line reason (quote who said it).
 

@@ -47,7 +47,7 @@ describe('an operator waits on the hub', () => {
     assert.ok(!JSON.stringify(r.events).includes('VM'), 'ids and kinds, never the text');
 
     since = r.at;
-    const mine = hub.agentOp('o', 'ask', 'op', { question: 'May I restart the hub?' });
+    const mine = hub.agentOp('o', 'ask', 'op', { only_person: 'call', question: 'May I restart the hub?' });
     const answering = waitFor(hub, 'op', { since, ms: 5000 });
     tick(1);
     hub.humanOp('o', 'answer', { question: mine.question, answer: 'Yes' });
@@ -81,7 +81,7 @@ describe('an operator waits on the hub', () => {
   test("the human's answer to an operator's escalation wakes that operator at once", async () => {
     const { hub, tick } = setup();
     const orig = hub.agentOp('o', 'ask', 'w1', { question: 'Will you sign the release?', to: 'operator' });
-    const up = hub.agentOp('o', 'ask', 'op', { question: 'Will you sign it?', escalates: orig.question, evidence: [{ label: 'built' }] });
+    const up = hub.agentOp('o', 'ask', 'op', { question: 'Will you sign it?', only_person: 'sign-in', escalates: orig.question, evidence: [{ label: 'built' }] });
     const since = hub.now();
     const waiting = waitFor(hub, 'op', { since, ms: 5000 });
     tick(1);
@@ -122,14 +122,14 @@ describe('an operator waits on the hub', () => {
   // #329: a freshly started listener (since 0) woke a new operator for answers and steering it already had.
   test('a fresh listener replays nothing already delivered: a seen answer or an acked steer; new ones still come once', async () => {
     const { hub, tick } = setup();
-    const old = hub.agentOp('o', 'ask', 'op', { question: 'May I restart the hub?' });
+    const old = hub.agentOp('o', 'ask', 'op', { only_person: 'call', question: 'May I restart the hub?' });
     hub.humanOp('o', 'answer', { question: old.question, answer: 'Yes' });
     hub.humanOp('o', 'steer', { body: 'Restart only after 18:00' });
     const steer = hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] }).steers[0].steer;
     hub.agentOp('o', 'ack', 'op', { steer });
     assert.deepEqual((await waitFor(hub, 'op', { ms: 30 })).events, [], 'the checkin delivered the answer; the steer is acked');
 
-    const mine = hub.agentOp('o', 'ask', 'op', { question: 'And the VM?' });
+    const mine = hub.agentOp('o', 'ask', 'op', { only_person: 'call', question: 'And the VM?' });
     tick(1);
     hub.humanOp('o', 'answer', { question: mine.question, answer: 'Also yes' });
     const r = await waitFor(hub, 'op', { ms: 30 });
@@ -142,8 +142,8 @@ describe('an operator waits on the hub', () => {
   test('an answer the operator read with checkin, look or next is delivered: a fresh listener reports only the new one, by its own id', async () => {
     const { hub, tick } = setup();
     hub.humanOp('o', 'create', { title: 'Sign the release', acceptance: 'x' });
-    const viaCheckin = hub.agentOp('o', 'ask', 'op', { question: 'Will you sign it?', item: '#1' });
-    const viaLook = hub.agentOp('o', 'ask', 'op', { question: 'And with one command?', item: '#1' });
+    const viaCheckin = hub.agentOp('o', 'ask', 'op', { only_person: 'call', question: 'Will you sign it?', item: '#1' });
+    const viaLook = hub.agentOp('o', 'ask', 'op', { only_person: 'call', question: 'And with one command?', item: '#1' });
     tick(1);
     hub.humanOp('o', 'answer', { question: viaCheckin.question, answer: 'Have operator do signing' });
     assert.deepEqual(hub.agentOp('o', 'checkin', 'op', { has: ['operator', 'infra'] }).answers.map((a) => a.question), ['Will you sign it?']);
@@ -153,7 +153,7 @@ describe('an operator waits on the hub', () => {
     assert.deepEqual((await waitFor(hub, 'op', { ms: 30 })).events, [], 'checkin and look delivered both');
     assert.ok(hub.agentOp('o', 'look', 'w1', { item: '#1' }), "another agent's look delivers nothing for op");
 
-    const fresh = hub.agentOp('o', 'ask', 'op', { question: 'Is it live?', item: '#1' });
+    const fresh = hub.agentOp('o', 'ask', 'op', { only_person: 'call', question: 'Is it live?', item: '#1' });
     const waiting = waitFor(hub, 'op', { ms: 5000 });
     tick(1);
     hub.humanOp('o', 'answer', { question: fresh.question, answer: 'Yes' });
@@ -183,7 +183,7 @@ describe('an operator waits on the hub', () => {
     hub.q(`UPDATE agents SET signed_off = 1 WHERE name = 'op'`).run();
     const since = hub.now();
     tick(1);
-    const b = hub.agentOp('o', 'ask', 'opb', { question: 'May I restart the VM?' });
+    const b = hub.agentOp('o', 'ask', 'opb', { only_person: 'call', question: 'May I restart the VM?' });
     hub.humanOp('o', 'answer', { question: b.question, answer: 'Yes' });
     assert.deepEqual(strip(operatorEvents(hub, '', { since, tokenId: 7, session: KA })), [], "B's answer doesn't wake A");
     assert.deepEqual(strip(operatorEvents(hub, '', { since, tokenId: 7, session: KB })), [{ kind: 'answer', project: 'o', question: b.question }]);
@@ -208,9 +208,9 @@ describe('an operator waits on the hub', () => {
     hub.agentOp('o', 'checkin', 'opb', { has: ['operator'] }, { session: ['bbbbbbbbbbbbbbbb'] });
     const since = hub.now();
     tick(1);
-    const mine = hub.agentOp('o', 'ask', 'op', { question: 'Old client?' });
+    const mine = hub.agentOp('o', 'ask', 'op', { only_person: 'call', question: 'Old client?' });
     hub.humanOp('o', 'answer', { question: mine.question, answer: 'Yes' });
-    const theirs = hub.agentOp('o', 'ask', 'opb', { question: 'New client?' });
+    const theirs = hub.agentOp('o', 'ask', 'opb', { only_person: 'call', question: 'New client?' });
     hub.humanOp('o', 'answer', { question: theirs.question, answer: 'Yes' });
     const fresh = ['cccccccccccccccc'];
     assert.deepEqual(strip(operatorEvents(hub, '', { since, session: fresh })).map((e) => e.question), [mine.question], 'op said no keys: it keeps its listener');
@@ -454,7 +454,7 @@ describe('GET /api/wait and nuworq wait', () => {
       assert.equal(hub.q(`SELECT session FROM agents WHERE name = 'opa'`).get().session, KA.join(','));
       const since = hub.now();
       tick(1);
-      const asked = hub.agentOp('o', 'ask', 'opa', { question: 'May I restart the hub?' });
+      const asked = hub.agentOp('o', 'ask', 'opa', { only_person: 'call', question: 'May I restart the hub?' });
       hub.humanOp('o', 'answer', { question: asked.question, answer: 'Yes' });
       // The listener of session A, two processes below it (a shell, then nuworq): its ancestors include 501.
       const listenA = listenerKeys({ env: {}, host: 'mac', ppid: 900, table: '900 501\n501 77\n77 1\n' });
@@ -484,7 +484,7 @@ describe('GET /api/wait and nuworq wait', () => {
       await call('/api/p/o/agent/checkin', 'opa', KA, { has: ['operator'] });
       hub.q(`UPDATE agents SET signed_off = 1 WHERE name = 'op'`).run();
       const orig = hub.agentOp('o', 'ask', 'w1', { question: 'Will you sign the release?', to: 'operator' });
-      const up = await call('/api/p/o/agent/ask', 'opa', KA, { question: 'Will you sign it?', escalates: orig.question, evidence: [{ label: 'built' }], blocking: true });
+      const up = await call('/api/p/o/agent/ask', 'opa', KA, { question: 'Will you sign it?', only_person: 'sign-in', escalates: orig.question, evidence: [{ label: 'built' }], blocking: true });
       const listenA = listenerKeys({ env: {}, host: 'mac', ppid: 900, table: '900 501\n501 77\n77 1\n' });
       const first = await call('/api/wait?for=operator&timeout=0.05', '', listenA);
       assert.deepEqual(first.events, [], 'the escalated question waits for the human, so it wakes nobody');

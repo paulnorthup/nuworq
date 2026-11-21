@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Hub, DAY, HOUR } from '../src/core.js';
 import { view, homeView } from '../src/insight.js';
 import { tools, guide } from '../src/protocol.js';
-import { defaultAudience } from '../src/audience.js';
+import { PERSON_REASONS } from '../src/audience.js';
 import { guidePage } from '../src/userguide.js';
 import { appSource } from './appsource.js';
 
@@ -49,7 +49,7 @@ describe('questions to an operator', () => {
     assert.equal(home.projects.find((p) => p.slug === 'o').needs, 0);
     // A question to the human still comes to the human.
     hub.agentOp('o', 'claim', 'w2', { item: '#2' });
-    hub.agentOp('o', 'ask', 'w2', { item: '#2', question: 'Which region?', blocking: true });
+    hub.agentOp('o', 'ask', 'w2', { item: '#2', question: 'Which region?', blocking: true, only_person: 'call' });
     assert.deepEqual(view(hub, 'o').attention.filter((a) => a.kind === 'question').map((a) => a.headline), ['Which region?']);
   });
 
@@ -90,22 +90,28 @@ describe('questions to an operator', () => {
     assert.throws(() => hub.agentOp('o', 'answer', 'op', { question: q, answer: 'again' }), /already answered/);
   });
 
-  test('only operators answer, and only questions asked to an operator', () => {
+  test('only operators answer: questions to an operator, and a person\'s that give no reason only a person can', () => {
     const { hub, q } = setup();
     assert.throws(() => hub.agentOp('o', 'answer', 'w1', { question: q, answer: 'yes' }), (e) => e.status === 403 && /Only an operator/.test(e.message) && /has: \["operator"\]/.test(e.hint));
     hub.agentOp('o', 'claim', 'w2', { item: '#2' });
-    const human = hub.agentOp('o', 'ask', 'w2', { item: '#2', question: 'Which region?', blocking: true }).question;
+    const person = hub.agentOp('o', 'ask', 'w2', { item: '#2', question: 'Which region?', blocking: true, only_person: 'call' }).question;
     hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
-    assert.throws(() => hub.agentOp('o', 'answer', 'op', { question: human, answer: 'eu' }), (e) => e.status === 403 && /for the human/.test(e.message) && /to: "operator"/.test(e.hint));
-    assert.equal(hub.q('SELECT status FROM questions WHERE id = ?').get(human).status, 'open');
+    assert.throws(() => hub.agentOp('o', 'answer', 'op', { question: person, answer: 'eu' }), (e) => e.status === 403 && /only a person can \(call\)/.test(e.message) && /give no reason/.test(e.hint));
+    assert.equal(hub.q('SELECT status FROM questions WHERE id = ?').get(person).status, 'open');
+    // Asked of a person before only_person (audience ''), as on a hub upgraded with questions open: the operator settles it.
+    hub.q(`UPDATE questions SET audience = '' WHERE id = ?`).run(person);
+    assert.equal(hub.agentOp('o', 'answer', 'op', { question: person, answer: 'eu-west, as the decision on regions says' }).ok, true);
+    assert.equal(hub.q('SELECT status, answered_by FROM questions WHERE id = ?').get(person).answered_by, 'op');
+    assert.equal(hub.item(hub.project('o'), '#2').stage, 'ready');
   });
 
   test('with no operator seen in a day, the blocking one is a card of yours and the rest one line; an operator checking in clears both', () => {
     const { hub, acts, tick } = setup();
     hub.agentOp('o', 'ask', 'w1', { question: 'Can you grant the deploy key?', assumption: 'I will skip deploying', to: 'operator' });
     let lines = acts();
-    assert.deepEqual(lines.map((a) => a.kind).sort(), ['operator-missing', 'question']);
-    const line = lines.find((a) => a.kind === 'operator-missing');
+    assert.deepEqual(lines.map((a) => a.kind).sort(), ['question'], 'the one with an assumption waits on nobody: worth knowing, not Needs you');
+    const line = view(hub, 'o').attention.find((a) => a.kind === 'operator-missing');
+    assert.equal(line.level, 'know');
     assert.equal(line.headline, '1 question waits for an operator; none connected');
     // #797: plain words, and how to start one, nuworq up first.
     assert.match(line.why, /a Claude Code session someone keeps open, acting with their access/);
@@ -113,12 +119,14 @@ describe('questions to an operator', () => {
     const card = lines.find((a) => a.kind === 'question');
     for (const t of [line.why, card.why]) assert.doesNotMatch(t, /attended|says how/, t);
     assert.equal(line.guide, 'guide#operator', "the guide's Start an operator, not the agents' protocol");
-    assert.equal(homeView(hub).needs.length, 2);
+    assert.equal(homeView(hub).needs.length, 1);
 
     hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
     assert.equal(acts().length, 0);
+    assert.ok(!view(hub, 'o').attention.some((a) => a.kind === 'operator-missing'));
     tick(DAY + HOUR); // gone for over a day: both come back
-    assert.equal(acts().length, 2);
+    assert.equal(acts().length, 1);
+    assert.ok(view(hub, 'o').attention.some((a) => a.kind === 'operator-missing'));
     hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
     assert.equal(acts().length, 0);
   });
@@ -225,56 +233,70 @@ describe('questions to an operator', () => {
   });
 });
 
-// #138: left out, `to` is picked from what the question is about; the human when unsure.
-describe('the default audience when to is left out', () => {
-  const cases = [
-    // Real questions from the board (#97, #81, #20/#21, #46, #120 style).
-    ["Can't run `claude` without approval: can someone run the live checks?", '', 'operator'],
-    ["Agents can't write .claude/settings.json", 'Adding Bash(claude:*) needs approval in this session', 'operator'],
-    ['Can the migration be run on prod tonight?', 'I have no access to the server', 'operator'],
-    ['The VM for the Linux runner is down', 'DNS for runner.nuworq.com does not resolve', 'operator'],
-    ['Is the GitHub App installed on paulnorthup/nuworq?', 'The webhook gets 401s', 'operator'],
-    ['Need a token for the llm-proxy API', '', 'operator'],
-    ['Could someone verify the plugin install on a real Claude Code?', '', 'operator'],
-    ['Approve browser workers?', 'They would screenshot UI changes', 'human'],
-    ['Should #120 come before #118?', 'Both are soon; I can only take one', 'human'],
-    ['Which region should it deploy to?', '', 'human'],
-    ['Publish the landing page now?', '', 'human'],
-    ['OK to delete the old demo projects on the server?', '', 'human'],
-    ['Is a $20/month plan worth it?', '', 'human'],
-    ['Tabs or spaces?', '', 'human'],
-    ['What should the empty state say?', '', 'human'],
+// Needs you means you: a question goes to an operator first; a person only when the asker says why only a person
+// can (only_person). Superseded #138's guess from the words, which sent "OK to…", "which…" and "approve…" to a person.
+describe('who a question goes to', () => {
+  // Real questions the homelab hub pushed to its person on 2026-11-20, all of which an operator could settle.
+  const operators = [
+    'Please run one git push for the #93 audit branch',
+    'OK the ops-broker firewall, and run its deploy yourself over Tailscale SSH',
+    'For homelab-ui v2.7.0: tag it by hand, or let a release item land it so the hub pushes the tag itself?',
+    'Command A Plus gave 2 empty answers in the eval run. Does that count as meeting "no answer is cut off"?',
+    'OK to remove the MacBook\'s SSH key from the ops-broker VM?',
+    'Approve browser workers?',
+    'Should #120 come before #118?',
   ];
-  for (const [question, context, want] of cases) {
-    test(`${want}: ${question}`, () => {
-      const got = defaultAudience({ question, context });
-      assert.equal(got.audience, want);
-      assert.ok(got.reason.length > 0);
+  for (const question of operators) {
+    test(`an operator first: ${question}`, () => {
+      const { hub } = setup();
+      for (const to of [undefined, 'human']) {
+        const r = hub.agentOp('o', 'ask', 'w1', { question, assumption: 'wait', ...(to ? { to } : {}) });
+        assert.equal(r.to, 'operator', `to: ${to}`);
+        assert.equal(hub.q('SELECT audience FROM questions WHERE id = ?').get(r.question).audience, 'operator');
+        assert.match(r.routed, /^To an operator first: no only_person was given\. Only a person can sign in as themselves .*pass only_person \(sign-in, money, physical, call\)/);
+      }
     });
   }
 
-  test('ask without to stores the picked audience and says why; with to, exactly what was given', () => {
+  test('only_person sends it to a person, says why on the card, and to: "operator" still wins', () => {
     const { hub } = setup();
     const audience = (id) => hub.q('SELECT audience FROM questions WHERE id = ?').get(id).audience;
-    const op = hub.agentOp('o', 'ask', 'w1', { question: 'Can someone run `npm run e2e` against staging?', assumption: 'skip it' });
-    assert.equal(op.to, 'operator');
-    assert.equal(audience(op.question), 'operator');
-    assert.match(op.routed, /^To an operator: it is about a command\. Pass to: "human"/);
-    const human = hub.agentOp('o', 'ask', 'w1', { question: 'Should the home show archived projects?', assumption: 'no' });
-    assert.equal(human.to, 'human');
-    assert.equal(audience(human.question), '');
-    assert.match(human.routed, /^To the human: .*Pass to: "operator"/);
-    const kept = hub.agentOp('o', 'ask', 'w1', { question: 'Can someone run `npm run e2e` against staging?', assumption: 'skip it', to: 'human' });
-    assert.equal(kept.to, 'human');
-    assert.equal(audience(kept.question), '');
-    assert.equal(kept.routed, undefined, 'given to is never second-guessed');
-    const toOp = hub.agentOp('o', 'ask', 'w1', { question: 'Tabs or spaces?', assumption: 'spaces', to: 'operator' });
+    const enrol = hub.agentOp('o', 'ask', 'w1', {
+      question: 'Please enrol your iPhone\'s passkey with the ops broker', only_person: 'Sign-In', blocking: true,
+      steps: [{ do: 'Open the enrolment link on your iPhone', where: 'https://broker.example/enrol', check: 'It says enrolled' }],
+    });
+    assert.equal(enrol.to, 'human');
+    assert.equal(enrol.only_person, 'sign-in');
+    assert.equal(enrol.routed, undefined);
+    assert.equal(audience(enrol.question), 'person:sign-in');
+    const card = view(hub, 'o').attention.find((a) => a.key === `q:${enrol.question}`);
+    assert.equal(card.level, 'act');
+    assert.equal(card.to ?? 'person', 'person');
+    assert.equal(card.only_person, 'sign-in');
+    assert.match(card.sub, /only a person: their sign-in/);
+    const money = hub.agentOp('o', 'ask', 'w1', { question: 'Is a $20/month plan worth it?', only_person: 'money', to: 'human', options: ['yes', 'no'] });
+    assert.equal(audience(money.question), 'person:money');
+    const toOp = hub.agentOp('o', 'ask', 'w1', { question: 'Tabs or spaces?', assumption: 'spaces', to: 'operator', only_person: 'call' });
     assert.equal(audience(toOp.question), 'operator');
+    assert.throws(() => hub.agentOp('o', 'ask', 'w1', { question: 'Buy it?', only_person: 'because' }), (e) => e.status === 400 && /only_person must be one of sign-in, money, physical, call/.test(e.message));
   });
 
-  test('the ask tool says what the default does, and the guide gives an example each way', () => {
+  test('an operator asks a person only with a reason; otherwise it settles it, or escalates an operator question', () => {
+    const { hub } = setup();
+    hub.agentOp('o', 'checkin', 'op', { has: ['operator'] });
+    for (const to of [undefined, 'human']) {
+      assert.throws(() => hub.agentOp('o', 'ask', 'op', { question: 'OK to commit and push the uncommitted changes to main?', ...(to ? { to } : {}) }),
+        (e) => e.status === 400 && /asks a person only for what only a person can do/.test(e.message) && /escalate it/.test(e.hint));
+    }
+    const r = hub.agentOp('o', 'ask', 'op', { question: 'Which of the two homelab-ui releases should ship first?', only_person: 'call', options: ['v2.7.0', 'v2.8.0'] });
+    assert.equal(r.to, 'human');
+    assert.equal(hub.agentOp('o', 'ask', 'op', { question: 'Can another operator check the runner logs?', to: 'operator', assumption: 'later' }).to, 'operator');
+  });
+
+  test('the ask tool and the guide say the rule', () => {
     const t = tools().find((x) => x.name === 'ask');
-    assert.match(t.inputSchema.properties.to.description, /left out, the hub picks/);
-    assert.match(guide(), /Leave out `to` and the hub picks.*`claude`.*approve browser workers/); // one sentence per param since #529
+    assert.deepEqual(PERSON_REASONS, ['sign-in', 'money', 'physical', 'call']);
+    assert.match(t.inputSchema.properties.only_person.description, /^sign-in, money, physical, call: why only a person can$/);
+    assert.match(guide(), /An operator answers, unless only a person can: then pass `only_person`: `sign-in` \(theirs\), `money`, `physical` or `call`/);
   });
 });

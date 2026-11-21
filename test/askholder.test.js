@@ -44,7 +44,7 @@ describe('a blocking question on work someone else holds', () => {
     const { hub, op, item } = world();
     op('op1', 'checkin', { has: ['operator', 'claude-cli'] });
     op('a1', 'claim', { item: '#3' });
-    op('op1', 'ask', { item: '#3', question: 'The deploy key is gone; who rotates it?', blocking: true, to: 'human', steps: [{ do: 'Rotate the key', where: 'GitHub settings', check: 'It lists a new key' }] });
+    op('op1', 'ask', { only_person: 'call', item: '#3', question: 'The deploy key is gone; who rotates it?', blocking: true, to: 'human', steps: [{ do: 'Rotate the key', where: 'GitHub settings', check: 'It lists a new key' }] });
     assert.deepEqual([item('#3').stage, item('#3').holder], ['waiting', null]);
   });
 });
